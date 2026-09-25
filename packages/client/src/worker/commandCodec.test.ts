@@ -263,6 +263,97 @@ describe('buildCommand', () => {
     ).toThrow('invalid request field permission: string');
   });
 
+  it('carries a permission change and a grantee rename to their own builders', () => {
+    const { wasm, calls } = lastArgsSpy();
+    const withNodes = {
+      ...wasm,
+      NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+    } as unknown as EngineWasm;
+    const node = new Uint8Array(16).fill(4);
+    const recipient = new Uint8Array([7, 7]);
+
+    buildCommand(withNodes, {
+      kind: 'changePermission',
+      node,
+      recipientIdentityPublicKey: recipient,
+      permission: 'write',
+    });
+    buildCommand(withNodes, {
+      kind: 'renameGrantee',
+      node,
+      recipientIdentityPublicKey: recipient,
+      name: 'Ada',
+    });
+
+    expect(calls.changePermission).toEqual([
+      { bytes: node },
+      recipient,
+      fakeWasmEnums.Permission.Write,
+    ]);
+    expect(calls.renameGrantee).toEqual([{ bytes: node }, recipient, 'Ada']);
+  });
+
+  it('carries the grantee name a grant names to the grant builder', () => {
+    const { wasm, calls } = lastArgsSpy();
+    const withNodes = {
+      ...wasm,
+      NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+    } as unknown as EngineWasm;
+    const grant = {
+      kind: 'grant' as const,
+      node: new Uint8Array(16).fill(4),
+      recipientIdentityPublicKey: new Uint8Array([7, 7]),
+      permission: 'read' as const,
+    };
+
+    buildCommand(withNodes, { ...grant, granteeName: 'Ada' });
+    expect(calls.grant).toEqual([
+      { bytes: grant.node },
+      grant.recipientIdentityPublicKey,
+      fakeWasmEnums.Permission.Read,
+      'Ada',
+    ]);
+
+    buildCommand(withNodes, { ...grant, granteeName: null });
+    expect(calls.grant).toEqual([
+      { bytes: grant.node },
+      grant.recipientIdentityPublicKey,
+      fakeWasmEnums.Permission.Read,
+      undefined,
+    ]);
+  });
+
+  it('refuses a grant whose grantee name is not text', () => {
+    expect(
+      refuses({
+        kind: 'grant',
+        node: new Uint8Array(16),
+        recipientIdentityPublicKey: new Uint8Array(33),
+        permission: 'read',
+        granteeName: 42,
+      })
+    ).toThrow('invalid request field granteeName: number');
+  });
+
+  it('refuses a permission change or a rename whose fields are not what they claim', () => {
+    expect(
+      refuses({
+        kind: 'changePermission',
+        node: new Uint8Array(16),
+        recipientIdentityPublicKey: new Uint8Array(33),
+        permission: 'admin',
+      })
+    ).toThrow('invalid request field permission: string');
+    expect(
+      refuses({
+        kind: 'renameGrantee',
+        node: new Uint8Array(16),
+        recipientIdentityPublicKey: new Uint8Array(33),
+        name: 42,
+      })
+    ).toThrow('invalid request field name: number');
+  });
+
   it('rejects an op id that is not the engine bigint', () => {
     expect(refuses({ kind: 'cancelUpload', opId: 7 })).toThrow(
       'invalid request field opId: number'
@@ -351,16 +442,44 @@ describe('buildCommand', () => {
       ]);
     });
 
-    it.each(['revokeInviteLink', 'convertInviteClaims'] as const)(
-      'builds a %s from the node alone',
-      (kind) => {
-        const { wasm, calls } = spyWasm();
+    it('builds a conversion from the node alone', () => {
+      const { wasm, calls } = spyWasm();
 
-        buildCommand(wasm, { kind, node });
+      buildCommand(wasm, { kind: 'convertInviteClaims', node });
 
-        expect(calls[kind]).toEqual([[{ bytes: node }]]);
-      }
-    );
+      expect(calls.convertInviteClaims).toEqual([[{ bytes: node }]]);
+    });
+
+    it('hands a revoke the tag of the link it names', () => {
+      const { wasm, calls } = spyWasm();
+      const linkTag = new Uint8Array(32).fill(0x7a);
+
+      buildCommand(wasm, { kind: 'revokeInviteLink', node, linkTag });
+
+      expect(calls.revokeInviteLink).toEqual([[{ bytes: node }, linkTag]]);
+    });
+
+    it('spells an absent link tag as undefined, never as null', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'revokeInviteLink', node, linkTag: null });
+
+      expect(calls.revokeInviteLink).toEqual([[{ bytes: node }, undefined]]);
+    });
+
+    it('refuses a link tag that is not bytes before the node is minted', () => {
+      const { wasm, calls } = spyWasm();
+
+      expect(() =>
+        buildCommand(wasm, {
+          kind: 'revokeInviteLink',
+          node,
+          linkTag: 'tag' as unknown as Uint8Array,
+        })
+      ).toThrow('invalid request field linkTag: string');
+      expect(calls.NodeId).toBeUndefined();
+      expect(calls.revokeInviteLink).toBeUndefined();
+    });
 
     it('hands the claim its URL fragment verbatim, as the one argument', () => {
       const { wasm, calls } = spyWasm();
@@ -425,7 +544,7 @@ describe('buildCommand', () => {
     it.each(['revokeInviteLink', 'convertInviteClaims'] as const)(
       'rejects a %s whose node is not bytes',
       (kind) => {
-        expect(refuses({ kind, node: 'sixteen bytes!!!' })).toThrow(
+        expect(refuses({ kind, node: 'sixteen bytes!!!', linkTag: null })).toThrow(
           'invalid request field node: string'
         );
       }
@@ -1017,6 +1136,12 @@ describe('readEvent', () => {
     });
   });
 
+  it('maps the payload-free grantee-name cache reset', () => {
+    expect(readEvent(fakeWasm, { kind: 'granteeNamesCleared' })).toEqual({
+      kind: 'granteeNamesCleared',
+    });
+  });
+
   it('maps the payload-free parked-writes refusal', () => {
     expect(readEvent(fakeWasm, { kind: 'parkedWritesUnreadable' })).toEqual({
       kind: 'parkedWritesUnreadable',
@@ -1380,50 +1505,106 @@ describe('readSnapshot', () => {
 });
 
 describe('readSharing', () => {
-  const links = {
-    live: true,
-    expired: false,
+  const link = {
+    tag: new Uint8Array(32).fill(0x7a),
+    permission: fakeWasmEnums.Permission.Write,
     expiresAt: 1_700_000_000_000n,
+    expired: false,
+    admissionCap: 5n,
     pendingClaims: 1,
+    contactBudgetFull: true,
   };
   const view = {
     scope: new Uint8Array(16).fill(3),
-    contacts: [{ identityPublicKey: new Uint8Array([1]) }],
+    contacts: [{ identityPublicKey: new Uint8Array([1]), cachedName: 'Ada' }],
     ownContactCode: new Uint8Array([4, 5, 6]),
     state: {
       grants: [
         {
           recipientIdentityPublicKey: new Uint8Array([2]),
           permission: fakeWasmEnums.Permission.Read,
+          granteeName: { name: 'Ada', source: 'claimant' },
         },
       ],
-      grantRefusal: 'grant-target-already-names-a-scope',
-      inviteLinkRefusal: 'invite-target-already-names-a-scope',
-      inviteLinks: links,
+      grantRefusal: 'grant-parent-envelope-version-unsupported',
+      inviteLinkRefusal: 'invite-parent-envelope-version-unsupported',
+      inviteLinks: [link],
     },
   };
 
   it('carries the scope, its grants and its link standing through unchanged', () => {
     expect(readSharing(fakeWasm, view)).toEqual({
       scope: view.scope,
-      contacts: [{ identityPublicKey: view.contacts[0].identityPublicKey }],
+      contacts: [{ identityPublicKey: view.contacts[0].identityPublicKey, cachedName: 'Ada' }],
       ownContactCode: view.ownContactCode,
       state: {
-        grants: [{ recipientIdentityPublicKey: new Uint8Array([2]), permission: 'read' }],
-        grantRefusal: 'grant-target-already-names-a-scope',
-        inviteLinkRefusal: 'invite-target-already-names-a-scope',
-        inviteLinks: links,
+        grants: [
+          {
+            recipientIdentityPublicKey: new Uint8Array([2]),
+            permission: 'read',
+            granteeName: { name: 'Ada', source: 'claimant' },
+          },
+        ],
+        grantRefusal: 'grant-parent-envelope-version-unsupported',
+        inviteLinkRefusal: 'invite-parent-envelope-version-unsupported',
+        inviteLinks: [
+          {
+            tag: link.tag,
+            permission: 'write',
+            expiresAt: 1_700_000_000_000n,
+            expired: false,
+            admissionCap: 5,
+            pendingClaims: 1,
+            contactBudgetFull: true,
+          },
+        ],
       },
     });
   });
 
-  it('reads a link with no deadline as null, never as a deadline', () => {
-    const open = {
+  it('reads an unnamed row and an uncached contact as null', () => {
+    const unnamed = {
       ...view,
-      state: { ...view.state, inviteLinks: { ...links, expiresAt: undefined } },
+      contacts: [{ identityPublicKey: new Uint8Array([1]), cachedName: undefined }],
+      state: {
+        ...view.state,
+        grants: [{ ...view.state.grants[0], granteeName: undefined }],
+      },
     };
 
-    expect(readSharing(fakeWasm, open).state?.inviteLinks.expiresAt).toBeNull();
+    const read = readSharing(fakeWasm, unnamed);
+    expect(read.contacts[0].cachedName).toBeNull();
+    expect(read.state?.grants[0].granteeName).toBeNull();
+  });
+
+  it('refuses a grantee name whose source this build does not know', () => {
+    const drifted = {
+      ...view,
+      state: {
+        ...view.state,
+        grants: [{ ...view.state.grants[0], granteeName: { name: 'Ada', source: 'admin' } }],
+      },
+    };
+
+    expect(() => readSharing(fakeWasm, drifted)).toThrow('unknown WASM grantee name source: admin');
+  });
+
+  it('reads every link the commitment carries, an expired one included', () => {
+    const expired = { ...link, tag: new Uint8Array(32).fill(0x7b), expired: true };
+    const both = { ...view, state: { ...view.state, inviteLinks: [link, expired] } };
+
+    const read = readSharing(fakeWasm, both).state?.inviteLinks;
+    expect(read?.map((each) => each.tag)).toEqual([link.tag, expired.tag]);
+    expect(read?.map((each) => each.expired)).toEqual([false, true]);
+  });
+
+  it('refuses a link permission this build does not know', () => {
+    const drifted = {
+      ...view,
+      state: { ...view.state, inviteLinks: [{ ...link, permission: 42 }] },
+    };
+
+    expect(() => readSharing(fakeWasm, drifted)).toThrow('unknown WASM permission value: 42');
   });
 
   it('reads an unreachable scope as absent, never as one granting nothing', () => {

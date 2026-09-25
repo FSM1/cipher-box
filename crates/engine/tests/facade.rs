@@ -52,6 +52,7 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
                 node,
                 recipient_identity_public_key: b"bob-pk".to_vec(),
                 permission: Permission::Read,
+                grantee_name: None,
             },
             EngineError::MalformedInput {
                 check: "recipient-identity-key-length",
@@ -67,9 +68,10 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
             },
         ),
         (
-            Command::Downgrade {
+            Command::ChangePermission {
                 node,
                 recipient_identity_public_key: b"bob-pk".to_vec(),
+                permission: Permission::Read,
             },
             EngineError::MalformedInput {
                 check: "recipient-identity-key-length",
@@ -82,7 +84,10 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
             },
         ),
         (
-            Command::RevokeInviteLink { node },
+            Command::RevokeInviteLink {
+                node,
+                link_tag: None,
+            },
             EngineError::UnsupportedTarget {
                 check: "revoke-link-target-is-not-a-scope-root",
             },

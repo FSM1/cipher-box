@@ -12,11 +12,7 @@
  */
 
 import { toHex } from '@cipherbox/client';
-import type {
-  Permission,
-  SharingDescriptor,
-  SharingInviteLinksDescriptor,
-} from '@cipherbox/client';
+import type { Permission, SharingDescriptor, SharingInviteLinkDescriptor } from '@cipherbox/client';
 
 /** A contact the engine re-verified from its stored code; `key` is its identity, as hex. */
 export interface VerifiedContact {
@@ -44,8 +40,8 @@ export interface ScopeSharing {
   readonly grantRefusal: string | null;
   /** The refusal an invite-link mint here would report, or `null`. */
   readonly inviteLinkRefusal: string | null;
-  /** This owner's invite links here, read off the scope's own record. */
-  readonly inviteLinks: SharingInviteLinksDescriptor;
+  /** Every invite link this owner's commitment carries here, expired ones included. */
+  readonly inviteLinks: readonly SharingInviteLinkDescriptor[];
 }
 
 export interface SharingState {
@@ -115,7 +111,7 @@ export const sharingStore = {
           ),
           grantRefusal: view.state.grantRefusal,
           inviteLinkRefusal: view.state.inviteLinkRefusal,
-          inviteLinks: Object.freeze(view.state.inviteLinks),
+          inviteLinks: Object.freeze(view.state.inviteLinks.map((link) => Object.freeze(link))),
         })
       );
     }

@@ -106,6 +106,7 @@ describe('EngineProvider', () => {
       contacts: [
         {
           identityPublicKey: new Uint8Array(33).fill(1),
+          cachedName: null,
         },
       ],
       ownContactCode: new Uint8Array([0xc0, 0xde]),
@@ -113,7 +114,7 @@ describe('EngineProvider', () => {
         grants: [],
         grantRefusal: null,
         inviteLinkRefusal: null,
-        inviteLinks: { live: false, expired: false, expiresAt: null, pendingClaims: 0 },
+        inviteLinks: [],
       },
     });
 

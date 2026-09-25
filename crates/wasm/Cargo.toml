@@ -43,11 +43,14 @@ console_error_panic_hook = "0.1"
 # `nextEvent` to one outstanding stream read.
 async-lock = "3"
 
-# The boundary tests run under wasm-bindgen-test-runner. Core is a test-only
-# dependency: the contact-code round-trip needs a signed bundle to import, and
-# no engine API mints one. It never enters the cdylib.
-[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+# Core is a test-only dependency: the contact-code round-trip needs a signed
+# bundle to import, and no engine API mints one; the native tests build sharing
+# rows whose grantee-name source is a core type. It never enters the cdylib.
+[dev-dependencies]
 cipherbox-core.workspace = true
+
+# The boundary tests run under wasm-bindgen-test-runner.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 # The boundary suite asserts that getrandom's `wasm_js` backend reaches
 # `crypto.getRandomValues` in the worker scope — the getrandom parity surface.

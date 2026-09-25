@@ -22,7 +22,9 @@ use cipherbox_engine::entropy::EntropyError;
 use cipherbox_engine::gate::{GateRejection, GateStage, RejectionReason};
 use cipherbox_engine::grants::InviteFragment;
 use cipherbox_engine::grants::accept::TooLong;
-use cipherbox_engine::grants::{AbuseEvent, AuthorityViolation, CreateGrantError, InviteError};
+use cipherbox_engine::grants::{
+    AbuseEvent, AuthorityViolation, CreateGrantError, GrantEditError, InviteError,
+};
 use cipherbox_engine::net::author::AuthorError;
 use cipherbox_engine::record_plane::DefaultsReason;
 use cipherbox_engine::rotation::{
@@ -129,7 +131,7 @@ fn every_class_is_an_axis_or_a_delegated_label() {
 /// leaves a reject vector unable to say where it came from — which is why a
 /// variant that means another surface's check delegates to it rather than
 /// repeating the string.
-fn surfaces() -> [(&'static str, &'static [&'static str]); 20] {
+fn surfaces() -> [(&'static str, &'static [&'static str]); 21] {
     [
         ("core-trust", TrustViolation::CHECKS),
         ("core-malformed", Malformed::CHECKS),
@@ -146,6 +148,7 @@ fn surfaces() -> [(&'static str, &'static [&'static str]); 20] {
         ("create", CreateGrantError::CHECKS),
         ("devices", RelayedAnswerRefused::CHECKS),
         ("gate", GateRejection::CHECKS),
+        ("grant_edit", GrantEditError::CHECKS),
         ("invite", InviteError::CHECKS),
         ("ledger", AuthorityViolation::CHECKS),
         ("owner_entry", AbuseEvent::CHECKS),
@@ -360,6 +363,7 @@ fn the_invite_check_surface_matches_the_variants_in_order() {
         InviteError::ScopeUnbound,
         InviteError::NotOwner,
         InviteError::LinkNotCommitted,
+        InviteError::LinkAmbiguous,
         InviteError::LinkExpired,
         InviteError::ClaimantContact(codec()),
         InviteError::ClaimantIsTheEphemeralHalf,
@@ -382,6 +386,24 @@ fn the_invite_check_surface_matches_the_variants_in_order() {
             violation.check(),
         ]
     );
+}
+
+#[test]
+fn the_grant_edit_check_surface_matches_the_variants_in_order() {
+    let named: Vec<&str> = [
+        GrantEditError::SamePermission,
+        GrantEditError::NotGranted,
+        GrantEditError::LinkRow,
+        GrantEditError::RecipientKeyChanged,
+        GrantEditError::Invite(InviteError::NotOwner),
+        GrantEditError::Sign(codec()),
+    ]
+    .iter()
+    .map(GrantEditError::check)
+    .collect();
+    let (owned, delegated) = split(&named, GrantEditError::CHECKS);
+    assert_eq!(owned, GrantEditError::CHECKS);
+    assert_eq!(delegated, [InviteError::NotOwner.check(), codec().check()]);
 }
 
 #[test]
@@ -413,7 +435,7 @@ fn the_create_check_surface_matches_the_variants_in_order() {
         CreateGrantError::Resume(ResolveFailure::Rejected),
         CreateGrantError::ResumeNotThisGrant,
         CreateGrantError::ParentScopeSuperseded,
-        CreateGrantError::TargetAlreadyNamesAScope,
+        CreateGrantError::TargetIndexLostARoot,
         CreateGrantError::DescendantResolve {
             scope_id: node_id,
             reason: ResolveFailure::Rejected,

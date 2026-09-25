@@ -346,12 +346,20 @@ export class EngineFacade {
     return outcome;
   }
 
+  /** `granteeName` is the name the owner gives the grantee on the row. */
   grant(
     node: Uint8Array,
     recipientIdentityPublicKey: Uint8Array,
-    permission: Permission
+    permission: Permission,
+    granteeName?: string
   ): Promise<CommandOutcomeDescriptor> {
-    return this.command({ kind: 'grant', node, recipientIdentityPublicKey, permission });
+    return this.command({
+      kind: 'grant',
+      node,
+      recipientIdentityPublicKey,
+      permission,
+      granteeName: granteeName ?? null,
+    });
   }
 
   revoke(
@@ -361,11 +369,20 @@ export class EngineFacade {
     return this.command({ kind: 'revoke', node, recipientIdentityPublicKey });
   }
 
-  downgrade(
+  changePermission(
     node: Uint8Array,
-    recipientIdentityPublicKey: Uint8Array
+    recipientIdentityPublicKey: Uint8Array,
+    permission: Permission
   ): Promise<CommandOutcomeDescriptor> {
-    return this.command({ kind: 'downgrade', node, recipientIdentityPublicKey });
+    return this.command({ kind: 'changePermission', node, recipientIdentityPublicKey, permission });
+  }
+
+  renameGrantee(
+    node: Uint8Array,
+    recipientIdentityPublicKey: Uint8Array,
+    name: string
+  ): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'renameGrantee', node, recipientIdentityPublicKey, name });
   }
 
   /**
@@ -393,9 +410,13 @@ export class EngineFacade {
     return outcome;
   }
 
-  /** Revokes the link minted at `node`: future claims end, converted grants stand. */
-  revokeInviteLink(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
-    return this.command({ kind: 'revokeInviteLink', node });
+  /**
+   * Revokes the link `linkTag` names at `node` (its `SharingInviteLinkDescriptor.tag`):
+   * future claims end, converted grants stand. With no tag it cuts the scope's
+   * only link, which the engine refuses where the scope carries more.
+   */
+  revokeInviteLink(node: Uint8Array, linkTag?: Uint8Array): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'revokeInviteLink', node, linkTag: linkTag ?? null });
   }
 
   /**

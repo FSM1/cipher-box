@@ -388,7 +388,7 @@ fn every_re_signed_cut_steps_the_cut_epoch_and_the_re_used_set_does_not() {
         );
     }
 
-    let reused = cut_for_write_grant(&fx.plan()).expect("write-grant cut");
+    let reused = cut_for_write_scope(&fx.plan()).expect("write-grant cut");
     assert_eq!(reused.commitment.cut_epoch, before);
 }
 
@@ -765,7 +765,7 @@ fn a_two_plane_cut_owes_no_pre_wave_publish() {
 #[test]
 fn a_write_grant_cut_carries_the_minted_set_through_the_write_plane() {
     let fx = Fixture::new();
-    let cut = cut_for_write_grant(&fx.plan()).expect("the owner's own minted set");
+    let cut = cut_for_write_scope(&fx.plan()).expect("the owner's own minted set");
 
     assert!(!cut.planes().read(), "a grant re-keys no read plane");
     assert!(cut.planes().write());
@@ -783,26 +783,9 @@ fn a_write_grant_cut_carries_the_minted_set_through_the_write_plane() {
 #[test]
 fn a_write_grant_cut_refuses_a_set_the_owner_did_not_sign() {
     let fx = Fixture::new();
-    let err = cut_for_write_grant(&fx.plan_signed_by(&stranger()))
+    let err = cut_for_write_scope(&fx.plan_signed_by(&stranger()))
         .expect_err("a set this signer never authorized");
     assert_eq!(err.check(), "rot-revoke-unauthorized-signer");
-}
-
-#[test]
-fn a_write_grant_cut_refuses_a_set_committing_no_write_row() {
-    // Read-only: the wave would move every name and cut nothing.
-    let fx = Fixture::new();
-    let read_only = revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::Full)
-        .expect("the write row leaves the set");
-    let sig = read_only.commitment_sig;
-    let err = cut_for_write_grant(&GrantCutPlan {
-        commitment: &read_only.commitment,
-        commitment_sig: &sig,
-        grant_ledger: &read_only.grant_ledger,
-        ..fx.plan()
-    })
-    .expect_err("no write row to cut a scope for");
-    assert_eq!(err.check(), "rot-revoke-not-write-granted");
 }
 
 #[test]

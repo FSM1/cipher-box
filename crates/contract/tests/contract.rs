@@ -1556,6 +1556,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     let recipient = GrantRecipient {
         contact: &recipient_contact,
         display_name: "Shared Folder".to_string(),
+        grantee_name: None,
     };
     let owner = OwnerGrantKeys {
         enc_secret: &owner_enc,

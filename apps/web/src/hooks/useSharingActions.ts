@@ -43,8 +43,11 @@ export interface SharingActions {
    * cannot ask for it again.
    */
   createInviteLink(permission: Permission, expiresAt?: bigint): Promise<string | null>;
-  /** Cuts this scope's live link: its future claims end, converted grants stand. */
-  revokeInviteLink(): Promise<boolean>;
+  /**
+   * Cuts the link `linkTag` names at this scope, or its only link: its future
+   * claims end, converted grants stand.
+   */
+  revokeInviteLink(linkTag?: Uint8Array): Promise<boolean>;
   /** Converts the claims waiting on this scope's link into grants. */
   convertInviteClaims(): Promise<boolean>;
 }
@@ -94,7 +97,7 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
     downgrade: useCallback(
       (contact) =>
         run('downgrade', async (facade) => {
-          await facade.downgrade(target, contact.identityPublicKey);
+          await facade.changePermission(target, contact.identityPublicKey, 'read');
           await read(facade);
         }),
       [run, read, target]
@@ -111,9 +114,9 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       [run, read, target]
     ),
     revokeInviteLink: useCallback(
-      () =>
+      (linkTag) =>
         run('revokeInviteLink', async (facade) => {
-          await facade.revokeInviteLink(target);
+          await facade.revokeInviteLink(target, linkTag);
           await read(facade);
         }),
       [run, read, target]

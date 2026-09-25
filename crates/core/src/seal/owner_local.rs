@@ -60,16 +60,19 @@ pub enum OwnerLocalKind {
     /// The scope roots a move out of a granted scope owes a scope-exit cut for,
     /// until each cut lands.
     ScopeExitDebt,
+    /// The owner device's last-seen grantee name per identity (ADR 0027 D4).
+    GranteeNames,
 }
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ReceivedShares,
         Self::ContactBook,
         Self::RetireLedger,
         Self::DoomedJournal,
         Self::ScopeExitDebt,
+        Self::GranteeNames,
     ];
 
     /// The kind's stable name — the `info` suffix and the manifest key.
@@ -80,6 +83,7 @@ impl OwnerLocalKind {
             Self::RetireLedger => "retire-ledger",
             Self::DoomedJournal => "doomed-journal",
             Self::ScopeExitDebt => "scope-exit-debt",
+            Self::GranteeNames => "grantee-names",
         }
     }
 
@@ -91,6 +95,7 @@ impl OwnerLocalKind {
             Self::RetireLedger => 0x04,
             Self::DoomedJournal => 0x05,
             Self::ScopeExitDebt => 0x06,
+            Self::GranteeNames => 0x08,
         }
     }
 
@@ -297,6 +302,7 @@ mod tests {
                 OwnerLocalKind::RetireLedger => 2,
                 OwnerLocalKind::DoomedJournal => 3,
                 OwnerLocalKind::ScopeExitDebt => 4,
+                OwnerLocalKind::GranteeNames => 5,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],

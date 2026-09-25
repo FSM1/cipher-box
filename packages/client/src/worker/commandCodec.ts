@@ -35,7 +35,8 @@ import type {
   VersionEntryDescriptor,
   SettingsOrigin,
   SharingDescriptor,
-  SharingInviteLinksDescriptor,
+  SharingInviteLinkDescriptor,
+  SharingGrantDescriptor,
   QueueHoldDescriptor,
   SnapshotDescriptor,
   Staleness,
@@ -55,7 +56,8 @@ import type {
   WasmReceivedShareRow,
   WasmRegisteredDevice,
   WasmVersionEntry,
-  WasmSharingInviteLinks,
+  WasmSharingInviteLink,
+  WasmSharingGrant,
   WasmSharingView,
   WasmSnapshotView,
   WasmVaultSettings,
@@ -338,22 +340,30 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       return wasm.Command.manualRefresh();
     case 'importContact':
       return wasm.Command.importContact(bytes(descriptor.contactCode, 'contactCode'));
-    case 'grant':
-      return wasm.Command.grant(
-        nodeId(wasm, descriptor.node, 'node'),
-        bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey'),
-        permission(wasm, descriptor.permission)
-      );
+    case 'grant': {
+      // Every scalar first: a refusal after `nodeId` strands the handle it minted.
+      const recipient = bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey');
+      const level = permission(wasm, descriptor.permission);
+      const name =
+        descriptor.granteeName == null ? undefined : text(descriptor.granteeName, 'granteeName');
+      return wasm.Command.grant(nodeId(wasm, descriptor.node, 'node'), recipient, level, name);
+    }
     case 'revoke':
       return wasm.Command.revoke(
         nodeId(wasm, descriptor.node, 'node'),
         bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey')
       );
-    case 'downgrade':
-      return wasm.Command.downgrade(
-        nodeId(wasm, descriptor.node, 'node'),
-        bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey')
-      );
+    case 'changePermission': {
+      // Every scalar first: a refusal after `nodeId` strands the handle it minted.
+      const recipient = bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey');
+      const level = permission(wasm, descriptor.permission);
+      return wasm.Command.changePermission(nodeId(wasm, descriptor.node, 'node'), recipient, level);
+    }
+    case 'renameGrantee': {
+      const recipient = bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey');
+      const name = text(descriptor.name, 'name');
+      return wasm.Command.renameGrantee(nodeId(wasm, descriptor.node, 'node'), recipient, name);
+    }
     case 'createInviteLink': {
       // Every scalar first: a refusal after `nodeId` strands the handle it minted.
       const level = permission(wasm, descriptor.permission);
@@ -367,8 +377,10 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
         ownerName
       );
     }
-    case 'revokeInviteLink':
-      return wasm.Command.revokeInviteLink(nodeId(wasm, descriptor.node, 'node'));
+    case 'revokeInviteLink': {
+      const tag = descriptor.linkTag === null ? undefined : bytes(descriptor.linkTag, 'linkTag');
+      return wasm.Command.revokeInviteLink(nodeId(wasm, descriptor.node, 'node'), tag);
+    }
     case 'claimInviteLink':
       return wasm.Command.claimInviteLink(fragment(descriptor.fragment, 'fragment'));
     case 'convertInviteClaims':
@@ -578,6 +590,8 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
       };
     case 'parkedWritesUnreadable':
       return { kind: 'parkedWritesUnreadable' };
+    case 'granteeNamesCleared':
+      return { kind: 'granteeNamesCleared' };
     case 'vaultSettingsChanged':
       return { kind: 'vaultSettingsChanged' };
     case 'attributableAbuse':
@@ -892,6 +906,18 @@ function resolution(name: string | undefined): ReceivedShareResolution | null {
   }
 }
 
+/**
+ * Fails closed on a source this build does not know: it is a JS/WASM version
+ * mismatch, and a guessed source would misreport who chose the name.
+ */
+function granteeName(grant: WasmSharingGrant): SharingGrantDescriptor['granteeName'] {
+  const named = grant.granteeName;
+  if (named === undefined) return null;
+  const { name, source } = named;
+  if (source === 'owner' || source === 'claimant') return { name, source };
+  throw new Error(`unknown WASM grantee name source: ${source}`);
+}
+
 /** Reads a wasm-bindgen `ReceivedShareRow`'s getters into a descriptor. */
 export function readReceivedShare(
   wasm: EngineWasm,
@@ -907,12 +933,18 @@ export function readReceivedShare(
   };
 }
 
-function readInviteLinks(links: WasmSharingInviteLinks): SharingInviteLinksDescriptor {
+function readInviteLink(
+  wasm: EngineWasm,
+  link: WasmSharingInviteLink
+): SharingInviteLinkDescriptor {
   return {
-    live: links.live,
-    expired: links.expired,
-    expiresAt: links.expiresAt ?? null,
-    pendingClaims: links.pendingClaims,
+    tag: link.tag,
+    permission: permissionFrom(wasm, link.permission),
+    expiresAt: link.expiresAt,
+    expired: link.expired,
+    admissionCap: Number(link.admissionCap),
+    pendingClaims: link.pendingClaims,
+    contactBudgetFull: link.contactBudgetFull,
   };
 }
 
@@ -928,6 +960,7 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
     scope: view.scope,
     contacts: view.contacts.map((contact) => ({
       identityPublicKey: contact.identityPublicKey,
+      cachedName: contact.cachedName ?? null,
     })),
     ownContactCode: view.ownContactCode,
     state:
@@ -937,10 +970,11 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
             grants: state.grants.map((grant) => ({
               recipientIdentityPublicKey: grant.recipientIdentityPublicKey,
               permission: permissionFrom(wasm, grant.permission),
+              granteeName: granteeName(grant),
             })),
             grantRefusal: state.grantRefusal ?? null,
             inviteLinkRefusal: state.inviteLinkRefusal ?? null,
-            inviteLinks: readInviteLinks(state.inviteLinks),
+            inviteLinks: state.inviteLinks.map((link) => readInviteLink(wasm, link)),
           },
   };
 }

@@ -95,7 +95,7 @@ pub use facade::{
     MAX_CONTACT_CODE_BYTES, MAX_FOCUS_FILES, MAX_FOCUS_FOLDERS, MAX_FOLDER_CHILDREN,
     MAX_NODE_NAME_BYTES, MAX_OPEN_STREAMS, NodeAttrs, NodeId, NodeKind, OpPhase, OverBudgetCause,
     Permission, QuotaView, ReceivedShareRow, RefusedBudget, ScopeSharing, SessionStatus,
-    SharingContact, SharingGrant, SharingInviteLinks, SharingView, SiweIntent, SnapshotChild,
+    SharingContact, SharingGrant, SharingInviteLink, SharingView, SiweIntent, SnapshotChild,
     SnapshotView, Staleness, StatFs, StreamHandle, VaultStorageView, VersionEntry, WriteHandle,
     WriteTarget,
 };
@@ -128,7 +128,7 @@ pub use rotation::{
     RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError, RotateScopePlan,
     RotationOutcome, RotationPlanes, RotationPublishError, RotationTrigger, ScopeExitReport,
     ScopeExitRotator, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepOutcome, SweepRun,
-    WriteHistory, WriteRevokeKind, consume_scope_exit_triggers, cut_for_write_grant,
+    WriteHistory, WriteRevokeKind, consume_scope_exit_triggers, cut_for_write_scope,
     enumerate_eager_set, reseal_scope_root, revoke_read_grant, revoke_write_grant, rotate_on_cut,
     rotate_scope, run_sweep_job,
 };

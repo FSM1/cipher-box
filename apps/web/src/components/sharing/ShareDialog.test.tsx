@@ -5,7 +5,7 @@ import type {
   EventDescriptor,
   Permission,
   SharingDescriptor,
-  SharingInviteLinksDescriptor,
+  SharingInviteLinkDescriptor,
 } from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,12 +25,20 @@ const MINTED_FRAGMENT = 'a-minted-fragment';
 /** The identity a converted claim lands in the ledger under. */
 const CLAIMANT_SEED = 5;
 
-const NO_LINKS: SharingInviteLinksDescriptor = {
-  live: false,
-  expired: false,
-  expiresAt: null,
-  pendingClaims: 0,
-};
+const NO_LINKS: SharingInviteLinkDescriptor[] = [];
+
+/** A link as the engine reports it; its tag is what a revoke names. */
+function inviteLink(seed: number, expiresAt: bigint): SharingInviteLinkDescriptor {
+  return {
+    tag: new Uint8Array(32).fill(seed),
+    permission: 'read',
+    expiresAt,
+    expired: false,
+    admissionCap: 5,
+    pendingClaims: 0,
+    contactBudgetFull: false,
+  };
+}
 
 const folder: ListingRow = {
   id: DOCS,
@@ -62,7 +70,7 @@ interface EngineState {
   contacts: number[];
   /** A scope mapped to `null` is one whose root the engine could not reach. */
   grants: Map<string, Array<[number, Permission]> | null>;
-  links: SharingInviteLinksDescriptor;
+  links: SharingInviteLinkDescriptor[];
   /** The ground `share_scope` would refuse this target on, as the engine names it. */
   standing: ShareStanding;
 }
@@ -75,10 +83,6 @@ const SHARE_STANDINGS = {
   vaultRoot: {
     grant: 'grant-target-is-the-vault-root',
     inviteLink: 'invite-target-is-the-vault-root',
-  },
-  alreadyAScope: {
-    grant: 'grant-target-already-names-a-scope',
-    inviteLink: 'invite-target-already-names-a-scope',
   },
   envelopeVersion: {
     grant: 'grant-parent-envelope-version-unsupported',
@@ -113,6 +117,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
           scope,
           contacts: state.contacts.map((seed) => ({
             identityPublicKey: identity(seed),
+            cachedName: null,
           })),
           ownContactCode: OWN_CODE,
           state:
@@ -122,10 +127,11 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
                   grants: rowsOf(scope).map(([seed, permission]) => ({
                     recipientIdentityPublicKey: identity(seed),
                     permission,
+                    granteeName: null,
                   })),
                   grantRefusal: SHARE_STANDINGS[state.standing].grant,
                   inviteLinkRefusal: SHARE_STANDINGS[state.standing].inviteLink,
-                  inviteLinks: { ...state.links },
+                  inviteLinks: state.links.map((link) => ({ ...link })),
                 },
         })
     ),
@@ -156,19 +162,16 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
         kind: 'inviteLinkMinted' as const,
         fragment: MINTED_FRAGMENT,
       }).then((outcome) => {
-        state.links = { ...(state.links ?? NO_LINKS), live: true, expiresAt: expiresAt ?? null };
-        state.standing = 'alreadyAScope';
+        state.links = [...state.links, inviteLink(state.links.length + 1, expiresAt ?? 1n)];
         return outcome;
       })
     ),
-    revokeInviteLink: vi.fn(() =>
+    revokeInviteLink: vi.fn((_scope: Uint8Array, linkTag?: Uint8Array) =>
       answer('revokeInviteLink', { kind: 'done' as const }).then((outcome) => {
-        state.links = {
-          ...(state.links ?? NO_LINKS),
-          live: false,
-          expired: false,
-          expiresAt: null,
-        };
+        state.links =
+          linkTag === undefined
+            ? []
+            : state.links.filter((link) => toHex(link.tag) !== toHex(linkTag));
         return outcome;
       })
     ),
@@ -178,12 +181,12 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
         return outcome;
       })
     ),
-    downgrade: vi.fn((scope: Uint8Array, recipient: Uint8Array) =>
-      answer('downgrade', { kind: 'done' as const }).then((outcome) => {
+    changePermission: vi.fn((scope: Uint8Array, recipient: Uint8Array, to: Permission) =>
+      answer('changePermission', { kind: 'done' as const }).then((outcome) => {
         state.grants.set(
           toHex(scope),
           rowsOf(scope).map(([seed, permission]): [number, Permission] =>
-            seed === seedOf(recipient) ? [seed, 'read'] : [seed, permission]
+            seed === seedOf(recipient) ? [seed, to] : [seed, permission]
           )
         );
         return outcome;
@@ -275,7 +278,7 @@ describe('the grant list', () => {
 
     await click('share-downgrade');
 
-    expect(engine.facade.downgrade).toHaveBeenCalledWith(DOCS, identity(1));
+    expect(engine.facade.changePermission).toHaveBeenCalledWith(DOCS, identity(1), 'read');
     expect(screen.getAllByTestId('share-grant-row')).toHaveLength(1);
     expect(screen.getByTestId('share-grant-permission').textContent).toBe('read');
     // Read is the floor a downgrade lands on, so the control is spent.
@@ -285,7 +288,7 @@ describe('the grant list', () => {
   it('keeps the write grant a refused downgrade left standing, and says why', async () => {
     await share(
       sharingEngine(
-        { downgrade: new EngineRequestError('the publish was refused') },
+        { changePermission: new EngineRequestError('the publish was refused') },
         held([1], [[1, 'write']])
       )
     );
@@ -452,15 +455,13 @@ describe('the invite link', () => {
   });
 
   it("renders the engine's refusal of a mint instead of a link", async () => {
-    const refusal = new EngineRequestError('invite-target-already-names-a-scope', 'unsupported');
+    const refusal = new EngineRequestError('invite-target-index-lost-a-root', 'unsupported');
     await share(sharingEngine({ createInviteLink: refusal }));
     fireEvent.change(screen.getByLabelText('permission'), { target: { value: 'write' } });
 
     await click('share-mint-link');
 
-    expect(screen.getByTestId('dialog-error').textContent).toBe(
-      'invite-target-already-names-a-scope'
-    );
+    expect(screen.getByTestId('dialog-error').textContent).toBe('invite-target-index-lost-a-root');
     expect(screen.queryByTestId('invite-link')).toBeNull();
     expect(screen.getByTestId('share-mint-link')).toBeTruthy();
   });
@@ -489,14 +490,11 @@ describe('the invite link', () => {
 });
 
 describe('a link the engine already holds', () => {
-  const live: SharingInviteLinksDescriptor = {
-    ...NO_LINKS,
-    live: true,
-    expiresAt: SEVEN_DAYS_ON,
-  };
+  const LIVE = inviteLink(0x7a, SEVEN_DAYS_ON);
+  const live = [LIVE];
 
   it('draws the standing of a link this session never minted', async () => {
-    await share(sharingEngine({}, held([], [], { links: live, standing: 'alreadyAScope' })));
+    await share(sharingEngine({}, held([], [], { links: live })));
 
     expect(screen.getByTestId('share-live-link')).toBeTruthy();
     expect(screen.getByTestId('share-live-link-expiry').textContent).toContain('expires');
@@ -504,38 +502,33 @@ describe('a link the engine already holds', () => {
     expect(screen.queryByTestId('invite-link')).toBeNull();
   });
 
-  it('offers no mint where the engine would refuse one', async () => {
-    await share(sharingEngine({}, held([], [], { links: live, standing: 'alreadyAScope' })));
+  it('offers no second mint beside the live link', async () => {
+    await share(sharingEngine({}, held([], [], { links: live })));
 
     expect(screen.queryByTestId('share-mint-link')).toBeNull();
   });
 
-  it('says so rather than offering a mint on a shared folder carrying no link', async () => {
-    await share(sharingEngine({}, held([1], [[1, 'read']], { standing: 'alreadyAScope' })));
+  it('offers a further link on a folder already shared by grant', async () => {
+    await share(sharingEngine({}, held([1], [[1, 'read']])));
 
-    expect(screen.getByTestId('share-no-mint')).toBeTruthy();
-    expect(screen.queryByTestId('share-mint-link')).toBeNull();
+    expect(screen.getByTestId('share-mint-link')).toBeTruthy();
+    expect(screen.queryByTestId('share-no-mint')).toBeNull();
   });
 
   it('ends the link on a revoke and leaves the grants it converted standing', async () => {
     const engine = await share(
-      sharingEngine(
-        {},
-        held([], [[CLAIMANT_SEED, 'read']], { links: live, standing: 'alreadyAScope' })
-      )
+      sharingEngine({}, held([], [[CLAIMANT_SEED, 'read']], { links: live }))
     );
 
     await click('share-revoke-link');
 
-    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS);
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, LIVE.tag);
     expect(screen.queryByTestId('share-live-link')).toBeNull();
     expect(screen.getAllByTestId('share-grant-row')).toHaveLength(1);
   });
 
   it('shows the grant a conversion committed', async () => {
-    const engine = await share(
-      sharingEngine({}, held([], [], { links: live, standing: 'alreadyAScope' }))
-    );
+    const engine = await share(sharingEngine({}, held([], [], { links: live })));
 
     await click('share-convert-claims');
 
@@ -544,19 +537,14 @@ describe('a link the engine already holds', () => {
   });
 
   it('counts the claims that wait beside the convert control', async () => {
-    await share(
-      sharingEngine(
-        {},
-        held([], [], { links: { ...live, pendingClaims: 2 }, standing: 'alreadyAScope' })
-      )
-    );
+    await share(sharingEngine({}, held([], [], { links: [{ ...LIVE, pendingClaims: 2 }] })));
 
     expect(screen.getByTestId('share-pending-claims').textContent).toBe('// 2 claims to convert');
     expect(screen.getByTestId('share-convert-claims')).toBeTruthy();
   });
 
   it('says nothing waits where the engine counts no claim', async () => {
-    await share(sharingEngine({}, held([], [], { links: live, standing: 'alreadyAScope' })));
+    await share(sharingEngine({}, held([], [], { links: live })));
 
     expect(screen.queryByTestId('share-pending-claims')).toBeNull();
   });
@@ -571,12 +559,12 @@ describe('a link the engine already holds', () => {
 });
 
 /**
- * The engine refuses a share on three grounds, each under its own name per
- * command (`ShareChecks`). What the dialog offers has to follow all three, and
+ * The engine refuses a share on two grounds, each under its own name per
+ * command (`ShareChecks`). What the dialog offers has to follow both, and
  * offer nothing the engine would refuse on the target's standing.
  */
 describe('what the dialog offers for each ground the engine refuses on', () => {
-  const REFUSING: ShareStanding[] = ['vaultRoot', 'alreadyAScope', 'envelopeVersion'];
+  const REFUSING: ShareStanding[] = ['vaultRoot', 'envelopeVersion'];
 
   it('offers both a grant and a mint where the engine accepts both', async () => {
     await share(sharingEngine({}, held([1], [], { standing: 'accepted' })));

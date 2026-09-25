@@ -61,7 +61,16 @@ const MAX_ACCEPTS_PER_SENDER: usize = 2;
 
 /// The invite claims an owner's inbox holds that name one of this owner's scope
 /// pointers, keyed by the mailbox item that carries each.
-pub(crate) type PendingInviteClaims = BTreeMap<String, NodeId>;
+pub(crate) type PendingInviteClaims = BTreeMap<String, PendingClaim>;
+
+/// One counted claim: the scope root its pointer names, and the identity that
+/// signed it — a link's ephemeral identity, which is what splits the count
+/// per link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingClaim {
+    pub scope: NodeId,
+    pub sender: [u8; IDENTITY_PUBLIC_LEN],
+}
 
 /// The seams one mailbox pull reads, plus this device's own encryption subkey —
 /// the seal's recipient half and the self-locating tag's other half. Borrowed:
@@ -102,7 +111,10 @@ fn pending_claims(
             let claim = InviteClaim::decode(&item.payload).ok()?;
             Some((
                 item.item_id.clone(),
-                scope_of_pointer(&claim.scope_pointer_name)?,
+                PendingClaim {
+                    scope: scope_of_pointer(&claim.scope_pointer_name)?,
+                    sender: item.sender_identity.to_sec1(),
+                },
             ))
         })
         .collect()
@@ -539,8 +551,8 @@ mod tests {
         /// The claims one pass counts, per scope.
         fn pending(&self) -> Option<BTreeMap<NodeId, usize>> {
             let mut counts = BTreeMap::new();
-            for scope in self.pass().1?.values() {
-                *counts.entry(*scope).or_default() += 1;
+            for claim in self.pass().1?.values() {
+                *counts.entry(claim.scope).or_default() += 1;
             }
             Some(counts)
         }

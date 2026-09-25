@@ -110,6 +110,9 @@ pub enum InviteError {
     /// No single owner-attested link row answers to the ephemeral identity: the
     /// row is absent, is not a link entry, or the owner did not attest it.
     LinkNotCommitted,
+    /// A revoke named no link, and the set commits more than one, so no single
+    /// link answers.
+    LinkAmbiguous,
     /// The link entry's deadline is not later than `now`, so it admits nobody.
     LinkExpired,
     /// The claimant's contact code failed its mandatory binding verify.
@@ -151,6 +154,7 @@ impl InviteError {
         "commitment-names-another-scope-root",
         "not-owner",
         "link-not-committed",
+        "link-ambiguous",
         "link-expired",
         "claimant-contact-invalid",
         "claimant-is-the-ephemeral-half",
@@ -180,6 +184,7 @@ impl InviteError {
             Self::InvalidExpiry => CodecError::from(Malformed::InvalidDeadline).class(),
             Self::MalformedClaim(error) | Self::ClaimantContact(error) => error.class(),
             Self::MalformedFragment => "malformed",
+            Self::LinkAmbiguous => "capability",
             Self::LinkExpired => "unsupported",
             Self::FragmentTooLarge | Self::NameTooLong | Self::GrantSetFull => "over-cap",
             Self::Authority(violation) => violation.class(),
@@ -201,6 +206,7 @@ impl InviteError {
             Self::ScopeUnbound => "commitment-names-another-scope-root",
             Self::NotOwner => "not-owner",
             Self::LinkNotCommitted => "link-not-committed",
+            Self::LinkAmbiguous => "link-ambiguous",
             Self::LinkExpired => "link-expired",
             Self::ClaimantContact(_) => "claimant-contact-invalid",
             Self::ClaimantIsTheEphemeralHalf => "claimant-is-the-ephemeral-half",
@@ -315,8 +321,30 @@ pub fn mint_invite_grant(
     write_scope_seed: &[u8; SECRET_LEN],
     terms: &LinkTerms,
 ) -> Result<GrantRow, InviteError> {
-    let deadline = NonZeroU64::new(terms.deadline.0).ok_or(InviteError::InvalidExpiry)?;
     let ipns_name: IpnsName = derive_write_name(write_scope_seed, scope_id);
+    mint_invite_row(
+        owner_identity_signer,
+        owner_enc_secret,
+        pointer_read_key,
+        invitee,
+        scope_id,
+        ipns_name.as_str().as_bytes(),
+        terms,
+    )
+}
+
+/// [`mint_invite_grant`] at a scope root that already stands, whose name the
+/// caller read off the gated record rather than derived (ADR 0026 D1).
+pub fn mint_invite_row(
+    owner_identity_signer: &EcdsaSigner,
+    owner_enc_secret: &X25519Secret,
+    pointer_read_key: &[u8; SECRET_LEN],
+    invitee: &EphemeralInvitee,
+    scope_id: &[u8; 16],
+    scope_root_ipns_name: &[u8],
+    terms: &LinkTerms,
+) -> Result<GrantRow, InviteError> {
+    let deadline = NonZeroU64::new(terms.deadline.0).ok_or(InviteError::InvalidExpiry)?;
     let mut row = mint_grant_row(
         owner_identity_signer,
         owner_enc_secret,
@@ -324,7 +352,7 @@ pub fn mint_invite_grant(
         invitee.identity_pk().to_sec1(),
         &invitee.enc_public(),
         scope_id,
-        ipns_name.as_str().as_bytes(),
+        scope_root_ipns_name,
         Permission::Read,
     )
     .ok_or(InviteError::UnusableInviteeKey)?;
@@ -661,10 +689,10 @@ pub struct OwnerAuthority<'a> {
 /// commitment for one scope can therefore not be presented under another scope's
 /// id.
 pub struct CommittedScope<'a> {
-    scope_id: &'a [u8; 16],
-    commitment: &'a GrantSetCommitment,
-    commitment_sig: &'a EcdsaSignature,
-    ledger: &'a [GrantLedgerEntry],
+    pub(super) scope_id: &'a [u8; 16],
+    pub(super) commitment: &'a GrantSetCommitment,
+    pub(super) commitment_sig: &'a EcdsaSignature,
+    pub(super) ledger: &'a [GrantLedgerEntry],
 }
 
 impl<'a> CommittedScope<'a> {
@@ -720,6 +748,8 @@ pub struct CommittedLink {
     pub deadline: UnixMillis,
     /// The permission conversion grants a claimant.
     pub conversion_permission: Permission,
+    /// The owner-signed admission cap. Core refuses a link entry without one.
+    pub admission_cap: u64,
 }
 
 impl CommittedLink {
@@ -750,34 +780,38 @@ pub fn committed_links(
         .filter_map(|entry| {
             let row = scope.ledger.iter().find(|row| row.tag == entry.tag)?;
             let deadline = UnixMillis(entry.deadline?.get());
+            let admission_cap = entry.admission_cap?;
             row_is_owner_attested(&owner_identity, row, name).then(|| CommittedLink {
                 tag: entry.tag,
                 ephemeral_identity_pk: row.recipient_identity_pk,
                 ephemeral_enc_pk: row.recipient_enc_pk,
                 deadline,
                 conversion_permission: entry.conversion_permission.unwrap_or(Permission::Read),
+                admission_cap,
             })
         })
         .collect())
 }
 
-/// The one link among `links` — the link a revoke cuts and the sharing read
-/// shows. Ambiguity gives `None` rather than the first match.
-pub fn sole_link(links: &[CommittedLink]) -> Option<&CommittedLink> {
-    match links {
-        [link] => Some(link),
-        _ => None,
-    }
-}
-
-/// The one live link on `scope` ([`sole_link`]).
+/// The link on `scope` a revoke cuts: the one `tag` names, or with no tag the
+/// only link the set commits. Two links and no tag give no defined cut, so
+/// neither is picked.
 pub fn locate_invite_link(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
+    tag: Option<&[u8; 32]>,
 ) -> Result<CommittedLink, InviteError> {
-    sole_link(&committed_links(owner, scope)?)
-        .copied()
-        .ok_or(InviteError::LinkNotCommitted)
+    let links = committed_links(owner, scope)?;
+    match (tag, links.as_slice()) {
+        (Some(tag), links) => links
+            .iter()
+            .find(|link| link.tag == *tag)
+            .copied()
+            .ok_or(InviteError::LinkNotCommitted),
+        (None, [link]) => Ok(*link),
+        (None, []) => Err(InviteError::LinkNotCommitted),
+        (None, _) => Err(InviteError::LinkAmbiguous),
+    }
 }
 
 /// What converting a claim did to the owner-signed set.
@@ -1551,19 +1585,21 @@ mod tests {
         let scope = Scope::of(&[&link_row]);
         let (stranger, stranger_enc) = claimant(0x60);
         assert_eq!(
-            locate_invite_link(&authority(&stranger, &stranger_enc), &scope.bound()).unwrap_err(),
+            locate_invite_link(&authority(&stranger, &stranger_enc), &scope.bound(), None)
+                .unwrap_err(),
             InviteError::NotOwner
         );
         let (identity, enc) = (owner_identity(), owner_enc());
-        let located = locate_invite_link(&authority(&identity, &enc), &scope.bound())
+        let located = locate_invite_link(&authority(&identity, &enc), &scope.bound(), None)
             .expect("the owner locates its link");
         assert_eq!(located.tag, link_row.tag);
         assert_eq!(located.ephemeral_identity_pk, link.identity_pk().to_sec1());
     }
 
-    /// Two link entries have no defined cut, so locate names neither.
+    /// Two link entries and no tag have no defined cut, so locate names
+    /// neither. A tag picks one, and a tag no link carries picks nothing.
     #[test]
-    fn two_links_locate_neither() {
+    fn two_links_locate_only_the_one_a_tag_names() {
         let first = link_row(&invitee());
         let second = link_row(&EphemeralInvitee::from_secret(&[0x4f; 32]).expect("valid"));
         let scope = Scope::of(&[&first, &second]);
@@ -1574,8 +1610,19 @@ mod tests {
                 .len(),
             2
         );
+        let owner = authority(&identity, &enc);
         assert_eq!(
-            locate_invite_link(&authority(&identity, &enc), &scope.bound()).unwrap_err(),
+            locate_invite_link(&owner, &scope.bound(), None).unwrap_err(),
+            InviteError::LinkAmbiguous
+        );
+        assert_eq!(
+            locate_invite_link(&owner, &scope.bound(), Some(&second.tag))
+                .expect("the tag names a committed link")
+                .tag,
+            second.tag
+        );
+        assert_eq!(
+            locate_invite_link(&owner, &scope.bound(), Some(&[0x11; 32])).unwrap_err(),
             InviteError::LinkNotCommitted
         );
     }

@@ -1,4 +1,4 @@
-import type { SharingInviteLinksDescriptor } from '@cipherbox/client';
+import type { SharingInviteLinkDescriptor } from '@cipherbox/client';
 import type { ScopeSharing } from '../stores/sharing.store';
 import { formatDate, MAX_DATE_MILLIS } from '../utils/format';
 
@@ -43,21 +43,19 @@ export function expiryLabel(expired: boolean, expiresAt: bigint): string {
 
 /** Which of the owner's three link situations a scope is in. */
 export type InviteLinkState =
-  | { kind: 'live'; links: SharingInviteLinksDescriptor; expiresAt: bigint }
+  | { kind: 'live'; link: SharingInviteLinkDescriptor }
   | { kind: 'mintable' }
   | { kind: 'refused'; check: string };
 
 /**
  * A scope the engine reached carries a live link, takes a mint, or takes
- * neither. `refused` carries the engine's own check name, because which ground
- * refuses is the engine's to say. The engine reports every live link with its
- * owner-signed deadline.
+ * neither. `live` draws the first link the commitment carries that has not
+ * expired on the engine's clock. `refused` carries the engine's own check name,
+ * because which ground refuses is the engine's to say.
  */
 export function inviteLinkState(scope: ScopeSharing): InviteLinkState {
-  const links = scope.inviteLinks;
-  if (links.live && links.expiresAt !== null) {
-    return { kind: 'live', links, expiresAt: links.expiresAt };
-  }
+  const link = scope.inviteLinks.find((each) => !each.expired);
+  if (link !== undefined) return { kind: 'live', link };
   const refusal = scope.inviteLinkRefusal;
   return refusal === null ? { kind: 'mintable' } : { kind: 'refused', check: refusal };
 }

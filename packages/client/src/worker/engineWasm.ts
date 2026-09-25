@@ -141,20 +141,32 @@ export interface WasmSnapshotView {
 /** wasm-bindgen `SharingContact` — one contact the vault's book holds. */
 export interface WasmSharingContact {
   readonly identityPublicKey: Uint8Array;
+  readonly cachedName: string | undefined;
+}
+
+/** wasm-bindgen `GranteeName` — a row's grantee name and who chose it. */
+export interface WasmGranteeName {
+  readonly name: string;
+  /** `"owner"` or `"claimant"`. */
+  readonly source: string;
 }
 
 /** wasm-bindgen `SharingGrant` — one grant a scope's ledger commits. */
 export interface WasmSharingGrant {
   readonly recipientIdentityPublicKey: Uint8Array;
   readonly permission: number;
+  readonly granteeName: WasmGranteeName | undefined;
 }
 
-/** wasm-bindgen `SharingInviteLinks` — a scope's invite-link standing. */
-export interface WasmSharingInviteLinks {
-  readonly live: boolean;
+/** wasm-bindgen `SharingInviteLink` — one link a scope's commitment carries. */
+export interface WasmSharingInviteLink {
+  readonly tag: Uint8Array;
+  readonly permission: number;
+  readonly expiresAt: bigint;
   readonly expired: boolean;
-  readonly expiresAt?: bigint;
+  readonly admissionCap: bigint;
   readonly pendingClaims: number;
+  readonly contactBudgetFull: boolean;
 }
 
 /** wasm-bindgen `ScopeSharing` — what one scope's own record says. */
@@ -162,7 +174,7 @@ export interface WasmScopeSharing {
   readonly grants: readonly WasmSharingGrant[];
   readonly grantRefusal?: string;
   readonly inviteLinkRefusal?: string;
-  readonly inviteLinks: WasmSharingInviteLinks;
+  readonly inviteLinks: readonly WasmSharingInviteLink[];
 }
 
 /** wasm-bindgen `SharingView` — a key-free read of one scope's sharing state. */
@@ -348,17 +360,27 @@ export interface EngineWasm {
     grant(
       node: WasmNodeId,
       recipientIdentityPublicKey: Uint8Array,
-      permission: number
+      permission: number,
+      granteeName: string | undefined
     ): WasmCommand;
     revoke(node: WasmNodeId, recipientIdentityPublicKey: Uint8Array): WasmCommand;
-    downgrade(node: WasmNodeId, recipientIdentityPublicKey: Uint8Array): WasmCommand;
+    changePermission(
+      node: WasmNodeId,
+      recipientIdentityPublicKey: Uint8Array,
+      permission: number
+    ): WasmCommand;
+    renameGrantee(
+      node: WasmNodeId,
+      recipientIdentityPublicKey: Uint8Array,
+      name: string
+    ): WasmCommand;
     createInviteLink(
       node: WasmNodeId,
       permission: number,
       expiresAt: bigint | undefined,
       ownerName: string
     ): WasmCommand;
-    revokeInviteLink(node: WasmNodeId): WasmCommand;
+    revokeInviteLink(node: WasmNodeId, linkTag: Uint8Array | undefined): WasmCommand;
     claimInviteLink(fragment: string): WasmCommand;
     convertInviteClaims(node: WasmNodeId): WasmCommand;
     rotateNow(node: WasmNodeId): WasmCommand;

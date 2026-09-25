@@ -38,11 +38,9 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, GrantSetEntryKind,
-    Permission, PreservedFields, ReadBody, SignedSealed, sign_grant_set,
+    GranteeName, Permission, PreservedFields, ReadBody, SignedSealed, sign_grant_set,
 };
-use cipherbox_core::suite::ecdsa::{
-    EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
-};
+use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -55,7 +53,7 @@ use cipherbox_core::payload::RepointObject;
 
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::contact::Contact;
-use crate::grants::{GrantRow, mint_grant_row};
+use crate::grants::{GrantRow, mint_grant_row, name_row};
 use crate::mailbox::post_sealed;
 use crate::rotation::sweep::{body_children, canonicalize_frontier, resolve_scope_current};
 use crate::rotation::{
@@ -152,6 +150,9 @@ pub struct GrantRecipient<'a> {
     pub contact: &'a Contact,
     /// Courtesy host label carried in the share pointer.
     pub display_name: String,
+    /// The name the owner gives the grantee on the row, source `owner`
+    /// (ADR 0027 D2), or `None` for a row with no name.
+    pub grantee_name: Option<&'a GranteeName>,
 }
 
 impl GrantRecipient<'_> {
@@ -312,10 +313,10 @@ pub enum CreateGrantError {
     /// the convergence pass.
     ParentScopeSuperseded,
     /// The granted folder carries a read-epoch floor this device raised, and the
-    /// resume probe found no promotion of it to resume: a live scope root this
-    /// grant did not publish stands at the name a mint would publish at, and a
-    /// fresh mint there would draw a second override seed over it.
-    TargetAlreadyNamesAScope,
+    /// resume probe found no promotion of it to resume: a live scope root the
+    /// parent's index does not name stands at the name a mint would publish at,
+    /// and a fresh mint there would draw a second override seed over it.
+    TargetIndexLostARoot,
     /// Resolving a reparented descendant for its re-key failed. Post-publish: the
     /// grantee root and any earlier-re-keyed descendants are committed; this one
     /// keeps its old parent derivation (grantee cannot yet descend into it).
@@ -419,7 +420,7 @@ impl CreateGrantError {
         "resume-probe-failed",
         "resume-not-this-grant",
         "parent-scope-superseded",
-        "target-already-names-a-scope",
+        "target-index-lost-a-root",
         "descendant-resolve-failed",
         "interior-resolve-failed",
         "interior-not-converged",
@@ -443,7 +444,7 @@ impl CreateGrantError {
             | Self::SubtreeBoundaryDiverged { .. }
             | Self::ResumeNotThisGrant
             | Self::ParentScopeSuperseded
-            | Self::TargetAlreadyNamesAScope
+            | Self::TargetIndexLostARoot
             | Self::InteriorNotConverged { .. }
             | Self::InteriorEpochRegressed { .. } => "trust",
             Self::Converge(error) => error.class(),
@@ -482,7 +483,7 @@ impl CreateGrantError {
             Self::Resume(_) => "resume-probe-failed",
             Self::ResumeNotThisGrant => "resume-not-this-grant",
             Self::ParentScopeSuperseded => "parent-scope-superseded",
-            Self::TargetAlreadyNamesAScope => "target-already-names-a-scope",
+            Self::TargetIndexLostARoot => "target-index-lost-a-root",
             Self::DescendantResolve { .. } => "descendant-resolve-failed",
             Self::InteriorResolve { .. } => "interior-resolve-failed",
             Self::InteriorNotConverged { .. } => "interior-not-converged",
@@ -760,7 +761,7 @@ where
     let ipns_name = grantee.ipns_name();
     let name_bytes = ipns_name.as_str().as_bytes();
     let permission = grantee.permission();
-    let row = mint_grant_row(
+    let mut row = mint_grant_row(
         owner.identity_signer,
         owner.enc_secret,
         grantee.pointer_read_key,
@@ -771,6 +772,14 @@ where
         permission,
     )
     .ok_or(CreateGrantError::UnusableRecipientKey)?;
+    if let Some(name) = recipient.grantee_name {
+        name_row(
+            owner.identity_signer,
+            name_bytes,
+            &mut row.ledger_entry,
+            name.clone(),
+        );
+    }
     match converge_grant_subtree(net, net, grantee, parent).await? {
         GrantSubtree::Converged(converged) => {
             mint_grantee_scope(entropy, net, voucher, converged, &row, owner).await
@@ -800,12 +809,39 @@ where
     E: Entropy,
     M: Mailbox,
 {
+    post_share_pointer_at(
+        entropy,
+        mailbox,
+        owner.identity_signer,
+        grantee.v,
+        recipient,
+        grantee.permission(),
+        scope_root_name,
+    )
+    .await
+}
+
+/// [`post_share_pointer`] for a row appended to a scope root that already
+/// stands, which has no [`GranteeScopePlan`] (ADR 0026 D1).
+pub async fn post_share_pointer_at<E, M>(
+    entropy: &mut E,
+    mailbox: &M,
+    owner_identity_signer: &EcdsaSigner,
+    v: u64,
+    recipient: &GrantRecipient<'_>,
+    permission: Permission,
+    scope_root_name: &IpnsName,
+) -> Result<(), CreateGrantError>
+where
+    E: Entropy,
+    M: Mailbox,
+{
     let recipient_enc_pub = recipient.enc_pub();
     let pointer = SharePointer::bounded(
         scope_root_name.as_str().as_bytes().to_vec(),
-        owner.identity_signer.verifying_key().to_sec1(),
+        owner_identity_signer.verifying_key().to_sec1(),
         recipient.display_name.clone(),
-        grantee.permission(),
+        permission,
     )
     .map_err(CreateGrantError::DisplayNameTooLong)?;
     // Fresh HPKE ephemeral scalar, never a clock or a constant.
@@ -824,8 +860,8 @@ where
         &recipient_enc_pub,
         &recipient.identity_pk(),
         &ephemeral,
-        grantee.v,
-        owner.identity_signer,
+        v,
+        owner_identity_signer,
         &pointer.encode(),
         &idempotency_key,
     )
@@ -967,7 +1003,7 @@ where
         .await
         .map_err(CreateGrantError::Resume)?
     {
-        return Err(CreateGrantError::TargetAlreadyNamesAScope);
+        return Err(CreateGrantError::TargetIndexLostARoot);
     }
     // The pass runs on the scope this command already proved current, so the
     // parent name is resolved once here and not again inside the pass.
@@ -1436,44 +1472,6 @@ fn committed_as(published: &GrantSetEntry, minted: &GrantSetEntry) -> bool {
         && published.permission == minted.permission
         && published.pseudonym_pk == minted.pseudonym_pk
         && published.masked_recipient_enc_pk() == minted.masked_recipient_enc_pk()
-}
-
-/// Whether `commitment` already commits the row a `Permission::Write` share of
-/// `scope_id` at `scope_root_name` to this recipient would mint. The recipient
-/// is a contact on the grant path and an invite link's throwaway invitee on the
-/// link path; both are one keypair to the row.
-///
-/// The whole-entry rule of [`resume_grantee_scope`] ([`committed_as`]),
-/// for a caller deciding whether a published scope root is the one its own
-/// stalled write share left behind. The row is re-minted here rather than
-/// compared field by field, so the proof cannot drift from the mint it proves.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn commits_write_grant(
-    commitment: &GrantSetCommitment,
-    owner_identity_signer: &EcdsaSigner,
-    owner_enc_secret: &X25519Secret,
-    pointer_read_key: &[u8; SECRET_LEN],
-    recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
-    recipient_enc_pub: &X25519Public,
-    scope_id: &[u8; 16],
-    scope_root_name: &IpnsName,
-) -> bool {
-    let Some(row) = mint_grant_row(
-        owner_identity_signer,
-        owner_enc_secret,
-        pointer_read_key,
-        recipient_identity_pk,
-        recipient_enc_pub,
-        scope_id,
-        scope_root_name.as_str().as_bytes(),
-        Permission::Write,
-    ) else {
-        return false;
-    };
-    commitment
-        .entries
-        .iter()
-        .any(|entry| committed_as(entry, &row.commitment_entry))
 }
 
 /// Re-seal every interior node under the granted folder into `root`, the scope
@@ -2418,6 +2416,7 @@ mod tests {
         let recipient = GrantRecipient {
             contact: &recipient_contact,
             display_name: "Shared Folder".to_string(),
+            grantee_name: None,
         };
         let owner = OwnerGrantKeys {
             enc_secret: &owner_enc,
@@ -2593,6 +2592,7 @@ mod tests {
             let recipient = GrantRecipient {
                 contact: &recipient_contact,
                 display_name: "Shared Folder".to_string(),
+                grantee_name: None,
             };
             let owner = OwnerGrantKeys {
                 enc_secret: &owner_enc,
@@ -2689,6 +2689,7 @@ mod tests {
             let recipient = GrantRecipient {
                 contact: &contact,
                 display_name: label,
+                grantee_name: None,
             };
             block_on(post_share_pointer(
                 &mut entropy,
@@ -3209,7 +3210,7 @@ mod tests {
             refused
                 .expect_err("a mint over a floored target is refused")
                 .check(),
-            "target-already-names-a-scope",
+            "target-index-lost-a-root",
         );
         assert!(published.is_empty(), "and nothing is published");
         assert_nothing_delivered(&hub);

@@ -448,14 +448,15 @@ fn grant_floor_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Vec<u8>
 ///
 /// # Caller obligation
 ///
-/// `recipient` MUST be the recipient of a grant **this owner just minted**, and
-/// nothing else. Never derive it from a resolved record: a re-key withholds a
+/// `recipient` MUST be the recipient of a grant **this owner's own command
+/// makes** — a row it just minted, or a held row it grants again — and nothing
+/// else. Never derive it from a resolved record: a re-key withholds a
 /// blob without removing the row, and a committed write grantee can republish a
 /// pre-cut owner-signed set, so neither a ledger row nor a commitment entry is
 /// evidence that the owner grants that recipient now. Either would lift a
 /// standing cut off bytes the attacker chose.
 ///
-/// Call it **after** the publish that carries the row landed. A raise ahead of
+/// Call it only **after** a publish that carries the row landed. A raise ahead of
 /// the publish is not inert, because the row it needs is not the owner's to
 /// withhold: a committed write grantee republishes a pre-cut owner-signed set
 /// and restores it, so a lift with no publish behind it undoes the cut for

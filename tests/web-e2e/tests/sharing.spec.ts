@@ -62,7 +62,7 @@ test('@full a minted invite link names the claim route and is held until it is d
   await expect(share.mintedLink).toHaveCount(0);
 });
 
-test('@full revoking the link leaves the scope it cut, and the engine names why no second one mints', async ({
+test('@full revoking the link leaves the scope it cut, and the scope takes a further link and a grant', async ({
   page,
 }) => {
   const { files, vault } = await coldStart(page);
@@ -79,13 +79,11 @@ test('@full revoking the link leaves the scope it cut, and the engine names why 
 
   await expect(share.liveLink).toHaveCount(0);
   await expect(share.error).toHaveCount(0);
-  // The mint cut a scope, and a scope outlives the link that cut it — so the
-  // folder now refuses both a second link and a grant of its own, each under
-  // the engine's own check name.
-  await expect(share.noMint).toHaveAttribute('data-check', 'invite-target-already-names-a-scope');
-  await expect(share.noGrant).toHaveAttribute('data-check', 'grant-target-already-names-a-scope');
-  await expect(share.mintButton).toHaveCount(0);
-  await expect(share.grantButton).toBeDisabled();
+  // The mint cut a scope, and a scope outlives the link that cut it. A further
+  // link or grant appends to that scope, so neither is refused.
+  await expect(share.noMint).toHaveCount(0);
+  await expect(share.noGrant).toHaveCount(0);
+  await expect(share.mintButton).toBeVisible();
 });
 
 test('@full the contact import refuses what it cannot read, and leaving retires the refusal', async ({

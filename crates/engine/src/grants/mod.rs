@@ -11,6 +11,7 @@
 //! is a composed core verdict or the adoption gate's; this layer holds no crypto.
 
 pub mod accept;
+pub mod append;
 pub mod child_index;
 pub mod contact;
 pub mod contact_store;
@@ -21,6 +22,7 @@ pub mod invite;
 pub mod invite_mint;
 pub mod ledger;
 pub(crate) mod link_read;
+pub mod name_cache;
 pub mod owner_entry;
 pub mod received_share_store;
 pub(crate) mod received_status;
@@ -30,6 +32,10 @@ pub use accept::{
     AcceptError, AcceptOutcome, BookmarkKey, LinkHold, MAX_RECEIVED_SHARES, ReceivedShare,
     ReceivedShareStore, ReceivedShareStoreError, ReceivedSharesCodecError, ReceivedSharesList,
     SentIndex, SentShare, SharePointer, TooLong, accept_share,
+};
+pub use append::{
+    EditedSet, GrantEditError, HeldRow, append_row, held_row, name_row, rename_grantee,
+    set_permission,
 };
 pub use child_index::{
     DestIndexVersion, UndoDestAdd, canonicalize, insert_child, move_child, remove_child,
@@ -41,28 +47,31 @@ pub use contact_store::{
     MAX_LINK_CONTACT_SCOPES, MAX_LINK_CONTACTS, StagingContactStore, link_budget_full,
     resolve_recipient,
 };
-pub(crate) use create::commits_write_grant;
 pub use create::{
     ConvergedSubtree, CreateGrantError, CreateGrantOutcome, GrantRecipient, GrantResumeResolver,
     GrantSubtree, GrantedReadScope, GranteeScopePlan, InteriorRecord, InteriorResealer, MintNet,
     MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, PromotedSubtree,
     ScopePointerVoucher, ScopeRootPromoter, converge_grant_subtree, create_grant,
-    mint_grantee_scope, post_share_pointer, resume_grantee_scope,
+    mint_grantee_scope, post_share_pointer, post_share_pointer_at, resume_grantee_scope,
 };
 pub use invite::{
     CLAIM_ID_LEN, ClaimOutcome, CommittedLink, CommittedScope, ConvertedClaim,
     DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, InviteClaim, InviteError,
     InviteFragment, LinkTerms, MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES, OwnerAuthority,
-    committed_links, convert_invite_claim, locate_invite_link, mint_invite_grant,
-    post_invite_claim, sole_link,
+    committed_links, convert_invite_claim, locate_invite_link, mint_invite_grant, mint_invite_row,
+    post_invite_claim,
 };
 pub use invite_mint::{
-    InviteMintError, InviteMintOutcome, InviteMintPlan, MintedInviteLink, mint_invite_link,
+    FragmentNames, InviteMintError, InviteMintOutcome, InviteMintPlan, MintedInviteLink,
+    mint_invite_link, seal_fragment,
 };
 pub use ledger::{
     AuthorityViolation, GrantRow, PublishedGrantBlob, UNATTESTED_IDENTITY_PK,
     enforce_committed_ledger, mint_grant_row, recipient_blinded_tag, recipient_self_location,
     row_is_owner_attested, self_locate, self_locate_signed,
+};
+pub use name_cache::{
+    GRANTEE_NAMES_PREFIX, GranteeNameCache, MAX_CACHED_NAMES, StagingGranteeNameCache,
 };
 pub use owner_entry::{AbuseEvent, OwnerEntry, OwnerSeedCache, OwnerSeedEntry, cross_check};
 pub use received_share_store::{RECEIVED_SHARES_PREFIX, StagingReceivedShareStore};

@@ -5,7 +5,7 @@ import type {
   EventDescriptor,
   Permission,
   SharingDescriptor,
-  SharingInviteLinksDescriptor,
+  SharingInviteLinkDescriptor,
 } from '@cipherbox/client';
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -21,11 +21,16 @@ const CODE = new Uint8Array([0xab, 0xcd]);
 const CONTACT = { key: toHex(IDENTITY), identityPublicKey: IDENTITY };
 const FRAGMENT = 'a-bearer-fragment';
 const DEADLINE = 1_700_000_000_000n;
-const NO_LINKS: SharingInviteLinksDescriptor = {
-  live: false,
+const NO_LINKS: SharingInviteLinkDescriptor[] = [];
+/** The link a mint commits, as the engine then reports it. */
+const MINTED: SharingInviteLinkDescriptor = {
+  tag: new Uint8Array(32).fill(0x7a),
+  permission: 'read',
+  expiresAt: DEADLINE,
   expired: false,
-  expiresAt: null,
+  admissionCap: 5,
   pendingClaims: 0,
+  contactBudgetFull: false,
 };
 
 function grantsFor(scopeKey: string): readonly GrantRow[] | null {
@@ -33,20 +38,19 @@ function grantsFor(scopeKey: string): readonly GrantRow[] | null {
 }
 
 /** One engine sharing read: the book always holds the one contact under test. */
-function view(grants: Permission[], links: SharingInviteLinksDescriptor): SharingDescriptor {
-  // A share of the folder mints a scope at it, which a second share cannot.
-  const shared = grants.length > 0 || links.live;
+function view(grants: Permission[], links: SharingInviteLinkDescriptor[]): SharingDescriptor {
   return {
     scope: DOCS,
-    contacts: [{ identityPublicKey: IDENTITY }],
+    contacts: [{ identityPublicKey: IDENTITY, cachedName: null }],
     ownContactCode: new Uint8Array([0xc0, 0xde]),
     state: {
       grants: grants.map((permission) => ({
         recipientIdentityPublicKey: IDENTITY,
         permission,
+        granteeName: null,
       })),
-      grantRefusal: shared ? 'grant-target-already-names-a-scope' : null,
-      inviteLinkRefusal: shared ? 'invite-target-already-names-a-scope' : null,
+      grantRefusal: null,
+      inviteLinkRefusal: null,
       inviteLinks: links,
     },
   };
@@ -59,18 +63,26 @@ function view(grants: Permission[], links: SharingInviteLinksDescriptor): Sharin
  */
 function sharingEngine(
   refusals: Partial<Record<SharingCommand, Error>> = {},
-  held: SharingInviteLinksDescriptor = NO_LINKS
+  held: SharingInviteLinkDescriptor[] = NO_LINKS
 ) {
   const answer = <T,>(name: SharingCommand, value: T) =>
     refusals[name] === undefined ? Promise.resolve(value) : Promise.reject(refusals[name]);
 
   const ledger: Permission[] = [];
-  const links: SharingInviteLinksDescriptor = { ...held };
+  const links: SharingInviteLinkDescriptor[] = [...held];
   const facade = {
     subscribe: (_listener: (event: EventDescriptor) => void) => () => undefined,
     snapshot: () => new Promise<never>(() => undefined),
     setFocus: () => Promise.resolve(),
-    sharing: vi.fn(() => answer('read', view(ledger, { ...links }))),
+    sharing: vi.fn(() =>
+      answer(
+        'read',
+        view(
+          ledger,
+          links.map((link) => ({ ...link }))
+        )
+      )
+    ),
     importContact: vi.fn(() =>
       answer('importContact', {
         kind: 'contactImported' as const,
@@ -86,21 +98,19 @@ function sharingEngine(
       if (refusals.revoke === undefined) ledger.length = 0;
       return answer('revoke', { kind: 'done' as const });
     }),
-    downgrade: vi.fn(() => {
-      if (refusals.downgrade === undefined) ledger.splice(0, ledger.length, 'read');
+    changePermission: vi.fn((_scope: Uint8Array, _key: Uint8Array, permission: Permission) => {
+      if (refusals.downgrade === undefined) ledger.splice(0, ledger.length, permission);
       return answer('downgrade', { kind: 'done' as const });
     }),
     createInviteLink: vi.fn(() => {
-      if (refusals.createInviteLink === undefined) {
-        links.live = true;
-        links.expiresAt = DEADLINE;
-      }
+      if (refusals.createInviteLink === undefined) links.push({ ...MINTED });
       return answer('createInviteLink', { kind: 'inviteLinkMinted' as const, fragment: FRAGMENT });
     }),
-    revokeInviteLink: vi.fn(() => {
+    revokeInviteLink: vi.fn((_scope: Uint8Array, linkTag?: Uint8Array) => {
       if (refusals.revokeInviteLink === undefined) {
-        links.live = false;
-        links.expiresAt = null;
+        const kept =
+          linkTag === undefined ? [] : links.filter((link) => toHex(link.tag) !== toHex(linkTag));
+        links.splice(0, links.length, ...kept);
       }
       return answer('revokeInviteLink', { kind: 'done' as const });
     }),
@@ -227,7 +237,7 @@ describe('grant commands', () => {
 
     await expect(result.current.downgrade(CONTACT)).resolves.toBe(true);
 
-    expect(engine.facade.downgrade).toHaveBeenCalledWith(DOCS, IDENTITY);
+    expect(engine.facade.changePermission).toHaveBeenCalledWith(DOCS, IDENTITY, 'read');
     expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'read' }]);
   });
 
@@ -252,13 +262,11 @@ describe('invite link commands', () => {
     await expect(result.current.createInviteLink('read', DEADLINE)).resolves.toBe(FRAGMENT);
 
     expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', DEADLINE);
-    expect(linksNow()).toEqual({ ...NO_LINKS, live: true, expiresAt: DEADLINE });
+    expect(linksNow()).toEqual([MINTED]);
   });
 
   it('hands back no fragment for a mint the engine refused', async () => {
-    const refusal = new EngineRequestError(
-      'unsupported target: invite-target-already-names-a-scope'
-    );
+    const refusal = new EngineRequestError('unsupported target: invite-target-index-lost-a-root');
     const engine = sharingEngine({ createInviteLink: refusal });
     const { result } = mount(engine.client);
 
@@ -271,9 +279,9 @@ describe('invite link commands', () => {
     const { result } = mount(engine.client);
     await result.current.createInviteLink('read', DEADLINE);
 
-    await expect(result.current.revokeInviteLink()).resolves.toBe(true);
+    await expect(result.current.revokeInviteLink(MINTED.tag)).resolves.toBe(true);
 
-    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS);
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, MINTED.tag);
     expect(linksNow()).toEqual(NO_LINKS);
   });
 
@@ -282,9 +290,9 @@ describe('invite link commands', () => {
     const { result } = mount(engine.client);
     await result.current.createInviteLink('read', DEADLINE);
 
-    await expect(result.current.revokeInviteLink()).resolves.toBe(false);
+    await expect(result.current.revokeInviteLink(MINTED.tag)).resolves.toBe(false);
 
-    expect(linksNow()).toEqual({ ...NO_LINKS, live: true, expiresAt: DEADLINE });
+    expect(linksNow()).toEqual([MINTED]);
   });
 
   it('lists the grant a conversion committed, not the claim it was sent', async () => {
