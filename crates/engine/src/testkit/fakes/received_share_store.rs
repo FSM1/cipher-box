@@ -37,6 +37,12 @@ impl InMemoryReceivedShareStore {
         self.inner.lock().expect("lock").failing = failing;
     }
 
+    /// The persisted list's encoded bytes.
+    pub(crate) fn contents(&self) -> Option<Vec<u8>> {
+        let inner = self.inner.lock().expect("lock");
+        inner.stored.as_ref().map(|stored| stored.to_vec())
+    }
+
     /// The number of persists that have succeeded.
     pub fn persist_count(&self) -> u32 {
         self.inner.lock().expect("lock").persists

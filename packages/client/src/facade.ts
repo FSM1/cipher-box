@@ -23,6 +23,7 @@ import type {
   DeviceRendezvousResult,
   DeviceRendezvousStep,
   ForgottenResidual,
+  InvitePreviewDescriptor,
   NodeKind,
   OpenedStream,
   PendingApprovalDescriptor,
@@ -148,6 +149,19 @@ export class EngineFacade {
 
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     return this.transport.read({ kind: 'receivedShares' });
+  }
+
+  /**
+   * Previews the link a URL fragment carries, before the join: the verified
+   * names, the permission conversion grants, the link state and a one-level
+   * listing. It posts nothing and persists nothing. The fragment is the whole
+   * bearer capability, as for [`claimInviteLink`].
+   */
+  previewInviteLink(fragment: string): Promise<InvitePreviewDescriptor> {
+    if (fragment.length > MAX_FRAGMENT_CHARS) {
+      return Promise.reject(new Error('that is not an invite link'));
+    }
+    return this.transport.read({ kind: 'invitePreview', fragment });
   }
 
   /** The `/bin` route's whole read; an `origin` of `'defaults'` is the fallback, not a read. */

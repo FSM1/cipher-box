@@ -2,7 +2,7 @@
 
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, Ordering};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -155,6 +155,20 @@ impl InMemoryRecordStore {
             .expect("lock")
             .get(endpoint)
             .and_then(|records| records.get(routing_key).cloned())
+    }
+
+    /// Every record each endpoint holds, by endpoint and routing key.
+    pub(crate) fn contents(&self) -> BTreeMap<(EndpointId, String), Vec<u8>> {
+        self.inner
+            .lock()
+            .expect("lock")
+            .iter()
+            .flat_map(|(endpoint, records)| {
+                records
+                    .iter()
+                    .map(|(key, record)| ((endpoint.clone(), key.clone()), record.clone()))
+            })
+            .collect()
     }
 
     /// Every routing key `endpoint` holds a record at, sorted.

@@ -27,7 +27,7 @@ use cipherbox_core::suite::secret::ct_eq;
 
 use zeroize::Zeroizing;
 
-use cipherbox_engine::gate::floor;
+use cipherbox_engine::gate::{floor, record_cut_epoch_floor};
 use cipherbox_engine::grants::{
     CLAIM_ID_LEN, Contact, ContactStore, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME,
     EphemeralInvitee, GrantRow, InviteClaim, InviteFragment, LinkHold, LinkTerms,
@@ -40,8 +40,8 @@ use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, Mailbox, RecordTransport, Scheduler, SnapshotCache, StagingStore,
-    UnixMillis,
+    BoxedTask, ContactLabel, FloorStore, Mailbox, RecordTransport, Scheduler,
+    SharerScopedFloorStore, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::MAX_QUARANTINE_ATTEMPTS;
@@ -59,9 +59,10 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, ContentProfile,
-    DeadLetterReason, Engine, EngineError, Event, EventStream, GatewayConfig, LoginSecret, NodeId,
-    NodeKind, Permission, RecordReader, SessionBearer, SharePointer, SharingInviteLink,
-    StoragePolicy, SyncTimingProfile, decode_queue, load_bin_index, poll_verified, post_sealed,
+    DeadLetterReason, Engine, EngineError, Event, EventStream, GatewayConfig, InvitePreview,
+    LinkPreviewState, LoginSecret, NodeId, NodeKind, Permission, PreviewEntry, PreviewNames,
+    RecordReader, SessionBearer, SharePointer, SharingInviteLink, StoragePolicy, SyncTimingProfile,
+    decode_queue, load_bin_index, poll_verified, post_sealed,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -5417,6 +5418,291 @@ fn a_join_whose_names_do_not_verify_bookmarks_no_name() {
     assert!(shares[0].via_link);
 }
 
+/// Preview `fragment` on `holder`.
+fn preview(holder: &Engine<FakeSeamTypes>, fragment: &str) -> Result<InvitePreview, EngineError> {
+    block_on(holder.preview_invite_link(fragment))
+}
+
+/// ADR 0028 D3: a preview reads the link and the scope root, and every store
+/// it could write holds what it held: no floor, no bookmark, no contact, no
+/// cache entry, no record and no mailbox item.
+#[test]
+fn a_preview_leaves_every_seam_store_unchanged() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (holder, _holder_events, _holder_tasks) = recipient_session(&fx);
+    let before = fx.recipient_device.durable_state();
+
+    let preview = preview(&holder, &fragment).expect("the preview reads");
+
+    assert_eq!(preview.state, LinkPreviewState::Live);
+    assert_eq!(preview.permission, Some(Permission::Read));
+    assert!(!preview.joined);
+    assert!(
+        fx.recipient_device.durable_state() == before,
+        "the preview wrote nothing"
+    );
+    assert!(
+        fx.world.scheduler.take_spawned_tasks().is_empty(),
+        "and filed no pass"
+    );
+}
+
+/// ADR 0027 D5: the names show only under the owner signature. A relabelled
+/// fragment shows none, and its link still previews.
+#[test]
+fn a_preview_shows_the_names_only_when_the_owner_signature_verifies() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (holder, _holder_events, _holder_tasks) = recipient_session(&fx);
+
+    assert_eq!(
+        preview(&holder, &fragment)
+            .expect("the preview reads")
+            .names,
+        Some(PreviewNames {
+            owner_name: "owner".to_owned(),
+            folder_name: "shared".to_owned(),
+        })
+    );
+
+    let mut relabelled = InviteFragment::decode(&fragment).expect("the mint's own fragment");
+    relabelled.folder_name = "Taxes".to_owned();
+    let forged = preview(&holder, &relabelled.encode().expect("inside the bound"))
+        .expect("a bad names signature still previews");
+    assert_eq!(forged.names, None);
+    assert_eq!(forged.state, LinkPreviewState::Live, "and the link works");
+}
+
+/// ADR 0028 D2: one read of the scope root lists its direct children by name
+/// and kind, and nothing below them.
+#[test]
+fn a_preview_lists_the_direct_children_by_name_and_kind_only() {
+    let mut fx = GrantScenario::new();
+    let drafts = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "drafts",
+    );
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, drafts, "deep");
+    block_on(fx.engine.command(Command::Create {
+        parent: fx.folder,
+        name: "notes.txt".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a metadata create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let fragment = fx.mint_link();
+    let (holder, _holder_events, _holder_tasks) = recipient_session(&fx);
+
+    assert_eq!(
+        preview(&holder, &fragment)
+            .expect("the preview reads")
+            .listing,
+        vec![
+            PreviewEntry {
+                name: "drafts".to_owned(),
+                kind: NodeKind::Folder,
+            },
+            PreviewEntry {
+                name: "notes.txt".to_owned(),
+                kind: NodeKind::File,
+            },
+        ]
+    );
+}
+
+/// A fragment whose owner code names another identity fails the re-point
+/// object's verify: a trust violation, and still no store changes.
+#[test]
+fn a_preview_of_a_forged_re_point_is_a_trust_violation_that_writes_nothing() {
+    let mut fx = GrantScenario::new();
+    let mut forged = InviteFragment::decode(&fx.mint_link()).expect("the mint's own fragment");
+    forged.owner_contact_code = contact_code(&BYSTANDER_SECRET);
+    let (holder, _holder_events, _holder_tasks) = recipient_session(&fx);
+    let before = fx.recipient_device.durable_state();
+
+    assert!(matches!(
+        preview(&holder, &forged.encode().expect("inside the bound")),
+        Err(EngineError::TrustViolation { .. })
+    ));
+    assert!(
+        fx.recipient_device.durable_state() == before,
+        "the refused preview wrote nothing"
+    );
+}
+
+/// ADR 0028 D5: a link past its deadline previews as expired, with the
+/// permission it would have granted and no listing.
+#[test]
+fn a_preview_past_the_link_deadline_is_expired() {
+    let mut fx = GrantScenario::new();
+    let deadline = fx
+        .world
+        .scheduler
+        .now()
+        .saturating_add(Duration::from_secs(60));
+    let CommandOutcome::InviteLinkMinted(link) =
+        block_on(fx.engine.command(Command::CreateInviteLink {
+            node: fx.folder,
+            permission: Permission::Read,
+            expires_at: Some(deadline),
+            owner_name: String::new(),
+        }))
+        .expect("the link mints")
+    else {
+        panic!("minting a link answers with the link");
+    };
+    fx.world.scheduler.advance_to(deadline);
+    let (holder, _holder_events, _holder_tasks) = recipient_session(&fx);
+
+    let preview = preview(&holder, &link.fragment).expect("the preview reads");
+    assert_eq!(preview.state, LinkPreviewState::Expired);
+    assert_eq!(preview.permission, Some(Permission::Read));
+    assert!(preview.listing.is_empty());
+}
+
+/// A revoked link previews as revoked: the scope pointer names the root the
+/// cut moved to, and its set commits no link.
+#[test]
+fn a_preview_of_a_revoked_link_is_revoked() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    let (holder, _holder_events, _holder_tasks) = recipient_session(&fx);
+
+    let preview = preview(&holder, &fragment).expect("the preview reads");
+    assert_eq!(preview.state, LinkPreviewState::Revoked);
+    assert_eq!(preview.permission, None);
+}
+
+/// A head block that fails its content address under the scope root's own
+/// record is a gate rejection: a trust violation, never an unresolvable link.
+#[test]
+fn a_preview_whose_root_head_fails_its_content_address_is_a_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let root = write_name(fx.folder);
+    let record = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], root.as_str())
+        .expect("the scope root is published");
+    let value = IpnsRecord::unmarshal(&record)
+        .and_then(|record| record.verify(&root))
+        .expect("the published record verifies under its own name")
+        .value;
+    let cid = core::str::from_utf8(&value)
+        .expect("utf8 value")
+        .strip_prefix("/ipfs/")
+        .expect("an /ipfs/ pointer")
+        .to_owned();
+    let mut head = fx.blocks.get(&cid).expect("the head block is on the plane");
+    head[0] ^= 0x01;
+    fx.blocks.replace(&cid, head);
+    let (holder, _holder_events, _holder_tasks) = recipient_session(&fx);
+    let before = fx.recipient_device.durable_state();
+
+    assert!(matches!(
+        preview(&holder, &fragment),
+        Err(EngineError::TrustViolation { .. })
+    ));
+    assert!(
+        fx.recipient_device.durable_state() == before,
+        "the refused preview wrote nothing"
+    );
+}
+
+/// A pointer no endpoint answers is availability, never a verdict.
+#[test]
+fn a_preview_whose_pointer_does_not_answer_is_unresolvable() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let pointer = InviteFragment::decode(&fragment)
+        .expect("the mint's own fragment")
+        .scope_pointer_name;
+    fx.world.record_store.fail_get_for(pointer.as_str());
+    let (holder, _holder_events, _holder_tasks) = recipient_session(&fx);
+
+    let preview = preview(&holder, &fragment).expect("the preview reads");
+    assert_eq!(preview.state, LinkPreviewState::Unresolvable);
+    assert!(preview.listing.is_empty());
+}
+
+/// ADR 0028 D5: a link this account joined previews as joined, and the root
+/// its pass adopted still lists.
+#[test]
+fn a_preview_of_a_joined_link_reads_the_root_the_join_adopted() {
+    let mut fx = GrantScenario::new();
+    create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "drafts",
+    );
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment.clone()),
+        Ok(CommandOutcome::Done)
+    );
+    let before = fx.recipient_device.durable_state();
+
+    let preview = preview(&holder, &fragment).expect("the preview reads");
+    assert!(preview.joined);
+    assert_eq!(preview.state, LinkPreviewState::Live);
+    assert_eq!(preview.listing.len(), 1);
+    assert!(
+        fx.recipient_device.durable_state() == before,
+        "the preview wrote nothing"
+    );
+}
+
+/// Gate stage 2 refuses a scope root whose owner commitment does not verify,
+/// here one a later cut on this device's floor superseded: a trust violation,
+/// never an unresolvable link, and no store changes.
+#[test]
+fn a_preview_of_a_root_whose_commitment_does_not_verify_is_a_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let scope_id = InviteFragment::decode(&fragment)
+        .expect("the mint's own fragment")
+        .scope_id;
+    let (holder, _holder_events, _holder_tasks) = recipient_session(&fx);
+    let floors = fx.recipient_device.floors(&RECIPIENT_SECRET);
+    block_on(record_cut_epoch_floor(
+        &SharerScopedFloorStore::granted_by(
+            &floors,
+            ContactLabel::of(
+                &kdf::contact_label_seed(&RECIPIENT_SECRET),
+                &owner_identity().verifying_key().to_sec1(),
+            ),
+        ),
+        &scope_id,
+        u64::MAX,
+    ))
+    .expect("the floor raises");
+    let before = fx.recipient_device.durable_state();
+
+    assert!(matches!(
+        preview(&holder, &fragment),
+        Err(EngineError::TrustViolation { .. })
+    ));
+    assert!(
+        fx.recipient_device.durable_state() == before,
+        "the refused preview wrote nothing"
+    );
+}
+
 /// Run the sweeps a stalled mint filed to completion. The mint files the
 /// parent's sweep, whose index self-heal names the promoted root.
 fn settle_filed_sweeps(fx: &GrantScenario) {
@@ -6436,6 +6722,47 @@ fn a_grant_names_its_grantee_on_the_row_it_mints_or_appends() {
             Some(("Bob".to_owned(), NameSource::Owner)),
         ]
     );
+}
+
+/// A name a grant gives goes into this device's name cache, on a fresh scope
+/// and on an append alike, so the sharing read of another folder pre-fills it
+/// (ADR 0027 D4).
+#[test]
+fn a_named_grant_pre_fills_the_name_on_another_folder() {
+    let mut fx = GrantScenario::new();
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    assert_eq!(
+        fx.grant_named(Permission::Read, "Alice"),
+        Ok(CommandOutcome::Done)
+    );
+    block_on(fx.engine.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the second recipient's code imports");
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Read,
+            grantee_name: Some("Bob".to_owned()),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    let contacts = block_on(fx.engine.sharing(other))
+        .expect("a sharing read")
+        .contacts;
+    let cached = |identity: &[u8]| {
+        contacts
+            .iter()
+            .find(|contact| contact.identity_public_key == identity)
+            .expect("an imported contact")
+            .cached_name
+            .clone()
+    };
+    let recipient = recipient_identity().verifying_key().to_sec1();
+    assert_eq!(cached(&recipient).as_deref(), Some("Alice"));
+    assert_eq!(cached(&bystander_identity()).as_deref(), Some("Bob"));
 }
 
 /// A committed writer authors the ledger, so it can relabel a row. A row whose

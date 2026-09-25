@@ -12,8 +12,9 @@ use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
 use cipherbox_engine::settings::MAX_BIN_RETENTION_DAYS;
 use cipherbox_wasm::{
-    BinOriginKind, BinView, ByoIpfsConfig, ByoKind, Command, DeadLetterReason, Event, NodeId,
-    NodeKind, OpPhase, PendingClass, Permission, PinMode, SnapshotView, Staleness, VaultSettings,
+    BinOriginKind, BinView, ByoIpfsConfig, ByoKind, Command, DeadLetterReason, Event,
+    InvitePreview, NodeId, NodeKind, OpPhase, PendingClass, Permission, PinMode, SnapshotView,
+    Staleness, VaultSettings,
 };
 use js_sys::{Array, BigInt, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -300,6 +301,75 @@ fn bin_view_getters_cross_with_boundary_shapes() {
             "{absent} must have no getter on the boundary"
         );
     }
+}
+
+/// The invite preview crosses with the names present together or absent
+/// together, the state as its stable name, and the listing as a JS array of
+/// names and kinds with no other field.
+#[wasm_bindgen_test]
+fn invite_preview_getters_cross_with_boundary_shapes() {
+    let get = |target: &JsValue, key: &str| {
+        Reflect::get(target, &JsValue::from_str(key)).expect("getter is readable")
+    };
+    let verified: JsValue = InvitePreview::from_facade(facade::InvitePreview {
+        names: Some(facade::PreviewNames {
+            owner_name: "Ada".into(),
+            folder_name: "trips".into(),
+        }),
+        permission: Some(facade::Permission::Write),
+        state: facade::LinkPreviewState::Live,
+        joined: true,
+        listing: vec![facade::PreviewEntry {
+            name: "notes.txt".into(),
+            kind: facade::NodeKind::File,
+        }],
+    })
+    .into();
+
+    assert_eq!(
+        get(&verified, "ownerName").as_string().as_deref(),
+        Some("Ada")
+    );
+    assert_eq!(
+        get(&verified, "folderName").as_string().as_deref(),
+        Some("trips")
+    );
+    assert_eq!(
+        get(&verified, "permission"),
+        JsValue::from(Permission::Write)
+    );
+    assert_eq!(get(&verified, "state").as_string().as_deref(), Some("live"));
+    assert_eq!(get(&verified, "joined").as_bool(), Some(true));
+    let listing = get(&verified, "listing");
+    assert!(listing.is_instance_of::<Array>());
+    let entry = listing.unchecked_into::<Array>().get(0);
+    assert_eq!(
+        get(&entry, "name").as_string().as_deref(),
+        Some("notes.txt")
+    );
+    assert_eq!(get(&entry, "kind"), JsValue::from(NodeKind::File));
+    for absent in ["size", "id", "ipnsName"] {
+        assert!(
+            get(&entry, absent).is_undefined(),
+            "{absent} must have no getter on the boundary"
+        );
+    }
+
+    let unverified: JsValue = InvitePreview::from_facade(facade::InvitePreview {
+        names: None,
+        permission: None,
+        state: facade::LinkPreviewState::Unresolvable,
+        joined: false,
+        listing: Vec::new(),
+    })
+    .into();
+    for absent in ["ownerName", "folderName", "permission"] {
+        assert!(get(&unverified, absent).is_undefined(), "{absent}");
+    }
+    assert_eq!(
+        get(&unverified, "state").as_string().as_deref(),
+        Some("unresolvable")
+    );
 }
 
 /// The snapshot read surface crosses with boundary-correct JS shapes: node ids

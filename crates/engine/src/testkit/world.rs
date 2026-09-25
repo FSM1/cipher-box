@@ -1,9 +1,14 @@
 //! The fake world — shared network state plus per-device seam sets, the
 //! seed of the simulation harness (blueprint/testing.md).
 
+use std::collections::BTreeMap;
+
 use cipherbox_core::kdf;
 
-use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore, SeamSet, SeamTypes};
+use crate::seams::{
+    EndpointId, MailboxItem, OwnerScopedFloorStore, QueueGenerationStore, SeamSet, SeamTypes,
+};
+use crate::testkit::fakes::StagingContents;
 use crate::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemoryMailbox, InMemoryMailboxHub,
     InMemoryNameRegistry, InMemoryReceivedShareStore, InMemoryRecordStore, InMemorySnapshotCache,
@@ -114,7 +119,39 @@ pub struct FakeDevice {
     pub record_store: InMemoryRecordStore,
 }
 
+/// Every durable byte a device and the shared world hold: the device's floors,
+/// op queue and staged bytes, snapshot cache, credential and received-share
+/// list, the names its registry queries asked about, then the network's
+/// records and the hub's inboxes. No `Debug`, so a failed comparison prints no
+/// key material.
+#[derive(PartialEq, Eq)]
+pub struct DurableState {
+    floors: [BTreeMap<Vec<u8>, u64>; 2],
+    staging: StagingContents,
+    snapshot_cache: BTreeMap<Vec<u8>, Vec<u8>>,
+    credential: Option<Vec<u8>>,
+    received_shares: Option<Vec<u8>>,
+    name_registry: Vec<String>,
+    records: BTreeMap<(EndpointId, String), Vec<u8>>,
+    inboxes: BTreeMap<String, Vec<MailboxItem>>,
+}
+
 impl FakeDevice {
+    /// Everything this device and the world hold durably, for a test that
+    /// proves a call wrote nothing.
+    pub fn durable_state(&self) -> DurableState {
+        DurableState {
+            floors: self.floor_store.contents(),
+            staging: self.staging_store.inner().contents(),
+            snapshot_cache: self.snapshot_cache.contents(),
+            credential: self.credential_store.contents(),
+            received_shares: self.received_share_store.contents(),
+            name_registry: self.name_registry.queries(),
+            records: self.record_store.contents(),
+            inboxes: self.mailbox.hub_contents(),
+        }
+    }
+
     /// This device's floors as the engine keys them for the session `secret`
     /// starts: [`OwnerScopedFloorStore`] namespaces every key by identity, so a
     /// raw read of the shared store finds none of the engine's own floors.

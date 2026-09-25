@@ -36,8 +36,9 @@ use crate::seams_bridge::{
     StagingStoreAdapter,
 };
 use crate::{
-    AuthMethod, BinView, Command, CommandOutcome, Event, NodeId, OpenedStream, PendingApproval,
-    ReceivedShareRow, RegisteredDevice, SharingView, SnapshotView, VaultStorageView, VersionEntry,
+    AuthMethod, BinView, Command, CommandOutcome, Event, InvitePreview, NodeId, OpenedStream,
+    PendingApproval, ReceivedShareRow, RegisteredDevice, SharingView, SnapshotView,
+    VaultStorageView, VersionEntry,
 };
 
 /// The largest integer a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
@@ -368,6 +369,24 @@ impl EngineHandle {
                 .map(JsValue::from)
                 .collect::<js_sys::Array>()
                 .into())
+        })
+    }
+
+    /// Previews the invite link `fragment` names before the join (ADR 0028
+    /// D3). Posts nothing and persists nothing. Resolves with an
+    /// `InvitePreview`; rejects with the engine error.
+    #[wasm_bindgen(js_name = previewInviteLink)]
+    pub fn preview_invite_link(&self, fragment: String) -> Promise {
+        let engine = self.engine.clone();
+        let fragment = Zeroizing::new(fragment);
+        future_to_promise(async move {
+            let preview = engine
+                .read()
+                .await
+                .preview_invite_link(&fragment)
+                .await
+                .map_err(engine_error)?;
+            Ok(InvitePreview::from_facade(preview).into())
         })
     }
 

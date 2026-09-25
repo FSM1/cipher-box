@@ -319,6 +319,31 @@ export interface ReceivedShareDescriptor {
   viaLink: boolean;
 }
 
+/** Where an invite link stands, as its preview read it (mirrors `LinkPreviewState`). */
+export type InvitePreviewState = 'live' | 'expired' | 'revoked' | 'unresolvable';
+
+/** One direct child of a previewed folder: a name and a kind, nothing else. */
+export interface InvitePreviewEntryDescriptor {
+  name: string;
+  kind: NodeKind;
+}
+
+/**
+ * What the invite page shows before the join (mirrors `InvitePreview`). The
+ * preview posts nothing and persists nothing.
+ */
+export interface InvitePreviewDescriptor {
+  /** `null` when the owner signature over the names does not verify; the link still works. */
+  names: { ownerName: string; folderName: string } | null;
+  /** The permission conversion grants, or `null` when no link entry was read. */
+  permission: Permission | null;
+  state: InvitePreviewState;
+  /** This account already joined the folder: a host offers "open folder", not "join". */
+  joined: boolean;
+  /** Empty unless `state` is `'live'`. */
+  listing: InvitePreviewEntryDescriptor[];
+}
+
 /**
  * Where a bin row's origin folder stands in the vault (mirrors the facade
  * `BinOrigin`). `'gone'` is the state a default restore refuses on, so a host
@@ -796,6 +821,7 @@ export type ReadDescriptor =
   | { kind: 'snapshot'; folder: Uint8Array | null }
   | { kind: 'sharing'; scope: Uint8Array | null }
   | { kind: 'receivedShares' }
+  | { kind: 'invitePreview'; fragment: string }
   | { kind: 'bin' }
   | { kind: 'vaultStorage' }
   | { kind: 'authMethods' }
@@ -814,6 +840,7 @@ export interface ReadResults {
   snapshot: SnapshotDescriptor;
   sharing: SharingDescriptor;
   receivedShares: ReceivedShareDescriptor[];
+  invitePreview: InvitePreviewDescriptor;
   bin: BinDescriptor;
   vaultStorage: VaultStorageDescriptor;
   authMethods: AuthMethodDescriptor[];
@@ -843,6 +870,7 @@ export const READ_KINDS: ReadonlySet<string> = new Set<ReadDescriptor['kind']>([
   'snapshot',
   'sharing',
   'receivedShares',
+  'invitePreview',
   'bin',
   'vaultStorage',
   'authMethods',

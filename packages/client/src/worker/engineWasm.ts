@@ -195,6 +195,22 @@ export interface WasmReceivedShareRow {
   readonly viaLink: boolean;
 }
 
+/** wasm-bindgen `PreviewEntry` — one direct child of a previewed folder. */
+export interface WasmPreviewEntry {
+  readonly name: string;
+  readonly kind: number;
+}
+
+/** wasm-bindgen `InvitePreview` — what the invite page shows before the join. */
+export interface WasmInvitePreview {
+  readonly ownerName?: string;
+  readonly folderName?: string;
+  readonly permission?: number;
+  readonly state: string;
+  readonly joined: boolean;
+  readonly listing: readonly WasmPreviewEntry[];
+}
+
 /** wasm-bindgen `BinRow` — one soft-deleted node, key-free by construction. */
 export interface WasmBinRow {
   readonly node: Uint8Array;
@@ -314,6 +330,7 @@ export interface WasmEngineHandle {
   snapshot(folder?: WasmNodeId): Promise<WasmSnapshotView>;
   sharing(scopeRoot?: WasmNodeId): Promise<WasmSharingView>;
   receivedShares(): Promise<readonly WasmReceivedShareRow[]>;
+  previewInviteLink(fragment: string): Promise<WasmInvitePreview>;
   bin(): Promise<WasmBinView>;
   vaultStorage(): Promise<WasmVaultStorageView>;
   authMethods(): Promise<readonly WasmAuthMethod[]>;

@@ -51,4 +51,4 @@ pub use owner_root::{
     OwnerRootFixture, OwnerRootSpec, owner_root_fixture, owner_root_fixture_at,
     owner_root_pseudonym, reencoded, with_cut_epoch,
 };
-pub use world::{FakeDevice, FakeSeamTypes, FakeWorld};
+pub use world::{DurableState, FakeDevice, FakeSeamTypes, FakeWorld};

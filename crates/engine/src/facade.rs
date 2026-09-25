@@ -65,7 +65,10 @@ use crate::grants::grafted::{
     floor_view, is_own_scope,
 };
 use crate::grants::inbox::{PendingInviteClaims, ShareInbox};
-use crate::grants::link_read::{JoinRead, JoinSeams, join_read, pending_link_bookmark};
+use crate::grants::link_read::{
+    JoinRead, JoinSeams, LinkReadRefusal, PreviewRead, join_read, pending_link_bookmark,
+    preview_read,
+};
 use crate::grants::received_status::{
     ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name, live_permission,
 };
@@ -73,11 +76,12 @@ use crate::grants::{
     ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError, ConvertedClaim,
     CreateGrantError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee,
     GrantRecipient, GranteeScopePlan, InviteClaim, InviteError, InviteFragment, InviteMintError,
-    InviteMintPlan, LinkTerms, MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan,
-    PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError, ResolutionClass, SharePointer,
-    StagingContactStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_links,
-    convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
-    link_budget_full, locate_invite_link, mint_invite_link, post_invite_claim, post_share_pointer,
+    InviteMintPlan, LinkHold, LinkTerms, MintedInviteLink, OwnerAuthority, OwnerGrantKeys,
+    ParentScopePlan, PublishedGrantBlob, ReceivedShare, ReceivedShareStore,
+    ReceivedShareStoreError, ResolutionClass, SharePointer, StagingContactStore,
+    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_links, convert_invite_claim,
+    create_grant, enforce_committed_ledger, import_contact, insert_child, link_budget_full,
+    locate_invite_link, mint_invite_link, post_invite_claim, post_share_pointer,
     recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::grants::{
@@ -660,6 +664,114 @@ impl fmt::Debug for ReceivedShareRow {
             .field("resolution", &self.resolution)
             .field("via_link", &self.via_link)
             .finish()
+    }
+}
+
+/// Where an invite link stands, as its preview read it (ADR 0028 D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkPreviewState {
+    /// The owner-signed set commits the link, and its deadline stands.
+    Live,
+    /// The link entry's deadline is reached.
+    Expired,
+    /// The owner-signed set commits no link at the link tag.
+    Revoked,
+    /// The pointer or the scope root did not answer.
+    Unresolvable,
+}
+
+impl LinkPreviewState {
+    /// The stable name a host branches on.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Expired => "expired",
+            Self::Revoked => "revoked",
+            Self::Unresolvable => "unresolvable",
+        }
+    }
+}
+
+/// The owner name and the folder name, under a verified owner signature
+/// (ADR 0027 D5).
+#[derive(Clone, PartialEq, Eq)]
+pub struct PreviewNames {
+    /// The owner's name, as the owner gave it. May be empty.
+    pub owner_name: String,
+    /// The shared folder's name.
+    pub folder_name: String,
+}
+
+impl fmt::Debug for PreviewNames {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PreviewNames")
+            .field("owner_name", &RedactedText::of(&self.owner_name))
+            .field("folder_name", &RedactedText::of(&self.folder_name))
+            .finish()
+    }
+}
+
+/// One direct child of a previewed folder: a name and a kind, and nothing
+/// that costs a read of the child (ADR 0028 D2).
+#[derive(Clone, PartialEq, Eq)]
+pub struct PreviewEntry {
+    /// The child's name.
+    pub name: String,
+    /// The child's kind.
+    pub kind: NodeKind,
+}
+
+impl fmt::Debug for PreviewEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PreviewEntry")
+            .field("name", &RedactedText::of(&self.name))
+            .field("kind", &self.kind)
+            .finish()
+    }
+}
+
+/// What the invite page shows before the join (ADR 0028 D2, D5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvitePreview {
+    /// The names, only when the owner signature over them verifies. A link
+    /// with a bad signature shows none, and still works.
+    pub names: Option<PreviewNames>,
+    /// The permission conversion grants, when the preview read the link entry.
+    pub permission: Option<Permission>,
+    /// Where the link stands.
+    pub state: LinkPreviewState,
+    /// This account already holds a bookmark for the folder.
+    pub joined: bool,
+    /// The scope root's direct children. Empty unless the link is live.
+    pub listing: Vec<PreviewEntry>,
+}
+
+/// An invite fragment decoded into the bookmark the join and the preview read
+/// the link through, and the seams they read it over.
+struct LinkOpening<'a, T: SeamTypes> {
+    fragment: InviteFragment,
+    invitee: EphemeralInvitee,
+    owner: Contact,
+    names: Option<PreviewNames>,
+    share: ReceivedShare,
+    hold: LinkHold,
+    seams: LinkSeams<'a, T>,
+}
+
+/// The link read's seams over one engine's seam family.
+type LinkSeams<'a, T> = JoinSeams<
+    'a,
+    RecordAccelerator<<T as SeamTypes>::RecordTransport>,
+    <T as SeamTypes>::Http,
+    SharerScopedFloorStore<'a, OwnerScopedFloorStore<<T as SeamTypes>::FloorStore>>,
+>;
+
+fn link_read_refused(refusal: LinkReadRefusal) -> EngineError {
+    match refusal {
+        LinkReadRefusal::Repoint => EngineError::TrustViolation {
+            message: "the scope pointer's re-point object was refused".to_owned(),
+        },
+        LinkReadRefusal::Gate(rejection) => EngineError::from_gate(GateError::Rejected(rejection)),
     }
 }
 
@@ -8833,15 +8945,23 @@ where {
             Some(granted_read_scope.epoch),
         );
 
-        if let ScopeShare::Contact { contact, .. } = &share {
+        if let ScopeShare::Contact {
+            contact,
+            grantee_name,
+        } = &share
+        {
             // The grant this mint published is one no claim conversion recorded,
             // so a later cut must not collect the recipient's book entry and
             // leave that grant with no resolvable recipient. An owner grant is a
             // vouch, and it outranks whatever a claim wrote.
+            let identity_pk = contact.identity_pk().to_sec1();
             self.contact_store(session)
-                .vouch(&contact.identity_pk().to_sec1())
+                .vouch(&identity_pk)
                 .await
                 .map_err(EngineError::from_contact_store)?;
+            if let Some(name) = grantee_name {
+                let _ = self.name_cache(session).remember(&identity_pk, name).await;
+            }
         }
         let scope_root_name = match mint_permission {
             Permission::Read => scope_root_name,
@@ -9095,7 +9215,7 @@ where {
                             .map(|()| CommandOutcome::Done);
                     }
                     None => {
-                        let grantee_name = grantee_name.map(owner_grantee_name).transpose()?;
+                        let row_name = grantee_name.map(owner_grantee_name).transpose()?;
                         if matches!(permission, Permission::Write)
                             && !gated.target.is_write_scope(&gated.current)
                         {
@@ -9114,7 +9234,7 @@ where {
                         .ok_or(EngineError::MalformedInput {
                             check: CreateGrantError::UnusableRecipientKey.check(),
                         })?;
-                        if let Some(name) = grantee_name {
+                        if let Some(name) = row_name {
                             name_row(
                                 session.identity(),
                                 &gated.target.scope.ipns_name,
@@ -9138,6 +9258,9 @@ where {
                             .vouch(&identity_pk)
                             .await
                             .map_err(EngineError::from_contact_store)?;
+                        if let Some(name) = grantee_name {
+                            let _ = self.name_cache(session).remember(&identity_pk, name).await;
+                        }
                         gated.target
                     }
                 };
@@ -9518,6 +9641,54 @@ where {
         .map(|_| ())
     }
 
+    /// Decode an invite fragment into the pending bookmark and the seams the
+    /// link read runs over. The owner signature over the names verifies once,
+    /// here.
+    fn open_link_fragment(&self, fragment: &str) -> Result<LinkOpening<'_, T>, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let fragment = InviteFragment::decode(fragment).map_err(EngineError::from_invite)?;
+        let invitee = EphemeralInvitee::from_secret(fragment.invite_secret.as_bytes())
+            .map_err(EngineError::from_invite)?;
+        let owner = import_contact(&fragment.owner_contact_code)
+            .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
+        // The sharer authors the scope id, and this vault's own root scope is
+        // never a share (ADR 0024 D5 step 4).
+        if fragment.scope_id == self.snapshot.borrow().root.0 {
+            return Err(EngineError::UnsupportedTarget {
+                check: "invite-names-the-own-vault-root",
+            });
+        }
+        let names =
+            fragment
+                .verified_names(&owner.identity_pk())
+                .map(|(owner_name, folder_name)| PreviewNames {
+                    owner_name: owner_name.to_owned(),
+                    folder_name: folder_name.to_owned(),
+                });
+        let display_name = names
+            .as_ref()
+            .map_or_else(String::new, |names| names.folder_name.clone());
+        let (share, hold) = pending_link_bookmark(&fragment, &owner, display_name);
+        let seams = JoinSeams {
+            transport: &self.record_transport,
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: SharerScopedFloorStore::granted_by(
+                &self.seams.floor_store,
+                ContactLabel::of(session.contact_label_seed(), &share.sharer_identity_pk),
+            ),
+        };
+        Ok(LinkOpening {
+            fragment,
+            invitee,
+            owner,
+            names,
+            share,
+            hold,
+            seams,
+        })
+    }
+
     /// Claim an invite link from the fragment its URL carries: read the link
     /// through the scope pointer, post a sealed claim to the owner the fragment
     /// names, record that owner as a contact, and bookmark the folder with the
@@ -9536,32 +9707,18 @@ where {
     async fn claim_invite_link(&self, fragment: &str) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let fragment = InviteFragment::decode(fragment).map_err(EngineError::from_invite)?;
-        let invitee = EphemeralInvitee::from_secret(fragment.invite_secret.as_bytes())
-            .map_err(EngineError::from_invite)?;
-        let owner = import_contact(&fragment.owner_contact_code)
-            .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
-        // The sharer authors the scope id, and this vault's own root scope is
-        // never a share (ADR 0024 D5 step 4).
-        if fragment.scope_id == self.snapshot.borrow().root.0 {
-            return Err(EngineError::UnsupportedTarget {
-                check: "invite-names-the-own-vault-root",
-            });
-        }
+        let LinkOpening {
+            fragment,
+            invitee,
+            owner,
+            mut share,
+            hold,
+            seams,
+            ..
+        } = self.open_link_fragment(fragment)?;
 
-        // Ahead of every write: a refused re-point object, an expired link and
-        // a revoked one post no claim and record nothing.
-        let (mut share, hold) = pending_link_bookmark(&fragment, &owner);
-        let floors = SharerScopedFloorStore::granted_by(
-            &self.seams.floor_store,
-            ContactLabel::of(session.contact_label_seed(), &share.sharer_identity_pk),
-        );
-        let seams = JoinSeams {
-            transport: &self.record_transport,
-            gateway: &self.gateway,
-            http: &self.seams.http,
-            floors: &floors,
-        };
+        // Ahead of every write: a refused read, an expired link and a revoked
+        // one post no claim and record nothing.
         match join_read(
             &seams,
             &share,
@@ -9582,11 +9739,7 @@ where {
             Ok(JoinRead::Revoked) => {
                 return Err(EngineError::from_invite(InviteError::LinkNotCommitted));
             }
-            Err(_) => {
-                return Err(EngineError::TrustViolation {
-                    message: "the scope pointer's re-point object was refused".to_owned(),
-                });
-            }
+            Err(refusal) => return Err(link_read_refused(refusal)),
         }
 
         let mut entropy = SharedEntropy(&self.entropy);
@@ -11114,6 +11267,73 @@ where {
                 }
             })
             .collect())
+    }
+
+    /// Preview the invite link `fragment` names, before the join (ADR 0028
+    /// D3): the join's read of the link, then one open of the scope root. It
+    /// posts nothing, persists nothing, deposits no seed and raises no floor.
+    /// A refused re-point object or scope root is a trust violation.
+    pub async fn preview_invite_link(&self, fragment: &str) -> Result<InvitePreview, EngineError> {
+        self.live_session()?;
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let LinkOpening {
+            invitee,
+            owner,
+            names,
+            share,
+            hold,
+            seams,
+            ..
+        } = self.open_link_fragment(fragment)?;
+        let joined = self
+            .received_share_store(session)
+            .load()
+            .await
+            .map_err(EngineError::from_received_share_store)?
+            .find(&share.key())
+            .is_some();
+        let read = preview_read(
+            &seams,
+            &share,
+            &hold,
+            &owner,
+            &invitee,
+            self.seams.scheduler.now(),
+        )
+        .await
+        .map_err(link_read_refused)?;
+        let (state, permission, children) = match read {
+            PreviewRead::Live {
+                conversion_permission,
+                children,
+            } => (
+                LinkPreviewState::Live,
+                Some(conversion_permission),
+                children,
+            ),
+            PreviewRead::Expired {
+                conversion_permission,
+            } => (
+                LinkPreviewState::Expired,
+                Some(conversion_permission),
+                Vec::new(),
+            ),
+            PreviewRead::Revoked => (LinkPreviewState::Revoked, None, Vec::new()),
+            PreviewRead::Unavailable => (LinkPreviewState::Unresolvable, None, Vec::new()),
+        };
+        Ok(InvitePreview {
+            names,
+            permission: permission.map(Permission::from),
+            state,
+            joined,
+            listing: children
+                .iter()
+                .map(|child| PreviewEntry {
+                    name: child.name.clone(),
+                    kind: map_kind(child.kind),
+                })
+                .collect(),
+        })
     }
 
     /// The owner's bin, one row per soft-deleted node, for the `/bin` route.

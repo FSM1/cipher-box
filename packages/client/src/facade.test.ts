@@ -83,6 +83,8 @@ function answerRead(read: ReadDescriptor): ReadResultValue {
       return FAKE_SIWE_NONCE;
     case 'download':
       return new Uint8Array([1, 2, 3]).buffer;
+    case 'invitePreview':
+      return { names: null, permission: null, state: 'unresolvable', joined: false, listing: [] };
   }
 }
 
@@ -610,6 +612,22 @@ describe('EngineFacade', () => {
       { kind: 'sharing', scope },
       { kind: 'sharing', scope: null },
     ]);
+  });
+
+  it('forwards an invite preview read with the fragment verbatim', async () => {
+    const transport = new FakeTransport();
+
+    await new EngineFacade(transport).previewInviteLink('abc-_');
+    expect(transport.readIntents).toEqual([{ kind: 'invitePreview', fragment: 'abc-_' }]);
+  });
+
+  it('refuses an oversize preview fragment before any realm clones it', async () => {
+    const transport = new FakeTransport();
+
+    await expect(
+      new EngineFacade(transport).previewInviteLink('x'.repeat(MAX_FRAGMENT_CHARS + 1))
+    ).rejects.toThrow('that is not an invite link');
+    expect(transport.readIntents).toEqual([]);
   });
 
   it('forwards a received-shares read', async () => {
