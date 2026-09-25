@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toHex } from '@cipherbox/client';
 import type { EngineFacade, Permission, SharingDescriptor } from '@cipherbox/client';
+import { errorMessage } from '../lib/errorMessage';
 import { useEngine } from '../providers/EngineProvider';
 import { sharingStore, type VerifiedContact } from '../stores/sharing.store';
 import { useCommandRunner } from './useCommandRunner';
@@ -28,6 +29,9 @@ export type SharingCommand =
 
 /** How long the "joined" notice stays up. */
 export const JOINED_NOTICE_MS = 8_000;
+
+/** The engine's refusal of a conversion while another pass runs on this device. */
+const CONVERSION_RUNNING = 'a-conversion-pass-is-running';
 
 export interface RevokeLinkOptions {
   /** Also cut the people who joined through the link (ADR 0025 D1). */
@@ -65,9 +69,8 @@ export interface SharingActions {
     admissionCap: number
   ): Promise<string | null>;
   /**
-   * Cuts the link `linkTag` names at this scope: its future claims end. A cut
-   * that asks to remove the people who joined is refused, since the client
-   * carries no such option.
+   * Cuts the link `linkTag` names at this scope: its future claims end. With
+   * `removeGrantees`, the people who joined through it lose access too.
    */
   revokeInviteLink(linkTag: Uint8Array, options: RevokeLinkOptions): Promise<boolean>;
   /** Drops the claims this scope's links refused at a cap from this device's record. */
@@ -149,7 +152,13 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       });
       if (!reached || !linked) return reached;
       return run('convertInviteClaims', async (facade) => {
-        await facade.convertInviteClaims(target);
+        try {
+          await facade.convertInviteClaims(target);
+        } catch (refusal: unknown) {
+          // The running pass announces each join with `granteeJoined`, which re-reads.
+          if (errorMessage(refusal).endsWith(`: ${CONVERSION_RUNNING}`)) return;
+          throw refusal;
+        }
         await read(facade);
       });
     }, [run, read, target]),
@@ -209,10 +218,7 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
     revokeInviteLink: useCallback(
       (linkTag, options) =>
         run('revokeInviteLink', async (facade) => {
-          if (options.removeGrantees) {
-            throw new Error('removing the people who joined is not in this build');
-          }
-          await facade.revokeInviteLink(target, linkTag);
+          await facade.revokeInviteLink(target, linkTag, options.removeGrantees);
           await read(facade);
         }),
       [run, read, target]

@@ -6174,6 +6174,7 @@ impl GrantScenario {
             permission,
             expires_at: Some(deadline),
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         }))
         .expect("the link mints");
         let CommandOutcome::InviteLinkMinted(link) = outcome else {
@@ -6418,6 +6419,7 @@ fn a_sweep_past_its_cut_cap_continues_on_the_next_tick() {
                     permission: Permission::Read,
                     expires_at: Some(deadline),
                     owner_name: "owner".to_owned(),
+                    admission_cap: None,
                 })),
                 Ok(CommandOutcome::InviteLinkMinted(_))
             ));
@@ -6611,6 +6613,7 @@ fn an_expired_write_link_with_a_pending_write_claim_converts_then_the_sweep_cuts
         permission: Permission::Write,
         expires_at: Some(deadline),
         owner_name: "owner".to_owned(),
+        admission_cap: None,
     }));
     let Ok(CommandOutcome::InviteLinkMinted(link)) = outcome else {
         panic!("the phone mints the link: {outcome:?}");
@@ -6659,6 +6662,7 @@ fn a_direct_grantee_revoke_runs_while_the_sweep_holds_the_lock() {
             permission: Permission::Read,
             expires_at: None,
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         })),
         Ok(CommandOutcome::InviteLinkMinted(_))
     ));
@@ -6764,6 +6768,7 @@ fn the_sweep_cuts_a_link_under_its_real_parent_when_another_index_names_it() {
             permission: Permission::Read,
             expires_at: Some(deadline),
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         })),
         Ok(CommandOutcome::InviteLinkMinted(_))
     ));

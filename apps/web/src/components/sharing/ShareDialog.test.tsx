@@ -810,7 +810,7 @@ describe('the links a scope carries', () => {
 
     await click('share-link-revoke-confirm');
 
-    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, other.tag);
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, other.tag, false);
     expect(screen.getAllByTestId('share-link-chip')).toHaveLength(1);
     expect(screen.queryByTestId('share-link-revoke-prompt')).toBeNull();
   });
@@ -847,26 +847,26 @@ describe('the links a scope carries', () => {
 
     await click('share-link-revoke-confirm');
 
-    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, other.tag);
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, other.tag, false);
     expect(screen.queryByTestId('dialog-error')).toBeNull();
     expect(screen.getAllByTestId('share-link-chip')).toHaveLength(1);
   });
 
-  it('refuses a revoke that also removes the people who joined, and keeps the link', async () => {
+  it.each([
+    ['checked', true],
+    ['unchecked', false],
+  ])('sends the remove choice to the engine with the box %s', async (_state, removeGrantees) => {
     const rows: HeldGrant[] = [{ seed: 2, permission: 'read', viaLink: 0x7a }];
     const engine = await share(sharingEngine({}, held([], rows, { links: [LIVE] })));
 
     await click('share-revoke-link');
-    await click('share-link-remove-grantees');
+    if (removeGrantees) await click('share-link-remove-grantees');
     await click('share-link-revoke-confirm');
 
-    expect(engine.facade.revokeInviteLink).not.toHaveBeenCalled();
-    expect(screen.getByTestId('dialog-error').textContent).toContain(
-      'removing the people who joined is not in this build'
-    );
-    expect(screen.getAllByTestId('share-link-chip')).toHaveLength(1);
-    expect(screen.getAllByTestId('share-grant-row')).toHaveLength(1);
-    expect(screen.getByTestId('share-link-revoke-prompt')).toBeTruthy();
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, LIVE.tag, removeGrantees);
+    expect(screen.queryByTestId('dialog-error')).toBeNull();
+    expect(screen.queryByTestId('share-link-chip')).toBeNull();
+    expect(screen.queryByTestId('share-link-revoke-prompt')).toBeNull();
   });
 
   it('draws no link section at all for a scope root the engine could not reach', async () => {
@@ -877,10 +877,20 @@ describe('the links a scope carries', () => {
     expect(screen.queryByTestId('share-mint-link')).toBeNull();
   });
 
-  it.each([
-    ['a-conversion-pass-is-running', 'converting in another pass'],
-    ['the-conversion-record-is-full', 'holds all the claims it can'],
-  ])(
+  it('shows no refusal on open while another conversion pass runs', async () => {
+    const running = new EngineRequestError('seam error: a-conversion-pass-is-running', 'seam');
+    await share(
+      sharingEngine(
+        { convertInviteClaims: running },
+        held([], [], { links: [{ ...LIVE, pendingClaims: 1 }] })
+      )
+    );
+
+    expect(screen.queryByTestId('dialog-error')).toBeNull();
+    expect(screen.getAllByTestId('share-link-chip')).toHaveLength(1);
+  });
+
+  it.each([['the-conversion-record-is-full', 'holds all the claims it can']])(
     'says in words that the open-time conversion refused on %s, and still offers the dialog',
     async (check, words) => {
       const refusal = new EngineRequestError(`seam error: ${check}`, 'seam');

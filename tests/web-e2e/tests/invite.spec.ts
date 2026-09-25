@@ -83,6 +83,7 @@ test("@full a join lists the folder once in the claimant's shared list", async (
   const shared = new SharedPage(claimant);
   await shared.open();
   await expect(shared.rows).toHaveCount(1);
+  await expect(shared.rows).toHaveAttribute('data-via-link', /^(true|false)$/);
   await expect(shared.rows.getByTestId('shared-name')).toHaveText(FOLDER);
   await expect(shared.empty).toHaveCount(0);
   await expect(shared.error).toHaveCount(0);

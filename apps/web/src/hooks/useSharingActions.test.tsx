@@ -200,6 +200,17 @@ describe('reading', () => {
     await waitFor(() => expect(result.current.error).toBe(refusal.message));
   });
 
+  it('reports nothing on open while another conversion pass runs', async () => {
+    const running = new EngineRequestError('seam error: a-conversion-pass-is-running', 'seam');
+    const engine = sharingEngine({ convertInviteClaims: running }, [MINTED]);
+    const { result } = mount(engine.client);
+
+    await expect(result.current.open()).resolves.toBe(true);
+
+    expect(engine.facade.convertInviteClaims).toHaveBeenCalledWith(DOCS);
+    expect(result.current.error).toBeNull();
+  });
+
   it('reads a row with no fingerprint where the engine forms none for its key', async () => {
     const engine = sharingEngine();
     engine.facade.identityFingerprint.mockImplementation(() =>
@@ -360,7 +371,7 @@ describe('invite link commands', () => {
       result.current.revokeInviteLink(MINTED.tag, { removeGrantees: false })
     ).resolves.toBe(true);
 
-    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, MINTED.tag);
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, MINTED.tag, false);
     expect(linksNow()).toEqual(NO_LINKS);
   });
 
@@ -376,19 +387,16 @@ describe('invite link commands', () => {
     expect(linksNow()).toEqual([MINTED]);
   });
 
-  it('refuses a cut that asks to remove the people who joined, and keeps the link', async () => {
+  it('asks the engine to cut the people who joined when the owner chose it', async () => {
     const engine = sharingEngine();
     const { result } = mount(engine.client);
     await result.current.createInviteLink('read', DEADLINE, '', 25);
 
     await expect(
       result.current.revokeInviteLink(MINTED.tag, { removeGrantees: true })
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
 
-    await waitFor(() =>
-      expect(result.current.error).toBe('removing the people who joined is not in this build')
-    );
-    expect(engine.facade.revokeInviteLink).not.toHaveBeenCalled();
-    expect(linksNow()).toEqual([MINTED]);
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, MINTED.tag, true);
+    expect(linksNow()).toEqual(NO_LINKS);
   });
 });

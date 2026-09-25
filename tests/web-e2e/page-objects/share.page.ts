@@ -105,8 +105,9 @@ export class SharePage {
   }
 
   /**
-   * Opens the dialog until `count` grant rows show. Opening converts the claims
-   * that wait on the folder's links, and a claim can land after one opening.
+   * Opens the dialog until `count` grant rows show. The owner's tick and each
+   * opening convert the claims that wait on the folder's links, and the dialog
+   * reads the grants only when it opens.
    */
   async openUntilGranted(folder: string, count: number, timeout = 180_000): Promise<void> {
     await expect(async () => {
