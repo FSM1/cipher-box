@@ -139,6 +139,19 @@ function deferred() {
   return { promise, land };
 }
 
+/** Claims the test settles by hand, in the order the page made them. */
+function heldClaims() {
+  const pending: { accept(): void; refuse(words: string): void }[] = [];
+  const claim = () =>
+    new Promise((resolve, reject) => {
+      pending.push({
+        accept: () => resolve({ kind: 'done' }),
+        refuse: (words) => reject(new Error(words)),
+      });
+    });
+  return { claim, pending };
+}
+
 /** The address moving to another link inside the tab, as a pasted link does. */
 async function moveTo(hash: string) {
   await act(async () => {
@@ -362,25 +375,77 @@ describe('the join', () => {
   it.each(['accepted', 'refused'] as const)(
     'lets a new link take over from a join still in flight that is then %s',
     async (outcome) => {
-      let settle!: () => void;
-      const claim = () =>
-        new Promise((resolve, reject) => {
-          settle = () =>
-            outcome === 'accepted' ? resolve({ kind: 'done' }) : reject(new Error('link-expired'));
-        });
+      const { claim, pending } = heldClaims();
       await openAt(`#${FRAGMENT}`, inviteEngine({ claim }));
       await join();
       expect(pageState()).toBe('joining');
 
       await moveTo('#another-link-fragment');
       await waitFor(() => expect(pageState()).toBe('joinable'));
-      await act(async () => settle());
+      await act(async () =>
+        outcome === 'accepted' ? pending[0].accept() : pending[0].refuse('link-expired')
+      );
 
       expect(pageState()).toBe('joinable');
       expect(window.location.pathname).toBe('/invite');
       expect(screen.queryByRole('alert')).toBeNull();
     }
   );
+
+  it.each(['accepted', 'refused'] as const)(
+    'keeps an earlier press of the same link, then %s, off a later press',
+    async (outcome) => {
+      const { claim, pending } = heldClaims();
+      const engine = await openAt(`#${FRAGMENT}`, inviteEngine({ claim }));
+      await join();
+      await moveTo('#another-link-fragment');
+      await moveTo(`#${FRAGMENT}`);
+      await waitFor(() => expect(pageState()).toBe('joinable'));
+      await join();
+
+      await act(async () =>
+        outcome === 'accepted' ? pending[0].accept() : pending[0].refuse('link-expired')
+      );
+
+      expect(pageState()).toBe('joining');
+      expect(window.location.pathname).toBe('/invite');
+
+      await act(async () => pending[1].accept());
+
+      expect(engine.claimInviteLink.mock.calls).toEqual([
+        [FRAGMENT, ''],
+        [FRAGMENT, ''],
+      ]);
+      expect(window.location.pathname).toBe(`/files/${toHex(SCOPE)}`);
+    }
+  );
+
+  it('shows the refusal of the join on screen, not of an earlier one that settles later', async () => {
+    const { claim, pending } = heldClaims();
+    await openAt(`#${FRAGMENT}`, inviteEngine({ claim }));
+    await join();
+    await moveTo('#another-link-fragment');
+    await waitFor(() => expect(pageState()).toBe('joinable'));
+    await join();
+
+    await act(async () => pending[1].refuse('the second refusal'));
+    await act(async () => pending[0].refuse('the first refusal'));
+
+    expect(pageState()).toBe('refused');
+    expect(screen.getByRole('alert').textContent).toBe('the second refusal');
+  });
+
+  it('opens no folder for a join the previous account started', async () => {
+    const { claim, pending } = heldClaims();
+    const engine = await openAt(`#${FRAGMENT}`, inviteEngine({ claim }));
+    await join();
+
+    await act(async () => engine.switchAccount('acct02'));
+    await act(async () => pending[0].accept());
+
+    expect(pageState()).not.toBe('joining');
+    expect(window.location.pathname).toBe('/invite');
+  });
 
   it("renders the engine's refusal in its own words and stays on the page", async () => {
     const refusal = new EngineRequestError('link-expired', 'malformedInput');

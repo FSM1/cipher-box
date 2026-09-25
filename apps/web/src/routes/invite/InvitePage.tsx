@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { InvitePreviewDescriptor } from '@cipherbox/client';
 import { LoginError } from '@cipherbox/auth-ui';
 import { useAuth } from '../../auth/useAuth';
 import { SignInPanel } from '../../components/auth/SignInPanel';
 import { useEngineAccount } from '../../engine/useEngineSession';
-import { useCommandRunner } from '../../hooks/useCommandRunner';
+import { errorMessage } from '../../lib/errorMessage';
 import { folderPath } from '../../lib/nodeId';
 import { useEngine } from '../../providers/EngineProvider';
 import { InviteCard } from './InviteCard';
@@ -32,7 +32,11 @@ type Preview = { account: string; fragment: string } & (
   | { outcome: PreviewFailure }
 );
 
-type Joining = { step: 'joining' | 'refused'; read: InvitePreviewDescriptor; claimed: string };
+/** One press of "join": the link and account it claims for, and its own result. */
+type Joining = { read: InvitePreviewDescriptor; claimed: string; account: string } & (
+  | { step: 'joining' }
+  | { step: 'refused'; refusal: string }
+);
 
 /** The address names a link other than the one claimed: the member moved on. */
 const movedOn = (claimed: string, fragment: string) => fragment !== '' && fragment !== claimed;
@@ -56,17 +60,22 @@ export function InvitePage() {
   const { isSignedOut } = useAuth();
   const client = useEngine();
   const navigate = useNavigate();
-  const { error, run } = useCommandRunner<'claimInviteLink'>();
   const fragment = useLocation().hash.slice(1);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [joining, setJoining] = useState<Joining | null>(null);
-  const latestClaim = useRef<string | null>(null);
+  // Mirrors `joining`, so a claim that settles late sees whether it is still on screen.
+  const onScreen = useRef<Joining | null>(null);
+  useLayoutEffect(() => {
+    onScreen.current = joining;
+  }, [joining]);
 
   // Latched, so a sign-in in flight keeps the panel, and the progress it holds.
   const [decided, setDecided] = useState(false);
   if (isSignedOut && !decided) setDecided(true);
   if (account === null && preview !== null) setPreview(null);
-  if (joining !== null && movedOn(joining.claimed, fragment)) setJoining(null);
+  if (joining !== null && (movedOn(joining.claimed, fragment) || joining.account !== account)) {
+    setJoining(null);
+  }
 
   useEffect(() => {
     if (account === null || client === null || fragment === '') return;
@@ -95,21 +104,26 @@ export function InvitePage() {
   const openFolder = (scope: Uint8Array) => navigate(folderPath(scope), { replace: true });
 
   /** Claims exactly the link the shown preview was read for. */
-  const join = ({ fragment: claimed }: Preview, read: InvitePreviewDescriptor, name: string) => {
-    if (joining?.step === 'joining') return;
+  const join = (
+    { fragment: claimed, account: claimant }: Preview,
+    read: InvitePreviewDescriptor,
+    name: string
+  ) => {
+    if (joining?.step === 'joining' || client === null) return;
     // Before the await, per `EngineFacade.claimInviteLink`.
     navigate(`${window.location.pathname}${window.location.search}`, { replace: true });
     setPreview(null);
-    setJoining({ step: 'joining', read, claimed });
-    latestClaim.current = claimed;
-    void run('claimInviteLink', (facade) => facade.claimInviteLink(claimed, name)).then(
-      (accepted) => {
-        if (latestClaim.current !== claimed || movedOn(claimed, window.location.hash.slice(1))) {
-          return;
-        }
-        if (accepted) openFolder(read.scope);
-        else setJoining({ step: 'refused', read, claimed });
-      }
+    const attempt: Joining = { step: 'joining', read, claimed, account: claimant };
+    setJoining(attempt);
+    // The router applies a new address in a transition, so the address bar can
+    // lead `onScreen` by a render.
+    const stillOnScreen = () =>
+      onScreen.current === attempt && !movedOn(claimed, window.location.hash.slice(1));
+    void client.facade.claimInviteLink(claimed, name).then(
+      () => stillOnScreen() && openFolder(read.scope),
+      (refusal: unknown) =>
+        stillOnScreen() &&
+        setJoining({ ...attempt, step: 'refused', refusal: errorMessage(refusal) })
     );
   };
 
@@ -125,7 +139,7 @@ export function InvitePage() {
             {MESSAGES[state]}
           </p>
         )}
-        {state === 'refused' && <LoginError message={error} />}
+        {joining?.step === 'refused' && <LoginError message={joining.refusal} />}
         {/* In place: a navigation away would drop the link with the address. */}
         {state === 'waiting' && <SignInPanel />}
         {read !== null && (state === 'joinable' || state === 'joining') && (
