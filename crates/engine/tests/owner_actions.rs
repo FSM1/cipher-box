@@ -5906,6 +5906,43 @@ fn a_grant_retried_after_a_failed_floor_raise_raises_the_floor() {
     );
 }
 
+/// A direct grant vouches for a link-sourced contact, so no later cut of the
+/// link collects a contact that holds a grant. A vouch that failed after the
+/// publish is not lost: the retry at the held permission vouches again.
+#[test]
+fn a_grant_retried_after_a_failed_vouch_vouches_the_contact() {
+    let mut fx = GrantScenario::new();
+    let recipient = recipient_identity().verifying_key().to_sec1();
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let staging = fx.owner_device.staging_store.clone();
+    let book = StagingContactStore::new(&staging, &enc_subkey, &entropy);
+    block_on(book.forget(&recipient)).expect("the hand import is dropped");
+    block_on(book.record_from_link(&contact_code(&RECIPIENT_SECRET), &[0x33; 32], &fx.folder.0))
+        .expect("the recipient records from a link");
+
+    staging
+        .inner()
+        .interrupt_staged_write_after(book.staging_key(), 0);
+    assert!(
+        matches!(
+            fx.grant_folder_to_recipient(),
+            Err(EngineError::Seam { .. })
+        ),
+        "the vouch after the publish fails"
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    block_on(book.forget_link_grant(&recipient, &fx.folder.0)).expect("the cut lands");
+    assert!(
+        block_on(book.contacts())
+            .expect("load")
+            .iter()
+            .any(|contact| contact.identity_pk().to_sec1() == recipient),
+        "the vouched contact outlives the link's cut"
+    );
+}
+
 /// A contact re-imported under a new encryption subkey cannot open the blob
 /// its row seals to its old one, so a grant retry refuses rather than post a
 /// pointer that restores nothing. The owner revokes and grants again.

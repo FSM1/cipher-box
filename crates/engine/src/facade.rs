@@ -9071,8 +9071,9 @@ where {
                                 GrantEditError::RecipientKeyChanged,
                             ));
                         }
-                        // The retry of a grant whose raise failed: this owner
-                        // grants the recipient now, and the raise is idempotent.
+                        // The retry of a grant whose raise or vouch failed:
+                        // this owner grants the recipient now, and both are
+                        // idempotent.
                         record_grant_floor(
                             &self.seams.floor_store,
                             &node.0,
@@ -9081,6 +9082,10 @@ where {
                         )
                         .await
                         .map_err(EngineError::from_seam)?;
+                        self.contact_store(session)
+                            .vouch(&identity_pk)
+                            .await
+                            .map_err(EngineError::from_contact_store)?;
                         gated.target
                     }
                     Some(_) => {
