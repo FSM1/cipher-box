@@ -5977,6 +5977,7 @@ fn a_retry_after_a_failed_publish_runs_the_checks_again() {
             permission: Permission::Read,
             expires_at: Some(deadline),
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         }))
         .expect("the link mints")
     else {
@@ -7267,6 +7268,7 @@ fn a_write_claim_the_link_refuses_runs_no_write_cut() {
             permission: Permission::Write,
             expires_at: Some(deadline),
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         }))
         .expect("the link mints")
     else {
