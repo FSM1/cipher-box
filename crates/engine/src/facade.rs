@@ -78,7 +78,7 @@ use crate::grants::{
     StagingContactStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_links,
     convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
     link_budget_full, locate_invite_link, mint_invite_link, post_invite_claim, post_share_pointer,
-    recipient_blinded_tag, resolve_recipient, row_is_owner_attested, sole_link,
+    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::grants::{
     EditedSet, FragmentNames, GrantEditError, GranteeNameCache, HeldRow, StagingGranteeNameCache,
@@ -548,22 +548,25 @@ impl fmt::Debug for SharingGrant {
     }
 }
 
-/// The invite-link standing this owner has at one scope, as a host renders the
-/// link half of a share dialog. Nothing here is key material: the link's own
-/// bytes are in its fragment alone.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SharingInviteLinks {
-    /// The scope's owner-signed commitment carries exactly one link entry — the
-    /// link [`Command::RevokeInviteLink`] cuts and
-    /// [`Command::ConvertInviteClaims`] converts against.
-    pub live: bool,
-    /// The live link's owner-signed deadline in Unix millis, or `None` where
-    /// no link is live.
-    pub expires_at: Option<UnixMillis>,
+/// One invite link this owner's commitment carries at a scope, as a host
+/// renders it in the link half of a share dialog. Nothing here is key
+/// material: the link's own bytes are in its fragment alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharingInviteLink {
+    /// The link entry's blinded tag — what [`Command::RevokeInviteLink`] names
+    /// to cut this link.
+    pub tag: Vec<u8>,
+    /// The permission conversion grants a claimant of this link.
+    pub permission: Permission,
+    /// The link's owner-signed deadline in Unix millis.
+    pub expires_at: UnixMillis,
     /// The deadline has passed, read against the engine's clock rather than a
     /// host's.
     pub expired: bool,
-    /// See [`SnapshotChild::pending_invite_claims`].
+    /// The link's owner-signed admission cap.
+    pub admission_cap: u64,
+    /// The claims [`SnapshotChild::pending_invite_claims`] counts that this
+    /// link's ephemeral identity signed.
     pub pending_claims: u32,
 }
 
@@ -581,8 +584,9 @@ pub struct ScopeSharing {
     pub grant_refusal: Option<&'static str>,
     /// The refusal an invite-link mint at this scope would report, or `None`.
     pub invite_link_refusal: Option<&'static str>,
-    /// This owner's invite links there, read off the scope's own record.
-    pub invite_links: SharingInviteLinks,
+    /// Every invite link this owner's commitment carries there, in commitment
+    /// order and expired ones included, read off the scope's own record.
+    pub invite_links: Vec<SharingInviteLink>,
 }
 
 /// A key-free read of the sharing state a host renders for one scope: this
@@ -1259,6 +1263,9 @@ pub enum Command {
     RevokeInviteLink {
         /// The node the link was minted at.
         node: NodeId,
+        /// The tag of the link to cut ([`SharingInviteLink::tag`]). `None` cuts
+        /// the only link at `node`, and is refused where it carries more.
+        link_tag: Option<Vec<u8>>,
     },
     /// Claim an invite link from the fragment its URL carries ([`InviteFragment`]).
     ClaimInviteLink {
@@ -1498,6 +1505,10 @@ pub enum Event {
     /// listed nor released, and no later dead letter may join them. Terminal:
     /// no pass changes it, and the member is the only one who can.
     ParkedWritesUnreadable,
+    /// This device's grantee name cache did not open, so it was cleared. It is a
+    /// pre-fill and no authority: names the owner gave are still on the rows,
+    /// and only the offer of a name for a new folder is lost.
+    GranteeNamesCleared,
     /// Attributable abuse: a fail-closed adoption-gate rejection, or an
     /// owner-blob / ascent-link / unseal cross-check disagreement (#39 D6) —
     /// never a silent failure.
@@ -1579,6 +1590,7 @@ impl fmt::Debug for Event {
                 .field("reason", reason)
                 .finish(),
             Self::ParkedWritesUnreadable => f.write_str("ParkedWritesUnreadable"),
+            Self::GranteeNamesCleared => f.write_str("GranteeNamesCleared"),
             Self::VaultSettingsChanged => f.write_str("VaultSettingsChanged"),
             Self::AttributableAbuse { description } => f
                 .debug_struct("AttributableAbuse")
@@ -1918,7 +1930,9 @@ impl EngineError {
     /// Map a refused owner edit of a standing set.
     fn from_grant_edit(err: GrantEditError) -> Self {
         match err {
-            e @ (GrantEditError::SamePermission | GrantEditError::NotGranted) => {
+            e @ (GrantEditError::SamePermission
+            | GrantEditError::NotGranted
+            | GrantEditError::RecipientKeyChanged) => {
                 EngineError::MalformedInput { check: e.check() }
             }
             e @ GrantEditError::LinkRow => EngineError::UnsupportedTarget { check: e.check() },
@@ -3555,9 +3569,9 @@ enum UnindexedScope {
 /// link-sourced share of the contact book
 /// ([`MAX_LINK_CONTACTS`](crate::grants::MAX_LINK_CONTACTS)).
 ///
-/// The sharing read reports it as the scope's `invite_link_refusal` while the
-/// live link there holds part of that share. One scope carries at most one live
-/// link, so reporting it there is what names the link the owner revokes.
+/// The sharing read reports it as the scope's `invite_link_refusal` while a
+/// link there holds its whole share, which names the scope where the owner
+/// revokes it.
 const LINK_CONTACT_BUDGET_FULL: &str = "invite-link-contact-budget-full";
 
 /// The name [`Engine::enclosing_scope`] reports when an ancestor of the target
@@ -3635,8 +3649,9 @@ enum ScopeShare<'a> {
     Contact {
         /// The recipient.
         contact: &'a Contact,
-        /// The name the owner gives them on the row.
-        grantee_name: Option<&'a GranteeName>,
+        /// The name the owner gives them on the row, checked only where a row
+        /// is minted ([`owner_grantee_name`]).
+        grantee_name: Option<&'a str>,
     },
     /// A bearer link: the recipient is a throwaway keypair the engine draws,
     /// and its secret is the whole capability.
@@ -7816,8 +7831,8 @@ where {
                 self.create_invite_link(node, permission, expires_at, &owner_name)
                     .await
             }
-            Command::RevokeInviteLink { node } => self
-                .revoke_invite_link(node)
+            Command::RevokeInviteLink { node, link_tag } => self
+                .revoke_invite_link(node, link_tag.as_deref())
                 .await
                 .map(|()| CommandOutcome::Done),
             Command::ClaimInviteLink { fragment } => self
@@ -8552,12 +8567,11 @@ where {
         let contact = self
             .recipient_contact(session, recipient_identity_public_key)
             .await?;
-        let grantee_name = grantee_name.map(owner_grantee_name).transpose()?;
         self.share_scope(
             node,
             ScopeShare::Contact {
                 contact: &contact,
-                grantee_name: grantee_name.as_ref(),
+                grantee_name,
             },
             permission,
         )
@@ -8647,6 +8661,12 @@ where {
                 )
                 .await;
         }
+        let minted_name = match &share {
+            ScopeShare::Contact { grantee_name, .. } => {
+                grantee_name.map(owner_grantee_name).transpose()?
+            }
+            ScopeShare::InviteLink { .. } => None,
+        };
         // The permission the mint commits and seals at.
         let mint_permission = match share {
             ScopeShare::Contact { .. } => permission,
@@ -8738,14 +8758,11 @@ where {
             payload_version: POINTER_PAYLOAD_VERSION,
         };
         let (pending, granted_read_scope) = match &share {
-            ScopeShare::Contact {
-                contact,
-                grantee_name,
-            } => {
+            ScopeShare::Contact { contact, .. } => {
                 let recipient = GrantRecipient {
                     contact,
                     display_name,
-                    grantee_name: *grantee_name,
+                    grantee_name: minted_name.as_ref(),
                 };
                 let outcome = create_grant(
                     &mut SharedEntropy(&self.entropy),
@@ -9043,6 +9060,23 @@ where {
                         if held.kind == GrantSetEntryKind::Personal
                             && held.permission == CommittedPermission::from(permission) =>
                     {
+                        // A pointer to a blob sealed to a key the contact no
+                        // longer holds restores nothing.
+                        if held.recipient_enc_pk != contact.enc_subkey().to_bytes() {
+                            return Err(EngineError::from_grant_edit(
+                                GrantEditError::RecipientKeyChanged,
+                            ));
+                        }
+                        // The retry of a grant whose raise failed: this owner
+                        // grants the recipient now, and the raise is idempotent.
+                        record_grant_floor(
+                            &self.seams.floor_store,
+                            &node.0,
+                            &contact.enc_subkey(),
+                            gated.current.current_read_epoch,
+                        )
+                        .await
+                        .map_err(EngineError::from_seam)?;
                         gated.target
                     }
                     Some(_) => {
@@ -9052,6 +9086,7 @@ where {
                             .map(|()| CommandOutcome::Done);
                     }
                     None => {
+                        let grantee_name = grantee_name.map(owner_grantee_name).transpose()?;
                         if matches!(permission, Permission::Write)
                             && !gated.target.is_write_scope(&gated.current)
                         {
@@ -9075,7 +9110,7 @@ where {
                                 session.identity(),
                                 &gated.target.scope.ipns_name,
                                 &mut row.ledger_entry,
-                                name.clone(),
+                                name,
                             );
                         }
                         self.edit_scope_set(&mut gated, |authority, scope| {
@@ -9442,13 +9477,22 @@ where {
         )
     }
 
-    /// Revoke the invite link at `node`: cut its row from the owner-signed
-    /// committed set and drive the cut through the planes it demands. The link
-    /// is read off the record, so any owner device can revoke it.
-    async fn revoke_invite_link(&self, node: NodeId) -> Result<(), EngineError> {
+    /// Revoke the invite link `link_tag` names at `node`, or its only link:
+    /// cut its row from the owner-signed committed set and drive the cut
+    /// through the planes it demands. The link is read off the record, so any
+    /// owner device can revoke it.
+    async fn revoke_invite_link(
+        &self,
+        node: NodeId,
+        link_tag: Option<&[u8]>,
+    ) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        // Owner-only: the tag comes from the one link entry on a set this
-        // session's own identity signed, never from the command.
+        let link_tag = link_tag
+            .map(<[u8; 32]>::try_from)
+            .transpose()
+            .map_err(|_| EngineError::from_invite(InviteError::LinkNotCommitted))?;
+        // Owner-only: the tag cut is a link entry on a set this session's own
+        // identity signed; the command's tag only picks among them.
         self.cut_and_rotate(
             node,
             "revoke-link-target-is-not-a-scope-root",
@@ -9456,7 +9500,7 @@ where {
             async |target: &OwnerScope, current: &CascadeTarget| {
                 let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
                 let scope = bound_scope(target, current, &commitment_sig)?;
-                locate_invite_link(&owner_authority(session), &scope)
+                locate_invite_link(&owner_authority(session), &scope, link_tag.as_ref())
                     .map(|link| link.tag)
                     .map_err(EngineError::from_invite)
             },
@@ -9921,11 +9965,22 @@ where {
     /// How many counted invite claims wait at each scope root.
     fn pending_claim_counts(&self) -> BTreeMap<NodeId, u32> {
         let mut counts: BTreeMap<NodeId, u32> = BTreeMap::new();
-        for scope in self.pending_invite_claims.borrow().values() {
-            let count = counts.entry(*scope).or_default();
+        for claim in self.pending_invite_claims.borrow().values() {
+            let count = counts.entry(claim.scope).or_default();
             *count = count.saturating_add(1);
         }
         counts
+    }
+
+    /// How many counted invite claims at `scope_root` the link whose ephemeral
+    /// identity is `sender` signed.
+    fn pending_link_claims(&self, scope_root: NodeId, sender: &[u8; IDENTITY_PUBLIC_LEN]) -> u32 {
+        let claims = self.pending_invite_claims.borrow();
+        let count = claims
+            .values()
+            .filter(|claim| claim.scope == scope_root && claim.sender == *sender)
+            .count();
+        u32::try_from(count).unwrap_or(u32::MAX)
     }
 
     /// Ack one claim item and drop it from the count at once, so a host re-read
@@ -11122,13 +11177,21 @@ where {
             .contacts_with_sources()
             .await
             .map_err(EngineError::from_contact_store)?;
-        let names: BTreeMap<[u8; IDENTITY_PUBLIC_LEN], String> = self
-            .name_cache(session)
-            .names()
-            .await
-            .map_err(EngineError::from_contact_store)?
-            .into_iter()
-            .collect();
+        // A pre-fill and no authority, so a cache that does not open is
+        // cleared and reads as empty rather than failing the read.
+        let cache = self.name_cache(session);
+        let names: BTreeMap<[u8; IDENTITY_PUBLIC_LEN], String> = match cache.names().await {
+            Ok(names) => names.into_iter().collect(),
+            Err(ContactStoreError::Unreadable(_)) => {
+                cache
+                    .clear()
+                    .await
+                    .map_err(EngineError::from_contact_store)?;
+                let _ = self.events.unbounded_send(Event::GranteeNamesCleared);
+                BTreeMap::new()
+            }
+            Err(e) => return Err(EngineError::from_contact_store(e)),
+        };
         let sources: Vec<Option<[u8; 32]>> = book.iter().map(|(_, source)| *source).collect();
         let keys: Vec<ContactKeys> = book
             .iter()
@@ -11202,7 +11265,7 @@ where {
                 grants: Vec::new(),
                 grant_refusal,
                 invite_link_refusal,
-                invite_links: SharingInviteLinks::default(),
+                invite_links: Vec::new(),
             });
         };
         let current = self
@@ -11221,27 +11284,30 @@ where {
         // A set this owner's identity did not sign reads as unreachable rather
         // than as a scope with no links.
         let links = committed_links(&owner_authority(session), &scope).ok()?;
-        let live = sole_link(&links);
-        // Reported at the scope whose link took the headroom, which is what
-        // names the link: one scope carries at most one live link, and revoking
-        // it is the remedy. It outranks the standing ground because that one is
-        // permanent and needs no action, while this one does — and while it
-        // stands, a link minted here would only mint claims that cannot convert.
-        let invite_link_refusal = match live {
-            Some(link) if link_budget_full(sources, &link.tag) => Some(LINK_CONTACT_BUDGET_FULL),
-            _ => invite_link_refusal,
+        // Reported at the scope whose link took the headroom, which is where
+        // the owner finds the link to revoke. It outranks the standing ground
+        // because that one is permanent and needs no action, while this one
+        // does.
+        let invite_link_refusal = if links
+            .iter()
+            .any(|link| link_budget_full(sources, &link.tag))
+        {
+            Some(LINK_CONTACT_BUDGET_FULL)
+        } else {
+            invite_link_refusal
         };
         let now = self.seams.scheduler.now();
-        let invite_links = SharingInviteLinks {
-            live: live.is_some(),
-            expires_at: live.map(|link| link.deadline),
-            expired: live.is_some_and(|link| link.is_expired(now)),
-            pending_claims: self
-                .pending_claim_counts()
-                .get(&scope_root)
-                .copied()
-                .unwrap_or(0),
-        };
+        let invite_links = links
+            .iter()
+            .map(|link| SharingInviteLink {
+                tag: link.tag.to_vec(),
+                permission: link.conversion_permission.into(),
+                expires_at: link.deadline,
+                expired: link.is_expired(now),
+                admission_cap: link.admission_cap,
+                pending_claims: self.pending_link_claims(scope_root, &link.ephemeral_identity_pk),
+            })
+            .collect();
 
         let projected = project_grant_ledger(
             &GrantLabels {

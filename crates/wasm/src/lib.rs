@@ -1075,45 +1075,56 @@ impl SharingGrant {
     }
 }
 
-/// The invite-link standing this owner has on the scope a [`SharingView`] reads.
+/// One invite link this owner's commitment carries on the scope a
+/// [`SharingView`] reads.
 #[wasm_bindgen]
-pub struct SharingInviteLinks {
-    inner: facade::SharingInviteLinks,
+pub struct SharingInviteLink {
+    inner: facade::SharingInviteLink,
 }
 
 #[wasm_bindgen]
-impl SharingInviteLinks {
-    /// Whether the scope carries one live link — the link a revoke cuts and a
-    /// conversion converts against.
+impl SharingInviteLink {
+    /// The link entry's blinded tag, which a revoke names to cut this link.
     #[wasm_bindgen(getter)]
-    pub fn live(&self) -> bool {
-        self.inner.live
+    pub fn tag(&self) -> Vec<u8> {
+        self.inner.tag.clone()
     }
 
-    /// The live link's deadline in Unix millis (a `u64`, crossing as a
-    /// `bigint`), absent where it does not expire or where no link is live.
+    /// The permission conversion grants a claimant of this link.
+    #[wasm_bindgen(getter)]
+    pub fn permission(&self) -> Permission {
+        self.inner.permission.into()
+    }
+
+    /// The link's deadline in Unix millis (a `u64`, crossing as a `bigint`).
     #[wasm_bindgen(getter, js_name = expiresAt)]
-    pub fn expires_at(&self) -> Option<u64> {
-        self.inner.expires_at.map(|deadline| deadline.0)
+    pub fn expires_at(&self) -> u64 {
+        self.inner.expires_at.0
     }
 
-    /// Whether the live link's deadline has passed, decided on the engine's
-    /// clock so a host never compares the deadline against its own.
+    /// Whether the deadline has passed, decided on the engine's clock so a
+    /// host never compares the deadline against its own.
     #[wasm_bindgen(getter)]
     pub fn expired(&self) -> bool {
         self.inner.expired
     }
 
-    /// Invite claims that wait for a conversion at this scope.
+    /// The link's owner-signed admission cap (a `u64`, crossing as a `bigint`).
+    #[wasm_bindgen(getter, js_name = admissionCap)]
+    pub fn admission_cap(&self) -> u64 {
+        self.inner.admission_cap
+    }
+
+    /// Invite claims this link signed that wait for a conversion.
     #[wasm_bindgen(getter, js_name = pendingClaims)]
     pub fn pending_claims(&self) -> u32 {
         self.inner.pending_claims
     }
 }
 
-impl SharingInviteLinks {
-    /// Wraps an engine invite-link standing. Never exported to JS.
-    pub fn from_facade(inner: facade::SharingInviteLinks) -> Self {
+impl SharingInviteLink {
+    /// Wraps an engine invite link. Never exported to JS.
+    pub fn from_facade(inner: facade::SharingInviteLink) -> Self {
         Self { inner }
     }
 }
@@ -1151,10 +1162,16 @@ impl ScopeSharing {
         self.inner.invite_link_refusal.map(str::to_owned)
     }
 
-    /// This owner's invite links at the scope, read off its own record.
+    /// Every invite link this owner's commitment carries at the scope, in
+    /// commitment order and expired ones included.
     #[wasm_bindgen(getter, js_name = inviteLinks)]
-    pub fn invite_links(&self) -> SharingInviteLinks {
-        SharingInviteLinks::from_facade(self.inner.invite_links.clone())
+    pub fn invite_links(&self) -> Vec<SharingInviteLink> {
+        self.inner
+            .invite_links
+            .iter()
+            .cloned()
+            .map(SharingInviteLink::from_facade)
+            .collect()
     }
 }
 
@@ -2025,11 +2042,13 @@ impl Command {
         })
     }
 
-    /// Revoke the invite link minted at a node (owner-only).
+    /// Revoke the invite link `link_tag` names at a node, or its only link
+    /// where no tag is given (owner-only).
     #[wasm_bindgen(js_name = revokeInviteLink)]
-    pub fn revoke_invite_link(node: &NodeId) -> Command {
+    pub fn revoke_invite_link(node: &NodeId, link_tag: Option<Vec<u8>>) -> Command {
         Self::wrap(facade::Command::RevokeInviteLink {
             node: node.facade(),
+            link_tag,
         })
     }
 
@@ -2175,6 +2194,7 @@ impl Event {
             facade::Event::WithheldUpdateEscalation { .. } => "withheldUpdateEscalation",
             facade::Event::DeadLetter { .. } => "deadLetter",
             facade::Event::ParkedWritesUnreadable => "parkedWritesUnreadable",
+            facade::Event::GranteeNamesCleared => "granteeNamesCleared",
             facade::Event::AttributableAbuse { .. } => "attributableAbuse",
             facade::Event::RenewalFailed { .. } => "renewalFailed",
             facade::Event::VaultUnprovisioned { .. } => "vaultUnprovisioned",

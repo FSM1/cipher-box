@@ -920,12 +920,14 @@ mod tests {
             &shared(
                 Some("grant-parent-envelope-version-unsupported"),
                 Some("invite-parent-envelope-version-unsupported"),
-                facade::SharingInviteLinks {
-                    live: true,
-                    expires_at: Some(UnixMillis(u64::MAX)),
+                vec![facade::SharingInviteLink {
+                    tag: vec![0x7a; 32],
+                    permission: facade::Permission::Write,
+                    expires_at: UnixMillis(u64::MAX),
                     expired: true,
+                    admission_cap: 5,
                     pending_claims: 2,
-                },
+                }],
             ),
             "state",
         );
@@ -938,11 +940,18 @@ mod tests {
             JsValue::from_str("invite-parent-envelope-version-unsupported")
         );
         assert_eq!(field(&live, "grants").unchecked_into::<Array>().length(), 0);
-        let links = field(&live, "inviteLinks");
-        assert_eq!(field(&links, "live"), JsValue::from_bool(true));
-        assert_eq!(field(&links, "expired"), JsValue::from_bool(true));
-        assert_eq!(field(&links, "pendingClaims"), JsValue::from_f64(2.0));
-        let expires_at = field(&links, "expiresAt");
+        let links = field(&live, "inviteLinks").unchecked_into::<Array>();
+        assert_eq!(links.length(), 1);
+        let link = links.get(0);
+        assert_eq!(field(&link, "expired"), JsValue::from_bool(true));
+        assert_eq!(field(&link, "pendingClaims"), JsValue::from_f64(2.0));
+        assert_eq!(
+            field(&link, "tag")
+                .unchecked_into::<js_sys::Uint8Array>()
+                .to_vec(),
+            vec![0x7a; 32]
+        );
+        let expires_at = field(&link, "expiresAt");
         assert_eq!(expires_at.js_typeof(), JsValue::from_str("bigint"));
         assert_eq!(
             String::from(
@@ -954,30 +963,23 @@ mod tests {
             u64::MAX.to_string(),
         );
 
-        let mintable = field(
-            &shared(None, None, facade::SharingInviteLinks::default()),
-            "state",
-        );
+        let mintable = field(&shared(None, None, Vec::new()), "state");
         assert!(
             field(&mintable, "grantRefusal").is_undefined(),
             "an accepted grant carries no refusal, never an empty string"
         );
         assert!(field(&mintable, "inviteLinkRefusal").is_undefined());
-        let none_live = field(&mintable, "inviteLinks");
-        assert_eq!(field(&none_live, "expired"), JsValue::from_bool(false));
-        assert!(
-            field(&none_live, "expiresAt").is_undefined(),
-            "a link with no deadline carries none, never 0n"
+        assert_eq!(
+            field(&mintable, "inviteLinks")
+                .unchecked_into::<Array>()
+                .length(),
+            0
         );
 
         // A link the engine refuses on its own ground, at a scope a grant is
         // still accepted at: the two verdicts are read apart.
         let link_only = field(
-            &shared(
-                None,
-                Some("invite-target-is-the-vault-root"),
-                facade::SharingInviteLinks::default(),
-            ),
+            &shared(None, Some("invite-target-is-the-vault-root"), Vec::new()),
             "state",
         );
         assert!(field(&link_only, "grantRefusal").is_undefined());

@@ -1,17 +1,20 @@
-import type { SharingInviteLinksDescriptor } from '@cipherbox/client';
+import type { SharingInviteLinkDescriptor } from '@cipherbox/client';
 import { describe, expect, it } from 'vitest';
 import type { ScopeSharing } from '../stores/sharing.store';
 import { expiryAt, expiryLabel, inviteLinkState, inviteUrl } from './inviteLink';
 
-const NO_LINKS: SharingInviteLinksDescriptor = {
-  live: false,
+const NO_LINKS: SharingInviteLinkDescriptor[] = [];
+const LINK: SharingInviteLinkDescriptor = {
+  tag: new Uint8Array(32).fill(1),
+  permission: 'read',
+  expiresAt: 1_000n,
   expired: false,
-  expiresAt: null,
+  admissionCap: 5,
   pendingClaims: 0,
 };
 
 const scope = (
-  inviteLinks: SharingInviteLinksDescriptor,
+  inviteLinks: SharingInviteLinkDescriptor[],
   inviteLinkRefusal: string | null = null
 ): ScopeSharing => ({ grants: [], grantRefusal: null, inviteLinkRefusal, inviteLinks });
 
@@ -45,13 +48,21 @@ describe('the deadline label', () => {
 
 describe('which link situation a scope is in', () => {
   it('reports the link a scope carries over any mint verdict', () => {
-    const links = { ...NO_LINKS, live: true, expiresAt: 1_000n };
-
-    expect(inviteLinkState(scope(links, 'invite-parent-envelope-version-unsupported'))).toEqual({
+    expect(inviteLinkState(scope([LINK], 'invite-parent-envelope-version-unsupported'))).toEqual({
       kind: 'live',
-      links,
-      expiresAt: 1_000n,
+      link: LINK,
     });
+  });
+
+  it('draws the first link still claimable, past one that expired', () => {
+    const expired = { ...LINK, tag: new Uint8Array(32).fill(2), expired: true };
+    const fresh = { ...LINK, tag: new Uint8Array(32).fill(3) };
+
+    expect(inviteLinkState(scope([expired, fresh]))).toEqual({ kind: 'live', link: fresh });
+  });
+
+  it('offers a mint where every link the scope carries has expired', () => {
+    expect(inviteLinkState(scope([{ ...LINK, expired: true }]))).toEqual({ kind: 'mintable' });
   });
 
   it('offers a mint only where the engine would take one', () => {

@@ -442,16 +442,44 @@ describe('buildCommand', () => {
       ]);
     });
 
-    it.each(['revokeInviteLink', 'convertInviteClaims'] as const)(
-      'builds a %s from the node alone',
-      (kind) => {
-        const { wasm, calls } = spyWasm();
+    it('builds a conversion from the node alone', () => {
+      const { wasm, calls } = spyWasm();
 
-        buildCommand(wasm, { kind, node });
+      buildCommand(wasm, { kind: 'convertInviteClaims', node });
 
-        expect(calls[kind]).toEqual([[{ bytes: node }]]);
-      }
-    );
+      expect(calls.convertInviteClaims).toEqual([[{ bytes: node }]]);
+    });
+
+    it('hands a revoke the tag of the link it names', () => {
+      const { wasm, calls } = spyWasm();
+      const linkTag = new Uint8Array(32).fill(0x7a);
+
+      buildCommand(wasm, { kind: 'revokeInviteLink', node, linkTag });
+
+      expect(calls.revokeInviteLink).toEqual([[{ bytes: node }, linkTag]]);
+    });
+
+    it('spells an absent link tag as undefined, never as null', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'revokeInviteLink', node, linkTag: null });
+
+      expect(calls.revokeInviteLink).toEqual([[{ bytes: node }, undefined]]);
+    });
+
+    it('refuses a link tag that is not bytes before the node is minted', () => {
+      const { wasm, calls } = spyWasm();
+
+      expect(() =>
+        buildCommand(wasm, {
+          kind: 'revokeInviteLink',
+          node,
+          linkTag: 'tag' as unknown as Uint8Array,
+        })
+      ).toThrow('invalid request field linkTag: string');
+      expect(calls.NodeId).toBeUndefined();
+      expect(calls.revokeInviteLink).toBeUndefined();
+    });
 
     it('hands the claim its URL fragment verbatim, as the one argument', () => {
       const { wasm, calls } = spyWasm();
@@ -516,7 +544,7 @@ describe('buildCommand', () => {
     it.each(['revokeInviteLink', 'convertInviteClaims'] as const)(
       'rejects a %s whose node is not bytes',
       (kind) => {
-        expect(refuses({ kind, node: 'sixteen bytes!!!' })).toThrow(
+        expect(refuses({ kind, node: 'sixteen bytes!!!', linkTag: null })).toThrow(
           'invalid request field node: string'
         );
       }
@@ -1108,6 +1136,12 @@ describe('readEvent', () => {
     });
   });
 
+  it('maps the payload-free grantee-name cache reset', () => {
+    expect(readEvent(fakeWasm, { kind: 'granteeNamesCleared' })).toEqual({
+      kind: 'granteeNamesCleared',
+    });
+  });
+
   it('maps the payload-free parked-writes refusal', () => {
     expect(readEvent(fakeWasm, { kind: 'parkedWritesUnreadable' })).toEqual({
       kind: 'parkedWritesUnreadable',
@@ -1471,10 +1505,12 @@ describe('readSnapshot', () => {
 });
 
 describe('readSharing', () => {
-  const links = {
-    live: true,
-    expired: false,
+  const link = {
+    tag: new Uint8Array(32).fill(0x7a),
+    permission: fakeWasmEnums.Permission.Write,
     expiresAt: 1_700_000_000_000n,
+    expired: false,
+    admissionCap: 5n,
     pendingClaims: 1,
   };
   const view = {
@@ -1491,7 +1527,7 @@ describe('readSharing', () => {
       ],
       grantRefusal: 'grant-parent-envelope-version-unsupported',
       inviteLinkRefusal: 'invite-parent-envelope-version-unsupported',
-      inviteLinks: links,
+      inviteLinks: [link],
     },
   };
 
@@ -1510,7 +1546,16 @@ describe('readSharing', () => {
         ],
         grantRefusal: 'grant-parent-envelope-version-unsupported',
         inviteLinkRefusal: 'invite-parent-envelope-version-unsupported',
-        inviteLinks: links,
+        inviteLinks: [
+          {
+            tag: link.tag,
+            permission: 'write',
+            expiresAt: 1_700_000_000_000n,
+            expired: false,
+            admissionCap: 5,
+            pendingClaims: 1,
+          },
+        ],
       },
     });
   });
@@ -1542,13 +1587,22 @@ describe('readSharing', () => {
     expect(() => readSharing(fakeWasm, drifted)).toThrow('unknown WASM grantee name source: admin');
   });
 
-  it('reads a link with no deadline as null, never as a deadline', () => {
-    const open = {
+  it('reads every link the commitment carries, an expired one included', () => {
+    const expired = { ...link, tag: new Uint8Array(32).fill(0x7b), expired: true };
+    const both = { ...view, state: { ...view.state, inviteLinks: [link, expired] } };
+
+    const read = readSharing(fakeWasm, both).state?.inviteLinks;
+    expect(read?.map((each) => each.tag)).toEqual([link.tag, expired.tag]);
+    expect(read?.map((each) => each.expired)).toEqual([false, true]);
+  });
+
+  it('refuses a link permission this build does not know', () => {
+    const drifted = {
       ...view,
-      state: { ...view.state, inviteLinks: { ...links, expiresAt: undefined } },
+      state: { ...view.state, inviteLinks: [{ ...link, permission: 42 }] },
     };
 
-    expect(readSharing(fakeWasm, open).state?.inviteLinks.expiresAt).toBeNull();
+    expect(() => readSharing(fakeWasm, drifted)).toThrow('unknown WASM permission value: 42');
   });
 
   it('reads an unreachable scope as absent, never as one granting nothing', () => {

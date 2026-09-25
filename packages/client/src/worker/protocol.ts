@@ -237,20 +237,22 @@ export interface SharingGrantDescriptor {
 }
 
 /**
- * A scope's invite links, as data (mirrors `SharingInviteLinks`). Never the
- * capability: the engine hands out a link's fragment once, at the mint.
+ * One invite link this owner's commitment carries at a scope, as data (mirrors
+ * `SharingInviteLink`). Never the capability: the engine hands out a link's
+ * fragment once, at the mint.
  */
-export interface SharingInviteLinksDescriptor {
-  /** The scope carries a live link — the one a revoke cuts and claims convert against. */
-  live: boolean;
-  /** That link's deadline has passed, as the engine's own clock reads it. */
+export interface SharingInviteLinkDescriptor {
+  /** The link entry's blinded tag, which `revokeInviteLink` names to cut this link. */
+  tag: Uint8Array;
+  /** What a conversion grants a claimant of this link. */
+  permission: Permission;
+  /** The owner-signed Unix-millis deadline. */
+  expiresAt: bigint;
+  /** The deadline has passed, as the engine's own clock reads it. */
   expired: boolean;
-  /**
-   * The live link's Unix-millis deadline; `null` where it does not expire or
-   * where there is no live link.
-   */
-  expiresAt: bigint | null;
-  /** Invite claims that wait for `convertInviteClaims` here. */
+  /** The owner-signed admission cap. */
+  admissionCap: number;
+  /** Invite claims this link signed that wait for `convertInviteClaims`. */
   pendingClaims: number;
 }
 
@@ -267,8 +269,8 @@ export interface ScopeSharingDescriptor {
   grantRefusal: string | null;
   /** The refusal an invite-link mint here would report, or `null`. */
   inviteLinkRefusal: string | null;
-  /** This owner's invite links here, read off the scope's own record. */
-  inviteLinks: SharingInviteLinksDescriptor;
+  /** Every invite link this owner's commitment carries here, expired ones included. */
+  inviteLinks: SharingInviteLinkDescriptor[];
 }
 
 /**
@@ -584,7 +586,8 @@ export type CommandDescriptor =
       /** Shown to the holder, signed by the owner; the engine bounds it, empty is allowed. */
       ownerName: string;
     }
-  | { kind: 'revokeInviteLink'; node: Uint8Array }
+  /** A `null` tag cuts the scope's only link; the engine refuses it where the scope carries more. */
+  | { kind: 'revokeInviteLink'; node: Uint8Array; linkTag: Uint8Array | null }
   /**
    * The fragment is the whole bearer capability, opaque above the engine: it
    * crosses verbatim, is never parsed, and never reaches a log or any durable
@@ -739,6 +742,8 @@ export type EventDescriptor =
   | { kind: 'deadLetter'; opId: bigint; reason: DeadLetterReason }
   /** This device holds a preserved dead-letter record another build wrote. */
   | { kind: 'parkedWritesUnreadable' }
+  /** This device's grantee-name cache did not open and was cleared; names on the rows stand. */
+  | { kind: 'granteeNamesCleared' }
   | { kind: 'attributableAbuse'; description: string }
   | { kind: 'renewalFailed'; routingKey: string; detail: string }
   | { kind: 'vaultUnprovisioned'; retryable: boolean; detail: string }

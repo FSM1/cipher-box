@@ -35,7 +35,7 @@ import type {
   VersionEntryDescriptor,
   SettingsOrigin,
   SharingDescriptor,
-  SharingInviteLinksDescriptor,
+  SharingInviteLinkDescriptor,
   SharingGrantDescriptor,
   QueueHoldDescriptor,
   SnapshotDescriptor,
@@ -56,7 +56,7 @@ import type {
   WasmReceivedShareRow,
   WasmRegisteredDevice,
   WasmVersionEntry,
-  WasmSharingInviteLinks,
+  WasmSharingInviteLink,
   WasmSharingGrant,
   WasmSharingView,
   WasmSnapshotView,
@@ -377,8 +377,10 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
         ownerName
       );
     }
-    case 'revokeInviteLink':
-      return wasm.Command.revokeInviteLink(nodeId(wasm, descriptor.node, 'node'));
+    case 'revokeInviteLink': {
+      const tag = descriptor.linkTag === null ? undefined : bytes(descriptor.linkTag, 'linkTag');
+      return wasm.Command.revokeInviteLink(nodeId(wasm, descriptor.node, 'node'), tag);
+    }
     case 'claimInviteLink':
       return wasm.Command.claimInviteLink(fragment(descriptor.fragment, 'fragment'));
     case 'convertInviteClaims':
@@ -588,6 +590,8 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
       };
     case 'parkedWritesUnreadable':
       return { kind: 'parkedWritesUnreadable' };
+    case 'granteeNamesCleared':
+      return { kind: 'granteeNamesCleared' };
     case 'vaultSettingsChanged':
       return { kind: 'vaultSettingsChanged' };
     case 'attributableAbuse':
@@ -929,12 +933,17 @@ export function readReceivedShare(
   };
 }
 
-function readInviteLinks(links: WasmSharingInviteLinks): SharingInviteLinksDescriptor {
+function readInviteLink(
+  wasm: EngineWasm,
+  link: WasmSharingInviteLink
+): SharingInviteLinkDescriptor {
   return {
-    live: links.live,
-    expired: links.expired,
-    expiresAt: links.expiresAt ?? null,
-    pendingClaims: links.pendingClaims,
+    tag: link.tag,
+    permission: permissionFrom(wasm, link.permission),
+    expiresAt: link.expiresAt,
+    expired: link.expired,
+    admissionCap: Number(link.admissionCap),
+    pendingClaims: link.pendingClaims,
   };
 }
 
@@ -964,7 +973,7 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
             })),
             grantRefusal: state.grantRefusal ?? null,
             inviteLinkRefusal: state.inviteLinkRefusal ?? null,
-            inviteLinks: readInviteLinks(state.inviteLinks),
+            inviteLinks: state.inviteLinks.map((link) => readInviteLink(wasm, link)),
           },
   };
 }

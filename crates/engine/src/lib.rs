@@ -95,7 +95,7 @@ pub use facade::{
     MAX_CONTACT_CODE_BYTES, MAX_FOCUS_FILES, MAX_FOCUS_FOLDERS, MAX_FOLDER_CHILDREN,
     MAX_NODE_NAME_BYTES, MAX_OPEN_STREAMS, NodeAttrs, NodeId, NodeKind, OpPhase, OverBudgetCause,
     Permission, QuotaView, ReceivedShareRow, RefusedBudget, ScopeSharing, SessionStatus,
-    SharingContact, SharingGrant, SharingInviteLinks, SharingView, SiweIntent, SnapshotChild,
+    SharingContact, SharingGrant, SharingInviteLink, SharingView, SiweIntent, SnapshotChild,
     SnapshotView, Staleness, StatFs, StreamHandle, VaultStorageView, VersionEntry, WriteHandle,
     WriteTarget,
 };

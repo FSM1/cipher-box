@@ -14,6 +14,9 @@ const SHARE_REFUSALS: Record<string, string> = {
     'an earlier share of this folder did not finish and cannot be resumed, so no link can be minted here',
   'grant-recipient-already-has-access': 'this contact already has that access',
   'grant-recipient-not-granted': 'this contact holds no grant on this folder',
+  'grant-recipient-key-changed':
+    "this contact's key changed since the grant — revoke it and share again",
+  'link-ambiguous': 'this folder carries more than one link — pick the one to revoke',
   'grant-row-is-a-link':
     "a link's access is fixed when it is minted — revoke it and mint a new one",
   'resume-not-this-grant':

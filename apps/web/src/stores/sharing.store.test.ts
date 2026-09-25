@@ -1,9 +1,5 @@
 import { toHex } from '@cipherbox/client';
-import type {
-  Permission,
-  SharingDescriptor,
-  SharingInviteLinksDescriptor,
-} from '@cipherbox/client';
+import type { Permission, SharingDescriptor, SharingInviteLinkDescriptor } from '@cipherbox/client';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sharingFor, sharingStore, type GrantRow } from './sharing.store';
 
@@ -13,12 +9,7 @@ const OWN_CODE = new Uint8Array([0xc0, 0xde]);
 const PHOTOS = new Uint8Array(16).fill(9);
 const DOCS_KEY = toHex(DOCS);
 const PHOTOS_KEY = toHex(PHOTOS);
-const NO_LINKS: SharingInviteLinksDescriptor = {
-  live: false,
-  expired: false,
-  expiresAt: null,
-  pendingClaims: 0,
-};
+const NO_LINKS: SharingInviteLinkDescriptor[] = [];
 
 function identity(seed: number): Uint8Array {
   return new Uint8Array(33).fill(seed);
@@ -43,7 +34,7 @@ function view(
   scopeState: Partial<{
     grantRefusal: string | null;
     inviteLinkRefusal: string | null;
-    inviteLinks: SharingInviteLinksDescriptor;
+    inviteLinks: SharingInviteLinkDescriptor[];
   }> = {}
 ): SharingDescriptor {
   return {
@@ -166,12 +157,16 @@ describe('grants', () => {
 });
 
 describe('invite links', () => {
-  const LIVE: SharingInviteLinksDescriptor = {
-    live: true,
-    expired: false,
-    expiresAt: 1_700_000_000_000n,
-    pendingClaims: 0,
-  };
+  const LIVE: SharingInviteLinkDescriptor[] = [
+    {
+      tag: new Uint8Array(32).fill(0x7a),
+      permission: 'read',
+      expiresAt: 1_700_000_000_000n,
+      expired: false,
+      admissionCap: 5,
+      pendingClaims: 0,
+    },
+  ];
   const linked = () =>
     view(DOCS, [1], [[1, 'read']], {
       grantRefusal: 'grant-parent-envelope-version-unsupported',

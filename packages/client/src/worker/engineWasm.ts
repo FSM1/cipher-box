@@ -158,11 +158,13 @@ export interface WasmSharingGrant {
   readonly granteeName: WasmGranteeName | undefined;
 }
 
-/** wasm-bindgen `SharingInviteLinks` — a scope's invite-link standing. */
-export interface WasmSharingInviteLinks {
-  readonly live: boolean;
+/** wasm-bindgen `SharingInviteLink` — one link a scope's commitment carries. */
+export interface WasmSharingInviteLink {
+  readonly tag: Uint8Array;
+  readonly permission: number;
+  readonly expiresAt: bigint;
   readonly expired: boolean;
-  readonly expiresAt?: bigint;
+  readonly admissionCap: bigint;
   readonly pendingClaims: number;
 }
 
@@ -171,7 +173,7 @@ export interface WasmScopeSharing {
   readonly grants: readonly WasmSharingGrant[];
   readonly grantRefusal?: string;
   readonly inviteLinkRefusal?: string;
-  readonly inviteLinks: WasmSharingInviteLinks;
+  readonly inviteLinks: readonly WasmSharingInviteLink[];
 }
 
 /** wasm-bindgen `SharingView` — a key-free read of one scope's sharing state. */
@@ -377,7 +379,7 @@ export interface EngineWasm {
       expiresAt: bigint | undefined,
       ownerName: string
     ): WasmCommand;
-    revokeInviteLink(node: WasmNodeId): WasmCommand;
+    revokeInviteLink(node: WasmNodeId, linkTag: Uint8Array | undefined): WasmCommand;
     claimInviteLink(fragment: string): WasmCommand;
     convertInviteClaims(node: WasmNodeId): WasmCommand;
     rotateNow(node: WasmNodeId): WasmCommand;

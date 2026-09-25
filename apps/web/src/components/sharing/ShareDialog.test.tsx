@@ -5,7 +5,7 @@ import type {
   EventDescriptor,
   Permission,
   SharingDescriptor,
-  SharingInviteLinksDescriptor,
+  SharingInviteLinkDescriptor,
 } from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,12 +25,19 @@ const MINTED_FRAGMENT = 'a-minted-fragment';
 /** The identity a converted claim lands in the ledger under. */
 const CLAIMANT_SEED = 5;
 
-const NO_LINKS: SharingInviteLinksDescriptor = {
-  live: false,
-  expired: false,
-  expiresAt: null,
-  pendingClaims: 0,
-};
+const NO_LINKS: SharingInviteLinkDescriptor[] = [];
+
+/** A link as the engine reports it; its tag is what a revoke names. */
+function inviteLink(seed: number, expiresAt: bigint): SharingInviteLinkDescriptor {
+  return {
+    tag: new Uint8Array(32).fill(seed),
+    permission: 'read',
+    expiresAt,
+    expired: false,
+    admissionCap: 5,
+    pendingClaims: 0,
+  };
+}
 
 const folder: ListingRow = {
   id: DOCS,
@@ -62,7 +69,7 @@ interface EngineState {
   contacts: number[];
   /** A scope mapped to `null` is one whose root the engine could not reach. */
   grants: Map<string, Array<[number, Permission]> | null>;
-  links: SharingInviteLinksDescriptor;
+  links: SharingInviteLinkDescriptor[];
   /** The ground `share_scope` would refuse this target on, as the engine names it. */
   standing: ShareStanding;
 }
@@ -123,7 +130,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
                   })),
                   grantRefusal: SHARE_STANDINGS[state.standing].grant,
                   inviteLinkRefusal: SHARE_STANDINGS[state.standing].inviteLink,
-                  inviteLinks: { ...state.links },
+                  inviteLinks: state.links.map((link) => ({ ...link })),
                 },
         })
     ),
@@ -154,18 +161,16 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
         kind: 'inviteLinkMinted' as const,
         fragment: MINTED_FRAGMENT,
       }).then((outcome) => {
-        state.links = { ...(state.links ?? NO_LINKS), live: true, expiresAt: expiresAt ?? null };
+        state.links = [...state.links, inviteLink(state.links.length + 1, expiresAt ?? 1n)];
         return outcome;
       })
     ),
-    revokeInviteLink: vi.fn(() =>
+    revokeInviteLink: vi.fn((_scope: Uint8Array, linkTag?: Uint8Array) =>
       answer('revokeInviteLink', { kind: 'done' as const }).then((outcome) => {
-        state.links = {
-          ...(state.links ?? NO_LINKS),
-          live: false,
-          expired: false,
-          expiresAt: null,
-        };
+        state.links =
+          linkTag === undefined
+            ? []
+            : state.links.filter((link) => toHex(link.tag) !== toHex(linkTag));
         return outcome;
       })
     ),
@@ -484,11 +489,8 @@ describe('the invite link', () => {
 });
 
 describe('a link the engine already holds', () => {
-  const live: SharingInviteLinksDescriptor = {
-    ...NO_LINKS,
-    live: true,
-    expiresAt: SEVEN_DAYS_ON,
-  };
+  const LIVE = inviteLink(0x7a, SEVEN_DAYS_ON);
+  const live = [LIVE];
 
   it('draws the standing of a link this session never minted', async () => {
     await share(sharingEngine({}, held([], [], { links: live })));
@@ -519,7 +521,7 @@ describe('a link the engine already holds', () => {
 
     await click('share-revoke-link');
 
-    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS);
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, LIVE.tag);
     expect(screen.queryByTestId('share-live-link')).toBeNull();
     expect(screen.getAllByTestId('share-grant-row')).toHaveLength(1);
   });
@@ -534,7 +536,7 @@ describe('a link the engine already holds', () => {
   });
 
   it('counts the claims that wait beside the convert control', async () => {
-    await share(sharingEngine({}, held([], [], { links: { ...live, pendingClaims: 2 } })));
+    await share(sharingEngine({}, held([], [], { links: [{ ...LIVE, pendingClaims: 2 }] })));
 
     expect(screen.getByTestId('share-pending-claims').textContent).toBe('// 2 claims to convert');
     expect(screen.getByTestId('share-convert-claims')).toBeTruthy();

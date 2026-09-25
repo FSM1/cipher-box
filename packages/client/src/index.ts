@@ -81,7 +81,7 @@ export type {
   SharingContactDescriptor,
   SharingGrantDescriptor,
   GranteeNameSource,
-  SharingInviteLinksDescriptor,
+  SharingInviteLinkDescriptor,
   ScopeSharingDescriptor,
   BinOriginDescriptor,
   BinRowDescriptor,

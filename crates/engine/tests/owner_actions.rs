@@ -31,8 +31,9 @@ use cipherbox_engine::gate::floor;
 use cipherbox_engine::grants::{
     CLAIM_ID_LEN, Contact, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee,
     GrantRow, InviteClaim, InviteFragment, LinkHold, LinkTerms, ReceivedShareStore,
-    ResolutionClass, StagingReceivedShareStore, import_contact, mint_grant_row, mint_invite_grant,
-    post_invite_claim, recipient_blinded_tag, row_is_owner_attested,
+    ResolutionClass, StagingGranteeNameCache, StagingReceivedShareStore, import_contact,
+    mint_grant_row, mint_invite_grant, post_invite_claim, recipient_blinded_tag,
+    row_is_owner_attested,
 };
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::rotation::{
@@ -59,7 +60,7 @@ use cipherbox_engine::testkit::{
 use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, ContentProfile,
     DeadLetterReason, Engine, EngineError, Event, EventStream, GatewayConfig, LoginSecret, NodeId,
-    NodeKind, Permission, RecordReader, SessionBearer, SharePointer, SharingInviteLinks,
+    NodeKind, Permission, RecordReader, SessionBearer, SharePointer, SharingInviteLink,
     StoragePolicy, SyncTimingProfile, decode_queue, load_bin_index, poll_verified, post_sealed,
 };
 
@@ -4057,7 +4058,7 @@ fn the_sharing_read_offers_a_mint_only_at_a_node_that_names_no_scope() {
     assert_eq!(plain.grant_refusal, None);
     assert_eq!(plain.invite_link_refusal, None);
     assert_eq!(plain.grants, Vec::new());
-    assert_eq!(plain.invite_links, SharingInviteLinks::default());
+    assert_eq!(plain.invite_links, Vec::new());
 
     let scope = block_on(engine.sharing(ROOT))
         .expect("a sharing read")
@@ -4118,6 +4119,18 @@ fn the_vault_root_refuses_both_shares_with_the_names_its_read_reports() {
     );
 }
 
+/// The one link the sharing read reports at a scope carrying `link`.
+fn listed_link(link: &GrantRow, expires_at: UnixMillis, expired: bool) -> Vec<SharingInviteLink> {
+    vec![SharingInviteLink {
+        tag: link.tag.to_vec(),
+        permission: Permission::Read,
+        expires_at,
+        expired,
+        admission_cap: DEFAULT_ADMISSION_CAP,
+        pending_claims: 0,
+    }]
+}
+
 /// The link half of a share dialog: the deadline the owner-signed link entry
 /// carries. The link's row is not a grant, because its recipient is a throwaway
 /// identity only the link holder answers for, so it renders as the link it
@@ -4129,7 +4142,7 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
     let blocks = Blocks::default();
     let link = expiring_invite_link_at_root(0x4e, deadline);
     let grantee = recipient_row_at_root(CorePermission::Read);
-    seed_vault(&world, &blocks, vec![link, grantee.clone()]);
+    seed_vault(&world, &blocks, vec![link.clone(), grantee.clone()]);
     let alice = world.device(b"alice");
     let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
 
@@ -4137,15 +4150,7 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
         .expect("a sharing read")
         .state
         .expect("the scope root resolved");
-    assert_eq!(
-        view.invite_links,
-        SharingInviteLinks {
-            live: true,
-            expires_at: Some(deadline),
-            expired: false,
-            pending_claims: 0,
-        }
-    );
+    assert_eq!(view.invite_links, listed_link(&link, deadline, false));
 
     let named: Vec<Vec<u8>> = view
         .grants
@@ -4159,7 +4164,10 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
     );
 
     assert_eq!(
-        block_on(engine.command(Command::RevokeInviteLink { node: ROOT })),
+        block_on(engine.command(Command::RevokeInviteLink {
+            node: ROOT,
+            link_tag: None,
+        })),
         Ok(CommandOutcome::Done)
     );
     let revoked = block_on(engine.sharing(ROOT))
@@ -4168,7 +4176,7 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
         .expect("the scope root resolved");
     assert_eq!(
         revoked.invite_links,
-        SharingInviteLinks::default(),
+        Vec::new(),
         "the cut landed, so the set commits no link"
     );
 }
@@ -4182,7 +4190,7 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let link = expiring_invite_link_at_root(0x6a, deadline);
-    seed_vault(&world, &blocks, vec![link]);
+    seed_vault(&world, &blocks, vec![link.clone()]);
     let alice = world.device(b"alice");
     let (engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
 
@@ -4190,15 +4198,7 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
         .expect("a sharing read")
         .state
         .expect("the scope root resolved");
-    assert_eq!(
-        before.invite_links,
-        SharingInviteLinks {
-            live: true,
-            expires_at: Some(deadline),
-            expired: false,
-            pending_claims: 0,
-        }
-    );
+    assert_eq!(before.invite_links, listed_link(&link, deadline, false));
 
     // The claim path refuses at the deadline, so the read reports it there too.
     world.scheduler.advance_to(deadline);
@@ -4206,15 +4206,7 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
         .expect("a sharing read")
         .state
         .expect("the scope root resolved");
-    assert_eq!(
-        after.invite_links,
-        SharingInviteLinks {
-            live: true,
-            expires_at: Some(deadline),
-            expired: true,
-            pending_claims: 0,
-        }
-    );
+    assert_eq!(after.invite_links, listed_link(&link, deadline, true));
 }
 
 /// The mailbox post is the last step of the mint and nothing compensates it, so
@@ -4405,7 +4397,10 @@ fn revoking_an_invite_link_cuts_its_row_and_rotates_the_read_plane() {
     );
 
     assert_eq!(
-        block_on(engine.command(Command::RevokeInviteLink { node: ROOT })),
+        block_on(engine.command(Command::RevokeInviteLink {
+            node: ROOT,
+            link_tag: None,
+        })),
         Ok(CommandOutcome::Done)
     );
 
@@ -4446,7 +4441,10 @@ fn revoking_a_link_at_an_ordinary_folder_is_a_target_refusal_not_a_trust_violati
     let folder = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "plain");
 
     assert_eq!(
-        block_on(engine.command(Command::RevokeInviteLink { node: folder })),
+        block_on(engine.command(Command::RevokeInviteLink {
+            node: folder,
+            link_tag: None,
+        })),
         Err(EngineError::UnsupportedTarget {
             check: "revoke-link-target-is-not-a-scope-root"
         }),
@@ -4494,7 +4492,10 @@ fn revoking_a_link_on_a_scope_with_no_link_entry_publishes_nothing() {
     let before = sequence_at(&world, &root_name);
 
     assert_eq!(
-        block_on(engine.command(Command::RevokeInviteLink { node: ROOT })),
+        block_on(engine.command(Command::RevokeInviteLink {
+            node: ROOT,
+            link_tag: None,
+        })),
         Err(EngineError::MalformedInput {
             check: "link-not-committed"
         }),
@@ -4510,6 +4511,108 @@ fn revoking_a_link_on_a_scope_with_no_link_entry_publishes_nothing() {
             .any(|e| e.tag == grantee.tag),
         "the grantee's row is untouched"
     );
+}
+
+/// The invite links the sharing read reports at `fx`'s folder.
+fn folder_links(fx: &GrantScenario) -> Vec<SharingInviteLink> {
+    block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved")
+        .invite_links
+}
+
+/// A folder carries any number of links (ADR 0026 D2), so the sharing read
+/// lists each, with the claims its own ephemeral identity signed. A revoke that
+/// names a link by its tag cuts that link alone.
+#[test]
+fn two_links_are_both_listed_and_a_revoke_by_tag_cuts_only_that_one() {
+    let mut fx = GrantScenario::new();
+    fx.mint_link();
+    let write_fragment = fx.mint_link_at(Permission::Write);
+    fx.post_claims(&write_fragment, 1);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let listed = folder_links(&fx);
+    assert_eq!(listed.len(), 2, "both links are live");
+    let by = |permission| {
+        listed
+            .iter()
+            .find(|link| link.permission == permission)
+            .expect("one link per permission")
+            .clone()
+    };
+    let (read, write) = (by(Permission::Read), by(Permission::Write));
+    for link in [&read, &write] {
+        assert!(!link.expired);
+        assert_eq!(link.admission_cap, DEFAULT_ADMISSION_CAP);
+    }
+    assert_eq!(
+        (read.pending_claims, write.pending_claims),
+        (0, 1),
+        "a claim counts on the link that signed it"
+    );
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: Some(read.tag.clone()),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(
+        folder_links(&fx)
+            .into_iter()
+            .map(|link| link.tag)
+            .collect::<Vec<_>>(),
+        vec![write.tag.clone()],
+        "the other link stays listed"
+    );
+    let committed: Vec<Vec<u8>> = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the scope root republished")
+        .commitment
+        .entries
+        .iter()
+        .map(|entry| entry.tag.to_vec())
+        .collect();
+    assert!(committed.contains(&write.tag), "and stays committed");
+    assert!(!committed.contains(&read.tag), "the named link is cut");
+}
+
+/// With two links and no tag, a revoke has no defined cut, so it refuses and
+/// publishes nothing.
+#[test]
+fn a_revoke_with_no_tag_over_two_links_is_refused_and_publishes_nothing() {
+    let mut fx = GrantScenario::new();
+    fx.mint_link();
+    fx.mint_link();
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None,
+        })),
+        Err(EngineError::MalformedInput {
+            check: "link-ambiguous"
+        }),
+    );
+
+    assert_eq!(sequence_at(&fx.world, &name), before, "nothing publishes");
+    assert_eq!(folder_links(&fx).len(), 2);
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: Some(vec![0x11; 32]),
+        })),
+        Err(EngineError::MalformedInput {
+            check: "link-not-committed"
+        }),
+        "a tag no link carries names nothing"
+    );
+    assert_eq!(sequence_at(&fx.world, &name), before);
 }
 
 // ---------------------------------------------------------------------------
@@ -4596,7 +4699,7 @@ fn a_waiting_claim_shows_on_the_folder_row_until_the_owner_converts_it() {
             .expect("a sharing read")
             .state
             .expect("the link standing reads")
-            .invite_links
+            .invite_links[0]
             .pending_claims;
         (row, links)
     };
@@ -4626,7 +4729,7 @@ fn a_claim_on_an_expired_link_is_acked_and_stops_counting() {
             .expect("a sharing read")
             .state
             .expect("the link standing reads")
-            .invite_links
+            .invite_links[0]
             .pending_claims
     };
     tick(&fx.world, &fx.engine, &mut fx._tasks);
@@ -5321,7 +5424,8 @@ fn a_mint_whose_parent_publish_fails_still_hands_over_a_working_link() {
             .state
             .expect("the healed index names the scope")
             .invite_links
-            .live,
+            .len()
+            == 1,
         "the sharing read reports the live link"
     );
     let name = write_name(fx.folder);
@@ -5714,6 +5818,129 @@ fn a_grant_retried_after_a_failed_pointer_post_delivers_the_pointer() {
     );
 }
 
+/// The durable grant floor the owner raises for the recipient at `scope`,
+/// unscoped: the fake strips the owner tag before it matches an injected fault.
+fn grant_floor_key(scope: &[u8; 16], recipient_secret: &[u8; 32]) -> Vec<u8> {
+    [
+        scope.as_slice(),
+        b"/granted/",
+        &kdf::enc_subkey(recipient_secret).public().to_bytes(),
+    ]
+    .concat()
+}
+
+/// A grant whose row published and whose floor raise failed leaves the
+/// recipient withheld at the next cut. The same grant retried raises the floor
+/// before it re-posts the pointer.
+#[test]
+fn a_grant_retried_after_a_failed_floor_raise_raises_the_floor() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let floor = grant_floor_key(&fx.folder.0, &RECIPIENT_SECRET);
+    let raised = |fx: &GrantScenario| {
+        block_on(fx.owner_device.floors(&SECRET).epoch_floor(&floor)).expect("the floor reads")
+    };
+    fx.owner_device.floor_store.fail_floor_raises_for(&floor);
+    assert!(
+        fx.grant_folder_to_recipient().is_err(),
+        "the row publishes and its floor raise fails"
+    );
+    fx.owner_device.floor_store.heal_floors();
+    assert!(
+        fx.granted_to()
+            .contains(&recipient_identity().verifying_key().to_sec1().to_vec()),
+        "the row is committed"
+    );
+    assert_eq!(raised(&fx), None);
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    assert_eq!(
+        raised(&fx),
+        Some(published_read_epoch(&fx.world, &fx.blocks, fx.folder))
+    );
+    assert_eq!(
+        inbox(&fx.recipient_device).len(),
+        1,
+        "and the pointer posts"
+    );
+}
+
+/// A contact re-imported under a new encryption subkey cannot open the blob
+/// its row seals to its old one, so a grant retry refuses rather than post a
+/// pointer that restores nothing. The owner revokes and grants again.
+#[test]
+fn a_grant_retry_to_a_contact_whose_encryption_key_changed_is_refused() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    block_on(
+        fx.engine.command(Command::ImportContact {
+            contact_code: ContactCode::create(
+                &recipient_identity(),
+                kdf::enc_subkey(&BYSTANDER_SECRET).public(),
+            )
+            .encode(),
+        }),
+    )
+    .expect("the same identity re-imports under a new subkey");
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+    let delivered = inbox(&fx.recipient_device);
+
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::MalformedInput {
+            check: "grant-recipient-key-changed"
+        }),
+    );
+
+    assert_eq!(inbox(&fx.recipient_device), delivered, "no pointer posts");
+    assert_eq!(sequence_at(&fx.world, &name), before, "nothing publishes");
+}
+
+/// A grantee name is used only on a row the grant mints, so an existing row's
+/// retry ignores a name the row could not carry, while a first grant refuses it
+/// before anything publishes.
+#[test]
+fn a_name_the_row_cannot_carry_is_ignored_on_a_retry_and_refused_on_a_mint() {
+    let mut fx = GrantScenario::new();
+    let too_long = "x".repeat(256);
+    let refused = GranteeName::new(too_long.clone(), NameSource::Owner)
+        .expect_err("a name past the bound is no name")
+        .check();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+
+    assert_eq!(
+        fx.grant_named(Permission::Read, &too_long),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        inbox(&fx.recipient_device).len(),
+        2,
+        "the retry re-posts the pointer"
+    );
+
+    block_on(fx.engine.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the second recipient's code imports");
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Read,
+            grantee_name: Some(too_long),
+        })),
+        Err(EngineError::MalformedInput { check: refused }),
+    );
+    assert_eq!(sequence_at(&fx.world, &name), before, "nothing publishes");
+}
+
 /// The parent index names the moved root, so a second owner device that never
 /// saw the wave still finds the grantee, and re-delivers to the moved root.
 #[test]
@@ -5958,6 +6185,50 @@ fn a_grantee_name_edit_changes_only_that_row_and_publishes_once() {
         .find(|contact| contact.identity_public_key == recipient)
         .expect("the imported recipient");
     assert_eq!(contact.cached_name.as_deref(), Some("Alice"));
+}
+
+/// The name cache is a pre-fill and no authority, so a cache that does not open
+/// is cleared, reported once, and the sharing read goes on without its names.
+#[test]
+fn a_name_cache_that_does_not_open_is_cleared_and_the_sharing_read_goes_on() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let key = StagingGranteeNameCache::new(&fx.owner_device.staging_store, &enc, &entropy)
+        .staging_key()
+        .to_vec();
+    block_on(
+        fx.owner_device
+            .staging_store
+            .put_staged_bytes(&key, b"not a sealed cache"),
+    )
+    .expect("the corrupt blob stores");
+    events_so_far(&mut fx._events);
+
+    let view = block_on(fx.engine.sharing(fx.folder)).expect("the sharing read succeeds");
+
+    assert!(!view.contacts.is_empty());
+    assert!(
+        view.contacts
+            .iter()
+            .all(|contact| contact.cached_name.is_none())
+    );
+    assert!(view.state.is_some(), "the scope's own sharing still reads");
+    assert_eq!(
+        block_on(fx.owner_device.staging_store.staged_bytes(&key)).expect("the store reads"),
+        None,
+        "the cache is cleared"
+    );
+    block_on(fx.engine.sharing(fx.folder)).expect("a second read");
+    assert_eq!(
+        events_so_far(&mut fx._events)
+            .into_iter()
+            .filter(|event| *event == Event::GranteeNamesCleared)
+            .count(),
+        1,
+        "reported once"
+    );
 }
 
 /// The row the stalled write share committed names the grantee, so a read

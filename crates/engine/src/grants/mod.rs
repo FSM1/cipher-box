@@ -59,7 +59,7 @@ pub use invite::{
     DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, InviteClaim, InviteError,
     InviteFragment, LinkTerms, MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES, OwnerAuthority,
     committed_links, convert_invite_claim, locate_invite_link, mint_invite_grant, mint_invite_row,
-    post_invite_claim, sole_link,
+    post_invite_claim,
 };
 pub use invite_mint::{
     FragmentNames, InviteMintError, InviteMintOutcome, InviteMintPlan, MintedInviteLink,

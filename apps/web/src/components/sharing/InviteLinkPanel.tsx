@@ -36,11 +36,11 @@ export function InviteLinkPanel({
 
   switch (state.kind) {
     case 'live': {
-      const pending = plural(state.links.pendingClaims, 'claim');
+      const pending = plural(state.link.pendingClaims, 'claim');
       return (
         <div className="dialog-content" data-testid="share-live-link">
           <p className="sharing-note" data-testid="share-live-link-expiry">
-            {`// a link stands here — ${expiryLabel(state.links.expired, state.expiresAt)}`}
+            {`// a link stands here — ${expiryLabel(state.link.expired, state.link.expiresAt)}`}
           </p>
           {pending !== null && (
             <p className="sharing-note" data-testid="share-pending-claims">
@@ -59,7 +59,7 @@ export function InviteLinkPanel({
           <button
             type="button"
             className="dialog-button dialog-button--danger"
-            onClick={() => void actions.revokeInviteLink()}
+            onClick={() => void actions.revokeInviteLink(state.link.tag)}
             disabled={busy}
             data-testid="share-revoke-link"
           >

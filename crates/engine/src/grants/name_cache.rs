@@ -74,6 +74,13 @@ impl<'a, St: StagingStore, E: Entropy> StagingGranteeNameCache<'a, St, E> {
         &self.staging_key
     }
 
+    /// Drop the stored cache, so a blob that does not open stops failing every
+    /// later read and write of it.
+    pub async fn clear(&self) -> Result<(), ContactStoreError> {
+        self.staging.remove_staged_bytes(&self.staging_key).await?;
+        Ok(())
+    }
+
     async fn load(&self) -> Result<Vec<([u8; IDENTITY_PUBLIC_LEN], String)>, ContactStoreError> {
         let Some(blob) = self.staging.staged_bytes(&self.staging_key).await? else {
             return Ok(Vec::new());

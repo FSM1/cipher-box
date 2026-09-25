@@ -363,6 +363,7 @@ fn the_invite_check_surface_matches_the_variants_in_order() {
         InviteError::ScopeUnbound,
         InviteError::NotOwner,
         InviteError::LinkNotCommitted,
+        InviteError::LinkAmbiguous,
         InviteError::LinkExpired,
         InviteError::ClaimantContact(codec()),
         InviteError::ClaimantIsTheEphemeralHalf,
@@ -393,6 +394,7 @@ fn the_grant_edit_check_surface_matches_the_variants_in_order() {
         GrantEditError::SamePermission,
         GrantEditError::NotGranted,
         GrantEditError::LinkRow,
+        GrantEditError::RecipientKeyChanged,
         GrantEditError::Invite(InviteError::NotOwner),
         GrantEditError::Sign(codec()),
     ]

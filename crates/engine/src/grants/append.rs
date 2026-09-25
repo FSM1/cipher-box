@@ -29,6 +29,8 @@ pub struct HeldRow {
     pub permission: Permission,
     /// Whether the row is a personal grant or a link.
     pub kind: GrantSetEntryKind,
+    /// The encryption key the row's blob is sealed to.
+    pub recipient_enc_pk: [u8; 32],
 }
 
 /// A committed set after one owner edit, with the owner's signature over it.
@@ -52,6 +54,10 @@ pub enum GrantEditError {
     /// The row is a link. Its permission is fixed at creation (ADR 0025 D7),
     /// and it names no grantee.
     LinkRow,
+    /// The row seals to an encryption key the grantee's contact no longer
+    /// carries, so a share pointer would send them to a blob they cannot open.
+    /// The owner revokes and grants again.
+    RecipientKeyChanged,
     /// The set refused: the caller did not sign it, or the edited set is one
     /// its own readers refuse.
     Invite(InviteError),
@@ -67,6 +73,7 @@ impl GrantEditError {
         "grant-recipient-already-has-access",
         "grant-recipient-not-granted",
         "grant-row-is-a-link",
+        "grant-recipient-key-changed",
     ];
 
     /// A stable, key-material-free classification name.
@@ -75,6 +82,7 @@ impl GrantEditError {
             Self::SamePermission => "grant-recipient-already-has-access",
             Self::NotGranted => "grant-recipient-not-granted",
             Self::LinkRow => "grant-row-is-a-link",
+            Self::RecipientKeyChanged => "grant-recipient-key-changed",
             Self::Invite(e) => e.check(),
             Self::Sign(e) => e.check(),
         }
@@ -83,7 +91,9 @@ impl GrantEditError {
     /// The class label used in reject vectors.
     pub fn class(&self) -> &'static str {
         match self {
-            Self::SamePermission | Self::NotGranted | Self::LinkRow => "capability",
+            Self::SamePermission | Self::NotGranted | Self::LinkRow | Self::RecipientKeyChanged => {
+                "capability"
+            }
             Self::Invite(e) => e.class(),
             Self::Sign(e) => e.class(),
         }
@@ -120,6 +130,7 @@ pub fn held_row(
         tag: entry.tag,
         permission: entry.permission,
         kind: entry.kind,
+        recipient_enc_pk: row.recipient_enc_pk,
     })
 }
 

@@ -114,7 +114,7 @@ describe('EngineProvider', () => {
         grants: [],
         grantRefusal: null,
         inviteLinkRefusal: null,
-        inviteLinks: { live: false, expired: false, expiresAt: null, pendingClaims: 0 },
+        inviteLinks: [],
       },
     });
 

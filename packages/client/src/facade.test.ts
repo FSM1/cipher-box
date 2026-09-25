@@ -506,6 +506,21 @@ describe('EngineFacade', () => {
     });
   });
 
+  it('names the link a revoke cuts, and sends null where the caller names none', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+    const node = new Uint8Array(16);
+    const linkTag = new Uint8Array(32).fill(0x7a);
+
+    await facade.revokeInviteLink(node, linkTag);
+    await facade.revokeInviteLink(node);
+
+    expect(transport.commands).toEqual([
+      { kind: 'revokeInviteLink', node, linkTag },
+      { kind: 'revokeInviteLink', node, linkTag: null },
+    ]);
+  });
+
   it('carries the owner name the link shows its holder', async () => {
     const transport = mintingTransport();
 
