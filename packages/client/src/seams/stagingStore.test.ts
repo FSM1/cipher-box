@@ -151,10 +151,10 @@ const key = new Uint8Array([1, 2, 3, 4]);
 const payload = new Uint8Array([9, 8, 7, 6, 5]);
 
 /** Holds an access handle open, so a second access to the file meets an exclusive handle. */
-function gateOpen(dir: FakeDirectory, name: Uint8Array): () => void {
+function gateOpen(dir: FakeDirectory, name: Uint8Array | string): () => void {
   let release!: () => void;
   dir.openGates.set(
-    toHex(name),
+    typeof name === 'string' ? name : toHex(name),
     new Promise((resolve) => {
       release = resolve;
     })
@@ -181,8 +181,21 @@ function stubOpQueue(): void {
   });
 }
 
+/** Fixes the temp name of the next staged write, so a test can gate its temp stage. */
+function nextTempName(): string {
+  const uuid = '00000000-0000-4000-8000-000000000000';
+  vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValueOnce(uuid);
+  return `.cbtmp.${uuid}`;
+}
+
+/** Lets every timer and microtask already queued run. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 20));
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('OpfsStagingStore staged bytes', () => {
@@ -330,6 +343,50 @@ describe('OpfsStagingStore access to one staged file', () => {
     expect(await read).toEqual(payload);
     await clear;
     expect(dir.files.size).toBe(0);
+  });
+
+  it('wipes a file whose write is at its temp stage when the clear starts', async () => {
+    const dir = mount();
+    stubOpQueue();
+    const store = new OpfsStagingStore('test');
+    const tempName = nextTempName();
+    const release = gateOpen(dir, tempName);
+
+    const write = store.putStagedBytes(key, payload);
+    await vi.waitFor(() => expect(dir.files.get(tempName)?.openHandle).toBeDefined());
+    let cleared = false;
+    const clear = store.clear().finally(() => {
+      cleared = true;
+    });
+    await settle();
+    expect(cleared).toBe(false);
+    release();
+    await expect(write).resolves.toBeUndefined();
+    await clear;
+    expect(dir.files.size).toBe(0);
+  });
+
+  it('leaves the temp of a write that starts during the clear to that write', async () => {
+    const dir = mount();
+    stubOpQueue();
+    const store = new OpfsStagingStore('test');
+    await store.putStagedBytes(key, payload);
+    const releaseRead = gateOpen(dir, key);
+    const read = store.stagedBytes(key);
+    await vi.waitFor(() => expect(dir.files.get(toHex(key))?.openHandle).toBeDefined());
+    const clear = store.clear();
+
+    const tempName = nextTempName();
+    const releaseWrite = gateOpen(dir, tempName);
+    const write = store.putStagedBytes(otherKey, payload);
+    await vi.waitFor(() => expect(dir.files.get(tempName)?.openHandle).toBeDefined());
+    releaseRead();
+    expect(await read).toEqual(payload);
+    await clear;
+    expect(dir.files.has(toHex(key))).toBe(false);
+    releaseWrite();
+    await write;
+    expect(await store.stagedBytes(otherKey)).toEqual(payload);
   });
 
   it('keeps the new bytes when a remove and then a put start on a cold store', async () => {

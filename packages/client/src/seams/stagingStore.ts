@@ -83,6 +83,8 @@ export class OpfsStagingStore implements StagingStoreSeam {
   private stagedDirectory: Promise<FileSystemDirectoryHandle> | undefined;
   /** The settle point of the last task queued on each staged file name. */
   private readonly fileQueues = new Map<string, Promise<void>>();
+  /** The temps of the writes in flight, which `clear()` must not sweep. */
+  private readonly liveTemps = new Set<string>();
 
   constructor(name = 'cipherbox-staging') {
     this.dirName = `${name}${STAGED_DIR_SUFFIX}`;
@@ -185,6 +187,20 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // commit point: a constrained write (a short count, or the throw the spec
     // names QuotaExceededError) leaves the key's previous bytes untouched.
     const tempName = `${TEMP_PREFIX}${globalThis.crypto.randomUUID()}`;
+    this.liveTemps.add(tempName);
+    try {
+      await this.commitStaged(dir, tempName, fileName, staged);
+    } finally {
+      this.liveTemps.delete(tempName);
+    }
+  }
+
+  private async commitStaged(
+    dir: FileSystemDirectoryHandle,
+    tempName: string,
+    fileName: string,
+    staged: Uint8Array
+  ): Promise<void> {
     const tempHandle = await dir.getFileHandle(tempName, { create: true });
     const handle = await tempHandle.createSyncAccessHandle();
     let failure: { message: string; cause?: unknown } | undefined;
@@ -265,12 +281,15 @@ export class OpfsStagingStore implements StagingStoreSeam {
   }
 
   /**
-   * Sweeps in-flight temps too, which enumeration hides: a temp holds the bytes
-   * a killed write was staging, so an erase that stepped over it would leave
-   * that record behind. IndexedDB resets a key generator only when its store is
-   * deleted, so clearing leaves op ids strictly increasing and unreused.
+   * Waits for every access in flight when the wipe starts, so a write that
+   * started earlier commits before the wipe and not after it. Sweeps the temps
+   * a failed or killed write left, which enumeration hides, but not the temp of
+   * a write that started later. IndexedDB resets a key generator only when
+   * its store is deleted, so clearing leaves op ids strictly increasing and
+   * unreused.
    */
   async clear(): Promise<void> {
+    const inFlight = Promise.all(this.fileQueues.values());
     const queue = await refusalOf(async () => {
       const db = await this.open();
       const tx = db.transaction(STAGING_OPS_STORE, 'readwrite');
@@ -278,9 +297,11 @@ export class OpfsStagingStore implements StagingStoreSeam {
       await transactionDone(tx);
     });
     const staged = await refusalOf(async () => {
+      await inFlight;
       const dir = await this.stagedDir();
+      const names = (await namesIn(dir)).filter((name) => !this.liveTemps.has(name));
       const removals = await Promise.allSettled(
-        (await namesIn(dir)).map((name) => this.serialized(name, () => removeIfPresent(dir, name)))
+        names.map((name) => this.serialized(name, () => removeIfPresent(dir, name)))
       );
       const refused = removals.find((removal) => removal.status === 'rejected');
       if (refused) throw refused.reason as Error;
