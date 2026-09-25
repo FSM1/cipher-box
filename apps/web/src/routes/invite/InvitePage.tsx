@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type { InvitePreviewDescriptor } from '@cipherbox/client';
 import { LoginError } from '@cipherbox/auth-ui';
 import { useAuth } from '../../auth/useAuth';
@@ -26,13 +26,19 @@ type InviteState =
   | 'joining'
   | 'refused';
 
-type Preview = { outcome: 'read'; preview: InvitePreviewDescriptor } | { outcome: PreviewFailure };
+/** A read, keyed by the account and the link it was read for. */
+type Preview = { account: string; fragment: string } & (
+  | { outcome: 'read'; preview: InvitePreviewDescriptor }
+  | { outcome: PreviewFailure }
+);
+
+type Joining = { step: 'joining' | 'refused'; read: InvitePreviewDescriptor };
 
 /**
  * The invite route (blueprint/web-client.md "Composition"): sign-in, then the
  * preview, then "join" (ADR 0028 D1). The fragment is the whole bearer
- * capability, so it goes from `location.hash` to the facade and nowhere else —
- * unparsed, unrendered, and never in state.
+ * capability, so it goes from the router's `hash` to the facade, unparsed and
+ * unrendered. The preview keeps it only to bind "join" to the link on screen.
  *
  * The preview spends and stores nothing, so it runs with no press. The join
  * needs a gesture: a mount-time join would let any page that can navigate a
@@ -48,31 +54,34 @@ export function InvitePage() {
   const client = useEngine();
   const navigate = useNavigate();
   const { error, run } = useCommandRunner<'claimInviteLink'>();
+  const fragment = useLocation().hash.slice(1);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [joining, setJoining] = useState<'joining' | 'refused' | null>(null);
-  // Read once, before the join clears it: afterwards an empty hash means spent,
-  // not absent.
-  const [carriesLink] = useState(() => window.location.hash.length > 1);
+  const [joining, setJoining] = useState<Joining | null>(null);
 
   // Latched, so a sign-in in flight keeps the panel, and the progress it holds.
   const [decided, setDecided] = useState(false);
   if (isSignedOut && !decided) setDecided(true);
+  if (account === null && preview !== null) setPreview(null);
 
-  const signedIn = account !== null && client !== null;
   useEffect(() => {
-    if (!signedIn || !carriesLink || client === null) return;
+    if (account === null || client === null || fragment === '') return;
     let current = true;
-    client.facade.previewInviteLink(window.location.hash.slice(1)).then(
-      (read) => current && setPreview({ outcome: 'read', preview: read }),
-      (failure: unknown) => current && setPreview({ outcome: failedPreviewOutcome(failure) })
+    client.facade.previewInviteLink(fragment).then(
+      (read) => current && setPreview({ account, fragment, outcome: 'read', preview: read }),
+      (failure: unknown) =>
+        current && setPreview({ account, fragment, outcome: failedPreviewOutcome(failure) })
     );
     return () => {
       current = false;
     };
-  }, [signedIn, carriesLink, client]);
+  }, [account, client, fragment]);
 
+  // A read for another account or another link shows nothing, so no action
+  // offered can act on what the page no longer names.
+  const shown = preview?.account === account && preview.fragment === fragment ? preview : null;
+  const signedIn = account !== null && client !== null;
   const state: InviteState =
-    joining ?? (signedIn ? linkState(carriesLink, preview) : decided ? 'waiting' : 'checking');
+    joining?.step ?? (signedIn ? linkState(fragment, shown) : decided ? 'waiting' : 'checking');
 
   /**
    * Through the router, so the capability leaves its in-memory location as
@@ -80,22 +89,22 @@ export function InvitePage() {
    */
   const openFolder = (scope: Uint8Array) => navigate(folderPath(scope), { replace: true });
 
-  const join = (scope: Uint8Array, name: string) => {
-    if (joining === 'joining') return;
-    const fragment = window.location.hash.slice(1);
-    if (fragment === '') return;
+  /** Claims exactly the link the shown preview was read for. */
+  const join = ({ fragment: claimed }: Preview, read: InvitePreviewDescriptor, name: string) => {
+    if (joining?.step === 'joining') return;
     // Before the await, per `EngineFacade.claimInviteLink`.
     navigate(`${window.location.pathname}${window.location.search}`, { replace: true });
-    setJoining('joining');
-    void run('claimInviteLink', (facade) => facade.claimInviteLink(fragment, name)).then(
+    setPreview(null);
+    setJoining({ step: 'joining', read });
+    void run('claimInviteLink', (facade) => facade.claimInviteLink(claimed, name)).then(
       (accepted) => {
-        if (accepted) openFolder(scope);
-        else setJoining('refused');
+        if (accepted) openFolder(read.scope);
+        else setJoining({ step: 'refused', read });
       }
     );
   };
 
-  const read = preview?.outcome === 'read' ? preview.preview : null;
+  const read = joining?.read ?? (shown?.outcome === 'read' ? shown.preview : null);
 
   return (
     <div className="login-container">
@@ -119,7 +128,7 @@ export function InvitePage() {
               preview={read}
               joining={state === 'joining'}
               focusJoin={decided}
-              onJoin={(name) => join(read.scope, name)}
+              onJoin={(name) => shown !== null && join(shown, read, name)}
             />
           </>
         )}
@@ -139,8 +148,8 @@ export function InvitePage() {
   );
 }
 
-function linkState(carriesLink: boolean, preview: Preview | null): InviteState {
-  if (!carriesLink) return 'noLink';
+function linkState(fragment: string, preview: Preview | null): InviteState {
+  if (fragment === '') return 'noLink';
   if (preview === null) return 'previewing';
   return preview.outcome === 'read' ? previewOutcome(preview.preview) : preview.outcome;
 }

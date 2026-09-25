@@ -30,7 +30,7 @@ function livePreview(overrides: Partial<InvitePreviewDescriptor> = {}): InvitePr
 }
 
 interface EngineOptions {
-  preview?: () => Promise<InvitePreviewDescriptor>;
+  preview?: (fragment: string) => Promise<InvitePreviewDescriptor>;
   refusal?: Error | null;
   signedIn?: boolean;
   started?: Promise<void>;
@@ -51,7 +51,7 @@ function inviteEngine({
   let routerHash = '';
   const listeners = new Set<() => void>();
   let account: string | null = signedIn ? 'acct01' : null;
-  const previewInviteLink = vi.fn((_fragment: string) => preview());
+  const previewInviteLink = vi.fn((fragment: string) => preview(fragment));
   const claimInviteLink = vi.fn((_fragment: string, _name: string) => {
     addressAtDispatch.push(window.location.hash);
     return refusal === null ? Promise.resolve({ kind: 'done' as const }) : Promise.reject(refusal);
@@ -84,8 +84,14 @@ function inviteEngine({
     routerHash = useLocation().hash;
     return null;
   }
+  /** The engine session moving to another account, or signing out. */
+  function switchAccount(next: string | null) {
+    account = next;
+    for (const listener of [...listeners]) listener();
+  }
   return {
     client,
+    switchAccount,
     previewInviteLink,
     claimInviteLink,
     addressAtDispatch,
@@ -122,6 +128,21 @@ async function openAt(
 }
 
 const pageState = () => screen.getByTestId('invite-claim').dataset.state;
+
+/** A preview read the test lands by hand. */
+function deferred() {
+  let land!: (read: InvitePreviewDescriptor) => void;
+  const promise = new Promise<InvitePreviewDescriptor>((resolve) => (land = resolve));
+  return { promise, land };
+}
+
+/** The address moving to another link inside the tab, as a pasted link does. */
+async function moveTo(hash: string) {
+  await act(async () => {
+    window.history.pushState(null, '', `/invite${hash}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+}
 
 /** Presses "join" and lets the command settle. */
 async function join() {
@@ -208,6 +229,31 @@ describe('the invite preview', () => {
     expect(claimInviteLink).not.toHaveBeenCalled();
   });
 
+  it('shows nothing a previous account read, and no action until the read for this one lands', async () => {
+    const reads = [Promise.resolve(livePreview({ joined: true }))];
+    const engine = await openAt(`#${FRAGMENT}`, inviteEngine({ preview: () => reads.shift()! }));
+    expect(pageState()).toBe('joined');
+
+    const second = deferred();
+    reads.push(second.promise);
+    await act(async () => engine.switchAccount('acct02'));
+
+    expect(pageState()).toBe('previewing');
+    expect(screen.queryByTestId('invite-open-folder')).toBeNull();
+    expect(screen.queryByTestId('invite-join')).toBeNull();
+
+    await act(async () => second.land(livePreview()));
+    expect(pageState()).toBe('joinable');
+    expect(screen.getByTestId('invite-account').textContent).toContain('acct02');
+
+    await act(async () => engine.switchAccount(null));
+    reads.push(new Promise(() => undefined));
+    await act(async () => engine.switchAccount('acct02'));
+
+    expect(pageState()).toBe('previewing');
+    expect(screen.queryByTestId('invite-join')).toBeNull();
+  });
+
   it('offers "open folder" and no join on a link this account already joined', async () => {
     const { claimInviteLink } = await openAt(
       `#${FRAGMENT}`,
@@ -284,6 +330,30 @@ describe('the join', () => {
     // raw `history.replaceState` would leave the capability there for the tab's
     // life.
     expect(engine.routerHash()).toBe('');
+  });
+
+  it('claims the link on screen: a new link shows no join until its own preview lands', async () => {
+    const second = deferred();
+    const engine = await openAt(
+      `#${FRAGMENT}`,
+      inviteEngine({
+        preview: (fragment) =>
+          fragment === FRAGMENT ? Promise.resolve(livePreview()) : second.promise,
+      })
+    );
+    expect(pageState()).toBe('joinable');
+
+    await moveTo('#another-link-fragment');
+
+    expect(pageState()).toBe('previewing');
+    expect(screen.queryByTestId('invite-join')).toBeNull();
+
+    await act(async () => second.land(livePreview({ names: null })));
+    expect(screen.getByTestId('invite-headline').textContent).toBe('a folder was shared with you');
+    await join();
+
+    expect(engine.previewInviteLink.mock.calls).toEqual([[FRAGMENT], ['another-link-fragment']]);
+    expect(engine.claimInviteLink.mock.calls).toEqual([['another-link-fragment', '']]);
   });
 
   it("renders the engine's refusal in its own words and stays on the page", async () => {
