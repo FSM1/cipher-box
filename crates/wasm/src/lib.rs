@@ -1298,6 +1298,86 @@ impl ReceivedShareRow {
     }
 }
 
+/// One direct child of a previewed folder: a name and a kind.
+#[wasm_bindgen]
+pub struct PreviewEntry {
+    inner: facade::PreviewEntry,
+}
+
+#[wasm_bindgen]
+impl PreviewEntry {
+    /// The child's name.
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    /// The child's kind.
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> NodeKind {
+        self.inner.kind.into()
+    }
+}
+
+/// What the invite page shows before the join (ADR 0028 D2, D5).
+#[wasm_bindgen]
+pub struct InvitePreview {
+    inner: facade::InvitePreview,
+}
+
+#[wasm_bindgen]
+impl InvitePreview {
+    /// The owner's name, or `undefined` when the owner signature over the
+    /// names does not verify.
+    #[wasm_bindgen(getter, js_name = ownerName)]
+    pub fn owner_name(&self) -> Option<String> {
+        self.inner.names.as_ref().map(|n| n.owner_name.clone())
+    }
+
+    /// The folder's name, present exactly when [`Self::owner_name`] is.
+    #[wasm_bindgen(getter, js_name = folderName)]
+    pub fn folder_name(&self) -> Option<String> {
+        self.inner.names.as_ref().map(|n| n.folder_name.clone())
+    }
+
+    /// The permission conversion grants, or `undefined` when the preview read
+    /// no link entry.
+    #[wasm_bindgen(getter)]
+    pub fn permission(&self) -> Option<Permission> {
+        self.inner.permission.map(Permission::from)
+    }
+
+    /// One of `live`, `expired`, `revoked`, `unresolvable`.
+    #[wasm_bindgen(getter)]
+    pub fn state(&self) -> String {
+        self.inner.state.name().to_owned()
+    }
+
+    /// Whether this account already joined the folder.
+    #[wasm_bindgen(getter)]
+    pub fn joined(&self) -> bool {
+        self.inner.joined
+    }
+
+    /// The scope root's direct children, in the order its body holds them.
+    #[wasm_bindgen(getter)]
+    pub fn listing(&self) -> Vec<PreviewEntry> {
+        self.inner
+            .listing
+            .iter()
+            .cloned()
+            .map(|inner| PreviewEntry { inner })
+            .collect()
+    }
+}
+
+impl InvitePreview {
+    /// Wraps an engine invite preview. Never exported to JS.
+    pub fn from_facade(inner: facade::InvitePreview) -> Self {
+        Self { inner }
+    }
+}
+
 /// The `/bin` route's whole read: the owner's soft-deleted nodes, and which
 /// rung the bin index load reached.
 #[wasm_bindgen]

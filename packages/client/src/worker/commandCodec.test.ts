@@ -9,6 +9,7 @@ import {
   readFileVersions,
   readPendingApprovals,
   readEvent,
+  readInvitePreview,
   readReceivedShare,
   readSharing,
   readSnapshot,
@@ -1655,6 +1656,59 @@ describe('readReceivedShare', () => {
     // A guessed class would paint a revoked share as still granted.
     expect(() => readReceivedShare(fakeWasm, { ...row, resolution: 'granted-ish' })).toThrow(
       'unknown WASM resolution class: granted-ish'
+    );
+  });
+});
+
+describe('readInvitePreview', () => {
+  const preview = {
+    ownerName: 'Ada',
+    folderName: 'trips',
+    permission: fakeWasmEnums.Permission.Write,
+    state: 'live',
+    joined: false,
+    listing: [
+      { name: 'drafts', kind: fakeWasmEnums.NodeKind.Folder },
+      { name: 'notes.txt', kind: fakeWasmEnums.NodeKind.File },
+    ],
+  };
+
+  it('carries the verified names, the permission, the state and the listing', () => {
+    expect(readInvitePreview(fakeWasm, preview)).toEqual({
+      names: { ownerName: 'Ada', folderName: 'trips' },
+      permission: 'write',
+      state: 'live',
+      joined: false,
+      listing: [
+        { name: 'drafts', kind: 'folder' },
+        { name: 'notes.txt', kind: 'file' },
+      ],
+    });
+  });
+
+  it('reads absent names and an absent permission as null', () => {
+    const unverified = readInvitePreview(fakeWasm, {
+      ...preview,
+      ownerName: undefined,
+      folderName: undefined,
+      permission: undefined,
+      state: 'unresolvable',
+      listing: [],
+    });
+    expect(unverified.names).toBeNull();
+    expect(unverified.permission).toBeNull();
+    expect(unverified.state).toBe('unresolvable');
+  });
+
+  it('fails closed on one name without the other', () => {
+    expect(() => readInvitePreview(fakeWasm, { ...preview, folderName: undefined })).toThrow(
+      'WASM invite preview carries one name without the other'
+    );
+  });
+
+  it('fails closed on a state it cannot map', () => {
+    expect(() => readInvitePreview(fakeWasm, { ...preview, state: 'joinable' })).toThrow(
+      'unknown WASM invite preview state: joinable'
     );
   });
 });

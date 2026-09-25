@@ -9,7 +9,7 @@
 //! engine presents a bearer on every mailbox call is asserted where the token
 //! lives (`api/client.rs`) and against the live API (the contract suite).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
@@ -92,6 +92,16 @@ pub struct InMemoryMailbox {
 }
 
 impl InMemoryMailbox {
+    /// Every inbox on the hub this handle posts through, by address.
+    pub(crate) fn hub_contents(&self) -> BTreeMap<String, Vec<MailboxItem>> {
+        let inner = self.hub.inner.lock().expect("lock");
+        inner
+            .queues
+            .iter()
+            .map(|(address, items)| (address.clone(), items.clone()))
+            .collect()
+    }
+
     /// Make every `ack` fail, or clear the failure.
     pub fn set_ack_failing(&self, failing: bool) {
         *self.ack_failing.lock().expect("lock") = failing;

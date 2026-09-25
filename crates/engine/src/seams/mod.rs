@@ -28,6 +28,7 @@ mod snapshot_cache;
 mod staging_store;
 
 pub use credential_store::CredentialStore;
+pub(crate) use floor_store::NoPersistFloorStore;
 pub use floor_store::{
     CONTACT_LABEL_LEN, ContactLabel, FloorNamespace, FloorRaise, FloorStore, OWNER_TAG_LEN,
     OwnerScopedFloorStore, SharerScopedFloorStore,

@@ -24,6 +24,7 @@ import type {
   DeviceRendezvousResult,
   DeviceRendezvousStep,
   EventDescriptor,
+  InvitePreviewDescriptor,
   OpenedStream,
   PendingApprovalDescriptor,
   VersionEntryDescriptor,
@@ -515,6 +516,7 @@ export class FakeEngineTransport implements EngineTransport {
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly sharingReads: Array<Uint8Array | null> = [];
   receivedShareReads = 0;
+  invitePreviewReads = 0;
   binReads = 0;
   vaultStorageReads = 0;
   authMethodReads = 0;
@@ -557,6 +559,14 @@ export class FakeEngineTransport implements EngineTransport {
   respondSharing: (scope: Uint8Array | null) => Promise<SharingDescriptor> = (scope) =>
     Promise.resolve(emptySharing(scope ?? undefined));
   respondReceivedShares: () => Promise<ReceivedShareDescriptor[]> = () => Promise.resolve([]);
+  respondInvitePreview: () => Promise<InvitePreviewDescriptor> = () =>
+    Promise.resolve({
+      names: null,
+      permission: null,
+      state: 'unresolvable',
+      joined: false,
+      listing: [],
+    });
   respondBin: () => Promise<BinDescriptor> = () => Promise.resolve(emptyBin());
   respondVaultStorage: () => Promise<VaultStorageDescriptor> = () =>
     Promise.resolve(emptyVaultStorage());
@@ -641,6 +651,9 @@ export class FakeEngineTransport implements EngineTransport {
       case 'receivedShares':
         this.receivedShareReads += 1;
         return this.respondReceivedShares();
+      case 'invitePreview':
+        this.invitePreviewReads += 1;
+        return this.respondInvitePreview();
       case 'bin':
         this.binReads += 1;
         return this.respondBin();

@@ -1,6 +1,6 @@
 //! In-memory [`FloorStore`] fake.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use crate::seams::{FloorNamespace, FloorRaise, FloorStore, OWNER_TAG_LEN, SeamError, SeamResult};
@@ -172,6 +172,18 @@ impl InMemoryFloorStore {
     /// "forget this device" onto its refusal path with the floors left standing.
     pub fn fail_clear(&self) {
         self.inner.lock().expect("lock").failing_clear = true;
+    }
+
+    /// Both floor maps, sorted: the durable state a test compares across a
+    /// call that must raise nothing.
+    pub(crate) fn contents(&self) -> [BTreeMap<Vec<u8>, u64>; 2] {
+        let inner = self.inner.lock().expect("lock");
+        [&inner.epoch, &inner.sequence].map(|floors| {
+            floors
+                .iter()
+                .map(|(key, floor)| (key.clone(), *floor))
+                .collect()
+        })
     }
 
     /// Every epoch-namespace key this store holds, exactly as it was written —

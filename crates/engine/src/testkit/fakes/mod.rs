@@ -27,4 +27,5 @@ pub use received_share_store::InMemoryReceivedShareStore;
 pub use record_store::{InMemoryRecordStore, SlotFillingRecordStore};
 pub use scheduler::VirtualScheduler;
 pub use snapshot_cache::InMemorySnapshotCache;
+pub(crate) use staging_store::StagingContents;
 pub use staging_store::{InMemoryStagingBackings, InMemoryStagingStore};

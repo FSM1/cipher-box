@@ -32,6 +32,7 @@ import {
   buildCommand,
   bytes,
   count,
+  fragment,
   minted,
   nodeId,
   readAuthMethods,
@@ -39,6 +40,7 @@ import {
   readDevices,
   readFileVersions,
   readEvent,
+  readInvitePreview,
   readPendingApprovals,
   readReceivedShare,
   readSharing,
@@ -390,6 +392,11 @@ export class EngineHost implements EngineHostLike {
         );
       case 'receivedShares':
         return (await this.handle.receivedShares()).map((row) => readReceivedShare(this.wasm, row));
+      case 'invitePreview':
+        return readInvitePreview(
+          this.wasm,
+          await this.handle.previewInviteLink(fragment(read.fragment, 'fragment'))
+        );
       case 'bin':
         return readBin(this.wasm, await this.handle.bin());
       case 'vaultStorage':

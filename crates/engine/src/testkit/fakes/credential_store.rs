@@ -11,6 +11,13 @@ pub struct InMemoryCredentialStore {
     inner: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
+impl InMemoryCredentialStore {
+    /// The stored refresh token, for a test that compares it across a call.
+    pub(crate) fn contents(&self) -> Option<Vec<u8>> {
+        self.inner.lock().expect("lock").clone()
+    }
+}
+
 impl CredentialStore for InMemoryCredentialStore {
     async fn store_refresh_token(&self, refresh_token: &[u8]) -> SeamResult<()> {
         *self.inner.lock().expect("lock") = Some(refresh_token.to_vec());

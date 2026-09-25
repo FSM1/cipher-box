@@ -49,7 +49,17 @@ pub struct InMemoryStagingStore {
     inner: Arc<Mutex<Inner>>,
 }
 
+/// An [`InMemoryStagingStore`]'s durable state: the queued ops in order, then
+/// every staged key and its bytes.
+pub(crate) type StagingContents = (Vec<(OpId, Vec<u8>)>, BTreeMap<Vec<u8>, Vec<u8>>);
+
 impl InMemoryStagingStore {
+    /// The durable state, for a test that compares it across a call.
+    pub(crate) fn contents(&self) -> StagingContents {
+        let inner = self.inner.lock().expect("lock");
+        (inner.ops.clone(), inner.staged.clone())
+    }
+
     /// Makes `queued_ops` return a seam error, so tests can prove a caller's
     /// precondition guard runs before the staging read.
     pub fn fail_queued_ops(&self) {

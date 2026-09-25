@@ -59,6 +59,11 @@ impl InMemorySnapshotCache {
         self.inner.lock().expect("lock").values().cloned().collect()
     }
 
+    /// Every cache key and its ciphertext.
+    pub(crate) fn contents(&self) -> BTreeMap<Vec<u8>, Vec<u8>> {
+        self.inner.lock().expect("lock").clone()
+    }
+
     /// The ciphertext held under `cache_key`, if any.
     pub fn peek(&self, cache_key: &[u8]) -> Option<Vec<u8>> {
         self.inner.lock().expect("lock").get(cache_key).cloned()

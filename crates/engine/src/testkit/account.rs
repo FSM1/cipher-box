@@ -237,6 +237,15 @@ impl Blocks {
         self.store.lock().expect("lock").get(cid).cloned()
     }
 
+    /// Serve `block` under `cid` whatever it hashes to: a plane that answers
+    /// with bytes the address does not commit.
+    pub fn replace(&self, cid: &str, block: Vec<u8>) {
+        self.store
+            .lock()
+            .expect("lock")
+            .insert(cid.to_owned(), block);
+    }
+
     /// The one block on the plane, for a fixture that uploaded exactly one.
     pub fn only_block(&self) -> String {
         let store = self.store.lock().expect("lock");

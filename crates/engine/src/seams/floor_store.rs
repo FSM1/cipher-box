@@ -410,6 +410,55 @@ impl<F: FloorStore> FloorStore for SharerScopedFloorStore<'_, F> {
     }
 }
 
+/// A read-through view that persists nothing: every read reaches the backing,
+/// and a raise answers the floor it would reach without writing it. The link
+/// preview runs the gate against the floors the session holds and raises none
+/// (ADR 0028 D3).
+#[derive(Clone, Copy)]
+pub(crate) struct NoPersistFloorStore<'a, F> {
+    inner: &'a F,
+}
+
+impl<'a, F: FloorStore> NoPersistFloorStore<'a, F> {
+    pub(crate) fn over(inner: &'a F) -> Self {
+        Self { inner }
+    }
+}
+
+impl<F: FloorStore> FloorStore for NoPersistFloorStore<'_, F> {
+    async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
+        self.inner.epoch_floor(scope_id).await
+    }
+
+    async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
+        Ok(self
+            .epoch_floor(scope_id)
+            .await?
+            .map_or(epoch, |f| f.max(epoch)))
+    }
+
+    async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+        self.inner.sequence_floor(ipns_name).await
+    }
+
+    async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+        Ok(self
+            .sequence_floor(ipns_name)
+            .await?
+            .map_or(sequence, |f| f.max(sequence)))
+    }
+
+    async fn commit_floors(&self, _raises: &[FloorRaise]) -> SeamResult<()> {
+        Ok(())
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        Err(SeamError::new(
+            "a view that persists nothing clears nothing",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,5 +714,24 @@ mod tests {
         // The erase is device-scoped, and a device that never started is
         // exactly the one that needs forgetting.
         assert!(block_on(unbound.clear()).is_ok());
+    }
+
+    #[test]
+    fn a_no_persist_view_reads_through_and_writes_nothing() {
+        let backing = InMemoryFloorStore::default();
+        block_on(backing.raise_epoch_floor(b"scope", 4)).unwrap();
+        block_on(backing.raise_sequence_floor(NAME, 9)).unwrap();
+        let before = backing.contents();
+        let view = NoPersistFloorStore::over(&backing);
+
+        assert_eq!(block_on(view.epoch_floor(b"scope")).unwrap(), Some(4));
+        assert_eq!(block_on(view.raise_epoch_floor(b"scope", 7)).unwrap(), 7);
+        assert_eq!(block_on(view.raise_epoch_floor(b"scope", 2)).unwrap(), 4);
+        assert_eq!(block_on(view.raise_epoch_floor(b"other", 3)).unwrap(), 3);
+        assert_eq!(block_on(view.raise_sequence_floor(NAME, 10)).unwrap(), 10);
+        block_on(view.commit_floors(&[FloorRaise::sequence(NAME.to_vec(), 11)])).unwrap();
+        assert!(block_on(view.clear()).is_err());
+
+        assert_eq!(backing.contents(), before, "the backing holds what it held");
     }
 }

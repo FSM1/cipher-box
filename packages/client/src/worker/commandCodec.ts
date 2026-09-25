@@ -22,6 +22,8 @@ import type {
   CommandDescriptor,
   DeadLetterReason,
   EventDescriptor,
+  InvitePreviewDescriptor,
+  InvitePreviewState,
   NodeKind,
   OpProgressPhase,
   PendingApprovalDescriptor,
@@ -50,6 +52,7 @@ import type {
   WasmCommand,
   WasmEvent,
   WasmByoIpfsConfig,
+  WasmInvitePreview,
   WasmNodeId,
   WasmPendingApproval,
   WasmQueueHold,
@@ -142,7 +145,7 @@ function deadline(value: unknown, field: string): bigint {
  * memory. Like every refusal here it names the field and never echoes the
  * value, which is the capability itself.
  */
-function fragment(value: unknown, field: string): string {
+export function fragment(value: unknown, field: string): string {
   const carried = text(value, field);
   if (carried.length > MAX_FRAGMENT_CHARS) throw invalidField(field, value);
   return carried;
@@ -930,6 +933,47 @@ export function readReceivedShare(
     permission: permissionFrom(wasm, row.permission),
     resolution: resolution(row.resolution),
     viaLink: row.viaLink,
+  };
+}
+
+/**
+ * The states `LinkPreviewState::name` produces, and nothing else: an unmapped
+ * string is a JS/WASM version mismatch, and guessing one could offer "join" on
+ * a revoked link.
+ */
+function previewState(name: string): InvitePreviewState {
+  switch (name) {
+    case 'live':
+    case 'expired':
+    case 'revoked':
+    case 'unresolvable':
+      return name;
+    default:
+      throw new Error(`unknown WASM invite preview state: ${name}`);
+  }
+}
+
+/**
+ * Reads a wasm-bindgen `InvitePreview`'s getters into a descriptor. The names
+ * cross together or not at all: one without the other is a version mismatch.
+ */
+export function readInvitePreview(
+  wasm: EngineWasm,
+  preview: WasmInvitePreview
+): InvitePreviewDescriptor {
+  const { ownerName, folderName, permission } = preview;
+  if ((ownerName === undefined) !== (folderName === undefined)) {
+    throw new Error('WASM invite preview carries one name without the other');
+  }
+  return {
+    names: ownerName === undefined || folderName === undefined ? null : { ownerName, folderName },
+    permission: permission === undefined ? null : permissionFrom(wasm, permission),
+    state: previewState(preview.state),
+    joined: preview.joined,
+    listing: preview.listing.map((entry) => ({
+      name: entry.name,
+      kind: nodeKindFrom(wasm, entry.kind),
+    })),
   };
 }
 

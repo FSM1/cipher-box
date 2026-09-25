@@ -501,6 +501,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
       snapshot: () => Promise.reject(new Error('unused')),
       sharing: () => Promise.reject(new Error('unused')),
       receivedShares: () => Promise.reject(new Error('unused')),
+      previewInviteLink: () => Promise.reject(new Error('unused')),
       bin: () => Promise.reject(new Error('unused')),
       vaultStorage: () => Promise.reject(new Error('unused')),
       authMethods: () => Promise.reject(new Error('unused')),

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { byoSettings, fakeWasmEnums, TEST_ACCOUNT_ID } from '../testkit.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm, WasmCommandOutcome } from './engineWasm.js';
+import { MAX_FRAGMENT_CHARS } from './protocol.js';
 import type { DeviceRendezvousStep, WriteTarget } from './protocol.js';
 
 /** A second account on the same device — the lockout this namespacing prevents. */
@@ -87,6 +88,11 @@ async function permissiveHost(): Promise<{ host: EngineHost; calls: unknown[][] 
       pushChunk = record('pushChunk');
       beginWrite = record('beginWrite');
       snapshot = record('snapshot', emptyView);
+      previewInviteLink = record('previewInviteLink', {
+        state: 'revoked',
+        joined: false,
+        listing: [],
+      });
       download = record('download');
       openContentStream = record('openContentStream');
       readStream = record('readStream');
@@ -330,6 +336,31 @@ describe('EngineHost request fields', () => {
     await expect(
       host.read({ kind: 'snapshot', folder: undefined as unknown as Uint8Array })
     ).rejects.toThrow('invalid request field folder: undefined');
+    expect(calls).toEqual([]);
+  });
+
+  it('previews the fragment verbatim and reads the preview back', async () => {
+    const { host, calls } = await permissiveHost();
+
+    await expect(host.read({ kind: 'invitePreview', fragment: 'abc-_' })).resolves.toEqual({
+      names: null,
+      permission: null,
+      state: 'revoked',
+      joined: false,
+      listing: [],
+    });
+    expect(calls).toEqual([['previewInviteLink', 'abc-_']]);
+  });
+
+  it('refuses a preview fragment that is not text or is past the bound', async () => {
+    const { host, calls } = await permissiveHost();
+
+    await expect(
+      host.read({ kind: 'invitePreview', fragment: 7 as unknown as string })
+    ).rejects.toThrow('invalid request field fragment: number');
+    await expect(
+      host.read({ kind: 'invitePreview', fragment: 'x'.repeat(MAX_FRAGMENT_CHARS + 1) })
+    ).rejects.toThrow('invalid request field fragment');
     expect(calls).toEqual([]);
   });
 
