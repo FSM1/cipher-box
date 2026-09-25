@@ -7,6 +7,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { toHex } from './bytes.js';
 import { OpfsStagingStore, StagingIoError } from './stagingStore.js';
 
 interface Limits {
@@ -20,6 +21,8 @@ interface Limits {
 
 class FakeFile {
   bytes = new Uint8Array(0);
+  /** OPFS sync access handles are exclusive: one open handle per file. */
+  openHandle: FakeSyncHandle | undefined;
 }
 
 class FakeSyncHandle {
@@ -71,6 +74,7 @@ class FakeSyncHandle {
 
   close(): void {
     this.closed = true;
+    if (this.file.openHandle === this) this.file.openHandle = undefined;
   }
 }
 
@@ -80,6 +84,8 @@ class FakeDirectory {
   limits: Limits = {};
   removeFails = false;
   moveFails = false;
+  /** Names whose next handle open waits for the gate to settle. */
+  readonly openGates = new Map<string, Promise<void>>();
 
   async *keys(): AsyncIterableIterator<string> {
     for (const name of [...this.files.keys()]) yield name;
@@ -98,14 +104,25 @@ class FakeDirectory {
     }
     const target = file;
     return Promise.resolve({
-      createSyncAccessHandle: (): Promise<FakeSyncHandle> => {
+      createSyncAccessHandle: async (): Promise<FakeSyncHandle> => {
+        if (target.openHandle) {
+          throw new DOMException(
+            'Access Handles cannot be created if there is another open Access Handle',
+            'NoModificationAllowedError'
+          );
+        }
         const handle = new FakeSyncHandle(target, this.limits);
+        target.openHandle = handle;
         this.handles.push(handle);
-        return Promise.resolve(handle);
+        await this.openGates.get(name);
+        return handle;
       },
       getFile: (): Promise<{ size: number }> => Promise.resolve({ size: target.bytes.byteLength }),
       move: (to: string): Promise<void> => {
         if (this.moveFails) return Promise.reject(new DOMException('busy', 'InvalidStateError'));
+        if (this.files.get(to)?.openHandle) {
+          return Promise.reject(new DOMException('handle open', 'NoModificationAllowedError'));
+        }
         this.files.delete(name);
         this.files.set(to, target);
         return Promise.resolve();
@@ -115,6 +132,9 @@ class FakeDirectory {
 
   removeEntry(name: string): Promise<void> {
     if (this.removeFails) return Promise.reject(new Error('remove failed'));
+    if (this.files.get(name)?.openHandle) {
+      return Promise.reject(new DOMException('handle open', 'NoModificationAllowedError'));
+    }
     if (!this.files.delete(name)) {
       return Promise.reject(new DOMException('missing', 'NotFoundError'));
     }
@@ -130,6 +150,18 @@ function mount(): FakeDirectory {
 
 const key = new Uint8Array([1, 2, 3, 4]);
 const payload = new Uint8Array([9, 8, 7, 6, 5]);
+
+/** Keeps a handle opened on `name` open until the returned release runs. */
+function gateOpen(dir: FakeDirectory, name: Uint8Array): () => void {
+  let release!: () => void;
+  dir.openGates.set(
+    toHex(name),
+    new Promise((resolve) => {
+      release = resolve;
+    })
+  );
+  return release;
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -224,5 +256,77 @@ describe('OpfsStagingStore staged bytes', () => {
     const store = new OpfsStagingStore('test');
     expect(await store.stagedBytes(key)).toBeNull();
     await expect(store.removeStagedBytes(key)).resolves.toBeUndefined();
+  });
+});
+
+describe('OpfsStagingStore access to one staged file', () => {
+  const otherKey = new Uint8Array([5, 6, 7, 8]);
+
+  it('resolves two concurrent reads of one file with the same bytes', async () => {
+    mount();
+    const store = new OpfsStagingStore('test');
+    await store.putStagedBytes(key, payload);
+
+    const reads = await Promise.all([store.stagedBytes(key), store.stagedBytes(key)]);
+    expect(reads).toEqual([payload, payload]);
+  });
+
+  it('resolves a read that starts during a write after the write, with the new bytes', async () => {
+    mount();
+    const store = new OpfsStagingStore('test');
+    await store.putStagedBytes(key, payload);
+    const replacement = new Uint8Array([4, 4, 4]);
+
+    const write = store.putStagedBytes(key, replacement);
+    const read = store.stagedBytes(key);
+    await write;
+    expect(await read).toEqual(replacement);
+  });
+
+  it('removes a file that a concurrent read holds open after the read closes', async () => {
+    const dir = mount();
+    const store = new OpfsStagingStore('test');
+    await store.putStagedBytes(key, payload);
+    const release = gateOpen(dir, key);
+
+    const read = store.stagedBytes(key);
+    await vi.waitFor(() => expect(dir.files.get(toHex(key))?.openHandle).toBeDefined());
+    const remove = store.removeStagedBytes(key);
+    release();
+    expect(await read).toEqual(payload);
+    await remove;
+    expect(dir.files.size).toBe(0);
+  });
+
+  it('does not make a read of one file wait for a read of another', async () => {
+    const dir = mount();
+    const store = new OpfsStagingStore('test');
+    await store.putStagedBytes(key, payload);
+    await store.putStagedBytes(otherKey, payload);
+    const release = gateOpen(dir, key);
+
+    let blockedDone = false;
+    const blocked = store.stagedBytes(key).then((bytes) => {
+      blockedDone = true;
+      return bytes;
+    });
+    expect(await store.stagedBytes(otherKey)).toEqual(payload);
+    expect(blockedDone).toBe(false);
+    release();
+    expect(await blocked).toEqual(payload);
+  });
+
+  it('runs the next access to a file after an earlier access fails', async () => {
+    const dir = mount();
+    const store = new OpfsStagingStore('test');
+    await store.putStagedBytes(key, payload);
+    dir.limits.maxRead = 3;
+    const failed = store.stagedBytes(key);
+    const next = store.stagedBytes(key);
+    await expect(failed).rejects.toThrow(StagingIoError);
+    await expect(next).rejects.toThrow(StagingIoError);
+
+    dir.limits.maxRead = undefined;
+    expect(await store.stagedBytes(key)).toEqual(payload);
   });
 });

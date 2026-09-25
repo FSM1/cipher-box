@@ -81,6 +81,8 @@ export class OpfsStagingStore implements StagingStoreSeam {
   private readonly dirName: string;
   private readonly open: () => Promise<IDBDatabase>;
   private stagedDirectory: Promise<FileSystemDirectoryHandle> | undefined;
+  /** The settle point of the last task queued on each staged file name. */
+  private readonly fileQueues = new Map<string, Promise<void>>();
 
   constructor(name = 'cipherbox-staging') {
     this.dirName = `${name}${STAGED_DIR_SUFFIX}`;
@@ -111,6 +113,24 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // still holds open must not fail the open; the next one reclaims it.
     await Promise.all(debris.map((name) => removeIfPresent(dir, name).catch(() => undefined)));
     return dir;
+  }
+
+  /**
+   * Runs `task` after every earlier task on `fileName` settles. An OPFS sync
+   * access handle is exclusive, and a move or remove onto a file with an open
+   * handle fails, so every access to one staged file takes its turn.
+   */
+  private serialized<T>(fileName: string, task: () => Promise<T>): Promise<T> {
+    const run = (this.fileQueues.get(fileName) ?? Promise.resolve()).then(task);
+    const settled = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.fileQueues.set(fileName, settled);
+    void settled.then(() => {
+      if (this.fileQueues.get(fileName) === settled) this.fileQueues.delete(fileName);
+    });
+    return run;
   }
 
   /** The staged record names in `dir`; an in-flight temp is not a record. */
@@ -156,6 +176,10 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // detached value truncates or throws on `handle.write`.
     const fileName = toHex(stagingKey);
     const staged = bytes.slice();
+    return this.serialized(fileName, () => this.writeStaged(fileName, staged));
+  }
+
+  private async writeStaged(fileName: string, staged: Uint8Array): Promise<void> {
     const dir = await this.stagedDir();
     // Every byte lands in a temp the engine cannot see, and the rename is the
     // commit point: a constrained write (a short count, or the throw the spec
@@ -196,6 +220,10 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // Hex the key before the first await: a WASM-backed view detached by a
     // concurrent `Memory.grow()` across the await would hex to ''.
     const fileName = toHex(stagingKey);
+    return this.serialized(fileName, () => this.readStaged(fileName));
+  }
+
+  private async readStaged(fileName: string): Promise<Uint8Array | null> {
     const dir = await this.stagedDir();
     let fileHandle: FileSystemFileHandle;
     try {
@@ -225,7 +253,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // concurrent `Memory.grow()` across the await would hex to ''.
     const fileName = toHex(stagingKey);
     const dir = await this.stagedDir();
-    await removeIfPresent(dir, fileName);
+    await this.serialized(fileName, () => removeIfPresent(dir, fileName));
   }
 
   async stagedKeys(): Promise<Uint8Array[]> {
@@ -253,7 +281,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
     const staged = await refusalOf(async () => {
       const dir = await this.stagedDir();
       const removals = await Promise.allSettled(
-        (await namesIn(dir)).map((name) => removeIfPresent(dir, name))
+        (await namesIn(dir)).map((name) => this.serialized(name, () => removeIfPresent(dir, name)))
       );
       const refused = removals.find((removal) => removal.status === 'rejected');
       if (refused) throw refused.reason as Error;
@@ -267,8 +295,10 @@ export class OpfsStagingStore implements StagingStoreSeam {
     let total = 0;
     for await (const name of this.recordNames(dir)) {
       try {
-        const fileHandle = await dir.getFileHandle(name);
-        total += (await fileHandle.getFile()).size;
+        total += await this.serialized(name, async () => {
+          const fileHandle = await dir.getFileHandle(name);
+          return (await fileHandle.getFile()).size;
+        });
       } catch (error) {
         // A record removed between the walk and the stat contributes zero,
         // matching the desktop host rather than failing the budget read.
