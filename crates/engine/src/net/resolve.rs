@@ -18,7 +18,7 @@ use core::cell::RefCell;
 use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 use zeroize::Zeroizing;
 
-use super::fanout::fanout_get_verify;
+use super::fanout::fanout_get_tied;
 use super::last_known_good::keep_newest_last_known_good;
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::head_cid_from_value;
@@ -279,6 +279,9 @@ pub(crate) struct GatedResolve {
     pub(crate) held_record: Option<(VerifiedRecord, Vec<u8>)>,
     /// The scope read seed a gate-passing owner adopt recovered.
     pub(crate) read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    /// Other records served at the fetched record's sequence, record-verified
+    /// and never gated: evidence of a split, never bytes to build on.
+    pub(crate) tied: Vec<Vec<u8>>,
 }
 
 /// What one arm of the gate match yields beside its outcome. Named because four
@@ -316,7 +319,11 @@ where
         ResolveMode::NoCache => None,
     };
 
-    let (outcome, parts) = match fanout_get_verify(transport, name).await {
+    let (fetched, tied) = match fanout_get_tied(transport, name).await {
+        Some((verified, bytes, tied)) => (Some((verified, bytes)), tied),
+        None => (None, Vec::new()),
+    };
+    let (outcome, parts) = match fetched {
         None => (ResolveOutcome::NoUpdate, GatedParts::default()),
         Some((verified, bytes)) => match adopter.adopt(name, &bytes).await {
             Ok(AdoptOutcome {
@@ -414,6 +421,7 @@ where
         hold,
         held_record,
         read_scope_seed,
+        tied,
     })
 }
 
@@ -477,6 +485,7 @@ where
         hold: adopt_hold,
         held_record,
         read_scope_seed,
+        ..
     } = resolve_gated(transport, snapshot_cache, adopter, name, mode).await?;
     let write_scope_seed = adopt_hold.clone();
     let done = |resolved| HeldResolve {

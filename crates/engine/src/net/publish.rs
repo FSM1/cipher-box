@@ -17,7 +17,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol;
-use super::fanout::{MAX_RECORD_BYTES, fanout_get_confirm, fanout_put};
+use super::fanout::{MAX_RECORD_BYTES, fanout_get_tied, fanout_put};
 use super::register::register;
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::gate::floor;
@@ -136,6 +136,11 @@ pub struct PublishReceipt {
     pub outcome: PublishOutcome,
     /// The signed record bytes this publish PUT.
     pub record_bytes: Vec<u8>,
+    /// On a [`PublishOutcome::LostRace`], the record that won: the higher one,
+    /// or at a tie a record other than ours. Record-verified only. A caller
+    /// that rebases gates it first, so its retry builds on the winner and not
+    /// on our own record, which the first-endpoint tie can still serve.
+    pub winner: Option<Vec<u8>>,
 }
 
 /// A fail-closed publish failure.
@@ -383,18 +388,30 @@ where
     }
 
     // Only our own bytes, uncontested at their sequence, confirm the publish.
-    let observed = fanout_get_confirm(transport, request.name).await;
-    let outcome = match observed {
-        Some((_, bytes, false)) if bytes == record_bytes => PublishOutcome::Published { sequence },
-        Some((observed, _, _)) if observed.sequence >= sequence => PublishOutcome::LostRace {
-            published_sequence: sequence,
-            observed_sequence: observed.sequence,
-        },
-        _ => PublishOutcome::Unconfirmed { sequence },
+    let (outcome, winner) = match fanout_get_tied(transport, request.name).await {
+        Some((_, bytes, tied)) if bytes == record_bytes && tied.is_empty() => {
+            (PublishOutcome::Published { sequence }, None)
+        }
+        Some((observed, bytes, tied)) if observed.sequence >= sequence => {
+            let winner = if bytes == record_bytes {
+                tied.into_iter().next()
+            } else {
+                Some(bytes)
+            };
+            (
+                PublishOutcome::LostRace {
+                    published_sequence: sequence,
+                    observed_sequence: observed.sequence,
+                },
+                winner,
+            )
+        }
+        _ => (PublishOutcome::Unconfirmed { sequence }, None),
     };
     Ok(PublishReceipt {
         outcome,
         record_bytes,
+        winner,
     })
 }
 

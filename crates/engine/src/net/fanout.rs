@@ -231,26 +231,26 @@ pub async fn fanout_get_under<T: RecordTransport>(
     }
 }
 
-/// The publish confirm's read: the freshest verified record, and whether
-/// another endpoint served other bytes at its sequence. The freshest pick keeps
-/// the first endpoint on a tie, so without the flag a sibling's record on a
-/// later endpoint hides behind ours.
-pub(crate) async fn fanout_get_confirm<T: RecordTransport>(
+/// The freshest verified record, and every other record another endpoint
+/// served at its sequence. The freshest pick keeps the first endpoint on a tie,
+/// so without the ties a sibling's record on a later endpoint hides behind it.
+/// The ties are record-verified only; a caller gates one before it builds on
+/// it.
+pub(crate) async fn fanout_get_tied<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
-) -> Option<(VerifiedRecord, Vec<u8>, bool)> {
-    let Scan {
-        best, contested, ..
-    } = scan(transport, name).await;
-    best.map(|(verified, bytes)| (verified, bytes, contested))
+) -> Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)> {
+    let Scan { best, tied, .. } = scan(transport, name).await;
+    best.map(|(verified, bytes)| (verified, bytes, tied))
 }
 
 /// Every endpoint's answer to one fan-out GET, before a caller reads it.
 struct Scan {
     /// The freshest verifiable record, the first endpoint winning a tie.
     best: Option<(VerifiedRecord, Vec<u8>)>,
-    /// A verifiable record at `best`'s sequence carried other bytes.
-    contested: bool,
+    /// The other distinct verifiable records at `best`'s sequence, one per
+    /// endpoint at most.
+    tied: Vec<Vec<u8>>,
     vacant: usize,
     failures: Vec<(EndpointId, EndpointFailure)>,
 }
@@ -259,7 +259,7 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
     let key = name.as_str();
     let mut scan = Scan {
         best: None,
-        contested: false,
+        tied: Vec::new(),
         vacant: 0,
         failures: Vec::new(),
     };
@@ -294,12 +294,14 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
         };
         match &scan.best {
             Some((current, held)) if verified.sequence == current.sequence => {
-                scan.contested |= bytes != *held;
+                if bytes != *held && !scan.tied.contains(&bytes) {
+                    scan.tied.push(bytes);
+                }
             }
             Some((current, _)) if verified.sequence < current.sequence => {}
             _ => {
                 scan.best = Some((verified, bytes));
-                scan.contested = false;
+                scan.tied.clear();
             }
         }
     }

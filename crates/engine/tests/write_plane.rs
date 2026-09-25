@@ -2519,6 +2519,8 @@ fn a_refused_root_authoring_names_the_check_that_fired_on_the_pass_it_fired() {
     let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
     cache_a_root_committed_to_another_name(&alice, &blocks);
+    // An unreachable plane leaves the pass building on the cached copy.
+    world.record_store.fail_get_for(write_name(ROOT).as_str());
     create(&mut engine, "photos");
     let _ = events_so_far(&mut events);
     tick(&world, &engine, &mut tasks);
@@ -3977,6 +3979,119 @@ fn a_root_the_gate_refuses_at_the_pre_signature_re_resolve_is_a_trust_violation(
         "the refusal is reported"
     );
     assert_eq!(queued(&second), 1, "the create stays queued");
+}
+
+/// Our root lands on the first endpoint and the sibling's on the second, at one
+/// sequence. The first endpoint wins a tie on every read, so the retry must
+/// rebase onto the sibling's record, which the confirm adopted, and not onto
+/// ours: ours already holds the op, which would then read as applied and leave
+/// the split for good.
+#[test]
+fn a_split_where_our_root_holds_the_first_endpoint_heals_above_both_records() {
+    let SiblingRoot {
+        world,
+        blocks,
+        second,
+        engine,
+        mut tasks,
+        base,
+        sibling,
+        ..
+    } = sibling_root();
+    let endpoints = world.record_store.endpoints();
+    world.record_store.seed_record_after_put_at(
+        &endpoints[1],
+        write_name(ROOT).as_str(),
+        write_name(ROOT).as_str(),
+        sibling.clone(),
+    );
+    world.record_store.fail_put_endpoint(&endpoints[1]);
+
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(root_record(&world, 1), sibling);
+    assert_ne!(root_record(&world, 0), sibling);
+    assert_eq!(
+        root_sequence(&world, 0),
+        base + 1,
+        "the endpoints split at one sequence, ours first"
+    );
+    assert_eq!(
+        queued(&second),
+        1,
+        "the create stays at the head of the queue"
+    );
+
+    world.record_store.heal_put_endpoint(&endpoints[1]);
+    tick(&world, &engine, &mut tasks);
+    for endpoint in 0..endpoints.len() {
+        assert_eq!(root_sequence(&world, endpoint), base + 2);
+    }
+    assert_eq!(
+        root_record(&world, 0),
+        root_record(&world, 1),
+        "one record on every endpoint"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["notes", "photos"],
+        "both devices' creates survive"
+    );
+    assert_eq!(queued(&second), 0);
+}
+
+/// The plane comes to serve another record at the very sequence this pass
+/// built on. Signing above the pass's own copy would erase that record's
+/// change, so the pass halts, and the next pass builds on the served record and
+/// signs above it with the op applied.
+#[test]
+fn a_different_root_at_the_built_on_sequence_is_rebased_on_and_signed_above() {
+    let SiblingRoot {
+        world,
+        blocks,
+        second,
+        engine,
+        mut tasks,
+        base,
+        sibling,
+        notes,
+        ..
+    } = sibling_root();
+    // The sibling's body, signed at the base sequence.
+    let value = IpnsRecord::unmarshal(&sibling)
+        .and_then(|record| record.verify(&write_name(ROOT)))
+        .expect("the sibling's root verifies")
+        .value;
+    let rival = IpnsRecord::create_v2(&write_signer(ROOT), &value, base, TTL_NANOS, EOL).marshal();
+    world.record_store.seed_record_after_put(
+        write_name(notes).as_str(),
+        write_name(ROOT).as_str(),
+        rival.clone(),
+    );
+
+    tick(&world, &engine, &mut tasks);
+    for endpoint in 0..world.record_store.endpoints().len() {
+        assert_eq!(
+            root_record(&world, endpoint),
+            rival,
+            "nothing is signed over the rival record"
+        );
+    }
+    assert_eq!(
+        queued(&second),
+        1,
+        "the create stays at the head of the queue"
+    );
+
+    tick(&world, &engine, &mut tasks);
+    for endpoint in 0..world.record_store.endpoints().len() {
+        assert_eq!(root_sequence(&world, endpoint), base + 1);
+    }
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["notes", "photos"],
+        "the signature sits over the rival's body with the op applied"
+    );
+    assert_eq!(queued(&second), 0);
 }
 
 /// A lost race before the signature put nothing on the plane and the retry

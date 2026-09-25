@@ -698,7 +698,7 @@ fn publish_confirm_reads_a_sibling_at_our_sequence_as_a_lost_race() {
 
     assert_eq!(
         world.record_store.record_at(&endpoints[0], name.as_str()),
-        Some(sibling),
+        Some(sibling.clone()),
         "the first endpoint kept the sibling's record"
     );
     assert_eq!(
@@ -713,6 +713,7 @@ fn publish_confirm_reads_a_sibling_at_our_sequence_as_a_lost_race() {
             observed_sequence: 2,
         }
     );
+    assert_eq!(receipt.winner, Some(sibling), "the sibling's record won");
 }
 
 /// The freshest pick keeps the first endpoint on a tie, so our own record there
@@ -764,7 +765,7 @@ fn publish_confirm_reads_a_sibling_on_a_later_endpoint_as_a_lost_race() {
     );
     assert_eq!(
         world.record_store.record_at(&endpoints[1], name.as_str()),
-        Some(sibling),
+        Some(sibling.clone()),
         "a later endpoint serves the sibling's, at the same sequence"
     );
     assert_eq!(
@@ -773,6 +774,11 @@ fn publish_confirm_reads_a_sibling_on_a_later_endpoint_as_a_lost_race() {
             published_sequence: 2,
             observed_sequence: 2,
         }
+    );
+    assert_eq!(
+        receipt.winner,
+        Some(sibling),
+        "the winner is the sibling's record, never our own on the first endpoint"
     );
 }
 
