@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "09184f0648d7",
+  "strategy": "manual-commit",
+  "branch": "refactor/2038-session-state",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/session.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/09/184f0648d7/0/metadata.json",
+      "transcript": "/09/184f0648d7/0/full.jsonl",
+      "compact_transcript": "/09/184f0648d7/0/transcript.jsonl",
+      "content_hash": "/09/184f0648d7/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1462,
+    "cache_creation_tokens": 409731,
+    "cache_read_tokens": 10092354,
+    "output_tokens": 96796,
+    "api_call_count": 56
+  }
+}
