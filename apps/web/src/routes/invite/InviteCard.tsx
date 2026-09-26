@@ -11,10 +11,7 @@ interface InviteCardProps {
   onJoin(name: string): void;
 }
 
-/**
- * The live, unjoined preview (ADR 0028 D2, variant A): the lead line, the
- * permission, the one-level listing, the grantee's own name and "join".
- */
+/** The live, unjoined preview card (ADR 0028 D2, variant A). */
 export function InviteCard({ preview, joining, focusJoin, onJoin }: InviteCardProps) {
   const [name, setName] = useState('');
 
