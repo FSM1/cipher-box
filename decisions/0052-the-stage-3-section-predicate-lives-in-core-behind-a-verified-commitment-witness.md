@@ -1,6 +1,6 @@
 # ADR 0052 — The stage-3 section predicate lives in core behind a verified-commitment witness
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-26; the `blueprint/core.md` and `blueprint/engine.md` reword lands in the code PR
 - **Date:** 2026-09-26
 - **Relates to:**
   [core: move the adoption gate's stage-3 section authentication into crates/core behind a verified-commitment witness (#1131)](https://github.com/FSM1/cipher-box/issues/1131)
