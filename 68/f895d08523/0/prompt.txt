@@ -1,0 +1,9 @@
+/mattpocock-skills:diagnosing-bugs https://github.com/FSM1/cipher-box/issues/1990
+
+---
+
+should the nightly test not run the latest staging tag code rather than the latest `main`?
+
+---
+
+wait but are the nightly runs not targetting the staging instance and infra? if so, its possible that a nightly run with test code on `main` would fail if there were assertions made that are not yet deployed to staging

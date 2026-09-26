@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "68f895d08523",
+  "strategy": "manual-commit",
+  "branch": "chore/adr-links-to-decisions",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/release-please.yml",
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/facade/link_sweep.rs",
+    "crates/engine/src/gate/adoption.rs",
+    "crates/engine/src/gate/floor.rs",
+    "crates/engine/src/grants/append.rs",
+    "crates/engine/src/grants/cut_set.rs",
+    "crates/engine/src/grants/name_cache.rs",
+    "crates/engine/src/grants/received_status.rs",
+    "crates/engine/src/net/resolve.rs",
+    "crates/engine/src/rotation/sweep.rs",
+    "scripts/check-tracker-refs.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/68/f895d08523/0/metadata.json",
+      "transcript": "/68/f895d08523/0/full.jsonl",
+      "compact_transcript": "/68/f895d08523/0/transcript.jsonl",
+      "content_hash": "/68/f895d08523/0/content_hash.txt",
+      "prompt": "/68/f895d08523/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 454,
+    "cache_creation_tokens": 87873,
+    "cache_read_tokens": 1308006,
+    "output_tokens": 14490,
+    "api_call_count": 17
+  }
+}
