@@ -1,0 +1,13 @@
+Is the following issue still valid? https://github.com/FSM1/cipher-box/issues/1131
+
+If its valid, this seems like something that should be implemented sooner rather than later as its a core change and will likely ripple through quite a few layers.
+
+---
+
+Ok, so the v2.0.0 milestone has been closed as we have long reached cutover.
+
+the adrs are now located in this repo, so the ADR needs to be created there.
+
+---
+
+please make sure to pull in the latest from main

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e4a5bdbc31f0",
+  "strategy": "manual-commit",
+  "branch": "docs/adr-0052-stage-3-in-core",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "decisions/0052-the-stage-3-section-predicate-lives-in-core-behind-a-verified-commitment-witness.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e4/a5bdbc31f0/0/metadata.json",
+      "transcript": "/e4/a5bdbc31f0/0/full.jsonl",
+      "compact_transcript": "/e4/a5bdbc31f0/0/transcript.jsonl",
+      "content_hash": "/e4/a5bdbc31f0/0/content_hash.txt",
+      "prompt": "/e4/a5bdbc31f0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 486,
+    "cache_creation_tokens": 177336,
+    "cache_read_tokens": 1563685,
+    "output_tokens": 13494,
+    "api_call_count": 18
+  }
+}
