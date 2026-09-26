@@ -1,5 +1,5 @@
 /**
- * The auth surfaces both hosts render (ADR 0008 D3). `@cipherbox/login` owns
+ * The auth surfaces both hosts render (ADR 0039 D6). `@cipherbox/login` owns
  * the sequencing; this package owns what the member sees and types, so a
  * surface has one implementation whichever host mounts it. Everything here
  * takes its host in through props: no store, no router, no engine handle.

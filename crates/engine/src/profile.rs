@@ -53,11 +53,10 @@ pub struct SyncTimingProfile {
     ///
     /// [`poll_cadence`]: SyncTimingProfile::poll_cadence
     pub sweep_cadence: Duration,
-    /// How long the old scope-root name lingers registered, serving the
-    /// `movedTo` tombstone, before it may be retired (CONTEXT.md "Root
-    /// linger"). Bounds how far behind a reader may be and still chase the
-    /// move; it is the ceiling on the name-registry rows one rotating scope
-    /// accretes.
+    /// How long the old scope-root name lingers registered before it may be
+    /// retired (CONTEXT.md "Root linger"). Bounds how far behind a reader may
+    /// be and still resolve the old root; it is the ceiling on the
+    /// name-registry rows one rotating scope accretes.
     pub migration_window: Duration,
     /// How long a preserved dead letter stays parked before the reconcile pass
     /// purges it and releases its staged version (v1's 30 days, carried

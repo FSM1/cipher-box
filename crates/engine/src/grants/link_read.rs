@@ -9,9 +9,7 @@
 //!
 //! A hold reads through the scope pointer the fragment named, never through a
 //! root name alone: a write wave moves the scope root, and the pointer's
-//! owner-signed re-point object names the root that stands. The old-name
-//! tombstone and the mailbox mirror stay accelerators (`CONTEXT.md`
-//! "Re-point object").
+//! owner-signed re-point object names the root that stands.
 
 use core::cell::RefCell;
 

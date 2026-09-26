@@ -4,8 +4,6 @@
 #
 # A red run is a REVERT trigger, not a fix-forward one: revert the merge that
 # turned it red, then land the fix through the PR gate.
-#
-# Job names are the contract (blueprint/deploy.md freeze step 4).
 name: CI E2E Tests
 
 on:

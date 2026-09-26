@@ -1956,7 +1956,7 @@ pub enum EngineError {
     },
     /// No byte destination could be decided, so the write is refused rather
     /// than placed on a store the member did not choose (blueprint/engine.md
-    /// "Settings-load policy"). Recoverable: republishing or re-resolving the
+    /// "Vault settings load"). Recoverable: republishing or re-resolving the
     /// vault settings record clears it.
     NoPlacement {
         /// Which rule refused, so a host can say what to fix.
@@ -5892,7 +5892,7 @@ impl<T: SeamTypes> Engine<T> {
 
         // Where this session's bytes go. Server-free and ahead of any vault
         // resolve, so a self-hosting owner never needs CipherBox to tell them
-        // where their own node is (blueprint/engine.md "Vault settings record").
+        // where their own node is (blueprint/engine.md "Vault settings load").
         let observed = observed_at(&self.held_records, HeldKey::VaultSettings);
         let settings = load_settings(
             &self.record_transport,

@@ -3,8 +3,8 @@
 //!
 //! Retire = remove my registry rows; the timing is engine policy. Interior old
 //! names batch-retire at name-wave completion (immediate, [`retire`]); the old
-//! scope-root name lingers serving the tombstone until the migration window
-//! closes ([`root_retire_ready`], stubbed — see below).
+//! scope-root name lingers until the migration window closes
+//! ([`root_retire_ready`], stubbed — see below).
 //!
 //! A pruned version's bytes are the one retirement that outlives the op that
 //! ordered it ([`drain_owed_retires`]).
@@ -762,9 +762,9 @@ where
 /// itself, whose slot
 /// ([`SyncTimingProfile::migration_window`](crate::profile::SyncTimingProfile::migration_window))
 /// still carries a placeholder. Retirement is irreversible, so until both land
-/// the root never auto-retires and a revokee or lagging reader can always chase
-/// the tombstone to the new root (blueprint/engine.md "Open edges:
-/// Migration-window closure").
+/// the root never auto-retires and a revokee or lagging reader that still names
+/// it keeps resolving it (blueprint/engine.md "Open edges: Migration-window
+/// closure").
 pub fn root_retire_ready() -> bool {
     false
 }

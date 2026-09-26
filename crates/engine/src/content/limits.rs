@@ -56,9 +56,9 @@ const HISTORY_LINK_WIRE_BYTES: usize = 352;
 /// The carried set is attacker-influenced — the adoption gate authenticates
 /// each link's signature and nothing about its length — so a re-seal that
 /// carried one verbatim would let a committed write grantee inflate a scope
-/// past the section budget and stall its re-key for good. An over-long link is
-/// dropped rather than refused, exactly as an over-long write history link
-/// already is.
+/// past the section budget and stall its re-key for good. A link past this bound
+/// is dropped (ADR 0033 D11); a write-plane link past its own bound is refused
+/// (ADR 0033 D6).
 ///
 /// Tighter than core's
 /// [`MAX_WRITE_HISTORY_LINK_BYTES`](cipherbox_core::seal::MAX_WRITE_HISTORY_LINK_BYTES),
