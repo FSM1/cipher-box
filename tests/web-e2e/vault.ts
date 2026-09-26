@@ -3,7 +3,7 @@
  * proves a write reached the network rather than an optimistic overlay.
  */
 
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { expect } from './fixtures';
 import { FilesPage } from './page-objects/files.page';
 import { VaultPage } from './page-objects/vault.page';
@@ -43,14 +43,19 @@ export function namesOf(listing: Listing): string[] {
 
 const PROBE = 'probe';
 
+/**
+ * Signs `page` in and waits for the settled vault root. `signIn` answers with
+ * the account id; the default cold-starts a vault nobody else shares.
+ */
 export async function coldStart(
-  page: Page
+  page: Page,
+  signIn: (vault: VaultPage) => Promise<string> = (vault) => vault.coldStart()
 ): Promise<{ vault: VaultPage; files: FilesPage; accountId: string }> {
   const vault = new VaultPage(page);
   const files = new FilesPage(page);
   await vault.open();
   await vault.controlled();
-  const accountId = await vault.coldStart();
+  const accountId = await signIn(vault);
   await vault.settled();
   await expect(files.browser).toBeVisible();
   return { vault, files, accountId };
@@ -71,4 +76,25 @@ export async function drained(files: FilesPage, vault: VaultPage): Promise<strin
     .filter((child) => child.name !== PROBE)
     .map((child) => `${child.kind} ${child.name}`)
     .sort();
+}
+
+/**
+ * Runs the nocache refresh on `vault` until `target` counts `count`. A change
+ * another client published reaches this tab only on a pass.
+ */
+export async function refreshedUntil(
+  vault: VaultPage,
+  target: Locator,
+  count = 1,
+  timeout = 120_000
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await vault.refresh();
+        return target.count();
+      },
+      { timeout, intervals: [1_000] }
+    )
+    .toBe(count);
 }

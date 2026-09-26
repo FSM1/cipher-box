@@ -39,7 +39,7 @@ test('@full a minted invite link names the claim route and is held until it is d
   const share = new SharePage(page);
   await share.open(FOLDER);
 
-  const link = await share.mintLink('30 days');
+  const link = await share.mintLink({ lifetime: '30 days' });
 
   expect(link.origin).toBe(new URL(page.url()).origin);
   expect(link.pathname).toBe('/invite');

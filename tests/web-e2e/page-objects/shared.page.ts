@@ -11,6 +11,12 @@ import { expect, type Locator, type Page } from '@playwright/test';
  * `revocation-signal`, `unresolvable`, `epoch-lag`, or `none` where no pass has
  * answered — and the rendered weight on `data-tone`. Assert those, not the copy.
  */
+/**
+ * One `/shared` row: `gone`, or the engine's resolution and whether the vault
+ * holds the share through a link's keys.
+ */
+export type RowStanding = 'gone' | { resolution: string | null; viaLink: boolean };
+
 export class SharedPage {
   constructor(readonly page: Page) {}
 
@@ -68,7 +74,7 @@ export class SharedPage {
         if ((await this.rows.count()) !== 1) return 'no row';
         return this.rows.getByTestId('shared-standing').getAttribute('data-resolution');
       },
-      resolution,
+      (read) => read === resolution,
       { timeout, nudge: true, intervals: [5_000] }
     );
   }
@@ -84,7 +90,7 @@ export class SharedPage {
         if ((await this.rows.count()) !== 1) return 'no row';
         return this.rows.getByTestId('shared-permission').textContent();
       },
-      permission,
+      (read) => read === permission,
       { timeout, nudge: true, intervals: [5_000] }
     );
   }
@@ -102,30 +108,56 @@ export class SharedPage {
         if ((await standing.count()) !== 1) return 'no row';
         return standing.getAttribute('data-resolution');
       },
-      resolution,
+      (read) => read === resolution,
       { timeout, nudge: false, intervals: [250] }
     );
   }
 
   /**
-   * Polls `read` against `expected`, one list re-read per turn. A verdict moves
-   * on the engine's sync pass, which `nudge` forces alongside the re-read.
+   * Re-reads until the row for `scope` stands as `accepts` wants, and answers
+   * with that standing. Each turn nudges the sync pass unless `nudge` is off.
    */
-  private async awaitRow(
-    read: () => Promise<string | null>,
-    expected: string,
+  async awaitStandingOf(
+    scope: string,
+    accepts: (standing: RowStanding) => boolean,
+    { timeout = 60_000, nudge = true, intervals = [5_000] } = {}
+  ): Promise<RowStanding> {
+    if ((await this.panel.count()) === 0) await this.open();
+    return this.awaitRow(() => this.standingOf(scope), accepts, { timeout, nudge, intervals });
+  }
+
+  private async standingOf(scope: string): Promise<RowStanding> {
+    const row = this.row(scope);
+    if ((await row.count()) === 0) return 'gone';
+    return {
+      resolution: await row.getByTestId('shared-standing').getAttribute('data-resolution'),
+      viaLink: (await row.getAttribute('data-via-link')) === 'true',
+    };
+  }
+
+  /**
+   * Polls `read` until `accepts` takes it, one list re-read per turn, and
+   * answers with the value it took. A verdict moves on the engine's sync pass,
+   * which `nudge` forces alongside the re-read.
+   */
+  private async awaitRow<T>(
+    read: () => Promise<T>,
+    accepts: (value: T) => boolean,
     { timeout, nudge, intervals }: { timeout: number; nudge: boolean; intervals: number[] }
-  ): Promise<void> {
+  ): Promise<T> {
+    let latest!: T;
     await expect
       .poll(
         async () => {
           if (nudge) await this.page.getByTestId('status-indicator').click();
           await this.readAgain();
-          return read();
+          latest = await read();
+          return accepts(latest) ? 'accepted' : latest;
         },
         { timeout, intervals }
       )
-      .toBe(expected);
+      .toBe('accepted');
+    return latest;
   }
 
   /** The row for the scope root `scope`, as lowercase hex. */

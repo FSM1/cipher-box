@@ -34,6 +34,10 @@ export interface ClaimSignIn {
   account: string;
   /** Starts a session in the tab, which is already on the claim route. */
   start(): Promise<void>;
+  /** The name the claimant offers the owner with the join. */
+  name?: string;
+  /** Runs on the joinable preview, before the join. */
+  beforeJoin?(invite: InvitePage): Promise<void>;
 }
 
 /**
@@ -56,6 +60,8 @@ export async function claimHere(page: Page, link: URL, how: ClaimSignIn): Promis
 
   await invite.expectState('joinable');
   await expect(invite.account).toContainText(how.account);
+  await how.beforeJoin?.(invite);
+  if (how.name !== undefined) await invite.name.fill(how.name);
   await invite.join();
   await invite.expectFolderOpened();
   // The join takes the capability out of the address, so a reload cannot spend

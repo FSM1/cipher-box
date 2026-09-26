@@ -40,18 +40,36 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   substituted ephemeral key shows other digits and seals a factor the honest
   device cannot open
 - the shipping bundle exposes no introspection hook
+- the link-first flow across two owner devices (`link-first.spec.ts`), in these
+  steps:
+  1. device A mints a read link with the owner name on a folder of two entries
+  2. the holder previews the owner and the folder, joins, and reads both entries
+     through the link's keys
+  3. device B converts the claim on its tick, and the holder's row turns to a
+     grant
+  4. a write link holder writes after device B converts, and device A reads the
+     write
+  5. device A revokes the write link with its joiners: the writer fails closed
+     and the reader keeps access
+  6. device B cuts the reader, device A admits it again, and the next re-key on
+     device B serves it (ADR 0025 D3)
+  7. the sweep on device B cuts an expired link, and its chip leaves device A
 
 The slices split on the `@full` tag. The smoke slice keeps login, CRUD, the
-session-end pair and one share-dialog spec — the bounded-minutes budget the PR
-gate holds. Everything above that lands `@full`, in the main gate's whole suite.
+session-end pair, the device approval, one share-dialog spec, the contact, write and
+cross-client grant specs, and steps 1 to 3 of the link-first flow — the
+bounded-minutes budget the PR gate holds. Everything above that lands `@full`,
+in the main gate's whole suite.
 
 ## How the suite logs in
 
 There is no interactive Core Kit login in CI. The `e2e` build carries the
 introspection hook (`apps/web/src/engine/introspection.ts`), which hands the
 engine a login secret the test generates. Challenge-signature login creates the
-account on first contact, so each test's fresh 32-byte secret is a fresh,
-isolated vault — no fixture setup and no shared state to serialize around.
+account on first contact, so a fresh 32-byte secret is a fresh, isolated vault —
+no fixture setup and no shared state to serialize around. A test mints a fresh
+secret for every account it signs in, and a device that signs in again reuses
+its account's secret (`devices.ts`).
 
 The `release` project runs the same specs' counterpart against a bundle built
 **without** the flag, and asserts `window.__CIPHERBOX_ENGINE__` is absent.
@@ -72,6 +90,13 @@ themselves.
 
 Every rendezvous secret stays behind the introspection seam: a tap answers with
 the public transcript and, for a factor, a SHA-256 of it.
+
+`link-first.spec.ts` signs two devices in on one account. `devices.ts` holds the
+account's login secret in the test process, and each device's context reads it
+through a binding, so no `evaluate` argument and no trace carries it. A device
+that must not act goes offline (its tabs close), so each conversion, cut and
+sweep has exactly one owner device that can run it. A holder is a device too,
+so it can sign in again on a second link.
 
 ## Running it locally
 

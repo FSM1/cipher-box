@@ -29,7 +29,7 @@ test('a minted link is claimed by a second identity and converted to a grant', a
   const share = new SharePage(page);
   await share.open(FOLDER);
   await share.permissionChoice.selectOption('read');
-  const link = await share.mintLink('30 days');
+  const link = await share.mintLink({ lifetime: '30 days' });
   await share.close();
 
   // The claimant opens the link signed out and signs in on the claim route
