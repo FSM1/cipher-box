@@ -60,7 +60,7 @@ What left the API relative to v1 — with the design that removed it:
   and returns no identity. Its validity is derived from the refresh family, so
   logout, reuse detection, and the account hard-delete revoke it with no second
   revocation path; the verify endpoint's in-process cache bounds how long a
-  revoked token is still honoured.
+  revoked token is still honoured (ADR 0036).
 - **Device-approval rendezvous** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md)): request, poll, respond, cancel, and a
   pending list, under a **scoped, non-refreshable** pre-reconstruction token — a
   device that cannot yet reconstruct its key reaches these routes and nothing else.
@@ -68,25 +68,26 @@ What left the API relative to v1 — with the design that removed it:
   ephemeral key and never holds plaintext key material. Both halves of the exchange
   carry a device-key signature, and a row's life ends at collection or expiry,
   whichever comes first.
-- **`account_devices`** is the registry that makes those signatures checkable: a
-  device identity key registered under a full session, so the account is proven,
-  with an Ed25519 signature over the account id, so possession is proven. The row
-  also records which identity subject the device signed in through — the only
-  path from the identity token a pre-reconstruction device still holds back to
-  the account whose devices can approve it. An identity subject reaches at most
-  one account, and an identity with no registered device gets no rendezvous at
-  all: that account's path is the recovery phrase (ADR 0009 D2). Revocation is a
-  hard delete, and it is honest about what it does — the device stops approving
-  from now on; nothing it already holds is un-shared (D5).
+- **`account_devices`** (ADR 0039) is the registry that makes those signatures
+  checkable: a device identity key registered under a full session, so the
+  account is proven, with an Ed25519 signature over the account id, so
+  possession is proven. The row also records which identity subject the device
+  signed in through — the only path from the identity token a
+  pre-reconstruction device still holds back to the account whose devices can
+  approve it. An identity subject reaches at most one account, and an identity
+  with no registered device gets no rendezvous at all: that account's path is
+  the recovery phrase (ADR 0009 D2). Revocation is a hard delete, and it is
+  honest about what it does — the device stops approving from now on; nothing
+  it already holds is un-shared (D5).
 - Tables: `users` (keyed by `publicKey`; carries quota-limit override and BYO flag),
-  `auth_methods`, `refresh_tokens`, `account_devices`, `device_approvals`,
-  `identity_subjects`.
+  `auth_methods`, `refresh_tokens`, `accelerator_tokens`, `account_devices`,
+  `device_approvals`, `identity_subjects`.
 - **`identity_subjects`** maps a verified provider identity — hashed, never
   stored in the clear — to the stable subject id the identity token's `sub`
   carries and `loginWithJWT` takes as its `verifierId`. It holds no `user_id`:
   the account still materializes at `POST /auth/login` against the derived key,
   so this table cannot fork the account model, and linking a second method later
-  is pointing another provider identity at an existing subject.
+  is pointing another provider identity at an existing subject (ADR 0039).
 
 ## Pin/name registry
 
@@ -116,7 +117,7 @@ decay) inverted into structure.
   one name row, and a bare re-register carrying no `headCid` leaves the stored
   head untouched. The refusal carries `code: REGISTRY_BATCH_REFUSED`, so a
   client classifies on the gate's own discriminator rather than on a bare `400`
-  an intermediary could have answered.
+  an intermediary could have answered (ADR 0046).
 - **Register-first, fail-closed**: registration precedes the first publish of a
   name, and publish is blocked on it. A live-but-uninventoried name is
   structurally impossible; the worst failure is a registered-never-published
@@ -137,7 +138,7 @@ decay) inverted into structure.
   orphaned head block and a name wave need. This is what stops a doomed root that
   aliases a live leaf of a **different** node from unpinning that leaf: only the
   registry holds an account-wide live view and a linearization point, so no
-  client can decide it. Refcounting across accounts is unchanged.
+  client can decide it. Refcounting across accounts is unchanged (ADR 0046).
 - **Shared scopes**: a write-grantee's uploads register (and count) under the
   grantee's account until the owner's client syncs, sees the new children, and
   registers them too — rows then coexist. Self-healing, permissionless.
@@ -149,7 +150,7 @@ decay) inverted into structure.
   sizes, and churn timing — never tree structure, kinds, or names' relationships.
   The reference rows make the name-to-CID association it already reads on every
   register **durable**, so it can also count each record's content set and see
-  which CIDs two records share. Still no tree structure and no kinds.
+  which CIDs two records share. Still no tree structure and no kinds (ADR 0046).
 
 ### Write-rotation name churn
 
@@ -159,8 +160,7 @@ decay) inverted into structure.
   metadata-scale only, accepted.
 - **Interior fast, root lingers**: interior old names are batch-retired at wave
   completion (a resumed wave enumerates them via the write-plane history link).
-  The old **scope-root** name stays registered, serving the owner-signed
-  `movedTo` forwarding record, until the migration window closes — window
+  The old **scope-root** name stays registered until the migration window closes — window
   length and closure signal are owned by
   [rotation completeness (FSM1/cipher-box-next#38)](https://github.com/FSM1/cipher-box-next/issues/38)
   — then retired. The API stays dumb: retire removes the caller's row; timing is
@@ -190,7 +190,7 @@ decay) inverted into structure.
   bytes to CID; the declared string is only a routing hint until it matches.
   Without this the ingress addresses blocks by its own UnixFS chunking, every
   published record points at a CID the accelerator does not hold, and the
-  engine's head-CID check fails closed forever.
+  engine's head-CID check fails closed forever (ADR 0038).
 - **One request, one block.** The declared CID takes the per-CID advisory lock
   and keys the pin row, so a refusal compensates the row exactly as a pin failure
   does — and every path that will not pin the block **removes** it, since an
@@ -199,21 +199,21 @@ decay) inverted into structure.
   (`block/put` refuses over 2 MiB), so an over-size body is a permanent 413 here
   rather than a retryable pin-store failure. Blocks are pinned **direct**, not
   recursive: every block is uploaded and registered individually, and a recursive
-  pin would make repo GC walk sealed bytes it cannot interpret.
+  pin would make repo GC walk sealed bytes it cannot interpret (ADR 0038).
 - **Egress**: the API process serves no bytes. CipherBox runs a Kubo-backed
   **trustless gateway** (block/CAR responses, client-side CID verification)
   gated by the read accelerator token above — never the session JWT, which would
   put full API authority on the system's highest-frequency credential
   presentation (roughly one per leaf block). Any public trustless gateway is the
   no-auth fallback; reads survive CipherBox infra loss.
-- **The front covers both read legs.** One `forward_auth` front sits in front of
-  Kubo's gateway leg and someguy's `/routing/v1` GET/resolve leg, gating both on
-  the same pseudonym — reads present it, writes never do, and the gate admits
-  only `GET` and `HEAD` so a read credential cannot turn into a write against an
-  accelerator that would have taken one. The `/routing/v1`
+- **The front covers both read legs** (ADR 0036). One `forward_auth` front sits
+  in front of Kubo's gateway leg and someguy's `/routing/v1` GET/resolve leg,
+  gating both on the same pseudonym — reads present it, writes never do, and the
+  gate admits only `GET` and `HEAD` so a read credential cannot turn into a
+  write against an accelerator that would have taken one. The `/routing/v1`
   **PUT** publish leg stays open: an IPNS record carries its own signature, so
-  the front has nothing to add there beyond IP-keyed rate limiting. The
-  republisher's re-PUTs route internally and never traverse the front.
+  the front has nothing to add there beyond IP-keyed rate limiting (ADR 0035
+  D7). The republisher's re-PUTs route internally and never traverse the front.
 - **What the `forward_auth` front owes the pseudonym.** Five requirements, all
   load-bearing: deny on **any** non-204, not only 401, so a verify-side fault
   fails closed; never log the `Authorization` header, since the raw pseudonym in
@@ -262,17 +262,16 @@ Per the liveness design (FSM1/cipher-box-next#24), restated here as API surface:
 ## Mailbox
 
 Integrity-untrusted, swappable transport for one-shot sealed pointers
-(share pointers, write-rotation root re-points, claims, courtesy
-notifications). Nothing on it is load-bearing for safety: root migration has
-the `movedTo` record (FSM1/cipher-box-next#38), revocation is discovered in metadata.
+(share pointers, claims, courtesy notifications). Nothing on it is load-bearing for safety: root migration uses
+the scope pointer (ADR 0041 D6), revocation is discovered in metadata.
 
 - **Post**: any authenticated account → recipient identity pubkey; body is the
   HPKE-sealed blob (≤ ~8 KB), sender supplies an idempotency key. A post that
   reuses a key returns the live item; after the ack, the same key creates a
   new item
   ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
-  D5, D6). Posts to unknown recipient pubkeys are rejected — an accepted,
-  rate-limited, exact-pubkey existence oracle.
+  D5, D6; ADR 0048). Posts to unknown recipient pubkeys are rejected — an
+  accepted, rate-limited, exact-pubkey existence oracle.
 - **Poll**: recipient-authenticated; returns `{id, receivedAt, blob}` — no
   sender metadata in the clear (the sealed payload is owner-signed inside).
   Clients poll on the sync design's 30 s cadence; no push in v2.0 (push-ready
@@ -281,8 +280,8 @@ the `movedTo` record (FSM1/cipher-box-next#38), revocation is discovered in meta
   the owner engine converts a claim only on "removed" (ADR 0023 D5). A missing,
   foreign, or malformed id answers "not removed". Retention:
   until acked, bounded — per-recipient pending cap (1000 items by default;
-  reject-new when full; a replay of a pending item still answers) and a
-  90-day unacked TTL aligned with record EOLs. Rate limits per sender account
+  reject-new when full; a replay of a pending item still answers, ADR 0048) and
+  a 90-day unacked TTL aligned with record EOLs. Rate limits per sender account
   and per recipient mailbox.
 - **Accepted exposure**: transient `{sender, recipient, timestamp}` edges;
   never a durable graph, never key material.
@@ -343,8 +342,9 @@ rate limiting must be verified effective in e2e); staging test hooks
 
 ## Data model (complete)
 
-`users`, `auth_methods`, `identity_subjects`, `refresh_tokens`, `account_devices`,
-`device_approvals`, `name_inventory (account, ipnsName)`,
+`users`, `auth_methods`, `identity_subjects`, `refresh_tokens`,
+`accelerator_tokens`, `account_devices`, `device_approvals`,
+`name_inventory (account, ipnsName)`,
 `pinned_cids (account, cid, size, advisory)`,
 `pin_references (account, ipnsName, cid)`, `mailbox_messages`,
 `record_cache` (non-canonical). Nothing else. No crypto-bearing rows outlive
@@ -363,7 +363,7 @@ correctness dependency.
 
 ## Open edges
 
-- `movedTo` migration-window length and closure signal (drives when the old
+- Migration-window length and closure signal (drives when the old
   scope-root name is retired) → [FSM1/cipher-box-next#38](https://github.com/FSM1/cipher-box-next/issues/38).
 - Module boundaries are fixed by
   [FSM1/cipher-box-next#28](https://github.com/FSM1/cipher-box-next/issues/28) D3 (NestJS residual

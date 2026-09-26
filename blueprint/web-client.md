@@ -75,7 +75,7 @@ What dies relative to v1 — with the design that killed it:
   offsets, lengths and a stream's pinned size cross as whole JS numbers, so a
   range and the size it is framed against are one arithmetic. The producer
   refuses a size past `Number.MAX_SAFE_INTEGER` rather than crossing one no read
-  could address. The WASM KAT run in CI covers the `u64`/BigInt and
+  could address (ADR 0037). The WASM KAT run in CI covers the `u64`/BigInt and
   getrandom boundary risks (core.md); `getrandom`'s JS backend wires to
   `crypto.getRandomValues` in the worker scope.
 - **Memory hygiene**: key material lives in WASM linear memory inside core's
@@ -87,7 +87,8 @@ What dies relative to v1 — with the design that killed it:
 
 One long-lived engine instance in a dedicated module worker, hosted by the
 **leader tab** (FSM1/cipher-box-next#28 D4). Leadership and failover (engineering judgment on the
-mechanism; the invariant — one engine writer per origin — is D4's):
+election mechanism; ADR 0037 fixes the follower mechanism; the invariant — one
+engine writer per origin — is FSM1/cipher-box-next#28 D4's):
 
 - **Election**: every tab's `packages/client` requests an exclusive Web Lock
   (`cipherbox-engine`). The holder is the leader: it spawns the engine worker
@@ -96,9 +97,10 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   exactly the failover primitive needed.
 - **Followers are thin mirrors, not engines**: a non-leader tab spawns no
   worker and holds no keys. It renders view projections served by the leader
-  and sends commands as data. Election and the port rendezvous ride a
-  `BroadcastChannel` as plain structured-clone data — every context on the
-  origin holds that channel, so nothing that names or measures vault content may
+  and sends commands as data. Election, the port rendezvous and the origin-wide
+  session-end notice (`cb:sessionEnded`, which carries no leadership token and
+  names no account) ride a `BroadcastChannel` as plain structured-clone data
+  (ADR 0037 D2) — every context on the origin holds that channel, so nothing that names or measures vault content may
   touch it: no plaintext, no key material, no user-supplied name, and no node id,
   IPNS name, routing key or block count. Everything else takes a different wire:
   each follower dials the leader a private `MessagePort` through the Service
@@ -111,7 +113,7 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   it bounds accidental and passive delivery, never a same-origin context that
   read the beacon — same origin remains the trust boundary. A tab with no Service
   Worker mirrors nothing: it fails closed rather than fall back to the shared
-  channel.
+  channel (ADR 0037).
 - **Follower death is structural, not a heartbeat**: every tab holds a Web Lock
   naming itself (`cipherbox-presence:<clientId>`) from before it greets the
   leader until it dies, and the leader requests that same lock for each follower
@@ -124,7 +126,7 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   that lock costs the tab back/forward-cache eligibility — a browser does not
   restore a page that held a Web Lock — and that is the intended trade: a back
   navigation re-elects and re-brokers from a fresh page, which a restored mirror
-  would have had to do anyway.
+  would have had to do anyway (ADR 0037).
 - **Failover**: the lock releases → some follower acquires it, spawns a fresh
   engine worker, and rehydrates from the durable seams (floors, op queue,
   staged bytes, snapshot cache — all origin-shared). Ops journal durably
@@ -159,10 +161,10 @@ all living in `packages/client` and running inside the engine worker realm:
 | Seam                | Web implementation                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **FloorStore**      | IndexedDB. Durable across logout by design. No in-memory fallback tier: an unavailable IndexedDB is an unsupported-browser hard error at login, not a degraded mode. Ephemeral storage (private windows) is safe: floors cold-seed from the re-point object's owner-vouched epochs (FSM1/cipher-box-next#39 D4), so a wiped store costs staleness, never a rolled-back revocation boundary |
-| **RecordTransport** | `fetch` against the configured `/routing/v1` endpoint set (someguy + at least one public endpoint), each GET bounded by the caller's `maxBytes` and the whole request by a deadline — the set includes untrusted public endpoints                                                                                                                                                          |
-| **Http**            | `fetch`, with `credentials` and the request deadline carried per request: `'include'` on the API origin so the HTTP-only refresh cookie rides it — which is why web's CredentialStore is a no-op — and `'omit'` everywhere else, so a gateway or BYO provider gets no ambient authority                                                                                                    |
+| **RecordTransport** | `fetch` against the configured `/routing/v1` endpoint set (someguy + at least one public endpoint), each GET bounded by the caller's `maxBytes` and the whole request by a deadline — the set includes untrusted public endpoints (ADR 0037)                                                                                                                                               |
+| **Http**            | `fetch`, with `credentials` and the request deadline (ADR 0037 D7) carried per request: `'include'` on the API origin so the HTTP-only refresh cookie rides it — which is why web's CredentialStore is a no-op — and `'omit'` everywhere else, so a gateway or BYO provider gets no ambient authority                                                                                      |
 | **Scheduler**       | Worker timers. Background throttling is tolerated: the 30 s tick and the ~hourly re-PUT job both survive coarse timers, and every wake-relevant transition already forces a pass                                                                                                                                                                                                           |
-| **StagingStore**    | Op-queue rows in IndexedDB; staged upload bytes in OPFS (per-op files, sync access handles in the worker), behind the sync-timing-profile budget                                                                                                                                                                                                                                           |
+| **StagingStore**    | Op-queue rows in IndexedDB; staged upload bytes in OPFS (per-op files, sync access handles in the worker), behind the storage-policy staging budget                                                                                                                                                                                                                                        |
 | **SnapshotCache**   | IndexedDB, ciphertext-only at rest — cached records/metadata unseal in the engine on read; plaintext never lands in browser storage                                                                                                                                                                                                                                                        |
 | **CredentialStore** | No-op (see Http)                                                                                                                                                                                                                                                                                                                                                                           |
 
@@ -186,7 +188,8 @@ all living in `packages/client` and running inside the engine worker realm:
   violations and withheld-update escalations render as a distinct warning
   class, never as staleness; dead-letters get a persistent, actionable
   notice. Manual refresh is a facade command with nocache semantics, and a
-  refresh it could not land reports back as a failure rather than a repaint.
+  refresh it could not land reports back as a failure rather than a repaint
+  (ADR 0044).
 - **Sharing UI is facade commands end to end**: invite links (the URL
   fragment carries the invite secret; the page hands it to the facade
   unread), contact-code import (QR / paste, verified in the engine), grant
@@ -336,6 +339,6 @@ belong to the
   advertises installability (manifest, install prompt) is deployment
   territory ([FSM1/cipher-box-next#48](https://github.com/FSM1/cipher-box-next/issues/48)).
 - **Designed-for, deliberately unbuilt**: push overlay (API WebSocket hints),
-  whose handler forces a pass through `Command::ManualRefresh` (FSM1/cipher-box-next#33 D1);
+  whose handler forces a pass through `Command::ManualRefresh` (FSM1/cipher-box-next#33 D1, ADR 0044);
   client-side search re-entry feeding an index from the snapshot event stream
   (FSM1/cipher-box-next#5).

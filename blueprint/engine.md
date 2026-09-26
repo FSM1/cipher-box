@@ -28,7 +28,7 @@ app and loaded as a worker-hosted WASM instance on web (FSM1/cipher-box-next#28 
 engine logic. The engine owns IPNS end-to-end over dumb `/routing/v1`
 transports (FSM1/cipher-box-next#28 D2) and contains the single hand-written API client (FSM1/cipher-box-next#28 D5).
 Hosts inject every capability as a constructor seam trait; a missing seam is a
-compile error, not a silent behavior gap (FSM1/cipher-box-next#26 D8).
+compile error, not a silent behavior gap (FSM1/cipher-box-next#26 D8, ADR 0044).
 
 What dies relative to v1 — with the design that killed it:
 
@@ -76,7 +76,7 @@ by the decomposition (FSM1/cipher-box-next#28 D3) and the rotation design's mand
 | **FloorStore**      | Durable monotonic-max per-scope epoch floors and per-name sequence floors; regression rejects fail-closed | IndexedDB                                    | Local journal |
 | **RecordTransport** | Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes against a configured endpoint set    | `fetch`                                      | `reqwest`     |
 | **Http**            | Plain HTTP for the API client, trustless gateway, and BYO providers                                       | `fetch`                                      | `reqwest`     |
-| **Scheduler**       | Timers, background task execution, wall clock                                                             | Worker timers                                | Tokio         |
+| **Scheduler**       | Timers, background task execution, wall clock (ADR 0044)                                                  | Worker timers                                | Tokio         |
 | **StagingStore**    | Durable op queue + staged upload bytes (storage-policy budget)                                            | IndexedDB + OPFS                             | Local journal |
 | **SnapshotCache**   | Durable last-known-good record/metadata cache backing cache-first reads                                   | IndexedDB                                    | Local store   |
 | **CredentialStore** | Refresh-token persistence                                                                                 | No-op (HTTP-only cookie rides the Http seam) | OS keychain   |
@@ -91,7 +91,7 @@ Notes:
   the access bearer never leaves the engine, so the engine implements the trait
   itself over its own API client — one token store, one refresh path, both
   platforms. The trait survives because it keeps a decentralized inbox
-  swappable behind the same abstraction (FSM1/cipher-box-next#25 D2).
+  swappable behind the same abstraction (FSM1/cipher-box-next#25 D2, ADR 0044).
 - Entropy and timestamps are engine inputs to core's pure functions: the clock
   comes from `Scheduler`, entropy from per-target `getrandom` wiring (core.md).
 - `SnapshotCache` as a distinct seam, and the exact `CredentialStore` split,
@@ -139,8 +139,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
   (FSM1/cipher-box-next#34 D4). Interior old names batch-retire at name-wave completion; the old
-  scope-root name lingers serving the tombstone until the migration window
-  closes (open edge below). An abandoned op retires the **whole** set its
+  scope-root name lingers until the migration window closes (open edge
+  below). An abandoned op retires the **whole** set its
   publish charged — the name it registered and every block it uploaded, root
   and leaves — because each upload is its own accountable pin row (api.md);
   batches chunk to the registry's batch cap, and retirement is idempotent, so a
@@ -153,7 +153,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   already be pinned under its own charged row, no record can name it, and the
   retry re-authors under a fresh seal nonce, so the drain retires that head at
   the end of the pass that orphaned it, per attempt. A fan-out that
-  acknowledged nothing does **not** qualify: no ack is not proof nothing stored.
+  acknowledged nothing does **not** qualify: no ack is not proof nothing stored
+  (ADR 0047).
   A **delete** reclaims its own target at once — the shortened parent is a
   record the pass resolved and republished — and holds every descendant in a
   bounded quarantine. A descendant is reached through a `ChildRef`, which any
@@ -185,13 +186,13 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    `signatureV2`, data-field/Value consistency, EOL/sequence extraction.
 2. **Commitment verify** (scope roots) — the owner-signed grant-set commitment
    against the contact-code-anchored owner identity (FSM1/cipher-box-next#34 D6, FSM1/cipher-box-next#39 D1),
-   then its `cutEpoch` against the newest cut epoch this scope already adopted.
-   The set carries no read epoch, so an owner-signed pre-cut set verifies for
-   ever; the cut-epoch floor is what refuses the replay of one. A commitment
-   that clears this stage whole raises that floor to its `cutEpoch`. The
-   `/shared` classification path holds a record to this same stage and makes the
-   same raise, so a device the owner cut — which adopts no post-cut record, and
-   therefore never reaches the raise below — learns the cut too.
+   then its `cutEpoch` against the newest cut epoch this scope already adopted
+   (ADR 0032). The set carries no read epoch, so an owner-signed pre-cut set
+   verifies for ever; the cut-epoch floor is what refuses the replay of one. A
+   commitment that clears this stage whole raises that floor to its `cutEpoch`.
+   The `/shared` classification path holds a record to this same stage and makes
+   the same raise, so a device the owner cut — which adopts no post-cut record,
+   and therefore never reaches the raise below — learns the cut too.
 3. **Grant-section authentication** (scope roots) — every seed-bearing
    structure (grant blobs, owner blob, the optional owner-write-blob, ascent
    link, history links, write-body) verifies under **one** committed
@@ -209,13 +210,13 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
 6. **Unseal** — success required; core's trust-violation error class carries
    through fail-closed.
 
-**One section, one signer** (stage 3). A section is a single rotator's work: it
-re-seals and detached-signs every structure with its own writer pseudonym,
-re-signing at the record's read epoch even the history links it carries forward
-verbatim (`rotation/reseal.rs`). The gate therefore **pins** the pseudonym that
-authenticated the section's first structure and requires every later structure
-to verify under that key alone; a section signed by two committed pseudonyms is
-unadoptable, not merely unusual.
+**One section, one signer** (stage 3, ADR 0032). A section is a single rotator's
+work: it re-seals and detached-signs every structure with its own writer
+pseudonym, re-signing at the record's read epoch even the history links it
+carries forward verbatim (`rotation/reseal.rs`). The gate therefore **pins** the
+pseudonym that authenticated the section's first structure and requires every
+later structure to verify under that key alone; a section signed by two
+committed pseudonyms is unadoptable, not merely unusual.
 
 It closes a **structure splice**: a structure lifted verbatim out of a different
 record at the same scope and epoch, authored by a different committed writer,
@@ -265,29 +266,29 @@ name → envelope grant blob → seeds → render. Residual, honestly scoped
 epochs (which revoke nobody — pure staleness) plus within-epoch staleness;
 revocation boundaries cannot be rolled back.
 
-**The first-run rule** (ADR 0022). The vault-pointer walk reads a name as
-absent only when every routing endpoint answered and every answer was "no
-record". A fresh account has no record at any endpoint, so one failed endpoint
-refuses its sign-up. Before the walk at index 0 — on a device that holds no
-vault-pointer index floor — the cold start asks the registry whether this
-account holds a registration for the index-0 pointer name. When the answer is
-`200 {"registered": false}`, the walk and the mint's vacancy probe read that
-one name under the first-run rule: a fan-out with at least one "no record"
-answer and every other endpoint failed is absent. Every endpoint failed stays
-unavailable, and a record at the name still passes the verify and the adoption
-gate. Every other outcome keeps unanimity, a 404 too, so a missing route never
-reads as "not registered". Register-first places the registry row before any
-record reaches the transport, so "not registered" means this account never
-published a pointer there. The answer permits availability only: it never adopts a record
-or selects a root, and it is not stored.
+**The first-run rule** (ADR 0022 as amended by ADR 0034). The vault-pointer walk
+reads a name as absent only when every routing endpoint answered and every
+answer was "no record". A fresh account has no record at any endpoint, so one
+failed endpoint refuses its sign-up. Before the walk at index 0 — on a device
+that holds no vault-pointer index floor — the cold start asks the registry
+whether this account holds a registration for the index-0 pointer name. When the
+answer is `200 {"registered": false}`, the walk and the mint's vacancy probe
+read that one name under the first-run rule: a fan-out with at least one "no
+record" answer and every other endpoint failed is absent. Every endpoint failed
+stays unavailable, and a record at the name still passes the verify and the
+adoption gate. Every other outcome keeps unanimity, a 404 too, so a missing
+route never reads as "not registered". Register-first places the registry row
+before any record reaches the transport, so "not registered" means this account
+never published a pointer there. The answer permits availability only: it never
+adopts a record or selects a root, and it is not stored.
 
 ## Vault settings load
 
 The vault settings record (`CONTEXT.md`) resolves at cold start, ahead of any
 vault resolve, and never blocks it: every failure degrades inside the sync
-timing profile's settings budget, measured on the Scheduler seam. What it
-degrades _to_ is a trust decision, because unlike every other resolve its
-degraded outcome applies a different policy rather than showing stale data.
+timing profile's settings budget, measured on the Scheduler seam (ADR 0034).
+What it degrades _to_ is a trust decision, because unlike every other resolve
+its degraded outcome applies a different policy rather than showing stale data.
 
 - **Last-known-good before defaults.** The head block of a settings record
   that cleared its sequence floor and opened is cached in `SnapshotCache` —
@@ -343,6 +344,13 @@ degraded outcome applies a different policy rather than showing stale data.
   reason. The encode side needs no matching guard: the EOL is `now + 90 days`
   off the injected clock, so a publish structurally cannot mint an
   already-expired record.
+- **A settings load enrols the record it read in the session's renewal set**
+  (ADR 0034 D9), so a session that only reads keeps the name alive. It enrols
+  only a record that cleared the whole floor law, the lapsed-EOL refusal
+  included, and only on a device that already holds a sequence floor for the
+  name. It writes only while the renewal slot still holds the bytes it held
+  when the load began, so a save that lands across the load is never replaced
+  by the older read.
 - **The sealed body carries a monotonic revision.** The outer sequence cannot
   order two records at the _same_ sequence, and an unconfirmed publish
   followed by a retry mints exactly that: two owner-signed records at one
@@ -390,11 +398,11 @@ degraded outcome applies a different policy rather than showing stale data.
 ## Bin index record
 
 The bin index (`CONTEXT.md`) is the owner's vault-level record of every
-soft-deleted node. Its record plane is the settings record's, so everything
-above under "Vault settings load" holds unchanged: the same three-rung ladder
-(the published record, this device's last-known-good copy, then an empty bin),
-the same three durable marks, and the same per-attempt body revision beside the
-per-name sequence floor. Only what differs is stated here.
+soft-deleted node (ADR 0031). Its record plane is the settings record's, so
+everything above under "Vault settings load" holds unchanged: the same
+three-rung ladder (the published record, this device's last-known-good copy,
+then an empty bin), the same three durable marks, and the same per-attempt body
+revision beside the per-name sequence floor. Only what differs is stated here.
 
 - **The seal key never rotates, so the nonce is always entropy.**
   `bin-index-seal-key` takes no epoch input and no per-record input, so one key
@@ -437,10 +445,12 @@ per-name sequence floor. Only what differs is stated here.
   crossing between bands. The IPNS sequence is public and monotone, so an
   observer reads a lower bound on the account's lifetime bin publishes. And
   nothing hides _when_ a revision lands, so the first bump off the genesis
-  record times the first soft delete and each later bump times another. A decoy
-  publish cadence is what closes the last of these, and the fresh-nonce rule
-  above is what makes one work — a no-op republish is byte-indistinguishable
-  from a real edit — but no decoy is scheduled in v2.0.0.
+  record times the first soft delete and each later bump times another. A bin
+  publish also coincides with the re-key's own republishes, which name the exact
+  records the delete binned. A decoy publish cadence is what closes the last of
+  these, and the fresh-nonce rule above is what makes one work — a no-op
+  republish is byte-indistinguishable from a real edit — but no decoy is
+  scheduled in v2.0.0.
 - **A mint counter with no adoption beside it is its own verdict.** The two
   adoption marks — the per-name sequence floor and the adopted body revision —
   prove a record this device took, so an absent record is withheld and the
@@ -450,15 +460,16 @@ per-name sequence floor. Only what differs is stated here.
   attempt case is why it refuses under its own reason, `StrandedMint`. The
   refusal is a device-local state: another device of the account holds no mark,
   so it publishes the record and clears it.
-- **The queue head never waits on the bin plane in silence.** Every state the
-  load can leave the head in has an exit and a reported cause. A refusal of
-  bytes the plane served is charged against the attempt budget. A stranded mint
-  dead-letters, because the hold's only exit is the record resolving and a
-  single-device account has nothing left to publish one — the member is told
-  the state and may hard-delete instead. Every other outcome takes a reported
-  hold the host reads beside the quota and settings holds, and the hold clears
-  when the record resolves. A body no rung admits is its own dead-letter reason
-  rather than a codec fault, because no retry shrinks it.
+- **The queue head never waits on the bin plane in silence** (ADR 0031,
+  ADR 0043). Every state the load can leave the head in has an exit and a
+  reported cause. A refusal of bytes the plane served is charged against the
+  attempt budget. A stranded mint dead-letters, because the hold's only exit is
+  the record resolving and a single-device account has nothing left to publish
+  one — the member is told the state and may hard-delete instead. Every other
+  outcome takes a reported hold the host reads beside the quota and settings
+  holds, and the hold clears when the record resolves. A body no rung admits is
+  its own dead-letter reason rather than a codec fault, because no retry shrinks
+  it.
 - **A lapsed EOL is availability here, and the settings carve-out does not carry
   over** ([ADR 0013](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0013-a-lapsed-bin-index-record-is-rewritten-not-refused.md)).
   Nothing on this plane re-signs the record but the rewrite a refusal
@@ -476,21 +487,21 @@ per-name sequence floor. Only what differs is stated here.
   only a record that cleared the whole floor law _and_ that this device already
   holds a sequence floor for, because the renewal re-signs at `floor + 1` and so
   promotes whatever it is given.
-- **One load serves a pass of soft deletes; every other rewrite resolves.** The
-  index a pass establishes — resolved, or left standing by its own confirmed
-  publish — is carried across the entries that pass _adds_, so a bulk soft
-  delete costs one resolve rather than one per node. A rewrite that removes an
-  entry runs after a re-key and several folder publishes, so it resolves again:
-  the index is rewritten whole, and a copy read before those would drop every
-  entry another device added since. The publish stays per operation either way,
-  which is what keeps each entry ahead of its own unlink.
+- **One load serves a pass of soft deletes; every other rewrite resolves**
+  (ADR 0043). The index a pass establishes — resolved, or left standing by its
+  own confirmed publish — is carried across the entries that pass _adds_, so a
+  bulk soft delete costs one resolve rather than one per node. A rewrite that
+  removes an entry runs after a re-key and several folder publishes, so it
+  resolves again: the index is rewritten whole, and a copy read before those
+  would drop every entry another device added since. The publish stays per
+  operation either way, which is what keeps each entry ahead of its own unlink.
 
 ## Delete branch
 
 There is one `Delete` command. The facade branches it on the owner's
 `binRetentionDays` setting and journals the verdict on the op, so a settings
 save between the queue and the drain cannot change what an already-queued
-delete does.
+delete does (ADR 0043).
 
 - **Retention `0` keeps the hard delete**, with the doomed manifest, the
   quarantine, and the reclamation above. Retention above `0` makes the delete
@@ -537,9 +548,10 @@ delete does.
 
 A soft delete re-seals every node of the doomed subtree under the bin-held key
 before the unlink publishes ([ADR 0010](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0010-recycle-bin-is-an-owner-sealed-index.md)
-item 3). That re-key is the access cut: key regression hands a current or a
-revoked grantee every older epoch of the scope seed, so only a key outside the
-scope's derivation entirely stops them reading a node the owner has binned.
+item 3, amended by ADR 0043 D5). That re-key is the access cut: key regression
+hands a current or a revoked grantee every older epoch of the scope seed, so
+only a key outside the scope's derivation entirely stops them reading a node the
+owner has binned.
 
 - **Names, signers and the AAD-bound scope id do not move.** Only the read key
   does, so the bin entry's `ipnsName` stays the route back to the node and the
@@ -555,7 +567,7 @@ scope's derivation entirely stops them reading a node the owner has binned.
   scope's read and write seeds, never its grant ledger, so it cannot tell a
   scope with live or historical grants from one without. A wrong "unshared"
   verdict is a fail-open disclosure no later pass repairs, and the cost of the
-  re-key is the same order as the hard branch's own subtree walk.
+  re-key is the same order as the hard branch's own subtree walk (ADR 0043 D5).
 - **A create never re-authors over a record that reached the unseal.** The
   replay probe reads a rejection at the unseal stage as published: the record
   verified and cleared both floors, so it is a node the bin re-keyed, and
@@ -564,9 +576,9 @@ scope's derivation entirely stops them reading a node the owner has binned.
 ### Owner capture
 
 The owner's engine adopts an unlink it observes but did not author (ADR 0010
-item 5). The poll leg's folder merge reports the children a folder stopped
-naming; the drain writes one bin entry for each and re-keys the node, so the
-grantee that removed it stops reading it.
+item 5, ADR 0043). The poll leg's folder merge reports the children a folder
+stopped naming; the drain writes one bin entry for each and re-keys the node, so
+the grantee that removed it stops reading it.
 
 - **The re-key runs before the entry**, the opposite of the authored delete's
   order and for the opposite reason: the unlink has already published, so
@@ -597,14 +609,14 @@ grantee that removed it stops reading it.
 Three operations take a node back out of the bin, and every one of them is a
 journaled intent op, so a replay of the queue reproduces the same bin and the
 same reclamation ([ADR 0010](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0010-recycle-bin-is-an-owner-sealed-index.md)
-items 4, 6 and 7).
+items 4, 6 and 7, ADR 0043).
 
-- **A restore re-keys in reverse, then relinks, then drops the entry.** Every
-  node of the subtree is re-sealed at the destination scope's current epoch, so
-  the destination's grantees read it again by scope membership and the bin-held
-  key stops opening it. An unshared destination gets the same operation: the
-  scope key it re-seals under is the fresh key such a restore needs, and no
-  second mechanism exists to drift from this one.
+- **A restore re-keys in reverse, then relinks, then drops the entry**
+  (ADR 0043). Every node of the subtree is re-sealed at the destination scope's
+  current epoch, so the destination's grantees read it again by scope membership
+  and the bin-held key stops opening it. An unshared destination gets the same
+  operation: the scope key it re-seals under is the fresh key such a restore
+  needs, and no second mechanism exists to drift from this one.
 - **The entry is dropped last.** A pass that stops between the relink and the
   drop leaves a node that is both linked and binned, and the retry settles it.
   The reverse order leaves a node no folder names and no entry finds.
@@ -681,33 +693,38 @@ items 4, 6 and 7).
 One model, two trigger sources (FSM1/cipher-box-next#33 D2): web drives it from navigation and the
 poll timer, desktop from FUSE-op TTL checks — the core is identical.
 
-- **State law**: rendered state = last-known-good remote snapshot ⊕
-  pending-op overlay, single owner; the op queue is the only local divergence
-  (FSM1/cipher-box-next#33 D6). Every op but a delete authors its target's next record, so the
-  overlay stamps `mtime = authored_at` — overwriting the projected time, not
-  filling it — and a content op also stamps its version's plaintext size,
-  through the one function the drain's publish plan shares.
-- **Focus-window tick**, 30 s: refresh the vault pointer, the open
-  folder, and its full ancestor chain to root; the scope-pointer resolves for
-  open shared scopes (FSM1/cipher-box-next#38 D4) and the mailbox poll (FSM1/cipher-box-next#34 D5) ride the same
-  tick. `Command::ManualRefresh` brings the next pass forward immediately and
-  resolves it nocache, and reports back what that pass reconciled. Any other cached folder
-  refreshes on access past the staleness threshold — no background churn over
-  the whole tree; cached shared scopes consult their scope pointer on access.
+- **State law**: rendered state = last-known-good remote snapshot ⊕ pending-op
+  overlay, single owner; the op queue is the only local divergence
+  (FSM1/cipher-box-next#33 D6). The overlay stamps `mtime = authored_at` on
+  exactly the nodes whose records the drain publishes for the op — `create` the
+  new node and its parent, `rename` and `delete` the parent, `relink` and `move`
+  both parents, `updateContent` the node alone — overwriting the projected time,
+  not filling it, and a content op also stamps its version's plaintext size,
+  through the one function that the overlay and the drain's publish plan both
+  call (ADR 0045).
+- **Focus-window tick**, 30 s: refresh the vault pointer, the open folder, and
+  its full ancestor chain to root; the scope-pointer resolves for open shared
+  scopes (FSM1/cipher-box-next#38 D4) and the mailbox poll
+  (FSM1/cipher-box-next#34 D5) ride the same tick. `Command::ManualRefresh`
+  brings the next pass forward immediately and resolves it nocache, and reports
+  back what that pass reconciled (ADR 0044). Any other cached folder refreshes
+  on access past the staleness threshold — no background churn over the whole
+  tree; cached shared scopes consult their scope pointer on access.
 - **Sync timing profile** (environment-scoped): record TTL, poll cadence,
   staleness thresholds, escalation window, and the pointer-consult interval
   that bounds the read-only-survivor residual (FSM1/cipher-box-next#38 residuals). The profile is
   the CI-DX hook — dev/CI values make cross-client e2e flows testable at speed
   (FSM1/cipher-box-next#33 D3). It is a _named_ constant set, so measured per-device byte counts
-  live in the storage policy instead.
+  live in the storage policy instead (ADR 0044).
 - **Storage policy** (device-scoped): the staging budget and the read-cache
   ceiling, split from a headroom figure the host measures once and injects at
-  construction — never a live host query inside a staging read-modify-write.
-  The cache ceiling comes off headroom before the staging fraction; there is no
-  floor-up, so a small headroom yields a small budget and an honest
-  over-budget rejection. A host that cannot measure headroom at all is a
-  distinct state, not a measured zero: uploads are refused as _unmeasurable_
-  rather than reported as a full device.
+  construction — never a live host query inside a staging read-modify-write. The
+  cache ceiling is part of the policy at once, and it comes off headroom before
+  the staging fraction only once a sealed-block read cache is built; until then,
+  headroom is unreduced (ADR 0044). There is no floor-up, so a small headroom
+  yields a small budget and an honest over-budget rejection. A host that cannot
+  measure headroom at all is a distinct state, not a measured zero: uploads are
+  refused as _unmeasurable_ rather than reported as a full device.
 - **Staleness ladder** (FSM1/cipher-box-next#33 D4): fresh → reconciling (quiet indicator) →
   stale (badge + "last synced X ago" after ~3 missed cycles) → offline banner.
   Availability staleness keeps cached views usable indefinitely. Errors are
@@ -717,15 +734,15 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   `relink`, `move`, `updateContent` — carrying its base sequence and its authored
   time, journaled FIFO in the durable op queue (all mutations, both platforms)
   as a versioned, owner-tagged record whose intent body seals HPKE-to-self in
-  **auth mode**, so authoring one requires the owner's enc secret rather than
-  the public tag stamped beside it. That authenticates a record's _author_, not
-  its freshness or its position: a store co-tenant can still copy, delete, or
-  reorder whole records, which queue-integrity work covers separately. The queue
-  is per device, not per account, and is shared with whatever build wrote it: a
-  record bearing another identity's tag, or a format version this build does not
-  implement, is **retained** — never replayed, never surfaced, never removed,
-  and its staged bytes stay pinned. Only a record that fails to decode at all is
-  dead-lettered and dropped. An intra-scope
+  **auth mode** (ADR 0030), so authoring one requires the owner's enc secret
+  rather than the public tag stamped beside it. That authenticates a record's
+  _author_, not its freshness or its position: a store co-tenant can still copy,
+  delete, or reorder whole records, which queue-integrity work covers
+  separately. The queue is per device, not per account, and is shared with
+  whatever build wrote it: a record bearing another identity's tag, or a format
+  version this build does not implement, is **retained** — never replayed, never
+  surfaced, never removed, and its staged bytes stay pinned. Only a record that
+  fails to decode at all is dead-lettered and dropped. An intra-scope
   `relink` is a pure relink; a cross-scope `relink` re-seals the moved subtree
   at the destination scope's epoch, and one that leaves a granted source scope
   is a scope-exit rotation trigger for the source (FSM1/cipher-box-next#26 D1/D7). The crossing
@@ -735,13 +752,14 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   one interior end — cannot author. The journaled crossing is a plan, never the
   authority: the drain re-derives it from the two planes its own pass proved and
   owes the source cut from that pair, so a boundary the journaling session had
-  not yet proved still re-seals the moved subtree and cuts the scope it left. A `move` is a
-  relink and a rename in one entry, optionally vacating the node already at the
-  destination name — one POSIX rename is exactly one `move`, so the whole
-  operation is journaled or none of it is. Replay is FIFO
-  in performed order through the standard rebase, and rebases only onto
-  gate-passing state (FSM1/cipher-box-next#33 D5–D7). A build decodes, opens and
-  drains every queue record that the previous release wrote
+  not yet proved still re-seals the moved subtree and cuts the scope it left
+  (ADR 0045). A `move` is a relink and a rename in one entry, optionally
+  vacating the node already at the destination name — one kernel rename is one
+  command; a relocation between two interior scopes journals as a parking leg
+  and an arriving leg, and both legs are journaled or neither is (ADR 0045).
+  Replay is FIFO in performed order through the standard rebase, and rebases
+  only onto gate-passing state (FSM1/cipher-box-next#33 D5–D7). A build decodes,
+  opens and drains every queue record that the previous release wrote
   ([ADR 0020](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0020-the-durable-op-queue-reads-the-previous-release.md)).
   A new field on a queued op takes a decode default equal to the value the older
   build used, and that default passes every check a written value passes. A
@@ -762,14 +780,14 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
 
 Per-op rebase rules (FSM1/cipher-box-next#33 D5):
 
-| Race                        | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Delete vs concurrent edit   | **Conditional delete**: the op snapshots the target's own record sequence; if the target advanced by rebase time, the delete is dropped — edit wins in both directions (a rebased edit resurrects a concurrently deleted node)                                                                                                                                                                                                                                                                                                                                        |
-| Edit vs edit                | **Conditional edit**: the op names the head version it was formed against, taken when the write handle opens; a head that is not that one by rebase or publish time is another writer's, so the edit **dead-letters** with its staged version preserved instead of superseding it. An identity, never a count — a queued predecessor and a concurrent writer advance a count alike. A device holding no head for the target resolves one at `beginWrite` rather than writing unanchored; no read path surfaces a non-head version, so a superseded one is unreachable |
-| Rename vs rename            | Serialized by the parent CAS; last writer at higher sequence wins                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Add vs add (name collision) | Always visible; the rebasing loser auto-suffixes (`name (2).ext`). Uniqueness = one strict comparator everywhere — NFC-normalized + case-folded, identical at create and merge on all platforms, names stored as-entered                                                                                                                                                                                                                                                                                                                                              |
-| Move                        | Dest-first publish, then a presence-conditional source-remove — orphans structurally impossible; a race loser compensates by undoing its dest-add                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Dual-link (crash residue)   | **Observed repair**: any write-capable client seeing one child id in two loaded parents publishes the fix; the child ref's monotonic link counter picks the deterministic loser                                                                                                                                                                                                                                                                                                                                                                                       |
+| Race                        | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Delete vs concurrent edit   | **Conditional delete**: the op snapshots the target's own record sequence; if the target advanced by rebase time, the delete is dropped — edit wins in both directions (a rebased edit resurrects a concurrently deleted node)                                                                                                                                                                                                                                                                                                                                                   |
+| Edit vs edit                | **Conditional edit**: the op names the head version it was formed against, taken when the write handle opens; a head that is not that one by rebase or publish time is another writer's, so the edit **dead-letters** with its staged version preserved instead of superseding it. An identity, never a count — a queued predecessor and a concurrent writer advance a count alike. A device holding no head for the target resolves one at `beginWrite` rather than writing unanchored; no read path surfaces a non-head version, so a superseded one is unreachable (ADR 0045) |
+| Rename vs rename            | Serialized by the parent CAS; last writer at higher sequence wins                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Add vs add (name collision) | Always visible; the rebasing loser auto-suffixes (`name (2).ext`). Uniqueness = one strict comparator everywhere — NFC-normalized + case-folded, identical at create and merge on all platforms, names stored as-entered                                                                                                                                                                                                                                                                                                                                                         |
+| Move                        | Dest-first publish, then a presence-conditional source-remove — orphans structurally impossible; a race loser compensates by undoing its dest-add                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Dual-link (crash residue)   | **Observed repair**: any write-capable client seeing one child id in two loaded parents publishes the fix; the child ref's monotonic link counter picks the deterministic loser                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 Terminally unrebasable ops (e.g. access revoked while offline) **dead-letter**
 with a visible notice and staged bytes preserved; nothing is silently dropped
@@ -778,17 +796,20 @@ separate carriers, because the preserved set evicts oldest-first: an op that
 staged a version parks its op record there, and one that staged none takes a
 per-owner notice of its id and its reason instead, which costs no slot and holds
 no record bytes. A cold start reads both back, so every dead letter is nameable
-and discardable after a restart. Web reaches full offline parity: uploads stage into OPFS/IndexedDB
-behind the profile budget (past it, only new uploads fail fast; metadata ops
-queue unbounded).
+and discardable after a restart (ADR 0045). Web reaches full offline parity:
+uploads stage into OPFS/IndexedDB behind the storage-policy staging budget (past
+it, only new uploads fail fast; metadata ops queue unbounded).
 
 ## Rotation primitives
 
 Three primitives, no recovery machinery (FSM1/cipher-box-next#26 D8): no job records, no
 checkpoints — published records are the sole source of truth. A pre-publish
 crash changed nothing durable; a post-publish crash recovers the override seed
-from the published root itself; a resumed name wave enumerates old names via
-the write-plane history link.
+from the published root itself; a resumed name wave enumerates old names via the
+write-plane history link. Every rotation publish re-reads, after its own gated
+read and immediately before it signs, each durable floor the gate holds the
+record to — the read-epoch, the write-epoch and, for a scope root, the cut-epoch
+floor — and refuses below any of them (ADR 0041).
 
 ### rotateScope
 
@@ -849,12 +870,13 @@ a scope root encountered but missing from its parent's index is repaired and
 flagged (FSM1/cipher-box-next#38 D6), a walk-time repair that runs whether or not any node is being
 re-sealed. Only a name the walk resolved current may be written to an index: a
 below-floor root is classified and re-resolved first (below), so the repair can
-never persist the superseded name that caused it. Sweeps re-seal metadata only;
-content bytes are never re-encrypted
-by any rotation path (FSM1/cipher-box-next#26 D6). Scheduling is engineering judgment (FSM1/cipher-box-next#26 handed
-it to FSM1/cipher-box-next#33, which did not fix it): the sweep runs as an idle-cadence Scheduler
-job; idempotence plus CAS make concurrent sweepers safe — a lost race drops
-that node from the work-list on re-resolve.
+never persist the superseded name that caused it (ADR 0041). Sweeps re-seal
+metadata only; content bytes are never re-encrypted by any rotation path
+(FSM1/cipher-box-next#26 D6). Scheduling is engineering judgment
+(FSM1/cipher-box-next#26 handed it to FSM1/cipher-box-next#33, which did not fix
+it): the sweep runs as an idle-cadence Scheduler job; idempotence plus CAS make
+concurrent sweepers safe — a lost race drops that node from the work-list on
+re-resolve.
 
 A **scope root** below its own read-epoch floor is not a sweep target and is
 never repaired. Rotations publish before they raise the floor, so the condition
@@ -884,10 +906,12 @@ _metadata_ while never re-keying it — the **read** override seed, read keys an
 `minReadEpoch` still carry verbatim, and the read-epoch floor never moves.
 
 The wave carries one envelope epoch across the whole subtree, so every republish
-re-reads both durable floors immediately before it seals and refuses below
-either: a concurrent read rotation lifting the read floor mid-wave would
-otherwise leave the subtree gate-rejected at its new names and retired at its old
-ones.
+re-reads the read-epoch floor immediately before it seals, the root republish
+also re-reads the write-epoch floor, and each refuses below the floor it reads
+(ADR 0041): a concurrent read rotation lifting the read floor mid-wave would
+otherwise leave the subtree gate-rejected at its new names and retired at its
+old ones. The re-point is held to the scope-pointer bar before it is signed, and
+the retire re-reads the read-epoch floor and refuses on a rise (ADR 0041).
 
 The re-point publishes to **two** channels, each carrying the one owner-signed
 re-point object under its own seal (FSM1/cipher-box-next#38 D3): the scope pointer record, and
@@ -981,22 +1005,22 @@ prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
   flip in sequence and not atomically, so a rotation that stops between them
   leaves the vault pointer one epoch behind. That lag is honest state, and
   measuring the vault pointer against the write-epoch floor would turn it into a
-  refused boot, so only the scope pointer is held to that floor.
+  refused boot, so only the scope pointer is held to that floor (ADR 0041).
 - Pointer names ride pin registration into the republisher inventory and get
   the same 90-day EOL + lease renewal as every name (FSM1/cipher-box-next#24 as amended by FSM1/cipher-box-next#38).
 
 ## Grants and ledger
 
-Grants-in-metadata (FSM1/cipher-box-next#25 D1): key material lives in the published scope root —
-grant blobs keyed by blinded tags, the authoritative ledger
-`(recipientIdentityPk, recipientEncPk, permission, tag)` in the write-body,
-and the owner-signed grant-set commitment. Every re-seal and every cut names
-its recipients from the commitment, which the owner signs, never from a ledger
-row a committed write grantee authors. The commitment carries each recipient
-masked, so a reader needs the scope's `pointerReadKey` to recover it. The engine maintains all
-three plus the per-(scope, writer) pseudonyms; re-mint does not exist as a
-separate step — every rekey re-seals surviving committed grants uniformly in
-the republish it already does.
+Grants-in-metadata (FSM1/cipher-box-next#25 D1): key material lives in the
+published scope root — grant blobs keyed by blinded tags, the authoritative
+ledger `(recipientIdentityPk, recipientEncPk, permission, tag)` in the
+write-body, and the owner-signed grant-set commitment. Every re-seal and every
+cut names its recipients from the commitment, which the owner signs, never from
+a ledger row a committed write grantee authors (ADR 0032). The commitment
+carries each recipient masked, so a reader needs the scope's `pointerReadKey` to
+recover it. The engine maintains all three plus the per-(scope, writer)
+pseudonyms; re-mint does not exist as a separate step — every rekey re-seals
+surviving committed grants uniformly in the republish it already does.
 
 - **Authority** (FSM1/cipher-box-next#25 D7, FSM1/cipher-box-next#26 D5): sharing, revoking, and every commitment
   change are owner-only. Any owner device converts claims and runs a revoke
@@ -1053,33 +1077,32 @@ the republish it already does.
   decodes inside its 2048-byte bound → the fragment's owner contact code
   passes its binding verify → the engine resolves the scope pointer the
   fragment names, opens the re-point object under the fragment's
-  `pointerReadKey`, verifies its owner-identity signature against that code,
-  and verifies the record at `currentRootName` at that name, with the
-  old-name tombstone and the mailbox mirror as accelerators only → the record is
-  not this vault's own root scope → a blob sits at the link tag, derived
-  again at each `currentRootName` → the owner-signed commitment names that tag
-  with kind `link` and a `deadline` later than the injected `now`, and the
-  holder reads at the committed `read` → the blob opens under the ephemeral
-  subkey, AAD bound to version, id, scope and epoch → the full adoption gate
-  runs against the fragment owner's identity, with floors keyed under the
-  owner's contact label → the bookmark persists before the floor advance
-  commits. Each refresh pass runs the checks of a personal share with the
-  ephemeral subkey, plus the link deadline; a second join on one device takes
-  the equal-floor short-circuit of the personal accept. The refresh prefers
-  the personal tag and reads the link tag only while no personal blob opens
-  and `linkSecret` is held; the persist that records the first personal open
-  deletes `linkSecret`, and the link holder is then a grantee.
+  `pointerReadKey`, verifies its owner-identity signature against that code, and
+  verifies the record at `currentRootName` at that name → the record is not this
+  vault's own root scope → a blob sits at the link tag, derived again at each
+  `currentRootName` → the owner-signed commitment names that tag with kind
+  `link` and a `deadline` later than the injected `now`, and the holder reads at
+  the committed `read` → the blob opens under the ephemeral subkey, AAD bound to
+  version, id, scope and epoch → the full adoption gate runs against the
+  fragment owner's identity, with floors keyed under the owner's contact label →
+  the bookmark persists before the floor advance commits. Each refresh pass runs
+  the checks of a personal share with the ephemeral subkey, plus the link
+  deadline; a second join on one device takes the equal-floor short-circuit of
+  the personal accept. The refresh prefers the personal tag and reads the link
+  tag only while no personal blob opens and `linkSecret` is held; the persist
+  that records the first personal open deletes `linkSecret`, and the link holder
+  is then a grantee.
 - **Revocation is discovered, not delivered** (FSM1/cipher-box-next#25 D3/D4): a fresh
   owner-signed record with no blob at your tag is the definitive revocation
   signal; an unresolvable name is merely unknown/stale. The engine classifies
   revocation-signal vs unresolvable vs epoch-lag and surfaces the distinction
   to hosts. Read revoke = the immediate-cut trigger above; the promise is
   "they keep what they saw; they lose everything new, now." Write
-  revoke/downgrade = write rotation; old names are hijackable by the revokee
-  and therefore dead to survivors — tombstones advisory only. Every
-  write-grantee revoke, downgrade and D1 checkbox on a write grantee runs a
-  name wave, so cheap, routinely-runnable write rotation stays a hard
-  requirement (ADR 0025 E6). Under the link-first model (ADR 0025):
+  revoke/downgrade = write rotation; old names are hijackable by the revokee and
+  therefore dead to survivors. Every write-grantee revoke, downgrade and D1
+  checkbox on a write grantee runs a name wave, so cheap, routinely-runnable
+  write rotation stays a hard requirement (ADR 0025 E6). Under the link-first
+  model (ADR 0025):
   - **Revoke link** cuts the link row, and every holder of that link loses
     access at once. A grantee who came through the link keeps access unless
     the owner ticks the confirmation's one checkbox, "also remove the N people
@@ -1089,11 +1112,13 @@ the republish it already does.
     the via-link reference (ADR 0024 D3).
   - **One revoke is one cut**: every row it removes leaves in one cut set,
     with one cut-epoch step and one rotation (D4).
-  - **Any owner device** revokes: it reads the person's encryption key from
-    the owner-signed ledger row after the row signature verifies. An
-    owner-signed commitment that commits the person again, at a cut epoch not
-    below the cut this device recorded, clears this device's local cut for
-    that person (D3).
+  - **Any owner device** revokes: it finds the person's rows through the
+    owner-attested ledger row, and names the recipient key from the commitment
+    entry (ADR 0032 D2). For a row whose label the owner did not attest, it
+    matches the encryption subkey that this device's contact book binds to the
+    identity against the commitment entry. An owner-signed commitment that
+    commits the person again, at a cut epoch not below the cut this device
+    recorded, clears this device's local cut for that person (ADR 0025 D3).
   - The removed side sees one of three messages, chosen by whether its
     bookmark reads as a link holder or as a grantee (D5): "The owner removed
     you" (a grantee finds no blob at the personal tag), "The link expired"
@@ -1277,11 +1302,14 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   Refresh is single-flight with one retry-then-fail on 401 (judgment).
 - **Surface consumed** (mirrors api.md): auth/refresh (+ staging-only
   test-login), batch register `[{ipnsName, headCid?, contentCids[]}]` and
-  batch retire, quota query (`advisory: true` for BYO), hosted upload, mailbox
+  batch retire `[{ipnsName?, targets[]}]`, quota query (`advisory: true` for BYO), hosted upload, mailbox
   post/poll/ack, recovery fetch, the account BYO toggle, account hard-delete.
 - Register-first ordering is built into the publish pipeline, not left to
   callers. Quota enforcement lives on the API upload endpoint (FSM1/cipher-box-next#34 D1); a
   pre-flight quota-query check to fail fast before bytes move is judgment.
+- The drain dead-letters a registry or upload refusal only on the gate's own
+  `code`; a 400 or 413 without it is charged against the attempt budget
+  (ADR 0046).
 
 ## Content plane
 
@@ -1290,11 +1318,13 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   every mode's publish flow still traverses registration. `ByoIpfsConfig`
   stays sealed in vault settings; provider connection testing is engine-side
   over the Http seam (the TEE tester is gone).
-- **Dispatch is concrete over the Http seam, and only content versions
-  dispatch.** A record head block always takes the hosted path — the record
-  plane's publish compares the ingress's returned address against the head
-  block's own, and the republisher re-PUTs from the hosted store — so
-  placement decides a version's blocks, not a record's.
+- **Dispatch is concrete over the Http seam, and every block of a record
+  dispatches by placement** (ADR 0029 D1). The head block goes where a content
+  version goes: to the hosted store under `Hosted`, to both legs under `Dual`,
+  and to the member's own node only under `External`. On every leg the record
+  plane's publish compares the address the leg returns against the head block's
+  own, and a mismatch publishes nothing. The republisher re-PUTs the signed
+  record from its own cache and never reads the head block.
   - The byte destinations a mode names are exactly what the provider's API
     supports. Kubo takes bytes under the caller's own address (`block/put`
     with the CID's multicodec and the frozen `blake3`/32 framing) and the
@@ -1306,7 +1336,7 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
     placement refusal** — no leg would hold the block for the service to
     fetch, so the published record would name bytes that exist nowhere.
   - **Dual runs both legs, both retrying inside the op, and only hosted can
-    fail it** (FSM1/cipher-box-next#34 D1). Under strict-FIFO stop-at-first-failure a
+    fail it** (ADR 0029). Under strict-FIFO stop-at-first-failure a
     both-must-succeed rule would let an offline home node stall every later
     mutation in the vault, so the op completes once hosted succeeds and
     external has either succeeded or exhausted its attempts. That budget is
@@ -1362,7 +1392,7 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   be authoritative — the API upload endpoint stays the enforcement — so an
   unreachable or unconfigured API leaves the write to queue offline like any
   other, while a placement that cannot be authenticated refuses it.
-- **BYO endpoint policy** (#905): one gate over the whole config, applied
+- **BYO endpoint policy** (#905, ADR 0029): one gate over the whole config, applied
   identically to a member-typed config and to one resolved back off the
   network, and release-active on the encode side so nothing is published that
   the reader would refuse. The rules: an absolute `http(s)` URL whose
@@ -1411,12 +1441,11 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   engineering judgment: the engine frames content into fixed-size chunks,
   seals each with core's content-seal primitive (fresh random per-version
   content key, FSM1/cipher-box-next#26 D6), and assembles a DAG addressed by the version's
-  `contentCid`, shaped so ranged block/CAR fetches map chunk-aligned.
-  The framing is frozen (#820) and pinned by the
-  engine KAT manifest: the 1 MiB budget belongs to the **block**, so a
-  1,048,536-byte plaintext chunk seals to a 1 MiB leaf; the DAG is a flat root
-  carrying an explicit format version, whose inlined link list caps a single
-  file at ~107.78 GiB.
+  `contentCid`, shaped so ranged block/CAR fetches map chunk-aligned. The
+  framing is frozen (ADR 0038) and pinned by the engine KAT manifest: the 1 MiB
+  budget belongs to the **block**, so a 1,048,536-byte plaintext chunk seals to
+  a 1 MiB leaf; the DAG is a flat root carrying an explicit format version,
+  whose inlined link list caps a single file at ~53.89 GiB.
 - **Version retention is count-based and clock-free.** A vault keeps the newest
   `keepLatestVersions` versions of a file; the default before the member chooses
   is ten. The rule is enforced where history grows — the content publish
@@ -1429,7 +1458,8 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   under the file's own name on each publish, so orphan GC leaves it alone. A
   version that falls outside the rule loses that reference, and what it owes the
   registry is journaled to the retire ledger before the shortened history
-  publishes.
+  publishes. A write-rotation name wave registers every version's root and
+  leaves at the node's new name before the record moves (ADR 0047).
 - **Shortening history acts only on a member choice.** It retires bytes and
   cannot be undone, so a device whose settings load carried no member choice
   keeps every version rather than applying the documented default — the same
@@ -1456,19 +1486,20 @@ render, they never decide.
 
 ## Open edges
 
-- **Migration-window closure** — how long the old scope-root name lingers
-  serving the tombstone before retire. FSM1/cipher-box-next#38 fixed the channel architecture but
-  not the window. It has landed as the sync-timing-profile constant
+- **Migration-window closure** — how long the old scope-root name lingers before
+  retire. FSM1/cipher-box-next#38 fixed the channel architecture but not the
+  window. It has landed as the sync-timing-profile constant
   `migration_window`, carrying a placeholder; two halves remain — its measured
   value, from the testing-strategy blueprint's cross-client latency measurement
   job, and a durable record of the re-point publish instant for
   `root_retire_ready` to measure the window from.
 - **Designed-for seams, deliberately unbuilt in v2.0**: push overlay (API
   WebSocket hints or desktop PubSub), whose handler forces a pass through
-  `Command::ManualRefresh` (FSM1/cipher-box-next#33 D1);
-  desktop embedded DHT behind `RecordTransport` (FSM1/cipher-box-next#23 D2); decentralized inbox
-  behind `Mailbox` (FSM1/cipher-box-next#25 D2); the re-signer wrapped-key enrollment channel
-  (FSM1/cipher-box-next#24 D4); scheduled hygiene rotation (FSM1/cipher-box-next#26 D7).
+  `Command::ManualRefresh` (FSM1/cipher-box-next#33 D1, ADR 0044); desktop
+  embedded DHT behind `RecordTransport` (FSM1/cipher-box-next#23 D2);
+  decentralized inbox behind `Mailbox` (FSM1/cipher-box-next#25 D2); the
+  re-signer wrapped-key enrollment channel (FSM1/cipher-box-next#24 D4);
+  scheduled hygiene rotation (FSM1/cipher-box-next#26 D7).
 - **Worker packaging, RPC facade, tab leadership** →
   [web client blueprint](https://github.com/FSM1/cipher-box-next/issues/45);
   FUSE adapter over the facade → desktop blueprint; contract tests and the

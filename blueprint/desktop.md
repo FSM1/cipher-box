@@ -22,12 +22,12 @@ The desktop app is the engine's **native host**: `apps/desktop` links
 `crates/engine` directly in the Tauri process and owns login, lifecycle, tray,
 and updater; `crates/fuse` projects the engine's snapshot state as a mounted
 filesystem and translates kernel operations into facade commands. The FS layer
-is a **projection, not a second brain**: it holds no keys, no publish
-machinery, no freshness policy, and no rotation logic — every trust and sync
-decision already happened below the facade (engine.md). Key material lives in
-engine memory only; the FS core maps inodes to stable node ids and moves
-plaintext bytes, which is its job — the mount is the plaintext trust terminus
-for the local OS.
+is a **projection, not a second brain**: it holds no key except the spill key
+of its own writes (ADR 0040), no publish machinery, no freshness policy, and no
+rotation logic — every trust and sync decision already happened below the
+facade (engine.md). Key material other than the spill key lives in engine memory only; the FS core maps
+inodes to stable node ids and moves plaintext bytes, which is its job — the
+mount is the plaintext trust terminus for the local OS.
 
 What dies relative to v1 — with the design that killed it:
 
@@ -67,8 +67,8 @@ headless e2e seam.
   model, the vfs-operation surface, read/write paths over the facade, and one
   adapter per mount technology (FUSE-T SMB, Linux FUSE, WinFsp; FSKit
   successor). Depends on the engine facade only — no transport or API access,
-  and the one direct use of `crates/core` is the AEAD the spill file seals
-  under, since the FS core never implements crypto of its own.
+  and the one cryptographic use of `crates/core` is the AEAD the spill file
+  seals under (ADR 0040), since the FS core never implements crypto of its own.
 
 ## Engine wiring
 
@@ -85,7 +85,7 @@ as web's IndexedDB stores; a stolen disk yields sealed bytes only.
 | **Scheduler**       | Tokio — timers, background tasks, wall clock                                                                                                                                                                                      |
 | **StagingStore**    | The v1 write journal generalized: one durable record per op (JSON or CBOR row + fsync barrier), sidecar files for staged ciphertext, `.json`-before-`.bin` removal ordering, orphan-sidecar GC. Covers **all** mutations, not two |
 | **SnapshotCache**   | Sealed record/metadata cache files in the data dir; unsealed in the engine on read                                                                                                                                                |
-| **CredentialStore** | OS keychain (`keyring`), one service name; stores the refresh token, the last-account id, and the key that seals the login SDK's Core Kit store — never a seed, and never a key in the KDF catalog                                |
+| **CredentialStore** | OS keychain (`keyring`), one service name; stores the refresh token, the last-account id, and the key that seals the login SDK's Core Kit store — never a seed, and never a key in the KDF catalog (ADR 0039)                     |
 
 The facade is called directly (in-process async Rust) — no RPC layer, no
 worker, no tab leadership; the single-writer invariant is free on desktop
@@ -119,11 +119,11 @@ The adapter trait carries, in each direction:
 
 ### Backends
 
-|              | macOS                                                                                                                     | Linux                                                     | Windows                  | macOS successor                                                                                                           |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| Backend      | **FUSE-T ≥ 1.2.7, SMB backend** — NFS abandoned unconditionally (FSM1/cipher-box-next#32)                                 | kernel FUSE via vendored `fuser` (MSG_PEEK patch carried) | **WinFsp** (MSI bundled) | **FSKit** module once macOS 27 is stable: Swift appex shell delegating into the shared FS core                            |
-| Invalidation | SMB-backend invalidation (added 1.2.1) — **mount with `noattrcache`**, verified on hardware (`tools/hw-gates/RESULTS.md`) | `inval_inode`/`inval_entry`                               | WinFsp notify API        | `FSVolume.DataCacheHandler`                                                                                               |
-| Status       | ship v2.0                                                                                                                 | ship v2.0                                                 | ship v2.0                | designed-for; FSKit spike **passed** on macOS 27 (`tools/hw-gates/fskit-spike/RESULTS.md`) — successor timeline unblocked |
+|              | macOS                                                                                                                               | Linux                                                     | Windows                                                                      | macOS successor                                                                                                           |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Backend      | **FUSE-T ≥ 1.2.7, SMB backend** — NFS abandoned unconditionally (FSM1/cipher-box-next#32)                                           | kernel FUSE via vendored `fuser` (MSG_PEEK patch carried) | **WinFsp** (member-installed; the installer bundles and downloads no WinFsp) | **FSKit** module once macOS 27 is stable: Swift appex shell delegating into the shared FS core                            |
+| Invalidation | SMB-backend invalidation (added 1.2.1) — **mount with `noattrcache`**, verified on hardware (`tools/hw-gates/RESULTS.md`; ADR 0040) | `inval_inode`/`inval_entry`                               | WinFsp notify API                                                            | `FSVolume.DataCacheHandler`                                                                                               |
+| Status       | ship v2.0                                                                                                                           | ship v2.0                                                 | ship v2.0                                                                    | designed-for; FSKit spike **passed** on macOS 27 (`tools/hw-gates/fskit-spike/RESULTS.md`) — successor timeline unblocked |
 
 **Windows licensing.** WinFsp and the winfsp-rs binding the adapter is built on
 are GPLv3, so the Windows build is a combined work distributed under GPLv3, with
@@ -131,7 +131,8 @@ WinFsp's commercial licence as the alternative. Two conditions ride with that an
 are part of the backend, not paperwork beside it: the notice **"WinFsp - Windows
 File System Proxy, Copyright (C) Bill Zissimopoulos"** and a pointer to
 <https://github.com/winfsp/winfsp> are shown in the desktop UI and stated in
-`docs/ATTRIBUTION.md`, and no proprietary software is bundled alongside WinFsp.
+`docs/ATTRIBUTION.md`, and no proprietary software is bundled alongside WinFsp
+(ADR 0051).
 
 macFUSE stays rejected (kext install friction, license, fuser ABI divergence);
 File Provider stays a fallback-only note (its plaintext replica is an E2EE
@@ -180,12 +181,14 @@ there is no `block_on` freeze of the whole mount behind one slow call.
 - **write** — bytes land in a per-handle **sealed spill file**: XChaCha20
   under a random per-handle key held only in engine/FS memory, in the engine
   data dir. A crash leaves ciphertext whose key died with the process — the v1
-  plaintext `cb-write-*` exposure class is gone (judgment; the zero-overwrite
+  plaintext `cb-write-*` exposure class is gone (ADR 0040; the zero-overwrite
   cleanup papers over what this closes structurally).
-- **release** (and create/mkdir/rename/unlink/rmdir) — becomes exactly one
-  facade intent op (`updateContent`, `create`, `move`, `delete`). A kernel
-  rename is one `move`, which carries the relink, the rename, and the
-  destination it replaces, so a replace is never observable half-done.
+- **release** (and create/mkdir/rename/unlink/rmdir) — becomes one facade
+  command (`updateContent`, `create`, `move`, `delete`). A kernel rename is one
+  command: one `move`, which carries the relink, the rename, and the
+  destination it replaces, or, for a relocation between two interior scopes, a
+  parking leg and an arriving leg that are journaled together or not at all, so
+  a replace is never observable half-done (ADR 0045).
   The kernel is acked when the op is **journaled durably in the StagingStore**
   — the v1 INV-1 no-false-ack discipline, now uniform across every mutation
   instead of two. Everything after the ack (seal, upload, publish, CAS rebase)
@@ -195,7 +198,7 @@ there is no `block_on` freeze of the whole mount behind one slow call.
   (`OverBudgetCause`), so the offline staging budget running out (FSM1/cipher-box-next#33 D6
   fail-fast) is `ENOSPC` and a hosted-quota refusal is `EDQUOT` — v1 returned
   neither, and collapsing both into "disk full" tells the user to free space on
-  the wrong machine.
+  the wrong machine (ADR 0040).
 - **Deletes** ride the engine's delete op; recycle-bin semantics (FSM1/cipher-box-next#5) are
   vault-level engine behavior. The bin is not projected into the mount in
   v2.0; restore/purge live in the web UI and the tray's "Open CipherBox".
@@ -224,10 +227,11 @@ Desktop drives the **same sync core** as web, from FUSE traffic instead of
 navigation (FSM1/cipher-box-next#33 D2):
 
 - Every lookup/readdir/getattr checks the target's snapshot age against the
-  sync timing profile's staleness threshold; a stale hit forces a pass for that
-  node — this is the **FUSE-op TTL check**, the desktop analog of route
-  navigation. Network reconnect, tray "Sync Now", and wake-from-sleep force one
-  the same way, through `Command::ManualRefresh`.
+  sync timing profile's staleness threshold; a stale hit puts the node in the
+  focus window, and the next tick refreshes it, so no kernel callback waits on
+  the network (ADR 0044) — this is the **FUSE-op TTL check**, the desktop
+  analog of route navigation. Network reconnect, tray "Sync Now", and
+  wake-from-sleep force a pass through `Command::ManualRefresh` (ADR 0044).
 - The **focus window** is derived from the op stream: folders with FUSE
   traffic inside the profile's focus horizon count as "open", and the 30 s
   tick refreshes them plus their ancestor chains and the vault pointer —
@@ -245,7 +249,10 @@ navigation (FSM1/cipher-box-next#33 D2):
   identity-linked one. Names, kinds, sizes and bodies stay sealed.
   `MAX_FOCUS_FILES` bounds the burst **per tick**; an entry it evicts unresolved
   is re-queued on the next stat, so a large directory's full sibling set still
-  reaches the endpoints across a browsing session.
+  reaches the endpoints across a browsing session. A folder in view also queues
+  every file child that projects no size, and a `lookup` that returns such a
+  file queues it, so a listing emits the burst with no stat at all; the same
+  `MAX_FOCUS_FILES` bound charges it (ADR 0040).
 - When a background reconcile lands a new snapshot, the engine event stream
   drives the **push-invalidation callback**, and the kernel's next access
   re-reads through the adapter — replacing dir-TTL-0, drain choreography, and
@@ -259,7 +266,7 @@ navigation (FSM1/cipher-box-next#33 D2):
   floor and unbounded staleness for cached data), and every remote change
   must fire push invalidation (uninvalidated cached data never
   revalidates). The smbfs client ignores FUSE reply TTLs entirely on this
-  backend.
+  backend (ADR 0040).
 
 ## Tauri shell
 
@@ -275,7 +282,7 @@ navigation (FSM1/cipher-box-next#33 D2):
   collector and its own start facade — `LoginFacade` is `{ start, logout }`, over
   Tauri IPC here. It does **not** take `packages/client` — the worker, leadership
   and Service Worker machinery has no place here.
-- **The auth surfaces are shared through `packages/auth-ui`**: the
+- **The auth surfaces are shared through `packages/auth-ui`** (ADR 0039): the
   login form, the phrase prompt and the error banner are React components both
   hosts mount, parameterised over the host's own actions. Each host keeps its
   own theme and its own wiring; neither keeps a second implementation of a
@@ -299,11 +306,11 @@ navigation (FSM1/cipher-box-next#33 D2):
 - **Device approval is requester-only through the cutover.** Approval itself
   always happens in a web session, so this window offers no approver affordance
   and its copy says where factors and approval are managed. Enrollment is
-  web-only for the same reason (ADR 0009 consequence 5). The approver role
-  arrives after v2.0 by reusing the web app's components, never by a second
-  implementation — v1 shipped a requester UI that could never work beside a
-  settings string saying MFA was web-only, and the affordance and the truth have
-  to agree.
+  web-only for the same reason (ADR 0009 consequence 5; ADR 0039). The approver
+  role arrives after v2.0 by reusing the web app's components, never by a
+  second implementation — v1 shipped a requester UI that could never work
+  beside a settings string saying MFA was web-only, and the affordance and the
+  truth have to agree.
 - **Tray** renders the event stream: the staleness ladder maps to
   `Synced / Reconciling / Stale / Offline`, dead-letters to the parked-writes
   state (edge-triggered notifications, v1's anti-spam watermark kept), trust
@@ -350,7 +357,7 @@ the headless harness entry.
   gate 4): bundling in the app requires a negotiated commercial license
   from the author (no published pricing; <alex@fuse-t.org>); user-installed
   FUSE-T is the free interim path. Negotiation must close before v2.0
-  ships with a bundled FUSE-T.
+  ships with a bundled FUSE-T (ADR 0051).
 - **Dead-letter recovery UX** — the tray surface and "recovered files" export
   shape; settle alongside the failover/offline e2e work
   ([#47](https://github.com/FSM1/cipher-box-next/issues/47)).
@@ -364,4 +371,5 @@ the headless harness entry.
   ([#47](https://github.com/FSM1/cipher-box-next/issues/47)).
 - **Designed-for, deliberately unbuilt**: FSKit adapter (above); desktop
   embedded DHT behind RecordTransport (FSM1/cipher-box-next#23 D2); desktop PubSub push, whose
-  handler forces a pass through `Command::ManualRefresh` (FSM1/cipher-box-next#33 D1).
+  handler forces a pass through `Command::ManualRefresh`
+  (FSM1/cipher-box-next#33 D1, ADR 0044).
