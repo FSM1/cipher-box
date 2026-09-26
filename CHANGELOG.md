@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.7.0](https://github.com/FSM1/cipher-box/compare/v2.6.0...v2.7.0) (2026-09-26)
+
+
+### Features
+
+* **api:** report whether the mailbox delete removed the item ([#1981](https://github.com/FSM1/cipher-box/issues/1981)) ([425e728](https://github.com/FSM1/cipher-box/commit/425e728f93c727ff035e94a221af69dad9681aa5))
+* **core:** add the link fields, the named ledger row and the key fingerprint ([#1983](https://github.com/FSM1/cipher-box/issues/1983)) ([2b67ada](https://github.com/FSM1/cipher-box/commit/2b67adaf1e727af94ca04b61c3b8da87b55764c3))
+* **engine:** append a grant or a link to a shared scope and change a grantee permission ([#1987](https://github.com/FSM1/cipher-box/issues/1987)) ([dacb46d](https://github.com/FSM1/cipher-box/commit/dacb46d80b388e93712909e40d24535abdedf4ff))
+* **engine:** mint a read link entry and read the folder through the scope pointer ([#1986](https://github.com/FSM1/cipher-box/issues/1986)) ([026f298](https://github.com/FSM1/cipher-box/commit/026f298c4a275d301f2a91ee816e311122c8247f))
+* **engine:** post the claim until the deadline and convert it ack first on any owner device ([#1988](https://github.com/FSM1/cipher-box/issues/1988)) ([5492e98](https://github.com/FSM1/cipher-box/commit/5492e98803b34a0f6b7bd11f6e710794d9025bfd))
+* **engine:** preview a link before join with nothing persisted and nothing posted ([#1991](https://github.com/FSM1/cipher-box/issues/1991)) ([a4c3cbb](https://github.com/FSM1/cipher-box/commit/a4c3cbbccba6a68e8160ceff9939f1e763720acf))
+* **engine:** revoke links and people under the link-first model and sweep expired links ([#1989](https://github.com/FSM1/cipher-box/issues/1989)) ([8baea3c](https://github.com/FSM1/cipher-box/commit/8baea3c45221d61083508d5269ff597bdf134316))
+* **web:** make the link the main path of the share dialog ([#1993](https://github.com/FSM1/cipher-box/issues/1993)) ([9ceec6e](https://github.com/FSM1/cipher-box/commit/9ceec6e12e87dffa3ae4b83d47685301c1965187))
+* **web:** preview an invite link before join ([#1994](https://github.com/FSM1/cipher-box/issues/1994)) ([53191d9](https://github.com/FSM1/cipher-box/commit/53191d913eda7501644f47a72b8089321c22b46e))
+
+
+### Bug Fixes
+
+* **client:** serialize access to one staged file behind one handle ([#2001](https://github.com/FSM1/cipher-box/issues/2001)) ([aa9376e](https://github.com/FSM1/cipher-box/commit/aa9376eea8dce7c350abb536d138d7b1d3c6ad54))
+* **engine:** repair the stale roots the link-first e2e found on both sides ([#2026](https://github.com/FSM1/cipher-box/issues/2026)) ([28e8062](https://github.com/FSM1/cipher-box/commit/28e806252a395e010504e68b80ef7932d6c24fe8))
+* **engine:** report a rejected root assembly on the refresh paths and key a link origin by its identity ([#1999](https://github.com/FSM1/cipher-box/issues/1999)) ([12e180f](https://github.com/FSM1/cipher-box/commit/12e180fb57f4f4674c74c868dc662c3014b27c74))
+* **engine:** sign a publish strictly above the sequence the drain observed ([#1982](https://github.com/FSM1/cipher-box/issues/1982)) ([b4b8fe5](https://github.com/FSM1/cipher-box/commit/b4b8fe5729c604501f9bcf81d0ef8f2828049d10))
+
 ## [2.6.0](https://github.com/FSM1/cipher-box/compare/v2.5.0...v2.6.0) (2026-09-24)
 
 
