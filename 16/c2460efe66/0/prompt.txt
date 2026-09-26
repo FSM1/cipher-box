@@ -1,0 +1,45 @@
+<task-notification>
+<task-id>bageyrugw</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1bc4f48e-3cea-46dc-9862-0522f68dd410/tasks/bageyrugw.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the CI checks on the docs PR to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adae652a4bbe9e5b1</task-id>
+<tool-use-id>toolu_011efTqKsjptcqYLdjnnG7uf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1bc4f48e-3cea-46dc-9862-0522f68dd410/tasks/adae652a4bbe9e5b1.output</output-file>
+<status>completed</status>
+<summary>Agent "Review the blueprint reword diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: FIX 8.** Six of the findings are outside the diff. The diff made them contradict text that it changed for ADRs 0040, 0041 and 0050. The full report is at `/Users/myankelev/.claude/scratch/close-635/reword/review-diff.md`, and it gives the exact replacement text for each finding.
+
+**Checks**
+- **ADR fidelity:** `core.md` and `engine.md` are clean. All other findings come from this check.
+- **Rewrap word loss or duplication:** Clean in all files. Each deleted word comes back, or an ADR removes it.
+- **Added `#NNNN` references, absence sentences, "code does not yet" phrases:** Clean. The two added "not yet proved" phrases are ADR 0045 wording, not code-lag phrases.
+- **CONTEXT.md terms:** Clean.
+- **Coverage (10 random picks):** 8 landed. 2 are out of scope by ruling 12, because 0039 C5 and 0047 C4 amend older ADRs. None are missing.
+
+**Findings**
+1. **`web-client.md`, "Engine hosting and tab leadership":** "is D4's" now comes after "ADR 0037", so a reader takes it as ADR 0037 D4. The invariant is #28 D4. Change it to "is FSM1/cipher-box-next#28 D4's".
+2. **`web-client.md`, Http row:** "(ADR 0037)" is on the `credentials` clause. ADR 0037 consequence 8 says that clause is not a decision of the ADR. Move the citation to "the request deadline (ADR 0037 D7)".
+3. **`CONTEXT.md`, "Root linger":** it still says the old name serves a `movedTo` record. ADR 0041 D6 and alternative (c) say that no `movedTo` record exists. Remove "serving the owner-signed `movedTo` record".
+4. **`api.md`, bullet "Interior fast, root lingers":** it has the same `movedTo` clause. Remove it.
+5. **`api.md`, Mailbox lead paragraph:** it still lists "write-rotation root re-points" and the `movedTo` record. ADR 0041 D6 says no re-point goes to the mailbox. Replace the text with "(share pointers, claims, courtesy notifications) ... root migration uses the scope pointer (ADR 0041 D6)".
+6. **`api.md`, Open edges:** change "`movedTo` migration-window length" to "Migration-window length".
+7. **`desktop.md`, Doctrine paragraph:** the new clause "no key except the spill key (ADR 0040)" now contradicts the old sentence "Key material lives in engine memory only". Change it to "Key material other than the spill key lives in engine memory only".
+8. **`deploy.md`, Open edges:** the "Nightly cost tuning" bullet still allows a trim to a rotation. ADR 0050 D7 and alternative (d) reject this. Delete the bullet.
+
+The ADR 0041 consequence 3 list did not name the places in findings 3 to 6, so the extract missed them.
+
+**Notes (not counted)**
+- **`testing.md`, contract suite:** the diff deletes "pending-cap reject-new". ADR 0048 E5 says the contract suite has no such test, so the deletion is correct. But extract-d marks the item "Skipped", and DECISIONS.md has no ruling on it. Add a ruling line to DECISIONS.md, and keep the deletion.
+- **`core.md`, line 234 (not in the diff):** "only what the uncuttable fields alone overflow is refused" omits the typed fields that ADR 0042 D1 names. A replacement is optional and is in the report.
+
+I made no git writes and no repo edits.</result>
+<usage><subagent_tokens>86929</subagent_tokens><tool_uses>21</tool_uses><duration_ms>261592</duration_ms></usage>
+</task-notification>

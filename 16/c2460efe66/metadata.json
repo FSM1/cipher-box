@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "16c2460efe66",
+  "strategy": "manual-commit",
+  "branch": "docs/blueprint-rewords-adr-0029-0051",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "CONTEXT.md",
+    "blueprint/api.md",
+    "blueprint/core.md",
+    "blueprint/deploy.md",
+    "blueprint/desktop.md",
+    "blueprint/web-client.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/16/c2460efe66/0/metadata.json",
+      "transcript": "/16/c2460efe66/0/full.jsonl",
+      "compact_transcript": "/16/c2460efe66/0/transcript.jsonl",
+      "content_hash": "/16/c2460efe66/0/content_hash.txt",
+      "prompt": "/16/c2460efe66/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 164,
+    "cache_creation_tokens": 7707,
+    "cache_read_tokens": 2580793,
+    "output_tokens": 3473,
+    "api_call_count": 7
+  }
+}
