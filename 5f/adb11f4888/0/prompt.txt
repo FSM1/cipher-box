@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>a9446a5c12bc1c78e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1bc4f48e-3cea-46dc-9862-0522f68dd410/tasks/a9446a5c12bc1c78e.output</output-file>
+<status>completed</status>
+<summary>Agent "PR A: move ADRs into cipher-box" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I opened draft PR #2030: https://github.com/FSM1/cipher-box/pull/2030. The branch is `docs/move-adrs-into-decisions` and has one commit, `cc3540a4f`. The commit body gives the source sha 68909ec. The hook added the `Entire-Checkpoint` trailer and I kept it. The PR body has no attribution line and ends with `@coderabbitai ignore`.
+
+**Files copied:** 51 ADRs, flat, into `decisions/`. I also added `decisions/README.md`, which has a header and an index table with 51 rows.
+
+**Links changed to relative paths:** 139 in total.
+
+| Group | Links | Detail |
+|---|---|---|
+| `decisions/` | 84 | in 28 files |
+| Root files | 10 | `CONTEXT.md` 9, `AGENTS.md` 1 |
+| `blueprint/` | 39 | `engine.md` 19, `web-client.md` 7, `api.md` 5, `core.md` 5, `desktop.md` 2, `testing.md` 1 |
+| `docs/SHARING.md` | 6 | |
+
+**Lint errors fixed by hand:** 5, as you expected.
+- MD040 in 0001, 0005 (two) and 0007. The code fences now have the language `text`.
+- MD018 in 0008. A line started with `#28 D5`, and that text is now a link to cipher-box-next issue 28.
+
+Prettier also made changes that do not change the rendered text: `*x*` became `_x_`, table columns were aligned, and some continuation lines lost their indent.
+
+**Checks:**
+- `markdownlint` and `prettier --check` pass on the full set, and I included `README.md`.
+- `pnpm lint:tracker-refs` passes.
+- The link check read 81 files and found 268 relative links, with 0 misses. The script is `/tmp/adr-linkcheck.mjs`.
+- No tracked `.md` file contains `cipher-box-next/blob`.
+
+**Changes outside the brief:**
+1. ADR 0031 linked to an old file name of ADR 0030 that no longer exists. The link now uses the current file name.
+2. The link check first found 4 misses in the old v1 docs: 3 in `docs/TESTING.md` to `tests/TESTING_STRATEGY.md`, and 1 in `docs/ARCHITECTURE.md` to `apps/tee-worker/src/index.ts`. v2 deleted both target files. The links now point to the `v1` branch on GitHub, where both files exist. I did this to get 0 misses.
+3. The root `README.md` said "ADRs … live in FSM1/cipher-box-next". I changed it the same way as the `docs/*.md` files.
+4. `blueprint/core.md` said "FSM1/cipher-box-next ADR 0015" and "FSM1/cipher-box-next ADR 0006". These now say "ADR 0015" and "ADR 0006".
+5. The releases skill line now links to `blueprint/deploy.md` in this repo.
+
+**AGENTS.md:** The table has the new `decisions/` row. The paragraph under the table now gives the in-repo path and says the archive is read-only. The tracker-refs exemption now also says that the corpus is archived. A new "ADR Process" section follows "Mandatory PR Review Flow". The text of that section is one paragraph.
+
+**Status values:** ADR 0006 has the status "Implemented". That status is not in your list, so the README header lists it as a status form. The other 50 ADRs are "Accepted" (21), "Accepted on 2026-09-25" (6) or "Accepted on 2026-09-26" (23).
+
+**Not done:** No `.rs`, `.ts`, `.mjs` or `.yml` file changed. The 10 Rust comment links and the tracker-refs script comment go to the chore PR. I did not stage the untracked `designs/inventory/` or `tests/web-e2e/staging/wave-timing.spec.ts`.</result>
+<usage><subagent_tokens>92004</subagent_tokens><tool_uses>34</tool_uses><duration_ms>346085</duration_ms></usage>
+</task-notification>
