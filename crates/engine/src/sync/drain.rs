@@ -759,7 +759,7 @@ fn bin_expiry_cutoff(now: UnixMillis, retention_days: Option<u32>) -> Option<u64
 ///
 /// A binned subtree takes no ordinary write and joins no eager set, so a scope
 /// rotation can leave it sealed at an epoch the gate refuses for good
-/// (FSM1/cipher-box-next ADR 0011) and no wave ever lifts it. Left uncharged —
+/// (ADR 0011) and no wave ever lifts it. Left uncharged —
 /// unclassified, or held for that wave — such a read would hold the strict-FIFO
 /// head for every pass thereafter, and the expiry sweep queues these ops without
 /// an owner command. Charged, the op spends its attempt budget and dead-letters,

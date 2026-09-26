@@ -215,9 +215,7 @@ pub struct Resolved {
     /// The read-body an own [`ResolveOutcome::Current`] root carries, recovered
     /// at the floor by the same stages an adopt runs. A quarantine release rests
     /// on an absence a poll of this session established, so a root that resolves
-    /// `Current` must still paint the base
-    /// ([ADR 0011](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0011-quarantine-release-rests-on-the-doomed-manifest.md)
-    /// D4).
+    /// `Current` must still paint the base (ADR 0011 D4).
     pub current_at_floor: Option<Adopted>,
 }
 

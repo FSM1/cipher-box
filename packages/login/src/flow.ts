@@ -57,7 +57,7 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
   recoverWithPhrase(phrase: string): Promise<void>;
   /**
    * Finishes such a login from the factor another device sealed back instead
-   * (FSM1/cipher-box-next ADR 0009 D3). The caller owns the bytes and erases
+   * (ADR 0009 D3). The caller owns the bytes and erases
    * them.
    */
   completeDeviceApproval(factorKey: Uint8Array): Promise<void>;

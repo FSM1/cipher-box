@@ -9516,10 +9516,9 @@ where {
     }
 
     /// Append a share of `node` to the scope root `target` it already names
-    /// ([ADR 0026](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0026-a-scope-root-takes-many-grants.md)
-    /// D1): one row, the commitment re-signed, and one publish of the root at
-    /// its current epoch. The grantee reads the whole history of the scope
-    /// (D6).
+    /// (ADR 0026 D1): one row, the commitment re-signed, and one publish of
+    /// the root at its current epoch. The grantee reads the whole history of
+    /// the scope (D6).
     ///
     /// A direct grant to a grantee the set already holds is a permission change
     /// (D4); at the permission they hold it re-posts their share pointer, so a

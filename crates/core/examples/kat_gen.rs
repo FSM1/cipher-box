@@ -1184,7 +1184,7 @@ struct EciesMeta {
 }
 
 /// The primitive-internal key-schedule contexts, frozen here rather than in
-/// the edge string table (FSM1/cipher-box-next ADR 0015 D3).
+/// the edge string table (ADR 0015 D3).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EciesContexts {
@@ -4419,8 +4419,8 @@ fn build_hpke_open_reject() -> Vec<HpkeOpenRejectVector> {
 }
 
 // ---------------------------------------------------------------------------
-// ECIES vectors: the device-approval rendezvous seal (FSM1/cipher-box-next ADR
-// 0009 D3/D5). Fixed-ephemeral full-envelope seals, plus the open rejects.
+// ECIES vectors: the device-approval rendezvous seal (ADR 0009 D3/D5).
+// Fixed-ephemeral full-envelope seals, plus the open rejects.
 // ---------------------------------------------------------------------------
 
 /// A fixed ECIES seal case: name, ephemeral scalar, aad, plaintext.
@@ -9165,7 +9165,7 @@ fn content_key_reject_vector(
 // ephemeral, so every blob is byte-reproducible; the clear header is the AAD,
 // so a header swap fails at the AEAD tag rather than merely mismatching, and
 // the store kind is a key-schedule input, so a cross-kind open is a decryption
-// failure rather than a parse failure (FSM1/cipher-box-next ADR 0006).
+// failure rather than a parse failure (ADR 0006).
 // ===========================================================================
 
 /// The frozen owner enc subkey the owner-local vectors seal to, and its scalar.

@@ -1,4 +1,4 @@
-//! The device registry and the device-approval rendezvous (FSM1/cipher-box-next ADR 0009).
+//! The device registry and the device-approval rendezvous (ADR 0009).
 //!
 //! Everything two hosts and the API must agree on byte for byte: the three
 //! signed payloads, the out-of-band comparison value D3 rests on, and the
@@ -510,7 +510,7 @@ pub fn rendezvous_public_key(
 
 /// The factor envelope's additional authenticated data: the request it answers
 /// and the device that opened it, so an envelope lifted onto another rendezvous
-/// opens nothing (the binding FSM1/cipher-box-next ADR 0009 D4 puts on the signatures, applied to the
+/// opens nothing (the binding ADR 0009 D4 puts on the signatures, applied to the
 /// ciphertext as well).
 fn factor_aad(
     request_id: &str,

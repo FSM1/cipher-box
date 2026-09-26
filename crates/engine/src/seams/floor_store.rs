@@ -149,8 +149,8 @@ impl FloorRaise {
 ///
 /// Every sequence-namespace key takes the account's [`kdf::name_label`] before
 /// the tag, so the durable key is `ownerTag(32) ‖ nameLabel(32)` and names no
-/// record a reader of local storage could resolve (FSM1/cipher-box-next ADR
-/// 0016). The label is account-wide, not per-contact, so one name still keeps
+/// record a reader of local storage could resolve (ADR 0016).
+/// The label is account-wide, not per-contact, so one name still keeps
 /// one sequence ratchet whichever view raises it. The epoch namespace keeps its
 /// plain key: a scope id is sealed body content, not a public name.
 ///

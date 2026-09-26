@@ -1,5 +1,5 @@
 //! The bin index: one owner-sealed, vault-level record of every soft-deleted
-//! node (FSM1/cipher-box-next ADR 0010).
+//! node (ADR 0010).
 //!
 //! Published at an IPNS name the `bin-index-ipns-keypair` edge derives, and
 //! sealed symmetrically under the `bin-index-seal-key` edge, so the record

@@ -1,7 +1,7 @@
 //! ECIES over secp256k1 (blueprint/core.md "Crypto suite"), the one seal whose
 //! recipient key is a bare curve point rather than a CipherBox identity: the
 //! device-approval rendezvous relays a compressed secp256k1 ephemeral key and
-//! the approver seals a fresh factor to it (FSM1/cipher-box-next ADR 0009 D3/D5).
+//! the approver seals a fresh factor to it (ADR 0009 D3/D5).
 //!
 //! HPKE ([`super::hpke`]) cannot serve it: its KEM is DHKEM(X25519) and the
 //! rendezvous key is secp256k1, fixed by the API's own field constraint.
@@ -11,7 +11,7 @@
 //! XChaCha20-Poly1305. Binding the whole transcript into both derivations is
 //! what makes a substituted `enc` open nothing. This key schedule is internal
 //! to the primitive, in the same class as HPKE's — not a KDF-catalog edge
-//! (FSM1/cipher-box-next ADR 0015 D2).
+//! (ADR 0015 D2).
 //!
 //! Determinism (blueprint/core.md "Doctrine"): the sender's ephemeral scalar is
 //! an injected parameter, never sampled here.
@@ -31,7 +31,7 @@ pub const ENC_LEN: usize = 33;
 
 /// BLAKE3 `derive_key` contexts. Two distinct contexts over one transcript, so
 /// the AEAD key and the nonce cannot collide. The KAT manifest freezes both
-/// (FSM1/cipher-box-next ADR 0015 D3).
+/// (ADR 0015 D3).
 pub const KEY_CONTEXT: &str = "cipherbox/device-factor-seal/v1 aead-key";
 pub const NONCE_CONTEXT: &str = "cipherbox/device-factor-seal/v1 aead-nonce";
 

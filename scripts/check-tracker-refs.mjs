@@ -15,7 +15,8 @@ const SKIP = [/^apps\/web\/src\/wasm\//, /\/test\/browser\/pkg\//, /\/vendor\//]
 // every `#006644`. The lower one exempts the `#NN Dn` wayfinder citations: issue
 // numbers here share one ever-increasing counter with PRs, which passed 1000
 // long ago, so this repo can never mint another two-digit number and a bare
-// `#33` can only be FSM1/cipher-box-next. Do not lower it to `{1,`.
+// `#33` can only be FSM1/cipher-box-next. That corpus is archived; its ADRs
+// now live in `decisions/`. Do not lower it to `{1,`.
 const NUMBER = /#\d{3,5}(?![\da-fA-F])/g;
 
 // An `owner/repo`-qualified number names a durable decision record in another

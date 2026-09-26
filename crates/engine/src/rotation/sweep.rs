@@ -1,6 +1,5 @@
 //! The sweep — the idempotent lazy wave over a scope's **interior nodes**
-//! (blueprint/engine.md "sweep"; #26 D2, #38 D6,
-//! [ADR 0003](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
+//! (blueprint/engine.md "sweep"; #26 D2, #38 D6, ADR 0003).
 //!
 //! # Population
 //!
