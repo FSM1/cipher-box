@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "153aded16599",
+  "strategy": "manual-commit",
+  "branch": "chore/adr-0029-0051-comment-cites",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".github/workflows/ci-e2e.yml",
+    ".github/workflows/desktop-e2e.yml",
+    "crates/engine/src/content/limits.rs",
+    "crates/engine/src/content/read.rs",
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/grants/link_read.rs",
+    "crates/engine/src/net/retire.rs",
+    "crates/engine/src/net/rotation.rs",
+    "crates/engine/src/profile.rs",
+    "crates/engine/src/settings.rs",
+    "crates/engine/tests/write_plane.rs",
+    "packages/auth-ui/src/index.ts",
+    "packages/client/src/broadcast.ts",
+    "packages/client/src/leaderRelay.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/15/3aded16599/0/metadata.json",
+      "transcript": "/15/3aded16599/0/full.jsonl",
+      "compact_transcript": "/15/3aded16599/0/transcript.jsonl",
+      "content_hash": "/15/3aded16599/0/content_hash.txt",
+      "prompt": "/15/3aded16599/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 262,
+    "cache_creation_tokens": 23263,
+    "cache_read_tokens": 4187082,
+    "output_tokens": 9203,
+    "api_call_count": 11
+  }
+}

@@ -1,0 +1,15 @@
+<task-notification>
+<task-id>buwzfaoxh</task-id>
+<tool-use-id>toolu_01H48eGPwa1fViEobMqFGVXo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1bc4f48e-3cea-46dc-9862-0522f68dd410/tasks/buwzfaoxh.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI on the review-fix commit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+#2028 is merged
+
+---
+
+start both please
