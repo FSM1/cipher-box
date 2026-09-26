@@ -927,8 +927,8 @@ injected `now`. It first converts the pending claims, and it keeps the
 pending-op rule of "Invites" (ADR 0023 D4). The sweep depends on the two-device
 publish fix: the drain re-resolves the root through the gate just before it
 signs and signs above the highest sequence it observed, and a confirm that reads
-a sibling's record at its own sequence is a lost race the next pass rebases and
-signs above.
+a sibling's record at its own sequence is a lost race (#23 D4) the next pass
+rebases and signs above.
 
 ### Residuals (as amended by FSM1/cipher-box-next#38)
 
@@ -1032,7 +1032,7 @@ the republish it already does.
   own permission and lifetime. A direct grant to an existing grantee is a
   permission change when the permission differs, and nothing otherwise
   ("already has access"). A write grant on a folder that is not a write
-  scope yet runs the write-scope cut first (ADR 0025 D6).
+  scope yet runs the write-scope cut first (ADR 0024 D4, ADR 0026 C4).
   `grant-target-already-names-a-scope` and
   `invite-target-already-names-a-scope` retire for the append; D7 lists the
   refusals that stay.
@@ -1049,7 +1049,7 @@ the republish it already does.
   claim, then reads the scope through the link's grant blob; the read is
   best-effort and the tick retries it. The received-shares bookmark keeps the
   invite secret in the optional `linkSecret` key, and the list stays at
-  version 2 (ADR 0020 D3). The join runs these checks in order: the fragment
+  version 2 (ADR 0024 C1). The join runs these checks in order: the fragment
   decodes inside its 2048-byte bound → the fragment's owner contact code
   passes its binding verify → the engine resolves the scope pointer the
   fragment names, opens the re-point object under the fragment's
@@ -1079,7 +1079,7 @@ the republish it already does.
   and therefore dead to survivors — tombstones advisory only. Every
   write-grantee revoke, downgrade and D1 checkbox on a write grantee runs a
   name wave, so cheap, routinely-runnable write rotation stays a hard
-  requirement (ADR 0025 D6). Under the link-first model (ADR 0025):
+  requirement (ADR 0025 E6). Under the link-first model (ADR 0025):
   - **Revoke link** cuts the link row, and every holder of that link loses
     access at once. A grantee who came through the link keeps access unless
     the owner ticks the confirmation's one checkbox, "also remove the N people
@@ -1445,7 +1445,7 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
 
 The engine exposes one async command-and-event surface, designed to be wrapped,
 not extended: commands (the intent ops, grant/rotation/share actions, the invite
-preview of ADR 0028 D2, auth, manual refresh) and an event stream out (snapshot
+preview of ADR 0028 C2, auth, manual refresh) and an event stream out (snapshot
 updates, staleness transitions, withheld-update escalations, dead-letters,
 attributable abuse events). Desktop calls it directly in the Tauri process; web
 wraps it via `crates/wasm` bindings inside a dedicated worker, with the RPC
