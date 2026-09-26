@@ -1,0 +1,268 @@
+<task-notification>
+<task-id>a3e249c9490bee5dc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/a3e249c9490bee5dc.output</output-file>
+<status>completed</status>
+<summary>Agent "Inventory closure identifiers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've inventoried everything the closure references. One thing first: **facade.rs was being edited while I read it**, so your line numbers are out of date.
+
+## 0. The file changed during the survey
+- `git status` shows facade.rs and rotation/mod.rs modified, plus a new untracked `rotation/flat_cut.rs`. Some other refactor is running at the same time.
+- facade.rs went from 21934 to 21716 lines while I worked. All facade.rs line numbers below come from the 21716-line snapshot:
+  - `fn build_tick_loop_spawner` is at **6514** (you had 6732).
+  - The closure `Some(Box::new(move || {` is at **6557**.
+  - The method's closing `}` is at **7501**.
+  - The test module starts at **12622** (`#[cfg(test)] mod tests`).
+- That refactor already moved `ScopeExitArm` and `cut_exited_scope` out of facade.rs into `rotation/flat_cut.rs`. It also already made `Boundaries` and its fields `pub(crate)`, and made `ascent_node_seed` and `proved_scope_ref` `pub(crate)`.
+- **Re-check line numbers just before the mechanical edit.**
+
+## A. Items defined in facade.rs (all need `use crate::facade::…` from `sync/pass.rs`)
+
+"Outside" counts real code references in facade.rs outside 6514–7501, not counting the definition itself or `//` comment lines. They are split into non-test / test (after 12622).
+
+| name | line | visibility now | outside refs (non-test / test) | notes |
+|---|---|---|---|---|
+| `NodeId` | 199 | `pub` | many | |
+| `Event` | 1677 | `pub` | many | closure uses `SnapshotUpdated`, `AttributableAbuse`, `StalenessChanged` |
+| `EngineError` | 1904 | `pub` | many | closure matches `EngineError::TrustViolation { message }` |
+| `Boundaries&lt;'a&gt;` | 3025 | `pub(crate)`, fields `pub(crate)` | 1 (2991, `queued_second_end`) / 0 | also used by claim_conversion.rs `TickSites` and rotation/flat_cut.rs |
+| `queued_second_end` | 2987 | private | **0 / 0** | only the closure uses it. Depends on `memoized_scan` (2953, private, 2 other refs), `second_end_scope` (2927, private, 1/4), `SecondEnd` (3041), `ascent_node_seed`, `RecordReader`, `derive_write_name` |
+| `SecondEnd` | 3041 | private, **fields private** | only inside `queued_second_end` | closure reads `end.root`, `end.name`, `end.material`, `end.ascent`, so the fields must become `pub(crate)` unless it moves too |
+| `focus_scope_roots` | 3900 | private | 1 (10151) / 0 | |
+| `nodes_in_scope` | 3909 | private | 1 (10149) / 0 | |
+| `scope_root_record_name` | 3924 | private | 1 (11730) / 0 | |
+| `leg_file_share` | 3945 | private | **0** / 7 | uses `MAX_FOCUS_FILES` (5107, `pub`) |
+| `queue_unprojected_children` | 3975 | private | 1 (12511) / 0 | uses `queue_focus_file` (4005, private, 2 refs) |
+| `settle_focus_leg` | 4050 | private | 1 (10200) / 0 | uses `stamp_focus_refreshed` (3880, private, 1 ref) |
+| `emit_trust_violation` | 4119 | `pub(crate)` | 4 / 0 | |
+| `report_settings_verdict` | 4135 | private | 1 (5398, in `start`) / 0 | |
+| `adopt_settings_summary` | 4181 | private | 1 (9965) / 0 | |
+| `ConsultWindow` | 4201 | private, fields private | only `consult_pointers`' signature / 1 (18969) | closure builds it with a struct literal, so the fields need `pub(crate)` if it stays |
+| `consult_pointers` | 4218 | private | **0** / 1 (18963) | reads `SweepKeys.scope_keys` and `.owner_identity` |
+| `owner_bin_retention_days` | 4266 | private | **0 / 0** | |
+| `owner_retention` | 4277 | private | **0 / 0** | |
+| `bin_retention_days` (free fn) | 4289 | private | 1 (12145, inside `Engine::bin_retention_days`) / 0 | the other name matches are a method or field of the same name |
+| `steady_state_hold` | 4450 | private | **0 / 0** | |
+| `deposit_write_seed` | 4577 | `pub(crate)` | 3 / 2 | |
+| `SyncStatus` | 4609 | `pub(crate)`, **fields private** | — | closure reads and writes `reconcile_in_flight`, `last_success`, `reported` (4610–4612). **Blocker: these three fields must become `pub(crate)`.** |
+| `ScopeSeeds` / `CachedSeed` | 4629 / 4622 | `pub(crate)` (`CachedSeed` fields private) | many | not named in the closure; field access only happens inside `cached_seed` / `deposit_seed` |
+| `deposit_seed` | 4700 | `pub(crate)` | 5 / 4 | |
+| `own_descendant_scopes` | 4680 | private | 2 (9849, 10006) / 0 | |
+| `SeedFloors` | 4715 | private, **fields private** | only `refresh_seed_floors` | closure reads `.read` / `.write` |
+| `refresh_seed_floors` | 4722 | private | 1 (6478, another method) / 0 | uses `refresh_seed_floor` / `SeedFloor` (`pub(crate)`) |
+| `walked_boundary_material` | 4743 | private | 1 (3111) / 0 | |
+| `GraftedWritePass` | 4766 | private, **fields private** | only `grafted_write_passes` | closure reads `root`, `name`, `read_scope_seed`, `write_scope_seed`, `floors`, `sharer_identity`, `sharer_enc` |
+| `grafted_write_passes` | 4797 | private | **0** / 4 | |
+| `write_grant_sharers` | 4831 | private | **0 / 0** | |
+| `write_grant_sharer_encs` | 4848 | private | **0 / 0** | needs the `ContactStore` trait in scope (it calls `contacts()`) |
+| `cached_seed` | 4870 | private | **9** / 0 | keep it in facade and make it `pub(crate)` |
+| `install_descendant_scopes` | 4891 | private | **0** / 2 | |
+| `install_unproved_scopes` | 4949 | private | **0** / 2 | |
+| `POINTER_PAYLOAD_VERSION` | 5132 | `pub(crate)` | 8 / 2 | |
+| `TickLoopSpawner` | 5136 | private (`type … = Box&lt;dyn FnOnce()&gt;`) | Engine field 5253 | this is the method's return type, so it stays in facade |
+| `SweepKeys` | 5167 | `pub(crate)`, **fields private** | — | closure uses `keys.scope_keys` four times; `consult_pointers` also uses `owner_identity`. **Blocker: `scope_keys` (5170) must be `pub(crate)`, and `owner_identity` (5169) too if `consult_pointers` moves.** |
+
+**Could move with the closure (only the closure uses them in non-test code):** `steady_state_hold`, `owner_bin_retention_days`, `owner_retention`, `write_grant_sharers`, `write_grant_sharer_encs`, `queued_second_end` (with `SecondEnd`), `consult_pointers` + `ConsultWindow`, `leg_file_share`, `grafted_write_passes` + `GraftedWritePass`, `install_descendant_scopes`, `install_unproved_scopes`. Items that also have tests in facade.rs would need their tests moved or a `pub(crate)` re-export.
+
+**Must stay in facade.rs and become `pub(crate)`:** `cached_seed`, `own_descendant_scopes`, `refresh_seed_floors` + `SeedFloors`, `focus_scope_roots`, `nodes_in_scope`, `scope_root_record_name`, `settle_focus_leg`, `queue_unprojected_children`, `bin_retention_days`, `walked_boundary_material`, `report_settings_verdict`, `adopt_settings_summary`.
+
+## B. facade/claim_conversion.rs and facade/link_sweep.rs — both are private child modules
+`mod claim_conversion;` (facade.rs:18) and `mod link_sweep;` (19) are private, and their items are `pub(super)`. Code in `sync::pass` can't reach them until **the module becomes `pub(crate) mod` (or facade re-exports the items with `pub(crate) use`) and every item below becomes `pub(crate)`**. Today facade.rs imports them at lines 28–31 through `use claim_conversion::{… ConversionPass, CutAuthority, …, PointerIndex, TickSites, placed, scope_pointer_index}`.
+
+| name | file:line | visibility |
+|---|---|---|
+| `PointerIndex` (type alias for `BTreeMap&lt;String, NodeId&gt;`) | claim_conversion.rs:116 | `pub(super)` |
+| `scope_pointer_index` | :119 | `pub(super)` |
+| `placed` | :130 | `pub(super)` |
+| `ConversionSites` trait (the bound on `run`) | :135 | `pub(super)`; would trigger the private-bounds lint |
+| `CutAuthority` + fields | :148 | `pub(super)` |
+| `ConversionPass` + 19 fields | :159 | `pub(super)` |
+| `ConversionPass::run` | :426 | `pub(super)` |
+| `PassOutcome` / `into_result` | :38 / :53 | `pub(super)` |
+| `TickSites` + fields | :1063 | `pub(super)`; its `ConversionSites` impl reads `Boundaries` fields through `super::*` |
+| `ConversionPass::sweep_links` | link_sweep.rs:98 | `pub(super)` |
+| `LinkSweepReport` + fields `rekeyed` / `failure` / `more` | link_sweep.rs:27 | `pub(super)`; closure reads all three fields |
+
+## C. Items outside facade.rs (grouped by defining file; "facade.rs import" is the current `use` line)
+
+| name | defined at | visibility | facade.rs import |
+|---|---|---|---|
+| `IpnsName` (`::parse`) | cipherbox_core::ipns | pub | L36 `cipherbox_core::ipns::IpnsName` |
+| `CommittedPermission` | alias of `cipherbox_core::seal::Permission` | pub | L40 `Permission as CommittedPermission` |
+| `mpsc` / `Zeroizing` / `X25519Secret` / `EcdsaVerifier` (needed for signatures) | external crates | pub | L49 / L51 / L48 / L44 |
+| `ApiClient` | api/client.rs:80 | pub | L53 `crate::api::ApiClient` |
+| `Gateway` | content/read.rs:166 | pub | L62 `crate::content::Gateway` |
+| `RetentionPolicy` | content/retention.rs:70 | pub | L63 `crate::content` |
+| `Entropy` | crate::entropy | pub | L69 |
+| `FloorNamespace` | grants/grafted.rs:326 | pub(crate) | L73–76 `crate::grants::grafted::{…}` |
+| `GraftedPlane` | grants/grafted.rs:212 (fields pub(crate)) | pub(crate) | same |
+| `is_own_scope` | grants/grafted.rs:313 | pub(crate) | same |
+| `floor_namespace` | grants/grafted.rs:352 | pub(crate) | same |
+| `floor_view` | grants/grafted.rs:368 | pub(crate) | same |
+| `evict_grafted_read_seeds` | grants/grafted.rs:393 | pub(crate) | same |
+| `evict_grafted_write_seeds` | grants/grafted.rs:435 | pub(crate) | same |
+| `ClaimRecord::contested` | grants/grafted.rs:72 | pub(crate) | method call only |
+| `BookmarkedPermissions` / `GraftedSharers` (helper signatures only) | grants/grafted.rs:33 / :22 | pub(crate) | same |
+| `ShareInbox` (fields pub, `.pull` at :124 pub(crate)) | grants/inbox.rs:74 | pub(crate) | L77 `crate::grants::inbox::{ShareInbox,…}` |
+| `repost_held_claims` | grants/link_read.rs:452 | pub(crate) | L78–81 `crate::grants::link_read::{…}` |
+| `ScopeRender` (fields pub) | grants/received_status.rs:109 | pub(crate) | L82–84 `crate::grants::received_status::{…}` |
+| `ReceivedShareStatus` (fields pub, `.refresh` at :413 pub(crate)) | grants/received_status.rs:372 | pub(crate) | same |
+| `StagingContactStore` (`::new` at :551) | grants/contact_store.rs:542 | pub | L85–98 `crate::grants::{…}` |
+| `ContactStore` trait (only if `write_grant_sharer_encs` moves) | grants/contact_store.rs:287 | pub | same |
+| `ENVELOPE_V` | net/author.rs:46 | pub | L107 `crate::net::author::ENVELOPE_V` |
+| `FolderRefresh` (fields pub(crate); `run` :107, `run_files` :209) | net/focus.rs:68 | pub(crate) | L113–122 `crate::net::{…}` |
+| `GraftedLeg` | net/focus.rs:60 | pub(crate) | same |
+| `FolderRefreshReport` (only if `settle_focus_leg` moves) | net/focus.rs:33 | pub(crate) | same |
+| `HeldKey` | net/liveness.rs:151 | pub | same |
+| `observed_at` | net/liveness.rs:180 | pub | same |
+| `HeldRecords` (for signatures) | net/liveness.rs:227 | pub | same |
+| `HeldMaterial` (fields pub) | net/resolve.rs:432 | pub(crate) | same |
+| `ResolveOutcome` | net/resolve.rs:184 | pub | same |
+| `resolve_and_hold` (returns `HeldResolve` at :446, fields pub(crate)) | net/resolve.rs:467 | pub(crate) | same |
+| `refresh_base_from_resolved` | net/resolve.rs:557 | pub(crate) | same |
+| `RootAdopter` (`new` :102 pub, `holding` :180 pub(crate)) | net/adopter.rs:69 | pub | same |
+| `ScopeWalk` (fields pub(crate); `descendant_scope_roots` :1574 returns `WalkedBoundaries` :986) | net/rotation.rs:1331 | pub(crate) | same |
+| `WalkFailure` | net/rotation.rs:948 | pub(crate) | same |
+| `WritePlaneDark` | net/rotation.rs:936 | pub(crate) | same |
+| `DescendantScopeRoot` (only if `install_descendant_scopes` moves) | net/rotation.rs:910 | pub(crate) | same |
+| `OwnerSeedKeys::pointer_seed` | owner_keys.rs:71 | pub(crate) | method call only |
+| `SyncTimingProfile` (fields `poll_cadence`, `settings_recheck_interval`, `link_sweep_cadence` are pub) | profile.rs:23 | pub | L124 |
+| `RotateOnExit` | rotation/trigger.rs:87 | pub | L127–135 `crate::rotation::{…}` |
+| `RotateError` | rotation/rotate.rs:189 | pub | same |
+| `ResolveFailure` | rotation/eager_set.rs:64 | pub | same |
+| `install_walked_read_epochs` | rotation/scope_material.rs:46 (re-exported rotation/mod.rs:86) | pub(crate) | same |
+| `WalkedReadEpochs` (signatures) | rotation/scope_material.rs:39 | pub(crate) | same |
+| `ScopeExitArm` (fields pub(crate)) | rotation/flat_cut.rs:39 | pub(crate) | **L136** `crate::rotation::{FlatCut, ScopeExitArm, cut_exited_scope, flat_root_cut}` |
+| `cut_exited_scope` | rotation/flat_cut.rs:70 | pub(crate) | L136 |
+| `LiveSeam` (prelude only) | seams/live.rs:28 | pub(crate) | L137–142 `crate::seams::{…}` |
+| `Scheduler` trait (**needed in scope for `.now()` and `.spawn()`**) | seams/scheduler.rs:65 | pub | same |
+| `FloorStore`, `RecordTransport`, `SnapshotCache`, `StagingStore`, `QueueGeneration`, `Http`, `CredentialStore`, `UnixMillis` (for bounds and signatures) | crate::seams | pub | same |
+| `SessionState` / `SessionSecrets` | session.rs:273 / :548 | pub(crate) | L143 `crate::session::{…}` |
+| `SessionPlacement` (field `decision` is pub) | settings.rs:483 | pub | L144–149 `crate::settings::{…}` |
+| `load_settings_at` (returns `SettingsRead`, `.enrol` at :632 pub) | settings.rs:831 | pub | same |
+| `redecide_placement` | settings.rs:532 | pub | same |
+| `summarize_settings` | settings.rs:186 | pub | same |
+| `VaultSettingsSummary` / `SettingsLoad` / `SettingsOrigin` / `DEFAULT_BIN_RETENTION_DAYS` (only if helpers move) | settings.rs:154 / :587 / :175 / :81 | pub | same |
+| `EngineSeams` | sync/drain.rs:1142 | pub(crate) | L153–156 `crate::sync::drain::{…}` |
+| `Drain` (`new` :1238, `run_tick` :1686) | sync/drain.rs:1223 | pub(crate) | same |
+| `DrainScope` | sync/drain.rs:879 | pub(crate) | same |
+| `ScopeEnd` | sync/drain.rs:804 | pub(crate) | same |
+| `SealPlane` | sync/drain.rs:858 | pub(crate) | same |
+| `GrantedPass` | sync/drain.rs:920 | pub(crate) | same |
+| `TickInputs` | sync/drain.rs:1189 | pub(crate) | same |
+| `TickScopes` | sync/drain.rs:1213 | pub(crate) | same |
+| `hold_captures` | sync/drain.rs:790 | pub(crate) | same |
+| `UnlinkedChild` (signatures) | sync/project.rs:143 | pub(crate) | L161 |
+| `BaseSnapshot` (signatures) | sync/render.rs:22 | pub(crate) | L168 |
+| `QueueScanMemo` (signatures) | sync/rebase.rs:337 | pub(crate) | L166 |
+| `ManualRefresh` | sync/refresh.rs:116 | pub(crate) | L176 `crate::sync::refresh::{ManualRefresh, RefreshVerdict}` |
+| `RefreshVerdict` (`worst` at :42) | sync/refresh.rs:26 | pub(crate) | L176 |
+| `Connectivity` | sync/staleness.rs:22 | pub | L182 `crate::sync::staleness::{Connectivity, classify}` |
+| `classify` | sync/staleness.rs:36 | pub | L182 |
+| `FocusWindow` (`host_queued` :98, `folders_in_view` :108, `open_files` pub) | sync/tick.rs:26 | pub | L183–187 `crate::sync::tick::{…}` |
+| `TickCause` / `ResolveMode` / `resolve_mode` | sync/tick.rs:135 / :144 / :153 | pub | same (`TickCause` isn't currently imported) |
+| `scope_root_of` / `focus_by_scope` / `focus_files` | sync/tick.rs:220 / :248 / :269 | pub | same |
+| `consult_scopes` / `consult_scopes_due` | sync/tick.rs:290 / :315 | pub | same |
+| `pace_due` | sync/tick.rs:345 | pub(crate) | same |
+| `expire_focus_stamps` / `expire_touched_folders` | sync/tick.rs:375 / :388 | pub | same |
+| `TickControl` / `run_tick_loop` | sync/tick.rs:411 / :446 | pub / pub(crate) | same |
+
+The closure also uses std/core items: `BTreeSet`, `Cell`, `RefCell`, `Rc`, `Box::pin`, and `core::iter::once`.
+
+## 1. `manual_refresh`
+- The field is `manual_refresh: ManualRefresh` at facade.rs:5244. It is cloned at 6555 as `let manual = self.manual_refresh.clone();`.
+- `ManualRefresh` is at sync/refresh.rs:116: `#[derive(Clone, Default)] pub(crate) struct ManualRefresh { inner: Rc&lt;RefCell&lt;Inner&gt;&gt; }`.
+- Signatures:
+  - `pub(crate) fn arm(&amp;self)` at :122
+  - `pub(crate) fn settle(&amp;self, verdict: RefreshVerdict)` at :180
+  - also `settle_drained(&amp;self)` at :192 and `close(&amp;self)` at :201
+
+## 2. `run_tick_loop` and `TickLoopSpawner`
+- `run_tick_loop` (sync/tick.rs:446):
+```rust
+pub(crate) async fn run_tick_loop&lt;Sch&gt;(
+    scheduler: &amp;Sch,
+    manual: &amp;ManualRefresh,
+    cadence: Duration,
+    mut on_tick: impl AsyncFnMut(TickCause) -&gt; TickControl,
+) where
+    Sch: Scheduler,
+```
+- `TickLoopSpawner` (facade.rs:5136): `type TickLoopSpawner = Box&lt;dyn FnOnce()&gt;;` It is private, the method returns `Option&lt;TickLoopSpawner&gt;`, and it is stored in the Engine field at 5253 as `RefCell&lt;Option&lt;TickLoopSpawner&gt;&gt;`.
+
+## 3. `EngineSeams`, `SessionState`, `SessionSecrets`
+
+**`EngineSeams&lt;T, H: Http, C: CredentialStore, F, S, St, Sch&gt;`** is at sync/drain.rs:1142. All fields are `pub(crate)`: `transport: T`, `api: Rc&lt;ApiClient&lt;H, C&gt;&gt;`, `floors: F`, `snapshot_cache: S`, `staging: St`, `scheduler: Sch`, `http: H`, `gateway: Gateway`, `entropy: Rc&lt;RefCell&lt;Box&lt;dyn Entropy&gt;&gt;&gt;`, `events: mpsc::UnboundedSender&lt;Event&gt;`, `deadlines: DeadlinePolicy`, `profile: SyncTimingProfile`, `storage_policy: StoragePolicy`, `content_profile: ContentProfile`.
+
+In the prelude it is instantiated as:
+- `T = RecordAccelerator&lt;T::RecordTransport&gt;`
+- `H = T::Http`, `C = T::CredentialStore`
+- `F = LiveSeam&lt;OwnerScopedFloorStore&lt;T::FloorStore&gt;&gt;`
+- `S = LiveSeam&lt;T::SnapshotCache&gt;`
+- `St = LiveSeam&lt;QueueGenerationStore&lt;T::StagingStore&gt;&gt;`
+- `Sch = T::Scheduler`
+
+**`SessionState`** is at session.rs:273, `pub(crate)`, and all fields are `pub(crate)`. On Engine it is `state: Rc&lt;SessionState&gt;` (5223). `drain_cells()` is at :527. Fields the closure destructures:
+- `snapshot: Rc&lt;BaseSnapshot&gt;` (287)
+- `held_records: Rc&lt;RefCell&lt;HeldRecords&gt;&gt;` (291)
+- `sync_status: Rc&lt;RefCell&lt;SyncStatus&gt;&gt;` (298)
+- `scope_read_seeds` (309) / `scope_write_seeds` (314): `Rc&lt;RefCell&lt;ScopeSeeds&gt;&gt;`
+- `descendant_scope_roots` (321) / `unproved_scope_roots` (332): `Rc&lt;RefCell&lt;BTreeSet&lt;NodeId&gt;&gt;&gt;`
+- `boundary_walk_rejected` (339) / `scope_roots_walked` (342): `Rc&lt;Cell&lt;bool&gt;&gt;`
+- `walked_read_epochs: Rc&lt;RefCell&lt;WalkedReadEpochs&gt;&gt;` (346)
+- `current_root_name: Rc&lt;RefCell&lt;Option&lt;IpnsName&gt;&gt;&gt;` (358)
+- `focus: Rc&lt;RefCell&lt;FocusWindow&gt;&gt;` (363)
+- `focus_refreshed` (367) / `pointer_consulted` (373): `Rc&lt;RefCell&lt;BTreeMap&lt;NodeId, UnixMillis&gt;&gt;&gt;`
+- `on_access_misses: OnAccessMisses` (375)
+- `received_verdicts: Rc&lt;RefCell&lt;ReceivedVerdicts&gt;&gt;` (379)
+- `received_shares_lock: Rc&lt;ReceivedSharesLock&gt;` (382)
+- `grafted_sharers: Rc&lt;RefCell&lt;GraftedSharers&gt;&gt;` (385)
+- `bookmarked_scope_roots: Rc&lt;RefCell&lt;BookmarkedScopeRoots&gt;&gt;` (389)
+- `bookmarked_permissions: Rc&lt;RefCell&lt;BookmarkedPermissions&gt;&gt;` (393)
+- `grafted_write_roots: Rc&lt;RefCell&lt;BTreeSet&lt;NodeId&gt;&gt;&gt;` (396)
+- `grafted_claims: Rc&lt;RefCell&lt;ClaimRecord&gt;&gt;` (399)
+- `minted_scope_roots: Rc&lt;RefCell&lt;BTreeSet&lt;NodeId&gt;&gt;&gt;` (404)
+- `pending_invite_claims: Rc&lt;RefCell&lt;ClaimCounts&gt;&gt;` (406)
+- `conversion_running: Rc&lt;Cell&lt;bool&gt;&gt;` (408)
+- `queue_scan: Rc&lt;RefCell&lt;QueueScanMemo&gt;&gt;` (415)
+- `converged_tick: Rc&lt;Cell&lt;bool&gt;&gt;` (441)
+- `sweep_tasks: Rc&lt;RefCell&lt;Option&lt;SweepTaskFactory&gt;&gt;&gt;` (445)
+- `placement: Rc&lt;RefCell&lt;Option&lt;SessionPlacement&gt;&gt;&gt;` (452)
+- `settings_summary: Rc&lt;RefCell&lt;Option&lt;VaultSettingsSummary&gt;&gt;&gt;` (460)
+- `observed_unlinks: Rc&lt;RefCell&lt;Vec&lt;UnlinkedChild&gt;&gt;&gt;` (465)
+- `byo_reconciled: Rc&lt;Cell&lt;bool&gt;&gt;` (471)
+
+Fields the closure doesn't use: `live_blocks` 276, `cancels` 278, `pending_scope_exits` 294, `dead_letters` 412, `queue_hold` 419, `pending_reclaim` 424, `reclaim_stalls` 430, `bookkeeping` 433, `orphan_heads` 437.
+
+**`SessionSecrets`** is at session.rs:548, `#[derive(Default)] pub(crate)`. On Engine it is `secrets: Rc&lt;SessionSecrets&gt;` (5224). The closure destructures all six fields:
+- `tick_enc_subkey: Rc&lt;RefCell&lt;Option&lt;X25519Secret&gt;&gt;&gt;` (555)
+- `tick_bin_keys: Rc&lt;RefCell&lt;Option&lt;Rc&lt;BinIndexKeys&gt;&gt;&gt;&gt;` (560)
+- `tick_settings_signer: Rc&lt;RefCell&lt;Option&lt;Rc&lt;Ed25519Signer&gt;&gt;&gt;&gt;` (564)
+- `tick_owner_signer: Rc&lt;RefCell&lt;Option&lt;Rc&lt;EcdsaSigner&gt;&gt;&gt;&gt;` (569)
+- `tick_contact_label_seed: Rc&lt;RefCell&lt;Option&lt;SecretBytes&gt;&gt;&gt;` (574)
+- `sweep_keys: Rc&lt;RefCell&lt;Option&lt;Rc&lt;SweepKeys&gt;&gt;&gt;&gt;` (580)
+
+## 4. What the closure captures
+The closure body will need these as parameters of the new function:
+- `manual: ManualRefresh`
+- `seams: EngineSeams&lt;…&gt;`
+- `state: Rc&lt;SessionState&gt;`
+- `secrets: Rc&lt;SessionSecrets&gt;`
+- `settings_rechecked: Cell&lt;UnixMillis&gt;`
+- `link_swept: Cell&lt;UnixMillis&gt;`
+- `alive: Rc&lt;Cell&lt;bool&gt;&gt;`
+- `interval: Duration` (from `seams.profile.poll_cadence`)
+- `owner_identity: EcdsaVerifier` (from `SessionIdentity::owner_identity`, session.rs:137)
+- `root_id: [u8; 16]`
+
+The prelude (6514–6556) stays in facade: it uses `self.*`, `EngineSeams`, `LiveSeam`, `Cell`, and `TickLoopSpawner`.
+
+## Changes the move requires
+- Make the `SyncStatus` fields and `SweepKeys.scope_keys` (and `SweepKeys.owner_identity` if `consult_pointers` moves) `pub(crate)`.
+- Make the `SecondEnd`, `GraftedWritePass`, `SeedFloors` and `ConsultWindow` fields `pub(crate)` if those types stay in facade.
+- Open up `mod claim_conversion` / `mod link_sweep` and their `pub(super)` items, as listed in section B.
+- Import the `Scheduler` trait in the new module for `.now()` and `.spawn()`.
+- Add `mod pass;` to sync/mod.rs (lines 20–39); there is no `pass.rs` there yet.</result>
+<usage><subagent_tokens>159156</subagent_tokens><tool_uses>43</tool_uses><duration_ms>367717</duration_ms></usage>
+</task-notification>

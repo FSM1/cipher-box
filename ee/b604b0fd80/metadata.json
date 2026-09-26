@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "eeb604b0fd80",
+  "strategy": "manual-commit",
+  "branch": "refactor/2040-tick-pass-move",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/facade/claim_conversion.rs",
+    "crates/engine/src/facade/link_sweep.rs",
+    "crates/engine/src/sync/mod.rs",
+    "crates/engine/src/sync/pass.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ee/b604b0fd80/0/metadata.json",
+      "transcript": "/ee/b604b0fd80/0/full.jsonl",
+      "compact_transcript": "/ee/b604b0fd80/0/transcript.jsonl",
+      "content_hash": "/ee/b604b0fd80/0/content_hash.txt",
+      "prompt": "/ee/b604b0fd80/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 17943,
+    "cache_read_tokens": 321682,
+    "output_tokens": 9313,
+    "api_call_count": 2
+  }
+}
