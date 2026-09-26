@@ -231,7 +231,8 @@ node UUID.
   vectors. The block ceiling never turns the carried set's **truncate, never
   refuse** law into a refusal: an encode within a limit measures its candidate
   and cuts against the lower of that limit and the ceiling before it mints
-  anything, so only what the uncuttable fields alone overflow is refused.
+  anything, so only what the typed and the uncuttable fields alone overflow is
+  refused (ADR 0042 D1).
   A maximal `readSealed` and a maximal grant section are not jointly reachable
   inside one block, exactly as the section's and write-body's maxima are not; the
   envelope's own total is what refuses the combination, surfaced to the engine as

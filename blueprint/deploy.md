@@ -400,8 +400,6 @@ cutover):
 - **Dashboard rewrite** — the v2 Grafana dashboard set (republisher walk,
   mailbox depth, gateway auth hit-rate) lands with the metrics that feed
   it.
-- **Nightly cost tuning** — the full-matrix surveillance run is the
-  expensive slot; trim to a rotation if runner spend becomes real money.
 - **Production go-live** — out of scope until funded: provisioning the
   parked environment, a second VPS or managed Postgres, CDN for the web
   bundle, and DNS cutover would each be decisions then, on this doc's

@@ -160,8 +160,7 @@ decay) inverted into structure.
   metadata-scale only, accepted.
 - **Interior fast, root lingers**: interior old names are batch-retired at wave
   completion (a resumed wave enumerates them via the write-plane history link).
-  The old **scope-root** name stays registered, serving the owner-signed
-  `movedTo` forwarding record, until the migration window closes — window
+  The old **scope-root** name stays registered until the migration window closes — window
   length and closure signal are owned by
   [rotation completeness (FSM1/cipher-box-next#38)](https://github.com/FSM1/cipher-box-next/issues/38)
   — then retired. The API stays dumb: retire removes the caller's row; timing is
@@ -263,9 +262,8 @@ Per the liveness design (FSM1/cipher-box-next#24), restated here as API surface:
 ## Mailbox
 
 Integrity-untrusted, swappable transport for one-shot sealed pointers
-(share pointers, write-rotation root re-points, claims, courtesy
-notifications). Nothing on it is load-bearing for safety: root migration has
-the `movedTo` record (FSM1/cipher-box-next#38), revocation is discovered in metadata.
+(share pointers, claims, courtesy notifications). Nothing on it is load-bearing for safety: root migration uses
+the scope pointer (ADR 0041 D6), revocation is discovered in metadata.
 
 - **Post**: any authenticated account → recipient identity pubkey; body is the
   HPKE-sealed blob (≤ ~8 KB), sender supplies an idempotency key. A post that
@@ -365,7 +363,7 @@ correctness dependency.
 
 ## Open edges
 
-- `movedTo` migration-window length and closure signal (drives when the old
+- Migration-window length and closure signal (drives when the old
   scope-root name is retired) → [FSM1/cipher-box-next#38](https://github.com/FSM1/cipher-box-next/issues/38).
 - Module boundaries are fixed by
   [FSM1/cipher-box-next#28](https://github.com/FSM1/cipher-box-next/issues/28) D3 (NestJS residual

@@ -25,7 +25,7 @@ filesystem and translates kernel operations into facade commands. The FS layer
 is a **projection, not a second brain**: it holds no key except the spill key
 of its own writes (ADR 0040), no publish machinery, no freshness policy, and no
 rotation logic — every trust and sync decision already happened below the
-facade (engine.md). Key material lives in engine memory only; the FS core maps
+facade (engine.md). Key material other than the spill key lives in engine memory only; the FS core maps
 inodes to stable node ids and moves plaintext bytes, which is its job — the
 mount is the plaintext trust terminus for the local OS.
 

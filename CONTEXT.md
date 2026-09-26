@@ -105,7 +105,7 @@ Glossary only. Design detail lives in `blueprint/`; the as-built v1 spec corpus,
 - **Register-first** — the fail-closed ordering law: a name/CID batch registers before its first publish, and publish blocks on it. Live-but-uninventoried is structurally impossible; the residual failure is a registered-never-published orphan, alert-GC'd.
 - **Union liveness** — a name stays in the republish inventory while any account holds a row for it; it leaves when the last row retires. Physical unpin fires at global refcount zero.
 - **Advisory pin row** — a BYO account's registration: counted for union liveness and the inventory, never quota-enforced; the bytes live on the user's own provider.
-- **Root linger** — after a write rotation, the old scope-root name stays registered serving the owner-signed `movedTo` record until the migration window closes; interior old names retire at wave completion.
+- **Root linger** — after a write rotation, the old scope-root name stays registered until the migration window closes; interior old names retire at wave completion.
 - **Read accelerator** — CipherBox's token-authed Kubo trustless gateway. A member convenience on the read path; any public trustless gateway is the no-auth fallback.
 - **Accelerator token** — the read accelerator's credential: an opaque, read-scoped per-session pseudonym minted beside the access token and rotating with it. Never the session JWT, and never identity-bearing, so the gateway tier can attribute nothing it observes. Valid only while its refresh family is, so every session revocation revokes it too (ADR 0036).
 - **Recovery endpoint** — authenticated fetch of non-canonical cached record bytes by name; the revival aid after a >EOL liveness lapse, on no client resolve path.
