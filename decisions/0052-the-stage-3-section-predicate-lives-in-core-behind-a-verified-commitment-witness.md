@@ -10,7 +10,7 @@
   [ADR 0032](./0032-the-owner-signs-each-grant-row-and-the-commitment-names-every-recipient.md)
   D8 (one section, one signer),
   [ADR 0033](./0033-every-attacker-sized-field-has-one-canonical-form-and-a-symmetric-fail-closed-bound.md)
-  D2 and D3 (the section bounds and their reason), the `blueprint/core.md` "Grant section" and
+  D2 (the section bounds and their reason; moved to `blueprint/core.md` "Grant section"), the `blueprint/core.md` "Grant section" and
   "Structure signatures" sections, the `blueprint/engine.md` "Adoption gate and floors" section
   (stage 3 and "One section, one signer"), and the `CONTEXT.md` "Adoption gate" term
 - **Amends:** ADR 0032 D8 (the home of the predicate) and ADR 0033 D2 (the citation of the

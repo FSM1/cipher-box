@@ -254,10 +254,8 @@ desktop "currently ships as a device-approval requester only". That claim was fa
 comment on FSM1/cipher-box#1514 corrects it on 2026-09-26. FSM1/cipher-box#2010 now tracks the
 requester leg, and FSM1/cipher-box#1514 reuses its seam for the approver. The copy and the absent
 affordance agree with each other today, so no member sees a control that cannot complete. This
-ADR records the blueprint rule (D4), and the owner has two options. Option 1: accept this ADR
-with FSM1/cipher-box#2010 as the open residual. Option 2: rule that the as-built position, no
-rendezvous role on desktop, is the decision, and reword D4, alternative (c), consequence 5 and
-the blueprint bullet to match.
+ADR records the blueprint rule (D4). The owner ruled on 2026-09-26: D4 stands, and
+FSM1/cipher-box#2010 is the open residual.
 
 **E2 — The subject row keeps a partial identifier that no code reads.** Every mint writes
 `identity_subjects.identifier_display` (`apps/api/src/auth/services/identity-subject.service.ts`,

@@ -182,6 +182,9 @@ node UUID.
   than the refusal the cut replaced, since no rotation clears an uncuttable
   field. Decode and encode refuse an over-budget envelope with the same
   `too-many-structures` verdict, release-active on the encode side.
+  A count bound fires before the decoder walks the collection, so an over-declared
+  input costs one length check; when a value breaks a count bound and a uniqueness
+  invariant, both sides check the count bound first and report the same verdict.
   `grantSection` is the budget's one exclusion, and only because it carries its
   own `MAX_GRANT_SECTION_BYTES`: a budget large enough to hold a grant section
   would be no budget at all. The budget stays well under the write-body's 64 KiB

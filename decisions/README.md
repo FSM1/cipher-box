@@ -4,7 +4,10 @@ An ADR records one architecture decision for CipherBox v2, with its context and 
 Each ADR is one file. The file name has the form `NNNN-<title-as-a-sentence>.md`.
 The header of each file gives the status: Proposed, Accepted, Accepted on <date>, or Implemented.
 An ADR that amends an older ADR adds an "Amended by" sentence at the amended item in the older file.
-For the process that adds or accepts an ADR, read "ADR Process" in [`AGENTS.md`](../AGENTS.md).
+Each decision item must pass three hurdles: it is hard to reverse, it is not clear without context, and it is the result of a real trade-off.
+If no item passes all three, the ADR is not written.
+A test duty, an accepted residual, a deferral, or the bug before a fix is not a decision.
+For the full bar and the process that adds or accepts an ADR, read "ADR Process" in [`AGENTS.md`](../AGENTS.md).
 The wayfinder threads and the as-built v1 spec corpus stay in the archived
 [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next). That repo is read-only.
 

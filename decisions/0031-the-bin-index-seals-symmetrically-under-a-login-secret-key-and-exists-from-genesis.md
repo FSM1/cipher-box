@@ -356,8 +356,8 @@ through the same `Entropy` seam, whose `fill` returns a `Result`, so every calle
 error. No blueprint sentence states the general rule. One rule for every entropy
 draw would need its own decision.
 
-**E4 — A failed first publish strands a device for good, and the owner has not accepted it.
-This residual is open.** The mechanism:
+**E4 — A failed first publish strands a device for good. The owner ruled it a defect on
+2026-09-26.** The mechanism:
 
 - `publish_bin_index` raises the durable mint counter (`crates/engine/src/bin_index.rs:322`)
   before it draws the nonce (`:323`), seals, preflights, and runs the PUT (`:334`).
@@ -378,8 +378,7 @@ publishes the record and clears the state.
 account: "the member is told the state and may hard-delete instead". It does not say that a
 failed genesis publish leads to the state, that the state is permanent for every soft delete on
 the device, or that an entropy failure after the mint also strands it. No decision source
-exists: FSM1/cipher-box#1675 lists options and decides none. The owner must accept this
-residual, or order a fix. Two changes narrow the window:
+exists: FSM1/cipher-box#1675 lists options and decides none. Two changes narrow the window:
 
 - Draw the nonce before the mint, so an entropy failure leaves no mark.
 - Read the next revision without a write, and persist it only just before the PUT, so every
@@ -387,6 +386,9 @@ residual, or order a fix. Two changes narrow the window:
 
 Neither change removes the residual case that D10 exists for, a publish that confirmed and then
 lost its floor write.
+
+The owner ruled on 2026-09-26: the mint counter must mark only a PUT that can have landed.
+FSM1/cipher-box#2035 tracks the fix.
 
 **E5 — The two blueprint files list different disclosure triples.** `blueprint/core.md` lists
 the IPNS sequence, the coincidence with the re-key republishes, and the existence of the record,
