@@ -50,7 +50,7 @@ use crate::rotation::WalkedReadEpochs;
 use crate::seams::UnixMillis;
 use crate::settings::{SessionPlacement, VaultSettingsSummary};
 use crate::sync::cancel::UploadCancels;
-use crate::sync::drain::{BookkeepingCursors, QueueHold};
+use crate::sync::drain::{BookkeepingCursors, DrainCells, QueueHold};
 use crate::sync::model::Snapshot;
 use crate::sync::project::UnlinkedChild;
 use crate::sync::rebase::QueueScanMemo;
@@ -520,6 +520,25 @@ impl SessionState {
             settings_summary: Rc::new(RefCell::new(None)),
             observed_unlinks: Rc::new(RefCell::new(Vec::new())),
             byo_reconciled: Rc::new(Cell::new(false)),
+        }
+    }
+
+    /// The cells a drain pass borrows, under the drain's own names.
+    pub(crate) fn drain_cells(&self) -> DrainCells<'_> {
+        DrainCells {
+            live_blocks: &self.live_blocks,
+            base: &self.snapshot,
+            held: &self.held_records,
+            hold: &self.queue_hold,
+            pending_reclaim: &self.pending_reclaim,
+            reclaim_stalls: &self.reclaim_stalls,
+            bookkeeping: &self.bookkeeping,
+            orphan_heads: &self.orphan_heads,
+            converged_tick: &self.converged_tick,
+            cancels: &self.cancels,
+            dead_letters: &self.dead_letters,
+            observed_unlinks: &self.observed_unlinks,
+            pending_scope_exits: &self.pending_scope_exits,
         }
     }
 }
