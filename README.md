@@ -78,9 +78,10 @@ The normative source of truth for the v2 build lives in this repo:
 | [`blueprint/testing.md`](blueprint/testing.md)       | Suite map, CI gates, coverage policy                         |
 | [`blueprint/deploy.md`](blueprint/deploy.md)         | Freeze mechanics, release management, staging pipeline       |
 
-For researchers: the as-built v1 specification corpus, ADRs, and the complete design-decision
-history behind v2 live in [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next) —
-its wayfinder map (issue 1) indexes every decision. The [`docs/`](docs/) folder here is v1
+For researchers: the ADRs live in [`decisions/`](decisions/README.md). The as-built v1
+specification corpus and the complete design-decision history behind v2 stay in the archived
+[FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next) — its wayfinder map (issue 1)
+indexes every decision. The [`docs/`](docs/) folder here is v1
 legacy and is being rewritten during the build.
 
 ## Repository layout

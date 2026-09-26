@@ -355,7 +355,7 @@ percentage never did.
   the deployed front. MFA enrollment and the Google and email-code methods stay
   uncovered by every automated suite: they need an interactive staging run, never
   a PR gate — an honest, inherited limitation (ADR 0049).
-  **Device approval is not covered by that exemption** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md)): it is a
+  **Device approval is not covered by that exemption** ([ADR 0009](../decisions/0009-device-approval-is-a-bound-rendezvous.md)): it is a
   rendezvous over our own API, and it needs a harness driving two sessions. v1
   skipped every cross-device case for want of a second device, which is how a
   desktop path that could never succeed reached a verified status.

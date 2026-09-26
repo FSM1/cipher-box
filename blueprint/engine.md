@@ -167,7 +167,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   doomed manifest quoted at delete time. **No live namer is consulted**, and the
   snapshot is populated by the focus window rather than by a whole-vault walk,
   so absence from the snapshot **enables** a release rather than holding one
-  ([ADR 0011](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0011-quarantine-release-rests-on-the-doomed-manifest.md)
+  ([ADR 0011](../decisions/0011-quarantine-release-rests-on-the-doomed-manifest.md)
   D2). Only an absence a poll of this session established counts, so a pass
   whose base no poll painted decides nothing (D4); the accepted residual is that
   a descendant a live parent outside the focus window still names can lose its
@@ -246,7 +246,7 @@ object's owner-vouched epochs (`writeEpoch`, `minReadEpoch`); a grant blob's
 epoch field is an advisory routing hint. One exception, and the list of them is
 closed: the `cutEpoch` of a grant-set commitment that passed stage 2 whole
 raises that scope's cut-epoch floor with no unseal, under the sharer-scoped key
-([ADR 0014](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)
+([ADR 0014](../decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)
 D1–D5). The owner signs that field and the signed preimage names the scope root
 it is presented under, so it is not a claim the network authored; no other field
 of the commitment, of the envelope, or of a grant blob gains such a path. The
@@ -471,7 +471,7 @@ revision beside the per-name sequence floor. Only what differs is stated here.
   its own dead-letter reason rather than a codec fault, because no retry shrinks
   it.
 - **A lapsed EOL is availability here, and the settings carve-out does not carry
-  over** ([ADR 0013](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0013-a-lapsed-bin-index-record-is-rewritten-not-refused.md)).
+  over** ([ADR 0013](../decisions/0013-a-lapsed-bin-index-record-is-rewritten-not-refused.md)).
   Nothing on this plane re-signs the record but the rewrite a refusal
   blocks: the API re-PUT carries the record's own validity, and the sub-EOL
   renewal passes over a record already past its EOL. A refusal would therefore
@@ -547,7 +547,7 @@ delete does (ADR 0043).
 ### Re-key into the bin
 
 A soft delete re-seals every node of the doomed subtree under the bin-held key
-before the unlink publishes ([ADR 0010](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0010-recycle-bin-is-an-owner-sealed-index.md)
+before the unlink publishes ([ADR 0010](../decisions/0010-recycle-bin-is-an-owner-sealed-index.md)
 item 3, amended by ADR 0043 D5). That re-key is the access cut: key regression
 hands a current or a revoked grantee every older epoch of the scope seed, so
 only a key outside the scope's derivation entirely stops them reading a node the
@@ -608,7 +608,7 @@ the grantee that removed it stops reading it.
 
 Three operations take a node back out of the bin, and every one of them is a
 journaled intent op, so a replay of the queue reproduces the same bin and the
-same reclamation ([ADR 0010](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0010-recycle-bin-is-an-owner-sealed-index.md)
+same reclamation ([ADR 0010](../decisions/0010-recycle-bin-is-an-owner-sealed-index.md)
 items 4, 6 and 7, ADR 0043).
 
 - **A restore re-keys in reverse, then relinks, then drops the entry**
@@ -760,7 +760,7 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   Replay is FIFO in performed order through the standard rebase, and rebases
   only onto gate-passing state (FSM1/cipher-box-next#33 D5–D7). A build decodes,
   opens and drains every queue record that the previous release wrote
-  ([ADR 0020](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0020-the-durable-op-queue-reads-the-previous-release.md)).
+  ([ADR 0020](../decisions/0020-the-durable-op-queue-reads-the-previous-release.md)).
   A new field on a queued op takes a decode default equal to the value the older
   build used, and that default passes every check a written value passes. A
   change that cannot take such a default — a removed op kind, a changed meaning,
@@ -841,22 +841,22 @@ the committed tag set verbatim and can neither extend nor shrink it (FSM1/cipher
 
 Idempotent lazy-wave advancement over a scope's **interior nodes** — not its
 descendant scope roots, which the cascade rotates eagerly (FSM1/cipher-box-next#26 D2,
-[ADR 0003](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
+[ADR 0003](../decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
 The work-list is the epoch-lag predicate: an interior node whose envelope epoch
 is behind its scope's current epoch. Reading one is one of exactly **three**
 paths that run the sequence floor without the read-epoch floor. The second is
 the drain's re-author of a lagging interior node, which carries the same wave
 for an ordinary write
-([ADR 0012](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0012-the-drain-carries-the-write-wave-forward.md)).
+([ADR 0012](../decisions/0012-the-drain-carries-the-write-wave-forward.md)).
 The third is the child resolve's read of a lagging interior node, which serves
 a member read before the wave arrives
-([ADR 0021](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0021-a-read-opens-an-epoch-lagged-interior-record.md)).
+([ADR 0021](../decisions/0021-a-read-opens-an-epoch-lagged-interior-record.md)).
 A lagging node sits below that floor by construction, and carries no seed,
 grant blob or commitment for the stage to protect; its body opens under the
 seed the scope's history-link ratchet walks back to. The re-seal relabels the
 node's epoch tag: the tag is a key-selection label that names the epoch whose
 read seed opens the body, and no reader treats it as authorship
-([ADR 0017](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0017-the-epoch-tag-is-a-key-selection-label-not-an-attestation.md)).
+([ADR 0017](../decisions/0017-the-epoch-tag-is-a-key-selection-label-not-an-attestation.md)).
 All three paths hold the same conditions: the record carries no grant section,
 the read moves no read-epoch floor, the sequence bar is the replay bar, and the
 epoch is one the scope root's own ratchet reaches. A node the retained
@@ -887,7 +887,7 @@ pointer consult (FSM1/cipher-box-next#38 D4) and a re-resolve at `currentRootNam
 if the fresh record is still below the floor. Admitting such a record would
 republish the scope's existing override seed at the current epoch — a
 revocation bypass, not a repair
-([ADR 0003](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
+([ADR 0003](../decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
 
 ### rotateScopeWrite
 
@@ -900,7 +900,7 @@ through **rewritten child refs**. A read-only grantee holds no `writeScopeSeed`
 and can derive no name, so the wave rewrites each `ChildRef.ipnsName` to the
 child's freshly derived name and re-seals that parent's read body under its
 unchanged read key at its unchanged read epoch; without it they reach the new
-root and stop ([ADR 0004](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0004-read-body-child-names-on-the-name-wave.md)).
+root and stop ([ADR 0004](../decisions/0004-read-body-child-names-on-the-name-wave.md)).
 The republish is therefore **not** byte-stable, and the wave touches read-plane
 _metadata_ while never re-keying it — the **read** override seed, read keys and
 `minReadEpoch` still carry verbatim, and the read-epoch floor never moves.
@@ -943,7 +943,7 @@ existing scope root. Scheduled hygiene is deferred, designed-for — the same
 primitive on a timer.
 
 The **expired-link sweep**
-([ADR 0025](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0025-revocation-under-the-link-first-model.md)
+([ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)
 D2) runs in owner sessions on a cadence slower than the 30 s tick. It walks
 `directChildScopeIndex` from the vault root, with one resolve and one unseal per
 scope root, and cuts every link entry whose `deadline` is not later than the
@@ -1025,7 +1025,7 @@ surviving committed grants uniformly in the republish it already does.
 - **Authority** (FSM1/cipher-box-next#25 D7, FSM1/cipher-box-next#26 D5): sharing, revoking, and every commitment
   change are owner-only. Any owner device converts claims and runs a revoke
   from owner-signed record fields alone; the contact book is no input
-  ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
+  ([ADR 0023](../decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
   D1–D4, ADR 0025 D3). Write-grantees write content and re-wrap blobs for
   committed tags during re-seals but cannot change the set — tags are
   name-bound, so read rotation leaves the commitment untouched.
@@ -1036,12 +1036,12 @@ surviving committed grants uniformly in the republish it already does.
   out-of-band; there is no directory. The import takes a grantee name from the
   owner. The device-local contact book caches the last grantee name seen for
   each identity and pre-fills it on another folder; it is no authority
-  ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
+  ([ADR 0027](../decisions/0027-a-grantee-name-is-not-an-identity.md)
   D2, D4). A grantee name is not an identity: every owner act binds to the
   identity key from the owner-signed row, and hosts show the core fingerprint
   beside the name on hover and in every confirmation (ADR 0027 D6, D7).
 - **Grant creation** has two shapes
-  ([ADR 0026](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0026-a-scope-root-takes-many-grants.md)).
+  ([ADR 0026](../decisions/0026-a-scope-root-takes-many-grants.md)).
   A **fresh mint**, on a folder that is not a scope root yet: converge the
   subtree (sweep) → mint the scope (fresh random seed, epoch 1, subtree swept
   in — a fresh mint needs no history) → for write grants, the write-scope cut
@@ -1068,7 +1068,7 @@ surviving committed grants uniformly in the republish it already does.
   `pointerReadKey`; the owner keeps a denormalized sent-index in theirs. Both
   lists are self-healing bookmarks — the metadata is the authority (FSM1/cipher-box-next#25 D3).
 - **Link-held arm**
-  ([ADR 0024](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)
+  ([ADR 0024](../decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)
   D1, D2, D5): a link holder reads at once. At join the engine posts the
   claim, then reads the scope through the link's grant blob; the read is
   best-effort and the tick retries it. The received-shares bookmark keeps the
@@ -1180,7 +1180,7 @@ surviving committed grants uniformly in the republish it already does.
     root. The name syncs with the record, and the same person in two folders
     has one grantee name per row.
   - **Preview**
-    ([ADR 0028](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0028-the-invite-page-previews-before-join.md)
+    ([ADR 0028](../decisions/0028-the-invite-page-previews-before-join.md)
     D2–D5): a read-only mode of the link-held read, in the signed-in session
     engine. It runs the link-path checks up to the open and the gate against
     the floors the session holds. It posts no claim or mailbox item,
@@ -1453,7 +1453,7 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   past the rule, and an explicit prune op re-applies the same plan to a history
   a settings change left long. No clock enters the decision, which is what lets
   the op queue replay it; an age-based rule was declined for that reason
-  ([ADR 0019](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0019-file-version-retention-is-count-based-keep-latest-n.md)).
+  ([ADR 0019](../decisions/0019-file-version-retention-is-count-based-keep-latest-n.md)).
 - **Referenced equals kept.** Every retained version's root is re-registered
   under the file's own name on each publish, so orphan GC leaves it alone. A
   version that falls outside the rule loses that reference, and what it owes the

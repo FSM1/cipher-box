@@ -8,18 +8,19 @@ CipherBox is a privacy-first, zero-knowledge E2EE personal cloud storage system 
 
 The normative source of truth for the v2 build:
 
-| Document                  | Purpose                                                       |
-| ------------------------- | ------------------------------------------------------------- |
-| `CONTEXT.md`              | The v2 ubiquitous language — use these terms, exactly         |
-| `blueprint/core.md`       | `crates/core` — wire formats, crypto, KDF catalog, KAT regime |
-| `blueprint/engine.md`     | `crates/engine` — the one stateful brain, seam traits, gates  |
-| `blueprint/api.md`        | API residual surface, registry, mailbox, republisher          |
-| `blueprint/web-client.md` | WASM hosting, tab leadership, `packages/client`, `apps/web`   |
-| `blueprint/desktop.md`    | FS projection, host adapters, Tauri shell                     |
-| `blueprint/testing.md`    | Suite map, CI gates, coverage policy                          |
-| `blueprint/deploy.md`     | Freeze mechanics, release management, staging pipeline        |
+| Document                  | Purpose                                                                           |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| `CONTEXT.md`              | The v2 ubiquitous language — use these terms, exactly                             |
+| `blueprint/core.md`       | `crates/core` — wire formats, crypto, KDF catalog, KAT regime                     |
+| `blueprint/engine.md`     | `crates/engine` — the one stateful brain, seam traits, gates                      |
+| `blueprint/api.md`        | API residual surface, registry, mailbox, republisher                              |
+| `blueprint/web-client.md` | WASM hosting, tab leadership, `packages/client`, `apps/web`                       |
+| `blueprint/desktop.md`    | FS projection, host adapters, Tauri shell                                         |
+| `blueprint/testing.md`    | Suite map, CI gates, coverage policy                                              |
+| `blueprint/deploy.md`     | Freeze mechanics, release management, staging pipeline                            |
+| `decisions/`              | Architecture decision records (ADRs); one file per decision, status in the header |
 
-The as-built v1 spec corpus, ADRs, and all design-decision history live in [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next) (wayfinder map issue 1 indexes every decision). The `docs/` folder is v1 legacy — being rewritten during the build; trust `blueprint/` when they conflict.
+The ADRs live in [`decisions/`](decisions/README.md). The as-built v1 spec corpus and the wayfinder threads (the design-decision history, indexed by issue 1) stay in the archived [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next), read-only. The `docs/` folder is v1 legacy — being rewritten during the build; trust `blueprint/` when they conflict.
 
 ## Terminology Standards
 
@@ -30,7 +31,7 @@ Use the v2 ubiquitous language defined in `CONTEXT.md` — every domain term (sc
 1. **Never** store `privateKey` or any seed in localStorage/sessionStorage
 2. **Never** log sensitive keys or seeds
 3. **Never** send unencrypted keys to the server — the server is zero-knowledge and NEVER sees plaintext or unencrypted keys
-4. **All crypto lives in `crates/core`** — TypeScript has no codec or crypto of its own; never implement crypto in TS. **One exception: browser-held key custody via WebCrypto**, for a key that must be non-extractable, or must exist before the engine has a session. The engine cannot serve either case — a WASM implementation necessarily materializes key bytes in linear memory, which is the property non-extractability exists to deny, and before `start(secret)` there is no session to derive from. Conditions, all of them: the key protects local state only, it derives nothing in the KDF catalog, it touches no wire format and no KAT, and it never leaves WebCrypto. Two live instances — the Core Kit store's wrapping key (`apps/web/src/auth/sealedStore.ts`), and the device identity key that signs a device-approval exchange before reconstruction ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md)). Anything protocol-shaped is still Rust, without exception.
+4. **All crypto lives in `crates/core`** — TypeScript has no codec or crypto of its own; never implement crypto in TS. **One exception: browser-held key custody via WebCrypto**, for a key that must be non-extractable, or must exist before the engine has a session. The engine cannot serve either case — a WASM implementation necessarily materializes key bytes in linear memory, which is the property non-extractability exists to deny, and before `start(secret)` there is no session to derive from. Conditions, all of them: the key protects local state only, it derives nothing in the KDF catalog, it touches no wire format and no KAT, and it never leaves WebCrypto. Two live instances — the Core Kit store's wrapping key (`apps/web/src/auth/sealedStore.ts`), and the device identity key that signs a device-approval exchange before reconstruction ([ADR 0009](decisions/0009-device-approval-is-a-bound-rendezvous.md)). Anything protocol-shaped is still Rust, without exception.
 5. Primitives are fixed by `blueprint/core.md`: XChaCha20-Poly1305 sealing, BLAKE3 tree KDF, X25519 + HPKE key wrapping, Ed25519/secp256k1 signing — no key derives outside the frozen KDF edge catalog
 6. Every resolved record passes the adoption gate; a failure is a fail-closed trust violation, never mere staleness
 7. Clear sensitive material from memory after use (zeroize at the terminal owner only — a callee must not zero caller-owned buffers)
@@ -57,7 +58,7 @@ Three recurring shapes of this smell go beyond excusing a hack — avoid all thr
 
 - **Absence-justifying comments** — prose explaining why a path that is _not_ in the code does not happen (e.g. "`replay()` does not run here, so `decode_queue` is the only source at this stage"). It bloats the diff and rots into a falsehood the moment that path is wired — a stale in-code claim that actively misleads. Describe what the present code does; a bare cross-reference suffices if a reader must know a related path lives elsewhere.
 - **Unchanged-code apologia** — a doc block defending code this change does not modify (e.g. why a parameter stays a raw borrow, on a function the diff leaves untouched). It is scope creep into untouched code and reads as pre-emptive defensiveness. Leave that rationale where it already lives.
-- **Tracker references** — a bare `#1234` claims something about the _tracker_, not the code, so nothing in CI, review, or the type system catches it drifting when the issue closes, splits, or gets re-scoped. State the condition instead: `the real wiring is #1026` becomes `the real wiring is not landed`, which is checkable from the code and stops being true in the same diff that falsifies it. Enforced by `pnpm lint:tracker-refs` (the **Tracker Refs** gate). Exempt: citations of the frozen decision corpus, whether written `FSM1/cipher-box-next#32` or bare as `#33 D6` — this repo's issue numbers share an ever-increasing counter with its PRs and passed 1000 long ago, so a one- or two-digit `#NN` can only be cipher-box-next. Commit messages and PR bodies are also exempt: they are timestamped and do not rot.
+- **Tracker references** — a bare `#1234` claims something about the _tracker_, not the code, so nothing in CI, review, or the type system catches it drifting when the issue closes, splits, or gets re-scoped. State the condition instead: `the real wiring is #1026` becomes `the real wiring is not landed`, which is checkable from the code and stops being true in the same diff that falsifies it. Enforced by `pnpm lint:tracker-refs` (the **Tracker Refs** gate). Exempt: citations of the frozen decision corpus, whether written `FSM1/cipher-box-next#32` or bare as `#33 D6`; that corpus is archived and its threads do not change — this repo's issue numbers share an ever-increasing counter with its PRs and passed 1000 long ago, so a one- or two-digit `#NN` can only be cipher-box-next. Commit messages and PR bodies are also exempt: they are timestamped and do not rot.
 
 State genuine non-obvious domain rationale **once**, at its home (the type or definition), not restated on every caller. These cost real review cycles — `/simplify`, CodeRabbit, and Greptile all flag them.
 
@@ -152,6 +153,10 @@ Every code PR runs these review gates after it is opened as a **draft**, before 
 3. `/crypto-privacy-review` — **required whenever the diff touches crypto**: `crates/core` primitives, key/seal material, or trust-boundary and fail-closed reads.
 
 Run each on the PR's own diff (`git diff main...HEAD`) and fold real findings back into the code and tests before requesting a CodeRabbit/Greptile review. If a slash-command skill is unavailable in your environment, do a rigorous manual pass against that review's checklist instead — never skip a gate. Self-review is the floor, not the ceiling: layer an independent reviewer pass on crypto- and trust-critical PRs. A pure documentation change with no code surface is exempt.
+
+### ADR Process
+
+An ADR is a `docs:` PR that adds one file to [`decisions/`](decisions/README.md) with the status Proposed. Open it as a draft, with `@coderabbitai ignore` in the body. The owner accepts it by merging it with the status changed to "Accepted on <date>". A blueprint or `CONTEXT.md` reword that the ADR's Consequences list goes in the same PR or the next one. An ADR that amends an older ADR adds one "Amended by ADR 00NN Dk on <date>: …" sentence at the amended item in the older file, in the same PR.
 
 ### Releases & Versioning
 

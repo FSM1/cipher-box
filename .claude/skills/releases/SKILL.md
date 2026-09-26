@@ -5,7 +5,7 @@ description: CipherBox v2 release and staging-deploy mechanics — release-pleas
 
 # Releases & Versioning
 
-Normative source: `blueprint/deploy.md` in [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next). One product version, one release train.
+Normative source: [`blueprint/deploy.md`](../../../blueprint/deploy.md). One product version, one release train.
 
 - The repo releases as a single product `vX.Y.Z` (starting at `v2.0.0`). One release-please component (root, `include-component-in-tag: false`), one CHANGELOG. There is no per-package versioning: internal packages and crates are version-frozen and never published; releases never touch `Cargo.toml`/`Cargo.lock`.
 - Version surfaces are exactly two files: root `package.json` (manifest source) and `apps/desktop/src-tauri/tauri.conf.json` (via `extra-files`). Both agree with `.release-please-manifest.json`; a release moves all three together.

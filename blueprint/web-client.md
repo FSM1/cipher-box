@@ -142,7 +142,7 @@ engine writer per origin — is FSM1/cipher-box-next#28 D4's):
   transport on followers. Leadership changes swap the transport without the
   UI noticing.
 - **The invite preview runs in the session engine**
-  ([ADR 0028](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0028-the-invite-page-previews-before-join.md)
+  ([ADR 0028](../decisions/0028-the-invite-page-previews-before-join.md)
   D3, D7): it is a facade command like any other, on the signed-in person's
   own engine, and it holds no state across a navigation. A preview before
   sign-in is deferred: it needs a throwaway engine mode with an in-memory
@@ -213,7 +213,7 @@ all living in `packages/client` and running inside the engine worker realm:
 - **The engine owns the token lifecycle** (FSM1/cipher-box-next#28 D5): challenge-signature login
   through its API client; access JWT in engine memory; refresh cookie rides
   the Http seam. This is a distinct authentication from unlocking the Core Kit,
-  and only the latter involves an identity provider ([ADR 0008](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0008-cipherbox-issues-the-identity-token.md)).
+  and only the latter involves an identity provider ([ADR 0008](../decisions/0008-cipherbox-issues-the-identity-token.md)).
 - **The login orchestration is shared, the credential collection is not**
   (ADR 0008 D3). `packages/login` (`@cipherbox/login`) is host-agnostic — no
   browser API, no React — and sequences provider credential → API exchange →
@@ -225,7 +225,7 @@ all living in `packages/client` and running inside the engine worker realm:
 - **Wallet is a first login here** (ADR 0008 D2): wagmi collects the signature on
   the UI thread, the API verifies it and mints the identity token, and the Core
   Kit login proceeds as for any other method. Web only.
-- **Device approval is not Core Kit UX** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md)). The Core Kit has no native
+- **Device approval is not Core Kit UX** ([ADR 0009](../decisions/0009-device-approval-is-a-bound-rendezvous.md)). The Core Kit has no native
   cross-device share transfer, so approval is a server-mediated rendezvous with
   its own API surface (api.md) — the client's part is minting the ephemeral key,
   displaying the comparison value both devices must match, signing both halves
@@ -289,15 +289,15 @@ all living in `packages/client` and running inside the engine worker realm:
   works; ADR 0027 D5), the permission badge, the one-level listing of names and
   kinds, and a grantee-name field that starts at the sign-in display name, or
   empty when the sign-in supplies none, never the email
-  ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
+  ([ADR 0027](../decisions/0027-a-grantee-name-is-not-an-identity.md)
   D1). "Join" posts the claim, starts the link read and opens the shared folder.
   An expired or revoked link shows its state; a link this account already joined
   shows "open folder" and no "join". A write-link preview says "can edit" before
   the holder can write.
 - **Share dialog**
-  ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
-  D7, [ADR 0025](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0025-revocation-under-the-link-first-model.md)
-  D1, D5–D7, [ADR 0026](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0026-a-scope-root-takes-many-grants.md)
+  ([ADR 0023](../decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
+  D7, [ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)
+  D1, D5–D7, [ADR 0026](../decisions/0026-a-scope-root-takes-many-grants.md)
   D2–D4): a people table with each grantee name, editable, the fingerprint on
   hover, and a "can" control with view and edit; an inline "create link" row
   that sets permission, deadline and admission cap, with a small default cap

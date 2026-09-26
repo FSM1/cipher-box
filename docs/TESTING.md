@@ -3,7 +3,7 @@
 # Testing
 
 CipherBox uses a multi-layer testing strategy documented in full in
-[tests/TESTING_STRATEGY.md](../tests/TESTING_STRATEGY.md). This page summarises
+[tests/TESTING_STRATEGY.md](https://github.com/FSM1/cipher-box/blob/v1/tests/TESTING_STRATEGY.md). This page summarises
 the test landscape, shows how to run each suite, and maps tests to CI gates.
 
 ## Test Landscape
@@ -78,7 +78,7 @@ cargo test --workspace --no-default-features --features winfsp
 
 SDK E2E tests (`@cipherbox/sdk-e2e`) drive `CipherBoxClient` directly against a
 real API instance — no browser, no Playwright. See
-[tests/TESTING_STRATEGY.md](../tests/TESTING_STRATEGY.md) for the full suite list
+[tests/TESTING_STRATEGY.md](https://github.com/FSM1/cipher-box/blob/v1/tests/TESTING_STRATEGY.md) for the full suite list
 and rate-limit strategy.
 
 ### Prerequisites
@@ -145,7 +145,7 @@ local recipe, the scenario list, and the login mechanics.
 ## Running Load Tests
 
 Load tests are managed by the `load-test.yml` workflow and are not meant to run
-against production. See [tests/TESTING_STRATEGY.md](../tests/TESTING_STRATEGY.md)
+against production. See [tests/TESTING_STRATEGY.md](https://github.com/FSM1/cipher-box/blob/v1/tests/TESTING_STRATEGY.md)
 for scenario descriptions and the rate-limit bypass design.
 
 ```bash
