@@ -19,7 +19,10 @@
 //! vault-pointer chain is index-probed at runtime (cold start and per tick,
 //! CONTEXT.md "Vault pointer") and cannot be fully pre-derived.
 
+use core::cell::{Cell, RefCell};
 use core::fmt;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
@@ -30,7 +33,30 @@ use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
-use crate::facade::{EngineError, LoginSecret};
+use crate::bin_index::BinIndexKeys;
+use crate::facade::{
+    ClaimCounts, EngineError, LoginSecret, NodeId, RetainedDeadLetters, ScopeSeeds, SweepKeys,
+    SweepTaskFactory, SyncStatus,
+};
+use crate::grants::accept::ReceivedSharesLock;
+use crate::grants::grafted::{
+    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, GraftedSharers,
+};
+use crate::grants::received_status::ReceivedVerdicts;
+use crate::net::HeldRecords;
+use crate::net::retire::{OrphanHeads, ReclaimStall};
+use crate::net::rotation::OnAccessMisses;
+use crate::rotation::WalkedReadEpochs;
+use crate::seams::UnixMillis;
+use crate::settings::{SessionPlacement, VaultSettingsSummary};
+use crate::sync::cancel::UploadCancels;
+use crate::sync::drain::{BookkeepingCursors, QueueHold};
+use crate::sync::model::Snapshot;
+use crate::sync::project::UnlinkedChild;
+use crate::sync::rebase::QueueScanMemo;
+use crate::sync::render::BaseSnapshot;
+use crate::sync::staging::LiveBlocks;
+use crate::sync::tick::FocusWindow;
 
 /// The session's seed-derived identity — the single place derived key material
 /// lives once the engine is live.
@@ -240,6 +266,299 @@ impl fmt::Debug for SessionIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SessionIdentity(redacted)")
     }
+}
+
+/// The session cells the command path and the tick loop share. Each cell keeps
+/// its own `Rc`, so a spawned task can still hold one cell alone.
+pub(crate) struct SessionState {
+    /// The staging keys the live write handles hold — orphan GC's live set, shared with
+    /// the tick loop that sweeps after each drain pass.
+    pub(crate) live_blocks: Rc<RefCell<LiveBlocks>>,
+    /// The upload-cancel interlock, shared with the drain the tick loop runs.
+    pub(crate) cancels: Rc<RefCell<UploadCancels>>,
+    /// The last-known-good gate-passing base snapshot (state law's left
+    /// operand). Seeded at the anchored root; cold-start/resolve replace it
+    /// with the resolved remote state. Reads render this ⊕ the pending-op
+    /// overlay; commands never mutate it — only the op queue diverges locally.
+    /// Behind an [`Rc`] so the resolve-tick loop shares the one cell and
+    /// repaints it in place from a gate-passing live resolve. Every repaint
+    /// bumps the cell's generation, which is half of what
+    /// [`render_memo`](crate::facade::Engine::render_memo) is keyed on.
+    pub(crate) snapshot: Rc<BaseSnapshot>,
+    /// The session's live held-record set — see [`HeldRecords`] for what enters
+    /// it. The liveness loop this session spawns keyless re-PUTs its values on
+    /// the hourly cadence.
+    pub(crate) held_records: Rc<RefCell<HeldRecords>>,
+    /// Scope roots this session owes a scope-exit cut for, driven by the drain.
+    /// Session-lived, like the orphan-head set.
+    pub(crate) pending_scope_exits: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
+    /// successes and reports rung changes; [`snapshot`](crate::facade::Engine::snapshot)
+    /// classifies at read time off the same cell.
+    pub(crate) sync_status: Rc<RefCell<SyncStatus>>,
+    /// Per-scope read seeds recovered by gate-passing adopts (the owner-blob
+    /// override seed), keyed by scope id. In-memory only — never persisted,
+    /// never crossing the facade (security rules 1/3); the child read pipeline
+    /// derives per-node read keys from them (`node-seed` → `read-key`).
+    ///
+    /// Every key is the vault root scope id, a scope root below it this vault
+    /// owns, or a grafted scope id. The eviction pass reads that as an
+    /// invariant: it drops a seed under any other key,
+    /// because no floor namespace answers for one
+    /// ([`evict_grafted_read_seeds`](crate::grants::grafted::evict_grafted_read_seeds)).
+    pub(crate) scope_read_seeds: Rc<RefCell<ScopeSeeds>>,
+    /// Per-scope write seeds recovered by gate-passing adopts (the
+    /// owner-write-blob seed), keyed by scope id. In-memory only, exactly like
+    /// [`scope_read_seeds`](Self::scope_read_seeds); the drain derives each new
+    /// node's `ipnsName` and its narrow per-name signer from them.
+    pub(crate) scope_write_seeds: Rc<RefCell<ScopeSeeds>>,
+    /// The scope roots below the vault root that a gated descent proved this
+    /// session holds
+    /// ([`ScopeWalk::descendant_scope_roots`](crate::net::ScopeWalk::descendant_scope_roots)).
+    /// In-memory only, grow-only within a session
+    /// (`install_descendant_scopes`); the read legs group focus targets against
+    /// it ([`scope_root_of`](crate::sync::tick::scope_root_of)).
+    pub(crate) descendant_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// Scope roots the same walk named but proved no material for: a folder
+    /// publishing under a name its parent scope's write seed does not derive is
+    /// a scope root of its own, whether or not the parent's child-scope index
+    /// still names it
+    /// ([`ScopeWalk::descendant_scope_roots`](crate::net::ScopeWalk::descendant_scope_roots)).
+    /// Grows within a session until a walk proves the root
+    /// (`install_unproved_scopes`). A boundary with no material still splits
+    /// the focus window (`focus_scope_roots`) and still names a crossing a
+    /// relocation is classified against
+    /// ([`relocation_scope_roots`](crate::facade::Engine::relocation_scope_roots)).
+    pub(crate) unproved_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// Whether the last boundary walk to reach a verdict met a trust rejection.
+    /// While it stands the session refuses every relocation, because a walk
+    /// that could not gate a descendant scope root names no boundary below it,
+    /// and every move out of that scope would read intra-scope. Only a later
+    /// walk that proves its whole boundary set lifts it; an availability
+    /// failure neither raises nor lifts it.
+    pub(crate) boundary_walk_rejected: Rc<Cell<bool>>,
+    /// Whether the last boundary walk proved every scope root it named. Until
+    /// one has, a scope root can be missing from the known set.
+    pub(crate) scope_roots_walked: Rc<Cell<bool>>,
+    /// The read epoch the same walk proved each of them at, which no seed cache
+    /// carries ([`crate::rotation::scope_material`]). Replaced per walk, unlike
+    /// the set above.
+    pub(crate) walked_read_epochs: Rc<RefCell<WalkedReadEpochs>>,
+    /// The `ipnsName` the vault root scope currently publishes under: adopted at
+    /// cold start, minted by a first run, moved by a write wave this session
+    /// drove, and re-read from the vault pointer on every consult. `None` until
+    /// one of those lands.
+    ///
+    /// A write wave moves the root and leaves the predecessor name **dead to
+    /// survivors but live to the revokee**, who still holds its write-name key
+    /// (blueprint/engine.md "Residuals"). The cached write scope seed lags the
+    /// wave until an adopt re-deposits it, so an owner action that re-derived
+    /// its target would name the dead root. This cell is what the derivation is
+    /// proved against ([`vault_root_scope`](crate::facade::Engine::vault_root_scope)).
+    pub(crate) current_root_name: Rc<RefCell<Option<IpnsName>>>,
+    /// The open focus window
+    /// ([`Command::SetFocus`](crate::facade::Command::SetFocus)): the folder
+    /// the host has open, whose record and whole ancestor chain every resolve
+    /// tick refreshes. Shared with the tick loop, which reads it on each pass.
+    pub(crate) focus: Rc<RefCell<FocusWindow>>,
+    /// When each focus folder was last refreshed, so a navigation inside the
+    /// staleness threshold renders state already held instead of re-probing the
+    /// record plane (blueprint/engine.md: refresh on access past the threshold).
+    pub(crate) focus_refreshed: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
+    /// When each scope's pointer was last consulted, so the polled consult runs
+    /// at
+    /// [`SyncTimingProfile::pointer_consult_interval`](crate::profile::SyncTimingProfile::pointer_consult_interval)
+    /// rather than at the poll cadence. In-memory: a floor only ever moves up,
+    /// so a restart's first tick re-consults and re-derives it.
+    pub(crate) pointer_consulted: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
+    /// The owner accesses' scope-pointer consult misses ([`OnAccessMisses`]).
+    pub(crate) on_access_misses: OnAccessMisses,
+    /// The verdict the tick's last pass reached for each bookmarked shared
+    /// scope. In-memory: a verdict is what a live resolve found, so a restart
+    /// re-earns it rather than rendering one nothing observed this session.
+    pub(crate) received_verdicts: Rc<RefCell<ReceivedVerdicts>>,
+    /// Held across every load, change and persist of the received-shares list,
+    /// so the join, the accept and the refresh never overwrite each other.
+    pub(crate) received_shares_lock: Rc<ReceivedSharesLock>,
+    /// Rebuilt by the received-share pass, like
+    /// [`received_verdicts`](Self::received_verdicts).
+    pub(crate) grafted_sharers: Rc<RefCell<GraftedSharers>>,
+    /// Rebuilt by the same pass: the cross-plane rule the focus window's folder
+    /// leg applies below a grafted root
+    /// ([`GraftedPlane`](crate::grants::grafted::GraftedPlane)).
+    pub(crate) bookmarked_scope_roots: Rc<RefCell<BookmarkedScopeRoots>>,
+    /// Rebuilt by the same pass: what each bookmarked scope's accepted grant
+    /// permits this vault to do, which is what [`snapshot`](crate::facade::Engine::snapshot)
+    /// reports so a host can refuse a write at the gesture.
+    pub(crate) bookmarked_permissions: Rc<RefCell<BookmarkedPermissions>>,
+    /// The grafted roots the last tick built a drain pass for, which is every
+    /// fact a write below one needs (`grafted_write_passes`).
+    pub(crate) grafted_write_roots: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// Folded by the same pass: what each renderable grafted scope's body
+    /// named, which decides the ids no plane may render.
+    pub(crate) grafted_claims: Rc<RefCell<ClaimRecord>>,
+    /// The folders this session's own grants promoted into scope roots. The
+    /// mint is the one moment a session proves it promoted a folder, so it is
+    /// the only writer; read by
+    /// [`relocation_scope_roots`](crate::facade::Engine::relocation_scope_roots).
+    pub(crate) minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// The conversion entries the last conversion pass counted.
+    pub(crate) pending_invite_claims: Rc<RefCell<ClaimCounts>>,
+    /// Set while a conversion pass runs (`ConversionPass::running`).
+    pub(crate) conversion_running: Rc<Cell<bool>>,
+    /// Retained dead-lettered ops. Feeds
+    /// [`SnapshotView`](crate::facade::SnapshotView)'s dead-letter surface (#33
+    /// D6: dead letters are retained, never silent).
+    pub(crate) dead_letters: Rc<RefCell<RetainedDeadLetters>>,
+    /// Memo of the durable queue scan every read renders through
+    /// ([`scan_queue`](crate::facade::Engine::scan_queue)).
+    pub(crate) queue_scan: Rc<RefCell<QueueScanMemo>>,
+    /// The drain's held queue head, written by the drain tick and read by
+    /// [`snapshot`](crate::facade::Engine::snapshot). In-memory: a restart re-derives it from the
+    /// next drain attempt's own verdict rather than trusting a stale one.
+    pub(crate) queue_hold: Rc<RefCell<Option<QueueHold>>>,
+    /// Pinned bytes a published prune still owes the registry, written by the
+    /// drain tick and read by
+    /// [`pending_reclaim_bytes`](crate::facade::Engine::pending_reclaim_bytes).
+    /// In-memory: the durable record is the retire ledger, which every pass re-reads.
+    pub(crate) pending_reclaim: Rc<Cell<u64>>,
+    /// Why the debts the last reclaim pass could not settle did not settle,
+    /// written by the drain tick and read by
+    /// [`reclaim_stalls`](crate::facade::Engine::reclaim_stalls). In-memory for the same reason
+    /// [`pending_reclaim`](Self::pending_reclaim) is: every pass re-derives it
+    /// from the retire ledger.
+    pub(crate) reclaim_stalls: Rc<RefCell<Vec<ReclaimStall>>>,
+    /// Where each bounded bookkeeping loop stopped, and whether the reclaim
+    /// figure prices the whole owed set ([`BookkeepingCursors`]).
+    pub(crate) bookkeeping: Rc<RefCell<BookkeepingCursors>>,
+    /// Head blocks the drain uploaded for a publish that never reached the
+    /// record transport, pending retirement. Session-lived so a retire the
+    /// registry refused goes out again on a later pass.
+    pub(crate) orphan_heads: Rc<OrphanHeads>,
+    /// Whether a poll tick has reconciled the record plane since this session
+    /// started. The drain holds a replayed quarantine until it is set
+    /// (blueprint/engine.md "Retirement").
+    pub(crate) converged_tick: Rc<Cell<bool>>,
+    /// Builds the sweep task every rotation arm enqueues. Built at
+    /// [`start`](crate::facade::Engine::start) for the same reason the tick loop is: a spawned
+    /// task is `'static`, and the command path's seam bounds are narrower.
+    pub(crate) sweep_tasks: Rc<RefCell<Option<SweepTaskFactory>>>,
+    /// Where this session's bytes go, decided at [`start`](crate::facade::Engine::start) from the
+    /// vault settings load and re-decided by a settings save, and shared with
+    /// the drain. Carries its own provenance, because an assumed placement must
+    /// never latch account-scoped state. `None` until start, and emptied on drop
+    /// like [`tick_enc_subkey`](SessionSecrets::tick_enc_subkey) — the config it holds
+    /// carries the member's provider bearer.
+    pub(crate) placement: Rc<RefCell<Option<SessionPlacement>>>,
+    /// The host-visible summary of the settings this session loaded, refreshed
+    /// by a confirmed save and by the tick's re-decide. Redacted at
+    /// construction
+    /// ([`VaultSettings::summary`](crate::settings::VaultSettings::summary)),
+    /// so the provider bearer never enters it. Shared with the tick loop, which
+    /// must never move the placement without moving what the host is told the
+    /// session writes under.
+    pub(crate) settings_summary: Rc<RefCell<Option<VaultSettingsSummary>>>,
+    /// Unlinks a read leg observed and this device did not author. The drain
+    /// adopts them into the bin and clears only what it settles, so a capture
+    /// the merge already dropped from the base is not lost on a failed pass
+    /// (ADR 0010 item 5).
+    pub(crate) observed_unlinks: Rc<RefCell<Vec<UnlinkedChild>>>,
+    /// Whether this session has already held the account's `byo` flag to the
+    /// vaulted mode. Latched per placement decision, not per write: the flag is
+    /// account-wide, so re-deriving it on every write would let two devices flap
+    /// it — a settings change this session adopts is the one event that re-arms
+    /// it, whether the member saved it here or on another device.
+    pub(crate) byo_reconciled: Rc<Cell<bool>>,
+}
+
+impl SessionState {
+    pub(crate) fn new() -> Self {
+        Self {
+            live_blocks: Rc::new(RefCell::new(LiveBlocks::default())),
+            cancels: Rc::new(RefCell::new(UploadCancels::default())),
+            // The anchored all-zero root until cold-start/resolve replaces
+            // the base snapshot; children come from the pending-op overlay.
+            // Shared by every account on purpose: a well-known anchor, never
+            // an account discriminator — separation lives in the KDFs and in
+            // the per-identity seam views that consume it.
+            snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId::VAULT_ROOT))),
+            held_records: Rc::new(RefCell::new(HeldRecords::new())),
+            pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
+            sync_status: Rc::new(RefCell::new(SyncStatus::default())),
+            scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
+            scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
+            descendant_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+            unproved_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+            boundary_walk_rejected: Rc::new(Cell::new(false)),
+            scope_roots_walked: Rc::new(Cell::new(false)),
+            walked_read_epochs: Rc::new(RefCell::new(WalkedReadEpochs::new())),
+            current_root_name: Rc::new(RefCell::new(None)),
+            focus: Rc::new(RefCell::new(FocusWindow::default())),
+            focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
+            pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
+            on_access_misses: OnAccessMisses::default(),
+            received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
+            received_shares_lock: Rc::new(ReceivedSharesLock::new(())),
+            grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
+            bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
+            bookmarked_permissions: Rc::new(RefCell::new(BookmarkedPermissions::new())),
+            grafted_write_roots: Rc::new(RefCell::new(BTreeSet::new())),
+            grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
+            minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+            pending_invite_claims: Rc::new(RefCell::new(ClaimCounts::default())),
+            conversion_running: Rc::new(Cell::new(false)),
+            dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
+            queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
+            queue_hold: Rc::new(RefCell::new(None)),
+            pending_reclaim: Rc::new(Cell::new(0)),
+            reclaim_stalls: Rc::new(RefCell::new(Vec::new())),
+            bookkeeping: Rc::new(RefCell::new(BookkeepingCursors::default())),
+            orphan_heads: Rc::new(OrphanHeads::default()),
+            converged_tick: Rc::new(Cell::new(false)),
+            sweep_tasks: Rc::new(RefCell::new(None)),
+            placement: Rc::new(RefCell::new(None)),
+            settings_summary: Rc::new(RefCell::new(None)),
+            observed_unlinks: Rc::new(RefCell::new(Vec::new())),
+            byo_reconciled: Rc::new(Cell::new(false)),
+        }
+    }
+}
+
+/// The session secrets the tick loop gates on, in cells that teardown empties.
+#[derive(Default)]
+pub(crate) struct SessionSecrets {
+    /// The one piece of session secret the resolve-tick loop needs — the
+    /// encryption subkey it opens owner blobs and op records with — in a cell
+    /// the engine empties on drop. A parked task is not polled until its next
+    /// scheduler wake, so anything the loop captured outright would stay
+    /// resident for up to that wake past the engine (security rules 1/7); every
+    /// shared cell of either group that carries key material is cleared the same way.
+    pub(crate) tick_enc_subkey: Rc<RefCell<Option<X25519Secret>>>,
+    /// The bin index's own signer and seal key, derived at
+    /// [`start`](crate::facade::Engine::start) and shared with the drain on the same terms as
+    /// [`tick_enc_subkey`](Self::tick_enc_subkey): a spawned task holds the two
+    /// edges the bin index needs, never the login secret they came from.
+    pub(crate) tick_bin_keys: Rc<RefCell<Option<Rc<BinIndexKeys>>>>,
+    /// The settings record's own signer, shared with the tick's settings
+    /// recheck on the same terms as [`tick_bin_keys`](Self::tick_bin_keys). The
+    /// recheck enrols what it resolved, and the renewal re-signs with this.
+    pub(crate) tick_settings_signer: Rc<RefCell<Option<Rc<Ed25519Signer>>>>,
+    /// The owner identity signer, shared with the tick's conversion pass on
+    /// the same terms as [`tick_settings_signer`](Self::tick_settings_signer):
+    /// a conversion on the tick re-signs the commitment, each minted row and
+    /// each share pointer (ADR 0023 D4).
+    pub(crate) tick_owner_signer: Rc<RefCell<Option<Rc<EcdsaSigner>>>>,
+    /// The received-share leg's: the contact-label seed that leg's
+    /// sharer-scoped floor reads are keyed under
+    /// ([`ContactLabel`](crate::seams::ContactLabel)). Same cell discipline as
+    /// [`tick_enc_subkey`](Self::tick_enc_subkey).
+    pub(crate) tick_contact_label_seed: Rc<RefCell<Option<SecretBytes>>>,
+    /// What a spawned sweep opens and signs with, shared with every task it
+    /// produces and emptied on drop — the tasks read through this cell, so
+    /// teardown revokes the material instead of waiting out the last pass. The
+    /// tick's polled pointer consult reads the same cell rather than holding a
+    /// second copy of the two owner seeds.
+    pub(crate) sweep_keys: Rc<RefCell<Option<Rc<SweepKeys>>>>,
 }
 
 #[cfg(test)]

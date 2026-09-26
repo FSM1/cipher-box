@@ -24,9 +24,10 @@ use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+pub(crate) use claim_conversion::ClaimCounts;
 use claim_conversion::{
-    CONVERSION_RUNNING, ClaimCounts, ConversionPass, CutAuthority, EngineSites, PassOutcome,
-    PointerIndex, TickSites, claimed_pointer, placed, scope_pointer_index,
+    CONVERSION_RUNNING, ConversionPass, CutAuthority, EngineSites, PassOutcome, PointerIndex,
+    TickSites, claimed_pointer, placed, scope_pointer_index,
 };
 
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
@@ -67,12 +68,11 @@ use crate::deadlines::DeadlinePolicy;
 use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprovalView};
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
-use crate::grants::accept::{JoinStanding, ReceivedSharesLock};
+use crate::grants::accept::JoinStanding;
 use crate::grants::create::MINT_EPOCH;
 use crate::grants::grafted::{
-    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, FloorNamespace, GraftedPlane,
-    GraftedSharers, evict_grafted_read_seeds, evict_grafted_write_seeds, floor_namespace,
-    floor_view, is_own_scope,
+    BookmarkedPermissions, FloorNamespace, GraftedPlane, GraftedSharers, evict_grafted_read_seeds,
+    evict_grafted_write_seeds, floor_namespace, floor_view, is_own_scope,
 };
 use crate::grants::inbox::{OwnedClaim, ShareInbox, owned_claims};
 use crate::grants::link_read::{
@@ -80,7 +80,7 @@ use crate::grants::link_read::{
     pending_link_bookmark, preview_read, repost_held_claims,
 };
 use crate::grants::received_status::{
-    ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name, live_permission,
+    ReceivedShareStatus, ScopeRender, grafted_root_name, live_permission,
 };
 use crate::grants::{
     BoundContact, CLAIM_KEY_LEN, ClaimOutcome, CommittedScope, Contact, ContactStore,
@@ -106,7 +106,7 @@ use crate::name::{NameError, is_emittable, validate_name};
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
-use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
+use crate::net::retire::{ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{
     GatedRoots, MovedScopeSeed, OnAccessMisses, RotationAncestry, SweptScopeState,
@@ -143,7 +143,7 @@ use crate::seams::{
     SeamError, SeamResult, SeamSet, SeamTypes, SharerScopedFloorStore, SnapshotCache, StagingStore,
     UnixMillis,
 };
-use crate::session::SessionIdentity;
+use crate::session::{SessionIdentity, SessionSecrets, SessionState};
 use crate::settings::{
     DEFAULT_BIN_RETENTION_DAYS, Placement, PlacementRefusal, PlacementSource, SessionPlacement,
     SettingsLoad, SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary,
@@ -152,12 +152,10 @@ use crate::settings::{
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
-use crate::sync::cancel::UploadCancels;
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{
-    BookkeepingCursors, Drain, DrainReport, DrainScope, GrantedPass, MAX_BIN_EXPIRIES, ScopeEnd,
-    SealPlane, TickShare, charge_the_identity_to_one_pass, hold_captures, owner_scoped_key,
-    published_op_mark,
+    Drain, DrainReport, DrainScope, GrantedPass, MAX_BIN_EXPIRIES, ScopeEnd, SealPlane, TickShare,
+    charge_the_identity_to_one_pass, hold_captures, owner_scoped_key, published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
@@ -180,7 +178,7 @@ use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{
-    DEAD_LETTER_NOTICES_PREFIX, LiveBlocks, PreservedBounds, PreservedDeadLetter, StagedBlocks,
+    DEAD_LETTER_NOTICES_PREFIX, PreservedBounds, PreservedDeadLetter, StagedBlocks,
     read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
     release_version_blocks, stage_op, take_dead_letter_notice, take_preserved_dead_letter,
 };
@@ -4849,7 +4847,7 @@ fn count_nodes(snapshot: &Snapshot) -> u64 {
 /// is in flight, and the last rung reported — [`Event::StalenessChanged`] fires
 /// only on a rung change.
 #[derive(Default)]
-struct SyncStatus {
+pub(crate) struct SyncStatus {
     last_success: Option<UnixMillis>,
     reconcile_in_flight: bool,
     reported: Option<Staleness>,
@@ -5375,13 +5373,14 @@ struct LiveStreams {
 pub(crate) const POINTER_PAYLOAD_VERSION: u64 = 1;
 
 /// The resolve-tick task, spawned once a root name exists to poll. It reads
-/// that name from [`Engine::current_root_name`] on every pass.
+/// that name from [`SessionState::current_root_name`] on every pass.
 type TickLoopSpawner = Box<dyn FnOnce()>;
 
 /// Builds the lazy-wave sweep task a rotation enqueues once its cut is durable
 /// ([`rotate_scope`]'s third effect), over the scope root the rotation read and
 /// the ancestor seed it read it under.
-type SweepTaskFactory = Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>) -> BoxedTask>;
+pub(crate) type SweepTaskFactory =
+    Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>) -> BoxedTask>;
 
 /// One [`run_sweep`] over a scope root, the ancestor seed its gate proves under,
 /// and a pass cap.
@@ -5405,8 +5404,8 @@ struct SweepTarget {
 
 /// The session material a spawned sweep opens and re-seals under, held in a cell
 /// the engine empties on drop so teardown revokes it rather than waiting out the
-/// task ([`Engine::tick_enc_subkey`] carries the tick loop's on the same terms).
-struct SweepKeys {
+/// task ([`SessionSecrets::tick_enc_subkey`] carries the tick loop's on the same terms).
+pub(crate) struct SweepKeys {
     enc_secret: X25519Secret,
     owner_identity: EcdsaVerifier,
     scope_keys: OwnerSeedKeys,
@@ -5443,11 +5442,6 @@ pub struct Engine<T: SeamTypes> {
     /// Live read streams and the content version each pins. In memory only: a
     /// restart drops them, and a host reopens.
     streams: RefCell<LiveStreams>,
-    /// The staging keys those handles hold — orphan GC's live set, shared with
-    /// the tick loop that sweeps after each drain pass.
-    live_blocks: Rc<RefCell<LiveBlocks>>,
-    /// The upload-cancel interlock, shared with the drain the tick loop runs.
-    cancels: Rc<RefCell<UploadCancels>>,
     /// The API base URL cold start logs in against and the liveness loop
     /// registers renewals against.
     api_base_url: ApiBaseUrl,
@@ -5467,176 +5461,22 @@ pub struct Engine<T: SeamTypes> {
     /// accelerator alone. Every record read and publish goes through this.
     record_transport: RecordAccelerator<T::RecordTransport>,
     events: mpsc::UnboundedSender<Event>,
-    /// The last-known-good gate-passing base snapshot (state law's left
-    /// operand). Seeded at the anchored root; cold-start/resolve replace it
-    /// with the resolved remote state. Reads render this ⊕ the pending-op
-    /// overlay; commands never mutate it — only the op queue diverges locally.
-    /// Behind an [`Rc`] so the resolve-tick loop shares the one cell and
-    /// repaints it in place from a gate-passing live resolve. Every repaint
-    /// bumps the cell's generation, which is half of what
-    /// [`render_memo`](Self::render_memo) is keyed on.
-    snapshot: Rc<BaseSnapshot>,
+    state: Rc<SessionState>,
+    secrets: Rc<SessionSecrets>,
     /// The one render the reads between two mutations share. Not shared with
     /// the tick loop: a pass reads the base itself, and the two generations the
     /// memo keys on already carry whatever it repaints.
     render_memo: RefCell<RenderMemo>,
-    /// The session's live held-record set — see [`HeldRecords`] for what enters
-    /// it. The liveness loop this session spawns keyless re-PUTs its values on
-    /// the hourly cadence.
-    held_records: Rc<RefCell<HeldRecords>>,
-    /// Scope roots this session owes a scope-exit cut for, driven by the drain.
-    /// Session-lived, like the orphan-head set.
-    pending_scope_exits: Rc<RefCell<BTreeSet<NodeId>>>,
-    /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
-    /// successes and reports rung changes; [`snapshot`](Self::snapshot)
-    /// classifies at read time off the same cell.
-    sync_status: Rc<RefCell<SyncStatus>>,
-    /// Per-scope read seeds recovered by gate-passing adopts (the owner-blob
-    /// override seed), keyed by scope id. In-memory only — never persisted,
-    /// never crossing the facade (security rules 1/3); the child read pipeline
-    /// derives per-node read keys from them (`node-seed` → `read-key`).
-    ///
-    /// Every key is the vault root scope id, a scope root below it this vault
-    /// owns, or a grafted scope id. The eviction pass reads that as an
-    /// invariant: it drops a seed under any other key,
-    /// because no floor namespace answers for one
-    /// ([`evict_grafted_read_seeds`](crate::grants::grafted::evict_grafted_read_seeds)).
-    scope_read_seeds: Rc<RefCell<ScopeSeeds>>,
-    /// Per-scope write seeds recovered by gate-passing adopts (the
-    /// owner-write-blob seed), keyed by scope id. In-memory only, exactly like
-    /// [`scope_read_seeds`](Self::scope_read_seeds); the drain derives each new
-    /// node's `ipnsName` and its narrow per-name signer from them.
-    scope_write_seeds: Rc<RefCell<ScopeSeeds>>,
-    /// The scope roots below the vault root that a gated descent proved this
-    /// session holds ([`ScopeWalk::descendant_scope_roots`]). In-memory only,
-    /// grow-only within a session ([`install_descendant_scopes`]); the read legs
-    /// group focus targets against it ([`scope_root_of`]).
-    descendant_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
-    /// Scope roots the same walk named but proved no material for: a folder
-    /// publishing under a name its parent scope's write seed does not derive is
-    /// a scope root of its own, whether or not the parent's child-scope index
-    /// still names it ([`ScopeWalk::descendant_scope_roots`]). Grows within a
-    /// session until a walk proves the root ([`install_unproved_scopes`]). A
-    /// boundary with no material still splits the focus window
-    /// ([`focus_scope_roots`]) and still names a crossing a relocation is
-    /// classified against
-    /// ([`relocation_scope_roots`](Self::relocation_scope_roots)).
-    unproved_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
-    /// Whether the last boundary walk to reach a verdict met a trust rejection.
-    /// While it stands the session refuses every relocation, because a walk
-    /// that could not gate a descendant scope root names no boundary below it,
-    /// and every move out of that scope would read intra-scope. Only a later
-    /// walk that proves its whole boundary set lifts it; an availability
-    /// failure neither raises nor lifts it.
-    boundary_walk_rejected: Rc<Cell<bool>>,
-    /// Whether the last boundary walk proved every scope root it named. Until
-    /// one has, a scope root can be missing from the known set.
-    scope_roots_walked: Rc<Cell<bool>>,
-    /// The read epoch the same walk proved each of them at, which no seed cache
-    /// carries ([`crate::rotation::scope_material`]). Replaced per walk, unlike
-    /// the set above.
-    walked_read_epochs: Rc<RefCell<WalkedReadEpochs>>,
-    /// The `ipnsName` the vault root scope currently publishes under: adopted at
-    /// cold start, minted by a first run, moved by a write wave this session
-    /// drove, and re-read from the vault pointer on every consult. `None` until
-    /// one of those lands.
-    ///
-    /// A write wave moves the root and leaves the predecessor name **dead to
-    /// survivors but live to the revokee**, who still holds its write-name key
-    /// (blueprint/engine.md "Residuals"). The cached write scope seed lags the
-    /// wave until an adopt re-deposits it, so an owner action that re-derived
-    /// its target would name the dead root. This cell is what the derivation is
-    /// proved against ([`vault_root_scope`](Self::vault_root_scope)).
-    current_root_name: Rc<RefCell<Option<IpnsName>>>,
     /// The vault-pointer index this session adopted at cold start, or minted —
     /// the index a root write rotation must re-point
     /// ([`resolve_vault_pointer`](crate::sync::pointer::resolve_vault_pointer)
     /// adopts the highest valid one). `None` on a vault with neither.
     vault_pointer_index: Cell<Option<u64>>,
-    /// The open focus window ([`Command::SetFocus`]): the folder the host has
-    /// open, whose record and whole ancestor chain every resolve tick refreshes.
-    /// Shared with the tick loop, which reads it on each pass.
-    focus: Rc<RefCell<FocusWindow>>,
-    /// When each focus folder was last refreshed, so a navigation inside the
-    /// staleness threshold renders state already held instead of re-probing the
-    /// record plane (blueprint/engine.md: refresh on access past the threshold).
-    focus_refreshed: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
-    /// When each scope's pointer was last consulted, so the polled consult runs
-    /// at [`SyncTimingProfile::pointer_consult_interval`] rather than at the
-    /// poll cadence. In-memory: a floor only ever moves up, so a restart's first
-    /// tick re-consults and re-derives it.
-    pointer_consulted: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
-    /// The owner accesses' scope-pointer consult misses ([`OnAccessMisses`]).
-    on_access_misses: OnAccessMisses,
-    /// The verdict the tick's last pass reached for each bookmarked shared
-    /// scope. In-memory: a verdict is what a live resolve found, so a restart
-    /// re-earns it rather than rendering one nothing observed this session.
-    received_verdicts: Rc<RefCell<ReceivedVerdicts>>,
-    /// Held across every load, change and persist of the received-shares list,
-    /// so the join, the accept and the refresh never overwrite each other.
-    received_shares_lock: Rc<ReceivedSharesLock>,
-    /// Rebuilt by the received-share pass, like
-    /// [`received_verdicts`](Self::received_verdicts).
-    grafted_sharers: Rc<RefCell<GraftedSharers>>,
-    /// Rebuilt by the same pass: the cross-plane rule the focus window's folder
-    /// leg applies below a grafted root
-    /// ([`GraftedPlane`](crate::grants::grafted::GraftedPlane)).
-    bookmarked_scope_roots: Rc<RefCell<BookmarkedScopeRoots>>,
-    /// Rebuilt by the same pass: what each bookmarked scope's accepted grant
-    /// permits this vault to do, which is what [`snapshot`](Self::snapshot)
-    /// reports so a host can refuse a write at the gesture.
-    bookmarked_permissions: Rc<RefCell<BookmarkedPermissions>>,
-    /// The grafted roots the last tick built a drain pass for, which is every
-    /// fact a write below one needs ([`grafted_write_passes`]).
-    grafted_write_roots: Rc<RefCell<BTreeSet<NodeId>>>,
-    /// Folded by the same pass: what each renderable grafted scope's body
-    /// named, which decides the ids no plane may render.
-    grafted_claims: Rc<RefCell<ClaimRecord>>,
-    /// The folders this session's own grants promoted into scope roots. The
-    /// mint is the one moment a session proves it promoted a folder, so it is
-    /// the only writer; read by
-    /// [`relocation_scope_roots`](Self::relocation_scope_roots).
-    minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
-    /// The conversion entries the last conversion pass counted.
-    pending_invite_claims: Rc<RefCell<ClaimCounts>>,
-    /// Set while a conversion pass runs ([`ConversionPass::running`]).
-    conversion_running: Rc<Cell<bool>>,
     /// The folder the FUSE-op TTL check last fired a hint for, and when. One
     /// slot: the check only ever asks about the folder in view, and a hint is
     /// not the refresh stamp a completed pass earns
-    /// ([`focus_refreshed`](Self::focus_refreshed)).
+    /// ([`focus_refreshed`](SessionState::focus_refreshed)).
     focus_hinted: Cell<Option<(NodeId, UnixMillis)>>,
-    /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
-    /// (#33 D6: dead letters are retained, never silent).
-    dead_letters: Rc<RefCell<RetainedDeadLetters>>,
-    /// Memo of the durable queue scan every read renders through
-    /// ([`scan_queue`](Self::scan_queue)).
-    queue_scan: Rc<RefCell<QueueScanMemo>>,
-    /// The drain's held queue head, written by the drain tick and read by
-    /// [`snapshot`](Self::snapshot). In-memory: a restart re-derives it from the
-    /// next drain attempt's own verdict rather than trusting a stale one.
-    queue_hold: Rc<RefCell<Option<QueueHold>>>,
-    /// Pinned bytes a published prune still owes the registry, written by the
-    /// drain tick and read by [`pending_reclaim_bytes`](Self::pending_reclaim_bytes).
-    /// In-memory: the durable record is the retire ledger, which every pass re-reads.
-    pending_reclaim: Rc<Cell<u64>>,
-    /// Why the debts the last reclaim pass could not settle did not settle,
-    /// written by the drain tick and read by
-    /// [`reclaim_stalls`](Self::reclaim_stalls). In-memory for the same reason
-    /// [`pending_reclaim`](Self::pending_reclaim) is: every pass re-derives it
-    /// from the retire ledger.
-    reclaim_stalls: Rc<RefCell<Vec<ReclaimStall>>>,
-    /// Where each bounded bookkeeping loop stopped, and whether the reclaim
-    /// figure prices the whole owed set ([`BookkeepingCursors`]).
-    bookkeeping: Rc<RefCell<BookkeepingCursors>>,
-    /// Head blocks the drain uploaded for a publish that never reached the
-    /// record transport, pending retirement. Session-lived so a retire the
-    /// registry refused goes out again on a later pass.
-    orphan_heads: Rc<OrphanHeads>,
-    /// Whether a poll tick has reconciled the record plane since this session
-    /// started. The drain holds a replayed quarantine until it is set
-    /// (blueprint/engine.md "Retirement").
-    converged_tick: Rc<Cell<bool>>,
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
     alive: Rc<Cell<bool>>,
@@ -5649,69 +5489,9 @@ pub struct Engine<T: SeamTypes> {
     /// slices read every signer from here. Owned outright, never shared, so the
     /// retained login secret drops with the engine.
     session: Option<SessionIdentity>,
-    /// The one piece of session secret the resolve-tick loop needs — the
-    /// encryption subkey it opens owner blobs and op records with — in a cell
-    /// the engine empties on drop. A parked task is not polled until its next
-    /// scheduler wake, so anything the loop captured outright would stay
-    /// resident for up to that wake past the engine (security rules 1/7); every
-    /// shared cell below carrying key material is cleared the same way.
-    tick_enc_subkey: Rc<RefCell<Option<X25519Secret>>>,
-    /// The bin index's own signer and seal key, derived at
-    /// [`start`](Self::start) and shared with the drain on the same terms as
-    /// [`tick_enc_subkey`](Self::tick_enc_subkey): a spawned task holds the two
-    /// edges the bin index needs, never the login secret they came from.
-    tick_bin_keys: Rc<RefCell<Option<Rc<BinIndexKeys>>>>,
-    /// The settings record's own signer, shared with the tick's settings
-    /// recheck on the same terms as [`tick_bin_keys`](Self::tick_bin_keys). The
-    /// recheck enrols what it resolved, and the renewal re-signs with this.
-    tick_settings_signer: Rc<RefCell<Option<Rc<Ed25519Signer>>>>,
-    /// The owner identity signer, shared with the tick's conversion pass on
-    /// the same terms as [`tick_settings_signer`](Self::tick_settings_signer):
-    /// a conversion on the tick re-signs the commitment, each minted row and
-    /// each share pointer (ADR 0023 D4).
-    tick_owner_signer: Rc<RefCell<Option<Rc<EcdsaSigner>>>>,
-    /// The received-share leg's: the contact-label seed that leg's
-    /// sharer-scoped floor reads are keyed under
-    /// ([`ContactLabel`](crate::seams::ContactLabel)). Same cell discipline as
-    /// [`tick_enc_subkey`](Self::tick_enc_subkey).
-    tick_contact_label_seed: Rc<RefCell<Option<SecretBytes>>>,
     /// Built at [`start`](Self::start), where the seam bounds its task needs
     /// hold, and waiting for a root name to poll.
     tick_loop_spawner: RefCell<Option<TickLoopSpawner>>,
-    /// Builds the sweep task every rotation arm enqueues. Built at
-    /// [`start`](Self::start) for the same reason the tick loop is: a spawned
-    /// task is `'static`, and the command path's seam bounds are narrower.
-    sweep_tasks: Rc<RefCell<Option<SweepTaskFactory>>>,
-    /// What a spawned sweep opens and signs with, shared with every task it
-    /// produces and emptied on drop — the tasks read through this cell, so
-    /// teardown revokes the material instead of waiting out the last pass. The
-    /// tick's polled pointer consult reads the same cell rather than holding a
-    /// second copy of the two owner seeds.
-    sweep_keys: Rc<RefCell<Option<Rc<SweepKeys>>>>,
-    /// Where this session's bytes go, decided at [`start`](Self::start) from the
-    /// vault settings load and re-decided by a settings save, and shared with
-    /// the drain. Carries its own provenance, because an assumed placement must
-    /// never latch account-scoped state. `None` until start, and emptied on drop
-    /// like [`tick_enc_subkey`](Self::tick_enc_subkey) — the config it holds
-    /// carries the member's provider bearer.
-    placement: Rc<RefCell<Option<SessionPlacement>>>,
-    /// The host-visible summary of the settings this session loaded, refreshed
-    /// by a confirmed save and by the tick's re-decide. Redacted at construction
-    /// ([`VaultSettings::summary`]), so the provider bearer never enters it.
-    /// Shared with the tick loop, which must never move the placement without
-    /// moving what the host is told the session writes under.
-    settings_summary: Rc<RefCell<Option<VaultSettingsSummary>>>,
-    /// Unlinks a read leg observed and this device did not author. The drain
-    /// adopts them into the bin and clears only what it settles, so a capture
-    /// the merge already dropped from the base is not lost on a failed pass
-    /// (ADR 0010 item 5).
-    observed_unlinks: Rc<RefCell<Vec<UnlinkedChild>>>,
-    /// Whether this session has already held the account's `byo` flag to the
-    /// vaulted mode. Latched per placement decision, not per write: the flag is
-    /// account-wide, so re-deriving it on every write would let two devices flap
-    /// it — a settings change this session adopts is the one event that re-arms
-    /// it, whether the member saved it here or on another device.
-    byo_reconciled: Rc<Cell<bool>>,
     /// The one shared API client, built and logged in at [`start`](Self::start)
     /// and handed to the liveness loop so the access JWT is shared across
     /// publish/renew (no redundant 401→refresh). `None` until then.
@@ -5748,8 +5528,6 @@ impl<T: SeamTypes> Engine<T> {
                 content_profile,
                 writes: RefCell::new(LiveWrites::default()),
                 streams: RefCell::new(LiveStreams::default()),
-                live_blocks: Rc::new(RefCell::new(LiveBlocks::default())),
-                cancels: Rc::new(RefCell::new(UploadCancels::default())),
                 api_base_url,
                 gateway: gateway.into_gateway(accelerator_bearer.clone()),
                 session_bearer,
@@ -5759,63 +5537,15 @@ impl<T: SeamTypes> Engine<T> {
                 ),
                 accelerator_bearer,
                 events,
-                // The anchored all-zero root until cold-start/resolve replaces
-                // the base snapshot; children come from the pending-op overlay.
-                // Shared by every account on purpose: a well-known anchor, never
-                // an account discriminator — separation lives in the KDFs and in
-                // the per-identity seam views that consume it.
-                snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId::VAULT_ROOT))),
+                state: Rc::new(SessionState::new()),
+                secrets: Rc::default(),
                 render_memo: RefCell::new(RenderMemo::default()),
-                held_records: Rc::new(RefCell::new(HeldRecords::new())),
-                pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
-                sync_status: Rc::new(RefCell::new(SyncStatus::default())),
-                scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
-                scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
-                descendant_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
-                unproved_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
-                boundary_walk_rejected: Rc::new(Cell::new(false)),
-                scope_roots_walked: Rc::new(Cell::new(false)),
-                walked_read_epochs: Rc::new(RefCell::new(WalkedReadEpochs::new())),
-                current_root_name: Rc::new(RefCell::new(None)),
                 vault_pointer_index: Cell::new(None),
-                focus: Rc::new(RefCell::new(FocusWindow::default())),
-                focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
-                pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
-                on_access_misses: OnAccessMisses::default(),
-                received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
-                received_shares_lock: Rc::new(ReceivedSharesLock::new(())),
-                grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
-                bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
-                bookmarked_permissions: Rc::new(RefCell::new(BookmarkedPermissions::new())),
-                grafted_write_roots: Rc::new(RefCell::new(BTreeSet::new())),
-                grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
-                minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
-                pending_invite_claims: Rc::new(RefCell::new(ClaimCounts::default())),
-                conversion_running: Rc::new(Cell::new(false)),
                 focus_hinted: Cell::new(None),
-                dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
-                queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
-                queue_hold: Rc::new(RefCell::new(None)),
-                pending_reclaim: Rc::new(Cell::new(0)),
-                reclaim_stalls: Rc::new(RefCell::new(Vec::new())),
-                bookkeeping: Rc::new(RefCell::new(BookkeepingCursors::default())),
-                orphan_heads: Rc::new(OrphanHeads::default()),
-                converged_tick: Rc::new(Cell::new(false)),
                 alive: Rc::new(Cell::new(true)),
                 manual_refresh: ManualRefresh::default(),
                 session: None,
-                tick_enc_subkey: Rc::new(RefCell::new(None)),
-                tick_bin_keys: Rc::new(RefCell::new(None)),
-                tick_settings_signer: Rc::new(RefCell::new(None)),
-                tick_owner_signer: Rc::new(RefCell::new(None)),
-                tick_contact_label_seed: Rc::new(RefCell::new(None)),
                 tick_loop_spawner: RefCell::new(None),
-                sweep_tasks: Rc::new(RefCell::new(None)),
-                sweep_keys: Rc::new(RefCell::new(None)),
-                placement: Rc::new(RefCell::new(None)),
-                settings_summary: Rc::new(RefCell::new(None)),
-                observed_unlinks: Rc::new(RefCell::new(Vec::new())),
-                byo_reconciled: Rc::new(Cell::new(false)),
                 api: None,
                 started: false,
                 forgotten: false,
@@ -5893,7 +5623,7 @@ impl<T: SeamTypes> Engine<T> {
         // Where this session's bytes go. Server-free and ahead of any vault
         // resolve, so a self-hosting owner never needs CipherBox to tell them
         // where their own node is (blueprint/engine.md "Vault settings load").
-        let observed = observed_at(&self.held_records, HeldKey::VaultSettings);
+        let observed = observed_at(&self.state.held_records, HeldKey::VaultSettings);
         let settings = load_settings(
             &self.record_transport,
             &self.gateway,
@@ -5905,10 +5635,10 @@ impl<T: SeamTypes> Engine<T> {
             secret.expose(),
         )
         .await
-        .enrol(&self.held_records, observed);
+        .enrol(&self.state.held_records, observed);
         report_settings_verdict(&self.events, &settings);
-        *self.placement.borrow_mut() = Some(decide_placement(&settings));
-        *self.settings_summary.borrow_mut() = Some(summarize_settings(&settings));
+        *self.state.placement.borrow_mut() = Some(decide_placement(&settings));
+        *self.state.settings_summary.borrow_mut() = Some(summarize_settings(&settings));
         // The secret zeroizes on drop here, at its terminal owner.
         drop(secret);
 
@@ -5922,7 +5652,7 @@ impl<T: SeamTypes> Engine<T> {
         // no derived key material stays resident and nothing runs past an unadopted
         // root (rules 4/6). An empty chain (a first-run vault with no pointer yet)
         // degrades to the anchored root with no error.
-        let root = self.snapshot.borrow().root;
+        let root = self.state.snapshot.borrow().root;
         let root_scope_id = root.0;
         let first_run_name = self.first_run_pointer_name(&api, root_scope_id).await;
         let first_run_name = first_run_name.as_ref();
@@ -5992,7 +5722,7 @@ impl<T: SeamTypes> Engine<T> {
         }
         // A successful cold start is a successful reconcile: stamp it so the
         // ladder starts Fresh rather than Reconciling.
-        self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
+        self.state.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
 
         // A crash between staging a version's blocks and journaling its op
         // leaves them referenced by nothing, so cold start is the first place
@@ -6001,7 +5731,7 @@ impl<T: SeamTypes> Engine<T> {
         // them, before a single tick runs.
         reconcile_staging(
             &self.seams.staging_store,
-            &self.live_blocks,
+            &self.state.live_blocks,
             PreservedBounds::at(
                 self.seams.scheduler.now(),
                 &self.storage_policy,
@@ -6012,7 +5742,7 @@ impl<T: SeamTypes> Engine<T> {
 
         self.spawn_liveness_loop(api.clone());
         let sweeper = self.build_sweeper(api.clone());
-        *self.sweep_tasks.borrow_mut() = sweeper.clone().map(sweep_task_factory);
+        *self.state.sweep_tasks.borrow_mut() = sweeper.clone().map(sweep_task_factory);
         *self.tick_loop_spawner.borrow_mut() = self.build_tick_loop_spawner(api.clone());
         self.open_tick_loop();
         if let Some(sweeper) = sweeper {
@@ -6041,7 +5771,7 @@ impl<T: SeamTypes> Engine<T> {
         // the in-memory per-scope cell the child read pipeline derives from.
         if let Some(seed) = outcome.read_scope_seed.take() {
             deposit_seed(
-                &self.scope_read_seeds,
+                &self.state.scope_read_seeds,
                 root_scope_id,
                 seed,
                 vouched.map(|repoint| repoint.min_read_epoch),
@@ -6051,19 +5781,19 @@ impl<T: SeamTypes> Engine<T> {
             .vault_pointer
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
-        *self.current_root_name.borrow_mut() = root_name.clone();
+        *self.state.current_root_name.borrow_mut() = root_name.clone();
         // The same adopt recovered the scope write seed: the drain derives every
         // new node's `ipnsName` and its narrow per-name signer from it.
         if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
             deposit_write_seed(
-                &self.scope_write_seeds,
+                &self.state.scope_write_seeds,
                 scope_id,
                 seed,
                 root_name.as_ref(),
                 vouched.map(|repoint| repoint.write_epoch),
             );
         }
-        *self.snapshot.borrow_mut() = outcome.base;
+        *self.state.snapshot.borrow_mut() = outcome.base;
         root_name.is_some()
     }
 
@@ -6077,7 +5807,7 @@ impl<T: SeamTypes> Engine<T> {
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         vouched: u64,
     ) {
-        let root = self.snapshot.borrow().root.0;
+        let root = self.state.snapshot.borrow().root.0;
         // Above `vouched` only through this start's own gated adopt: the cold
         // seed refused any higher floor that stood before it.
         let floor = match floor::read_epoch_floor(&self.seams.floor_store, &root).await {
@@ -6085,7 +5815,7 @@ impl<T: SeamTypes> Engine<T> {
             Ok(_) => return,
             Err(error) => Err(error),
         };
-        let root_name = self.current_root_name.borrow().clone();
+        let root_name = self.state.current_root_name.borrow().clone();
         let (Some(root_name), Some(anchor)) = (root_name, self.vault_pointer_voucher(api)) else {
             return;
         };
@@ -6115,19 +5845,19 @@ impl<T: SeamTypes> Engine<T> {
         self.vault_pointer_index
             .set(Some(GENESIS_VAULT_POINTER_INDEX));
         deposit_seed(
-            &self.scope_read_seeds,
+            &self.state.scope_read_seeds,
             vault.repoint.scope_id,
             vault.read_scope_seed,
             Some(vault.repoint.min_read_epoch),
         );
         deposit_write_seed(
-            &self.scope_write_seeds,
+            &self.state.scope_write_seeds,
             vault.repoint.scope_id,
             vault.write_scope_seed,
             Some(&vault.root_name),
             Some(vault.repoint.write_epoch),
         );
-        *self.current_root_name.borrow_mut() = Some(vault.root_name);
+        *self.state.current_root_name.borrow_mut() = Some(vault.root_name);
     }
 
     /// Whether this session holds the root scope's write seed — the material a
@@ -6136,8 +5866,8 @@ impl<T: SeamTypes> Engine<T> {
     /// mint lands, which a forced refresh retries. The event stream announces it
     /// ([`Event::VaultUnprovisioned`]); this answers a host that attached after.
     pub fn is_provisioned(&self) -> bool {
-        let root = self.snapshot.borrow().root.0;
-        self.scope_write_seeds.borrow().contains_key(&root)
+        let root = self.state.snapshot.borrow().root.0;
+        self.state.scope_write_seeds.borrow().contains_key(&root)
     }
 
     /// The live session identity, once [`start`](Self::start) has derived it.
@@ -6151,7 +5881,7 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Stop the spawned loops at their next wake and drop the key material they
     /// share with the engine here and now, at the terminal owner (security rule
-    /// 7) — see [`tick_enc_subkey`](Self::tick_enc_subkey). `try_borrow_mut`
+    /// 7) — see [`tick_enc_subkey`](SessionSecrets::tick_enc_subkey). `try_borrow_mut`
     /// because a panic while dropping aborts the process.
     fn shut_down(&self) {
         self.alive.set(false);
@@ -6162,37 +5892,37 @@ impl<T: SeamTypes> Engine<T> {
         self.accelerator_bearer.seal();
         // Every parked manual refresh fails now: no pass is left to answer it.
         self.manual_refresh.close();
-        if let Ok(mut enc_subkey) = self.tick_enc_subkey.try_borrow_mut() {
+        if let Ok(mut enc_subkey) = self.secrets.tick_enc_subkey.try_borrow_mut() {
             *enc_subkey = None;
         }
-        if let Ok(mut bin_keys) = self.tick_bin_keys.try_borrow_mut() {
+        if let Ok(mut bin_keys) = self.secrets.tick_bin_keys.try_borrow_mut() {
             *bin_keys = None;
         }
-        if let Ok(mut signer) = self.tick_settings_signer.try_borrow_mut() {
+        if let Ok(mut signer) = self.secrets.tick_settings_signer.try_borrow_mut() {
             *signer = None;
         }
-        if let Ok(mut signer) = self.tick_owner_signer.try_borrow_mut() {
+        if let Ok(mut signer) = self.secrets.tick_owner_signer.try_borrow_mut() {
             *signer = None;
         }
-        if let Ok(mut seed) = self.tick_contact_label_seed.try_borrow_mut() {
+        if let Ok(mut seed) = self.secrets.tick_contact_label_seed.try_borrow_mut() {
             *seed = None;
         }
         if let Ok(mut spawner) = self.tick_loop_spawner.try_borrow_mut() {
             *spawner = None;
         }
-        if let Ok(mut sweep_tasks) = self.sweep_tasks.try_borrow_mut() {
+        if let Ok(mut sweep_tasks) = self.state.sweep_tasks.try_borrow_mut() {
             *sweep_tasks = None;
         }
-        if let Ok(mut keys) = self.sweep_keys.try_borrow_mut() {
+        if let Ok(mut keys) = self.secrets.sweep_keys.try_borrow_mut() {
             *keys = None;
         }
-        if let Ok(mut placement) = self.placement.try_borrow_mut() {
+        if let Ok(mut placement) = self.state.placement.try_borrow_mut() {
             *placement = None;
         }
-        if let Ok(mut summary) = self.settings_summary.try_borrow_mut() {
+        if let Ok(mut summary) = self.state.settings_summary.try_borrow_mut() {
             *summary = None;
         }
-        if let Ok(mut held) = self.held_records.try_borrow_mut() {
+        if let Ok(mut held) = self.state.held_records.try_borrow_mut() {
             held.clear();
         }
         // Each open stream pins a version's content key; releasing the table's
@@ -6200,49 +5930,49 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut streams) = self.streams.try_borrow_mut() {
             streams.open.clear();
         }
-        for seeds in [&self.scope_read_seeds, &self.scope_write_seeds] {
+        for seeds in [&self.state.scope_read_seeds, &self.state.scope_write_seeds] {
             if let Ok(mut seeds) = seeds.try_borrow_mut() {
                 seeds.clear();
             }
         }
-        clear_proved_scope_roots(&self.descendant_scope_roots);
-        if let Ok(mut roots) = self.unproved_scope_roots.try_borrow_mut() {
+        clear_proved_scope_roots(&self.state.descendant_scope_roots);
+        if let Ok(mut roots) = self.state.unproved_scope_roots.try_borrow_mut() {
             roots.clear();
         }
-        self.boundary_walk_rejected.set(false);
-        self.scope_roots_walked.set(false);
-        if let Ok(mut epochs) = self.walked_read_epochs.try_borrow_mut() {
+        self.state.boundary_walk_rejected.set(false);
+        self.state.scope_roots_walked.set(false);
+        if let Ok(mut epochs) = self.state.walked_read_epochs.try_borrow_mut() {
             epochs.clear();
         }
         // Session-scoped, and a failed start would otherwise leave the prior
         // account's index resident.
         self.vault_pointer_index.set(None);
-        if let Ok(mut consulted) = self.pointer_consulted.try_borrow_mut() {
+        if let Ok(mut consulted) = self.state.pointer_consulted.try_borrow_mut() {
             consulted.clear();
         }
-        self.on_access_misses.clear_all();
-        if let Ok(mut verdicts) = self.received_verdicts.try_borrow_mut() {
+        self.state.on_access_misses.clear_all();
+        if let Ok(mut verdicts) = self.state.received_verdicts.try_borrow_mut() {
             verdicts.clear();
         }
-        if let Ok(mut sharers) = self.grafted_sharers.try_borrow_mut() {
+        if let Ok(mut sharers) = self.state.grafted_sharers.try_borrow_mut() {
             sharers.clear();
         }
-        if let Ok(mut roots) = self.bookmarked_scope_roots.try_borrow_mut() {
+        if let Ok(mut roots) = self.state.bookmarked_scope_roots.try_borrow_mut() {
             roots.clear();
         }
-        if let Ok(mut permissions) = self.bookmarked_permissions.try_borrow_mut() {
+        if let Ok(mut permissions) = self.state.bookmarked_permissions.try_borrow_mut() {
             permissions.clear();
         }
-        if let Ok(mut roots) = self.grafted_write_roots.try_borrow_mut() {
+        if let Ok(mut roots) = self.state.grafted_write_roots.try_borrow_mut() {
             roots.clear();
         }
-        if let Ok(mut claims) = self.grafted_claims.try_borrow_mut() {
+        if let Ok(mut claims) = self.state.grafted_claims.try_borrow_mut() {
             claims.clear();
         }
-        if let Ok(mut roots) = self.minted_scope_roots.try_borrow_mut() {
+        if let Ok(mut roots) = self.state.minted_scope_roots.try_borrow_mut() {
             roots.clear();
         }
-        if let Ok(mut claims) = self.pending_invite_claims.try_borrow_mut() {
+        if let Ok(mut claims) = self.state.pending_invite_claims.try_borrow_mut() {
             *claims = ClaimCounts::default();
         }
     }
@@ -6301,10 +6031,10 @@ impl<T: SeamTypes> Engine<T> {
         // metadata about the vault this session is leaving.
         drop(api);
         self.session = None;
-        let root = self.snapshot.borrow().root;
-        *self.snapshot.borrow_mut() = Snapshot::new(root);
+        let root = self.state.snapshot.borrow().root;
+        *self.state.snapshot.borrow_mut() = Snapshot::new(root);
         self.render_memo.borrow_mut().clear();
-        self.queue_scan.borrow_mut().clear();
+        self.state.queue_scan.borrow_mut().clear();
 
         self.seams.credential_store.clear_refresh_token().await
     }
@@ -6448,7 +6178,7 @@ impl<T: SeamTypes> Engine<T> {
         {
             Some(parked) => {
                 let reader = RecordReader::new(session.enc_subkey());
-                let mut notices = self.dead_letters.borrow_mut();
+                let mut notices = self.state.dead_letters.borrow_mut();
                 for entry in parked {
                     // The same two conditions [`Self::parked_write`] states: one
                     // account's session lists no other's entries, and an op the
@@ -6476,7 +6206,7 @@ impl<T: SeamTypes> Engine<T> {
         .map_err(ColdStartError::Seam)?
         {
             Some(noted) => {
-                let mut notices = self.dead_letters.borrow_mut();
+                let mut notices = self.state.dead_letters.borrow_mut();
                 for notice in noted {
                     if !raw.iter().any(|(id, _)| *id == notice.op_id) {
                         notices.insert(notice.op_id, (None, notice.reason));
@@ -6499,7 +6229,8 @@ impl<T: SeamTypes> Engine<T> {
         for (op_id, reason) in &scan.undecodable {
             // Retain the dead letter (target unknown for an undecodable entry)
             // so the read surface keeps reporting it.
-            self.dead_letters
+            self.state
+                .dead_letters
                 .borrow_mut()
                 .insert(*op_id, (None, *reason));
             if self
@@ -6626,12 +6357,12 @@ impl<T: SeamTypes> Engine<T> {
     fn clear_failed_start(&mut self) {
         self.session = None;
         *self.tick_loop_spawner.borrow_mut() = None;
-        *self.placement.borrow_mut() = None;
-        *self.settings_summary.borrow_mut() = None;
+        *self.state.placement.borrow_mut() = None;
+        *self.state.settings_summary.borrow_mut() = None;
         // The settings and bin index loads enrol ahead of the gate, and every
         // held record carries its name's own signer, so a start that stops here
         // drops them at their terminal owner (security rule 7).
-        self.held_records.borrow_mut().clear();
+        self.state.held_records.borrow_mut().clear();
         self.session_bearer.clear();
         self.accelerator_bearer.clear();
     }
@@ -6704,7 +6435,7 @@ where {
         if holds_a_bin_index_mark(&self.seams.floor_store, &keys).await {
             return;
         }
-        let observed = observed_at(&self.held_records, HeldKey::BinIndex);
+        let observed = observed_at(&self.state.held_records, HeldKey::BinIndex);
         let load = load_bin_index(
             &self.record_transport,
             &self.gateway,
@@ -6716,7 +6447,7 @@ where {
             &keys,
         )
         .await
-        .enrol(&self.held_records, observed);
+        .enrol(&self.state.held_records, observed);
         if !matches!(load, BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun)) {
             return;
         }
@@ -6728,13 +6459,14 @@ where {
             &self.seams.scheduler,
             &self.profile,
             &mut SharedEntropy(&self.entropy),
-            &self.orphan_heads,
+            &self.state.orphan_heads,
             &keys,
             &BinIndex::new(0),
         )
         .await
         {
-            self.held_records
+            self.state
+                .held_records
                 .borrow_mut()
                 .insert(HeldKey::BinIndex, held);
         }
@@ -6754,12 +6486,12 @@ where {
         T::SnapshotCache: Clone + 'static,
     {
         let session = self.session.as_ref()?;
-        *self.sweep_keys.borrow_mut() = Some(Rc::new(SweepKeys {
+        *self.secrets.sweep_keys.borrow_mut() = Some(Rc::new(SweepKeys {
             enc_secret: session.enc_subkey().clone(),
             owner_identity: session.owner_identity(),
             scope_keys: OwnerSeedKeys::of(session),
         }));
-        let held = self.sweep_keys.clone();
+        let held = self.secrets.sweep_keys.clone();
         let transport = self.record_transport.clone();
         let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
@@ -6770,7 +6502,7 @@ where {
         let entropy = self.entropy.clone();
         let alive = self.alive.clone();
         let profile = self.profile;
-        let on_access_misses = self.on_access_misses.clone();
+        let on_access_misses = self.state.on_access_misses.clone();
 
         Some(Rc::new(
             move |scope: ChildScopeRef,
@@ -6854,12 +6586,12 @@ where {
         let scheduler = self.seams.scheduler.clone();
         let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let alive = self.alive.clone();
-        let keys = self.sweep_keys.clone();
-        let base = self.snapshot.clone();
-        let root_name = self.current_root_name.clone();
-        let walked = self.walked_read_epochs.clone();
-        let read_seeds = self.scope_read_seeds.clone();
-        let write_seeds = self.scope_write_seeds.clone();
+        let keys = self.secrets.sweep_keys.clone();
+        let base = self.state.snapshot.clone();
+        let root_name = self.state.current_root_name.clone();
+        let walked = self.state.walked_read_epochs.clone();
+        let read_seeds = self.state.scope_read_seeds.clone();
+        let write_seeds = self.state.scope_write_seeds.clone();
         let cadence = self.profile.sweep_cadence;
         self.seams.scheduler.spawn(Box::pin(async move {
             let read_epoch_converged_at: RefCell<BTreeMap<[u8; 16], u64>> = RefCell::default();
@@ -6935,17 +6667,17 @@ where {
         let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
         let profile = self.profile;
-        let held = self.held_records.clone();
+        let held = self.state.held_records.clone();
         let alive = self.alive.clone();
         let events = self.events.clone();
         let gateway = self.gateway.clone();
         let http = self.seams.http.clone();
         let entropy = self.entropy.clone();
-        let pointer_keys = self.sweep_keys.clone();
-        let scope_read_seeds = self.scope_read_seeds.clone();
-        let scope_write_seeds = self.scope_write_seeds.clone();
-        let on_access_misses = self.on_access_misses.clone();
-        let root_id = self.snapshot.borrow().root.0;
+        let pointer_keys = self.secrets.sweep_keys.clone();
+        let scope_read_seeds = self.state.scope_read_seeds.clone();
+        let scope_write_seeds = self.state.scope_write_seeds.clone();
+        let on_access_misses = self.state.on_access_misses.clone();
+        let root_id = self.state.snapshot.borrow().root.0;
         self.seams.scheduler.spawn(Box::pin(async move {
             // One latch per session: the loop is spawned once per start.
             let scope_tree_walked = Cell::new(false);
@@ -7032,77 +6764,31 @@ where {
         T::StagingStore: Clone + 'static,
     {
         let session = self.session.as_ref()?;
-        let tick_enc_subkey = self.tick_enc_subkey.clone();
-        let tick_bin_keys = self.tick_bin_keys.clone();
-        let tick_settings_signer = self.tick_settings_signer.clone();
-        let tick_settings = self.settings_summary.clone();
-        let observed_unlinks = self.observed_unlinks.clone();
-        let tick_contact_label_seed = self.tick_contact_label_seed.clone();
+        let state = self.state.clone();
+        let secrets = self.secrets.clone();
         let scheduler = self.seams.scheduler.clone();
         let staging = LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone());
         let entropy = self.entropy.clone();
-        let scope_write_seeds = self.scope_write_seeds.clone();
-        let dead_letters = self.dead_letters.clone();
-        let queue_hold = self.queue_hold.clone();
-        let pending_reclaim = self.pending_reclaim.clone();
-        let reclaim_stalls = self.reclaim_stalls.clone();
-        let bookkeeping = self.bookkeeping.clone();
         let content_profile = self.content_profile;
         let storage_policy = self.storage_policy;
         let deadlines = self.deadlines;
-        let orphan_heads = self.orphan_heads.clone();
-        let converged_tick = self.converged_tick.clone();
-        let cancels = self.cancels.clone();
-        let live_blocks = self.live_blocks.clone();
         let transport = self.record_transport.clone();
         let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
         let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let http = self.seams.http.clone();
         let gateway = self.gateway.clone();
-        let placement = self.placement.clone();
-        let settings_summary = self.settings_summary.clone();
-        let byo_reconciled = self.byo_reconciled.clone();
         // Start has just decided, so the first re-decide comes one interval on.
         let settings_rechecked = Cell::new(self.seams.scheduler.now());
         let link_swept = Cell::new(self.seams.scheduler.now());
-        let held = self.held_records.clone();
-        let base = self.snapshot.clone();
         let events = self.events.clone();
         let alive = self.alive.clone();
-        let sync_status = self.sync_status.clone();
-        let scope_read_seeds = self.scope_read_seeds.clone();
-        let descendant_roots = self.descendant_scope_roots.clone();
-        let unproved_roots = self.unproved_scope_roots.clone();
-        let boundary_walk_rejected = self.boundary_walk_rejected.clone();
-        let scope_roots_walked = self.scope_roots_walked.clone();
-        let walked_read_epochs = self.walked_read_epochs.clone();
-        let current_root_name = self.current_root_name.clone();
-        let focus = self.focus.clone();
-        let focus_refreshed = self.focus_refreshed.clone();
-        let pointer_consulted = self.pointer_consulted.clone();
-        let on_access_misses = self.on_access_misses.clone();
-        let received_verdicts = self.received_verdicts.clone();
-        let received_shares_lock = self.received_shares_lock.clone();
-        let grafted_sharers = self.grafted_sharers.clone();
-        let bookmarked_scope_roots = self.bookmarked_scope_roots.clone();
-        let bookmarked_permissions = self.bookmarked_permissions.clone();
-        let grafted_write_roots = self.grafted_write_roots.clone();
-        let grafted_claims = self.grafted_claims.clone();
-        let consult_keys = self.sweep_keys.clone();
-        let minted_roots = self.minted_scope_roots.clone();
-        let pending_invite_claims = self.pending_invite_claims.clone();
-        let tick_owner_signer = self.tick_owner_signer.clone();
-        let conversion_running = self.conversion_running.clone();
-        let pending_scope_exits = self.pending_scope_exits.clone();
-        let sweep_tasks = self.sweep_tasks.clone();
-        let queue_scan = self.queue_scan.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
         let owner_identity = session.owner_identity();
         // The vault's own root scope and root node are the anchored all-zero id16
         // (the cold-start bootstrap anchor): the adopter's scope binding and the
         // held-set fallback key.
-        let root_id = self.snapshot.borrow().root.0;
+        let root_id = self.state.snapshot.borrow().root.0;
 
         let manual = self.manual_refresh.clone();
 
@@ -7110,6 +6796,57 @@ where {
             manual.arm();
             let spawn_on = scheduler.clone();
             spawn_on.spawn(Box::pin(async move {
+                let SessionState {
+                    observed_unlinks,
+                    scope_write_seeds,
+                    dead_letters,
+                    queue_hold,
+                    pending_reclaim,
+                    reclaim_stalls,
+                    bookkeeping,
+                    orphan_heads,
+                    converged_tick,
+                    cancels,
+                    live_blocks,
+                    placement,
+                    settings_summary,
+                    byo_reconciled,
+                    held_records: held,
+                    snapshot: base,
+                    sync_status,
+                    scope_read_seeds,
+                    descendant_scope_roots: descendant_roots,
+                    unproved_scope_roots: unproved_roots,
+                    boundary_walk_rejected,
+                    scope_roots_walked,
+                    walked_read_epochs,
+                    current_root_name,
+                    focus,
+                    focus_refreshed,
+                    pointer_consulted,
+                    on_access_misses,
+                    received_verdicts,
+                    received_shares_lock,
+                    grafted_sharers,
+                    bookmarked_scope_roots,
+                    bookmarked_permissions,
+                    grafted_write_roots,
+                    grafted_claims,
+                    minted_scope_roots: minted_roots,
+                    pending_invite_claims,
+                    conversion_running,
+                    pending_scope_exits,
+                    sweep_tasks,
+                    queue_scan,
+                } = &*state;
+                let SessionSecrets {
+                    tick_enc_subkey,
+                    tick_bin_keys,
+                    tick_settings_signer,
+                    tick_contact_label_seed,
+                    sweep_keys: consult_keys,
+                    tick_owner_signer,
+                } = &*secrets;
                 run_tick_loop(&scheduler, &manual, interval, async |cause| {
                     if !alive.get() {
                         return TickControl::Stop;
@@ -7147,7 +6884,7 @@ where {
                         profile.settings_recheck_interval,
                     ) {
                         settings_rechecked.set(now);
-                        let observed = observed_at(&held, HeldKey::VaultSettings);
+                        let observed = observed_at(held, HeldKey::VaultSettings);
                         let read = load_settings_at(
                             &transport,
                             &gateway,
@@ -7169,13 +6906,13 @@ where {
                         if !alive.get() {
                             return TickControl::Stop;
                         }
-                        let load = read.enrol(&held, observed);
+                        let load = read.enrol(held, observed);
                         report_settings_verdict(&events, &load);
                         if let Some(decided) = redecide_placement(&load) {
                             *placement.borrow_mut() = Some(decided);
                             adopt_settings_summary(
                                 summarize_settings(&load),
-                                &settings_summary,
+                                settings_summary,
                                 &events,
                             );
                             byo_reconciled.set(false);
@@ -7205,9 +6942,9 @@ where {
                     if let Some(current_root) = consult_pointers(
                         &transport,
                         &floors,
-                        &consult_keys,
+                        consult_keys,
                         &events,
-                        &pointer_consulted,
+                        pointer_consulted,
                         ConsultWindow {
                             scopes: consult_targets,
                             anchor: NodeId(root_id),
@@ -7223,22 +6960,18 @@ where {
                     // since the last pass revokes the seeds this pass would
                     // otherwise read and seal under. The floors it reports stamp
                     // whatever this pass's own resolve recovers.
-                    let floors_before = refresh_seed_floors(
-                        &floors,
-                        &root_id,
-                        &scope_read_seeds,
-                        &scope_write_seeds,
-                    )
-                    .await;
+                    let floors_before =
+                        refresh_seed_floors(&floors, &root_id, scope_read_seeds, scope_write_seeds)
+                            .await;
                     let grafted = grafted_sharers.borrow().clone();
-                    let own_before = own_descendant_scopes(&descendant_roots, &minted_roots);
+                    let own_before = own_descendant_scopes(descendant_roots, minted_roots);
                     evict_grafted_read_seeds(
                         &floors,
                         &grafted,
                         &contact_label_seed,
                         &root_id,
                         &own_before,
-                        &scope_read_seeds,
+                        scope_read_seeds,
                     )
                     .await;
                     evict_grafted_write_seeds(
@@ -7247,7 +6980,7 @@ where {
                         &contact_label_seed,
                         &root_id,
                         &own_before,
-                        &scope_write_seeds,
+                        scope_write_seeds,
                     )
                     .await;
                     let adopter = RootAdopter::new(
@@ -7259,11 +6992,11 @@ where {
                         root_id,
                     )
                     .holding(steady_state_hold(
-                        &held,
+                        held,
                         root_id,
                         &root_name,
-                        &scope_read_seeds,
-                        &scope_write_seeds,
+                        scope_read_seeds,
+                        scope_write_seeds,
                     ));
                     // Own-root material: the write-scope seed the owner cannot
                     // re-derive rides the adopt (recovered from the owner-write-blob),
@@ -7283,7 +7016,7 @@ where {
                         &snapshot_cache,
                         &adopter,
                         &root_name,
-                        &held,
+                        held,
                         &material,
                         mode,
                     )
@@ -7300,11 +7033,11 @@ where {
                                 ResolveOutcome::Adopted(adopted) => Some(adopted.epoch),
                                 _ => floors_before.read,
                             };
-                            deposit_seed(&scope_read_seeds, root_id, seed, stamp);
+                            deposit_seed(scope_read_seeds, root_id, seed, stamp);
                         }
                         if let Some((node_id, seed)) = surfaced.write_scope_seed.take() {
                             deposit_write_seed(
-                                &scope_write_seeds,
+                                scope_write_seeds,
                                 node_id,
                                 seed,
                                 Some(&root_name),
@@ -7317,16 +7050,16 @@ where {
                         if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
                             emit_trust_violation(&events, root_name.as_str(), rejection);
                         }
-                        let merged = refresh_base_from_resolved(&base, NodeId(root_id), resolved);
+                        let merged = refresh_base_from_resolved(base, NodeId(root_id), resolved);
                         if merged.changed {
                             let _ = events.unbounded_send(Event::SnapshotUpdated);
                         }
                         hold_captures(
-                            &observed_unlinks,
+                            observed_unlinks,
                             merged.observed_unlinks(root_id, NodeId(root_id), now.0),
                         );
                     }
-                    let read_seed = cached_seed(&scope_read_seeds, &root_id);
+                    let read_seed = cached_seed(scope_read_seeds, &root_id);
                     // The held record is the root this pass reconciled, so the
                     // walk needs no second read of either plane to start.
                     let held_root = held
@@ -7360,18 +7093,18 @@ where {
                             .map_or_else(|met| Some(*met), |walked| walked.failure);
                         if let Ok(walked) = walked {
                             let departed = install_descendant_scopes(
-                                &descendant_roots,
-                                &scope_read_seeds,
-                                &scope_write_seeds,
-                                &base,
+                                descendant_roots,
+                                scope_read_seeds,
+                                scope_write_seeds,
+                                base,
                                 &events,
                                 &walked.proved,
                                 now.0,
                             );
-                            hold_captures(&observed_unlinks, departed);
-                            install_walked_read_epochs(&walked_read_epochs, &walked.proved);
+                            hold_captures(observed_unlinks, departed);
+                            install_walked_read_epochs(walked_read_epochs, &walked.proved);
                             install_unproved_scopes(
-                                &unproved_roots,
+                                unproved_roots,
                                 walked.proved.iter().map(|s| NodeId(s.scope_id)),
                                 walked.unproved,
                             );
@@ -7434,7 +7167,7 @@ where {
                             continue;
                         }
                         let own = is_own_scope(&root_id, &proved_scope_ids, &scope_root.0);
-                        let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
+                        let Some(scope_read_seed) = cached_seed(scope_read_seeds, &scope_root.0)
                         else {
                             // A scope this vault owns and cannot read is an
                             // outage on its own leg: a promotion the last
@@ -7466,22 +7199,22 @@ where {
                             http: &http,
                             floors: &scope_floors,
                             gateway: &gateway,
-                            base: &base,
+                            base,
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
                             scope_root_name: scope_root_name.as_ref(),
                             plane: (!own).then_some(GraftedLeg {
                                 scope_roots: &scope_roots,
-                                claims: &grafted_claims,
+                                claims: grafted_claims,
                             }),
                             mode,
                             observed_at: now.0,
                         };
                         let mut settle = |nodes: &[NodeId], report| {
                             folder_verdict = folder_verdict.worst(settle_focus_leg(
-                                &observed_unlinks,
-                                &focus_refreshed,
+                                observed_unlinks,
+                                focus_refreshed,
                                 &events,
                                 nodes,
                                 report,
@@ -7508,8 +7241,8 @@ where {
                             for folder in in_view.into_iter().rev() {
                                 queue_unprojected_children(
                                     &base_now,
-                                    &focus,
-                                    &focus_refreshed,
+                                    focus,
+                                    focus_refreshed,
                                     &profile,
                                     scheduler.now(),
                                     folder,
@@ -7565,14 +7298,14 @@ where {
                     // A vault that keeps no bin captures no unlink either: the
                     // owner turned the bin off, and an adoption carries no owner
                     // command that could overrule that.
-                    if bin_retention_days(&tick_settings) == 0 {
+                    if bin_retention_days(settings_summary) == 0 {
                         observed_unlinks.borrow_mut().clear();
                     }
                     // The drain rides the same tick: it publishes onto exactly the
                     // gate-passing state this pass just reconciled. Both scope seeds
                     // are required — without them there is no name to publish under
                     // and no key to seal with, so the queue simply waits.
-                    let write_seed = cached_seed(&scope_write_seeds, &root_id);
+                    let write_seed = cached_seed(scope_write_seeds, &root_id);
                     let write_grafts = write_grant_sharers(
                         &bookmarked_permissions.borrow(),
                         &grafted_sharers.borrow(),
@@ -7597,7 +7330,7 @@ where {
                     let grafted = {
                         let sharers = grafted_sharers.borrow();
                         grafted_write_passes(
-                            &base,
+                            base,
                             &bookmarked_permissions.borrow(),
                             &sharers,
                             &sharer_encs,
@@ -7610,8 +7343,8 @@ where {
                                     scope_id,
                                 )
                             },
-                            &scope_read_seeds,
-                            &scope_write_seeds,
+                            scope_read_seeds,
+                            scope_write_seeds,
                         )
                     };
                     let write_roots: BTreeSet<NodeId> =
@@ -7665,23 +7398,23 @@ where {
                     // owes: both read the boundaries this session knows, at the
                     // material the walk proved for them.
                     let boundaries = read_seed.as_ref().map(|root_read_seed| Boundaries {
-                        base: &base,
+                        base,
                         scope_roots: minted_roots
                             .borrow()
                             .union(&proved_scope_ids)
                             .copied()
                             .collect(),
                         material: walked_boundary_material(
-                            &walked_read_epochs,
-                            &scope_read_seeds,
-                            &scope_write_seeds,
+                            walked_read_epochs,
+                            scope_read_seeds,
+                            scope_write_seeds,
                         ),
                         root: NodeId(root_id),
                         root_read_seed,
                     });
                     let second = match &boundaries {
                         Some(boundaries) => {
-                            queued_second_end(&staging, &enc_subkey, &queue_scan, boundaries).await
+                            queued_second_end(&staging, &enc_subkey, queue_scan, boundaries).await
                         }
                         None => None,
                     };
@@ -7701,11 +7434,11 @@ where {
                                 scheduler: &scheduler,
                                 profile: &profile,
                                 entropy: &entropy,
-                                keys: &consult_keys,
-                                sweep: &sweep_tasks,
+                                keys: consult_keys,
+                                sweep: sweep_tasks,
                                 boundaries,
-                                walked_epochs: &walked_read_epochs,
-                                on_access_misses: &on_access_misses,
+                                walked_epochs: walked_read_epochs,
+                                on_access_misses,
                             },
                             scope_root,
                         )
@@ -7810,37 +7543,37 @@ where {
                             placement: &decision,
                             profile: &profile,
                             storage_policy: &storage_policy,
-                            live_blocks: &live_blocks,
+                            live_blocks,
                             content_profile: &content_profile,
                             entropy: &entropy,
-                            base: &base,
-                            held: &held,
-                            hold: &queue_hold,
-                            pending_reclaim: &pending_reclaim,
-                            reclaim_stalls: &reclaim_stalls,
-                            bookkeeping: &bookkeeping,
-                            orphan_heads: &orphan_heads,
-                            converged_tick: &converged_tick,
-                            cancels: &cancels,
+                            base,
+                            held,
+                            hold: queue_hold,
+                            pending_reclaim,
+                            reclaim_stalls,
+                            bookkeeping,
+                            orphan_heads,
+                            converged_tick,
+                            cancels,
                             events: &events,
                             bin_keys: &bin_keys,
-                            bin_retention_days: owner_bin_retention_days(&tick_settings),
-                            retention: owner_retention(&tick_settings),
-                            dead_letters: &dead_letters,
+                            bin_retention_days: owner_bin_retention_days(settings_summary),
+                            retention: owner_retention(settings_summary),
+                            dead_letters,
 
                             established_bin_index: RefCell::new(None),
                             bin_expiries: RefCell::new(TickShare::new(
                                 MAX_BIN_EXPIRIES,
                                 scopes.len(),
                             )),
-                            observed_unlinks: &observed_unlinks,
-                            pending_scope_exits: &pending_scope_exits,
+                            observed_unlinks,
+                            pending_scope_exits,
                         };
                         let mut journalled = Vec::new();
                         for scope in &scopes {
                             let mut report = drain.run_queue(scope, &exits).await;
                             journalled.append(&mut report.journalled_deletes);
-                            surface_drain_report(&events, &dead_letters, &report);
+                            surface_drain_report(&events, dead_letters, &report);
                         }
                         // Once per tick. The retire ledger is the identity's
                         // and reads under the vault root's material, so a tick
@@ -7857,7 +7590,7 @@ where {
                         // still has to be reclaimed at the poll cadence.
                         reconcile_staging(
                             &staging,
-                            &live_blocks,
+                            live_blocks,
                             PreservedBounds::at(scheduler.now(), &storage_policy, &profile),
                         )
                         .await;
@@ -7885,7 +7618,7 @@ where {
                         enc_secret: &enc_subkey,
                         contact_label_seed: &contact_label_seed,
                         vault_root_scope: root_id,
-                        list_lock: &received_shares_lock,
+                        list_lock: received_shares_lock,
                     }
                     .pull(
                         &staging,
@@ -7924,7 +7657,7 @@ where {
                             events: &events,
                             scheduler: &scheduler,
                             profile: &profile,
-                            on_access_misses: &on_access_misses,
+                            on_access_misses,
                             entropy: &entropy,
                             staging: &staging,
                             identity: &signer,
@@ -7933,13 +7666,13 @@ where {
                             scope_keys: &keys.scope_keys,
                             cut: CutAuthority {
                                 owner_pointer_seed: keys.scope_keys.pointer_seed(),
-                                held: &held,
+                                held,
                                 sweep: &sweep,
                                 vault_root: NodeId(root_id),
                             },
-                            scope_roots_walked: &scope_roots_walked,
-                            counts: &pending_invite_claims,
-                            running: &conversion_running,
+                            scope_roots_walked,
+                            counts: pending_invite_claims,
+                            running: conversion_running,
                         };
                         let converted = pass
                             .run(
@@ -7987,7 +7720,7 @@ where {
                         &staging,
                         &entropy,
                         &enc_subkey,
-                        &received_shares_lock,
+                        received_shares_lock,
                         ENVELOPE_V,
                         scheduler.now(),
                     )
@@ -7999,23 +7732,23 @@ where {
                         floors: &floors,
                         enc_secret: &enc_subkey,
                         contact_label_seed: &contact_label_seed,
-                        list_lock: &received_shares_lock,
+                        list_lock: received_shares_lock,
                         mode,
                     }
                     .refresh(
                         &staging,
                         &entropy,
-                        &received_verdicts,
+                        received_verdicts,
                         &ScopeRender {
-                            base: &base,
-                            read_seeds: &scope_read_seeds,
-                            write_seeds: &scope_write_seeds,
+                            base,
+                            read_seeds: scope_read_seeds,
+                            write_seeds: scope_write_seeds,
                             own_root: &root_id,
-                            own_descendants: &descendant_roots,
-                            grafted_sharers: &grafted_sharers,
-                            scope_roots: &bookmarked_scope_roots,
-                            permissions: &bookmarked_permissions,
-                            claims: &grafted_claims,
+                            own_descendants: descendant_roots,
+                            grafted_sharers,
+                            scope_roots: bookmarked_scope_roots,
+                            permissions: bookmarked_permissions,
+                            claims: grafted_claims,
                             events: &events,
                         },
                         now,
@@ -8057,7 +7790,7 @@ where {
         let Some(session) = self.session.as_ref() else {
             return;
         };
-        if self.current_root_name.borrow().is_none() {
+        if self.state.current_root_name.borrow().is_none() {
             return;
         }
         let Some(spawn) = self.tick_loop_spawner.borrow_mut().take() else {
@@ -8067,13 +7800,14 @@ where {
         // pass needs the enc subkey, the bin index's own two edges, the owner
         // identity signer its conversions sign with, and the (public) owner
         // verifier, never the login secret or the pointer seeds beside them.
-        *self.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
-        *self.tick_owner_signer.borrow_mut() = Some(Rc::new(session.identity().clone()));
-        *self.tick_bin_keys.borrow_mut() =
+        *self.secrets.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
+        *self.secrets.tick_owner_signer.borrow_mut() = Some(Rc::new(session.identity().clone()));
+        *self.secrets.tick_bin_keys.borrow_mut() =
             Some(Rc::new(BinIndexKeys::derive(session.login_secret())));
-        *self.tick_settings_signer.borrow_mut() =
+        *self.secrets.tick_settings_signer.borrow_mut() =
             Some(Rc::new(kdf::settings_ipns_keypair(session.login_secret())));
-        *self.tick_contact_label_seed.borrow_mut() = Some(session.contact_label_seed().clone());
+        *self.secrets.tick_contact_label_seed.borrow_mut() =
+            Some(session.contact_label_seed().clone());
         spawn();
     }
 
@@ -8297,7 +8031,7 @@ where {
                 .map(|()| CommandOutcome::Done),
             Command::RecoverDeadLetter { op_id } => self.recover_dead_letter(op_id).await,
             Command::SetFocus { node } => {
-                self.focus.borrow_mut().open_folder = node;
+                self.state.focus.borrow_mut().open_folder = node;
                 // Navigation is the tick model's second trigger source (#33 D2):
                 // refresh the newly-focused chain now rather than waiting out a
                 // poll cadence, and only past the staleness threshold — a repeat
@@ -8492,11 +8226,11 @@ where {
     /// so the verdict is the retryable [`EngineError::ContentUnavailable`] the
     /// absent-seed refusal above already answers.
     fn vault_root_scope(&self) -> Result<ChildScopeRef, EngineError> {
-        let root = self.snapshot.borrow().root;
+        let root = self.state.snapshot.borrow().root;
         held_vault_root_scope(
             root,
-            &self.scope_write_seeds,
-            self.current_root_name.borrow().as_ref(),
+            &self.state.scope_write_seeds,
+            self.state.current_root_name.borrow().as_ref(),
         )
     }
 
@@ -8553,7 +8287,7 @@ where {
         // The vault root is the walk's own anchor rather than a step in it, and
         // no index names it.
         let (mut chain, root) = {
-            let base = self.snapshot.borrow();
+            let base = self.state.snapshot.borrow();
             (base.ancestors(node), base.root)
         };
         chain.reverse();
@@ -8626,7 +8360,7 @@ where {
         check: &'static str,
         unindexed: UnindexedScope,
     ) -> Result<(Option<OwnerScope>, ShareStanding), EngineError> {
-        let root = self.snapshot.borrow().root;
+        let root = self.state.snapshot.borrow().root;
         if node == root {
             return Ok((
                 Some(OwnerScope {
@@ -8637,7 +8371,7 @@ where {
                 ShareStanding::VaultRoot,
             ));
         }
-        if !self.snapshot.borrow().contains(node) {
+        if !self.state.snapshot.borrow().contains(node) {
             return Err(EngineError::UnsupportedTarget { check });
         }
         let (_, current, _) = self
@@ -8693,7 +8427,7 @@ where {
             keys,
             ancestry,
             pointer_consult,
-            on_access_misses: &self.on_access_misses,
+            on_access_misses: &self.state.on_access_misses,
             payload_version: POINTER_PAYLOAD_VERSION,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
@@ -8704,7 +8438,8 @@ where {
     /// The sweep-task factory [`start`](Self::start) built, absent once the
     /// engine has torn its session material down.
     fn sweep_factory(&self) -> Result<SweepTaskFactory, EngineError> {
-        self.sweep_tasks
+        self.state
+            .sweep_tasks
             .borrow()
             .clone()
             .ok_or(EngineError::NotStarted)
@@ -8763,7 +8498,7 @@ where {
     ) -> Option<VaultPointerVoucherOf<'a, T>> {
         let session = self.session.as_ref()?;
         let index = self.vault_pointer_index.get()?;
-        let scope_id = self.snapshot.borrow().root.0;
+        let scope_id = self.state.snapshot.borrow().root.0;
         Some(VaultPointerVoucher {
             transport: &self.record_transport,
             api: api.as_ref(),
@@ -8803,7 +8538,7 @@ where {
                 UnindexedScope::Refuse,
             )
             .await?;
-        let anchor = if node == self.snapshot.borrow().root {
+        let anchor = if node == self.state.snapshot.borrow().root {
             Some(self.vault_pointer_voucher(api).ok_or_else(|| {
                 EngineError::from_rotate(RotateError::Resolve(ResolveFailure::Unavailable))
             })?)
@@ -9049,8 +8784,8 @@ where {
             // so every later step in this method can fail without leaving the
             // session anchored on the root the wave moved off. No index carries
             // the vault root's name, so this cell is its only record.
-            if node.0 == self.snapshot.borrow().root.0 {
-                *self.current_root_name.borrow_mut() = Some(write.new_root_name.clone());
+            if node.0 == self.state.snapshot.borrow().root.0 {
+                *self.state.current_root_name.borrow_mut() = Some(write.new_root_name.clone());
             }
             // The wave publishes the re-point but never pre-advances the floor
             // (`WriteEpochLease`): a failed publish must not brick the plane.
@@ -9069,7 +8804,7 @@ where {
             .map_err(EngineError::from_seam)?;
             // Every wave moves the root, so every wave owes the index the same
             // repoint — the vault root excepted, handled above.
-            if node.0 != self.snapshot.borrow().root.0 {
+            if node.0 != self.state.snapshot.borrow().root.0 {
                 self.repoint_child_scope_index(node, &write.new_root_name)
                     .await?;
             }
@@ -9159,7 +8894,7 @@ where {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         // The vault root's own scope is the session's; minting one at it would
         // replace the scope every record this vault publishes lives in.
-        if node.0 == self.snapshot.borrow().root.0 {
+        if node.0 == self.state.snapshot.borrow().root.0 {
             return Err(EngineError::UnsupportedTarget {
                 check: checks.vault_root,
             });
@@ -9285,7 +9020,7 @@ where {
             keys: &keys.scope_keys,
             identity_signer: session.identity(),
             identity: &keys.identity,
-            held: &self.held_records,
+            held: &self.state.held_records,
             payload_version: POINTER_PAYLOAD_VERSION,
         };
         let (pending, granted_read_scope) = match &share {
@@ -9351,11 +9086,11 @@ where {
             }
         };
 
-        self.minted_scope_roots.borrow_mut().insert(node);
+        self.state.minted_scope_roots.borrow_mut().insert(node);
         // The grant re-sealed the folder's interior under this seed, so the
         // owner's reads there need it now, not after a boundary walk proves it.
         deposit_seed(
-            &self.scope_read_seeds,
+            &self.state.scope_read_seeds,
             node.0,
             granted_read_scope.seed,
             Some(granted_read_scope.epoch),
@@ -9977,7 +9712,7 @@ where {
             .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
         // The sharer authors the scope id, and this vault's own root scope is
         // never a share (ADR 0024 D5 step 4).
-        if fragment.scope_id == self.snapshot.borrow().root.0 {
+        if fragment.scope_id == self.state.snapshot.borrow().root.0 {
             return Err(EngineError::UnsupportedTarget {
                 check: "invite-names-the-own-vault-root",
             });
@@ -10062,7 +9797,7 @@ where {
             .transpose()
             .map_err(|_| EngineError::from_invite(InviteError::LinkNotCommitted))?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        if self.conversion_running.get() {
+        if self.state.conversion_running.get() {
             return Err(EngineError::Seam {
                 message: CONVERSION_RUNNING.to_owned(),
             });
@@ -10243,7 +9978,7 @@ where {
 
         // Held to the persist below, so no other list writer lands between
         // the claimed check and the hold this call writes.
-        let list_guard = self.received_shares_lock.lock().await;
+        let list_guard = self.state.received_shares_lock.lock().await;
         let store = self.received_share_store(session);
         let mut received = store
             .load()
@@ -10393,7 +10128,10 @@ where {
     fn scope_pointer_index(&self, session: &SessionIdentity) -> PointerIndex {
         scope_pointer_index(
             &OwnerSessionKeys::new(session),
-            own_descendant_scopes(&self.descendant_scope_roots, &self.minted_scope_roots),
+            own_descendant_scopes(
+                &self.state.descendant_scope_roots,
+                &self.state.minted_scope_roots,
+            ),
         )
     }
 
@@ -10434,7 +10172,7 @@ where {
             events: &self.events,
             scheduler: &self.seams.scheduler,
             profile: &self.profile,
-            on_access_misses: &self.on_access_misses,
+            on_access_misses: &self.state.on_access_misses,
             entropy: &self.entropy,
             staging: &self.seams.staging_store,
             identity: session.identity(),
@@ -10443,13 +10181,13 @@ where {
             scope_keys: &keys.scope_keys,
             cut: CutAuthority {
                 owner_pointer_seed: keys.pointer_seed.as_bytes(),
-                held: &self.held_records,
+                held: &self.state.held_records,
                 sweep: &keys.sweep,
-                vault_root: self.snapshot.borrow().root,
+                vault_root: self.state.snapshot.borrow().root,
             },
-            scope_roots_walked: &self.scope_roots_walked,
-            counts: &self.pending_invite_claims,
-            running: &self.conversion_running,
+            scope_roots_walked: &self.state.scope_roots_walked,
+            counts: &self.state.pending_invite_claims,
+            running: &self.state.conversion_running,
         }
     }
 
@@ -10470,7 +10208,7 @@ where {
     /// authorises: a session placing no bytes on the member's own provider
     /// keeps no credential for it (security rule 7).
     fn held_provider(&self) -> Option<ByoIpfsConfig> {
-        match &self.placement.borrow().as_ref()?.decision {
+        match &self.state.placement.borrow().as_ref()?.decision {
             Ok(Placement::External(config) | Placement::Dual(config)) => Some(config.clone()),
             Ok(Placement::Hosted) | Err(_) => None,
         }
@@ -10492,25 +10230,26 @@ where {
             &self.seams.scheduler,
             &self.profile,
             &mut SharedEntropy(&self.entropy),
-            &self.orphan_heads,
+            &self.state.orphan_heads,
             session.login_secret(),
             settings,
         )
         .await
         .map_err(EngineError::from_settings_publish)?;
-        self.held_records
+        self.state
+            .held_records
             .borrow_mut()
             .insert(HeldKey::VaultSettings, held);
         // The confirm re-resolve read back our own bytes, so this device has
         // adopted what it published: the session's byte destinations follow, or
         // an `External` save keeps feeding the hosted leg until the next start.
-        *self.placement.borrow_mut() = Some(SessionPlacement::member(placement_of(settings)));
+        *self.state.placement.borrow_mut() = Some(SessionPlacement::member(placement_of(settings)));
         adopt_settings_summary(
             settings.summary(SettingsOrigin::Resolved),
-            &self.settings_summary,
+            &self.state.settings_summary,
             &self.events,
         );
-        self.byo_reconciled.set(false);
+        self.state.byo_reconciled.set(false);
         Ok(())
     }
 
@@ -10521,11 +10260,17 @@ where {
         // Every arm that serves no seed also drops the one it holds, so no
         // cached seed outlives the authority that entitles it.
         let Some(floors) = self.scope_floors(scope_id) else {
-            self.scope_read_seeds.borrow_mut().remove(scope_id);
+            self.state.scope_read_seeds.borrow_mut().remove(scope_id);
             return None;
         };
-        refresh_seed_floor(&floors, &self.scope_read_seeds, scope_id, SeedFloor::Read).await;
-        cached_seed(&self.scope_read_seeds, scope_id)
+        refresh_seed_floor(
+            &floors,
+            &self.state.scope_read_seeds,
+            scope_id,
+            SeedFloor::Read,
+        )
+        .await;
+        cached_seed(&self.state.scope_read_seeds, scope_id)
     }
 
     /// The namespace `scope_id`'s floors live in ([`floor_view`]), or `None`
@@ -10537,10 +10282,13 @@ where {
         let session = self.session.as_ref()?;
         floor_view(
             &self.seams.floor_store,
-            &self.grafted_sharers.borrow(),
+            &self.state.grafted_sharers.borrow(),
             session.contact_label_seed(),
-            &self.snapshot.borrow().root.0,
-            &own_descendant_scopes(&self.descendant_scope_roots, &self.minted_scope_roots),
+            &self.state.snapshot.borrow().root.0,
+            &own_descendant_scopes(
+                &self.state.descendant_scope_roots,
+                &self.state.minted_scope_roots,
+            ),
             scope_id,
         )
     }
@@ -10554,14 +10302,19 @@ where {
     /// session authors under is this vault's own, including one it minted that
     /// no descent has re-proved yet.
     async fn authored_scope_epoch(&self, scope: NodeId) -> Result<u64, EngineError> {
-        let floors = if self.bookmarked_scope_roots.borrow().contains(&scope.0) {
+        let floors = if self
+            .state
+            .bookmarked_scope_roots
+            .borrow()
+            .contains(&scope.0)
+        {
             let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
             floor_view(
                 &self.seams.floor_store,
-                &self.grafted_sharers.borrow(),
+                &self.state.grafted_sharers.borrow(),
                 session.contact_label_seed(),
-                &self.snapshot.borrow().root.0,
-                &self.descendant_scope_roots.borrow(),
+                &self.state.snapshot.borrow().root.0,
+                &self.state.descendant_scope_roots.borrow(),
                 &scope.0,
             )
             .ok_or_else(|| EngineError::ScopeExitRefused {
@@ -10584,7 +10337,7 @@ where {
     /// published — is a verdict a retry reaches identically.
     async fn provision_in_session(&self) -> Result<(), EngineError> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?.clone();
-        let root = self.snapshot.borrow().root;
+        let root = self.state.snapshot.borrow().root;
         let first_run_name = self.first_run_pointer_name(&api, root.0).await;
         match self
             .provision_first_run_vault(&api, root.0, first_run_name.as_ref())
@@ -10623,7 +10376,7 @@ where {
             }
         }
         self.open_tick_loop();
-        self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
+        self.state.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         Ok(())
     }
@@ -10676,10 +10429,10 @@ where {
     /// ([`nodes_in_scope`]).
     fn scoped_to(&self, root: NodeId, nodes: Vec<NodeId>) -> Vec<NodeId> {
         nodes_in_scope(
-            &self.snapshot.borrow(),
+            &self.state.snapshot.borrow(),
             &focus_scope_roots(
-                &self.descendant_scope_roots.borrow(),
-                &self.unproved_scope_roots.borrow(),
+                &self.state.descendant_scope_roots.borrow(),
+                &self.state.unproved_scope_roots.borrow(),
             ),
             root,
             nodes,
@@ -10695,19 +10448,19 @@ where {
     async fn refresh_focus_on_access(&self, now: UnixMillis, folder: Option<NodeId>) {
         // One root read: the seed the legs run under and the scope they filter
         // to must name the same scope across the await below.
-        let root = self.snapshot.borrow().root;
+        let root = self.state.snapshot.borrow().root;
         let due = self.scoped_to(
             root,
             focus_folders_due(
-                &self.snapshot.borrow(),
-                &self.focus.borrow(),
-                &self.focus_refreshed.borrow(),
+                &self.state.snapshot.borrow(),
+                &self.state.focus.borrow(),
+                &self.state.focus_refreshed.borrow(),
                 now,
                 &self.profile,
             ),
         );
         let scope_read_seed = self.scope_read_seed(&root.0).await;
-        let root_name = self.current_root_name.borrow().clone();
+        let root_name = self.state.current_root_name.borrow().clone();
         let leg = scope_read_seed
             .as_ref()
             .map(|scope_read_seed| FolderRefresh {
@@ -10716,7 +10469,7 @@ where {
                 http: &self.seams.http,
                 floors: &self.seams.floor_store,
                 gateway: &self.gateway,
-                base: &self.snapshot,
+                base: &self.state.snapshot,
                 events: &self.events,
                 scope_id: root.0,
                 scope_read_seed,
@@ -10727,8 +10480,8 @@ where {
             });
         let settle = |nodes: &[NodeId], report| {
             settle_focus_leg(
-                &self.observed_unlinks,
-                &self.focus_refreshed,
+                &self.state.observed_unlinks,
+                &self.state.focus_refreshed,
                 &self.events,
                 nodes,
                 report,
@@ -10749,7 +10502,8 @@ where {
                 settle(&files, leg.run_files(&files).await);
                 // The tick leg's rule: a row leaves the queue only once a pass
                 // has attempted it.
-                self.focus
+                self.state
+                    .focus
                     .borrow_mut()
                     .open_files
                     .retain(|row| !files.contains(&row.node));
@@ -10848,7 +10602,7 @@ where {
 
         writes.next += 1;
         let handle = WriteHandle(writes.next);
-        self.live_blocks.borrow_mut().open(handle);
+        self.state.live_blocks.borrow_mut().open(handle);
         writes.open.insert(
             handle,
             LiveWrite {
@@ -10873,7 +10627,7 @@ where {
     async fn hosted_quota_pre_flight(&self, requested: u64) -> Result<(), EngineError> {
         // Only the predicate and the provenance leave the borrow: cloning the
         // placement would copy the member's provider bearer on every write.
-        let (hosted_leg, source) = match self.placement.borrow().as_ref() {
+        let (hosted_leg, source) = match self.state.placement.borrow().as_ref() {
             None => return Err(EngineError::NotStarted),
             Some(SessionPlacement {
                 decision: Err(refusal),
@@ -10909,11 +10663,11 @@ where {
             // rejects a BYO account, so an unreconciled flag fails every hosted
             // upload the session makes.
             PlacementSource::Member => {
-                if !self.byo_reconciled.get()
+                if !self.state.byo_reconciled.get()
                     && quota.advisory == hosted_leg
                     && api.set_byo(!hosted_leg).await.is_ok()
                 {
-                    self.byo_reconciled.set(true);
+                    self.state.byo_reconciled.set(true);
                 }
             }
         }
@@ -10997,7 +10751,7 @@ where {
             Ok(op_id) => {
                 // The journaled op now references the blocks, so GC no longer
                 // needs the handle to vouch for them.
-                self.live_blocks.borrow_mut().close(handle);
+                self.state.live_blocks.borrow_mut().close(handle);
                 let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 Ok(op_id)
             }
@@ -11036,7 +10790,7 @@ where {
         cid: &[u8],
         sealed: &[u8],
     ) -> Result<(), EngineError> {
-        self.live_blocks.borrow_mut().record(handle, cid);
+        self.state.live_blocks.borrow_mut().record(handle, cid);
         self.seams
             .staging_store
             .put_staged_bytes(cid, sealed)
@@ -11047,7 +10801,7 @@ where {
     /// Drop every block a handle staged — no op will ever reference them.
     /// Best-effort: a failed removal is orphan residue a later GC pass collects.
     async fn release_handle_blocks(&self, handle: WriteHandle) {
-        let keys = self.live_blocks.borrow_mut().close(handle);
+        let keys = self.state.live_blocks.borrow_mut().close(handle);
         for key in keys {
             let _ = self.seams.staging_store.remove_staged_bytes(&key).await;
         }
@@ -11198,7 +10952,7 @@ where {
         }
         // Claimed before anything is undone, and refused once the drain holds
         // the op for publish — cancel never mutates published state.
-        if !self.cancels.borrow_mut().request(op_id) {
+        if !self.state.cancels.borrow_mut().request(op_id) {
             return Err(EngineError::TooLateToCancel { op_id });
         }
         let node = op.target;
@@ -11215,7 +10969,7 @@ where {
         };
 
         if let Err(error) = self.discard_upload(op_id, node, &root_cid).await {
-            self.cancels.borrow_mut().withdraw(op_id);
+            self.state.cancels.borrow_mut().withdraw(op_id);
             return Err(error);
         }
         // The primary op is already gone, so the overlay is stale either way:
@@ -11235,7 +10989,8 @@ where {
     }
 
     /// Undo one queued upload: drop the op, retire what of it reached the
-    /// network ([`UploadCancels`]), release its blocks, and tell the host.
+    /// network ([`UploadCancels`](crate::sync::cancel::UploadCancels)), release
+    /// its blocks, and tell the host.
     ///
     /// The dequeue goes first and is the only step allowed to fail the cancel:
     /// an op that is still queued is still publishable, and unpinning its blocks
@@ -11251,6 +11006,7 @@ where {
     ) -> Result<(), EngineError> {
         self.dequeue_op(op_id).await?;
         let uploaded: Vec<String> = self
+            .state
             .cancels
             .borrow()
             .uploaded_by(op_id)
@@ -11302,7 +11058,7 @@ where {
         let retained_records = self.scan_queue().await?.retained;
         Ok(SessionStatus {
             dead_letters: self.retained_dead_letters(),
-            queue_hold: *self.queue_hold.borrow(),
+            queue_hold: *self.state.queue_hold.borrow(),
             retained_records,
             staleness: self.staleness_now(),
         })
@@ -11316,7 +11072,7 @@ where {
     /// lost "reclaimed" would strand a host on a debt that is already paid.
     #[must_use]
     pub fn pending_reclaim_bytes(&self) -> u64 {
-        self.pending_reclaim.get()
+        self.state.pending_reclaim.get()
     }
 
     /// Whether that figure is a floor rather than the whole debt: the ledger
@@ -11324,7 +11080,7 @@ where {
     /// the window it opened and leaves the rest for the passes that follow.
     #[must_use]
     pub fn pending_reclaim_is_partial(&self) -> bool {
-        self.bookkeeping.borrow().reclaim_is_partial()
+        self.state.bookkeeping.borrow().reclaim_is_partial()
     }
 
     /// Why the debts the last reclaim pass could not settle did not settle.
@@ -11336,7 +11092,7 @@ where {
     /// here too (blueprint/engine.md "never a silent failure").
     #[must_use]
     pub fn reclaim_stalls(&self) -> Vec<ReclaimStall> {
-        self.reclaim_stalls.borrow().clone()
+        self.state.reclaim_stalls.borrow().clone()
     }
 
     /// A key-free [`SnapshotView`] of `folder` — its children (with pending/
@@ -11349,7 +11105,7 @@ where {
         let scan = self.scan_queue().await?;
         let ops: Vec<Op> = scan.mine.into_iter().map(|(_id, op)| op).collect();
         let rendered = {
-            let base = self.snapshot.borrow();
+            let base = self.state.snapshot.borrow();
             apply_overlay(&base, &ops)
         };
         let meta = rendered.node(folder).ok_or(EngineError::UnknownNode)?;
@@ -11361,9 +11117,9 @@ where {
             let slot = pending.entry(op.target).or_default();
             *slot = (*slot).max(op.pending_class());
         }
-        let dead = self.dead_letters.borrow();
+        let dead = self.state.dead_letters.borrow();
         let dead_nodes: BTreeSet<NodeId> = dead.values().filter_map(|(node, _)| *node).collect();
-        let claims = self.pending_invite_claims.borrow().clone();
+        let claims = self.state.pending_invite_claims.borrow().clone();
         let children = rendered_children(&rendered, folder)
             .iter()
             .map(|child| SnapshotChild {
@@ -11389,7 +11145,12 @@ where {
             .collect();
         let folder_name = rendered_name(&rendered, folder);
         let scope = scope_of(&rendered, folder, &self.authored_scope_roots());
-        let granted = self.bookmarked_permissions.borrow().get(&scope.0).copied();
+        let granted = self
+            .state
+            .bookmarked_permissions
+            .borrow()
+            .get(&scope.0)
+            .copied();
         let permission = match granted {
             None => Permission::Write,
             Some(_)
@@ -11411,7 +11172,7 @@ where {
             children,
             ancestors,
             dead_letters: self.retained_dead_letters(),
-            queue_hold: *self.queue_hold.borrow(),
+            queue_hold: *self.state.queue_hold.borrow(),
             retained_records: scan.retained,
             staleness: self.staleness_now(),
         })
@@ -11421,6 +11182,7 @@ where {
     pub async fn vault_storage(&self) -> Result<VaultStorageView, EngineError> {
         self.live_session()?;
         let settings = self
+            .state
             .settings_summary
             .borrow()
             .clone()
@@ -11553,7 +11315,7 @@ where {
             .await
             .map_err(EngineError::from_received_share_store)?;
 
-        let verdicts = self.received_verdicts.borrow();
+        let verdicts = self.state.received_verdicts.borrow();
         Ok(received
             .iter()
             .map(|share| {
@@ -11706,7 +11468,7 @@ where {
         // back as the empty grant list a node that is simply not a scope root
         // answers with.
         {
-            let base = self.snapshot.borrow();
+            let base = self.state.snapshot.borrow();
             if scope_root != base.root && !base.contains(scope_root) {
                 return Err(EngineError::UnknownNode);
             }
@@ -11823,7 +11585,7 @@ where {
         // than as a scope with no links.
         let links = committed_links(&owner_authority(session), &scope).ok()?;
         let now = self.seams.scheduler.now();
-        let counts = self.pending_invite_claims.borrow();
+        let counts = self.state.pending_invite_claims.borrow();
         let invite_links = links
             .iter()
             .map(|link| SharingInviteLink {
@@ -12156,7 +11918,7 @@ where {
     /// must not cascade.
     fn project_head(&self, node: NodeId, version: &Version, version_count: u64) {
         if project_child_version(
-            &mut self.snapshot.borrow_mut(),
+            &mut self.state.snapshot.borrow_mut(),
             node,
             version.size,
             version.modified_at,
@@ -12197,7 +11959,7 @@ where {
         // come from the overlay) — no full render for a single node. The borrow
         // never spans an await.
         let base_meta = {
-            let base = self.snapshot.borrow();
+            let base = self.state.snapshot.borrow();
             base.node(node)
                 .map(|meta| (meta.kind, meta.ipns_name.clone()))
         };
@@ -12240,7 +12002,7 @@ where {
         // none of them has no scope to open under. The clone of the seed
         // zeroizes when the adopter drops.
         let scope_id = {
-            let base = self.snapshot.borrow();
+            let base = self.state.snapshot.borrow();
             let mut roots = self.authored_scope_roots();
             roots.push(base.root);
             enclosing_scope_root(&base, node, &roots)
@@ -12248,8 +12010,8 @@ where {
                 .0
         };
         let scope_root_name = scope_root_record_name(
-            &self.snapshot.borrow(),
-            self.current_root_name.borrow().as_ref(),
+            &self.state.snapshot.borrow(),
+            self.state.current_root_name.borrow().as_ref(),
             &scope_id,
         );
         let scope_read_seed = self.scope_read_seed(&scope_id).await.ok_or_else(no_seed)?;
@@ -12301,7 +12063,7 @@ where {
     /// The current base snapshot's root node id — the FUSE mount anchor. The
     /// seeded all-zero root until cold-start/resolve replaces the base snapshot.
     pub fn root(&self) -> NodeId {
-        self.snapshot.borrow().root
+        self.state.snapshot.borrow().root
     }
 
     /// Plant a child into the base snapshot the way a peer's committed record
@@ -12309,7 +12071,7 @@ where {
     /// drive names and duplicates this device would refuse to author.
     #[cfg(any(test, feature = "test-kit"))]
     pub fn plant_committed_child(&self, parent: NodeId, child: NodeId, name: &str, kind: NodeKind) {
-        let mut base = self.snapshot.borrow_mut();
+        let mut base = self.state.snapshot.borrow_mut();
         base.upsert_node(NodeMeta::new(child, name, kind));
         base.link_next(parent, child);
     }
@@ -12323,7 +12085,7 @@ where {
     /// pair no later read can ask for ([`RenderMemo::fill`]).
     async fn render(&self) -> Result<Rc<Snapshot>, EngineError> {
         let key = RenderKey {
-            base: self.snapshot.generation(),
+            base: self.state.snapshot.generation(),
             queue: self.seams.staging_store.generation(),
         };
         let hit = self.render_memo.borrow().hit(key);
@@ -12333,14 +12095,15 @@ where {
         // Take the base borrow only after the await, and drop it at the end of
         // this sync call — a `RefCell` borrow must never span an `.await`.
         let ops = self.pending_ops().await?;
-        let rendered = Rc::new(apply_overlay(&self.snapshot.borrow(), &ops));
+        let rendered = Rc::new(apply_overlay(&self.state.snapshot.borrow(), &ops));
         self.render_memo.borrow_mut().fill(key, rendered.clone());
         Ok(rendered)
     }
 
     /// Every retained dead-lettered op, with its reason.
     fn retained_dead_letters(&self) -> Vec<DeadLetter> {
-        self.dead_letters
+        self.state
+            .dead_letters
             .borrow()
             .iter()
             .map(|(op_id, (_, reason))| DeadLetter {
@@ -12352,7 +12115,7 @@ where {
 
     /// The staleness rung at this instant, off the injected clock.
     fn staleness_now(&self) -> Staleness {
-        let status = self.sync_status.borrow();
+        let status = self.state.sync_status.borrow();
         classify(
             self.seams.scheduler.now(),
             status.last_success,
@@ -12370,7 +12133,7 @@ where {
     async fn scan_queue(&self) -> Result<QueueScan, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let reader = RecordReader::new(session.enc_subkey());
-        memoized_scan(&self.seams.staging_store, &reader, &self.queue_scan)
+        memoized_scan(&self.seams.staging_store, &reader, &self.state.queue_scan)
             .await
             .map_err(EngineError::from_seam)
     }
@@ -12389,18 +12152,19 @@ where {
     /// Every scope boundary this session has named: the roots its own grants
     /// minted, the roots a gated descent proved ([`install_descendant_scopes`]),
     /// and the roots the walk named without material
-    /// ([`unproved_scope_roots`](Self::unproved_scope_roots)). Wider than the
+    /// ([`unproved_scope_roots`](SessionState::unproved_scope_roots)). Wider than the
     /// set the drain drives, which lists only the scopes it holds a seed pair
     /// for: a boundary the drain cannot author is one a relocation must still
     /// be classified against.
     fn relocation_scope_roots(&self) -> Vec<NodeId> {
         let mut roots: BTreeSet<NodeId> = self
+            .state
             .minted_scope_roots
             .borrow()
-            .union(&self.descendant_scope_roots.borrow())
+            .union(&self.state.descendant_scope_roots.borrow())
             .copied()
             .collect();
-        roots.extend(self.unproved_scope_roots.borrow().iter().copied());
+        roots.extend(self.state.unproved_scope_roots.borrow().iter().copied());
         roots.into_iter().collect()
     }
 
@@ -12409,9 +12173,10 @@ where {
     /// in-memory write seed still stand. A restart admits nothing until a tick
     /// re-proves the pass.
     fn writable_graft_roots(&self) -> Vec<NodeId> {
-        let permissions = self.bookmarked_permissions.borrow();
-        let seeds = self.scope_write_seeds.borrow();
-        self.grafted_write_roots
+        let permissions = self.state.bookmarked_permissions.borrow();
+        let seeds = self.state.scope_write_seeds.borrow();
+        self.state
+            .grafted_write_roots
             .borrow()
             .iter()
             .filter(|root| {
@@ -12437,7 +12202,7 @@ where {
         let WriteHome::Graft(graft) = home else {
             return Ok(home);
         };
-        let seed = cached_seed(&self.scope_write_seeds, &graft.0).ok_or_else(out_of_scope)?;
+        let seed = cached_seed(&self.state.scope_write_seeds, &graft.0).ok_or_else(out_of_scope)?;
         let chain = core::iter::once(node).chain(rendered.ancestors(node));
         for below in chain.take_while(|below| *below != graft) {
             let Some(published) = rendered.node(below).and_then(|meta| meta.ipns_name.clone())
@@ -12462,7 +12227,8 @@ where {
     fn authored_scope_roots(&self) -> Vec<NodeId> {
         let mut roots = self.relocation_scope_roots();
         roots.extend(
-            self.bookmarked_scope_roots
+            self.state
+                .bookmarked_scope_roots
                 .borrow()
                 .iter()
                 .copied()
@@ -12485,7 +12251,7 @@ where {
         node: NodeId,
         new_parent: NodeId,
     ) -> Result<(NodeId, u64, RelocationPlan), EngineError> {
-        if self.boundary_walk_rejected.get() {
+        if self.state.boundary_walk_rejected.get() {
             return Err(EngineError::TrustViolation {
                 message: "a scope root below this vault failed the adoption gate, so this \
                           session cannot name every boundary a move would cross"
@@ -12544,7 +12310,7 @@ where {
             return Ok(authored);
         }
         let projected = {
-            let base = self.snapshot.borrow();
+            let base = self.state.snapshot.borrow();
             base.node(node)
                 .map(|meta| (meta.content_version, meta.head_content_cid.clone()))
         };
@@ -12641,6 +12407,7 @@ where {
             return Ok(Some(staged));
         }
         Ok(self
+            .state
             .snapshot
             .borrow()
             .node(node)
@@ -12657,7 +12424,7 @@ where {
     }
 
     fn bin_retention_days(&self) -> u32 {
-        bin_retention_days(&self.settings_summary)
+        bin_retention_days(&self.state.settings_summary)
     }
 
     /// Mint a fresh random 16-byte node id from the injected entropy seam
@@ -12727,7 +12494,7 @@ where {
             .await
             .map_err(EngineError::from_seam)?
         {
-            self.dead_letters.borrow_mut().remove(&op_id);
+            self.state.dead_letters.borrow_mut().remove(&op_id);
             let _ = self.events.unbounded_send(Event::SnapshotUpdated);
             return Ok(());
         }
@@ -12740,7 +12507,7 @@ where {
         if let Some(root) = record_content_root_cid(&parked.record).ok().flatten() {
             release_version_blocks(&self.seams.staging_store, root.as_slice()).await;
         }
-        self.dead_letters.borrow_mut().remove(&op_id);
+        self.state.dead_letters.borrow_mut().remove(&op_id);
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         Ok(())
     }
@@ -12812,7 +12579,7 @@ where {
         take_preserved_dead_letter(&self.seams.staging_store, op_id)
             .await
             .map_err(EngineError::from_seam)?;
-        self.dead_letters.borrow_mut().remove(&op_id);
+        self.state.dead_letters.borrow_mut().remove(&op_id);
         Ok(outcome)
     }
 
@@ -12841,11 +12608,12 @@ where {
     /// `deletedAt` that read produced.
     async fn owner_bin_load(&self) -> Result<BinIndexLoad, EngineError> {
         let keys = self
+            .secrets
             .tick_bin_keys
             .borrow()
             .clone()
             .ok_or(EngineError::NotStarted)?;
-        let observed = observed_at(&self.held_records, HeldKey::BinIndex);
+        let observed = observed_at(&self.state.held_records, HeldKey::BinIndex);
         let load = load_bin_index(
             &self.record_transport,
             &self.gateway,
@@ -12857,7 +12625,7 @@ where {
             &keys,
         )
         .await
-        .enrol(&self.held_records, observed);
+        .enrol(&self.state.held_records, observed);
         let reason = match load {
             BinIndexLoad::Resolved(_) => return Ok(load),
             BinIndexLoad::Stale { reason, .. } | BinIndexLoad::Empty(reason) => reason,
@@ -12959,6 +12727,7 @@ where {
         };
         let now = self.seams.scheduler.now();
         let is_file = self
+            .state
             .snapshot
             .borrow()
             .node(node)
@@ -12974,6 +12743,7 @@ where {
             .filter(|(hinted, _)| *hinted == node)
             .map(|(_, at)| at);
         let last = self
+            .state
             .focus_refreshed
             .borrow()
             .get(&node)
@@ -13000,10 +12770,10 @@ where {
     /// pass, so a slot spent on it serves no resolve and evicts a folder that
     /// would have had one.
     fn note_touched_folder(&self, folder: NodeId, now: UnixMillis) {
-        if folder == self.snapshot.borrow().root {
+        if folder == self.state.snapshot.borrow().root {
             return;
         }
-        let mut focus = self.focus.borrow_mut();
+        let mut focus = self.state.focus.borrow_mut();
         focus.touched_folders.insert(folder, now);
         if focus.touched_folders.len() > MAX_FOCUS_FOLDERS {
             let coldest = focus
@@ -13021,9 +12791,9 @@ where {
     /// ([`queue_unprojected_children`]).
     fn queue_focus_file_children(&self, folder: NodeId) {
         queue_unprojected_children(
-            &self.snapshot.borrow(),
-            &self.focus,
-            &self.focus_refreshed,
+            &self.state.snapshot.borrow(),
+            &self.state.focus,
+            &self.state.focus_refreshed,
             &self.profile,
             self.seams.scheduler.now(),
             folder,
@@ -13033,8 +12803,8 @@ where {
     /// Put `node` on the on-access file queue ([`queue_focus_file`]).
     pub fn note_focus_file(&self, node: NodeId) {
         queue_focus_file(
-            &self.focus,
-            &self.focus_refreshed,
+            &self.state.focus,
+            &self.state.focus_refreshed,
             &self.profile,
             self.seams.scheduler.now(),
             FocusFile::host(node),
@@ -13043,7 +12813,8 @@ where {
 
     /// The files the tick's file leg will resolve next, oldest first.
     pub fn queued_focus_files(&self) -> Vec<NodeId> {
-        self.focus
+        self.state
+            .focus
             .borrow()
             .open_files
             .iter()
@@ -13055,7 +12826,7 @@ where {
     /// opened, and every folder a host operation stream touched inside the focus
     /// horizon.
     pub fn focus_folders(&self) -> Vec<NodeId> {
-        self.focus.borrow().folders_in_view().collect()
+        self.state.focus.borrow().folders_in_view().collect()
     }
 
     /// The sync timing profile this engine runs under.
@@ -13086,8 +12857,8 @@ where {
         let read_scope_seed = self.scope_read_seed(&scope.0).await?;
         Some(crate::rotation::scope_material::ScopeMaterial {
             read_scope_seed,
-            write_scope_seed: cached_seed(&self.scope_write_seeds, &scope.0)?,
-            read_epoch: *self.walked_read_epochs.borrow().get(&scope)?,
+            write_scope_seed: cached_seed(&self.state.scope_write_seeds, &scope.0)?,
+            read_epoch: *self.state.walked_read_epochs.borrow().get(&scope)?,
         })
     }
 }
@@ -14399,11 +14170,11 @@ mod tests {
     #[test]
     fn a_relocation_whose_source_is_outside_this_vault_is_refused() {
         let (mut engine, _events) = started();
-        let root = engine.snapshot.borrow().root;
+        let root = engine.state.snapshot.borrow().root;
         let shared_root = NodeId([0xf1; 16]);
         let shared_child = NodeId([0xf2; 16]);
         {
-            let mut base = engine.snapshot.borrow_mut();
+            let mut base = engine.state.snapshot.borrow_mut();
             base.upsert_node(NodeMeta::new(shared_root, "theirs", NodeKind::Folder));
             base.upsert_node(NodeMeta::new(shared_child, "doc", NodeKind::File));
             base.link_next(shared_root, shared_child);
@@ -15461,8 +15232,8 @@ mod tests {
             target: "bafystalledroot".to_owned(),
             reason: ReclaimStallReason::TargetStillLive,
         };
-        engine.pending_reclaim.set(0);
-        engine.reclaim_stalls.borrow_mut().push(stall.clone());
+        engine.state.pending_reclaim.set(0);
+        engine.state.reclaim_stalls.borrow_mut().push(stall.clone());
 
         let view = block_on(engine.vault_storage()).expect("storage view");
 
@@ -16441,7 +16212,11 @@ mod tests {
             .unwrap()
             .id;
         // The cut a grant makes: the folder answers as a scope root of its own.
-        engine.descendant_scope_roots.borrow_mut().insert(shared);
+        engine
+            .state
+            .descendant_scope_roots
+            .borrow_mut()
+            .insert(shared);
         // Two floors that differ, so a blob that read the wrong scope's floor
         // carries a distinguishable epoch.
         block_on(engine.seams.floor_store.raise_epoch_floor(&root.0, 3)).unwrap();
@@ -16491,7 +16266,11 @@ mod tests {
             .lookup(root, "shared")
             .unwrap()
             .id;
-        engine.descendant_scope_roots.borrow_mut().insert(shared);
+        engine
+            .state
+            .descendant_scope_roots
+            .borrow_mut()
+            .insert(shared);
         write_file(
             &mut engine,
             WriteTarget::NewFile {
@@ -16542,7 +16321,11 @@ mod tests {
                 .unwrap()
                 .id;
             if promote_before_write {
-                engine.descendant_scope_roots.borrow_mut().insert(shared);
+                engine
+                    .state
+                    .descendant_scope_roots
+                    .borrow_mut()
+                    .insert(shared);
             }
             write_file(
                 &mut engine,
@@ -16553,7 +16336,11 @@ mod tests {
                 &[9u8; 32],
             )
             .expect("the write commits");
-            engine.descendant_scope_roots.borrow_mut().insert(shared);
+            engine
+                .state
+                .descendant_scope_roots
+                .borrow_mut()
+                .insert(shared);
             let file = block_on(engine.view())
                 .unwrap()
                 .lookup(shared, "inside.bin")
@@ -16575,8 +16362,13 @@ mod tests {
         let (engine, _events) = started();
         let grafted = NodeId([0x5c; 16]);
         let sharer = [0x21; cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN];
-        engine.bookmarked_scope_roots.borrow_mut().insert(grafted.0);
         engine
+            .state
+            .bookmarked_scope_roots
+            .borrow_mut()
+            .insert(grafted.0);
+        engine
+            .state
             .grafted_sharers
             .borrow_mut()
             .insert(grafted.0, sharer);
@@ -16606,7 +16398,11 @@ mod tests {
     fn a_grafted_scope_with_no_granting_identity_refuses_the_epoch() {
         let (engine, _events) = started();
         let grafted = NodeId([0x5c; 16]);
-        engine.bookmarked_scope_roots.borrow_mut().insert(grafted.0);
+        engine
+            .state
+            .bookmarked_scope_roots
+            .borrow_mut()
+            .insert(grafted.0);
 
         assert!(matches!(
             block_on(engine.authored_scope_epoch(grafted)),
@@ -16628,7 +16424,7 @@ mod tests {
                 crate::content::ProviderError::InsecureTransport,
             )),
         };
-        *engine.queue_hold.borrow_mut() = Some(hold);
+        *engine.state.queue_hold.borrow_mut() = Some(hold);
 
         assert_eq!(
             block_on(engine.snapshot(root)).unwrap().queue_hold,
@@ -17355,7 +17151,7 @@ mod tests {
             let (engine, _events) = started();
             let root = engine.root();
             refresh_base_from_resolved(
-                &engine.snapshot,
+                &engine.state.snapshot,
                 root,
                 &Resolved::just(ResolveOutcome::Adopted(adopted_folder(vec![
                     child_ref(1, "a", CoreNodeKind::Folder),
@@ -17570,8 +17366,13 @@ mod tests {
                 "a folder of this vault's own plane is written by ownership"
             );
 
-            engine.bookmarked_scope_roots.borrow_mut().insert(shared.0);
             engine
+                .state
+                .bookmarked_scope_roots
+                .borrow_mut()
+                .insert(shared.0);
+            engine
+                .state
                 .bookmarked_permissions
                 .borrow_mut()
                 .insert(shared.0, cipherbox_core::seal::Permission::Read);
@@ -17612,12 +17413,16 @@ mod tests {
             // A graft plants the scope root with no parent link, exactly as the
             // received-share pass does.
             let grafted = NodeId([0x5c; 16]);
-            engine.snapshot.borrow_mut().upsert_node(NodeMeta::new(
-                grafted,
-                "shared",
-                NodeKind::Folder,
-            ));
-            engine.bookmarked_scope_roots.borrow_mut().insert(grafted.0);
+            engine
+                .state
+                .snapshot
+                .borrow_mut()
+                .upsert_node(NodeMeta::new(grafted, "shared", NodeKind::Folder));
+            engine
+                .state
+                .bookmarked_scope_roots
+                .borrow_mut()
+                .insert(grafted.0);
 
             assert!(block_on(engine.snapshot(grafted)).unwrap().received_share);
             assert!(matches!(
@@ -17761,11 +17566,11 @@ mod tests {
                     &RecordReader::new(&enc_subkey),
                     engine.seams.staging_store.generation(),
                 );
-                assert!(engine.queue_scan.borrow().hit(&key).is_some());
+                assert!(engine.state.queue_scan.borrow().hit(&key).is_some());
 
                 block_on(engine.command(Command::Logout)).unwrap();
 
-                assert!(engine.queue_scan.borrow().hit(&key).is_none());
+                assert!(engine.state.queue_scan.borrow().hit(&key).is_none());
             }
 
             #[test]
@@ -17786,7 +17591,7 @@ mod tests {
                 assert!(names(&engine, root).is_empty());
 
                 refresh_base_from_resolved(
-                    &engine.snapshot,
+                    &engine.state.snapshot,
                     root,
                     &Resolved::just(ResolveOutcome::Adopted(adopted_folder(vec![child_ref(
                         1,
@@ -17829,7 +17634,7 @@ mod tests {
                         .render_memo
                         .borrow()
                         .hit(RenderKey {
-                            base: engine.snapshot.generation(),
+                            base: engine.state.snapshot.generation(),
                             queue: engine.seams.staging_store.generation(),
                         })
                         .is_none()
@@ -18086,7 +17891,7 @@ mod tests {
             // into the shared base cell and emit, exactly as the tick loop does.
             assert!(
                 refresh_base_from_resolved(
-                    &engine.snapshot,
+                    &engine.state.snapshot,
                     root,
                     &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
                         [0xC1; 16], "live.txt"
@@ -18115,14 +17920,14 @@ mod tests {
             assert_eq!(root, b.root());
 
             refresh_base_from_resolved(
-                &a.snapshot,
+                &a.state.snapshot,
                 root,
                 &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
                     [0xD2; 16], "clk.txt",
                 ))),
             );
             refresh_base_from_resolved(
-                &b.snapshot,
+                &b.state.snapshot,
                 root,
                 &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
                     [0xD2; 16], "clk.txt",
@@ -18131,7 +17936,7 @@ mod tests {
 
             // Clock-independent: the two repainted bases are byte-identical, and
             // both render the same post-pass view.
-            assert_eq!(*a.snapshot.borrow(), *b.snapshot.borrow());
+            assert_eq!(*a.state.snapshot.borrow(), *b.state.snapshot.borrow());
             let va = block_on(a.view()).unwrap();
             let vb = block_on(b.view()).unwrap();
             assert!(va.lookup(root, "clk.txt").is_some());
@@ -18758,6 +18563,7 @@ mod tests {
             );
             assert!(
                 !engine
+                    .state
                     .held_records
                     .borrow()
                     .contains_key(&HeldKey::VaultSettings),
@@ -18802,7 +18608,7 @@ mod tests {
             let (mut engine, _events) = engine_on(&device);
             block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
             assert!(
-                engine.held_records.borrow().is_empty(),
+                engine.state.held_records.borrow().is_empty(),
                 "nothing held until the record appears"
             );
 
@@ -18817,7 +18623,7 @@ mod tests {
             world.scheduler.advance(engine.profile().poll_cadence);
             poll_tasks_once(&mut tasks); // the resolve tick runs one pass
 
-            let held = engine.held_records.borrow();
+            let held = engine.state.held_records.borrow();
             assert_eq!(held.len(), 1, "the resolve tick held the owner root");
             let record = held
                 .get(&HeldKey::Node(ROOT.0))
@@ -18825,6 +18631,7 @@ mod tests {
             assert_eq!(record.routing_key, root_name.as_str());
             assert_eq!(
                 engine
+                    .state
                     .scope_read_seeds
                     .borrow()
                     .get(&SCOPE)
@@ -18877,7 +18684,7 @@ mod tests {
             let walked: Vec<NodeId> = (0..64u8).map(|i| NodeId([i; 16])).collect();
             {
                 let now = engine.seams.scheduler.now();
-                let mut stamps = engine.focus_refreshed.borrow_mut();
+                let mut stamps = engine.state.focus_refreshed.borrow_mut();
                 for node in &walked {
                     stamps.insert(*node, now);
                 }
@@ -18885,6 +18692,7 @@ mod tests {
             world.scheduler.advance(SyncTimingProfile::CI.stale_after);
             let fresh = NodeId([200; 16]);
             engine
+                .state
                 .focus_refreshed
                 .borrow_mut()
                 .insert(fresh, engine.seams.scheduler.now());
@@ -18893,6 +18701,7 @@ mod tests {
 
             assert_eq!(
                 engine
+                    .state
                     .focus_refreshed
                     .borrow()
                     .keys()
@@ -18913,10 +18722,10 @@ mod tests {
             let (engine, _events, mut tasks) = started_and_parked(&world, &device);
             tick(&world, &device, &mut tasks);
 
-            let held = engine.held_records.clone();
-            let read_seeds = engine.scope_read_seeds.clone();
-            let write_seeds = engine.scope_write_seeds.clone();
-            let enc_subkey = engine.tick_enc_subkey.clone();
+            let held = engine.state.held_records.clone();
+            let read_seeds = engine.state.scope_read_seeds.clone();
+            let write_seeds = engine.state.scope_write_seeds.clone();
+            let enc_subkey = engine.secrets.tick_enc_subkey.clone();
             assert!(
                 !held.borrow().is_empty(),
                 "the tick holds the root under a per-name renewal signer"
@@ -19002,13 +18811,14 @@ mod tests {
 
             tick(&world, &device, &mut tasks);
             assert_eq!(
-                engine.held_records.borrow().len(),
+                engine.state.held_records.borrow().len(),
                 1,
                 "the first steady-state poll recovers the write seed and holds"
             );
             // Stamp the entry: a re-hold rebuilds it wholesale, so the stamp
             // surviving is the observable proof that no re-hold ran.
             engine
+                .state
                 .held_records
                 .borrow_mut()
                 .get_mut(&HeldKey::Node(ROOT.0))
@@ -19017,12 +18827,13 @@ mod tests {
 
             tick(&world, &device, &mut tasks);
             assert_eq!(
-                engine.held_records.borrow()[&HeldKey::Node(ROOT.0)].content_cids,
+                engine.state.held_records.borrow()[&HeldKey::Node(ROOT.0)].content_cids,
                 vec!["bafystamp".to_owned()],
                 "the next poll left the hold alone"
             );
             assert_eq!(
                 engine
+                    .state
                     .scope_write_seeds
                     .borrow()
                     .get(&SCOPE)
@@ -19044,7 +18855,7 @@ mod tests {
 
             let published = vec!["bafypublished".to_owned()];
             let before = {
-                let mut held = engine.held_records.borrow_mut();
+                let mut held = engine.state.held_records.borrow_mut();
                 let record = held
                     .get_mut(&HeldKey::Node(ROOT.0))
                     .expect("held under the root node id");
@@ -19065,7 +18876,7 @@ mod tests {
             };
             reseed(2);
             tick(&world, &device, &mut tasks);
-            let held = engine.held_records.borrow();
+            let held = engine.state.held_records.borrow();
             assert_ne!(
                 held[&HeldKey::Node(ROOT.0)].record_bytes,
                 before,
@@ -19081,6 +18892,7 @@ mod tests {
             // Stamped against a head this device did not author: that block set
             // is superseded, so it must not ride the new head's renewal.
             engine
+                .state
                 .held_records
                 .borrow_mut()
                 .get_mut(&HeldKey::Node(ROOT.0))
@@ -19089,7 +18901,7 @@ mod tests {
             reseed(3);
             tick(&world, &device, &mut tasks);
             assert!(
-                engine.held_records.borrow()[&HeldKey::Node(ROOT.0)]
+                engine.state.held_records.borrow()[&HeldKey::Node(ROOT.0)]
                     .content_cids
                     .is_empty(),
                 "CIDs held for a different head are dropped, not carried over"
@@ -19110,15 +18922,23 @@ mod tests {
             let promoted = NodeId([0xD1; 16]);
             let inside = NodeId([0xD2; 16]);
             {
-                let mut base = engine.snapshot.borrow_mut();
+                let mut base = engine.state.snapshot.borrow_mut();
                 base.upsert_node(NodeMeta::new(promoted, "promoted", NodeKind::Folder));
                 base.upsert_node(NodeMeta::new(inside, "inside", NodeKind::Folder));
                 base.link(ROOT, promoted, 1);
                 base.link(promoted, inside, 1);
             }
-            engine.descendant_scope_roots.borrow_mut().insert(promoted);
+            engine
+                .state
+                .descendant_scope_roots
+                .borrow_mut()
+                .insert(promoted);
             assert!(
-                !engine.scope_read_seeds.borrow().contains_key(&promoted.0),
+                !engine
+                    .state
+                    .scope_read_seeds
+                    .borrow()
+                    .contains_key(&promoted.0),
                 "the walk that dropped the seed left the promotion proved"
             );
             engine.note_focus_access(Some(inside));
@@ -19210,7 +19030,7 @@ mod tests {
                 },
             );
             {
-                let mut base = engine.snapshot.borrow_mut();
+                let mut base = engine.state.snapshot.borrow_mut();
                 let mut folder = NodeMeta::new(unproved, "unproved", NodeKind::Folder);
                 folder.ipns_name = Some(folder_name.as_str().as_bytes().to_vec());
                 base.upsert_node(folder);
@@ -19220,7 +19040,11 @@ mod tests {
                 base.link(ROOT, unproved, 1);
                 base.link(unproved, row, 1);
             }
-            engine.unproved_scope_roots.borrow_mut().insert(unproved);
+            engine
+                .state
+                .unproved_scope_roots
+                .borrow_mut()
+                .insert(unproved);
             engine.note_focus_access(Some(unproved));
 
             let forced = engine
@@ -19256,7 +19080,14 @@ mod tests {
                 "a boundary with no material is an outage on its own leg",
             );
             assert!(
-                engine.snapshot.borrow().node(row).unwrap().size.is_none(),
+                engine
+                    .state
+                    .snapshot
+                    .borrow()
+                    .node(row)
+                    .unwrap()
+                    .size
+                    .is_none(),
                 "and nothing below it was painted from a record read under \
                  another scope's seed",
             );
@@ -19271,7 +19102,7 @@ mod tests {
             let device = world.device(b"alice-pk");
             let (engine, _events, mut tasks) = started_and_parked(&world, &device);
             tick(&world, &device, &mut tasks);
-            assert!(engine.scope_read_seeds.borrow().contains_key(&SCOPE));
+            assert!(engine.state.scope_read_seeds.borrow().contains_key(&SCOPE));
 
             block_on(
                 device
@@ -19282,11 +19113,11 @@ mod tests {
             tick(&world, &device, &mut tasks);
 
             assert!(
-                !engine.scope_read_seeds.borrow().contains_key(&SCOPE),
+                !engine.state.scope_read_seeds.borrow().contains_key(&SCOPE),
                 "the seed recovered below the new floor is evicted"
             );
             assert!(
-                engine.scope_write_seeds.borrow().contains_key(&SCOPE),
+                engine.state.scope_write_seeds.borrow().contains_key(&SCOPE),
                 "the write-epoch floor is a separate clock and did not move"
             );
         }
@@ -19371,7 +19202,7 @@ mod tests {
             let device = world.device(b"alice-pk");
             let (engine, _events, mut tasks) = started_and_parked(&world, &device);
             tick(&world, &device, &mut tasks);
-            assert!(engine.scope_write_seeds.borrow().contains_key(&SCOPE));
+            assert!(engine.state.scope_write_seeds.borrow().contains_key(&SCOPE));
 
             let (_, _, root_name) = owner_root();
             seed_scope_pointer(&device, &root_name, EPOCH + 1);
@@ -19387,11 +19218,11 @@ mod tests {
                 "the polled consult advanced the write-epoch floor on sight",
             );
             assert!(
-                !engine.scope_write_seeds.borrow().contains_key(&SCOPE),
+                !engine.state.scope_write_seeds.borrow().contains_key(&SCOPE),
                 "and the seed the rotation retired is evicted in the same pass",
             );
             assert!(
-                engine.pointer_consulted.borrow().contains_key(&ROOT),
+                engine.state.pointer_consulted.borrow().contains_key(&ROOT),
                 "the pass stamped the consult, so the interval damper can pace it",
             );
         }
@@ -19414,7 +19245,7 @@ mod tests {
                 block_on(consult_pointers(
                     &device.record_store,
                     &device.floors(&CAP_SECRET),
-                    &engine.sweep_keys,
+                    &engine.secrets.sweep_keys,
                     &events,
                     &RefCell::new(BTreeMap::new()),
                     ConsultWindow {
@@ -19448,7 +19279,7 @@ mod tests {
             let (engine, mut events, mut tasks) = started_and_parked(&world, &device);
             tick(&world, &device, &mut tasks);
             assert_eq!(
-                engine.held_records.borrow()[&HeldKey::Node(ROOT.0)].routing_key,
+                engine.state.held_records.borrow()[&HeldKey::Node(ROOT.0)].routing_key,
                 root_name.as_str(),
                 "cold start opened at the name the vault pointer gave it"
             );
@@ -19484,7 +19315,7 @@ mod tests {
                 abuse[0]
             );
             assert_ne!(
-                engine.held_records.borrow()[&HeldKey::Node(ROOT.0)].routing_key,
+                engine.state.held_records.borrow()[&HeldKey::Node(ROOT.0)].routing_key,
                 moved.as_str(),
                 "and a gate refusal holds nothing (fail-closed)"
             );
@@ -19875,6 +19706,7 @@ mod tests {
             fn listing(&self) -> Vec<String> {
                 let mut names: Vec<String> = self
                     .engine
+                    .state
                     .snapshot
                     .borrow()
                     .children(NodeId(SHARED_SCOPE_ROOT))
@@ -19893,6 +19725,7 @@ mod tests {
 
             fn holds_the_write_seed(&self) -> bool {
                 self.engine
+                    .state
                     .scope_write_seeds
                     .borrow()
                     .contains_key(&SHARED_SCOPE_ROOT)
@@ -19913,7 +19746,7 @@ mod tests {
                 }
                 assert_eq!(self.queued(), 0, "the grafted pass drained every op");
                 assert!(
-                    self.engine.dead_letters.borrow().is_empty(),
+                    self.engine.state.dead_letters.borrow().is_empty(),
                     "and parked none of them"
                 );
             }
@@ -19922,6 +19755,7 @@ mod tests {
             fn names_under(&self, folder: NodeId) -> Vec<String> {
                 let mut names: Vec<String> = self
                     .engine
+                    .state
                     .snapshot
                     .borrow()
                     .children(folder)
@@ -19934,6 +19768,7 @@ mod tests {
 
             fn child(&self, folder: NodeId, name: &str) -> NodeId {
                 self.engine
+                    .state
                     .snapshot
                     .borrow()
                     .children(folder)
@@ -19991,7 +19826,7 @@ mod tests {
             grantee.pass();
             assert_eq!(grantee.listing(), vec!["photos".to_owned()]);
             assert!(
-                grantee.engine.observed_unlinks.borrow().is_empty(),
+                grantee.engine.state.observed_unlinks.borrow().is_empty(),
                 "a departure in a granted scope feeds no capture",
             );
         }
@@ -20008,7 +19843,7 @@ mod tests {
             grantee.pass();
 
             assert_eq!(grantee.listing(), vec!["photos".to_owned()]);
-            assert!(grantee.engine.observed_unlinks.borrow().is_empty());
+            assert!(grantee.engine.state.observed_unlinks.borrow().is_empty());
         }
 
         /// The child holds no standing of its own: the sharer's cut takes the
@@ -20058,6 +19893,7 @@ mod tests {
 
             let links = grantee
                 .engine
+                .state
                 .snapshot
                 .borrow()
                 .links_ranked(NodeId(CHILD_ID));
@@ -20108,6 +19944,7 @@ mod tests {
             let head = |grantee: &WriteGrantee| {
                 grantee
                     .engine
+                    .state
                     .snapshot
                     .borrow()
                     .node(notes)
@@ -20382,7 +20219,7 @@ mod tests {
                 0,
                 "the queue drained past the stranded op"
             );
-            assert_eq!(grantee.engine.dead_letters.borrow().len(), 1);
+            assert_eq!(grantee.engine.state.dead_letters.borrow().len(), 1);
             assert!(grantee.names_under(ROOT).contains(&"own".to_owned()));
         }
 
@@ -20396,6 +20233,7 @@ mod tests {
             let unproved = WriteGrantee::accepted(photos());
             unproved
                 .engine
+                .state
                 .scope_write_seeds
                 .borrow_mut()
                 .remove(&SHARED_SCOPE_ROOT);
@@ -20498,7 +20336,7 @@ mod tests {
             let device = world.device(b"alice-pk");
             let (engine, _events, mut tasks) = started_and_parked(&world, &device);
             tick(&world, &device, &mut tasks);
-            assert!(engine.scope_write_seeds.borrow().contains_key(&SCOPE));
+            assert!(engine.state.scope_write_seeds.borrow().contains_key(&SCOPE));
 
             block_on(floor::advance_write_epoch_on_sight(
                 &device.floors(&CAP_SECRET),
@@ -20509,11 +20347,11 @@ mod tests {
             tick(&world, &device, &mut tasks);
 
             assert!(
-                !engine.scope_write_seeds.borrow().contains_key(&SCOPE),
+                !engine.state.scope_write_seeds.borrow().contains_key(&SCOPE),
                 "the seed recovered below the new write floor is evicted"
             );
             assert!(
-                engine.scope_read_seeds.borrow().contains_key(&SCOPE),
+                engine.state.scope_read_seeds.borrow().contains_key(&SCOPE),
                 "and the read seed, whose floor did not move, stays"
             );
         }
@@ -20626,7 +20464,7 @@ mod tests {
             let _ = tasks[0].as_mut().poll(&mut cx); // keyless re-PUT
 
             assert!(
-                !engine.held_records.borrow().is_empty(),
+                !engine.state.held_records.borrow().is_empty(),
                 "the resolve tick populated the held set"
             );
             assert!(
@@ -20953,7 +20791,7 @@ mod tests {
                 seed_child_record(&device, &head_cid, 1);
                 enqueue_download(&device, &head_block, &dag, &leaves);
                 {
-                    let mut base = engine.snapshot.borrow_mut();
+                    let mut base = engine.state.snapshot.borrow_mut();
                     base.unlink(ROOT, NodeId(CHILD_ID));
                     base.link_next(NodeId([0xf1; 16]), NodeId(CHILD_ID));
                 }
@@ -21466,8 +21304,8 @@ mod tests {
     #[test]
     fn a_running_pass_refuses_a_conversion_and_a_link_revoke() {
         let (mut engine, device) = engine_for_account("account-7");
-        let root = engine.snapshot.borrow().root;
-        let running = engine.conversion_running.clone();
+        let root = engine.state.snapshot.borrow().root;
+        let running = engine.state.conversion_running.clone();
         let _held = claim_conversion::Running::take(&running).expect("no pass runs yet");
         for command in [
             Command::ConvertInviteClaims { node: root },
@@ -21758,7 +21596,7 @@ mod focus_access_tests {
     /// [`FOLDER`] under the root with `count` file children, every third one
     /// carrying a projected size. Returns the ids of the rest, in child order.
     fn folder_with_files(engine: &Engine<FakeSeamTypes>, count: usize) -> Vec<NodeId> {
-        let mut base = engine.snapshot.borrow_mut();
+        let mut base = engine.state.snapshot.borrow_mut();
         let root = base.root;
         base.upsert_node(NodeMeta::new(FOLDER, "photos", NodeKind::Folder));
         base.link(root, FOLDER, 1);
@@ -21799,9 +21637,9 @@ mod focus_access_tests {
     fn started_engine() -> Engine<FakeSeamTypes> {
         let (mut engine, _clock) = engine();
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
-        let scope_id = engine.snapshot.borrow().root.0;
+        let scope_id = engine.state.snapshot.borrow().root.0;
         deposit_seed(
-            &engine.scope_read_seeds,
+            &engine.state.scope_read_seeds,
             scope_id,
             Zeroizing::new([5u8; 32]),
             Some(0),
@@ -21851,7 +21689,7 @@ mod focus_access_tests {
     #[test]
     fn the_vault_root_takes_no_slot_in_the_window() {
         let (engine, _clock) = engine();
-        let root = engine.snapshot.borrow().root;
+        let root = engine.state.snapshot.borrow().root;
 
         assert!(engine.note_focus_access(Some(root)), "the root still hints");
 
@@ -21927,7 +21765,7 @@ mod focus_access_tests {
         assert!(engine.note_focus_access(Some(FOLDER)));
 
         assert!(
-            engine.focus_refreshed.borrow().is_empty(),
+            engine.state.focus_refreshed.borrow().is_empty(),
             "a hint is a request for a pass, never the record of one"
         );
     }
@@ -22021,7 +21859,11 @@ mod focus_access_tests {
     fn a_node_whose_stamp_expired_is_due_on_its_next_access() {
         let (engine, clock) = engine();
         let now = engine.seams.scheduler.now();
-        engine.focus_refreshed.borrow_mut().insert(FOLDER, now);
+        engine
+            .state
+            .focus_refreshed
+            .borrow_mut()
+            .insert(FOLDER, now);
         assert!(
             !engine.note_focus_access(Some(FOLDER)),
             "a fresh stamp damps the access"
@@ -22029,12 +21871,12 @@ mod focus_access_tests {
 
         clock.advance(SyncTimingProfile::CI.stale_after);
         expire_focus_stamps(
-            &mut engine.focus_refreshed.borrow_mut(),
+            &mut engine.state.focus_refreshed.borrow_mut(),
             engine.seams.scheduler.now(),
             &engine.profile,
         );
 
-        assert!(engine.focus_refreshed.borrow().is_empty());
+        assert!(engine.state.focus_refreshed.borrow().is_empty());
         assert!(
             engine.note_focus_access(Some(FOLDER)),
             "the evicted node is due, as a never-stamped node is"
@@ -22050,7 +21892,7 @@ mod focus_access_tests {
         engine.note_focus_access(Some(FOLDER));
         assert!(!engine.queued_focus_files().is_empty());
         // What the tick does with the queue it served.
-        engine.focus.borrow_mut().open_files.clear();
+        engine.state.focus.borrow_mut().open_files.clear();
 
         clock.advance(SyncTimingProfile::CI.stale_after / 2);
         engine.note_focus_access(Some(FOLDER));
@@ -22077,7 +21919,7 @@ mod focus_access_tests {
         let shared_file = file_id(1);
         let own_file = file_id(2);
         {
-            let mut base = engine.snapshot.borrow_mut();
+            let mut base = engine.state.snapshot.borrow_mut();
             let root = base.root;
             base.upsert_node(NodeMeta::new(shared_root, "shared", NodeKind::Folder));
             base.link(root, shared_root, 1);
@@ -22087,6 +21929,7 @@ mod focus_access_tests {
             base.link(root, own_file, 1);
         }
         engine
+            .state
             .descendant_scope_roots
             .borrow_mut()
             .insert(shared_root);
@@ -22096,7 +21939,7 @@ mod focus_access_tests {
         let now = engine.seams.scheduler.now();
         block_on(engine.refresh_focus_on_access(now, Some(shared_root)));
 
-        let stamped = engine.focus_refreshed.borrow();
+        let stamped = engine.state.focus_refreshed.borrow();
         assert!(
             stamped.contains_key(&own_file),
             "the vault's own row was attempted under the vault's seed"
@@ -22122,7 +21965,7 @@ mod focus_access_tests {
         let theirs = file_id(1);
         let mine = file_id(2);
         {
-            let mut base = engine.snapshot.borrow_mut();
+            let mut base = engine.state.snapshot.borrow_mut();
             let root = base.root;
             base.upsert_node(NodeMeta::new(unproved_root, "unproved", NodeKind::Folder));
             base.link(root, unproved_root, 1);
@@ -22132,6 +21975,7 @@ mod focus_access_tests {
             base.link(root, mine, 1);
         }
         engine
+            .state
             .unproved_scope_roots
             .borrow_mut()
             .insert(unproved_root);
@@ -22142,7 +21986,7 @@ mod focus_access_tests {
         block_on(engine.refresh_focus_on_access(now, Some(unproved_root)));
 
         assert!(
-            !engine.focus_refreshed.borrow().contains_key(&theirs),
+            !engine.state.focus_refreshed.borrow().contains_key(&theirs),
             "the row below the boundary was not resolved under the vault's seed"
         );
         assert_eq!(
