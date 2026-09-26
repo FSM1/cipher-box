@@ -38,10 +38,10 @@ use cipherbox_engine::grants::conversion::{
 };
 use cipherbox_engine::grants::{
     AckedClaim, CLAIM_ID_LEN, CLAIM_REPOST_FIRST_WAIT, CommittedLink, Contact, ContactStore,
-    DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRow, InviteClaim,
-    InviteFragment, LinkHold, LinkTerms, MAX_LINK_CONTACTS, ReceivedShareStore, ResolutionClass,
-    StagingContactStore, StagingGranteeNameCache, StagingReceivedShareStore, import_contact,
-    mint_grant_row, mint_invite_grant, post_invite_claim, recipient_blinded_tag,
+    ContactStoreError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRow,
+    InviteClaim, InviteFragment, LinkHold, LinkTerms, MAX_LINK_CONTACTS, ReceivedShareStore,
+    ResolutionClass, StagingContactStore, StagingGranteeNameCache, StagingReceivedShareStore,
+    import_contact, mint_grant_row, mint_invite_grant, post_invite_claim, recipient_blinded_tag,
     row_is_owner_attested,
 };
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
@@ -4399,6 +4399,64 @@ fn a_person_revoke_after_a_rotated_re_import_cuts_the_row_under_the_former_subke
     );
 }
 
+/// A claim may carry a contact code that binds the former subkey of another
+/// identity. The book refuses it, so a link revoke with `remove_grantees`
+/// keeps the row the other identity holds under that subkey without an
+/// attested label.
+#[test]
+fn a_link_revoke_keeps_a_row_under_a_subkey_another_identity_bound_before() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let link = invite_link_at_root(0x4e);
+    let link_tag = link.tag;
+    let mut stripped = recipient_row_at_root(CorePermission::Read);
+    stripped.ledger_entry.owner_sig[0] ^= 0xff;
+    seed_vault(&world, &blocks, vec![link, stripped]);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+    block_on(
+        engine.command(Command::ImportContact {
+            contact_code: ContactCode::create(
+                &recipient_identity(),
+                kdf::enc_subkey(&[0x3d; 32]).public(),
+            )
+            .encode(),
+        }),
+    )
+    .expect("the rotated code imports");
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let book = StagingContactStore::new(&alice.staging_store, &enc_subkey, &entropy);
+    let bystander = EcdsaSigner::from_scalar(&BYSTANDER_SECRET).expect("valid identity scalar");
+    let recorded = block_on(book.record_from_link(
+        &ContactCode::create(&bystander, kdf::enc_subkey(&RECIPIENT_SECRET).public()).encode(),
+        &committed_link_at(0x4e, link_tag),
+        &SCOPE,
+    ));
+
+    assert_eq!(
+        block_on(engine.command(Command::RevokeInviteLink {
+            node: ROOT,
+            link_tag: None,
+            remove_grantees: true,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&world, &engine, &mut tasks);
+
+    let state = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the vault root resolved");
+    assert!(state.invite_links.is_empty(), "the link is cut");
+    assert_eq!(state.grants.len(), 1, "the row of the other identity stays");
+    assert!(
+        matches!(recorded, Err(ContactStoreError::RecipientKeyChanged)),
+        "the book refuses a subkey another identity bound before"
+    );
+}
+
 /// The name wave re-mints every committed row, and files the all-zero
 /// placeholder for one whose recipient binding the owner never signed. Doing
 /// that silently would leave the owner a live grant they can neither name nor
@@ -4498,11 +4556,10 @@ fn the_sharing_read_names_a_row_the_owner_signed_without_a_label() {
 
 /// A contact code binds an encryption subkey under its **own** holder's
 /// signature, so a second holder can bind the subkey a contact the owner already
-/// holds is named by. Either name would then answer for the same committed
-/// entry, and the label is what a host revokes from — so an ambiguous match
-/// leaves the row unattested rather than naming a party the owner never granted.
+/// holds is named by. The book refuses that code, so the committed key of the
+/// row still names the one contact the owner imported.
 #[test]
-fn the_sharing_read_leaves_a_row_two_contacts_claim_unattested() {
+fn a_contact_code_that_binds_the_subkey_of_another_contact_is_refused() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let mut poisoned = recipient_row_at_root(CorePermission::Write);
@@ -4512,11 +4569,18 @@ fn the_sharing_read_leaves_a_row_two_contacts_claim_unattested() {
     let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
     import_recipient(&mut engine);
     let impostor = EcdsaSigner::from_scalar(&BYSTANDER_SECRET).expect("valid identity scalar");
-    block_on(engine.command(Command::ImportContact {
-        contact_code:
-            ContactCode::create(&impostor, kdf::enc_subkey(&RECIPIENT_SECRET).public()).encode(),
-    }))
-    .expect("a code its own holder signed imports");
+    assert!(matches!(
+        block_on(
+            engine.command(Command::ImportContact {
+                contact_code: ContactCode::create(
+                    &impostor,
+                    kdf::enc_subkey(&RECIPIENT_SECRET).public()
+                )
+                .encode(),
+            })
+        ),
+        Err(EngineError::TrustViolation { .. })
+    ));
 
     let named: Vec<Vec<u8>> = block_on(engine.sharing(ROOT))
         .expect("a sharing read")
@@ -4529,8 +4593,8 @@ fn the_sharing_read_leaves_a_row_two_contacts_claim_unattested() {
 
     assert_eq!(
         named,
-        vec![vec![0u8; IDENTITY_PUBLIC_LEN]],
-        "neither claimant is named for the row"
+        vec![recipient_identity().verifying_key().to_sec1().to_vec()],
+        "the committed key names the contact the owner imported"
     );
 }
 

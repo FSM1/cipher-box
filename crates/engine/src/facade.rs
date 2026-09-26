@@ -83,16 +83,17 @@ use crate::grants::received_status::{
     ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name, live_permission,
 };
 use crate::grants::{
-    CLAIM_KEY_LEN, ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError,
-    ConvertedClaim, CreateGrantError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME,
-    EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim, InviteClaim, InviteError,
-    InviteFragment, InviteMintError, InviteMintPlan, LinkHold, LinkSource, LinkSources, LinkTerms,
-    MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob,
-    ReceivedShare, ReceivedShareStore, ReceivedShareStoreError, ResolutionClass, RevokedPerson,
-    StagingContactStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_grantee,
-    committed_links, convert_invite_claim, create_grant, enforce_committed_ledger, grantee_cut_set,
-    import_contact, insert_child, link_budget_full, link_cut_set, link_of_sender,
-    locate_invite_link, mint_invite_link, post_invite_claim, post_share_pointer, resolve_recipient,
+    BoundContact, CLAIM_KEY_LEN, ClaimOutcome, CommittedScope, Contact, ContactStore,
+    ContactStoreError, ConvertedClaim, CreateGrantError, DEFAULT_ADMISSION_CAP,
+    DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim,
+    InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan, LinkHold,
+    LinkSource, LinkSources, LinkTerms, MintedInviteLink, OwnerAuthority, OwnerGrantKeys,
+    ParentScopePlan, PublishedGrantBlob, ReceivedShare, ReceivedShareStore,
+    ReceivedShareStoreError, ResolutionClass, RevokedPerson, StagingContactStore,
+    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_grantee, committed_links,
+    convert_invite_claim, create_grant, enforce_committed_ledger, grantee_cut_set, import_contact,
+    insert_child, link_budget_full, link_cut_set, link_of_sender, locate_invite_link,
+    mint_invite_link, post_invite_claim, post_share_pointer, resolve_recipient,
     row_is_owner_attested,
 };
 use crate::grants::{
@@ -4535,22 +4536,20 @@ fn sole_holder<'a>(
 /// to no other contact, now or before. An ambiguous key names nobody, as in
 /// [`sole_holder`].
 fn sole_enc_subkeys(
-    book: &[(Contact, Vec<[u8; SECRET_LEN]>)],
+    book: &[BoundContact],
     identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
 ) -> Vec<[u8; SECRET_LEN]> {
-    let bound = |(contact, former): &(Contact, Vec<[u8; SECRET_LEN]>)| {
-        core::iter::once(contact.enc_subkey().to_bytes()).chain(former.clone())
-    };
     let Some(held) = book
         .iter()
-        .find(|(contact, _)| contact.identity_pk().to_sec1() == *identity_pk)
+        .find(|bound| bound.contact.identity_pk().to_sec1() == *identity_pk)
     else {
         return Vec::new();
     };
-    bound(held)
+    held.enc_subkeys()
+        .into_iter()
         .filter(|key| {
             book.iter()
-                .filter(|other| bound(other).any(|bound_key| bound_key == *key))
+                .filter(|other| other.enc_subkeys().contains(key))
                 .count()
                 == 1
         })
@@ -8814,7 +8813,7 @@ where {
         let identity_pk = recipient_identity(recipient_identity_public_key)?;
         let book = self
             .contact_store(session)
-            .contacts_with_former_subkeys()
+            .contacts_with_bindings()
             .await
             .map_err(EngineError::from_contact_store)?;
         let contact_enc_pks = sole_enc_subkeys(&book, &identity_pk);
@@ -10027,11 +10026,11 @@ where {
         let sources = if remove_grantees {
             Some(
                 self.contact_store(session)
-                    .contacts_with_sources()
+                    .contacts_with_bindings()
                     .await
                     .map_err(EngineError::from_contact_store)?
                     .iter()
-                    .map(|(contact, source)| (contact.enc_subkey().to_bytes(), *source))
+                    .map(|bound| (bound.enc_subkeys(), bound.source))
                     .collect::<Vec<_>>(),
             )
         } else {
@@ -13071,6 +13070,20 @@ impl<T: SeamTypes> Drop for Engine<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_subkey_two_contacts_bind_names_neither() {
+        let keys = |identity: u8, enc: u8| ContactKeys {
+            identity_pk: vec![identity; IDENTITY_PUBLIC_LEN],
+            enc_subkey: [enc; SECRET_LEN],
+        };
+        let contacts = [keys(1, 9), keys(2, 9), keys(3, 8)];
+        assert!(sole_holder(&contacts, &[9; SECRET_LEN]).is_none());
+        assert_eq!(
+            sole_holder(&contacts, &[8; SECRET_LEN]).map(|contact| contact.identity_pk.clone()),
+            Some(vec![3; IDENTITY_PUBLIC_LEN])
+        );
+    }
 
     /// The proved-descendant set decides the own-plane floor namespace, so the
     /// end of a session must empty it.

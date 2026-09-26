@@ -70,7 +70,8 @@ pub enum ConversionRefusal {
     /// this device could not cut the grant it minted.
     ContactBookFull,
     /// A claim from a known identity carries another encryption subkey. The
-    /// owner revokes and grants again to move the grant to the new key.
+    /// owner revokes and grants again to move the grant to the new key. Also a
+    /// claim whose subkey the book binds to another identity.
     RecipientKeyChanged,
 }
 

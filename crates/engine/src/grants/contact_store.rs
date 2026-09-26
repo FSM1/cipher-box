@@ -120,6 +120,10 @@ pub enum ContactStoreError {
     /// for that identity. A key change is a revoke and a
     /// re-grant by the owner, never a silent book update: the revoke fallback
     /// reaches the old rows by the held subkey.
+    ///
+    /// Also a contact code whose subkey the book binds to another identity,
+    /// now or before: the revoke fallback names a row by its subkey, so one
+    /// subkey must name one identity.
     RecipientKeyChanged,
     /// A re-import would replace a subkey on a contact that already keeps
     /// [`MAX_FORMER_SUBKEYS`] former subkeys, so a fifth subkey rotation under
@@ -160,7 +164,7 @@ impl fmt::Display for ContactStoreError {
                 "that contact already holds a granted scope on {MAX_LINK_CONTACT_SCOPES} scopes"
             ),
             ContactStoreError::RecipientKeyChanged => {
-                f.write_str("the claim carries a key other than the one the book holds")
+                f.write_str("the contact carries a key other than the one the book holds")
             }
             ContactStoreError::FormerSubkeysFull => write!(
                 f,
@@ -287,7 +291,9 @@ pub trait ContactStore {
     /// the contact rotating their own subkey. The entry keeps the subkeys it
     /// bound before, so a revoke still reaches a row granted under one. A
     /// rotation past [`MAX_FORMER_SUBKEYS`] is refused with
-    /// [`FormerSubkeysFull`](ContactStoreError::FormerSubkeysFull).
+    /// [`FormerSubkeysFull`](ContactStoreError::FormerSubkeysFull), and a
+    /// subkey the book binds to another identity with
+    /// [`RecipientKeyChanged`](ContactStoreError::RecipientKeyChanged).
     async fn record(&self, contact_code: &[u8]) -> Result<Contact, ContactStoreError>;
 
     /// Record a contact a claim conversion anchored, charged to that link's own
@@ -296,8 +302,8 @@ pub trait ContactStore {
     ///
     /// A contact the owner imported by hand keeps that standing and owes the
     /// link bound nothing. A claim under another encryption subkey than the
-    /// book holds is refused with
-    /// [`RecipientKeyChanged`](ContactStoreError::RecipientKeyChanged).
+    /// book holds, or under one the book binds to another identity, is
+    /// refused with [`RecipientKeyChanged`](ContactStoreError::RecipientKeyChanged).
     async fn record_from_link(
         &self,
         contact_code: &[u8],
@@ -347,11 +353,9 @@ pub trait ContactStore {
         &self,
     ) -> Result<Vec<(Contact, Option<LinkSource>)>, ContactStoreError>;
 
-    /// Every recorded contact with the encryption subkeys the book bound to
-    /// that identity before, oldest first.
-    async fn contacts_with_former_subkeys(
-        &self,
-    ) -> Result<Vec<(Contact, Vec<[u8; 32]>)>, ContactStoreError>;
+    /// Every recorded contact with each encryption subkey the book binds to
+    /// it and the link that sourced it.
+    async fn contacts_with_bindings(&self) -> Result<Vec<BoundContact>, ContactStoreError>;
 
     /// Drop the entry for `identity_pk`. Idempotent: an identity the book does
     /// not hold succeeds. Without it a book at [`MAX_CONTACTS`] would refuse
@@ -380,6 +384,27 @@ pub async fn resolve_recipient<S: ContactStore>(
         .into_iter()
         .find(|contact| contact.identity_pk().to_sec1() == *identity_pk)
         .ok_or(ContactStoreError::RecipientNotImported)
+}
+
+/// One recorded contact as a revoke reads it.
+pub struct BoundContact {
+    /// The verified contact.
+    pub contact: Contact,
+    /// The encryption subkeys the book bound to this identity before, oldest
+    /// first.
+    pub former: Vec<[u8; 32]>,
+    /// The link that sourced the contact, `None` for one the owner imported or
+    /// granted directly.
+    pub source: Option<LinkSource>,
+}
+
+impl BoundContact {
+    /// Every encryption subkey the book binds to this identity, now or before.
+    pub fn enc_subkeys(&self) -> Vec<[u8; 32]> {
+        core::iter::once(self.contact.enc_subkey().to_bytes())
+            .chain(self.former.iter().copied())
+            .collect()
+    }
 }
 
 /// Why a claim-sourced contact is in the book: the link that produced it, and
@@ -457,6 +482,13 @@ fn former_after(held: Recorded, contact: &Contact) -> Result<Vec<[u8; 32]>, Cont
         return Err(ContactStoreError::FormerSubkeysFull);
     }
     Ok(former)
+}
+
+/// Whether an entry of `book` binds the subkey of `contact`, now or before.
+fn subkey_bound(book: &[Recorded], contact: &Contact) -> bool {
+    let subkey = contact.enc_subkey().to_bytes();
+    book.iter()
+        .any(|held| held.contact.enc_subkey().to_bytes() == subkey || held.former.contains(&subkey))
 }
 
 /// Whether `link`'s own claim conversions already hold its whole
@@ -575,6 +607,9 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
             .map(|at| former_after(book.remove(at), &contact))
             .transpose()?
             .unwrap_or_default();
+        if subkey_bound(&book, &contact) {
+            return Err(ContactStoreError::RecipientKeyChanged);
+        }
         if book.len() >= MAX_CONTACTS {
             return Err(ContactStoreError::Full);
         }
@@ -628,7 +663,8 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
             .map(|at| book.remove(at));
         if held.as_ref().is_some_and(|held| {
             held.contact.enc_subkey().to_bytes() != contact.enc_subkey().to_bytes()
-        }) {
+        }) || subkey_bound(&book, &contact)
+        {
             return Err(ContactStoreError::RecipientKeyChanged);
         }
         let (origin, former) = match held {
@@ -731,14 +767,16 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
             .collect())
     }
 
-    async fn contacts_with_former_subkeys(
-        &self,
-    ) -> Result<Vec<(Contact, Vec<[u8; 32]>)>, ContactStoreError> {
+    async fn contacts_with_bindings(&self) -> Result<Vec<BoundContact>, ContactStoreError> {
         Ok(self
             .recorded()
             .await?
             .into_iter()
-            .map(|held| (held.contact, held.former))
+            .map(|held| BoundContact {
+                contact: held.contact,
+                former: held.former,
+                source: held.origin.map(|origin| origin.source),
+            })
             .collect())
     }
 
@@ -1438,10 +1476,10 @@ mod tests {
     fn former_of<St: StagingStore, E: Entropy>(
         store: &StagingContactStore<'_, St, E>,
     ) -> Vec<[u8; 32]> {
-        block_on(store.contacts_with_former_subkeys())
+        block_on(store.contacts_with_bindings())
             .expect("the book opens")
             .into_iter()
-            .flat_map(|(_, former)| former)
+            .flat_map(|bound| bound.former)
             .collect()
     }
 
@@ -1481,6 +1519,32 @@ mod tests {
             vec![subkey(0x90), subkey(0x91), subkey(0x93), subkey(0x94)],
             "a current subkey is never a former one"
         );
+    }
+
+    /// A revoke names a row by its subkey, so the book refuses a contact
+    /// whose subkey another identity binds, now or before, on both write
+    /// paths.
+    #[test]
+    fn a_subkey_another_identity_binds_is_refused() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x84);
+        let entropy = seeded(137);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        block_on(store.record(&bound_code(0x33, 0x90))).expect("first import");
+        block_on(store.record(&bound_code(0x33, 0x91))).expect("rotated import");
+
+        for taken in [0x90, 0x91] {
+            assert!(matches!(
+                block_on(store.record(&bound_code(0x34, taken))),
+                Err(ContactStoreError::RecipientKeyChanged)
+            ));
+            assert!(matches!(
+                block_on(store.record_from_link(&bound_code(0x34, taken), &LINK, &SCOPE_A)),
+                Err(ContactStoreError::RecipientKeyChanged)
+            ));
+        }
+        assert_eq!(block_on(store.contacts()).expect("the book opens").len(), 1);
+        block_on(store.record(&bound_code(0x33, 0x90))).expect("back to its own former subkey");
     }
 
     /// A claim under another subkey than the book holds is refused, and the
