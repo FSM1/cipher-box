@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "4a9a18745e67",
+  "strategy": "manual-commit",
+  "branch": "docs/2005-greptile-followups",
+  "checkpoints_count": 71,
+  "files_touched": [
+    "CONTEXT.md",
+    "blueprint/engine.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4a/9a18745e67/0/metadata.json",
+      "transcript": "/4a/9a18745e67/0/full.jsonl",
+      "compact_transcript": "/4a/9a18745e67/0/transcript.jsonl",
+      "content_hash": "/4a/9a18745e67/0/content_hash.txt",
+      "prompt": "/4a/9a18745e67/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12914,
+    "cache_creation_tokens": 2030343,
+    "cache_read_tokens": 133780183,
+    "output_tokens": 451212,
+    "api_call_count": 572
+  }
+}
