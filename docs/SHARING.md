@@ -139,12 +139,12 @@ The device that converts records the claimant in its contact book and emits `Eve
 
 These refusals keep the entry as refused. The sharing read counts them per link (`refusedClaims`), and they never block the pending entries:
 
-| Check                         | Why                                                                                                           |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `link-admission-cap-reached`  | The link reached its admission cap. A revoke frees a slot.                                                    |
-| `grant-set-full`              | The scope root holds 1024 rows (ADR 0026 E1).                                                                 |
-| `contact-book-full`           | The contact book cannot record the claimant: the link's bound, the contact's scope bound or the book is full. |
-| `claim-recipient-key-changed` | A known identity claims under another encryption subkey. The owner revokes and grants again.                  |
+| Check                         | Why                                                                                                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `link-admission-cap-reached`  | The link reached its admission cap. A revoke frees a slot.                                                                                                            |
+| `grant-set-full`              | The scope root holds 1024 rows (ADR 0026 E1).                                                                                                                         |
+| `contact-book-full`           | The contact book cannot record the claimant: the link's bound, the contact's scope bound or the book is full.                                                         |
+| `claim-recipient-key-changed` | A known identity claims under another encryption subkey, or the book binds the claimed subkey to another identity, now or before. The owner revokes and grants again. |
 
 One link can record at most `MAX_LINK_CONTACTS` (128) claimants in the owner's contact book, and the sharing read sets `contactBudgetFull` on a link at that bound. One leaked link therefore fills only its own part of the book, and it does not deny other links or a hand import. A fresh copy of a refused claim is pending again. `Command::DismissRefusedClaims { node }` clears the refused entries, and the cut of a link retires the claims it refused. The record keeps at most 64 refused entries, and `Event::RefusedClaimDropped` reports the oldest one when it goes.
 
@@ -186,7 +186,7 @@ Every row one revoke removes leaves in one cut set, with one cut-epoch step, one
 
 ### Revoke a person
 
-`Command::Revoke { node, recipient_identity_public_key }` finds the grantee on the owner-attested ledger rows, so any owner device revokes, including one that never saw the person (ADR 0025 D3). A writer can break the owner signature of a row. The engine then finds that row through the committed `recipientEncPk` of the one contact on this device that holds that key.
+`Command::Revoke { node, recipient_identity_public_key }` finds the grantee on the owner-attested ledger rows, so any owner device revokes, including one that never saw the person (ADR 0025 D3). A writer can break the owner signature of a row. The engine then finds that row through the committed `recipientEncPk`, when one contact on this device binds that key, now or before.
 
 The cut also takes each committed link that the via-link reference of an attested row names (ADR 0024 D3). The engine runs a conversion pass first. When a link admitted the grantee, a failed pass refuses the revoke, with `mailbox-unavailable` when the engine cannot poll the inbox. A pending conversion through a link that admitted the grantee refuses it with `link-has-a-pending-conversion`. The revoke of a direct grantee does not wait for a conversion.
 
@@ -195,7 +195,7 @@ The cut also takes each committed link that the via-link reference of an atteste
 `Command::RevokeInviteLink { node, link_tag, remove_grantees }` cuts the link row, and every link holder of that link loses access at once (ADR 0025 D1).
 
 - `link_tag` names the link. With no tag, the engine cuts the only link, and refuses with `link-ambiguous` when the folder carries more than one.
-- With `remove_grantees`, the same cut also takes every committed personal row whose via-link reference names the link. The grantees who joined through the link keep access otherwise.
+- With `remove_grantees`, the same cut also takes every committed personal row whose via-link reference names the link. It also takes a row with no attested label whose committed `recipientEncPk` names a contact that the link admitted, before and after a write wave. The contact book keys that link by its ephemeral identity key, which a wave does not move. The grantees who joined through the link keep access otherwise.
 - The engine runs a conversion pass first, and never cuts a link while a conversion entry for it is pending (ADR 0023 D4).
 
 ### The revocation floor and the D3 clear
@@ -209,7 +209,7 @@ When another owner device commits the recipient again, an owner-signed commitmen
 The owner tick runs the sweep on `SyncTimingProfile::link_sweep_cadence` (600 s in production), after the conversion pass and under the same lock (ADR 0025 D2).
 
 - It walks the direct-child-scope index from the vault root, with one resolve and one unseal per scope root. A scope root counts as visited only after the gate passes it.
-- It cuts every link entry whose deadline the injected `now` has reached, less every link with a pending conversion entry.
+- It cuts every link entry whose deadline is `SyncTimingProfile::link_sweep_grace` (1200 s in production) or more before the injected `now`, less every link with a pending conversion entry. The grace lets an owner device that acked a claim convert it first.
 - Each folder takes one cut for all its expired links. The engine resolves the scope root again right before it signs, so a link that another owner device already cut costs nothing.
 - One sweep lands at most eight cuts, deepest first. A failed cut does not count. When the sweep stops at the cap, the next tick sweeps again.
 
@@ -247,13 +247,11 @@ The received-share refresh reports one class per bookmark (ADR 0025 D5):
 These gaps are in the code on `main`.
 
 - The web host does not show the link-first share dialog yet. It shows one live link and a control that runs a conversion pass at once, and it mints every link with an empty owner name. It has a downgrade-only control and no upgrade, and it has no people-list names, rename, `remove_grantees` checkbox, joined notice or refused count.
-- The web invite page runs no preview, and it sends an empty claimant name.
 - The owner cannot set the admission cap yet, so every link carries the default of 25.
 - Only a command pass (`ConvertInviteClaims` or `RevokeInviteLink`) repairs a parent index that a failed re-point left stale, because the tick converts only at scope roots its own walk proved.
 - A downgrade over a stalled write scope runs two name waves: the owed wave, then the cut.
-- After a write wave, the contact route of `remove_grantees` does not find a row whose writer stripped its via-link reference, so the owner must revoke that person directly.
-- When two contacts on one device share one encryption subkey, a person revoke on that device cannot reach an unattested row for that subkey, and answers `rot-revoke-not-granted`.
-- A cut floor that a build before the D3 clear recorded carries no recorded cut epoch, so a re-commit never clears it on that device, and the device keeps the recipient withheld.
+- When the contact book of one device binds one encryption subkey to two contacts, now or before, a person revoke on that device cannot reach an unattested row under that subkey. When the person has no other row on the scope, the revoke answers `rot-revoke-not-granted`. No write path binds such a pair now. Only a book that an earlier build wrote can hold one.
+- A cut floor has no recorded cut epoch when the publish lands but the floor raise or the cut-epoch record after it fails. A re-commit never clears that floor on that device. The device keeps the recipient withheld until it grants the recipient again.
 
 ## Accepted residuals
 
