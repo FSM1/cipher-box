@@ -12,7 +12,11 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
 import { sharingFor, sharingStore, type GrantRow } from '../stores/sharing.store';
-import { useSharingActions, type SharingCommand } from './useSharingActions';
+import {
+  SNAPSHOT_REREAD_GAP_MS,
+  useSharingActions,
+  type SharingCommand,
+} from './useSharingActions';
 
 const DOCS = new Uint8Array(16).fill(7);
 const DOCS_KEY = toHex(DOCS);
@@ -232,15 +236,39 @@ describe('reading', () => {
     expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
   });
 
-  it('reads nothing on a snapshot update where the scope carries no link', async () => {
+  it('re-reads on a snapshot update where the scope carries no link yet', async () => {
     const engine = sharingEngine();
     const { result } = mount(engine.client);
     await expect(result.current.open()).resolves.toBe(true);
 
+    engine.links.push({ ...MINTED });
     engine.emit({ kind: 'snapshotUpdated' });
-    await new Promise((settle) => setTimeout(settle, 0));
 
-    expect(engine.facade.sharing).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(sharingFor(sharingStore.getState(), DOCS_KEY)?.inviteLinks).toHaveLength(1)
+    );
+    expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts one re-read at once and one trailing read for a burst inside the gap', async () => {
+    vi.useFakeTimers();
+    try {
+      const engine = sharingEngine();
+      const { result } = mount(engine.client);
+      await expect(result.current.open()).resolves.toBe(true);
+
+      for (let i = 0; i < 3; i++) engine.emit({ kind: 'snapshotUpdated' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_REREAD_GAP_MS);
+      expect(engine.facade.sharing).toHaveBeenCalledTimes(3);
+
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_REREAD_GAP_MS * 5);
+      expect(engine.facade.sharing).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a command's view when an older event read finishes after it", async () => {
@@ -260,6 +288,30 @@ describe('reading', () => {
     await new Promise((settle) => setTimeout(settle, 0));
 
     expect(engine.facade.sharing).toHaveBeenCalledTimes(3);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
+  });
+
+  it('publishes an older command read when the newer event read failed', async () => {
+    const engine = sharingEngine();
+    const { result } = mount(engine.client);
+    await result.current.grant(CONTACT, 'write');
+    let finishCommand: (current: SharingDescriptor) => void = () => undefined;
+    engine.facade.sharing
+      .mockImplementationOnce(
+        () => new Promise<SharingDescriptor>((settle) => (finishCommand = settle))
+      )
+      .mockImplementationOnce(() =>
+        Promise.reject(new EngineRequestError('seam error: the name did not resolve'))
+      );
+
+    const changed = result.current.changePermission(CONTACT, 'read');
+    await waitFor(() => expect(engine.facade.sharing).toHaveBeenCalledTimes(2));
+    engine.emit({ kind: 'granteeJoined', scopeRoot: DOCS, name: 'Ada', fingerprint: FINGERPRINT });
+    await waitFor(() => expect(engine.facade.sharing).toHaveBeenCalledTimes(3));
+
+    finishCommand(view(['read'], NO_LINKS));
+
+    await expect(changed).resolves.toBe(true);
     expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
   });
 

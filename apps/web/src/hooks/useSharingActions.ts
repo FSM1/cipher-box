@@ -11,7 +11,7 @@ import { toHex } from '@cipherbox/client';
 import type { EngineFacade, Permission, SharingDescriptor } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { useEngine } from '../providers/EngineProvider';
-import { sharingFor, sharingStore, type VerifiedContact } from '../stores/sharing.store';
+import { sharingStore, type VerifiedContact } from '../stores/sharing.store';
 import { useCommandRunner } from './useCommandRunner';
 
 /** Which call is in flight, or `null` when the sharing surface is idle. */
@@ -29,6 +29,9 @@ export type SharingCommand =
 
 /** How long the "joined" notice stays up. */
 export const JOINED_NOTICE_MS = 8_000;
+
+/** The least time between two event re-reads of the sharing view. */
+export const SNAPSHOT_REREAD_GAP_MS = 1_000;
 
 /** The engine's refusal of a conversion while another pass runs on this device. */
 const CONVERSION_RUNNING = 'a-conversion-pass-is-running';
@@ -114,15 +117,20 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
   const scopeKey = toHex(scope);
   const target = useMemo(() => scope, [scopeKey]);
 
-  // Only the latest read publishes: an event read that finishes after a
-  // command's read holds older state.
-  const readSeq = useRef(0);
+  // A read publishes only when it is newer than the last read that published:
+  // an older read that finishes late holds older state, and a newer read that
+  // failed publishes nothing and blocks nothing.
+  const startedSeq = useRef(0);
+  const publishedSeq = useRef(0);
   const read = useCallback(
     async (facade: EngineFacade) => {
-      const seq = ++readSeq.current;
+      const seq = ++startedSeq.current;
       const view = await facade.sharing(target);
       const fingerprints = await fingerprintsOf(facade, view);
-      if (seq === readSeq.current) sharingStore.reported(view, fingerprints);
+      if (seq > publishedSeq.current) {
+        publishedSeq.current = seq;
+        sharingStore.reported(view, fingerprints);
+      }
       return view;
     },
     [target]
@@ -132,16 +140,22 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
   const [joined, setJoined] = useState<string | null>(null);
   useEffect(() => {
     if (client === null) return;
-    // One re-read at a time: a burst of events folds into one trailing read. A
-    // sharing read emits no `snapshotUpdated`, so a re-read cannot loop.
+    // One re-read in flight, and one start per `SNAPSHOT_REREAD_GAP_MS`: the
+    // events inside a gap fold into one trailing read. A sharing read emits no
+    // `snapshotUpdated`, so a re-read cannot loop.
+    let live = true;
     let reading = false;
     let again = false;
-    const reread = () => {
+    let lastStart = -Infinity;
+    let trailing: ReturnType<typeof setTimeout> | null = null;
+    const start = () => {
+      trailing = null;
       if (reading) {
         again = true;
         return;
       }
       reading = true;
+      lastStart = Date.now();
       // A failed re-read leaves the last view drawn.
       void read(client.facade)
         .catch(() => undefined)
@@ -153,18 +167,25 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
           }
         });
     };
-    return client.facade.subscribe((event) => {
-      // A conversion pass that moves only the claim counts reports them here,
-      // and only a scope with a link has claim counts.
-      if (event.kind === 'snapshotUpdated') {
-        const links = sharingFor(sharingStore.getState(), scopeKey)?.inviteLinks.length ?? 0;
-        if (links > 0) reread();
-        return;
-      }
+    const reread = () => {
+      if (!live || trailing !== null) return;
+      const wait = lastStart + SNAPSHOT_REREAD_GAP_MS - Date.now();
+      if (wait > 0) trailing = setTimeout(start, wait);
+      else start();
+    };
+    const unsubscribe = client.facade.subscribe((event) => {
+      // A conversion pass that moves only the claim counts, or a link another
+      // device minted, reports here.
+      if (event.kind === 'snapshotUpdated') return reread();
       if (event.kind !== 'granteeJoined' || toHex(event.scopeRoot) !== scopeKey) return;
       setJoined(joinedLabel(event.name, event.fingerprint));
       reread();
     });
+    return () => {
+      live = false;
+      if (trailing !== null) clearTimeout(trailing);
+      unsubscribe();
+    };
   }, [client, read, scopeKey]);
   useEffect(() => {
     if (joined === null) return;
