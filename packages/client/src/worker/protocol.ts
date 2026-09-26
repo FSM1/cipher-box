@@ -234,7 +234,7 @@ export interface SharingGrantDescriptor {
   permission: Permission;
   /** The name on the owner-attested row; `null` where the row carries none. */
   granteeName: { name: string; source: GranteeNameSource } | null;
-  /** The `SharingInviteLinkDescriptor.tag` of the link that admitted this grantee; `null` for a direct grant. */
+  /** The `SharingInviteLinkDescriptor.tag` of the link that admitted this grantee; `null` for a direct grant or a row the owner does not attest. */
   viaLink: Uint8Array | null;
 }
 

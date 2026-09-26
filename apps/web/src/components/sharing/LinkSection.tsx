@@ -13,6 +13,7 @@ import {
   linkLabel,
   type LinkLifetime,
   MAX_ADMISSION_CAP,
+  unclearGrants,
 } from '../../sharing/inviteLink';
 import { storedOwnerName, storeOwnerName } from '../../sharing/ownerName';
 import { refusalLabel } from '../../sharing/shareRefusals';
@@ -277,14 +278,19 @@ function RevokeLinkPrompt({
 }) {
   const [removeGrantees, setRemoveGrantees] = useState(false);
   const joined = joinedThrough(scope.grants, link);
-  const people = joined.length === 1 ? '1 person' : `${joined.length} people`;
+  const unclear = plural(unclearGrants(scope.grants).length, 'grant');
+  // A count shows only where the list is exact.
+  const people =
+    unclear !== null || joined.length === 0
+      ? 'people'
+      : joined.length === 1
+        ? '1 person'
+        : `${joined.length} people`;
 
   const revoke = () =>
-    void actions
-      .revokeInviteLink(link.tag, { removeGrantees: removeGrantees && joined.length > 0 })
-      .then((revoked) => {
-        if (revoked) onDone();
-      });
+    void actions.revokeInviteLink(link.tag, { removeGrantees }).then((revoked) => {
+      if (revoked) onDone();
+    });
 
   return (
     <Confirm
@@ -297,24 +303,27 @@ function RevokeLinkPrompt({
     >
       <p className="sharing-note">{'// no one can join through it after this'}</p>
       {joined.length > 0 && (
-        <>
-          <p className="sharing-note" data-testid="share-link-keepers">
-            {`// ${removeGrantees ? 'these lose access' : 'these keep access'}: ${joined
-              .map((grant) => `${granteeLabel(grant)} (${grant.fingerprint ?? 'no fingerprint'})`)
-              .join(', ')}`}
-          </p>
-          <label className="sharing-check">
-            <input
-              type="checkbox"
-              checked={removeGrantees}
-              onChange={(event) => setRemoveGrantees(event.target.checked)}
-              disabled={busy}
-              data-testid="share-link-remove-grantees"
-            />
-            {`also remove the ${people} who joined through it`}
-          </label>
-        </>
+        <p className="sharing-note" data-testid="share-link-keepers">
+          {`// ${removeGrantees ? 'these lose access' : 'these keep access'}: ${joined
+            .map((grant) => `${granteeLabel(grant)} (${grant.fingerprint ?? 'no fingerprint'})`)
+            .join(', ')}`}
+        </p>
       )}
+      {unclear !== null && (
+        <p className="sharing-note" data-testid="share-link-unclear">
+          {`// ${unclear} with no name and no link may have joined through it`}
+        </p>
+      )}
+      <label className="sharing-check">
+        <input
+          type="checkbox"
+          checked={removeGrantees}
+          onChange={(event) => setRemoveGrantees(event.target.checked)}
+          disabled={busy}
+          data-testid="share-link-remove-grantees"
+        />
+        {`also remove the ${people} who joined through it`}
+      </label>
     </Confirm>
   );
 }

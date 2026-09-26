@@ -67,3 +67,14 @@ export function joinedThrough(
   const tag = toHex(link.tag);
   return grants.filter((grant) => grant.viaLink === tag);
 }
+
+/**
+ * The grants a link revoke with remove-grantees can also take, though no row
+ * names the link. The engine shows a via-link tag and a name only on a row the
+ * owner attests. The cut also takes a row the owner does not attest when a
+ * contact the link sourced holds its key (`link_cut_set`). A named row is
+ * attested, so only a row with no name and no link is unclear.
+ */
+export function unclearGrants(grants: readonly GrantRow[]): GrantRow[] {
+  return grants.filter((grant) => grant.viaLink === null && grant.name === null);
+}

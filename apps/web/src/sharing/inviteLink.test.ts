@@ -9,6 +9,7 @@ import {
   inviteUrl,
   joinedThrough,
   linkLabel,
+  unclearGrants,
 } from './inviteLink';
 
 const LINK: SharingInviteLinkDescriptor = {
@@ -72,5 +73,13 @@ describe('who joined through a link', () => {
     const direct = row(3, null);
 
     expect(joinedThrough([joined, other, direct], LINK)).toEqual([joined]);
+  });
+
+  it('holds unclear only a row with no link and no name', () => {
+    const linked = row(1, LINK.tag);
+    const named = { ...row(2, null), name: { name: 'Ada', source: 'owner' as const } };
+    const bare = row(3, null);
+
+    expect(unclearGrants([linked, named, bare])).toEqual([bare]);
   });
 });

@@ -35,7 +35,7 @@ export interface GrantRow {
   readonly permission: Permission;
   /** The name on the owner-attested row and who chose it, or `null`. */
   readonly name: SharingGrantDescriptor['granteeName'];
-  /** The hex tag of the link that admitted this grantee; `null` for a direct grant. */
+  /** The hex tag of the link that admitted this grantee; `null` for a direct grant or a row the owner does not attest. */
   readonly viaLink: string | null;
   /** The engine's fingerprint of the grantee's identity key, or `null` where it formed none. */
   readonly fingerprint: string | null;

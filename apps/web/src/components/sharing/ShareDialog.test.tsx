@@ -805,8 +805,8 @@ describe('the links a scope carries', () => {
     await click(screen.getAllByTestId('share-revoke-link')[1]);
     expect(engine.facade.revokeInviteLink).not.toHaveBeenCalled();
     expect(screen.getByTestId('share-link-revoke-prompt').textContent).toContain('view link');
-    // No one joined through it, so there is no one to remove with it.
-    expect(screen.queryByTestId('share-link-remove-grantees')).toBeNull();
+    expect(screen.queryByTestId('share-link-keepers')).toBeNull();
+    expect(screen.queryByTestId('share-link-unclear')).toBeNull();
 
     await click('share-link-revoke-confirm');
 
@@ -818,7 +818,7 @@ describe('the links a scope carries', () => {
   it('names the people who joined through a link and keep access past its revoke', async () => {
     const rows: HeldGrant[] = [
       { seed: 2, permission: 'read', viaLink: 0x7a, name: { name: 'Ada', source: 'owner' } },
-      { seed: 3, permission: 'read' },
+      { seed: 3, permission: 'read', name: { name: 'Bo', source: 'owner' } },
     ];
     await share(sharingEngine({}, held([], rows, { links: [LIVE] })));
 
@@ -826,6 +826,7 @@ describe('the links a scope carries', () => {
 
     const keepers = screen.getByTestId('share-link-keepers');
     expect(keepers.textContent).toBe(`// these keep access: Ada (${fingerprint(2)})`);
+    expect(screen.queryByTestId('share-link-unclear')).toBeNull();
     const remove = screen.getByTestId('share-link-remove-grantees');
     expect(remove.parentElement?.textContent).toBe(
       'also remove the 1 person who joined through it'
@@ -835,7 +836,7 @@ describe('the links a scope carries', () => {
     expect(keepers.textContent).toContain('these lose access');
   });
 
-  it('drops the remove choice when the owner turns to a link no one joined through', async () => {
+  it('drops the remove choice when the owner turns to another link', async () => {
     const other = inviteLink(0x7b, 4_000_000_000_000n);
     const rows: HeldGrant[] = [{ seed: 2, permission: 'read', viaLink: 0x7a }];
     const engine = await share(sharingEngine({}, held([], rows, { links: [LIVE, other] })));
@@ -843,7 +844,7 @@ describe('the links a scope carries', () => {
     await click(screen.getAllByTestId('share-revoke-link')[0]);
     await click('share-link-remove-grantees');
     await click(screen.getAllByTestId('share-revoke-link')[1]);
-    expect(screen.queryByTestId('share-link-remove-grantees')).toBeNull();
+    expect(screen.getByTestId<HTMLInputElement>('share-link-remove-grantees').checked).toBe(false);
 
     await click('share-link-revoke-confirm');
 
@@ -867,6 +868,46 @@ describe('the links a scope carries', () => {
     expect(screen.queryByTestId('dialog-error')).toBeNull();
     expect(screen.queryByTestId('share-link-chip')).toBeNull();
     expect(screen.queryByTestId('share-link-revoke-prompt')).toBeNull();
+  });
+
+  // The engine shows no link and no name on a row the owner does not attest,
+  // and a revoke with remove-grantees can still take that row.
+  it('offers the remove choice and marks the list unclear past a grant it cannot place', async () => {
+    const rows: HeldGrant[] = [
+      { seed: 2, permission: 'read', viaLink: 0x7a, name: { name: 'Ada', source: 'owner' } },
+      { seed: 3, permission: 'read' },
+    ];
+    const engine = await share(sharingEngine({}, held([], rows, { links: [LIVE] })));
+
+    await click('share-revoke-link');
+
+    expect(screen.getByTestId('share-link-keepers').textContent).toBe(
+      `// these keep access: Ada (${fingerprint(2)})`
+    );
+    expect(screen.getByTestId('share-link-unclear').textContent).toBe(
+      '// 1 grant with no name and no link may have joined through it'
+    );
+    const remove = screen.getByTestId('share-link-remove-grantees');
+    expect(remove.parentElement?.textContent).toBe('also remove the people who joined through it');
+
+    await click(remove);
+    await click('share-link-revoke-confirm');
+
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, LIVE.tag, true);
+  });
+
+  it('sends the remove choice when no grant names the link', async () => {
+    const rows: HeldGrant[] = [{ seed: 3, permission: 'read' }];
+    const engine = await share(sharingEngine({}, held([], rows, { links: [LIVE] })));
+
+    await click('share-revoke-link');
+
+    expect(screen.queryByTestId('share-link-keepers')).toBeNull();
+    expect(screen.getByTestId('share-link-unclear')).toBeTruthy();
+    await click('share-link-remove-grantees');
+    await click('share-link-revoke-confirm');
+
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, LIVE.tag, true);
   });
 
   it('draws no link section at all for a scope root the engine could not reach', async () => {
