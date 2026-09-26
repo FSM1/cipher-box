@@ -12384,7 +12384,7 @@ fn a_byo_reconcile_that_did_not_land_is_retried_by_the_next_write() {
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
     // A published record, so the hosted placement is the member's own — an
-    // assumed one latches nothing (blueprint/engine.md "Settings-load policy").
+    // assumed one latches nothing (blueprint/engine.md "Vault settings load").
     seed_settings(&world, &alice, &blocks, PinMode::Hosted);
     // The account carries the flag an external session set; this one is hosted.
     blocks.set_advisory(true);
@@ -12413,7 +12413,7 @@ fn a_byo_reconcile_that_did_not_land_is_retried_by_the_next_write() {
 
 /// A settings load that cannot authenticate the member's choice refuses the
 /// write rather than placing it on the hosted default — the widening that
-/// blueprint/engine.md's settings-load policy exists to prevent.
+/// blueprint/engine.md "Vault settings load" exists to prevent.
 #[test]
 fn a_withheld_settings_record_refuses_the_write_instead_of_widening_it() {
     let world = FakeWorld::new();

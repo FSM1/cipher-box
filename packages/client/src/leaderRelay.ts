@@ -10,8 +10,9 @@
  *   follows whichever tab is focused, cross-tab.
  *
  * Nothing that names or measures vault content touches the `BroadcastChannel`
- * in either direction: it carries election and the port rendezvous only. One
- * port per follower per leadership.
+ * in either direction: it carries election, the port rendezvous and the
+ * session-end notice only (ADR 0037 D2, D3). One port per follower per
+ * leadership.
  *
  * The channel is a **rendezvous, not an authority**: every same-origin context
  * can read and write it, so the leadership token fences one leadership from the

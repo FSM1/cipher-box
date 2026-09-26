@@ -180,8 +180,9 @@ impl Gateway {
 }
 
 /// Whether `base_url` may be handed a credential: TLS, and no credentials of
-/// its own. The token authorizes the whole API, so it must not ride a cleartext
-/// hop, and a `user:pass@host` authority would send Basic auth beside it.
+/// its own. The bearer is a credential ([`SessionBearer`], ADR 0036 D1), so it
+/// must not ride a cleartext hop, and a `user:pass@host` authority would send
+/// Basic auth beside it.
 ///
 /// The prefix is deliberate rather than a URL parse: a parser accepts `HTTPS://`
 /// as TLS, and every divergence between the two must fall on the denying side.

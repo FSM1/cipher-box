@@ -3809,9 +3809,9 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// The pointer-payload envelope version the scope pointer is read under
     /// (`RotateScopeWritePlan::payload_version`).
     pub payload_version: u64,
-    /// The root name the wave is moving off. It lingers serving the tombstone, so
-    /// [`WriteWaveNet::retire`] refuses a batch naming it. A resumed pass reads
-    /// its own moved root instead ([`ResumedRoot`]).
+    /// The root name the wave is moving off. It lingers until the migration
+    /// window closes, so [`WriteWaveNet::retire`] refuses a batch naming it. A
+    /// resumed pass reads its own moved root instead ([`ResumedRoot`]).
     pub current_root_name: &'a IpnsName,
     /// The session's vault-anchor scope, which
     /// [`floor::repoint_regression`] needs to scope its read-epoch stage. Unlike
@@ -5054,8 +5054,7 @@ where
     }
 
     async fn retire(&self, old_names: &[IpnsName]) -> Result<(), WritePublishError> {
-        // Irreversible, and the old root serves the tombstone every lagging
-        // reader chases (`net/retire.rs::root_retire_ready`).
+        // Irreversible, and the old root lingers (`net/retire.rs::root_retire_ready`).
         if !root_retire_ready() && old_names.iter().any(|name| name == self.current_root_name) {
             return Err(WritePublishError::Rejected);
         }
@@ -11456,8 +11455,8 @@ mod tests {
 
     #[test]
     fn retire_refuses_a_batch_naming_the_lingering_root() {
-        // Retirement is irreversible and the old root serves the tombstone every
-        // lagging reader chases, so the guard is release-active, not a debug assert.
+        // Retirement is irreversible, so the guard is release-active, not a debug
+        // assert.
         let harness = Harness::plain();
         let owner = owner_identity();
         let current_root = old_root_name();

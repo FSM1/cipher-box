@@ -170,7 +170,7 @@ pub struct VaultSettingsSummary {
 }
 
 /// Which rung a record-plane load reached, for the summary or the view it
-/// produced (blueprint/engine.md "Settings-load policy").
+/// produced (blueprint/engine.md "Vault settings load").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsOrigin {
     /// The published record opened and validated.
@@ -368,7 +368,7 @@ pub type PlacementDecision = Result<Placement, PlacementRefusal>;
 
 /// Why no byte destination could be decided. Every variant refuses the write:
 /// a placement that cannot be authenticated must not widen to the hosted
-/// default (blueprint/engine.md "Settings-load policy").
+/// default (blueprint/engine.md "Vault settings load").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlacementRefusal {
     /// The settings load degraded past a first run with no last-known-good copy,
@@ -466,8 +466,8 @@ impl SettingsRefusal {
 /// Where a session's placement decision came from. An assumed default
 /// authorises the session's own writes but must never latch account-scoped
 /// state: a device that authenticated no settings record would otherwise
-/// rewrite the account's own BYO flag (blueprint/engine.md "Settings-load
-/// policy").
+/// rewrite the account's own BYO flag (blueprint/engine.md "Vault settings
+/// load").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlacementSource {
     /// The member's own settings record — published, or this device's
@@ -502,7 +502,7 @@ impl SessionPlacement {
 /// [`DefaultsReason::UnprovenFirstRun`] is the one degraded reason that still
 /// authorises a write; every other one with no last-known-good copy refuses
 /// rather than resolving to [`PinMode::Hosted`] (blueprint/engine.md
-/// "Settings-load policy", which also states the residual that arm carries).
+/// "Vault settings load", which also states the residual that arm carries).
 pub fn decide_placement(load: &SettingsLoad) -> SessionPlacement {
     match load {
         SettingsLoad::Resolved(settings) | SettingsLoad::Stale { settings, .. } => {
@@ -525,7 +525,7 @@ pub fn decide_placement(load: &SettingsLoad) -> SessionPlacement {
 /// that the member changed anything, and [`DefaultsReason::UnprovenFirstRun`]
 /// resolves to [`Placement::Hosted`] — honouring one would widen a live
 /// `External` session to CipherBox on a transient outage, which is exactly the
-/// widening the settings-load policy exists to prevent (blueprint/engine.md).
+/// widening blueprint/engine.md "Vault settings load" exists to prevent.
 /// A re-decide is therefore never a second route to a placement the load itself
 /// would refuse at start.
 #[must_use]
@@ -597,7 +597,7 @@ pub enum SettingsLoad {
     },
     /// Neither a published record nor a cached one: nothing here is the
     /// member's choice, only the documented defaults. What a placement decision
-    /// owes this outcome is the settings-load policy in blueprint/engine.md.
+    /// owes this outcome is in blueprint/engine.md "Vault settings load".
     Defaults(DefaultsReason),
 }
 
@@ -1490,7 +1490,7 @@ mod tests {
 
     /// The last-known-good copy is the member's own choice, so it decides
     /// placement exactly as a resolved record does — that is the whole point of
-    /// keeping it (blueprint/engine.md "Settings-load policy").
+    /// keeping it (blueprint/engine.md "Vault settings load").
     #[test]
     fn a_stale_copy_decides_placement_like_a_resolved_record() {
         let load = SettingsLoad::Stale {

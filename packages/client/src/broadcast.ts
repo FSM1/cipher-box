@@ -1,11 +1,12 @@
 /**
  * The cross-tab broadcast wire (blueprint/web-client.md "Followers are thin
- * mirrors"). The `BroadcastChannel` carries election and the port rendezvous —
- * nothing else. Every exchange that names or measures vault content, in either
- * direction, rides the follower's private port: command arguments and upload
- * chunks up, snapshot projections, file plaintext and the engine event stream
- * down. The account each side holds rides it too, so the origin-wide channel
- * never names one. The channel exists to rendezvous that port.
+ * mirrors"). The `BroadcastChannel` carries election, the port rendezvous and
+ * the session-end notice — nothing else (ADR 0037 D2). Every exchange that
+ * names or measures vault content, in either direction, rides the follower's
+ * private, Service-Worker-brokered port (ADR 0037 D1): command arguments and
+ * upload chunks up, snapshot projections, file plaintext and the engine event
+ * stream down. The account each side holds rides it too, so the origin-wide
+ * channel never names one.
  *
  * Security shape, structural not by discipline:
  * - The login **secret never crosses** — the keyless follower transport takes no

@@ -15,8 +15,8 @@
 # challenge-signature login mints the account on first contact. So this
 # workflow reads no secret, and `secrets: inherit` from a caller buys nothing.
 #
-# Job names are the contract (blueprint/deploy.md freeze step 4). `ci-e2e.yml`
-# and `tag-staging.yml` call this workflow and read the `ref` input.
+# `tag-staging.yml` sets `ref` to the resolved main SHA. `ci-e2e.yml` sets no
+# `ref`, so checkout uses `github.sha`.
 #
 # The cross-client suite runs one leg, macOS — a runner-cost choice, not a
 # harness limit.
