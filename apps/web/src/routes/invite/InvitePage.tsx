@@ -63,10 +63,14 @@ export function InvitePage() {
   const fragment = useLocation().hash.slice(1);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [joining, setJoining] = useState<Joining | null>(null);
-  // Mirrors `joining`, so a claim that settles late sees whether it is still on screen.
+  // Mirrors `joining` while the route is mounted, so a claim that settles late
+  // sees whether it is still on screen.
   const onScreen = useRef<Joining | null>(null);
   useLayoutEffect(() => {
     onScreen.current = joining;
+    return () => {
+      onScreen.current = null;
+    };
   }, [joining]);
 
   // Latched, so a sign-in in flight keeps the panel, and the progress it holds.

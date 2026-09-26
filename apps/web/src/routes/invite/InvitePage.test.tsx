@@ -2,7 +2,7 @@ import { StrictMode, type ReactNode } from 'react';
 import { EngineRequestError, toHex } from '@cipherbox/client';
 import type { EngineClient, InvitePreviewDescriptor } from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { BrowserRouter, useLocation } from 'react-router-dom';
+import { BrowserRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebCoreKitSession } from '../../auth/coreKit';
 import { authStore } from '../../stores/auth.store';
@@ -110,7 +110,8 @@ function inviteEngine({
 async function openAt(
   hash: string,
   engine = inviteEngine(),
-  session: WebCoreKitSession = fakeCoreKitSession().session
+  session: WebCoreKitSession = fakeCoreKitSession().session,
+  page: ReactNode = <InvitePage />
 ) {
   window.history.replaceState(null, '', `/invite${hash}`);
   const Providers = pageWrapper(engine.client, session);
@@ -125,7 +126,7 @@ async function openAt(
     </StrictMode>
   );
   await act(async () => {
-    render(wrapper({ children: <InvitePage /> }));
+    render(wrapper({ children: page }));
   });
   return engine;
 }
@@ -433,6 +434,28 @@ describe('the join', () => {
 
     expect(pageState()).toBe('refused');
     expect(screen.getByRole('alert').textContent).toBe('the second refusal');
+  });
+
+  it('opens no folder for a join that settles after the member left the invite route', async () => {
+    const { claim, pending } = heldClaims();
+    await openAt(
+      `#${FRAGMENT}`,
+      inviteEngine({ claim }),
+      fakeCoreKitSession().session,
+      <Routes>
+        <Route path="/invite" element={<InvitePage />} />
+        <Route path="*" element={null} />
+      </Routes>
+    );
+    await join();
+
+    await act(async () => {
+      window.history.pushState(null, '', '/files');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await act(async () => pending[0].accept());
+
+    expect(window.location.pathname).toBe('/files');
   });
 
   it('opens no folder for a join the previous account started', async () => {
