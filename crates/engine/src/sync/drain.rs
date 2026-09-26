@@ -24,6 +24,7 @@
 use core::cell::{Cell, RefCell};
 use core::num::NonZeroU64;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use cipherbox_core::content::{
     decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid, verify_cid,
@@ -110,7 +111,7 @@ use crate::sync::render::BaseSnapshot;
 use crate::sync::scope_exit_debt::{owe_cut, settle_owed_cuts};
 use crate::sync::staging::{
     DEAD_LETTER_NOTICES_PREFIX, LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter,
-    reconcile_staging_over, release_version_blocks, stage_op, version_leaf_cids,
+    reconcile_staging, reconcile_staging_over, release_version_blocks, stage_op, version_leaf_cids,
 };
 use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_mark_key};
 
@@ -488,10 +489,23 @@ fn halt_below_another_scope_root(
 /// Never a grafted pass: the budget answers for an op under a keyless root of
 /// **this vault's** own boundary set, which a pass over a scope another identity
 /// owns proves nothing about.
-pub(crate) fn charge_the_identity_to_one_pass(scopes: &mut [DrainScope<'_>]) {
+fn charge_the_identity_to_one_pass(scopes: &mut [DrainScope<'_>]) {
     if let Some(first) = scopes.iter_mut().find(|scope| !scope.is_grafted()) {
         first.charges_the_identity = true;
     }
+}
+
+/// The order one tick's passes run in. The vault root's pass leads, because
+/// [`Drain::settle`] reads the identity-wide bookkeeping under its material.
+fn ordered(scopes: TickScopes<'_>) -> Vec<DrainScope<'_>> {
+    let TickScopes {
+        vault,
+        interior,
+        grafted,
+    } = scopes;
+    let mut passes: Vec<_> = vault.into_iter().chain(interior).chain(grafted).collect();
+    charge_the_identity_to_one_pass(&mut passes);
+    passes
 }
 
 /// The shared lagging seed walk ([`lagging_read_seed`]), or the halt this pass
@@ -1123,60 +1137,59 @@ fn crossing_may_reseal(
     Ok(())
 }
 
-/// One drain pass over the durable queue, holding every seam it needs by
-/// reference.
-pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
-    pub(crate) transport: &'a T,
-    pub(crate) api: &'a ApiClient<H, C>,
-    pub(crate) floors: &'a F,
-    pub(crate) snapshot_cache: &'a S,
-    pub(crate) staging: &'a St,
-    pub(crate) scheduler: &'a Sch,
-    pub(crate) http: &'a H,
-    pub(crate) gateway: &'a Gateway,
-    /// The transport deadlines this pass's uploads and placements run under.
-    pub(crate) deadlines: &'a DeadlinePolicy,
+/// What enters the engine by injection, and what the engine builds over it once
+/// per session. Every drain pass borrows it.
+pub(crate) struct EngineSeams<T, H: Http, C: CredentialStore, F, S, St, Sch> {
+    pub(crate) transport: T,
+    pub(crate) api: Rc<ApiClient<H, C>>,
+    pub(crate) floors: F,
+    pub(crate) snapshot_cache: S,
+    pub(crate) staging: St,
+    pub(crate) scheduler: Sch,
+    pub(crate) http: H,
+    pub(crate) gateway: Gateway,
+    pub(crate) entropy: Rc<RefCell<Box<dyn Entropy>>>,
+    /// The session's outbound event stream.
+    pub(crate) events: mpsc::UnboundedSender<Event>,
+    /// The transport deadlines uploads and placements run under.
+    pub(crate) deadlines: DeadlinePolicy,
+    pub(crate) profile: SyncTimingProfile,
+    /// Bounds what the preserved dead-letter set may hold, so abandoned versions
+    /// cannot eat the device's staging budget.
+    pub(crate) storage_policy: StoragePolicy,
+    /// The framing profile a version's pinned size is derived under — the same
+    /// one the upload framed it at.
+    pub(crate) content_profile: ContentProfile,
+}
+
+/// The session cells a drain pass reads and writes, borrowed from
+/// [`SessionState::drain_cells`](crate::session::SessionState::drain_cells),
+/// which documents each cell.
+pub(crate) struct DrainCells<'a> {
+    pub(crate) live_blocks: &'a RefCell<LiveBlocks>,
+    /// The session's base snapshot, repainted in place on each publish.
+    pub(crate) base: &'a BaseSnapshot,
+    /// The session's held records.
+    pub(crate) held: &'a RefCell<HeldRecords>,
+    /// The session's queue hold. It clears only here, when its reason's own
+    /// exit comes.
+    pub(crate) hold: &'a RefCell<Option<QueueHold>>,
+    pub(crate) pending_reclaim: &'a Cell<u64>,
+    pub(crate) reclaim_stalls: &'a RefCell<Vec<ReclaimStall>>,
+    pub(crate) bookkeeping: &'a RefCell<BookkeepingCursors>,
+    pub(crate) orphan_heads: &'a OrphanHeads,
+    pub(crate) converged_tick: &'a Cell<bool>,
+    pub(crate) cancels: &'a RefCell<UploadCancels>,
+    pub(crate) dead_letters: &'a RefCell<RetainedDeadLetters>,
+    pub(crate) observed_unlinks: &'a RefCell<Vec<UnlinkedChild>>,
+    pub(crate) pending_scope_exits: &'a RefCell<BTreeSet<NodeId>>,
+}
+
+/// The values one tick decides before its drain runs.
+pub(crate) struct TickInputs<'a> {
     /// Where this session's bytes go. An `Err` holds every content op — the
     /// drain publishes no version it cannot place.
     pub(crate) placement: &'a PlacementDecision,
-    pub(crate) profile: &'a SyncTimingProfile,
-    /// Bounds what the preserved dead-letter set may hold, so abandoned versions
-    /// cannot eat the device's staging budget.
-    pub(crate) storage_policy: &'a StoragePolicy,
-    /// Staging keys open write handles hold, which the pass's sweep must not
-    /// collect.
-    pub(crate) live_blocks: &'a RefCell<LiveBlocks>,
-    /// The framing profile a version's pinned size is derived under — the same
-    /// one the upload framed it at.
-    pub(crate) content_profile: &'a ContentProfile,
-    /// Seal nonces enter as injected entropy; the drain reads no RNG of its own.
-    pub(crate) entropy: &'a RefCell<Box<dyn Entropy>>,
-    /// The gate-passing base snapshot, repainted in place on each publish.
-    pub(crate) base: &'a BaseSnapshot,
-    /// The live held-record set the liveness loop keeps alive.
-    pub(crate) held: &'a RefCell<HeldRecords>,
-    /// The held queue head, shared with the facade's read surface. It clears
-    /// only here, when its reason's own exit comes.
-    pub(crate) hold: &'a RefCell<Option<QueueHold>>,
-    /// Pinned bytes the retire ledger still owes, shared with the facade's read
-    /// surface. Rewritten at the end of every pass from the ledger itself.
-    pub(crate) pending_reclaim: &'a Cell<u64>,
-    /// Why the debts the last pass could not settle did not settle, shared with
-    /// the facade's read surface. Replaced whole on every pass that reads the
-    /// ledger, so a stall that clears stops being reported.
-    pub(crate) reclaim_stalls: &'a RefCell<Vec<ReclaimStall>>,
-    /// Where each bounded bookkeeping loop stopped, shared with the facade's
-    /// read surface for the reclaim figure's own completeness bit.
-    pub(crate) bookkeeping: &'a RefCell<BookkeepingCursors>,
-    /// Head blocks this session's publishes orphaned, pending retirement.
-    pub(crate) orphan_heads: &'a OrphanHeads,
-    /// Whether a poll tick has reconciled the record plane since this session
-    /// started ([`Settle`]).
-    pub(crate) converged_tick: &'a Cell<bool>,
-    /// The upload-cancel interlock, shared with the facade's cancel command.
-    pub(crate) cancels: &'a RefCell<UploadCancels>,
-    /// The facade's outbound event stream, for upload progress.
-    pub(crate) events: &'a mpsc::UnboundedSender<Event>,
     /// The bin's own key material. The pass holds these derived edges rather
     /// than the login secret they come from.
     pub(crate) bin_keys: &'a BinIndexKeys,
@@ -1194,24 +1207,47 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// Shortening history retires bytes, so it acts only on a retention this
     /// device can show is the owner's — the same rule the bin's expiry follows.
     pub(crate) retention: RetentionPolicy,
-    /// The dead letters this session has surfaced, so the expiry sweep does not
-    /// re-queue a purge for an entry whose own purge is already terminal.
-    pub(crate) dead_letters: &'a RefCell<RetainedDeadLetters>,
-    /// Unlinks the poll leg observed and this device did not author, shared
-    /// with the tick loop that fills it. A capture leaves the set only once its
-    /// bin entry has landed: the merge that saw it has already dropped the node
-    /// from the base, so a set this pass emptied on failure would lose it.
-    pub(crate) observed_unlinks: &'a RefCell<Vec<UnlinkedChild>>,
+}
+
+/// The passes one tick runs, by kind; `run_tick` fixes their order.
+pub(crate) struct TickScopes<'a> {
+    /// The vault root's own pass. `None` when this tick holds neither vault seed.
+    pub(crate) vault: Option<DrainScope<'a>>,
+    /// The passes over this vault's own interior scopes.
+    pub(crate) interior: Vec<DrainScope<'a>>,
+    /// The passes over scopes another identity granted.
+    pub(crate) grafted: Vec<DrainScope<'a>>,
+}
+
+/// One tick's drain over the durable queue.
+pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
+    seams: &'a EngineSeams<T, H, C, F, S, St, Sch>,
+    cells: DrainCells<'a>,
+    inputs: TickInputs<'a>,
     /// The bin index this pass has established: the one it resolved, or the one
     /// its last confirmed publish left standing. Carried so a bulk soft delete
     /// costs one resolve rather than one per operation; the publish stays per
     /// operation, which is what keeps the entry ahead of its unlink.
-    pub(crate) established_bin_index: RefCell<Option<BinIndex>>,
+    established_bin_index: RefCell<Option<BinIndex>>,
     /// What this tick may still queue in bin purges, shared out across its
     /// scope passes ([`MAX_BIN_EXPIRIES`]).
-    pub(crate) bin_expiries: RefCell<TickShare>,
-    /// Scope roots this session owes a cut for ([`Drain::cut_exited_scopes`]).
-    pub(crate) pending_scope_exits: &'a RefCell<BTreeSet<NodeId>>,
+    bin_expiries: RefCell<TickShare>,
+}
+
+impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S, St, Sch> {
+    pub(crate) fn new(
+        seams: &'a EngineSeams<T, H, C, F, S, St, Sch>,
+        cells: DrainCells<'a>,
+        inputs: TickInputs<'a>,
+    ) -> Self {
+        Self {
+            seams,
+            cells,
+            inputs,
+            established_bin_index: RefCell::new(None),
+            bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),
+        }
+    }
 }
 
 /// One folder's current published state, carried across the ops of one pass so
@@ -1642,7 +1678,66 @@ where
     /// This session's custody of its per-owner staging bookkeeping — the retire
     /// ledger and the doomed-name journal alike (`crate::sync::bookkeeping`).
     fn bookkeeping_seal<'s>(&'s self, scope: &'s DrainScope<'_>) -> BookkeepingSeal<'s> {
-        BookkeepingSeal::new(scope.enc_secret, self.entropy)
+        BookkeepingSeal::new(scope.enc_secret, &*self.seams.entropy)
+    }
+
+    /// One tick's drain: every pass in [`ordered`] order, each report surfaced
+    /// as its pass ends, then the tick's bookkeeping once.
+    pub(crate) async fn run_tick<R: ScopeExitRotator>(&self, scopes: TickScopes<'_>, exits: &R) {
+        let vault_held = scopes.vault.is_some();
+        let passes = ordered(scopes);
+        *self.bin_expiries.borrow_mut() = TickShare::new(MAX_BIN_EXPIRIES, passes.len());
+        let mut journalled = Vec::new();
+        for scope in &passes {
+            let mut report = self.run_queue(scope, exits).await;
+            journalled.append(&mut report.journalled_deletes);
+            self.surface_drain_report(&report);
+        }
+        // The retire ledger is the identity's and reads under the vault root's
+        // material, so only a tick that holds that root settles.
+        if vault_held && let Some(vault) = passes.first() {
+            self.settle(vault, &passes, &journalled).await;
+        } else {
+            // Settle sweeps staging on its own listing. Without it, an
+            // abandoned write handle's residue still needs reclaiming at the
+            // poll cadence.
+            reconcile_staging(
+                &self.seams.staging,
+                self.cells.live_blocks,
+                self.preserved_bounds(),
+            )
+            .await;
+        }
+    }
+
+    /// The bounds the preserved dead-letter set is held to at this moment.
+    fn preserved_bounds(&self) -> PreservedBounds {
+        PreservedBounds::at(
+            self.seams.scheduler.now(),
+            &self.seams.storage_policy,
+            &self.seams.profile,
+        )
+    }
+
+    /// Fold one pass's report into the host-visible surface: retain and emit
+    /// every dead letter, and emit one [`Event::SnapshotUpdated`] if the pass
+    /// moved anything off the queue (the overlay the host renders just shrank).
+    /// Both sends are best-effort over the in-process channel — a dropped
+    /// receiver is fine.
+    fn surface_drain_report(&self, report: &DrainReport) {
+        for (op_id, target, reason) in &report.dead_letters {
+            self.cells
+                .dead_letters
+                .borrow_mut()
+                .insert(*op_id, (Some(*target), *reason));
+            let _ = self.seams.events.unbounded_send(Event::DeadLetter {
+                op_id: *op_id,
+                reason: *reason,
+            });
+        }
+        if !report.is_empty() {
+            let _ = self.seams.events.unbounded_send(Event::SnapshotUpdated);
+        }
     }
 
     /// One scope's queue pass: rebase the queue onto gate-passing state and
@@ -1650,7 +1745,7 @@ where
     /// clear what the pass orphaned in this scope's own bin. A tick runs one of
     /// these per scope it holds and [`settle`](Self::settle) once, because
     /// everything settle touches is keyed by the identity.
-    pub(crate) async fn run_queue<R: ScopeExitRotator>(
+    async fn run_queue<R: ScopeExitRotator>(
         &self,
         scope: &DrainScope<'_>,
         exits: &R,
@@ -1674,13 +1769,16 @@ where
     ///
     /// `vault` supplies the material for the identity-wide half: every name in
     /// the retire ledger derives from the vault root's own write seed.
-    pub(crate) async fn settle(
+    async fn settle(
         &self,
         vault: &DrainScope<'_>,
         scopes: &[DrainScope<'_>],
         journalled_deletes: &[NodeId],
     ) {
-        self.orphan_heads.retire_pending(self.api).await;
+        self.cells
+            .orphan_heads
+            .retire_pending(&self.seams.api)
+            .await;
         // One enumeration serves every consumer below. A desktop vault stages
         // on the order of ten thousand keys, and each of these was listing the
         // whole set for itself. Taken after the queue loop, so a debt the pass
@@ -1688,7 +1786,7 @@ where
         // A store that will not enumerate leaves both the ledger and the sweep
         // for the next pass: "no debt" and "no residue" are claims this one
         // cannot make.
-        let Ok(staged) = self.staging.staged_keys().await else {
+        let Ok(staged) = self.seams.staging.staged_keys().await else {
             return;
         };
         // An X25519 base-point multiply, so the pass derives it once and threads
@@ -1710,15 +1808,15 @@ where
                 .await,
             );
         }
-        let resume = self.bookkeeping.borrow().ledger.clone();
+        let resume = self.cells.bookkeeping.borrow().ledger.clone();
         if let Some(pass) = drain_owed_retires(
-            &StagingRetireLedger::over(self.staging, seal, &staged),
+            &StagingRetireLedger::over(&self.seams.staging, seal, &staged),
             &owner,
-            self.api,
+            &self.seams.api,
             &RootSource {
-                gateway: self.gateway,
-                http: self.http,
-                profile: self.content_profile,
+                gateway: &self.seams.gateway,
+                http: &self.seams.http,
+                profile: &self.seams.content_profile,
             },
             &owed_now,
             resume.as_deref(),
@@ -1726,17 +1824,17 @@ where
         )
         .await
         {
-            self.pending_reclaim.set(pass.still_owed);
-            *self.reclaim_stalls.borrow_mut() = pass.stalls;
-            let mut bookkeeping = self.bookkeeping.borrow_mut();
+            self.cells.pending_reclaim.set(pass.still_owed);
+            *self.cells.reclaim_stalls.borrow_mut() = pass.stalls;
+            let mut bookkeeping = self.cells.bookkeeping.borrow_mut();
             bookkeeping.ledger = pass.cursor;
             bookkeeping.ledger_partial = pass.partial;
         }
         reconcile_staging_over(
-            self.staging,
-            self.live_blocks,
+            &self.seams.staging,
+            self.cells.live_blocks,
             &staged,
-            PreservedBounds::at(self.scheduler.now(), self.storage_policy, self.profile),
+            self.preserved_bounds(),
         )
         .await;
     }
@@ -1812,7 +1910,7 @@ where
 
         let mut pass = self.open_pass(scope).await?;
         let rebased = {
-            let base = self.base.borrow();
+            let base = self.cells.base.borrow();
             let ops: Vec<Op> = queued.iter().map(|(_, op)| op.clone()).collect();
             let local = apply_overlay(&base, &ops);
             replay(&base, &local, queued, scope.scope_roots)
@@ -1856,7 +1954,7 @@ where
                 return Err(halt);
             }
             self.dequeue_op(applied.op_id).await?;
-            self.cancels.borrow_mut().published(applied.op_id);
+            self.cells.cancels.borrow_mut().published(applied.op_id);
             report.published.push(applied.op_id);
         }
         Ok(())
@@ -1886,20 +1984,20 @@ where
         if scope.is_grafted() {
             return;
         }
-        let vault_root = self.base.borrow().root;
+        let vault_root = self.cells.base.borrow().root;
         let still_owed = settle_owed_cuts(
-            self.staging,
+            &self.seams.staging,
             self.bookkeeping_seal(scope),
             scope.enc_secret,
             exits,
-            self.pending_scope_exits,
+            self.cells.pending_scope_exits,
             vault_root,
         )
         .await;
         // A scope this session could not cut is a revocation still outstanding,
         // so the member is told which one rather than left with a silent retry.
         for (root, detail) in still_owed {
-            let _ = self.events.unbounded_send(Event::ScopeExitCutOwed {
+            let _ = self.seams.events.unbounded_send(Event::ScopeExitCutOwed {
                 scope_root: root,
                 detail: detail.to_owned(),
             });
@@ -1919,7 +2017,7 @@ where
         // The bin plane has no probe of its own — the load is the only one — so
         // its hold exits here, on a classified halt at the held op. Every other
         // reason has an exit the pre-pass gate can try.
-        if bin_index_hold_exits(*self.hold.borrow(), op_id, halt) {
+        if bin_index_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
             self.release_hold();
         }
         match halt {
@@ -2040,7 +2138,7 @@ where
     /// the one hold cell. A hold whose op has left the queue, or whose reason's
     /// own exit has come, lets go of the cell.
     async fn hold_admits_the_head(&self, queued: &[(OpId, Op)]) -> bool {
-        let Some(hold) = *self.hold.borrow() else {
+        let Some(hold) = *self.cells.hold.borrow() else {
             return true;
         };
         if still_queued(queued, hold.op_id) {
@@ -2051,7 +2149,7 @@ where
                     }
                 }
                 QueueHoldReason::Settings(refusal) => {
-                    if settings_refusal(self.placement) == Some(refusal) {
+                    if settings_refusal(self.inputs.placement) == Some(refusal) {
                         return false;
                     }
                 }
@@ -2068,13 +2166,13 @@ where
     /// Whether a `GET /account/quota` probe reports room for a held head. The
     /// probe is the hold's only exit, so an unanswered one leaves it in place.
     async fn quota_admits(&self, needed_bytes: u64) -> bool {
-        let Ok(placement) = self.placement.as_ref() else {
+        let Ok(placement) = self.inputs.placement.as_ref() else {
             // A placement the settings themselves refuse is a verdict the pass
             // re-takes as its own hold, so the head stops waiting under a cause
             // the member cannot act on. An outage is not a verdict: it keeps
             // the head where it is rather than spending the unattributed budget
             // on a placement no pass can decide.
-            return settings_refusal(self.placement).is_some();
+            return settings_refusal(self.inputs.placement).is_some();
         };
         // Only the hosted leg is quota-gated, so no answer the quota endpoint
         // could give bears on a hold under a placement without one — and an
@@ -2082,14 +2180,14 @@ where
         if !placement.has_hosted_leg() {
             return true;
         }
-        let Ok(quota) = self.api.quota().await else {
+        let Ok(quota) = self.seams.api.quota().await else {
             return false;
         };
         pre_flight_quota_check(needed_bytes, &quota, true).is_ok()
     }
 
     fn hold_head(&self, op_id: OpId, op: &Op, reason: QueueHoldReason) {
-        *self.hold.borrow_mut() = Some(QueueHold {
+        *self.cells.hold.borrow_mut() = Some(QueueHold {
             op_id,
             node: op.target,
             reason,
@@ -2097,7 +2195,7 @@ where
     }
 
     fn release_hold(&self) {
-        *self.hold.borrow_mut() = None;
+        *self.cells.hold.borrow_mut() = None;
     }
 
     /// This identity's queued ops, minus restore residue: an op at or below the
@@ -2108,7 +2206,7 @@ where
         scope: &DrainScope<'_>,
         report: &mut DrainReport,
     ) -> Result<Queue, Halt> {
-        let raw = self.staging.queued_ops().await.map_err(seam)?;
+        let raw = self.seams.staging.queued_ops().await.map_err(seam)?;
         let all_ids = raw.iter().map(|(op_id, _)| *op_id).collect();
         let scan = decode_queue(&RecordReader::new(scope.enc_secret), &raw);
         if scan.mine.is_empty() {
@@ -2121,7 +2219,7 @@ where
         // contract promises only strictly-increasing ids, so a host that starts
         // at 0 must not lose its first op.
         let drained = self.drained_mark(scope).await?;
-        let published = published_op_mark(self.staging, scope.enc_secret)
+        let published = published_op_mark(&self.seams.staging, scope.enc_secret)
             .await
             .map_err(seam)?;
         let mut mine = Vec::with_capacity(scan.mine.len());
@@ -2189,6 +2287,7 @@ where
     /// The scope root as this device last held it: the cached record, opened.
     async fn load_scope_root(&self, source: &ScopeEnd<'_>) -> Result<LoadedRoot, Halt> {
         let record_bytes = self
+            .seams
             .snapshot_cache
             .get(source.root_name.as_str().as_bytes())
             .await
@@ -2206,8 +2305,8 @@ where
         record_bytes: &[u8],
     ) -> Result<LoadedRoot, Halt> {
         let (sequence, envelope, _) = assemble_head_envelope(
-            self.gateway,
-            self.http,
+            &self.seams.gateway,
+            &self.seams.http,
             source.root_name,
             record_bytes,
             None,
@@ -2222,7 +2321,7 @@ where
         // at-floor gate call covers both floors (encode-side of the gate's
         // stage-5 reject; security rule 8).
         floor::check(
-            &source.floors(self.floors),
+            &source.floors(&self.seams.floors),
             source.root_name.as_str().as_bytes(),
             &source.root.0,
             sequence,
@@ -2284,8 +2383,8 @@ where
     ) -> RootAdopter<'e, H, SharerScopedFloorStore<'e, F>> {
         let adopter = match scope.granted {
             Some(GrantedPass { sharer_enc, .. }) => RootAdopter::for_grantee(
-                self.gateway,
-                self.http,
+                &self.seams.gateway,
+                &self.seams.http,
                 floors,
                 scope.enc_secret,
                 sharer_enc,
@@ -2293,8 +2392,8 @@ where
                 end.root.0,
             ),
             None => RootAdopter::new(
-                self.gateway,
-                self.http,
+                &self.seams.gateway,
+                &self.seams.http,
                 floors,
                 scope.enc_secret,
                 scope.owner_identity,
@@ -2322,7 +2421,7 @@ where
         let resolved = self
             .gated_scope_root(scope, end, ResolveMode::CacheFirst)
             .await?;
-        resolved_bytes(resolved, end.root_name, self.events)
+        resolved_bytes(resolved, end.root_name, &self.seams.events)
     }
 
     /// One end's scope root through its own gate, under `mode`.
@@ -2332,11 +2431,11 @@ where
         end: &ScopeEnd<'_>,
         mode: ResolveMode,
     ) -> Result<GatedResolve, Halt> {
-        let floors = end.floors(self.floors);
+        let floors = end.floors(&self.seams.floors);
         let adopter = self.root_adopter(scope, &floors, end);
         resolve_gated(
-            self.transport,
-            self.snapshot_cache,
+            &self.seams.transport,
+            &self.seams.snapshot_cache,
             &adopter,
             end.root_name,
             mode,
@@ -2356,18 +2455,24 @@ where
         mode: ResolveMode,
     ) -> Result<LoadedNode, Halt> {
         let name = plane.end.write_name(&node.0);
-        let floors = plane.end.floors(self.floors);
+        let floors = plane.end.floors(&self.seams.floors);
         let adopter = ChildAdopter::new(
-            self.gateway,
-            self.http,
+            &self.seams.gateway,
+            &self.seams.http,
             &floors,
             plane.end.root.0,
             plane.end.read_scope_seed.clone(),
             node.0,
         );
-        let resolved = resolve_gated(self.transport, self.snapshot_cache, &adopter, &name, mode)
-            .await
-            .map_err(seam)?;
+        let resolved = resolve_gated(
+            &self.seams.transport,
+            &self.seams.snapshot_cache,
+            &adopter,
+            &name,
+            mode,
+        )
+        .await
+        .map_err(seam)?;
         // A drain publish is an ordinary write, so it carries the lazy wave
         // rather than refusing what a cut left behind: a record the epoch floor
         // rejects is re-read at the epoch it was sealed at, and the publish path
@@ -2380,9 +2485,9 @@ where
                         .ok_or(Halt::EpochLagged)?,
                     Some(epoch),
                 ),
-                _ => return Err(refuse_record(self.events, &name, rejection)),
+                _ => return Err(refuse_record(&self.seams.events, &name, rejection)),
             },
-            _ => (resolved_bytes(resolved, &name, self.events)?, None),
+            _ => (resolved_bytes(resolved, &name, &self.seams.events)?, None),
         };
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, &adopter, &name, &record_bytes, lagging)
@@ -2426,7 +2531,7 @@ where
                 Ok(carried) => return Ok(carried),
                 Err(GateError::Rejected(rejection)) => match rejection.reason {
                     RejectionReason::EpochBelowFloor { epoch, .. } => epoch,
-                    _ => return Err(refuse_record(self.events, name, &rejection)),
+                    _ => return Err(refuse_record(&self.seams.events, name, &rejection)),
                 },
                 Err(GateError::Seam(_)) => return Err(Halt::UploadAttempt),
             },
@@ -2453,7 +2558,7 @@ where
             return scope.folder_plane(pass, folder);
         }
         let mut chain = {
-            let base = self.base.borrow();
+            let base = self.cells.base.borrow();
             let mut chain = base.ancestors(folder);
             chain.reverse();
             chain.push(folder);
@@ -2763,7 +2868,7 @@ where
         // create published.
         if let Some(staged) = applied.op.staged_content() {
             project_child_version(
-                &mut self.base.borrow_mut(),
+                &mut self.cells.base.borrow_mut(),
                 child_id,
                 staged.plaintext_size,
                 applied.op.authored_at.0,
@@ -2929,7 +3034,7 @@ where
             // the only retry there is.
             (false, Some(residue)) => {
                 for name in residue.names() {
-                    self.orphan_heads.record(&name);
+                    self.cells.orphan_heads.record(&name);
                 }
             }
             (false, None) => {}
@@ -2964,7 +3069,7 @@ where
         };
         // A node some folder already links is one an earlier attempt of this op
         // relinked, or another device restored. Only the entry is left.
-        if !self.base.borrow().links_to(target).is_empty() {
+        if !self.cells.base.borrow().links_to(target).is_empty() {
             return self.drop_bin_entry(target).await;
         }
         let name = Zeroizing::new(applied.effective_name.clone().ok_or(Halt::Unclassified)?);
@@ -2976,7 +3081,7 @@ where
         if plane.end.root != binned_under.end.root {
             return Err(Halt::Permanent(DeadLetterReason::CrossingUnauthorable));
         }
-        let held = self.bin_keys.held_key(&target.0, entry.deleted_at);
+        let held = self.inputs.bin_keys.held_key(&target.0, entry.deleted_at);
         let binned = SealPlane {
             end: ScopeEnd {
                 read_scope_seed: &held,
@@ -3056,7 +3161,7 @@ where
         {
             return Err(Halt::Permanent(DeadLetterReason::TargetStillLinked));
         }
-        let held = self.bin_keys.held_key(&target.0, deleted_at);
+        let held = self.inputs.bin_keys.held_key(&target.0, deleted_at);
         let binned = SealPlane {
             end: ScopeEnd {
                 read_scope_seed: &held,
@@ -3127,7 +3232,7 @@ where
         // device knows is checked at the moment of action: the pass republishes
         // folders and repaints the base as it runs, so the rebase's own verdict
         // is already behind by here.
-        if !self.base.borrow().links_to(target).is_empty() {
+        if !self.cells.base.borrow().links_to(target).is_empty() {
             return Ok(false);
         }
         // The scope root is the record the pass opened on, and it publishes
@@ -3218,7 +3323,11 @@ where
         let Ok(entry) = seal_reclamation(seal, reclamation) else {
             return false;
         };
-        self.staging.put_staged_bytes(key, &entry).await.is_ok()
+        self.seams
+            .staging
+            .put_staged_bytes(key, &entry)
+            .await
+            .is_ok()
     }
 
     /// Replace a journal entry with what its settle left owing: removed once
@@ -3233,14 +3342,14 @@ where
     ) {
         match residue {
             None => {
-                let _ = self.staging.remove_staged_bytes(key).await;
+                let _ = self.seams.staging.remove_staged_bytes(key).await;
             }
             // A residue the replay would refuse leaves the previous entry
             // standing, which the replay still accepts, rather than an entry
             // nothing can ever settle ([`Reclamation::is_for`]).
             Some(residue) if residue != *previous && residue.is_for(target) => {
                 if let Ok(entry) = seal_reclamation(seal, &residue) {
-                    let _ = self.staging.put_staged_bytes(key, &entry).await;
+                    let _ = self.seams.staging.put_staged_bytes(key, &entry).await;
                 }
             }
             Some(_) => {}
@@ -3297,6 +3406,7 @@ where
         // every host; the read wraps, so an unopenable run costs one pass its
         // ceiling rather than starving the entries behind it for good.
         let resume = self
+            .cells
             .bookkeeping
             .borrow()
             .journal
@@ -3318,11 +3428,12 @@ where
                 continue;
             }
             budget.opens -= 1;
-            self.bookkeeping
+            self.cells
+                .bookkeeping
                 .borrow_mut()
                 .journal
                 .insert(scope.source.root.0, target.0);
-            let Ok(Some(entry)) = self.staging.staged_bytes(&key).await else {
+            let Ok(Some(entry)) = self.seams.staging.staged_bytes(&key).await else {
                 continue;
             };
             let Some(reclamation) = open_reclamation(seal, &entry).filter(|r| r.is_for(target))
@@ -3331,7 +3442,7 @@ where
             };
             budget.replays.spend(1);
             mine -= 1;
-            let settle = match self.converged_tick.get() {
+            let settle = match self.cells.converged_tick.get() {
                 true => Settle::Decide(&mut budget.proofs),
                 false => Settle::Hold,
             };
@@ -3413,6 +3524,7 @@ where
                 Err(halt)
                     if kind == NodeKind::Folder
                         || !self
+                            .cells
                             .base
                             .borrow()
                             .node(node)
@@ -3463,7 +3575,7 @@ where
             child.name.clone(),
             deleted_at,
             child.scope_id,
-            Some(*self.bin_keys.held_key(&child.node.0, deleted_at)),
+            Some(*self.inputs.bin_keys.held_key(&child.node.0, deleted_at)),
         ));
         self.publish_bin(index).await?;
         Ok(deleted_at)
@@ -3544,6 +3656,7 @@ where
                 unlinked.scope_id,
                 Some(
                     *self
+                        .inputs
                         .bin_keys
                         .held_key(&unlinked.node.0, unlinked.deleted_at),
                 ),
@@ -3572,8 +3685,8 @@ where
         if scope.is_grafted() {
             return;
         }
-        let now = self.scheduler.now();
-        let Some(cutoff) = bin_expiry_cutoff(now, self.bin_retention_days) else {
+        let now = self.seams.scheduler.now();
+        let Some(cutoff) = bin_expiry_cutoff(now, self.inputs.bin_retention_days) else {
             return;
         };
         let Some(index) = self.expiry_bin_index().await else {
@@ -3581,8 +3694,8 @@ where
         };
         let share = self.bin_expiries.borrow().share();
         let expired: Vec<(NodeId, u64)> = {
-            let base = self.base.borrow();
-            let terminal = self.dead_letters.borrow();
+            let base = self.cells.base.borrow();
+            let terminal = self.cells.dead_letters.borrow();
             index
                 .entries
                 .iter()
@@ -3606,7 +3719,8 @@ where
         };
         self.bin_expiries.borrow_mut().spend(expired.len());
         for (node, deleted_at) in expired {
-            let Ok(ephemeral_scalar) = fresh_ephemeral(&mut *self.entropy.borrow_mut()) else {
+            let Ok(ephemeral_scalar) = fresh_ephemeral(&mut *self.seams.entropy.borrow_mut())
+            else {
                 return;
             };
             let seal = RecordSeal {
@@ -3616,7 +3730,7 @@ where
             // The base sequence anchors a rebase against the target's own
             // record, and a binned node has no record the snapshot renders.
             let op = Op::purge(node, deleted_at, 1, now);
-            let _ = stage_op(self.staging, seal, &op).await;
+            let _ = stage_op(&self.seams.staging, seal, &op).await;
         }
     }
 
@@ -3631,22 +3745,24 @@ where
         if let Some(index) = self.established_bin_index.borrow().clone() {
             return Some(index);
         }
-        if let Some(index) = cached_bin_index(self.snapshot_cache, self.bin_keys).await {
+        if let Some(index) =
+            cached_bin_index(&self.seams.snapshot_cache, self.inputs.bin_keys).await
+        {
             return Some(index);
         }
-        let observed = observed_at(self.held, HeldKey::BinIndex);
+        let observed = observed_at(self.cells.held, HeldKey::BinIndex);
         match load_bin_index(
-            self.transport,
-            self.gateway,
-            self.http,
-            self.floors,
-            self.snapshot_cache,
-            self.scheduler,
-            self.profile,
-            self.bin_keys,
+            &self.seams.transport,
+            &self.seams.gateway,
+            &self.seams.http,
+            &self.seams.floors,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.seams.profile,
+            self.inputs.bin_keys,
         )
         .await
-        .enrol(self.held, observed)
+        .enrol(self.cells.held, observed)
         {
             BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. } => Some(index),
             BinIndexLoad::Empty(_) => None,
@@ -3662,8 +3778,8 @@ where
     /// scope root, which the authored delete refuses for the same reason. A name
     /// longer than this build ever authors is a peer's, and no entry carries it.
     fn take_captures(&self, scope: &DrainScope<'_>) -> Vec<UnlinkedChild> {
-        let base = self.base.borrow();
-        let mut set = self.observed_unlinks.borrow_mut();
+        let base = self.cells.base.borrow();
+        let mut set = self.cells.observed_unlinks.borrow_mut();
         let mut taken = Vec::new();
         set.retain(|unlinked| {
             // A capture belongs to whichever pass names its scope. One that no
@@ -3697,7 +3813,7 @@ where
     /// Put back the captures this pass did not settle, up to the frozen bound
     /// on what one session holds unadopted.
     fn return_captures(&self, unfinished: Vec<UnlinkedChild>) {
-        hold_captures(self.observed_unlinks, unfinished);
+        hold_captures(self.cells.observed_unlinks, unfinished);
     }
 
     /// The current bin index, ready to be written over.
@@ -3707,26 +3823,26 @@ where
     /// entries. [`Self::carried_bin_index`] is the one caller that may build on
     /// what the pass already established.
     async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
-        let observed = observed_at(self.held, HeldKey::BinIndex);
+        let observed = observed_at(self.cells.held, HeldKey::BinIndex);
         let index = load_bin_index(
-            self.transport,
-            self.gateway,
-            self.http,
-            self.floors,
-            self.snapshot_cache,
-            self.scheduler,
-            self.profile,
-            self.bin_keys,
+            &self.seams.transport,
+            &self.seams.gateway,
+            &self.seams.http,
+            &self.seams.floors,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.seams.profile,
+            self.inputs.bin_keys,
         )
         .await
-        .enrol(self.held, observed)
+        .enrol(self.cells.held, observed)
         .writable()
         .map_err(|reason| {
             let halt = halt_for_bin_load(reason);
             if halt == Halt::Attempt {
                 emit_trust_violation(
-                    self.events,
-                    self.bin_keys.name().as_str(),
+                    &self.seams.events,
+                    self.inputs.bin_keys.name().as_str(),
                     format!("bin index refused: {reason:?}"),
                 );
             }
@@ -3757,7 +3873,7 @@ where
         // The load is the hold's own probe, so an index this pass established
         // is the exit whichever pass of the tick took the hold.
         if matches!(
-            self.hold.borrow().map(|hold| hold.reason),
+            self.cells.hold.borrow().map(|hold| hold.reason),
             Some(QueueHoldReason::BinIndex(_))
         ) {
             self.release_hold();
@@ -3770,20 +3886,20 @@ where
         // the next rewrite resolves rather than building on this attempt.
         *self.established_bin_index.borrow_mut() = None;
         let held = publish_bin_index(
-            self.transport,
-            self.api,
-            self.floors,
-            self.snapshot_cache,
-            self.scheduler,
-            self.profile,
-            &mut SharedEntropy(self.entropy),
-            self.orphan_heads,
-            self.bin_keys,
+            &self.seams.transport,
+            &self.seams.api,
+            &self.seams.floors,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.seams.profile,
+            &mut SharedEntropy(&self.seams.entropy),
+            self.cells.orphan_heads,
+            self.inputs.bin_keys,
             &index,
         )
         .await
         .map_err(|error| halt_for_bin_publish(&error))?;
-        self.held.borrow_mut().insert(HeldKey::BinIndex, held);
+        self.cells.held.borrow_mut().insert(HeldKey::BinIndex, held);
         // The confirm re-resolved this session's own bytes at its own sequence,
         // so the published entries are the standing index.
         self.establish_bin_index(index);
@@ -3800,7 +3916,7 @@ where
         root: NodeId,
         deleted_at: u64,
     ) -> Result<(), Halt> {
-        let held = self.bin_keys.held_key(&root.0, deleted_at);
+        let held = self.inputs.bin_keys.held_key(&root.0, deleted_at);
         let binned = SealPlane {
             end: ScopeEnd {
                 read_scope_seed: &held,
@@ -3929,7 +4045,7 @@ where
         doomed: &[Doomed],
         binned_at: Option<u64>,
     ) -> Reclamation {
-        let unlinked = self.base.borrow().links_to(target).is_empty();
+        let unlinked = self.cells.base.borrow().links_to(target).is_empty();
         let mut reclamation = Reclamation {
             binned_at,
             ..Reclamation::default()
@@ -4005,7 +4121,7 @@ where
         let mut doomed = reclamation.doomed.clone();
         doomed.extend(proven.into_iter().map(|entry| (entry.node, entry.name)));
         let names: Vec<String> = doomed.iter().map(|(_, name)| name.clone()).collect();
-        let retired = retire(self.api, &names).await.is_ok();
+        let retired = retire(&self.seams.api, &names).await.is_ok();
         // Whatever the registry answered, this device must stop re-PUTting
         // records no parent references — but only those. The walk enumerates a
         // subtree it cannot prove is reached from here alone, so a node still
@@ -4017,8 +4133,8 @@ where
         // and a shallow drop of that parent would leave the child in the
         // snapshot with no link at all.
         {
-            let mut held = self.held.borrow_mut();
-            let mut base = self.base.borrow_mut();
+            let mut held = self.cells.held.borrow_mut();
+            let mut base = self.cells.base.borrow_mut();
             let mut forget = |node: NodeId| {
                 held.remove(&HeldKey::Node(node.0));
                 // A scope root's node id is its scope id, so a reclaimed root
@@ -4077,7 +4193,7 @@ where
         owner: &[u8; 32],
         owed: &[OwedRetire],
     ) -> bool {
-        let ledger = StagingRetireLedger::new(self.staging, seal);
+        let ledger = StagingRetireLedger::new(&self.seams.staging, seal);
         let nodes: BTreeSet<[u8; 16]> = owed.iter().map(|entry| entry.node).collect();
         for node in nodes {
             if ledger.tombstone(owner, node).await.is_err() {
@@ -4120,7 +4236,7 @@ where
         let held = reclamation
             .binned_at
             .zip(reclamation.doomed.first())
-            .map(|(deleted_at, (target, _))| self.bin_keys.held_key(&target.0, deleted_at));
+            .map(|(deleted_at, (target, _))| self.inputs.bin_keys.held_key(&target.0, deleted_at));
         let plane = scope.source.at(root.epoch);
         let sealed_under = held.as_ref().map_or(plane, |held| SealPlane {
             end: ScopeEnd {
@@ -4132,7 +4248,7 @@ where
         let mut proven = Vec::new();
         let mut held_over = Vec::new();
         for entry in quarantined {
-            let verdict = if self.base.borrow().contains(entry.node) {
+            let verdict = if self.cells.base.borrow().contains(entry.node) {
                 // Decided off local state alone, so a surviving namer this
                 // device renders spends no proof. A link that is merely stale is
                 // why it retries rather than refuses outright.
@@ -4259,7 +4375,7 @@ where
         // A cycle detaches the whole subtree from the scope root irrecoverably,
         // and no walk can find it again. Release-active, and refused again at
         // rebase so the op dead-letters instead of wedging the queue.
-        if dest == target || self.base.borrow().ancestors(dest).contains(&target) {
+        if dest == target || self.cells.base.borrow().ancestors(dest).contains(&target) {
             return Err(Halt::Unclassified);
         }
         let modified_at = applied.op.authored_at.0;
@@ -4448,17 +4564,17 @@ where
     /// on a later pass, never a reason to fail an op nothing can undo.
     fn retire_names(&self, names: &[IpnsName]) {
         for name in names {
-            self.orphan_heads.record(name.as_str());
+            self.cells.orphan_heads.record(name.as_str());
         }
     }
 
     /// Take on the cut a move out of `scope_root` owes ([`owe_cut`]).
     async fn owe_scope_exit(&self, scope: &DrainScope<'_>, scope_root: NodeId) {
         owe_cut(
-            self.staging,
+            &self.seams.staging,
             self.bookkeeping_seal(scope),
             scope.enc_secret,
-            self.pending_scope_exits,
+            self.cells.pending_scope_exits,
             scope_root,
         )
         .await;
@@ -4511,7 +4627,7 @@ where
                 continue;
             }
             crossing_may_reseal(
-                &self.base.borrow(),
+                &self.cells.base.borrow(),
                 scope.scope_roots,
                 source,
                 dest,
@@ -4697,7 +4813,7 @@ where
     /// resolvable fails closed: the compensation may not treat an unanswered
     /// name as "unchanged".
     async fn observed_sequence(&self, name: &IpnsName) -> Result<u64, Halt> {
-        fanout_get_verify(self.transport, name)
+        fanout_get_verify(&self.seams.transport, name)
             .await
             .map(|(verified, _)| verified.sequence)
             .ok_or(Halt::Unclassified)
@@ -4807,7 +4923,7 @@ where
         // A history this build refuses to shorten publishes whole: the member's
         // own write is not the place to fail on a version list a co-writer
         // authored, and leaving history long retires nothing.
-        if let RetentionPolicy::KeepLatest(keep_latest) = self.retention
+        if let RetentionPolicy::KeepLatest(keep_latest) = self.inputs.retention
             && let Err(halt) = self
                 .shorten_history(scope, target, &mut versions, keep_latest)
                 .await
@@ -4874,14 +4990,14 @@ where
         published: Published,
     ) {
         project_child_version(
-            &mut self.base.borrow_mut(),
+            &mut self.cells.base.borrow_mut(),
             target,
             plaintext_size,
             modified_at,
             version_count,
             Some(head_cid),
         );
-        if let Some(node) = self.base.borrow_mut().node_mut(target) {
+        if let Some(node) = self.cells.base.borrow_mut().node_mut(target) {
             node.record_sequence = published.sequence;
         }
         self.hold(target.0, published.held);
@@ -5034,7 +5150,7 @@ where
     ) -> Result<(), Halt> {
         scope.refuse_vault_surface()?;
         let owed = self.prune_debt(target, doomed).await?;
-        StagingRetireLedger::new(self.staging, self.bookkeeping_seal(scope))
+        StagingRetireLedger::new(&self.seams.staging, self.bookkeeping_seal(scope))
             .owe(&owner_tag(scope.enc_secret), &owed)
             .await
             .map_err(seam)
@@ -5234,10 +5350,14 @@ where
             .map(|version| {
                 let content_cid =
                     encode_content_cid_str(checked_content_cid(&version.content_cid)?);
-                ContentVersion::from_plaintext_size(content_cid, version.size, self.content_profile)
-                    // A framed size with no readable root is a version this
-                    // engine could not have published, and no retry reframes it.
-                    .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))
+                ContentVersion::from_plaintext_size(
+                    content_cid,
+                    version.size,
+                    &self.seams.content_profile,
+                )
+                // A framed size with no readable root is a version this
+                // engine could not have published, and no retry reframes it.
+                .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))
             })
             .collect()
     }
@@ -5311,7 +5431,7 @@ where
         node: [u8; 16],
         owing: OwingRecord,
     ) -> Option<LiveRecord> {
-        let end = scope.end_of(&self.base.borrow(), NodeId(node)).ok()?;
+        let end = scope.end_of(&self.cells.base.borrow(), NodeId(node)).ok()?;
         let name = end.write_name(&node).as_str().to_owned();
         let reaching = |cids| Some(LiveRecord { name, cids });
         if owing == OwingRecord::Retired {
@@ -5350,8 +5470,8 @@ where
         let expected = decode_content_cid_str(&version.content_cid)
             .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))?;
         let root_block = read_block(
-            self.gateway,
-            self.http,
+            &self.seams.gateway,
+            &self.seams.http,
             &version.content_cid,
             &expected,
             ContentPlane::Root,
@@ -5364,7 +5484,7 @@ where
         expand_retire_targets(
             &version.content_cid,
             &root_block,
-            self.content_profile,
+            &self.seams.content_profile,
             version.pinned_bytes,
         )
         .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))
@@ -5392,7 +5512,7 @@ where
                 // A cancel that landed inside one of the loop's awaits released
                 // this version's blocks, so the halt it reported is that
                 // cancel's shadow, not a failure of the upload.
-                if self.cancels.borrow().is_cancelled(applied.op_id) {
+                if self.cells.cancels.borrow().is_cancelled(applied.op_id) {
                     return Err(Halt::Cancelled);
                 }
                 if let Some(error) = upload_failure(halt) {
@@ -5401,7 +5521,7 @@ where
                 return Err(halt);
             }
         };
-        if !self.cancels.borrow_mut().enter_publish(applied.op_id) {
+        if !self.cells.cancels.borrow_mut().enter_publish(applied.op_id) {
             return Err(Halt::Cancelled);
         }
         Ok(uploaded)
@@ -5413,7 +5533,7 @@ where
     /// arriving record's rejection is ([`emit_trust_violation`]).
     fn report_author_refusal(&self, name: &IpnsName, error: AuthorError) -> Halt {
         if error.is_trust_refusal() {
-            emit_trust_violation(self.events, name.as_str(), &error);
+            emit_trust_violation(&self.seams.events, name.as_str(), &error);
         }
         classify_author(error)
     }
@@ -5440,7 +5560,7 @@ where
         // [`PlacementRefusal::holds`]'s to say — an outage this pass could not
         // resolve is retried uncharged rather than spending a budget that ends
         // by releasing the version's staged blocks.
-        let placement = self.placement.as_ref().map_err(|refusal| {
+        let placement = self.inputs.placement.as_ref().map_err(|refusal| {
             refusal
                 .holds()
                 .map_or(Halt::Unclassified, Halt::HeldBySettings)
@@ -5522,7 +5642,8 @@ where
                         self.mark_uploaded(&reached, &mark_key, index + 1, leaves)
                             .await?;
                     }
-                    self.staging
+                    self.seams
+                        .staging
                         .remove_staged_bytes(leaf_cid)
                         .await
                         .map_err(seam)?;
@@ -5566,7 +5687,7 @@ where
     /// guarantee collapses to "only before the op starts".
     async fn cancel_checkpoint(&self, op_id: OpId) -> Result<(), Halt> {
         yield_now().await;
-        match self.cancels.borrow().is_cancelled(op_id) {
+        match self.cells.cancels.borrow().is_cancelled(op_id) {
             true => Err(Halt::Cancelled),
             false => Ok(()),
         }
@@ -5581,7 +5702,7 @@ where
         progress: Option<BlockProgress>,
         error: Option<&str>,
     ) {
-        let _ = self.events.unbounded_send(Event::OpProgress {
+        let _ = self.seams.events.unbounded_send(Event::OpProgress {
             op_id: Some(applied.op_id),
             node: applied.op.target,
             phase,
@@ -5600,6 +5721,7 @@ where
     ) -> Result<Resume, Halt> {
         let here = placement.destinations();
         Ok(self
+            .seams
             .staging
             .staged_bytes(mark_key)
             .await
@@ -5625,7 +5747,8 @@ where
         leaves: usize,
     ) -> Result<(), Halt> {
         let mark = encode_upload_mark(reached, count, leaves).ok_or(Halt::Unclassified)?;
-        self.staging
+        self.seams
+            .staging
             .put_staged_bytes(mark_key, &mark)
             .await
             .map_err(seam)
@@ -5633,7 +5756,7 @@ where
 
     /// The staged bytes at `key`, admitted by [`admissible_staged_block`].
     async fn staged_block(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Halt> {
-        let Some(block) = self.staging.staged_bytes(key).await.map_err(seam)? else {
+        let Some(block) = self.seams.staging.staged_bytes(key).await.map_err(seam)? else {
             return Ok(None);
         };
         admissible_staged_block(key, block).map(Some)
@@ -5664,7 +5787,7 @@ where
                 self.charged(op_id, cid);
             }
             Placement::External(config) => {
-                place_block(config, cid, block, self.http, self.deadlines)
+                place_block(config, cid, block, &self.seams.http, &self.seams.deadlines)
                     .await
                     .map_err(classify_placement)?;
                 self.charged(op_id, cid);
@@ -5678,7 +5801,9 @@ where
                     // boundary. The charge above is already recorded, so one
                     // landing here still retires these bytes.
                     self.cancel_checkpoint(op_id).await?;
-                    match place_block(config, cid, block, self.http, self.deadlines).await {
+                    match place_block(config, cid, block, &self.seams.http, &self.seams.deadlines)
+                        .await
+                    {
                         Ok(()) => break,
                         Err(error) => mirror.refused(error),
                     }
@@ -5693,12 +5818,13 @@ where
     /// ([`UploadCancels`]). Written the instant the leg that charges confirms,
     /// so no later await can abandon the upload with the charge unrecorded.
     fn charged(&self, op_id: OpId, cid: &[u8]) {
-        self.cancels.borrow_mut().confirmed(op_id, cid);
+        self.cells.cancels.borrow_mut().confirmed(op_id, cid);
     }
 
     /// One block to the hosted ingress, under its own content address.
     async fn hosted_upload(&self, cid: &[u8], block: &[u8]) -> Result<(), Halt> {
-        self.api
+        self.seams
+            .api
             .upload(&encode_content_cid_str(cid), block)
             .await
             .map(drop)
@@ -5713,13 +5839,17 @@ where
         let Some(root_cid) = op.content_root_cid() else {
             return;
         };
-        release_version_blocks(self.staging, root_cid).await;
+        release_version_blocks(&self.seams.staging, root_cid).await;
     }
 
     /// The parent a node is published under, from the base the pass repaints as
     /// it goes — so an op rebases onto exactly what the ops before it published.
     fn published_parent(&self, node: NodeId) -> Result<NodeId, Halt> {
-        self.base.borrow().parent_of(node).ok_or(Halt::Unclassified)
+        self.cells
+            .base
+            .borrow()
+            .parent_of(node)
+            .ok_or(Halt::Unclassified)
     }
 
     /// Every parent the base links `node` under, winner first
@@ -5746,7 +5876,7 @@ where
         pass: &Pass,
         node: NodeId,
     ) -> Result<Vec<NodeId>, Halt> {
-        let base = self.base.borrow();
+        let base = self.cells.base.borrow();
         let mut parents = Vec::new();
         let mut beyond = None;
         for link in base.links_ranked(node) {
@@ -5853,7 +5983,7 @@ where
                 .gated_scope_root(scope, &plane.end, ResolveMode::NoCache)
                 .await?;
             if let ResolveOutcome::TrustViolation(rejection) = &resolved.resolved.outcome {
-                return Err(refuse_record(self.events, name, rejection));
+                return Err(refuse_record(&self.seams.events, name, rejection));
             }
             resolved
                 .held_record
@@ -5877,18 +6007,18 @@ where
         folder: NodeId,
         name: &IpnsName,
     ) -> Result<Option<Served>, Halt> {
-        let floors = plane.end.floors(self.floors);
+        let floors = plane.end.floors(&self.seams.floors);
         let adopter = ChildAdopter::new(
-            self.gateway,
-            self.http,
+            &self.seams.gateway,
+            &self.seams.http,
             &floors,
             plane.end.root.0,
             plane.end.read_scope_seed.clone(),
             folder.0,
         );
         let resolved = resolve_gated(
-            self.transport,
-            self.snapshot_cache,
+            &self.seams.transport,
+            &self.seams.snapshot_cache,
             &adopter,
             name,
             ResolveMode::NoCache,
@@ -5907,7 +6037,7 @@ where
                         .map_err(|_| Halt::Unclassified)?;
                     Ok(Some(Served::new(lagging.sequence, bytes, tied)))
                 }
-                _ => Err(refuse_record(self.events, name, rejection)),
+                _ => Err(refuse_record(&self.seams.events, name, rejection)),
             },
             _ => Ok(resolved
                 .held_record
@@ -5938,7 +6068,7 @@ where
     ) -> Result<Published, PublishHalt> {
         plane_seals(plane, node, name, is_scope_root).map_err(PublishHalt::before_the_put)?;
         let read_key = plane.end.read_key(&node.0);
-        let nonce = fresh_nonce(&mut *self.entropy.borrow_mut())
+        let nonce = fresh_nonce(&mut *self.seams.entropy.borrow_mut())
             .map_err(|_| PublishHalt::before_the_put(Halt::UploadAttempt))?;
         let authoring = EnvelopeAuthoring {
             node_id: node.0,
@@ -5961,7 +6091,7 @@ where
             author_child_envelope(authoring)
         }
         .map_err(|error| PublishHalt::before_the_put(self.report_author_refusal(name, error)))?;
-        report_carried_cut(self.events, name, &head.cut);
+        report_carried_cut(&self.seams.events, name, &head.cut);
 
         let record_bytes = match self
             .publish_head(plane, name, &node.0, &head, content_cids.clone())
@@ -5978,7 +6108,7 @@ where
                         .adopt_node_record(scope, plane, node, name, is_scope_root, &winner, None)
                         .await;
                     if let Err(GateError::Rejected(rejection)) = adopted {
-                        refuse_record(self.events, name, &rejection);
+                        refuse_record(&self.seams.events, name, &rejection);
                     }
                 }
                 return Err(PublishHalt::before_the_put(Halt::Attempt));
@@ -6028,7 +6158,7 @@ where
         record_bytes: &[u8],
         local: Option<LocalHead>,
     ) -> Result<u64, GateError> {
-        let floors = plane.end.floors(self.floors);
+        let floors = plane.end.floors(&self.seams.floors);
         let adopted = if is_scope_root {
             let adopter = self.root_adopter(scope, &floors, &plane.end);
             if let Some(local) = local {
@@ -6037,8 +6167,8 @@ where
             adopter.adopt(name, record_bytes).await?
         } else {
             let adopter = ChildAdopter::new(
-                self.gateway,
-                self.http,
+                &self.seams.gateway,
+                &self.seams.http,
                 &floors,
                 plane.end.root.0,
                 plane.end.read_scope_seed.clone(),
@@ -6049,7 +6179,7 @@ where
             }
             adopter.adopt(name, record_bytes).await?
         };
-        keep_newest_last_known_good(self.snapshot_cache, name, record_bytes)
+        keep_newest_last_known_good(&self.seams.snapshot_cache, name, record_bytes)
             .await
             .map_err(GateError::Seam)?;
         Ok(adopted
@@ -6080,11 +6210,11 @@ where
             record_bytes,
             winner,
         } = publish_record(
-            self.transport,
-            self.api,
-            &plane.end.floors(self.floors),
-            self.scheduler,
-            self.profile,
+            &self.seams.transport,
+            &self.seams.api,
+            &plane.end.floors(&self.seams.floors),
+            &self.seams.scheduler,
+            &self.seams.profile,
             &RecordPublishRequest {
                 name,
                 signer: &signer,
@@ -6119,7 +6249,7 @@ where
         sequence: u64,
         modified_at: u64,
     ) {
-        let mut base = self.base.borrow_mut();
+        let mut base = self.cells.base.borrow_mut();
         match scope.granted {
             Some(GrantedPass { plane, .. }) => {
                 let split = plane.split(&base, children);
@@ -6141,12 +6271,15 @@ where
     /// Insert a just-published record into the live held set so the liveness
     /// loop keeps it alive.
     fn hold(&self, node_id: [u8; 16], held: HeldRecord) {
-        self.held.borrow_mut().insert(HeldKey::Node(node_id), held);
+        self.cells
+            .held
+            .borrow_mut()
+            .insert(HeldKey::Node(node_id), held);
     }
 
     /// Remove a resolved op from the durable queue.
     async fn dequeue_op(&self, op_id: OpId) -> Result<(), Halt> {
-        self.staging.remove_op(op_id).await.map_err(seam)
+        self.seams.staging.remove_op(op_id).await.map_err(seam)
     }
 
     /// Note one head block as orphaned.
@@ -6156,6 +6289,7 @@ where
     /// loss, where leaving the row charged is only a leak.
     fn record_orphan_head(&self, cid: &str) {
         if self
+            .cells
             .held
             .borrow()
             .values()
@@ -6163,7 +6297,7 @@ where
         {
             return;
         }
-        self.orphan_heads.record(cid);
+        self.cells.orphan_heads.record(cid);
     }
 
     /// Retire every block a cancelled op put on the network. Best-effort: a
@@ -6171,6 +6305,7 @@ where
     /// pass over an op that is already gone would be a stuck queue.
     async fn retire_cancelled(&self, op_id: OpId) {
         let cids: Vec<String> = self
+            .cells
             .cancels
             .borrow()
             .uploaded_by(op_id)
@@ -6178,7 +6313,7 @@ where
             .map(|cid| encode_content_cid_str(cid))
             .collect();
         if !cids.is_empty() {
-            let _ = retire(self.api, &cids).await;
+            let _ = retire(&self.seams.api, &cids).await;
         }
     }
 
@@ -6194,17 +6329,17 @@ where
         op_id: OpId,
         reason: DeadLetterReason,
     ) -> Result<Preservation, Halt> {
-        let queued = self.staging.queued_ops().await.map_err(seam)?;
+        let queued = self.seams.staging.queued_ops().await.map_err(seam)?;
         let Some((_, record)) = queued.iter().find(|(id, _)| *id == op_id) else {
             return Ok(Preservation::Kept);
         };
         preserve_dead_letter(
-            self.staging,
+            &self.seams.staging,
             &owner_scoped_key(DEAD_LETTER_NOTICES_PREFIX, scope.enc_secret),
             op_id,
             reason,
             record,
-            self.scheduler.now(),
+            self.seams.scheduler.now(),
         )
         .await
         .map_err(seam)
@@ -6250,7 +6385,7 @@ where
     /// Abandon one op: retire what its publish registered, then drop it from
     /// the queue.
     async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
-        retire(self.api, &self.registered_by(scope, op).await)
+        retire(&self.seams.api, &self.registered_by(scope, op).await)
             .await
             .map_err(|_| Halt::UploadAttempt)?;
         self.dequeue_op(op_id).await
@@ -6278,7 +6413,7 @@ where
         let Some(name) = self.unreferenced_create_name(scope, op) else {
             return Ok(());
         };
-        retire(self.api, &[name])
+        retire(&self.seams.api, &[name])
             .await
             .map_err(|_| Halt::UploadAttempt)
     }
@@ -6318,7 +6453,8 @@ where
         // The durable record, not this pass's copy: what a restore rewinds is
         // exactly what survives a restart.
         let attempts = Attempts::decode(
-            self.staging
+            self.seams
+                .staging
                 .staged_bytes(OP_ATTEMPTS_KEY)
                 .await
                 .map_err(seam)?,
@@ -6327,7 +6463,7 @@ where
             return Ok(false);
         }
         let name = plane.end.write_name(&target.0);
-        let floors = plane.end.floors(self.floors);
+        let floors = plane.end.floors(&self.seams.floors);
         if floor::sequence_floor(&floors, name.as_str().as_bytes())
             .await
             .map_err(seam)?
@@ -6336,16 +6472,16 @@ where
             return Ok(false);
         }
         let adopter = ChildAdopter::new(
-            self.gateway,
-            self.http,
+            &self.seams.gateway,
+            &self.seams.http,
             &floors,
             plane.end.root.0,
             plane.end.read_scope_seed.clone(),
             target.0,
         );
         let resolved = resolve(
-            self.transport,
-            self.snapshot_cache,
+            &self.seams.transport,
+            &self.seams.snapshot_cache,
             &adopter,
             &name,
             ResolveMode::NoCache,
@@ -6375,7 +6511,7 @@ where
         let OpKind::Create { parent, .. } = &op.kind else {
             return None;
         };
-        let base = self.base.borrow();
+        let base = self.cells.base.borrow();
         if base.contains(op.target) {
             return None;
         }
@@ -6397,7 +6533,7 @@ where
         let content = match op.content_root_cid() {
             Some(root_cid) => version_cids(
                 root_cid,
-                version_leaf_cids(self.staging, root_cid)
+                version_leaf_cids(&self.seams.staging, root_cid)
                     .await
                     .iter()
                     .map(|cid| cid.as_slice()),
@@ -6413,6 +6549,7 @@ where
     /// reset a budget another account's ops are spending.
     async fn load_attempts(&self, live: &BTreeSet<OpId>) -> Result<Attempts, Halt> {
         let stored = self
+            .seams
             .staging
             .staged_bytes(OP_ATTEMPTS_KEY)
             .await
@@ -6433,12 +6570,14 @@ where
         // body would park a staging row nothing ever reclaims.
         if attempts.counts.is_empty() {
             return self
+                .seams
                 .staging
                 .remove_staged_bytes(OP_ATTEMPTS_KEY)
                 .await
                 .map_err(seam);
         }
-        self.staging
+        self.seams
+            .staging
             .put_staged_bytes(OP_ATTEMPTS_KEY, &attempts.encode())
             .await
             .map_err(seam)
@@ -6496,8 +6635,14 @@ where
 
     /// Raise the op-id high-water at `key` to `max(stored, mark)`.
     async fn raise_op_mark(&self, key: &[u8], mark: u64) -> Result<(), Halt> {
-        let raised = mark.max(op_mark(self.staging, key).await.map_err(seam)?.unwrap_or(0));
-        self.staging
+        let raised = mark.max(
+            op_mark(&self.seams.staging, key)
+                .await
+                .map_err(seam)?
+                .unwrap_or(0),
+        );
+        self.seams
+            .staging
             .put_staged_bytes(key, &raised.to_be_bytes())
             .await
             .map_err(seam)
@@ -6507,7 +6652,7 @@ where
     /// device or the stored bytes are not a mark this build wrote.
     async fn drained_mark(&self, scope: &DrainScope<'_>) -> Result<Option<u64>, Halt> {
         op_mark(
-            self.staging,
+            &self.seams.staging,
             &owner_scoped_key(DRAINED_OP_MARK_PREFIX, scope.enc_secret),
         )
         .await
@@ -8247,6 +8392,7 @@ mod tests {
     use crate::grants::grafted::{BookmarkedScopeRoots, ContestedNodes};
     use crate::rotation::{RotateError, RotationOutcome};
     use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore};
+    use crate::session::SessionState;
     use crate::testkit::fakes::{
         InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache,
         InMemoryStagingStore, ScriptedHttp, VirtualScheduler,
@@ -8281,42 +8427,27 @@ mod tests {
         VirtualScheduler,
     >;
 
+    type FakeSeams = EngineSeams<
+        InMemoryRecordStore,
+        ScriptedHttp,
+        InMemoryCredentialStore,
+        OwnerScopedFloorStore<InMemoryFloorStore>,
+        InMemorySnapshotCache,
+        QueueGenerationStore<InMemoryStagingStore>,
+        VirtualScheduler,
+    >;
+
     /// Every value a [`Drain`] borrows, owned in one place so a test can hand
     /// out a pass and still drive the seams behind it.
     struct DrainHarness {
-        transport: InMemoryRecordStore,
-        api: ApiClient<ScriptedHttp, InMemoryCredentialStore>,
-        floors: OwnerScopedFloorStore<InMemoryFloorStore>,
-        snapshot_cache: InMemorySnapshotCache,
-        staging: QueueGenerationStore<InMemoryStagingStore>,
-        scheduler: VirtualScheduler,
-        http: ScriptedHttp,
-        gateway: Gateway,
-        deadlines: DeadlinePolicy,
-        placement: PlacementDecision,
-        profile: SyncTimingProfile,
-        storage_policy: StoragePolicy,
-        content_profile: ContentProfile,
-        live_blocks: RefCell<LiveBlocks>,
-        entropy: RefCell<Box<dyn Entropy>>,
-        base: BaseSnapshot,
-        held: RefCell<HeldRecords>,
-        hold: RefCell<Option<QueueHold>>,
-        pending_reclaim: Cell<u64>,
-        reclaim_stalls: RefCell<Vec<ReclaimStall>>,
-        bookkeeping: RefCell<BookkeepingCursors>,
-        orphan_heads: OrphanHeads,
-        converged_tick: Cell<bool>,
-        cancels: RefCell<UploadCancels>,
-        events: mpsc::UnboundedSender<Event>,
+        seams: FakeSeams,
+        state: SessionState,
         /// Held open: an events channel whose receiver dropped refuses sends.
-        _event_stream: mpsc::UnboundedReceiver<Event>,
+        events: mpsc::UnboundedReceiver<Event>,
+        placement: PlacementDecision,
         bin_keys: BinIndexKeys,
         /// The owner's bin retention, which the expiry sweep acts only on.
         bin_retention_days: Option<u32>,
-        dead_letters: RefCell<RetainedDeadLetters>,
-        observed_unlinks: RefCell<Vec<UnlinkedChild>>,
-        pending_scope_exits: RefCell<BTreeSet<NodeId>>,
         root_name: IpnsName,
         read_scope_seed: Zeroizing<[u8; 32]>,
         write_scope_seed: Zeroizing<[u8; 32]>,
@@ -8335,52 +8466,34 @@ mod tests {
 
     impl DrainHarness {
         fn drain(&self) -> FakeDrain<'_> {
-            Drain {
-                transport: &self.transport,
-                api: &self.api,
-                floors: &self.floors,
-                snapshot_cache: &self.snapshot_cache,
-                staging: &self.staging,
-                scheduler: &self.scheduler,
-                http: &self.http,
-                gateway: &self.gateway,
-                deadlines: &self.deadlines,
-                placement: &self.placement,
-                profile: &self.profile,
-                storage_policy: &self.storage_policy,
-                live_blocks: &self.live_blocks,
-                content_profile: &self.content_profile,
-                entropy: &self.entropy,
-                base: &self.base,
-                held: &self.held,
-                hold: &self.hold,
-                pending_reclaim: &self.pending_reclaim,
-                reclaim_stalls: &self.reclaim_stalls,
-                bookkeeping: &self.bookkeeping,
-                orphan_heads: &self.orphan_heads,
-                converged_tick: &self.converged_tick,
-                cancels: &self.cancels,
-                events: &self.events,
-                bin_keys: &self.bin_keys,
-                bin_retention_days: self.bin_retention_days,
-                retention: RetentionPolicy::KeepAll,
-                dead_letters: &self.dead_letters,
-                established_bin_index: RefCell::new(None),
-                bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),
-                observed_unlinks: &self.observed_unlinks,
-                pending_scope_exits: &self.pending_scope_exits,
-            }
+            Drain::new(
+                &self.seams,
+                self.state.drain_cells(),
+                TickInputs {
+                    placement: &self.placement,
+                    bin_keys: &self.bin_keys,
+                    bin_retention_days: self.bin_retention_days,
+                    retention: RetentionPolicy::KeepAll,
+                },
+            )
         }
 
         fn scope(&self) -> DrainScope<'_> {
+            self.scope_at(HARNESS_ROOT, self.floor_namespace)
+        }
+
+        /// A pass anchored at `root`, grafted exactly when `floor_namespace`
+        /// is another identity's. Its records need not resolve: an empty
+        /// queue gives the pass nothing to open.
+        fn scope_at(&self, root: NodeId, floor_namespace: FloorNamespace) -> DrainScope<'_> {
             DrainScope {
                 source: ScopeEnd {
-                    root: HARNESS_ROOT,
+                    root,
                     root_name: &self.root_name,
                     read_scope_seed: &self.read_scope_seed,
                     write_scope_seed: &self.write_scope_seed,
                     ascent_node_seed: None,
-                    floor_namespace: self.floor_namespace,
+                    floor_namespace,
                 },
                 destination: None,
                 scope_roots: &self.scope_roots,
@@ -8388,11 +8501,11 @@ mod tests {
                 charges_the_identity: false,
                 enc_secret: &self.enc_secret,
                 owner_identity: &self.owner_identity,
-                granted: matches!(self.floor_namespace, FloorNamespace::GrantedBy(_)).then_some(
+                granted: matches!(floor_namespace, FloorNamespace::GrantedBy(_)).then_some(
                     GrantedPass {
                         sharer_enc: &self.sharer_enc,
                         plane: GraftedPlane {
-                            scope_id: HARNESS_ROOT.0,
+                            scope_id: root.0,
                             scope_roots: &self.bookmarked_roots,
                             contested: &self.contested,
                         },
@@ -8401,11 +8514,24 @@ mod tests {
             }
         }
 
+        fn own_scope_at(&self, root: NodeId) -> DrainScope<'_> {
+            self.scope_at(root, FloorNamespace::Own)
+        }
+
+        fn grafted_scope_at(&self, root: NodeId) -> DrainScope<'_> {
+            self.scope_at(root, FloorNamespace::GrantedBy(sharer_label()))
+        }
+
+        /// One tick over `scopes`, with a rotator nothing asks to cut.
+        fn tick(&self, scopes: TickScopes<'_>) {
+            block_on(self.drain().run_tick(scopes, &RecordingRotator::default()));
+        }
+
         /// Queue one op under the same owner secret the pass reads the queue
         /// with, and answer the id the store assigned it.
         fn queue_an_op(&self, op: &Op) -> OpId {
             block_on(stage_op(
-                &self.staging,
+                &self.seams.staging,
                 RecordSeal {
                     owner_enc_secret: &self.enc_secret,
                     ephemeral_scalar: Zeroizing::new([0x5A; 32]),
@@ -8416,7 +8542,7 @@ mod tests {
         }
 
         fn queued_op_ids(&self) -> Vec<OpId> {
-            block_on(self.staging.queued_ops())
+            block_on(self.seams.staging.queued_ops())
                 .expect("the queue reads")
                 .into_iter()
                 .map(|(id, _)| id)
@@ -8484,43 +8610,33 @@ mod tests {
             blocks.insert(head_cid, head_block);
         }
 
-        let (events, _event_stream) = mpsc::unbounded();
+        let (events, event_stream) = mpsc::unbounded();
         DrainHarness {
-            transport: InMemoryRecordStore::new(vec![EndpointId::new("fake:someguy")]),
-            api: ApiClient::new(
-                ScriptedHttp::default(),
-                InMemoryCredentialStore::default(),
-                "",
-            ),
-            floors,
-            snapshot_cache,
-            staging: QueueGenerationStore::new(InMemoryStagingStore::default()),
-            scheduler: VirtualScheduler::new(),
-            http: serve(&blocks),
-            gateway: gateway(),
-            deadlines: DeadlinePolicy::default(),
+            seams: EngineSeams {
+                transport: InMemoryRecordStore::new(vec![EndpointId::new("fake:someguy")]),
+                api: Rc::new(ApiClient::new(
+                    ScriptedHttp::default(),
+                    InMemoryCredentialStore::default(),
+                    "",
+                )),
+                floors,
+                snapshot_cache,
+                staging: QueueGenerationStore::new(InMemoryStagingStore::default()),
+                scheduler: VirtualScheduler::new(),
+                http: serve(&blocks),
+                gateway: gateway(),
+                entropy: Rc::new(RefCell::new(Box::new(SeededEntropy::new(42)))),
+                events,
+                deadlines: DeadlinePolicy::default(),
+                profile: SyncTimingProfile::CI,
+                storage_policy: StoragePolicy::CI,
+                content_profile: ContentProfile::CI,
+            },
+            state: SessionState::new(),
+            events: event_stream,
             placement: Ok(Placement::Hosted),
-            profile: SyncTimingProfile::CI,
-            storage_policy: StoragePolicy::CI,
-            content_profile: ContentProfile::CI,
-            live_blocks: RefCell::new(LiveBlocks::default()),
-            entropy: RefCell::new(Box::new(SeededEntropy::new(42))),
-            base: BaseSnapshot::new(Snapshot::new(HARNESS_ROOT)),
-            held: RefCell::new(HeldRecords::new()),
-            hold: RefCell::new(None),
-            pending_reclaim: Cell::new(0),
-            reclaim_stalls: RefCell::new(Vec::new()),
-            bookkeeping: RefCell::new(BookkeepingCursors::default()),
-            orphan_heads: OrphanHeads::default(),
-            converged_tick: Cell::new(false),
-            cancels: RefCell::new(UploadCancels::default()),
-            events,
-            _event_stream,
             bin_keys: BinIndexKeys::derive(&HARNESS_SECRET),
             bin_retention_days: None,
-            dead_letters: RefCell::new(RetainedDeadLetters::new()),
-            observed_unlinks: RefCell::new(Vec::new()),
-            pending_scope_exits: RefCell::new(BTreeSet::new()),
             root_name,
             read_scope_seed: Zeroizing::new(OWNER_ROOT_SCOPE_SEED),
             write_scope_seed,
@@ -8613,10 +8729,10 @@ mod tests {
 
         let mut refusing = drain_harness(None);
         refusing.placement = Err(PlacementRefusal::NoProvider);
-        *refusing.hold.borrow_mut() = Some(over_quota);
+        *refusing.state.queue_hold.borrow_mut() = Some(over_quota);
         assert!(block_on(refusing.drain().hold_admits_the_head(&queued)));
         assert_eq!(
-            *refusing.hold.borrow(),
+            *refusing.state.queue_hold.borrow(),
             None,
             "the settings refusal is what the next pass names",
         );
@@ -8625,10 +8741,10 @@ mod tests {
         undecided.placement = Err(PlacementRefusal::SettingsUnavailable(
             DefaultsReason::Suppressed,
         ));
-        *undecided.hold.borrow_mut() = Some(over_quota);
+        *undecided.state.queue_hold.borrow_mut() = Some(over_quota);
         assert!(!block_on(undecided.drain().hold_admits_the_head(&queued)));
         assert_eq!(
-            *undecided.hold.borrow(),
+            *undecided.state.queue_hold.borrow(),
             Some(over_quota),
             "an outage leaves the head held rather than charging it",
         );
@@ -8662,7 +8778,7 @@ mod tests {
             ),
         ] {
             let harness = drain_harness(Some(harness_root_envelope()));
-            *harness.hold.borrow_mut() = Some(held);
+            *harness.state.queue_hold.borrow_mut() = Some(held);
             block_on(harness.drain().apply_valve(
                 &harness.scope(),
                 halted,
@@ -8671,11 +8787,11 @@ mod tests {
                 &mut Attempts::default(),
                 &mut DrainReport::default(),
             ));
-            assert_eq!(*harness.hold.borrow(), Some(held), "{case}");
+            assert_eq!(*harness.state.queue_hold.borrow(), Some(held), "{case}");
         }
 
         let harness = drain_harness(Some(harness_root_envelope()));
-        *harness.hold.borrow_mut() = Some(held);
+        *harness.state.queue_hold.borrow_mut() = Some(held);
         block_on(harness.drain().apply_valve(
             &harness.scope(),
             OpId(1),
@@ -8685,7 +8801,7 @@ mod tests {
             &mut DrainReport::default(),
         ));
         assert_eq!(
-            *harness.hold.borrow(),
+            *harness.state.queue_hold.borrow(),
             None,
             "a classified verdict on the held op is the hold's own exit",
         );
@@ -8717,7 +8833,7 @@ mod tests {
                 (FOLDER, "below the grafted root"),
             ] {
                 let mut harness = drain_harness(Some(harness_root_envelope()));
-                harness.base = BaseSnapshot::new(grafted.clone());
+                harness.state.snapshot = Rc::new(BaseSnapshot::new(grafted.clone()));
                 harness.scope_roots = roots.clone();
                 let drain = harness.drain();
                 let scope = harness.scope();
@@ -8996,22 +9112,26 @@ mod tests {
     #[test]
     fn a_grafted_pass_bins_no_capture_and_starves_no_set() {
         let grafted = grafted_harness();
-        *grafted.observed_unlinks.borrow_mut() = vec![capture(&grafted.write_scope_seed)];
+        *grafted.state.observed_unlinks.borrow_mut() = vec![capture(&grafted.write_scope_seed)];
         block_on(grafted.drain().adopt_observed_unlinks(&grafted.scope()));
         assert!(
-            grafted.observed_unlinks.borrow().is_empty(),
+            grafted.state.observed_unlinks.borrow().is_empty(),
             "the capture leaves the bounded set rather than being held for ever",
         );
         assert!(
-            !grafted.held.borrow().contains_key(&HeldKey::BinIndex),
+            !grafted
+                .state
+                .held_records
+                .borrow()
+                .contains_key(&HeldKey::BinIndex),
             "no bin index record was published",
         );
 
         let own = drain_harness(Some(harness_root_envelope()));
-        *own.observed_unlinks.borrow_mut() = vec![capture(&own.write_scope_seed)];
+        *own.state.observed_unlinks.borrow_mut() = vec![capture(&own.write_scope_seed)];
         block_on(own.drain().adopt_observed_unlinks(&own.scope()));
         assert_eq!(
-            own.observed_unlinks.borrow().len(),
+            own.state.observed_unlinks.borrow().len(),
             1,
             "an own-vault pass keeps the capture for the tick that can bin it",
         );
@@ -9048,6 +9168,7 @@ mod tests {
         for harness in [&mut grafted, &mut own] {
             harness.bin_retention_days = Some(1);
             harness
+                .seams
                 .scheduler
                 .advance(Duration::from_secs(60 * 60 * 24 * 30));
         }
@@ -9061,6 +9182,7 @@ mod tests {
     }
 
     /// A rotator that records every root a pass asked it to cut.
+    #[derive(Default)]
     struct RecordingRotator(RefCell<Vec<NodeId>>);
 
     impl ScopeExitRotator for RecordingRotator {
@@ -9084,7 +9206,11 @@ mod tests {
         const EXITED: NodeId = NodeId([0x46; 16]);
 
         let cut_roots = |harness: &DrainHarness| {
-            harness.pending_scope_exits.borrow_mut().insert(EXITED);
+            harness
+                .state
+                .pending_scope_exits
+                .borrow_mut()
+                .insert(EXITED);
             let exits = RecordingRotator(RefCell::new(Vec::new()));
             block_on(harness.drain().cut_exited_scopes(&harness.scope(), &exits));
             exits.0.into_inner()
@@ -9125,7 +9251,7 @@ mod tests {
                 block_on(drain.journal_doomed(seal, &key, TARGET, &reclamation)),
                 "the entry journals",
             );
-            let staged = block_on(harness.staging.staged_keys()).expect("the keys list");
+            let staged = block_on(harness.seams.staging.staged_keys()).expect("the keys list");
             let mut budget = JournalBudget::new(1);
             let before = budget.opens;
             block_on(drain.settle_journalled_deletes(
@@ -9181,7 +9307,7 @@ mod tests {
 
         assert!(
             !passes[0].charges_the_identity,
-            "the facade appends the grafted passes after the charge is assigned",
+            "the charge skips a grafted pass wherever it sits in the list",
         );
     }
 
@@ -9196,18 +9322,18 @@ mod tests {
 
         let harness = grafted_harness();
         let scope = harness.scope();
-        let view = scope.source.floors(&harness.floors);
+        let view = scope.source.floors(&harness.seams.floors);
 
         block_on(view.raise_epoch_floor(&SHARED, 9)).expect("the floor raises");
 
-        let read_leg = SharerScopedFloorStore::granted_by(&harness.floors, sharer_label());
+        let read_leg = SharerScopedFloorStore::granted_by(&harness.seams.floors, sharer_label());
         assert_eq!(
             block_on(read_leg.epoch_floor(&SHARED)).expect("floor read"),
             Some(9),
             "a read leg below the grafted root reads the floor the pass raised",
         );
         assert_eq!(
-            block_on(SharerScopedFloorStore::own(&harness.floors).epoch_floor(&SHARED))
+            block_on(SharerScopedFloorStore::own(&harness.seams.floors).epoch_floor(&SHARED))
                 .expect("floor read"),
             None,
             "and this vault's own namespace is untouched by it",
@@ -9218,12 +9344,12 @@ mod tests {
         block_on(
             own_scope
                 .source
-                .floors(&own.floors)
+                .floors(&own.seams.floors)
                 .raise_epoch_floor(&SHARED, 4),
         )
         .expect("the floor raises");
         assert_eq!(
-            block_on(own.floors.epoch_floor(&SHARED)).expect("floor read"),
+            block_on(own.seams.floors.epoch_floor(&SHARED)).expect("floor read"),
             Some(4),
             "an own pass keeps the plain scope-id key every other owner-side caller reads",
         );
@@ -9242,14 +9368,168 @@ mod tests {
         block_on(
             scope
                 .source
-                .floors(&harness.floors)
+                .floors(&harness.seams.floors)
                 .raise_sequence_floor(NAME, 6),
         )
         .expect("the floor raises");
 
         assert_eq!(
-            block_on(harness.floors.sequence_floor(NAME)).expect("floor read"),
+            block_on(harness.seams.floors.sequence_floor(NAME)).expect("floor read"),
             Some(6),
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // One tick's drain: the pass order and the bookkeeping `run_tick` owns.
+    // -----------------------------------------------------------------------
+
+    const INTERIOR_ONE: NodeId = NodeId([0x51; 16]);
+    const INTERIOR_TWO: NodeId = NodeId([0x52; 16]);
+    const GRAFTED_ROOT: NodeId = NodeId([0x53; 16]);
+    const ORPHAN_KEY: &[u8] = b"an-abandoned-write-handle-block";
+
+    fn roots(passes: &[DrainScope<'_>]) -> Vec<NodeId> {
+        passes.iter().map(|pass| pass.source.root).collect()
+    }
+
+    fn charged(passes: &[DrainScope<'_>]) -> Vec<bool> {
+        passes
+            .iter()
+            .map(|pass| pass.charges_the_identity)
+            .collect()
+    }
+
+    fn drain_events(events: &mut mpsc::UnboundedReceiver<Event>) -> Vec<Event> {
+        core::iter::from_fn(|| events.try_recv().ok()).collect()
+    }
+
+    #[test]
+    fn a_tick_orders_the_vault_pass_first_and_the_grafted_passes_last() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+
+        let full = ordered(TickScopes {
+            vault: Some(harness.scope()),
+            interior: vec![
+                harness.own_scope_at(INTERIOR_ONE),
+                harness.own_scope_at(INTERIOR_TWO),
+            ],
+            grafted: vec![harness.grafted_scope_at(GRAFTED_ROOT)],
+        });
+        assert_eq!(
+            roots(&full),
+            vec![HARNESS_ROOT, INTERIOR_ONE, INTERIOR_TWO, GRAFTED_ROOT],
+        );
+        assert_eq!(charged(&full), vec![true, false, false, false]);
+
+        let unheld = ordered(TickScopes {
+            vault: None,
+            interior: vec![
+                harness.own_scope_at(INTERIOR_ONE),
+                harness.own_scope_at(INTERIOR_TWO),
+            ],
+            grafted: vec![harness.grafted_scope_at(GRAFTED_ROOT)],
+        });
+        assert_eq!(
+            roots(&unheld),
+            vec![INTERIOR_ONE, INTERIOR_TWO, GRAFTED_ROOT]
+        );
+        assert_eq!(
+            charged(&unheld),
+            vec![true, false, false],
+            "the first interior pass takes the charge, never a grafted one",
+        );
+
+        let grafted_only = ordered(TickScopes {
+            vault: None,
+            interior: Vec::new(),
+            grafted: vec![harness.grafted_scope_at(GRAFTED_ROOT)],
+        });
+        assert_eq!(charged(&grafted_only), vec![false]);
+    }
+
+    #[test]
+    fn a_tick_shares_its_bin_expiries_over_the_final_pass_count() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let drain = harness.drain();
+
+        block_on(drain.run_tick(
+            TickScopes {
+                vault: None,
+                interior: vec![
+                    harness.own_scope_at(INTERIOR_ONE),
+                    harness.own_scope_at(INTERIOR_TWO),
+                ],
+                grafted: vec![harness.grafted_scope_at(GRAFTED_ROOT)],
+            },
+            &RecordingRotator::default(),
+        ));
+
+        assert_eq!(
+            drain.bin_expiries.borrow().per_scope,
+            TickShare::new(MAX_BIN_EXPIRIES, 3).per_scope,
+        );
+    }
+
+    /// The reclaim figure is the retire ledger's, which only settle reads, so a
+    /// rewritten figure is the settle's own mark; the sweep runs either way.
+    #[test]
+    fn an_unheld_root_reconciles_staging_in_place_of_settle() {
+        let tick = |vault: bool| {
+            let harness = drain_harness(Some(harness_root_envelope()));
+            block_on(
+                harness
+                    .seams
+                    .staging
+                    .put_staged_bytes(ORPHAN_KEY, b"residue"),
+            )
+            .expect("the block stages");
+            harness.state.pending_reclaim.set(7);
+            harness.tick(TickScopes {
+                vault: vault.then(|| harness.scope()),
+                interior: vec![harness.own_scope_at(INTERIOR_ONE)],
+                grafted: Vec::new(),
+            });
+            let staged =
+                block_on(harness.seams.staging.staged_bytes(ORPHAN_KEY)).expect("the store reads");
+            (staged, harness.state.pending_reclaim.get())
+        };
+
+        assert_eq!(
+            tick(false),
+            (None, 7),
+            "the sweep ran, and the ledger figure kept its value",
+        );
+        assert_eq!(
+            tick(true),
+            (None, 0),
+            "the settle swept staging and rewrote the figure",
+        );
+    }
+
+    #[test]
+    fn a_tick_surfaces_each_pass_report_to_the_host() {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let op_id = harness.queue_an_op(&Op::rename(
+            NodeId([9; 16]),
+            "renamed.txt",
+            1,
+            UnixMillis(0),
+        ));
+
+        harness.tick(TickScopes {
+            vault: Some(harness.scope()),
+            interior: vec![harness.own_scope_at(INTERIOR_ONE)],
+            grafted: Vec::new(),
+        });
+
+        // The base holds no such node, so the vault pass dead-letters the op.
+        assert!(harness.queued_op_ids().is_empty(), "the op left the queue");
+        let retained = harness.state.dead_letters.borrow().get(&op_id).copied();
+        let Some((_, reason)) = retained else {
+            panic!("the dead letter is retained");
+        };
+        let events = drain_events(&mut harness.events);
+        assert!(events.contains(&Event::DeadLetter { op_id, reason }));
+        assert!(events.contains(&Event::SnapshotUpdated));
     }
 }

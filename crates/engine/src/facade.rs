@@ -154,8 +154,8 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{
-    Drain, DrainReport, DrainScope, GrantedPass, MAX_BIN_EXPIRIES, ScopeEnd, SealPlane, TickShare,
-    charge_the_identity_to_one_pass, hold_captures, owner_scoped_key, published_op_mark,
+    Drain, DrainScope, EngineSeams, GrantedPass, ScopeEnd, SealPlane, TickInputs, TickScopes,
+    hold_captures, owner_scoped_key, published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
@@ -4682,29 +4682,6 @@ fn steady_state_hold(
     (record.routing_key == name.as_str()).then(|| record.record_bytes.clone())
 }
 
-/// Fold one drain pass's report into the host-visible surface: retain and emit
-/// every dead letter, and emit one [`Event::SnapshotUpdated`] if the pass moved
-/// anything off the queue (the overlay the host renders just shrank). Both sends
-/// are best-effort over the in-process channel — a dropped receiver is fine.
-fn surface_drain_report(
-    events: &mpsc::UnboundedSender<Event>,
-    dead_letters: &RefCell<RetainedDeadLetters>,
-    report: &DrainReport,
-) {
-    for (op_id, target, reason) in &report.dead_letters {
-        dead_letters
-            .borrow_mut()
-            .insert(*op_id, (Some(*target), *reason));
-        let _ = events.unbounded_send(Event::DeadLetter {
-            op_id: *op_id,
-            reason: *reason,
-        });
-    }
-    if !report.is_empty() {
-        let _ = events.unbounded_send(Event::SnapshotUpdated);
-    }
-}
-
 /// The vault root's scope at the name this session holds for it, refused where
 /// the held write seed does not derive that name.
 fn held_vault_root_scope(
@@ -6766,24 +6743,27 @@ where {
         let session = self.session.as_ref()?;
         let state = self.state.clone();
         let secrets = self.secrets.clone();
-        let scheduler = self.seams.scheduler.clone();
-        let staging = LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone());
-        let entropy = self.entropy.clone();
-        let content_profile = self.content_profile;
-        let storage_policy = self.storage_policy;
-        let deadlines = self.deadlines;
-        let transport = self.record_transport.clone();
-        let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
-        let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
-        let http = self.seams.http.clone();
-        let gateway = self.gateway.clone();
+        let seams = EngineSeams {
+            transport: self.record_transport.clone(),
+            api,
+            floors: LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone()),
+            snapshot_cache: LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone()),
+            staging: LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone()),
+            scheduler: self.seams.scheduler.clone(),
+            http: self.seams.http.clone(),
+            gateway: self.gateway.clone(),
+            entropy: self.entropy.clone(),
+            events: self.events.clone(),
+            deadlines: self.deadlines,
+            profile: self.profile,
+            storage_policy: self.storage_policy,
+            content_profile: self.content_profile,
+        };
         // Start has just decided, so the first re-decide comes one interval on.
         let settings_rechecked = Cell::new(self.seams.scheduler.now());
         let link_swept = Cell::new(self.seams.scheduler.now());
-        let events = self.events.clone();
         let alive = self.alive.clone();
-        let profile = self.profile;
-        let interval = self.profile.poll_cadence;
+        let interval = seams.profile.poll_cadence;
         let owner_identity = session.owner_identity();
         // The vault's own root scope and root node are the anchored all-zero id16
         // (the cold-start bootstrap anchor): the adopter's scope binding and the
@@ -6794,20 +6774,26 @@ where {
 
         Some(Box::new(move || {
             manual.arm();
-            let spawn_on = scheduler.clone();
+            let spawn_on = seams.scheduler.clone();
             spawn_on.spawn(Box::pin(async move {
+                let EngineSeams {
+                    transport,
+                    api,
+                    floors,
+                    snapshot_cache,
+                    staging,
+                    scheduler,
+                    http,
+                    gateway,
+                    entropy,
+                    events,
+                    profile,
+                    ..
+                } = &seams;
                 let SessionState {
                     observed_unlinks,
                     scope_write_seeds,
-                    dead_letters,
-                    queue_hold,
-                    pending_reclaim,
-                    reclaim_stalls,
-                    bookkeeping,
-                    orphan_heads,
                     converged_tick,
-                    cancels,
-                    live_blocks,
                     placement,
                     settings_summary,
                     byo_reconciled,
@@ -6835,9 +6821,9 @@ where {
                     minted_scope_roots: minted_roots,
                     pending_invite_claims,
                     conversion_running,
-                    pending_scope_exits,
                     sweep_tasks,
                     queue_scan,
+                    ..
                 } = &*state;
                 let SessionSecrets {
                     tick_enc_subkey,
@@ -6847,7 +6833,7 @@ where {
                     sweep_keys: consult_keys,
                     tick_owner_signer,
                 } = &*secrets;
-                run_tick_loop(&scheduler, &manual, interval, async |cause| {
+                run_tick_loop(scheduler, &manual, interval, async |cause| {
                     if !alive.get() {
                         return TickControl::Stop;
                     }
@@ -6886,13 +6872,13 @@ where {
                         settings_rechecked.set(now);
                         let observed = observed_at(held, HeldKey::VaultSettings);
                         let read = load_settings_at(
-                            &transport,
-                            &gateway,
-                            &http,
-                            &floors,
-                            &snapshot_cache,
-                            &scheduler,
-                            &profile,
+                            transport,
+                            gateway,
+                            http,
+                            floors,
+                            snapshot_cache,
+                            scheduler,
+                            profile,
                             &enc_subkey,
                             &settings_signer,
                         )
@@ -6907,13 +6893,13 @@ where {
                             return TickControl::Stop;
                         }
                         let load = read.enrol(held, observed);
-                        report_settings_verdict(&events, &load);
+                        report_settings_verdict(events, &load);
                         if let Some(decided) = redecide_placement(&load) {
                             *placement.borrow_mut() = Some(decided);
                             adopt_settings_summary(
                                 summarize_settings(&load),
                                 settings_summary,
-                                &events,
+                                events,
                             );
                             byo_reconciled.set(false);
                         }
@@ -6936,14 +6922,14 @@ where {
                             &focus.borrow(),
                             &pointer_consulted.borrow(),
                             now,
-                            &profile,
+                            profile,
                         ),
                     };
                     if let Some(current_root) = consult_pointers(
-                        &transport,
-                        &floors,
+                        transport,
+                        floors,
                         consult_keys,
-                        &events,
+                        events,
                         pointer_consulted,
                         ConsultWindow {
                             scopes: consult_targets,
@@ -6961,12 +6947,12 @@ where {
                     // otherwise read and seal under. The floors it reports stamp
                     // whatever this pass's own resolve recovers.
                     let floors_before =
-                        refresh_seed_floors(&floors, &root_id, scope_read_seeds, scope_write_seeds)
+                        refresh_seed_floors(floors, &root_id, scope_read_seeds, scope_write_seeds)
                             .await;
                     let grafted = grafted_sharers.borrow().clone();
                     let own_before = own_descendant_scopes(descendant_roots, minted_roots);
                     evict_grafted_read_seeds(
-                        &floors,
+                        floors,
                         &grafted,
                         &contact_label_seed,
                         &root_id,
@@ -6975,7 +6961,7 @@ where {
                     )
                     .await;
                     evict_grafted_write_seeds(
-                        &floors,
+                        floors,
                         &grafted,
                         &contact_label_seed,
                         &root_id,
@@ -6984,9 +6970,9 @@ where {
                     )
                     .await;
                     let adopter = RootAdopter::new(
-                        &gateway,
-                        &http,
-                        &floors,
+                        gateway,
+                        http,
+                        floors,
                         &enc_subkey,
                         &owner_identity,
                         root_id,
@@ -7012,8 +6998,8 @@ where {
                     // last-known-good intact (fail-closed for data).
                     sync_status.borrow_mut().reconcile_in_flight = true;
                     let mut held_resolve = resolve_and_hold(
-                        &transport,
-                        &snapshot_cache,
+                        transport,
+                        snapshot_cache,
                         &adopter,
                         &root_name,
                         held,
@@ -7048,7 +7034,7 @@ where {
                     let resolved = held_resolve.map(|surfaced| surfaced.resolved);
                     if let Ok(resolved) = &resolved {
                         if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
-                            emit_trust_violation(&events, root_name.as_str(), rejection);
+                            emit_trust_violation(events, root_name.as_str(), rejection);
                         }
                         let merged = refresh_base_from_resolved(base, NodeId(root_id), resolved);
                         if merged.changed {
@@ -7071,11 +7057,11 @@ where {
                     let walk_keys = consult_keys.borrow().clone();
                     let mut descendants = Vec::new();
                     let walk = walk_keys.as_ref().map(|keys| ScopeWalk {
-                        transport: &transport,
-                        snapshot_cache: &snapshot_cache,
-                        gateway: &gateway,
-                        http: &http,
-                        floors: &floors,
+                        transport,
+                        snapshot_cache,
+                        gateway,
+                        http,
+                        floors,
                         enc_secret: &enc_subkey,
                         identity: &owner_identity,
                         scope_keys: &keys.scope_keys,
@@ -7097,7 +7083,7 @@ where {
                                 scope_read_seeds,
                                 scope_write_seeds,
                                 base,
-                                &events,
+                                events,
                                 &walked.proved,
                                 now.0,
                             );
@@ -7120,16 +7106,16 @@ where {
                             None => boundary_walk_rejected.set(false),
                             Some(rejected @ WalkFailure::Rejected { .. }) => {
                                 boundary_walk_rejected.set(true);
-                                emit_trust_violation(&events, name.as_str(), rejected);
+                                emit_trust_violation(events, name.as_str(), rejected);
                             }
                             Some(WalkFailure::Unavailable) => {}
                         }
                     }
-                    expire_touched_folders(&mut focus.borrow_mut(), scheduler.now(), &profile);
+                    expire_touched_folders(&mut focus.borrow_mut(), scheduler.now(), profile);
                     expire_focus_stamps(
                         &mut focus_refreshed.borrow_mut(),
                         scheduler.now(),
-                        &profile,
+                        profile,
                     );
                     // The focus window's folders below each scope root — the read
                     // leg for a subtree this device did not author. It runs before
@@ -7182,7 +7168,7 @@ where {
                             continue;
                         };
                         let Some(scope_floors) = floor_view(
-                            &floors,
+                            floors,
                             &grafted,
                             &contact_label_seed,
                             &root_id,
@@ -7194,13 +7180,13 @@ where {
                         let scope_root_name =
                             scope_root_record_name(&base.borrow(), Some(&root_name), &scope_root.0);
                         let refresh = FolderRefresh {
-                            transport: &transport,
-                            snapshot_cache: &snapshot_cache,
-                            http: &http,
+                            transport,
+                            snapshot_cache,
+                            http,
                             floors: &scope_floors,
-                            gateway: &gateway,
+                            gateway,
                             base,
-                            events: &events,
+                            events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
                             scope_root_name: scope_root_name.as_ref(),
@@ -7215,7 +7201,7 @@ where {
                             folder_verdict = folder_verdict.worst(settle_focus_leg(
                                 observed_unlinks,
                                 focus_refreshed,
-                                &events,
+                                events,
                                 nodes,
                                 report,
                                 scheduler.now(),
@@ -7243,7 +7229,7 @@ where {
                                     &base_now,
                                     focus,
                                     focus_refreshed,
-                                    &profile,
+                                    profile,
                                     scheduler.now(),
                                     folder,
                                 );
@@ -7311,7 +7297,7 @@ where {
                         &grafted_sharers.borrow(),
                     );
                     let sharer_encs = write_grant_sharer_encs(
-                        &StagingContactStore::new(&staging, &enc_subkey, &entropy),
+                        &StagingContactStore::new(staging, &enc_subkey, entropy),
                         write_grafts,
                     )
                     .await;
@@ -7380,8 +7366,6 @@ where {
                         .chain(read_only_grafts.iter().copied())
                         .collect();
                     let vault_seeds = read_seed.as_ref().zip(write_seed.as_ref());
-                    // Index 0 is the vault root's own pass whenever this holds.
-                    let root_scope_held = vault_seeds.is_some();
                     let drivable: Vec<_> = descendants
                         .iter()
                         .filter_map(|scope| Some((scope, scope.write.as_ref().ok()?)))
@@ -7414,7 +7398,7 @@ where {
                     });
                     let second = match &boundaries {
                         Some(boundaries) => {
-                            queued_second_end(&staging, &enc_subkey, queue_scan, boundaries).await
+                            queued_second_end(staging, &enc_subkey, queue_scan, boundaries).await
                         }
                         None => None,
                     };
@@ -7424,16 +7408,16 @@ where {
                         };
                         cut_exited_scope(
                             ScopeExitArm {
-                                transport: &transport,
-                                api: &api,
-                                gateway: &gateway,
-                                http: &http,
-                                floors: &floors,
-                                snapshot_cache: &snapshot_cache,
-                                events: &events,
-                                scheduler: &scheduler,
-                                profile: &profile,
-                                entropy: &entropy,
+                                transport,
+                                api,
+                                gateway,
+                                http,
+                                floors,
+                                snapshot_cache,
+                                events,
+                                scheduler,
+                                profile,
+                                entropy,
                                 keys: consult_keys,
                                 sweep: sweep_tasks,
                                 boundaries,
@@ -7444,158 +7428,110 @@ where {
                         )
                         .await
                     });
-                    let mut scopes: Vec<DrainScope<'_>> = Vec::new();
-                    if let Some((read_seed, write_seed)) = vault_seeds {
-                        scopes.push(DrainScope {
-                            source: ScopeEnd {
-                                root: NodeId(root_id),
-                                root_name: &root_name,
-                                read_scope_seed: read_seed,
-                                write_scope_seed: write_seed,
-                                // The vault root carries no ascent link.
-                                ascent_node_seed: None,
-                                floor_namespace: FloorNamespace::Own,
-                            },
-                            destination: second.as_ref().map(|end| SealPlane {
-                                end: ScopeEnd {
-                                    root: end.root,
-                                    root_name: &end.name,
-                                    read_scope_seed: &end.material.read_scope_seed,
-                                    write_scope_seed: &end.material.write_scope_seed,
-                                    ascent_node_seed: end.ascent.as_ref(),
-                                    floor_namespace: FloorNamespace::Own,
-                                },
-                                epoch: end.material.read_epoch,
-                            }),
-                            scope_roots: &proved_roots,
-                            keyless_roots: &keyless_roots,
-                            charges_the_identity: false,
-                            enc_secret: &enc_subkey,
-                            owner_identity: &owner_identity,
-                            granted: None,
-                        });
-                    }
-                    scopes.extend(drivable.iter().map(|(scope, write)| DrainScope {
+                    let vault = vault_seeds.map(|(read_seed, write_seed)| DrainScope {
                         source: ScopeEnd {
-                            root: NodeId(scope.scope_id),
-                            root_name: &scope.name,
-                            read_scope_seed: &scope.read_scope_seed,
-                            write_scope_seed: &write.seed,
-                            ascent_node_seed: Some(&scope.parent_node_seed),
-                            // A grant cut mints an interior scope root out of
-                            // this vault's own tree, so its floors are this
-                            // identity's own.
+                            root: NodeId(root_id),
+                            root_name: &root_name,
+                            read_scope_seed: read_seed,
+                            write_scope_seed: write_seed,
+                            // The vault root carries no ascent link.
+                            ascent_node_seed: None,
                             floor_namespace: FloorNamespace::Own,
                         },
-                        destination: None,
+                        destination: second.as_ref().map(|end| SealPlane {
+                            end: ScopeEnd {
+                                root: end.root,
+                                root_name: &end.name,
+                                read_scope_seed: &end.material.read_scope_seed,
+                                write_scope_seed: &end.material.write_scope_seed,
+                                ascent_node_seed: end.ascent.as_ref(),
+                                floor_namespace: FloorNamespace::Own,
+                            },
+                            epoch: end.material.read_epoch,
+                        }),
                         scope_roots: &proved_roots,
                         keyless_roots: &keyless_roots,
                         charges_the_identity: false,
                         enc_secret: &enc_subkey,
                         owner_identity: &owner_identity,
                         granted: None,
-                    }));
-                    // Before the grafted passes below, which never take the
-                    // charge: the identity-wide budget answers for an op under
-                    // a keyless root of this vault's own boundary set, and a
-                    // grafted pass proves nothing about that set.
-                    charge_the_identity_to_one_pass(&mut scopes);
+                    });
+                    let interior = drivable
+                        .iter()
+                        .map(|(scope, write)| DrainScope {
+                            source: ScopeEnd {
+                                root: NodeId(scope.scope_id),
+                                root_name: &scope.name,
+                                read_scope_seed: &scope.read_scope_seed,
+                                write_scope_seed: &write.seed,
+                                ascent_node_seed: Some(&scope.parent_node_seed),
+                                // A grant cut mints an interior scope root out of
+                                // this vault's own tree, so its floors are this
+                                // identity's own.
+                                floor_namespace: FloorNamespace::Own,
+                            },
+                            destination: None,
+                            scope_roots: &proved_roots,
+                            keyless_roots: &keyless_roots,
+                            charges_the_identity: false,
+                            enc_secret: &enc_subkey,
+                            owner_identity: &owner_identity,
+                            granted: None,
+                        })
+                        .collect();
                     // A grafted pass has no second end: a crossing into or out
                     // of a shared scope is the owner's cut to make, and this
                     // vault holds no boundary material for one.
-                    scopes.extend(grafted.iter().map(|pass| DrainScope {
-                        source: ScopeEnd {
-                            root: pass.root,
-                            root_name: &pass.name,
-                            read_scope_seed: &pass.read_scope_seed,
-                            write_scope_seed: &pass.write_scope_seed,
-                            // A grantee enters by its own grant blob and holds
-                            // no ancestor seed to derive an ascent keypair from.
-                            ascent_node_seed: None,
-                            floor_namespace: pass.floors,
-                        },
-                        destination: None,
-                        scope_roots: &proved_roots,
-                        keyless_roots: &keyless_roots,
-                        charges_the_identity: false,
-                        enc_secret: &enc_subkey,
-                        owner_identity: &pass.sharer_identity,
-                        granted: Some(GrantedPass {
-                            sharer_enc: &pass.sharer_enc,
-                            plane: GraftedPlane {
-                                scope_id: pass.root.0,
-                                scope_roots: &grafted_scope_roots,
-                                contested: &grafted_contested,
+                    let grafted_passes = grafted
+                        .iter()
+                        .map(|pass| DrainScope {
+                            source: ScopeEnd {
+                                root: pass.root,
+                                root_name: &pass.name,
+                                read_scope_seed: &pass.read_scope_seed,
+                                write_scope_seed: &pass.write_scope_seed,
+                                // A grantee enters by its own grant blob and holds
+                                // no ancestor seed to derive an ascent keypair from.
+                                ascent_node_seed: None,
+                                floor_namespace: pass.floors,
                             },
-                        }),
-                    }));
-                    if !scopes.is_empty() {
-                        let drain = Drain {
-                            transport: &transport,
-                            api: &api,
-                            floors: &floors,
-                            snapshot_cache: &snapshot_cache,
-                            staging: &staging,
-                            scheduler: &scheduler,
-                            http: &http,
-                            gateway: &gateway,
-                            deadlines: &deadlines,
+                            destination: None,
+                            scope_roots: &proved_roots,
+                            keyless_roots: &keyless_roots,
+                            charges_the_identity: false,
+                            enc_secret: &enc_subkey,
+                            owner_identity: &pass.sharer_identity,
+                            granted: Some(GrantedPass {
+                                sharer_enc: &pass.sharer_enc,
+                                plane: GraftedPlane {
+                                    scope_id: pass.root.0,
+                                    scope_roots: &grafted_scope_roots,
+                                    contested: &grafted_contested,
+                                },
+                            }),
+                        })
+                        .collect();
+                    let drain = Drain::new(
+                        &seams,
+                        state.drain_cells(),
+                        TickInputs {
                             placement: &decision,
-                            profile: &profile,
-                            storage_policy: &storage_policy,
-                            live_blocks,
-                            content_profile: &content_profile,
-                            entropy: &entropy,
-                            base,
-                            held,
-                            hold: queue_hold,
-                            pending_reclaim,
-                            reclaim_stalls,
-                            bookkeeping,
-                            orphan_heads,
-                            converged_tick,
-                            cancels,
-                            events: &events,
                             bin_keys: &bin_keys,
                             bin_retention_days: owner_bin_retention_days(settings_summary),
                             retention: owner_retention(settings_summary),
-                            dead_letters,
-
-                            established_bin_index: RefCell::new(None),
-                            bin_expiries: RefCell::new(TickShare::new(
-                                MAX_BIN_EXPIRIES,
-                                scopes.len(),
-                            )),
-                            observed_unlinks,
-                            pending_scope_exits,
-                        };
-                        let mut journalled = Vec::new();
-                        for scope in &scopes {
-                            let mut report = drain.run_queue(scope, &exits).await;
-                            journalled.append(&mut report.journalled_deletes);
-                            surface_drain_report(&events, dead_letters, &report);
-                        }
-                        // Once per tick. The retire ledger is the identity's
-                        // and reads under the vault root's material, so a tick
-                        // that did not hold that root owes none of this pass;
-                        // the reclamation journal is per scope, so every scope
-                        // this tick proved settles its own entries.
-                        if root_scope_held && let Some(root_scope) = scopes.first() {
-                            drain.settle(root_scope, &scopes, &journalled).await;
-                        }
-                    }
-                    if !root_scope_held {
-                        // The drain sweeps staging on the listing it already
-                        // took; without one, an abandoned write handle's residue
-                        // still has to be reclaimed at the poll cadence.
-                        reconcile_staging(
-                            &staging,
-                            live_blocks,
-                            PreservedBounds::at(scheduler.now(), &storage_policy, &profile),
+                        },
+                    );
+                    drain
+                        .run_tick(
+                            TickScopes {
+                                vault,
+                                interior,
+                                grafted: grafted_passes,
+                            },
+                            &exits,
                         )
                         .await;
-                    }
-                    // Last, and after the settle above: the grantee's own read
+                    // Last, and after the drain above: the grantee's own read
                     // leg is the slowest in the pass, and a host refresh waits
                     // on nothing it reports.
                     //
@@ -7611,21 +7547,21 @@ where {
                     };
                     let claims = ShareInbox {
                         mailbox: api.as_ref(),
-                        transport: &transport,
-                        gateway: &gateway,
-                        http: &http,
-                        floors: &floors,
+                        transport,
+                        gateway,
+                        http,
+                        floors,
                         enc_secret: &enc_subkey,
                         contact_label_seed: &contact_label_seed,
                         vault_root_scope: root_id,
                         list_lock: received_shares_lock,
                     }
                     .pull(
-                        &staging,
-                        &entropy,
+                        staging,
+                        entropy,
                         ENVELOPE_V,
                         &|pointer| placed(&pointers, pointer),
-                        &events,
+                        events,
                     )
                     .await;
                     // Any owner device converts on every pass (ADR 0023 D4), at
@@ -7648,18 +7584,18 @@ where {
                         vault_root_name,
                     ) {
                         let pass = ConversionPass {
-                            transport: &transport,
+                            transport,
                             api: api.as_ref(),
-                            gateway: &gateway,
-                            http: &http,
-                            floors: &floors,
-                            snapshot_cache: &snapshot_cache,
-                            events: &events,
-                            scheduler: &scheduler,
-                            profile: &profile,
+                            gateway,
+                            http,
+                            floors,
+                            snapshot_cache,
+                            events,
+                            scheduler,
+                            profile,
                             on_access_misses,
-                            entropy: &entropy,
-                            staging: &staging,
+                            entropy,
+                            staging,
                             identity: &signer,
                             enc_secret: &enc_subkey,
                             owner_identity: &owner_identity,
@@ -7717,8 +7653,8 @@ where {
                     }
                     repost_held_claims(
                         api.as_ref(),
-                        &staging,
-                        &entropy,
+                        staging,
+                        entropy,
                         &enc_subkey,
                         received_shares_lock,
                         ENVELOPE_V,
@@ -7726,18 +7662,18 @@ where {
                     )
                     .await;
                     ReceivedShareStatus {
-                        transport: &transport,
-                        gateway: &gateway,
-                        http: &http,
-                        floors: &floors,
+                        transport,
+                        gateway,
+                        http,
+                        floors,
                         enc_secret: &enc_subkey,
                         contact_label_seed: &contact_label_seed,
                         list_lock: received_shares_lock,
                         mode,
                     }
                     .refresh(
-                        &staging,
-                        &entropy,
+                        staging,
+                        entropy,
                         received_verdicts,
                         &ScopeRender {
                             base,
@@ -7749,10 +7685,10 @@ where {
                             scope_roots: bookmarked_scope_roots,
                             permissions: bookmarked_permissions,
                             claims: grafted_claims,
-                            events: &events,
+                            events,
                         },
                         now,
-                        &profile,
+                        profile,
                     )
                     .await;
                     let mut status = sync_status.borrow_mut();
@@ -7768,7 +7704,7 @@ where {
                         status.last_success,
                         status.reconcile_in_flight,
                         Connectivity::Online,
-                        &profile,
+                        profile,
                     );
                     if status.reported != Some(rung) {
                         status.reported = Some(rung);
