@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "734006e826bf",
+  "strategy": "manual-commit",
+  "branch": "docs/adr-0052-stage-3-in-core",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "AGENTS.md",
+    "decisions/0018-the-pr-gate-is-grouped-by-area-with-an-adapter-leg-per-desktop-platform.md",
+    "decisions/0029-a-record-head-block-follows-placement-and-the-hosted-leg-alone-can-fail-an-op.md",
+    "decisions/0033-every-attacker-sized-field-has-one-canonical-form-and-a-symmetric-fail-closed-bound.md",
+    "decisions/0043-a-delete-writes-the-bin-entry-before-the-unlink-and-every-bin-op-journals-first.md",
+    "decisions/0047-a-failed-or-abandoned-publish-retires-exactly-what-it-charged.md",
+    "decisions/0049-each-suite-proves-what-it-claims-and-no-test-seam-ships.md",
+    "decisions/0050-the-gate-map-names-which-suite-blocks-which-merge.md",
+    "decisions/0052-the-stage-3-section-predicate-lives-in-core-behind-a-verified-commitment-witness.md",
+    "decisions/README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/73/4006e826bf/0/metadata.json",
+      "transcript": "/73/4006e826bf/0/full.jsonl",
+      "compact_transcript": "/73/4006e826bf/0/transcript.jsonl",
+      "content_hash": "/73/4006e826bf/0/content_hash.txt",
+      "prompt": "/73/4006e826bf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 468,
+    "cache_creation_tokens": 75551,
+    "cache_read_tokens": 4018625,
+    "output_tokens": 35973,
+    "api_call_count": 24
+  }
+}

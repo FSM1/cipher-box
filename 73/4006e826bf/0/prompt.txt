@@ -1,0 +1,373 @@
+One thing I wanted to discuss is whether all the ADRs currently in the repo meet the 3 quality hurdles defined by Matt: hard to reverse, surprising without context, result of a real trade-off
+
+---
+
+<task-notification>
+<task-id>aee78c7684f384573</task-id>
+<tool-use-id>toolu_01989exAnQot8XV3hTq2StW4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/60a7371a-b3f7-4f81-98c3-bad1880d6be0/tasks/aee78c7684f384573.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit ADRs 0001-0013 vs hurdles" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>| ADR | H1 reverse | H2 surprise | H3 trade-off | Overall | Weak items (Dn) | One-line reason |
+|---|---|---|---|---|---|---|
+| 0001 | PASS | PASS | PASS | PASS | none | The signed preimage is a wire-level choice. The AAD alternative is real and easy to get wrong. |
+| 0002 | PASS | PASS | PASS | PASS | "Concretely" list (tag `0x09`, AAD fields, KAT set) | A new struct tag and grant-section field, with three real alternatives. The byte-level list is blueprint spec. |
+| 0003 | PASS | WEAK | WEAK | WEAK | D1, D3 | D2 (the superseded verdict, with no stage-5 exemption) is a real trust choice. D1 restates #26 D2 to fix drift. D3 is a code-local repair move. |
+| 0004 | PASS | PASS | PASS | PASS | none | A write rotation that rewrites read-plane bytes surprises a reader. Both alternatives are real. |
+| 0005 | PASS | PASS | PASS | PASS | none | A KDF edge is permanent. Self-ECDH is a strong rival, and the ADR gives clear reasons against it. |
+| 0006 | PASS | WEAK | WEAK | WEAK | "leave unsealed" alternative is a strawman | The sealed format is hard to change after cutover. But the main choice (one module or three) is code layout. ADR 0030 D11 rewrote the decision text. |
+| 0007 | PASS | PASS | PASS | PASS | D3, D4 | Derived genesis seeds are very surprising, and the alternatives are strong. D3 follows from D1. D4 accepts a residual; it is not a decision. |
+| 0008 | PASS | PASS | PASS | PASS | D2, D3 | The identity-token issuer is a trust boundary. D2 (wallet login on web only) is a platform fact, not a choice. D3 (the shared login package) is code layout that a refactor can move. |
+| 0009 | PASS | PASS | PASS | PASS | D1, D4 | The comparison value, the recovery floor and the fresh factor are real choices. D1 corrects the blueprint framing. D4 (signed requests) is the obvious fix. |
+| 0010 | PASS | PASS | PASS | PASS | items 2, 6, 7, 8 | An owner-level bin with re-key on delete is real and surprising. Item 6 (30 days) is a default value. Items 2, 7 and 8 are engine detail. Later ADRs rewrote items 1, 3 and 4. |
+| 0011 | WEAK | PASS | PASS | WEAK | D3, D5 | A record of drain logic written after the merge. The co-writer veto trade-off is real, but a code PR can flip the rule. D3 and D5 are consequences. |
+| 0012 | PASS | PASS | PASS | PASS | D1, D3, D4, D6 | D2 makes the count of floor-bypass paths a trust invariant. D1 is a bug fix that the glossary already required. D3 repeats D2. D4 is budget detail. D6 is a general rule. |
+| 0013 | WEAK | PASS | PASS | WEAK | D3, D4 | A narrow bug fix of an inherited load rule, and a code PR can flip it. D3 and D4 are renewal-set detail, which ADR 0034 later took over. |
+
+Cross-cutting observations:
+
+- **Some ADRs restate merged code.** 0011, 0012 and 0013 each have a "The rule the code implements" section. With the "Gate" sections in 0003, 0004, 0007, 0008, 0009 and 0011 to 0013, they read as a restatement of a merged PR plus a test plan. Move each Gate list to its issue or to the tests. Keep only the trade-off in the ADR.
+- **Some ADRs are several ADRs in one.** 0008 holds three decisions: the token issuer, wallet first login, and the shared login package. 0009 holds five. 0010 holds at least two (the bin shape and re-key on delete), plus a default setting and engine detail. Split them, or move the detail items to the blueprint.
+- **Inline amendments hide the current rule.** Later ADRs rewrote 0010 items 1, 3 and 4, and the core of 0006. A reader must open three or four later ADRs to find the rule in force now. Mark those items superseded, or record the change as a new ADR.
+- **Some text duplicates the blueprint.** Most "Consequences" sections list blueprint edits file by file. 0002 also holds a byte layout. One line that points to the blueprint is enough.
+- **A gap fill is only an ADR if there was a choice.** 0003 D1 and 0012 D1 correct drift from a decision that was already frozen, and only one path was valid. Those items are spec corrections. In contrast, 0004 and 0005 fill gaps where real alternatives existed, so they earn their place.</result>
+<usage><subagent_tokens>85648</subagent_tokens><tool_uses>14</tool_uses><duration_ms>87596</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac3ce54b46564ec21</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/60a7371a-b3f7-4f81-98c3-bad1880d6be0/tasks/ac3ce54b46564ec21.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit ADRs 0014-0026 vs hurdles" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Six of the thirteen ADRs fail at least one hurdle. Seven pass as a whole, but most of these contain Dn items that belong in the blueprint or the code.
+
+| ADR | H1 reverse | H2 surprise | H3 trade-off | Overall | Weak items (Dn) | One-line reason |
+|---|---|---|---|---|---|---|
+| 0014 | PASS | PASS | PASS | PASS | D5, D7 | It adds an exception to the floor law, which is a trust rule. D5 repeats the general monotone rule. D7 repeats D1. |
+| 0015 | PASS | PASS | WEAK | WEAK | D4, D5 | Frozen context strings are a wire fact. The ADR does not examine an X25519 key in the API field. D4 is a non-decision. D5 sets the scope of test vectors. |
+| 0016 | PASS | PASS | PASS | PASS | D4, D6 | It adds a new KDF edge and a new key shape, and the alternatives are real. D4 is a bind site. D6 is test and doc upkeep. |
+| 0017 | PASS | PASS | PASS | PASS | D3 | It rejects a record-shape field before the cutover. D3 is a doc reword. The reader inventory will become wrong. |
+| 0018 | FAIL | WEAK | PASS | FAIL | D3, D4 | A later PR can change the CI YAML and a Cargo profile quickly. Area result contexts are common practice. This belongs in `blueprint/testing.md`. |
+| 0019 | WEAK | WEAK | PASS | WEAK | D4, D6, D7 | Keep-latest-N copies v1, so it is the obvious path. D5 (no clock) is the real decision. D6 and D7 follow from fresh keys. |
+| 0020 | PASS | PASS | PASS | PASS | D4, D5 | It sets a storage-compatibility contract, and the one-release bound is a clear choice. D5 is a test rule for review. |
+| 0021 | PASS | PASS | PASS | PASS | D3, D5 | It opens a gate exception for reads. D3 is a refactor. The D5 error table is code detail. |
+| 0022 | PASS | PASS | PASS | PASS | D4 | It relaxes a trust rule through a new API query and states the operator residual. D4 is a non-decision. |
+| 0023 | PASS | PASS | PASS | PASS | D4, D6, D7 | It changes the wire format and trust, and it rejects a real option. With nine items, it is several ADRs. D6 (retry) and D7 (notice) are code and UI detail. |
+| 0024 | PASS | PASS | PASS | PASS | D5, D6, Amendment | It stores the invite secret and commits links at `read`. D5 is a check list for the blueprint. The Amendment is a list of bookmark fields. |
+| 0025 | WEAK | WEAK | PASS | WEAK | D5, D6, D7 | The title is a topic, not one decision. D2 (the sweep) and D3 (revoke from the record) are the real decisions. D5 is UI copy. D6 and D7 have no alternatives. |
+| 0026 | WEAK | WEAK | WEAK | WEAK | D2, D3, D5, D7 | Append is the obvious fix for a refusal. Option (a) is the status quo, and the ADR itself says option (b) is not possible. Only D6 (full history) is surprising. D7 is a list of code refusals. |
+
+- **Duplication of the blueprint.** Many ADRs duplicate the blueprint. The "Gate" and "Consequences" sections hold exact blueprint text, KAT counts and test names. ADR 0020 holds a word-for-word blueprint paragraph. Keep the decision and its reasons in the ADR, and move the other text to the blueprint.
+- **Retroactive ADRs.** ADRs 0015 and 0019 came after the code shipped. ADR 0015 D4 says "The primitive does not change". Thus 0015 mostly repairs a conflict with the docs. It does not record a new choice.
+- **One design in four ADRs.** ADRs 0023 to 0026 are one link-first design with one date, divided by topic, not by decision. ADRs 0025 and 0026 have topic titles. The UI items (0023 D7, 0025 D5 and D7, 0026 D2 and D3) belong in `blueprint/web-client.md`.
+- **Items that decide nothing.** Some Dn items only say that nothing changes (0015 D4, 0022 D4, 0026 D5). Others only set a test duty (0015 D5, 0016 D6, 0020 D5). No alternative exists for these items, so they fail H3. Move them to "Consequences" or to `blueprint/testing.md`.
+- **Line citations.** File-and-line citations become wrong after the next refactor. Examples are the reader inventory in ADR 0017 and the `facade.rs:NNNN` citations in ADRs 0023 to 0026. Cite the module or the function name.</result>
+<usage><subagent_tokens>96284</subagent_tokens><tool_uses>14</tool_uses><duration_ms>87301</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae8e21dd7e8428ab3</task-id>
+<tool-use-id>toolu_017D4oMBbi4CaFnXCYe1LAQn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/60a7371a-b3f7-4f81-98c3-bad1880d6be0/tasks/ae8e21dd7e8428ab3.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit ADRs 0027-0039 vs hurdles" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I read all 13 ADRs in `/Users/myankelev/Code/random/cipher-box/decisions/` in full. Eight of them do not pass all three hurdles. In the retroactive group (0029 to 0039), nearly every ADR rests on one to three real decisions and restates the blueprint for the rest.
+
+| ADR | H1 reverse | H2 surprise | H3 trade-off | Overall | Weak items (Dn) | One-line reason |
+|---|---|---|---|---|---|---|
+| 0027 | PASS | PASS | PASS | PASS | D2, D4; alts (f), (g) are circular | The claim payload, the row preimage and the fragment signature all change on the wire. The alternatives are real: a name in the contact book only, or a name on the server. |
+| 0028 | WEAK | WEAK | PASS | WEAK | D5, D6, D7 (a deferral), Consequence 1 | This is mostly a UI flow and one facade command, and a later PR can change it. The only hard core is the rule that no link is spent before a press. |
+| 0029 | PASS | PASS | PASS | PASS | D4–D7, D10, D13, D14; D15 is a separate ADR | D1 and D3 are real owner trade-offs. The other 13 items restate the blueprint. |
+| 0030 | PASS | PASS | PASS | PASS | D3, D5, D6, D9 (format spec); D2, D8 (other topics) | Auth mode in place of base mode is a surprising wire rule. The alternative shipped first and failed. |
+| 0031 | PASS | PASS | PASS | PASS | D3, D6, D9, D10, D11 | The symmetric seal is a deliberate exception to ADR 0030. The pad rungs and the genesis publish are real trade-offs. |
+| 0032 | PASS | PASS | PASS | PASS | D5, D7 (device-local, H1 weak), D10 (other topic) | The masked recipient and the cut epoch change the signed commitment. The review record shows real options. |
+| 0033 | PASS | WEAK | WEAK | WEAK | D1 (restates AGENTS rule 8), D2–D6, D9, D10, D13, D14, D15 | Its own E10 says most values are sizes, not decisions. Only D7, D8, D11 and D12 carry a trade-off. |
+| 0034 | WEAK | PASS | PASS | WEAK | D1, D8 (a residual), D9, D10, D11 (ADR 0022 topic) | Only D6 touches the wire; the rest is engine policy. The fall-back to the last verified copy in place of the defaults is a real trade-off. |
+| 0035 | WEAK | PASS | PASS | WEAK | D2, D6, D8, D9 | This is staging deploy config. The zone certificate versus the shared CA is the one hard trust choice. Much of the rest reads as a runbook. |
+| 0036 | PASS | PASS | PASS | PASS | D3, D5, D6–D8 (Caddy detail), D9 (a cost, not a decision) | The opaque pseudonym versus a scoped JWT is a real trade-off. It adds a new credential and a new table. |
+| 0037 | WEAK | PASS | PASS | WEAK | D4; D6, D7, D8 (other topic, obvious) | The private cross-tab port lives inside the web client, and the blueprint called it "engineering judgment". D6 to D8 are HTTP hygiene with no real alternative. |
+| 0038 | PASS | PASS | PASS | PASS | D2, D3, D4, D6 (a test); D7–D8 are a separate ADR | The declared address keeps codecs out of TypeScript. The chunk framing is frozen in every published root. |
+| 0039 | WEAK | PASS | PASS | WEAK | D4 (not shipped, time-bound), D6 (package layout, fails H1) | D1 to D3 are a real data-model and trust choice. The desktop half is product scope that a PR can flip. |
+
+- **The retroactive ADRs read as a restatement of the blueprint.** In 0029 to 0039, most items end "this ADR records it", and Consequences say the blueprint "already carries" them with "no text change". Alone, each such item fails H3. The ADR as a whole passes only because one to three items carry a real trade-off. The other items could shrink to blueprint citations.
+- **Several ADRs are really two or three ADRs:**
+  - 0029: placement, the BYO endpoint policy (D15) and the staging read leg (D14).
+  - 0030: auth mode, the settings KDF edge (D2) and the content key structure (D8).
+  - 0032: the grant commitment and the contact-label edges (D10).
+  - 0033: the size bounds and the canonical encodings (D14, D15).
+  - 0034: the settings load and the ADR 0022 registry rule (D10, D11).
+  - 0037: the tab channel and HTTP bounds (D6 to D8).
+  - 0038: the upload ingress and the chunk framing (D7, D8).
+  - 0039: the device registry, the desktop scope and the UI package.
+- **Some items are not decisions:**
+  - Accepted residuals: 0031 D11, 0034 D8, 0036 D9.
+  - Test or CI obligations: 0033 D13, 0035 D6 and D9, 0038 D6.
+  - A deferral: 0028 D7.
+- **Open owner decisions sit in the Residuals sections:**
+  - 0029 E1: the code lags D1, and a BYO account cannot publish at all.
+  - 0031 E4: a failed genesis publish strands a device, and the text says "the owner has not accepted it".
+  - 0039 E1: D4 did not ship, and the text gives the owner two options.
+
+  Each one needs an explicit ruling or its own record before the owner accepts the ADR.
+- **The Gate and Consequences sections are most of the length.** They are lists of test names and citation edits. ADRs 0029 to 0039 run 350 to 510 lines, against 116 to 127 lines for 0027 and 0028. This text repeats the blueprint and the test suites, and it goes out of date fast. Drift already shows: 0034 consequence 9 finds code comments that cite headings that do not exist, and 0030 E5 finds two "only seals" lines that are now wrong.</result>
+<usage><subagent_tokens>180543</subagent_tokens><tool_uses>14</tool_uses><duration_ms>101916</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a404ba8686e8648be</task-id>
+<tool-use-id>toolu_01DJYdMNTzmwq4oTwBwPwJ8k</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/60a7371a-b3f7-4f81-98c3-bad1880d6be0/tasks/a404ba8686e8648be.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit ADRs 0040-0052 vs hurdles" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>| ADR | H1 reverse | H2 surprise | H3 trade-off | Overall | Weak items (Dn) | One-line reason |
+|---|---|---|---|---|---|---|
+| 0040 | WEAK | PASS | WEAK | WEAK | D1, D2, D5 | Five unrelated rules. D3 (spill seal) and D4 (accepted sibling-set exposure) hold. D1 restates #32 and a hardware fact. D5 is a local patch to the vendored crate. |
+| 0041 | PASS | WEAK | WEAK | WEAK | D2, D3, D4, D5 | Two ADRs in one. D6 to D8 pass: two channels, one seal per channel, and the vault-pointer exemption. D2 to D5 are TOCTOU bug fixes, and the only "alternative" is the old bug. |
+| 0042 | PASS | PASS | PASS | PASS | D2, D6, D7 | A wire reservation made before the v2.0 freeze, with real options: a sub-map, a no-protocol rule, smallest first. D2 is code-local. D6 and D7 are duties on a future author, and no check enforces them. |
+| 0043 | WEAK | PASS | WEAK | WEAK | D1, D8, D11, D12, D14, D15 | 15 items. D2, D5 and D9 (entry before unlink, always re-key, restore key) are real amendments of ADR 0010. Most other items are drain procedure and belong in the blueprint. |
+| 0044 | WEAK | WEAK | WEAK | WEAK | D3, D5, D7, D8 | Three ADRs in one. D4 (the bearer stays in the engine) passes. D3 (no jitter) and D5 (test harness) are local choices. The D7 numbers are not frozen, and the ADR says a change "needs no migration". |
+| 0045 | PASS | PASS | PASS | PASS | D2, D4, D5, D8 | The op record is durable across releases. D1, D3, D6 and D7 had real options. D5 is overlay UI detail. D4 and D8 are local queue mechanics. |
+| 0046 | PASS | PASS | PASS | PASS | D3, D4 | A new table and a new retire wire shape. Review rejected the client-side designs. The 1000 cap in the title is older than the ADR and is the obvious path. |
+| 0047 | FAIL | WEAK | WEAK | FAIL | D1, D3, D5 | Engine retire policy with no format change: D3 "needs no new durable format". Only D2 and D4 surprise a reader: they keep the rows when a PUT can have landed. D5 restates ADR 0019. |
+| 0048 | WEAK | PASS | PASS | WEAK | D2, D3 | A small API rule that ADR 0023 D5 depends on. D3 is only a reading of ADR 0023, so this ADR can be an amendment note on 0023. |
+| 0049 | FAIL | WEAK | WEAK | FAIL | D1, D4, D6, D7, D8 | Test tooling that a PR can change. Only D2 and D3 (hook flag, build-time refusal) and D5 (engine KAT set) have weight. D7 is only a scope note. |
+| 0050 | FAIL | WEAK | WEAK | FAIL | D3, D4, D5, D7, D8 | CI configuration. D5 follows directly from how GitHub scopes caches. D1 (the law 1 amendment) and D6 (no signing secret in PR runs) hold. Move them to ADR 0018 or the blueprint. |
+| 0051 | PASS | PASS | PASS | PASS | D4, D5 | A GPLv3 Windows build, an unbundled FUSE-T and disabled library validation are hard to undo and surprising, and each had real options. D4 is a schedule decision. D5 is CI detail. |
+| 0052 | WEAK | PASS | PASS | WEAK | D4, D5, D6 | A crate move in one PR, with no wire change and no KAT byte change, so a later PR can move it back. The ADR weighs a real counter-argument. D4 to D6 are consequences, not decisions. Option (b) is the current state and is close to a strawman. |
+
+- **The rejected alternative is often the bug.** Many retroactive ADRs list the defect from before the fix as the rejected option: 0041 (a) and (b), 0043 (a), (e) and (j), the first cuts in 0047, and 0049 (b). A defect is not a real option. These items fail hurdle 3. The blueprint and the tests are the right place for them.
+- **Several ADRs are bundles.** 0040, 0041, 0044, 0049 and 0050 each hold two or more unrelated decisions. Keep the one or two items that pass in each ADR, and move the rest to the blueprint.
+- **Most of the text restates the blueprint or reports an audit.** Each retroactive ADR says "the blueprint already carries D1 to Dn; no text change". That tells you the ADR restates existing text. The Gate and Residuals sections, with test lists, line numbers and "finding" notes, are audit reports. They go out of date quickly and belong in issues.
+- **The status is "Accepted", but some items are new proposals.** These items say they are "for the owner to accept": 0041 D1, 0042 D8, 0043 D5 and D9, 0044 D3 and D8, 0045 D5 and D6. Mark these items Proposed, or move them to separate ADRs. Also, 0050 calls 0049 "proposed", but 0049 says "Accepted".
+- **0052 has the right shape.** It is short, it holds one decision, and it weighs a real counter-argument. Its weak point is hurdle 1. Either state why a move back costs a lot (the core API surface, the KAT family move), or accept that it is a blueprint note.</result>
+<usage><subagent_tokens>180783</subagent_tokens><tool_uses>14</tool_uses><duration_ms>107615</duration_ms></usage>
+</task-notification>
+
+---
+
+ok, can we handle all these proposed clean-ups and decisions in the current PR?
+
+---
+
+also make sure to update the AGENTS.md
+
+---
+
+<task-notification>
+<task-id>a9462ad465c05b70f</task-id>
+<tool-use-id>toolu_01WDAvuzvvt2t8TpafYqwmRN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/60a7371a-b3f7-4f81-98c3-bad1880d6be0/tasks/a9462ad465c05b70f.output</output-file>
+<status>completed</status>
+<summary>Agent "Rewrite the ADR process text" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I rewrote "### ADR Process" in `/Users/myankelev/Code/random/cipher-box/AGENTS.md` and the intro above the table in `/Users/myankelev/Code/random/cipher-box/decisions/README.md`. The subsection has 26 lines. Prettier made no changes, markdownlint reported no errors, and `git diff --stat` shows only these two files.
+
+**New subsection (verbatim):**
+
+&gt; An ADR is a `docs:` PR that adds one file to `decisions/` with the status Proposed. [The mechanics paragraph is unchanged.]
+&gt;
+&gt; Each decision item must pass all three hurdles. If no item passes all three, do not write the ADR.
+&gt;
+&gt; 1. Hard to reverse. A later change has a meaningful cost: a wire format, a KDF edge, a trust boundary, a durable storage shape, a protocol, or a term that the corpus uses.
+&gt; 2. Not clear without context. A reader of the code asks why.
+&gt; 3. The result of a real trade-off. Genuine alternatives existed, and the ADR picked one for stated reasons.
+&gt;
+&gt; Some items are not decisions. The bug before a fix is not an alternative. A test duty, an accepted residual, a deferral, a schedule, a numeric default, or a "nothing changes" note is not a decision. Put it in Consequences or in the blueprint, in one line.
+&gt;
+&gt; One ADR records one decision. A second decision is a second ADR or an "Amended by" sentence. Use these sections:
+&gt;
+&gt; - The header list: Status, Date, Relates to, Implemented by, Amends.
+&gt; - Context: the reason, in one short paragraph at most.
+&gt; - Decision: the items, numbered D1, D2, and so on, so that other text can cite them.
+&gt; - Alternatives considered: real options only.
+&gt; - Consequences: one line for each document that changes.
+&gt; - Residuals: open owner questions only.
+&gt;
+&gt; Do not add a Gate section. `blueprint/testing.md` names the tests that prove an ADR. Do not cite a file and a line. Cite a module, a function, or a blueprint section. Keep an ADR under 120 lines.
+&gt;
+&gt; A retroactive ADR records a decision after the code shipped. It meets the same bar. If the blueprint already carries a rule, cite the blueprint and do not write an item for it.
+&gt;
+&gt; When you remove an item from an accepted ADR, do not reuse its number. Replace the item with one line: "Items Dx and Dy moved to `blueprint/&lt;file&gt;.md` "&lt;section&gt;" on &lt;date&gt;". Citations such as `ADR 0033 D2` then still resolve.
+
+**README:** I replaced the "For the process…" sentence with these four sentences:
+
+&gt; Each decision item must pass three hurdles: it is hard to reverse, it is not clear without context, and it is the result of a real trade-off.
+&gt; If no item passes all three, the ADR is not written.
+&gt; A test duty, an accepted residual, a deferral, or the bug before a fix is not a decision.
+&gt; For the full bar and the process that adds or accepts an ADR, read "ADR Process" in `AGENTS.md`.
+
+All other README sentences are unchanged.</result>
+<usage><subagent_tokens>54850</subagent_tokens><tool_uses>2</tool_uses><duration_ms>35425</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a761c3bab0ecc039d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/60a7371a-b3f7-4f81-98c3-bad1880d6be0/tasks/a761c3bab0ecc039d.output</output-file>
+<status>completed</status>
+<summary>Agent "Trim ADRs 0043 0047" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both ADRs are trimmed and under 140 lines, and prettier and markdownlint pass. I made no git writes, and the other ADRs changed in the checkout were edited by other agents, not me.
+
+**0043, now 132 lines**
+- **Kept:** D2, D5 and D9, which is the same set the prior reviewer chose. D5 and D9 are also cited by ADR 0010 items 3 and 4.
+- **Owner sentences:** kept word for word. The file never had the phrase "for the owner to accept". The actual wording is "This ADR records it, and the owner accepts the amendment by accepting this ADR." (D5) and "No owner decision records the replacement, and the owner accepts the amendment by accepting this ADR." (D9).
+- **Removed:** D1, D3, D4, D6, D7, D8 and D10 to D15. `blueprint/engine.md` states each of them in "Delete branch", "Owner capture", "Restore, purge, and expiry" or "Bin index record". I also removed the parts of D5 and D9 that the blueprint repeats: the descendant-scope-root bullet, the destination paragraph and the rebase rule.
+- **Kept because another ADR cites it:** residual E2 (ADR 0010 item 4 cites "ADR 0043 E2"). It is also an open owner question.
+- **Kept because the blueprint lacks it:** residual E4 (owner capture sees only folders that this device has rendered). It is also a surprising accepted residual.
+- **Removed residuals:**
+  - E1 is a code defect tracked in FSM1/cipher-box#2019, not a rule. The blueprint does not carry the defect.
+  - E6, E7 and E8 are in the blueprint.
+  - E3 is not in the blueprint. It is a one-pass transient.
+- **Alternatives kept:** (a), (b) and (d).
+
+**0047, now 139 lines**
+- **Kept:** D2 and D4, as the reviewer chose. I also kept D3 and D5, which the reviewer dropped. Another ADR cites each one: ADR 0007 line 110 cites "ADR 0047 D3", and ADR 0019 line 72 cites "ADR 0047 D5".
+- **My own hurdle view:** D3 and D5 are weak on hurdle 1. I kept them only because of these citations.
+- **Removed:** D1. `blueprint/engine.md` "Retirement" and `blueprint/api.md` "Pin/name registry" carry it.
+- **Residuals kept:** E1 (open owner question), E4 and E5 (surprising accepted residuals). E5 is not in the blueprint.
+- **Residuals removed:**
+  - E2 is a defect tracked in FSM1/cipher-box#2021.
+  - E3 duplicates Consequence 4 and ADR 0007 D4.
+
+**Blueprint sentences that may now be missing**
+The blueprint does not state either of these, so you may want to add them:
+1. For `engine.md` "Re-key into the bin" (from 0043 E3): "The node is sealed under the bin-held key and still named by its parent for one pass on the authoring device, so a refresh in that window reports an unseal rejection."
+2. For `engine.md` "Content plane" (from 0047 E5): "A version whose root the name wave cannot fetch carries its root alone. Its leaves lose their reference edges when the old name retires. They stay pinned only because the registry deletes a pin row only for a CID that the batch names as a target."
+
+The "Retirement" bullet also names only four of the head-retire failures that `orphaned_head` lists. D3 is still correct on this point.
+
+Files:
+- /Users/myankelev/Code/random/cipher-box/decisions/0043-a-delete-writes-the-bin-entry-before-the-unlink-and-every-bin-op-journals-first.md
+- /Users/myankelev/Code/random/cipher-box/decisions/0047-a-failed-or-abandoned-publish-retires-exactly-what-it-charged.md</result>
+<usage><subagent_tokens>112466</subagent_tokens><tool_uses>16</tool_uses><duration_ms>196609</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa3f3a51bf238ebda</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/60a7371a-b3f7-4f81-98c3-bad1880d6be0/tasks/aa3f3a51bf238ebda.output</output-file>
+<status>completed</status>
+<summary>Agent "Trim ADRs 0018 0049 0050" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I trimmed all three ADRs. Prettier and markdownlint pass on each, `pnpm lint:tracker-refs` is clean, and I ran no git writes.
+
+## 0018: 74 lines
+- **Kept:** D1 (area grouping), D2 (one stable result context per area), D3 (adapter leg per desktop platform), residual E1.
+- **Removed:** D4 (the Cargo profile). `blueprint/testing.md` "CI gates" carries it.
+- **Reviewer label:** the reviewer said "keep D1/D2 (area grouping and adapter leg)". The adapter leg is D3, so the reviewer used the wrong number.
+- **D2:** I kept it because ADR 0050 D1 cites "ADR 0018 D2".
+- **C3:** I kept it with its "Amended by" sentence unchanged, because ADR 0050 D1 cites "ADR 0018 C3".
+- **C1:** I cut C1 and its note "Amended by ADR 0050 D6 to D8". C1 now says in one line that the blueprint carries D1 to D3.
+
+## 0049: 118 lines
+- **Kept:** D2, D3, D5, residuals E2, E3 and E5. E3 says the test-login route ships in the API image. This is a surprise under the title "no test seam ships".
+- **Removed:** D1, D4, D6, D7, D8. Blueprint homes:
+  - D1: testing.md "Host suites".
+  - D4: testing.md "E2E — flows over real stacks".
+  - D6: testing.md "CI gates".
+  - D7: deploy.md "Scheduled tier".
+  - D8: testing.md "Open edges" and "Staging e2e".
+- **Citations:** no code or other ADR cites a removed item.
+- **Alternatives:** I dropped (c), because it is the state before the fix.
+
+## 0050: 118 lines
+- **Kept:** D1, D2, D6, residuals E2 and E7 (E7 is an open owner question).
+- **Removed:** D3, D4, D5, D7, D8 and the Gate section.
+- **D2:** I kept it against the reviewer. ADR 0018 C3 cites "the ADR 0050 D2 class". Also, D2 is the part of the law amendment that has real alternatives: delete the suites, or force them into the PR gate.
+- **D3:** I added one clause to D2: "its code still compiles in the PR gate". This matches the D1 wording in AGENTS.md.
+- **Status line:** it still says law 1 and AGENTS.md "do not carry them yet (consequences 3 and 4)". I kept the header unchanged and kept consequences 3 and 4 at those numbers. That clause is now false, because both files already carry the rule.
+
+## Blueprint sentences that are now missing
+1. For 0049 D4, in testing.md "E2E": "The page mints the login secret itself, so that the secret never appears as an `evaluate` argument in an uploaded trace."
+2. For 0049 D6, in testing.md "CI gates" dispatch row: "Target resolution is an allowlist: `local` reaches a loopback host only, `staging` reaches only an https URL from the approval-gated `staging` environment, and no production target exists."
+3. For 0050 D7, in deploy.md "Scheduled tier": "It runs the full matrix every night: no cost trim, no weeknights-only, and no rotating operating system."
+4. For 0050 D6, in testing.md main-gate row: "The PR gate forwards no signing secret to any area, and a dispatch of `Updater Key` is guarded to `main`." (D6 is kept, but the blueprint lacks this sentence.)
+5. For 0049 D3, in testing.md "E2E": "A `staging` or `production` build that sets `VITE_E2E_HOOK` fails at build time." (D3 is kept, but the blueprint lacks this sentence.)
+
+Files:
+- /Users/myankelev/Code/random/cipher-box/decisions/0018-the-pr-gate-is-grouped-by-area-with-an-adapter-leg-per-desktop-platform.md
+- /Users/myankelev/Code/random/cipher-box/decisions/0049-each-suite-proves-what-it-claims-and-no-test-seam-ships.md
+- /Users/myankelev/Code/random/cipher-box/decisions/0050-the-gate-map-names-which-suite-blocks-which-merge.md</result>
+<usage><subagent_tokens>113195</subagent_tokens><tool_uses>18</tool_uses><duration_ms>214780</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6818cd3d66542f48</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/60a7371a-b3f7-4f81-98c3-bad1880d6be0/tasks/a6818cd3d66542f48.output</output-file>
+<status>completed</status>
+<summary>Agent "Trim ADRs 0029 0033" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I trimmed both ADRs and left them uncommitted. Each file is 139 lines. prettier, markdownlint and `pnpm lint:tracker-refs` pass on both.
+
+**0029** (`decisions/0029-a-record-head-block-follows-placement-and-the-hosted-leg-alone-can-fail-an-op.md`)
+- **Kept:** D1, D3, D11 and D15. E1 is verbatim.
+- **D11 is my addition.** The reviewer did not judge it. It passes all three hurdles: it fixes a storage shape (the server has no `pin_mode` column), a reader will ask why the server does not know `Dual`, and alternatives (c) and (d) were real options.
+- **D15** stays as a short decision. The rule list now lives in the blueprint.
+- **Removed:** D2, D4 to D10, D12, D13 and D14. `blueprint/engine.md` "Content plane" carries every one of them. D12 is in the quota pre-flight bullet.
+- **Citations:** code and other ADRs cite only D1, which I kept.
+- **Residuals:** I kept E3, because it follows from D11 and a reader will not expect it. I dropped E2, E4, E5, E6 and E7. E2 is a code lag. E4 is an open gap that FSM1/cipher-box#2007 tracks. The blueprint states E5, E6 and E7.
+
+**0033** (`decisions/0033-every-attacker-sized-field-has-one-canonical-form-and-a-symmetric-fail-closed-bound.md`)
+- **Kept:** D7, D8, D11 and D12, as the reviewer said.
+- **Kept because something cites them:**
+  - D6: `crates/engine/src/content/limits.rs:61` and `blueprint/core.md:309` cite it.
+  - D9 and D10: ADR 0042 D5 cites them.
+  - All three are shortened. D9 no longer has its table, because `blueprint/core.md` "Envelope size bounds" carries the measures.
+- **Removed:** D1, D2, D3, D4, D5, D13, D14 and D15. `blueprint/core.md` carries all of them. The "Items moved" line has your D2 amendment sentence word for word.
+- **Decision for you:** ADR 0052 cites "ADR 0033 D2 and D3" in its Relates-to. Your D2 instruction shows that this citation does not block the removal, so I removed D3 on the same basis. If you want the strict rule, put D3 back.
+- **Residuals:** I kept E3, E4 and E8.
+  - E1, E2, E6 and E9 are out of date: the blueprint and the `limits.rs` comment are already fixed.
+  - E5 repeats D12. E10 is not a decision.
+  - I dropped E7, an open reader-panic defect that FSM1/cipher-box#2008 tracks. That issue is now its only record.
+
+**A blueprint sentence that is now missing** (from 0033 D1; `blueprint/core.md` does not state the order):
+
+&gt; A count bound fires before the decoder walks the collection, so an over-declared input costs one length check. When a value breaks a count bound and a uniqueness invariant, both sides check the count bound first and report the same verdict.
+
+**Other gaps** (these stay in the ADRs; I did not add them to the blueprint):
+- **Mode-change order:** 0029 E1 says the blueprint does not carry the order for `byo` changes. The rule is: `byo` first when the member leaves `External`, last when the member enters it.
+- **Retire and prune:** 0029 E4 is removed, and the blueprint does not carry its rule (retire and prune unpin both legs). Only FSM1/cipher-box#2007 records it now.</result>
+<usage><subagent_tokens>150007</subagent_tokens><tool_uses>48</tool_uses><duration_ms>380779</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1127a9e3194833c1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/60a7371a-b3f7-4f81-98c3-bad1880d6be0/tasks/a1127a9e3194833c1.output</output-file>
+<status>completed</status>
+<summary>Agent "Add missing blueprint sentences" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I added all seven sentences. My greps found none of them already stated in the blueprint. Prettier, markdownlint and `pnpm lint:tracker-refs` all pass.
+
+1. **`blueprint/testing.md`, "E2E — flows over real stacks", Web Playwright bullet:** added after "a fresh login secret per test is a fresh vault (ADR 0049)".
+2. **`blueprint/testing.md`, "CI gates", Dispatch / scheduled row:** added inside the load-harness parenthetical as "its target resolution is an allowlist: ...", because ADR 0049 D6 applies the allowlist to the load harness.
+3. **`blueprint/deploy.md`, "Scheduled tier", full-matrix flake surveillance bullet:** added as "The full matrix runs every night: no cost trim, no weeknights-only run, and no rotating operating system."
+4. **`blueprint/testing.md`, "CI gates", Main gate row:** added after "stays out of the pull-request path". That clause already covers part of the rule, but it does not say that the PR gate forwards no signing secret or that the dispatch is guarded to `main`.
+5. **`blueprint/testing.md`, E2E section, Web Playwright bullet:** added after "asserts the shipping one exposes no hook".
+6. **`blueprint/engine.md`, "Delete branch" &gt; "Re-key into the bin", bullet "A re-key that does not land leaves the node linked":** added and made to start with "The node is then sealed...".
+7. **`blueprint/engine.md`, "Content plane", bullet "Referenced equals kept":** added after the write-rotation name-wave sentence (ADR 0047). I joined its second and third sentences into one.
+
+`git diff` also shows changes in `blueprint/core.md`. I did not make them, so another agent did.</result>
+<usage><subagent_tokens>71367</subagent_tokens><tool_uses>10</tool_uses><duration_ms>58320</duration_ms></usage>
+</task-notification>
