@@ -5507,6 +5507,108 @@ fn a_write_claim_converts_on_the_other_owner_devices_tick_with_one_cut() {
     assert_eq!(state.invite_links[0].pending_claims, 0, "nothing waits");
 }
 
+/// The minting device holds the write-epoch floor its own mint seeded. The
+/// other device's write-scope cut seals the moved root's owner-write-blob one
+/// epoch higher, so the minting device must consult the scope pointer when it
+/// next reads that root, or it cannot read the sharing state nor act on it.
+#[test]
+fn the_minting_device_reads_the_root_another_owner_devices_write_cut_moved() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link_at(Permission::Write);
+    let minted = fx.granted_scope_repoint();
+    let claimants = fx.post_claims(&fragment, 1);
+    let floors = fx.owner_device.floors(&SECRET);
+    let floor_before =
+        block_on(floor::write_epoch_floor(&floors, &fx.folder.0)).expect("the floor store answers");
+    assert_eq!(
+        floor_before,
+        Some(minted.write_epoch),
+        "the mint seeded the floor"
+    );
+    let phone = fx.world.device(&owner_identity().verifying_key().to_sec1());
+    let (phone_engine, _phone_events, mut phone_tasks) = boot_owner(&fx.world, &fx.blocks, &phone);
+
+    tick(&fx.world, &phone_engine, &mut phone_tasks);
+
+    let moved = fx.granted_scope_repoint();
+    assert_eq!(
+        moved.write_epoch,
+        minted.write_epoch + 1,
+        "the phone cut the write scope"
+    );
+    let state = block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the minting device reads the moved root");
+    let row = state
+        .grants
+        .iter()
+        .find(|grant| grant.recipient_identity_public_key == claimants[0])
+        .expect("the claimant holds a row");
+    assert_eq!(row.permission, Permission::Write);
+    assert_eq!(
+        block_on(floor::write_epoch_floor(&floors, &fx.folder.0)).expect("the floor store answers"),
+        Some(moved.write_epoch),
+        "the pointer consult raised the floor to the epoch the owner signed"
+    );
+    assert!(
+        matches!(
+            fx.try_mint_link_at(Permission::Read),
+            Ok(CommandOutcome::InviteLinkMinted(_))
+        ),
+        "the minting device mints on the moved root"
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: Some(state.invite_links[0].tag.clone()),
+            remove_grantees: true,
+        })),
+        Ok(CommandOutcome::Done),
+        "the minting device revokes the write link with its joiner"
+    );
+    assert!(
+        !fx.granted_to().contains(&claimants[0]),
+        "the joiner leaves with the link"
+    );
+}
+
+/// A scope pointer below the write-epoch floor this device holds is a rollback,
+/// so the on-access consult refuses it as a trust violation.
+#[test]
+fn an_on_access_pointer_consult_below_the_floor_is_a_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link_at(Permission::Write);
+    fx.post_claims(&fragment, 1);
+    let phone = fx.world.device(&owner_identity().verifying_key().to_sec1());
+    let (phone_engine, _phone_events, mut phone_tasks) = boot_owner(&fx.world, &fx.blocks, &phone);
+    tick(&fx.world, &phone_engine, &mut phone_tasks);
+    let vouched = fx.granted_scope_repoint().write_epoch;
+    let floors = fx.owner_device.floors(&SECRET);
+    block_on(floor::advance_write_epoch_on_sight(
+        &floors,
+        &fx.folder.0,
+        vouched + 1,
+    ))
+    .expect("the floor store answers");
+    abuse_events(&mut fx._events);
+
+    let sharing = block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
+
+    assert!(
+        sharing.state.is_none(),
+        "a refused root reads as unreachable"
+    );
+    assert_eq!(abuse_events(&mut fx._events), 1, "the refusal is reported");
+    assert!(
+        matches!(
+            fx.try_mint_link_at(Permission::Read),
+            Err(EngineError::TrustViolation { .. })
+        ),
+        "a command on the refused root fails closed"
+    );
+}
+
 /// A command pass before this session's first walk knows no scope root, so
 /// it cannot place a pending entry. It keeps the entry, and the first tick
 /// after the walk converts it. The record is durable, so a fresh engine on

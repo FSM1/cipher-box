@@ -11769,11 +11769,22 @@ where {
                 invite_links: Vec::new(),
             });
         };
-        let current = self
+        let current = match self
             .owner_rotation_net(api, keys(), target.ancestry(), PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
             .await
-            .ok()?;
+        {
+            Ok(current) => current,
+            Err(ResolveFailure::Rejected) => {
+                emit_trust_violation(
+                    &self.events,
+                    &hex_lower(&scope_root.0),
+                    "scope root refused on a sharing read",
+                );
+                return None;
+            }
+            Err(_) => return None,
+        };
         // Fail closed on a ledger the owner's commitment does not commit: the
         // write body it rides in is authored by any committed writer, so the row
         // set is only as trustworthy as the owner's commitment over it.

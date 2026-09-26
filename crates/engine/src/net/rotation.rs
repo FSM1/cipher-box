@@ -156,6 +156,10 @@ pub trait OwnerPointerSign {
 /// Refusing is not the same as skipping: a pass that runs no sweep has no
 /// consult to answer for, so one reached from it is a wiring error and reports
 /// as unavailable rather than resolving a plane nothing asked about.
+///
+/// The arm governs the sweep's consult only. The on-access consult of a root
+/// whose owner-write-blob does not open at the standing floor
+/// (`OwnerRotationNet::write_seed_on_access`) runs under either arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerConsultArm {
     /// The sweep's consult may run.
@@ -1809,12 +1813,15 @@ where
     ) -> Result<GatedWritePlane, ResolveFailure> {
         let name = scope_name(&scope.ipns_name)?;
         let ResealableRoot {
-            root,
+            mut root,
             over_sequence,
         } = self
             .resealable_root(scope.scope_id, &name, anchor)
             .await
             .map_err(ResolveFailure::from)?;
+        if root.write_scope_seed.is_none() {
+            root.write_scope_seed = Some(self.write_seed_on_access(&root, scope.scope_id).await?);
+        }
         let GatedWriteBody {
             body: write_body,
             epoch: write_epoch,
@@ -1832,6 +1839,44 @@ where
             write_epoch,
             over_sequence,
         })
+    }
+
+    /// The on-access scope-pointer consult (blueprint/engine.md "Pointer
+    /// planes") for a scope root whose owner-write-blob does not open at the
+    /// standing write-epoch floor: another owner device's write-scope cut
+    /// sealed it higher, and only an owner-signed re-point raises this device's
+    /// floor (floor law item 3). The blob is then opened again at that floor.
+    ///
+    /// A rejected re-point is [`ResolveFailure::Rejected`]. Every other miss,
+    /// including a blob that still does not open, is availability.
+    async fn write_seed_on_access(
+        &self,
+        root: &GatedScopeRoot,
+        scope_id: [u8; 16],
+    ) -> Result<Zeroizing<[u8; SECRET_LEN]>, ResolveFailure> {
+        let owb = root
+            .section
+            .owner_write_blob
+            .as_ref()
+            .ok_or(ResolveFailure::Unavailable)?;
+        let consult = PointerConsult {
+            scope_keys: self.keys.scope_keys,
+            owner_identity: self.keys.identity,
+            payload_version: self.payload_version,
+        };
+        match consult.run(self.transport, self.floors, &scope_id).await {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(PointerConsultError::Unavailable) => {
+                return Err(ResolveFailure::Unavailable);
+            }
+            Err(PointerConsultError::Rejected) => return Err(ResolveFailure::Rejected),
+        }
+        let epoch = floor::write_epoch_floor(self.floors, &scope_id)
+            .await
+            .map_err(|_| ResolveFailure::Unavailable)?
+            .ok_or(ResolveFailure::Unavailable)?;
+        open_write_scope_seed_at(self.keys.enc_secret, &root.envelope, owb, epoch)
+            .ok_or(ResolveFailure::Unavailable)
     }
 
     /// [`CascadeResealResolver::resolve`] at [`RootAnchor::VaultRoot`]. Same
@@ -2981,7 +3026,7 @@ where
     ) -> Result<SweptScope, SweepResolveFailure> {
         let name = scope_name(&scope.ipns_name).map_err(SweepResolveFailure::from)?;
         let ResealableRoot {
-            root,
+            mut root,
             over_sequence,
         } = self
             .gated_root(scope.scope_id, &name)
@@ -2989,6 +3034,13 @@ where
             .map_err(SweepResolveFailure::from)?;
         if root.envelope.v != ENVELOPE_V {
             return Err(SweepResolveFailure::VersionSkew);
+        }
+        if root.write_scope_seed.is_none() {
+            root.write_scope_seed = Some(
+                self.write_seed_on_access(&root, scope.scope_id)
+                    .await
+                    .map_err(SweepResolveFailure::from)?,
+            );
         }
         let GatedWriteBody {
             write_scope_seed,
