@@ -15,7 +15,7 @@
 //! and every successful stage emits [`Event::SnapshotUpdated`]. A [`Command`]
 //! variant with no arm of its own returns [`EngineError::Unimplemented`].
 
-pub(crate) mod claim_conversion;
+mod claim_conversion;
 mod link_sweep;
 
 use core::cell::{Cell, RefCell};
@@ -24,9 +24,10 @@ use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+pub(crate) use claim_conversion::ClaimCounts;
 use claim_conversion::{
-    CONVERSION_RUNNING, ClaimCounts, ConversionPass, CutAuthority, EngineSites, PassOutcome,
-    PointerIndex, TickSites, claimed_pointer, placed, scope_pointer_index,
+    CONVERSION_RUNNING, ConversionPass, CutAuthority, EngineSites, PassOutcome, PointerIndex,
+    TickSites, claimed_pointer, placed, scope_pointer_index,
 };
 
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
@@ -67,12 +68,11 @@ use crate::deadlines::DeadlinePolicy;
 use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprovalView};
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
-use crate::grants::accept::{JoinStanding, ReceivedSharesLock};
+use crate::grants::accept::JoinStanding;
 use crate::grants::create::MINT_EPOCH;
 use crate::grants::grafted::{
-    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, FloorNamespace, GraftedPlane,
-    GraftedSharers, evict_grafted_read_seeds, evict_grafted_write_seeds, floor_namespace,
-    floor_view, is_own_scope,
+    BookmarkedPermissions, FloorNamespace, GraftedPlane, GraftedSharers, evict_grafted_read_seeds,
+    evict_grafted_write_seeds, floor_namespace, floor_view, is_own_scope,
 };
 use crate::grants::inbox::{OwnedClaim, ShareInbox, owned_claims};
 use crate::grants::link_read::{
@@ -80,7 +80,7 @@ use crate::grants::link_read::{
     pending_link_bookmark, preview_read, repost_held_claims,
 };
 use crate::grants::received_status::{
-    ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name, live_permission,
+    ReceivedShareStatus, ScopeRender, grafted_root_name, live_permission,
 };
 use crate::grants::{
     BoundContact, CLAIM_KEY_LEN, ClaimOutcome, CommittedScope, Contact, ContactStore,
@@ -106,7 +106,7 @@ use crate::name::{NameError, is_emittable, validate_name};
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
-use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
+use crate::net::retire::{ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{
     GatedRoots, MovedScopeSeed, OnAccessMisses, RotationAncestry, SweptScopeState,
@@ -152,12 +152,10 @@ use crate::settings::{
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
-use crate::sync::cancel::UploadCancels;
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{
-    BookkeepingCursors, Drain, DrainReport, DrainScope, GrantedPass, MAX_BIN_EXPIRIES, ScopeEnd,
-    SealPlane, TickShare, charge_the_identity_to_one_pass, hold_captures, owner_scoped_key,
-    published_op_mark,
+    Drain, DrainReport, DrainScope, GrantedPass, MAX_BIN_EXPIRIES, ScopeEnd, SealPlane, TickShare,
+    charge_the_identity_to_one_pass, hold_captures, owner_scoped_key, published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
@@ -180,7 +178,7 @@ use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{
-    DEAD_LETTER_NOTICES_PREFIX, LiveBlocks, PreservedBounds, PreservedDeadLetter, StagedBlocks,
+    DEAD_LETTER_NOTICES_PREFIX, PreservedBounds, PreservedDeadLetter, StagedBlocks,
     read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
     release_version_blocks, stage_op, take_dead_letter_notice, take_preserved_dead_letter,
 };
@@ -5375,7 +5373,7 @@ struct LiveStreams {
 pub(crate) const POINTER_PAYLOAD_VERSION: u64 = 1;
 
 /// The resolve-tick task, spawned once a root name exists to poll. It reads
-/// that name from [`Engine::current_root_name`] on every pass.
+/// that name from [`SessionState::current_root_name`] on every pass.
 type TickLoopSpawner = Box<dyn FnOnce()>;
 
 /// Builds the lazy-wave sweep task a rotation enqueues once its cut is durable
@@ -5406,7 +5404,7 @@ struct SweepTarget {
 
 /// The session material a spawned sweep opens and re-seals under, held in a cell
 /// the engine empties on drop so teardown revokes it rather than waiting out the
-/// task ([`Engine::tick_enc_subkey`] carries the tick loop's on the same terms).
+/// task ([`SessionSecrets::tick_enc_subkey`] carries the tick loop's on the same terms).
 pub(crate) struct SweepKeys {
     enc_secret: X25519Secret,
     owner_identity: EcdsaVerifier,
@@ -5463,9 +5461,7 @@ pub struct Engine<T: SeamTypes> {
     /// accelerator alone. Every record read and publish goes through this.
     record_transport: RecordAccelerator<T::RecordTransport>,
     events: mpsc::UnboundedSender<Event>,
-    /// The session cells the command path and the tick loop share.
     state: Rc<SessionState>,
-    /// The session secrets the tick gates on and teardown empties.
     secrets: Rc<SessionSecrets>,
     /// The one render the reads between two mutations share. Not shared with
     /// the tick loop: a pass reads the base itself, and the two generations the
@@ -5541,54 +5537,7 @@ impl<T: SeamTypes> Engine<T> {
                 ),
                 accelerator_bearer,
                 events,
-                state: Rc::new(SessionState {
-                    live_blocks: Rc::new(RefCell::new(LiveBlocks::default())),
-                    cancels: Rc::new(RefCell::new(UploadCancels::default())),
-                    // The anchored all-zero root until cold-start/resolve replaces
-                    // the base snapshot; children come from the pending-op overlay.
-                    // Shared by every account on purpose: a well-known anchor, never
-                    // an account discriminator — separation lives in the KDFs and in
-                    // the per-identity seam views that consume it.
-                    snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId::VAULT_ROOT))),
-                    held_records: Rc::new(RefCell::new(HeldRecords::new())),
-                    pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
-                    sync_status: Rc::new(RefCell::new(SyncStatus::default())),
-                    scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
-                    scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
-                    descendant_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
-                    unproved_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
-                    boundary_walk_rejected: Rc::new(Cell::new(false)),
-                    scope_roots_walked: Rc::new(Cell::new(false)),
-                    walked_read_epochs: Rc::new(RefCell::new(WalkedReadEpochs::new())),
-                    current_root_name: Rc::new(RefCell::new(None)),
-                    focus: Rc::new(RefCell::new(FocusWindow::default())),
-                    focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
-                    pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
-                    on_access_misses: OnAccessMisses::default(),
-                    received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
-                    received_shares_lock: Rc::new(ReceivedSharesLock::new(())),
-                    grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
-                    bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
-                    bookmarked_permissions: Rc::new(RefCell::new(BookmarkedPermissions::new())),
-                    grafted_write_roots: Rc::new(RefCell::new(BTreeSet::new())),
-                    grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
-                    minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
-                    pending_invite_claims: Rc::new(RefCell::new(ClaimCounts::default())),
-                    conversion_running: Rc::new(Cell::new(false)),
-                    dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
-                    queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
-                    queue_hold: Rc::new(RefCell::new(None)),
-                    pending_reclaim: Rc::new(Cell::new(0)),
-                    reclaim_stalls: Rc::new(RefCell::new(Vec::new())),
-                    bookkeeping: Rc::new(RefCell::new(BookkeepingCursors::default())),
-                    orphan_heads: Rc::new(OrphanHeads::default()),
-                    converged_tick: Rc::new(Cell::new(false)),
-                    sweep_tasks: Rc::new(RefCell::new(None)),
-                    placement: Rc::new(RefCell::new(None)),
-                    settings_summary: Rc::new(RefCell::new(None)),
-                    observed_unlinks: Rc::new(RefCell::new(Vec::new())),
-                    byo_reconciled: Rc::new(Cell::new(false)),
-                }),
+                state: Rc::new(SessionState::new()),
                 secrets: Rc::default(),
                 render_memo: RefCell::new(RenderMemo::default()),
                 vault_pointer_index: Cell::new(None),
@@ -5932,7 +5881,7 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Stop the spawned loops at their next wake and drop the key material they
     /// share with the engine here and now, at the terminal owner (security rule
-    /// 7) — see [`tick_enc_subkey`](Self::tick_enc_subkey). `try_borrow_mut`
+    /// 7) — see [`tick_enc_subkey`](SessionSecrets::tick_enc_subkey). `try_borrow_mut`
     /// because a panic while dropping aborts the process.
     fn shut_down(&self) {
         self.alive.set(false);
@@ -11040,7 +10989,8 @@ where {
     }
 
     /// Undo one queued upload: drop the op, retire what of it reached the
-    /// network ([`UploadCancels`]), release its blocks, and tell the host.
+    /// network ([`UploadCancels`](crate::sync::cancel::UploadCancels)), release
+    /// its blocks, and tell the host.
     ///
     /// The dequeue goes first and is the only step allowed to fail the cancel:
     /// an op that is still queued is still publishable, and unpinning its blocks
@@ -12202,7 +12152,7 @@ where {
     /// Every scope boundary this session has named: the roots its own grants
     /// minted, the roots a gated descent proved ([`install_descendant_scopes`]),
     /// and the roots the walk named without material
-    /// ([`unproved_scope_roots`](Self::unproved_scope_roots)). Wider than the
+    /// ([`unproved_scope_roots`](SessionState::unproved_scope_roots)). Wider than the
     /// set the drain drives, which lists only the scopes it holds a seed pair
     /// for: a boundary the drain cannot author is one a relocation must still
     /// be classified against.

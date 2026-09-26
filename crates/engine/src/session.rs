@@ -18,9 +18,6 @@
 //! `Debug`; the login secret is retained in engine memory only, because the
 //! vault-pointer chain is index-probed at runtime (cold start and per tick,
 //! CONTEXT.md "Vault pointer") and cannot be fully pre-derived.
-//!
-//! [`SessionState`] and [`SessionSecrets`] group the session cells the command
-//! path and the tick loop share.
 
 use core::cell::{Cell, RefCell};
 use core::fmt;
@@ -37,10 +34,9 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
 use crate::bin_index::BinIndexKeys;
-use crate::facade::claim_conversion::ClaimCounts;
 use crate::facade::{
-    EngineError, LoginSecret, NodeId, RetainedDeadLetters, ScopeSeeds, SweepKeys, SweepTaskFactory,
-    SyncStatus,
+    ClaimCounts, EngineError, LoginSecret, NodeId, RetainedDeadLetters, ScopeSeeds, SweepKeys,
+    SweepTaskFactory, SyncStatus,
 };
 use crate::grants::accept::ReceivedSharesLock;
 use crate::grants::grafted::{
@@ -55,6 +51,7 @@ use crate::seams::UnixMillis;
 use crate::settings::{SessionPlacement, VaultSettingsSummary};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{BookkeepingCursors, QueueHold};
+use crate::sync::model::Snapshot;
 use crate::sync::project::UnlinkedChild;
 use crate::sync::rebase::QueueScanMemo;
 use crate::sync::render::BaseSnapshot;
@@ -316,18 +313,21 @@ pub(crate) struct SessionState {
     /// node's `ipnsName` and its narrow per-name signer from them.
     pub(crate) scope_write_seeds: Rc<RefCell<ScopeSeeds>>,
     /// The scope roots below the vault root that a gated descent proved this
-    /// session holds ([`ScopeWalk::descendant_scope_roots`]). In-memory only,
-    /// grow-only within a session ([`install_descendant_scopes`]); the read legs
-    /// group focus targets against it ([`scope_root_of`]).
+    /// session holds
+    /// ([`ScopeWalk::descendant_scope_roots`](crate::net::ScopeWalk::descendant_scope_roots)).
+    /// In-memory only, grow-only within a session
+    /// (`install_descendant_scopes`); the read legs group focus targets against
+    /// it ([`scope_root_of`](crate::sync::tick::scope_root_of)).
     pub(crate) descendant_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// Scope roots the same walk named but proved no material for: a folder
     /// publishing under a name its parent scope's write seed does not derive is
     /// a scope root of its own, whether or not the parent's child-scope index
-    /// still names it ([`ScopeWalk::descendant_scope_roots`]). Grows within a
-    /// session until a walk proves the root ([`install_unproved_scopes`]). A
-    /// boundary with no material still splits the focus window
-    /// ([`focus_scope_roots`]) and still names a crossing a relocation is
-    /// classified against
+    /// still names it
+    /// ([`ScopeWalk::descendant_scope_roots`](crate::net::ScopeWalk::descendant_scope_roots)).
+    /// Grows within a session until a walk proves the root
+    /// (`install_unproved_scopes`). A boundary with no material still splits
+    /// the focus window (`focus_scope_roots`) and still names a crossing a
+    /// relocation is classified against
     /// ([`relocation_scope_roots`](crate::facade::Engine::relocation_scope_roots)).
     pub(crate) unproved_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// Whether the last boundary walk to reach a verdict met a trust rejection.
@@ -356,18 +356,20 @@ pub(crate) struct SessionState {
     /// its target would name the dead root. This cell is what the derivation is
     /// proved against ([`vault_root_scope`](crate::facade::Engine::vault_root_scope)).
     pub(crate) current_root_name: Rc<RefCell<Option<IpnsName>>>,
-    /// The open focus window ([`Command::SetFocus`]): the folder the host has
-    /// open, whose record and whole ancestor chain every resolve tick refreshes.
-    /// Shared with the tick loop, which reads it on each pass.
+    /// The open focus window
+    /// ([`Command::SetFocus`](crate::facade::Command::SetFocus)): the folder
+    /// the host has open, whose record and whole ancestor chain every resolve
+    /// tick refreshes. Shared with the tick loop, which reads it on each pass.
     pub(crate) focus: Rc<RefCell<FocusWindow>>,
     /// When each focus folder was last refreshed, so a navigation inside the
     /// staleness threshold renders state already held instead of re-probing the
     /// record plane (blueprint/engine.md: refresh on access past the threshold).
     pub(crate) focus_refreshed: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
     /// When each scope's pointer was last consulted, so the polled consult runs
-    /// at [`SyncTimingProfile::pointer_consult_interval`] rather than at the
-    /// poll cadence. In-memory: a floor only ever moves up, so a restart's first
-    /// tick re-consults and re-derives it.
+    /// at
+    /// [`SyncTimingProfile::pointer_consult_interval`](crate::profile::SyncTimingProfile::pointer_consult_interval)
+    /// rather than at the poll cadence. In-memory: a floor only ever moves up,
+    /// so a restart's first tick re-consults and re-derives it.
     pub(crate) pointer_consulted: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
     /// The owner accesses' scope-pointer consult misses ([`OnAccessMisses`]).
     pub(crate) on_access_misses: OnAccessMisses,
@@ -390,7 +392,7 @@ pub(crate) struct SessionState {
     /// reports so a host can refuse a write at the gesture.
     pub(crate) bookmarked_permissions: Rc<RefCell<BookmarkedPermissions>>,
     /// The grafted roots the last tick built a drain pass for, which is every
-    /// fact a write below one needs ([`grafted_write_passes`]).
+    /// fact a write below one needs (`grafted_write_passes`).
     pub(crate) grafted_write_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// Folded by the same pass: what each renderable grafted scope's body
     /// named, which decides the ids no plane may render.
@@ -402,10 +404,11 @@ pub(crate) struct SessionState {
     pub(crate) minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// The conversion entries the last conversion pass counted.
     pub(crate) pending_invite_claims: Rc<RefCell<ClaimCounts>>,
-    /// Set while a conversion pass runs ([`ConversionPass::running`]).
+    /// Set while a conversion pass runs (`ConversionPass::running`).
     pub(crate) conversion_running: Rc<Cell<bool>>,
-    /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
-    /// (#33 D6: dead letters are retained, never silent).
+    /// Retained dead-lettered ops. Feeds
+    /// [`SnapshotView`](crate::facade::SnapshotView)'s dead-letter surface (#33
+    /// D6: dead letters are retained, never silent).
     pub(crate) dead_letters: Rc<RefCell<RetainedDeadLetters>>,
     /// Memo of the durable queue scan every read renders through
     /// ([`scan_queue`](crate::facade::Engine::scan_queue)).
@@ -448,10 +451,12 @@ pub(crate) struct SessionState {
     /// carries the member's provider bearer.
     pub(crate) placement: Rc<RefCell<Option<SessionPlacement>>>,
     /// The host-visible summary of the settings this session loaded, refreshed
-    /// by a confirmed save and by the tick's re-decide. Redacted at construction
-    /// ([`VaultSettings::summary`]), so the provider bearer never enters it.
-    /// Shared with the tick loop, which must never move the placement without
-    /// moving what the host is told the session writes under.
+    /// by a confirmed save and by the tick's re-decide. Redacted at
+    /// construction
+    /// ([`VaultSettings::summary`](crate::settings::VaultSettings::summary)),
+    /// so the provider bearer never enters it. Shared with the tick loop, which
+    /// must never move the placement without moving what the host is told the
+    /// session writes under.
     pub(crate) settings_summary: Rc<RefCell<Option<VaultSettingsSummary>>>,
     /// Unlinks a read leg observed and this device did not author. The drain
     /// adopts them into the bin and clears only what it settles, so a capture
@@ -466,6 +471,59 @@ pub(crate) struct SessionState {
     pub(crate) byo_reconciled: Rc<Cell<bool>>,
 }
 
+impl SessionState {
+    pub(crate) fn new() -> Self {
+        Self {
+            live_blocks: Rc::new(RefCell::new(LiveBlocks::default())),
+            cancels: Rc::new(RefCell::new(UploadCancels::default())),
+            // The anchored all-zero root until cold-start/resolve replaces
+            // the base snapshot; children come from the pending-op overlay.
+            // Shared by every account on purpose: a well-known anchor, never
+            // an account discriminator — separation lives in the KDFs and in
+            // the per-identity seam views that consume it.
+            snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId::VAULT_ROOT))),
+            held_records: Rc::new(RefCell::new(HeldRecords::new())),
+            pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
+            sync_status: Rc::new(RefCell::new(SyncStatus::default())),
+            scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
+            scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
+            descendant_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+            unproved_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+            boundary_walk_rejected: Rc::new(Cell::new(false)),
+            scope_roots_walked: Rc::new(Cell::new(false)),
+            walked_read_epochs: Rc::new(RefCell::new(WalkedReadEpochs::new())),
+            current_root_name: Rc::new(RefCell::new(None)),
+            focus: Rc::new(RefCell::new(FocusWindow::default())),
+            focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
+            pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
+            on_access_misses: OnAccessMisses::default(),
+            received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
+            received_shares_lock: Rc::new(ReceivedSharesLock::new(())),
+            grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
+            bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
+            bookmarked_permissions: Rc::new(RefCell::new(BookmarkedPermissions::new())),
+            grafted_write_roots: Rc::new(RefCell::new(BTreeSet::new())),
+            grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
+            minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+            pending_invite_claims: Rc::new(RefCell::new(ClaimCounts::default())),
+            conversion_running: Rc::new(Cell::new(false)),
+            dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
+            queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
+            queue_hold: Rc::new(RefCell::new(None)),
+            pending_reclaim: Rc::new(Cell::new(0)),
+            reclaim_stalls: Rc::new(RefCell::new(Vec::new())),
+            bookkeeping: Rc::new(RefCell::new(BookkeepingCursors::default())),
+            orphan_heads: Rc::new(OrphanHeads::default()),
+            converged_tick: Rc::new(Cell::new(false)),
+            sweep_tasks: Rc::new(RefCell::new(None)),
+            placement: Rc::new(RefCell::new(None)),
+            settings_summary: Rc::new(RefCell::new(None)),
+            observed_unlinks: Rc::new(RefCell::new(Vec::new())),
+            byo_reconciled: Rc::new(Cell::new(false)),
+        }
+    }
+}
+
 /// The session secrets the tick loop gates on, in cells that teardown empties.
 #[derive(Default)]
 pub(crate) struct SessionSecrets {
@@ -474,7 +532,7 @@ pub(crate) struct SessionSecrets {
     /// the engine empties on drop. A parked task is not polled until its next
     /// scheduler wake, so anything the loop captured outright would stay
     /// resident for up to that wake past the engine (security rules 1/7); every
-    /// shared cell below carrying key material is cleared the same way.
+    /// shared cell of either group that carries key material is cleared the same way.
     pub(crate) tick_enc_subkey: Rc<RefCell<Option<X25519Secret>>>,
     /// The bin index's own signer and seal key, derived at
     /// [`start`](crate::facade::Engine::start) and shared with the drain on the same terms as
