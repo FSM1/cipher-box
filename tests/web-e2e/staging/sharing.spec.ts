@@ -6,7 +6,7 @@
 
 import { FilesPage } from '../page-objects/files.page';
 import { SharedPage } from '../page-objects/shared.page';
-import { expect, published, test } from './fixtures';
+import { expect, nudgedUntil, published, test } from './fixtures';
 import { grant, OWNER_FOLDER } from './sharing';
 import { recordJourneys } from './timing';
 
@@ -31,15 +31,7 @@ test('a grant reaches a second identity, and a revoke cuts it', async ({
   await published(page);
   await expect(ownerFiles.row(AFTER_GRANT)).toBeVisible();
 
-  await expect
-    .poll(
-      async () => {
-        await recipient.getByTestId('status-indicator').click();
-        return recipientFiles.row(AFTER_GRANT).count();
-      },
-      { timeout: 300_000, intervals: [5_000] }
-    )
-    .toBe(1);
+  await nudgedUntil(recipientFiles, recipientFiles.row(AFTER_GRANT));
 
   await ownerFiles.openFromSidebar();
   await owner.open(OWNER_FOLDER);

@@ -6,7 +6,7 @@
 
 import { FilesPage } from '../page-objects/files.page';
 import { SharedPage } from '../page-objects/shared.page';
-import { expect, published, test } from './fixtures';
+import { expect, nudgedUntil, published, test } from './fixtures';
 import { grant, OWNER_FOLDER } from './sharing';
 
 const WRITTEN = 'written-by-the-recipient.bin';
@@ -28,18 +28,8 @@ test('a write grant lets a second identity build inside the folder', async ({
 
   await owner.close();
   await ownerFiles.open(OWNER_FOLDER);
-  // A focus change reads what the engine already holds; only the manual refresh
-  // forces the pass that reaches the record plane.
   for (const name of [WRITTEN, NESTED]) {
-    await expect
-      .poll(
-        async () => {
-          await ownerFiles.status.click();
-          return ownerFiles.row(name).count();
-        },
-        { timeout: 300_000, intervals: [5_000] }
-      )
-      .toBe(1);
+    await nudgedUntil(ownerFiles, ownerFiles.row(name));
   }
 
   await ownerFiles.openFromSidebar();

@@ -3,15 +3,19 @@
  * can sign in on one account: two owner devices, or a holder that loads a
  * second link after its first session ended.
  *
- * Each context reads the secret through a binding. No `evaluate` argument
- * carries it, so no uploaded trace does either.
+ * Each context reads the secret through a binding, for the reason
+ * `VaultPage.coldStart` mints its own in the page.
  */
 
+import { toHex } from '@cipherbox/client';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
-import { expect } from './fixtures';
 import { FilesPage } from './page-objects/files.page';
 import { SharePage } from './page-objects/share.page';
-import { SECRET_BINDING, VaultPage } from './page-objects/vault.page';
+import type { VaultPage } from './page-objects/vault.page';
+import { coldStart } from './vault';
+
+/** The binding a device context answers with its held login secret. */
+const SECRET_BINDING = '__cipherboxE2eLoginSecret';
 
 /** One account's login: the secret, and the store namespace its devices use. */
 export interface Login {
@@ -21,9 +25,8 @@ export interface Login {
 
 /** A login nobody else in the run holds, so a fresh account over an empty vault. */
 export function freshLogin(): Login {
-  const secret = crypto.getRandomValues(new Uint8Array(32));
   return {
-    secret: Array.from(secret, (byte) => byte.toString(16).padStart(2, '0')).join(''),
+    secret: toHex(crypto.getRandomValues(new Uint8Array(32))),
     accountId: crypto.randomUUID(),
   };
 }
@@ -54,22 +57,30 @@ export class Device {
     return new Device(context, login);
   }
 
-  /** A page of this device that holds no session yet. */
+  /** This device's open page, or a new one when it has none. */
   async page(): Promise<Page> {
     return this.context.pages()[0] ?? this.context.newPage();
+  }
+
+  /** Starts a session in `page`, a page of this device, on whatever route it holds. */
+  async signIn(page: Page): Promise<void> {
+    await page.evaluate(
+      async ({ account, binding }) => {
+        const held = (window as unknown as Record<string, () => Promise<string>>)[binding];
+        await window.__CIPHERBOX_ENGINE__!.signIn(await held(), account);
+      },
+      { account: this.login.accountId, binding: SECRET_BINDING }
+    );
   }
 
   /** Signs a tab in and waits for the settled vault root. */
   async online(): Promise<Tab> {
     const page = await this.page();
-    const vault = new VaultPage(page);
-    const files = new FilesPage(page);
-    await vault.open();
-    await vault.controlled();
-    await vault.signInHeld(this.login.accountId);
-    await page.waitForURL('**/files');
-    await vault.settled();
-    await expect(files.browser).toBeVisible();
+    const { vault, files } = await coldStart(page, async () => {
+      await this.signIn(page);
+      await page.waitForURL('**/files');
+      return this.login.accountId;
+    });
     return { page, vault, files, share: new SharePage(page) };
   }
 

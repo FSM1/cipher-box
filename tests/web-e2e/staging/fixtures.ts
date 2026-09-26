@@ -163,6 +163,28 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
   );
 }
 
+/**
+ * Nudges `files`' sync pass until `target` counts `count`. A focus change reads
+ * what the engine already holds; only the manual refresh forces the pass that
+ * reaches the record plane.
+ */
+export async function nudgedUntil(
+  files: FilesPage,
+  target: Locator,
+  count = 1,
+  timeout = 300_000
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await files.status.click();
+        return target.count();
+      },
+      { timeout, intervals: [5_000] }
+    )
+    .toBe(count);
+}
+
 /** {@link FilesPage.published}, for the page a staging spec holds. */
 export function published(page: Page): Promise<void> {
   return new FilesPage(page).published();

@@ -8,7 +8,7 @@
  */
 
 import { FilesPage } from '../page-objects/files.page';
-import { expect, published, signIn, test } from './fixtures';
+import { expect, nudgedUntil, published, signIn, test } from './fixtures';
 
 test('a second browser on the same identity reaches the same vault', async ({
   page,
@@ -35,15 +35,5 @@ test('a second browser on the same identity reaches the same vault', async ({
   await expect(joined.row(answer)).toBeVisible();
   await published(second);
 
-  // A focus change reads what the engine already holds; only the manual refresh
-  // forces the pass that reaches the record plane.
-  await expect
-    .poll(
-      async () => {
-        await first.status.click();
-        return first.row(answer).count();
-      },
-      { timeout: 300_000, intervals: [5_000] }
-    )
-    .toBe(1);
+  await nudgedUntil(first, first.row(answer));
 });

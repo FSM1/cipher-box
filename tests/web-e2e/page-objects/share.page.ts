@@ -2,8 +2,17 @@ import { expect, type Locator, type Page } from '@playwright/test';
 
 const DAY_MS = 86_400_000;
 
-/** What a mint carries beyond its lifetime; an absent field keeps the dialog's default. */
+declare global {
+  interface Window {
+    /** Puts back the `Date.now` that `SharePage.mintExpiringIn` moved. */
+    __cipherboxE2eRestoreNow?: () => void;
+  }
+}
+
+/** What a mint carries; an absent field keeps the dialog's default. */
 export interface LinkTerms {
+  /** One of the dialog's own lifetime options, such as `7 days`. */
+  lifetime?: string;
   permission?: 'read' | 'write';
   /** The owner's label, which the preview leads with once it verifies. */
   ownerName?: string;
@@ -71,12 +80,9 @@ export class SharePage {
     return this.page.getByTestId('share-link-chip');
   }
 
-  /** The chips of the links that grant `permission`. */
-  linkChipsFor(permission: 'read' | 'write'): Locator {
-    const label = permission === 'write' ? 'edit' : 'view';
-    return this.linkChips.filter({
-      has: this.page.getByTestId('share-link-summary').filter({ hasText: `${label} · ` }),
-    });
+  /** The chips of the links that make their holders writers. */
+  get writeLinkChips(): Locator {
+    return this.linkChips.filter({ hasText: 'edit · ' });
   }
 
   /** Cuts the first link, through the confirmation its chip raises. */
@@ -150,9 +156,8 @@ export class SharePage {
   }
 
   /**
-   * Opens the dialog until `count` link chips show. An owner device's own
-   * tick and the sweep of another device move the links, and the dialog reads
-   * them only when it opens.
+   * Opens the dialog until `count` link chips show. Each opening reads the
+   * links again, so a cut or a sweep that another owner device ran shows.
    */
   async openUntilLinks(folder: string, count: number, timeout = 180_000): Promise<void> {
     await this.openUntil(folder, this.linkChips, count, timeout);
@@ -255,9 +260,9 @@ export class SharePage {
    * Mints a link and returns the URL the dialog shows. The link is shown once,
    * so the caller keeps it.
    */
-  async mintLink(lifetime?: string, terms: LinkTerms = {}): Promise<URL> {
-    if (lifetime !== undefined) {
-      await this.page.getByLabel('link expires').selectOption(lifetime);
+  async mintLink(terms: LinkTerms = {}): Promise<URL> {
+    if (terms.lifetime !== undefined) {
+      await this.page.getByLabel('link expires').selectOption(terms.lifetime);
     }
     if (terms.permission !== undefined) {
       await this.permissionChoice.selectOption(terms.permission);
@@ -276,27 +281,33 @@ export class SharePage {
 
   /**
    * Mints a link whose deadline falls `inMs` after the click, which may be
-   * negative. The dialog offers days, so the tab's `Date.now` runs back by the
-   * shortest lifetime less `inMs` for the mint. The engine reads its own clock
-   * in its worker, which does not move.
+   * negative. The dialog offers whole days, so the tab's `Date.now` runs back
+   * by its shortest lifetime less `inMs` for the mint. The engine reads its own
+   * clock in its worker, which does not move.
    */
   async mintExpiringIn(inMs: number): Promise<void> {
+    const choice = this.page.getByLabel('link expires');
+    await expect(choice).toBeVisible();
+    const offered = await choice
+      .locator('option')
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value));
+    const lifetime = offered.reduce((a, b) => (parseInt(b, 10) < parseInt(a, 10) ? b : a));
+    const days = parseInt(lifetime, 10);
+    expect(lifetime, 'the dialog offers its lifetimes in days').toBe(`${days} days`);
     await this.page.evaluate(
       (by) => {
         const real = Date.now;
         Date.now = () => real() + by;
-        (window as unknown as { restoreNow: () => void }).restoreNow = () => {
+        window.__cipherboxE2eRestoreNow = () => {
           Date.now = real;
         };
       },
-      inMs - 7 * DAY_MS
+      inMs - days * DAY_MS
     );
     try {
-      await this.mintLink('7 days');
+      await this.mintLink({ lifetime });
     } finally {
-      await this.page.evaluate(() =>
-        (window as unknown as { restoreNow: () => void }).restoreNow()
-      );
+      await this.page.evaluate(() => window.__cipherboxE2eRestoreNow?.());
     }
   }
 
