@@ -277,7 +277,7 @@ navigation (FSM1/cipher-box-next#33 D2):
   the shell's only credential duty is hosting the keychain seam. Dev-key mode
   survives: a debug flag feeds the staging test-login path through the same
   facade, keychain bypassed — the headless agent/e2e seam.
-- **The orchestration is shared through `packages/login`** ([ADR 0008](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0008-cipherbox-issues-the-identity-token.md) D3): the shell
+- **The orchestration is shared through `packages/login`** ([ADR 0008](../decisions/0008-cipherbox-issues-the-identity-token.md) D3): the shell
   imports the same host-agnostic package and supplies both its own credential
   collector and its own start facade — `LoginFacade` is `{ start, logout }`, over
   Tauri IPC here. It does **not** take `packages/client` — the worker, leadership
@@ -298,7 +298,7 @@ navigation (FSM1/cipher-box-next#33 D2):
   is genuinely native (ADR 0008).
 - **No wallet method here.** The webview reaches no wallet, so the method is
   absent rather than offered and unable to complete (ADR 0008 D2).
-- **Recovery phrase always works here** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md) D2): a member with a factor
+- **Recovery phrase always works here** ([ADR 0009](../decisions/0009-device-approval-is-a-bound-rendezvous.md) D2): a member with a factor
   policy signs in on this host with the phrase alone, no second device and no
   rendezvous. A login that reaches the policy is held open rather than ended,
   because the phrase is redeemed against that same login, and the window renders

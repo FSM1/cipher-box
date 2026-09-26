@@ -252,7 +252,7 @@ CipherBox API
 
 The TEE worker runs as an isolated Express service inside a Phala Cloud CVM. It never
 writes to a database; all state flows through the API. In staging the TEE runs in Docker
-simulator mode. See [tee-worker/src/index.ts](../apps/tee-worker/src/index.ts) for the
+simulator mode. See [tee-worker/src/index.ts](https://github.com/FSM1/cipher-box/blob/v1/apps/tee-worker/src/index.ts) for the
 route listing.
 
 ### TEE Key Rotation and keyEpoch Grace Period

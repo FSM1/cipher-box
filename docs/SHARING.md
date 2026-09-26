@@ -6,14 +6,14 @@ The normative source is [`blueprint/engine.md`](../blueprint/engine.md) "Grants 
 
 ## Decisions
 
-| ADR                                                                                                                                                   | Subject                                                    |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| [0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md) | The link is the primary path; conversion runs by itself    |
-| [0024](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)                            | A link holder reads at once from the link blob             |
-| [0025](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0025-revocation-under-the-link-first-model.md)                                     | Revocation under the link-first model                      |
-| [0026](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0026-a-scope-root-takes-many-grants.md)                                            | A scope root takes many grants                             |
-| [0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)                                         | A grantee name is not an identity                          |
-| [0028](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0028-the-invite-page-previews-before-join.md)                                      | The invite page previews the share before the person joins |
+| ADR                                                                                                    | Subject                                                    |
+| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| [0023](../decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md) | The link is the primary path; conversion runs by itself    |
+| [0024](../decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)                            | A link holder reads at once from the link blob             |
+| [0025](../decisions/0025-revocation-under-the-link-first-model.md)                                     | Revocation under the link-first model                      |
+| [0026](../decisions/0026-a-scope-root-takes-many-grants.md)                                            | A scope root takes many grants                             |
+| [0027](../decisions/0027-a-grantee-name-is-not-an-identity.md)                                         | A grantee name is not an identity                          |
+| [0028](../decisions/0028-the-invite-page-previews-before-join.md)                                      | The invite page previews the share before the person joins |
 
 This document cites a decision as "ADR 0023 D3" (decision) or "ADR 0023 E2" (residual).
 

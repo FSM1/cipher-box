@@ -38,7 +38,7 @@ What left the API relative to v1 — with the design that removed it:
 
 - Account = the Web3Auth-derived secp256k1 **identity key**; challenge-signature
   login. **CipherBox issues the identity token the Core Kit consumes** (FSM1/cipher-box-next#5 as
-  amended by [ADR 0008](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0008-cipherbox-issues-the-identity-token.md)): each verified method mints a CipherBox JWT, and the Core Kit
+  amended by [ADR 0008](../decisions/0008-cipherbox-issues-the-identity-token.md)): each verified method mints a CipherBox JWT, and the Core Kit
   logs in against a CipherBox custom verifier over the API's own JWKS. The account
   model is unchanged by this — the Core Kit yields the same key whichever provider
   vouched.
@@ -61,7 +61,7 @@ What left the API relative to v1 — with the design that removed it:
   logout, reuse detection, and the account hard-delete revoke it with no second
   revocation path; the verify endpoint's in-process cache bounds how long a
   revoked token is still honoured (ADR 0036).
-- **Device-approval rendezvous** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md)): request, poll, respond, cancel, and a
+- **Device-approval rendezvous** ([ADR 0009](../decisions/0009-device-approval-is-a-bound-rendezvous.md)): request, poll, respond, cancel, and a
   pending list, under a **scoped, non-refreshable** pre-reconstruction token — a
   device that cannot yet reconstruct its key reaches these routes and nothing else.
   The API is a bulletin board: it relays ciphertext sealed to the requester's
@@ -99,7 +99,7 @@ decay) inverted into structure.
   retire `[{ipnsName?, targets[]}]`, where each target is an `ipnsName` or a
   `cid`. Ordinary writes send single-item batches; name waves and sweeps send
   bulk. v1's BYO-only `register-cid` folds into the same register call.
-- **Registration query** ([ADR 0022](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0022-a-first-run-cold-start-tolerates-a-failed-public-routing-endpoint.md)):
+- **Registration query** ([ADR 0022](../decisions/0022-a-first-run-cold-start-tolerates-a-failed-public-routing-endpoint.md)):
   `GET /registry/names/:ipnsName` answers whether the caller holds the name as a
   JSON boolean, `{"registered": true | false}`; a missing route can never read
   as not registered. Another account's row, and a malformed name, answer
@@ -269,7 +269,7 @@ the scope pointer (ADR 0041 D6), revocation is discovered in metadata.
   HPKE-sealed blob (≤ ~8 KB), sender supplies an idempotency key. A post that
   reuses a key returns the live item; after the ack, the same key creates a
   new item
-  ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
+  ([ADR 0023](../decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
   D5, D6; ADR 0048). Posts to unknown recipient pubkeys are rejected — an
   accepted, rate-limited, exact-pubkey existence oracle.
 - **Poll**: recipient-authenticated; returns `{id, receivedAt, blob}` — no
@@ -300,7 +300,7 @@ directory component (FSM1/cipher-box-next#25) and resolves crypto-review finding
 - Identity keys therefore only ever arrive out-of-band — there is no in-band
   lookup for a directory substitution attack to poison. Fingerprint comparison
   uses the `crates/core` fingerprint function
-  ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
+  ([ADR 0027](../decisions/0027-a-grantee-name-is-not-an-identity.md)
   D7), and no server component is involved.
 
 ## Account lifecycle

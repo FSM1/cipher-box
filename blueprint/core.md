@@ -77,7 +77,7 @@ Functional decomposition, not final file layout:
 | Symmetric sealing           | XChaCha20-Poly1305 (24-byte nonce)                                           | All sealed bodies and structures, content bytes                                                                                                                                                            |
 | Key derivation              | BLAKE3 `derive_key` / `keyed_hash`                                           | The whole edge catalog; a primitive-internal key schedule is not an edge                                                                                                                                   |
 | Sealing to a person         | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305)                      | Base mode: grant blobs, owner blob, owner-write-blob, ascent links, mailbox payloads; auth mode (owner to owner, ADR 0030): op record, settings record, content key, owner-local, write-plane history link |
-| Sealing to a rendezvous key | In-repo ECIES on secp256k1 (ECDH + BLAKE3 key schedule + XChaCha20-Poly1305) | The device-approval factor seal, and nothing else; full-envelope KAT under a fixed ephemeral scalar (FSM1/cipher-box-next ADR 0015)                                                                        |
+| Sealing to a rendezvous key | In-repo ECIES on secp256k1 (ECDH + BLAKE3 key schedule + XChaCha20-Poly1305) | The device-approval factor seal, and nothing else; full-envelope KAT under a fixed ephemeral scalar (ADR 0015)                                                                                             |
 | Pairwise secrets            | X25519 ECDH                                                                  | Blinded tags, grantee pseudonym derivation                                                                                                                                                                 |
 | Identity signing            | secp256k1 ECDSA (RFC 6979) over det-CBOR                                     | Grant-set commitment, subkey binding, re-point object, mailbox sender signature, invite-fragment names                                                                                                     |
 | Pseudonym + record signing  | Ed25519                                                                      | Structure signatures; IPNS records                                                                                                                                                                         |
@@ -92,7 +92,7 @@ Functional decomposition, not final file layout:
   the **fingerprint**, a named function of the identity key with its own KAT
   that shows at least 80 bits, so both hosts show one value and no TypeScript
   hashes a key
-  ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
+  ([ADR 0027](../decisions/0027-a-grantee-name-is-not-an-identity.md)
   D7).
 - An **X25519 public key** is adopted only as the **canonical encoding of a
   prime-order point** (ADR 0033) — the u-coordinate is lifted to Edwards, tested
@@ -137,7 +137,7 @@ node UUID.
   which moves every child's `ipnsName` at once and so rewrites the parent's
   child refs, re-sealing its read body under its **unchanged** read key at its
   **unchanged** read epoch — a metadata rewrite, never a read rotation
-  ([ADR 0004](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0004-read-body-child-names-on-the-name-wave.md)).
+  ([ADR 0004](../decisions/0004-read-body-child-names-on-the-name-wave.md)).
   A node's own body still
   moves names untouched, since `ipnsName` is not in the AAD (FSM1/cipher-box-next#39 D7).
 - **Carried unknown fields** (FSM1/cipher-box-next#27 D10, as ADR 0042 amends
@@ -250,7 +250,7 @@ tag}` and each optional field only when it is present, so a row minted
   refuses a malformed grantee name on decode and, release-active, on encode. A
   write wave re-mints every row at a new tag and re-maps each via-link reference
   in the same pass
-  ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
+  ([ADR 0023](../decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
   D2 and consequence 1, ADR 0027 D3). The
   child-scope index enumerates directly-descendant scope roots for the F-4
   rotation cascade (FSM1/cipher-box-next#38 D6). That index is writer-authored
@@ -318,7 +318,7 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
   `permission` is not `read`, on decode and, release-active, on encode: every
   re-sealer selects blob material by the committed permission (ADR 0023 D2,
   D9;
-  [ADR 0024](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)
+  [ADR 0024](../decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)
   D4). The section also carries the owner blob, the optional
   owner-write-blob (below), ascent link (public half plaintext,
   derive-and-verified by ancestor readers), per-epoch history links, and a
@@ -518,8 +518,7 @@ is a version whose key is gone.
 The `owner-local` structure carries **every durable store the owner alone
 authors and reads** — received shares, the contact book, and the engine's
 per-owner staging bookkeeping (the retire ledger and the doomed-name journal) —
-under one format rather than one module per store (FSM1/cipher-box-next ADR
-0006). It seals HPKE **auth mode** (ADR 0030) to the owner's own enc subkey
+under one format rather than one module per store (ADR 0006). It seals HPKE **auth mode** (ADR 0030) to the owner's own enc subkey
 over the same three-key clear header as the settings record (`v`, `enc`,
 `ciphertext`), with
 the owner tag bound into the AAD and never serialized. What is new is the
@@ -544,7 +543,7 @@ that distinct per-store `info` strings used to give for free).
 ### Bin index
 
 The recycle bin is one owner-sealed, vault-level index record
-([ADR 0010](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0010-recycle-bin-is-an-owner-sealed-index.md)).
+([ADR 0010](../decisions/0010-recycle-bin-is-an-owner-sealed-index.md)).
 It is published at the `bin-index-ipns-keypair` name and sealed
 **symmetrically** under `bin-index-seal-key`. It is the one owner-only
 structure that seals symmetrically: a key that only the login secret derives
