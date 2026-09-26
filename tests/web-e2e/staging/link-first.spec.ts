@@ -2,8 +2,7 @@
  * Profile: link-first sharing across two owner devices (ADR 0023-0028), the
  * staging leg of `tests/link-first.spec.ts`. The step numbers are the steps of
  * the link-first flow in `tests/web-e2e/README.md`; they run here in the order
- * 1, 2, 3, 6, 4, 7, so device B's sweep clock already runs at step 7. Step 5
- * waits on its expected failure in the local suite.
+ * 1, 2, 3, 6, 4, 5, 7, so device B's sweep clock already runs at step 7.
  *
  * Device B is a second context on the owner's wallet. A device goes offline on
  * `about:blank`, which stops its engine, and comes back on a load that resumes
@@ -25,7 +24,6 @@ const SUBFOLDER = 'photos';
 const OWNER_NAME = 'dana';
 const WRITTEN = 'from-the-writer.bin';
 const AFTER_REKEY = 'after-the-rekey.txt';
-const READER_FOLDER = 'reader-own';
 const DAY_MS = 86_400_000;
 
 /** The ceiling on one wait for a sync pass on the record plane. */
@@ -133,7 +131,7 @@ test('the link-first flow runs across two owner devices', async ({
     await bShare.close();
   });
 
-  await test.step('6. device B cuts the reader, device A admits it again, and the next re-key on B serves it (ADR 0025 D3)', async () => {
+  await test.step('6. device B cuts the reader, the reader joins again through a new link that device A converts, and the next re-key on B serves it (ADR 0025 D3, E4)', async () => {
     await bShare.open(FOLDER);
     await bShare.revokeGrantee();
     await expect(bShare.noGrants).toBeVisible({ timeout: 180_000 });
@@ -142,32 +140,25 @@ test('the link-first flow runs across two owner devices', async ({
     await readerShared.awaitStandingOf(scope, revoked, PASS);
     await offline(deviceB);
 
-    // The direct grant: see step 6 of `tests/link-first.spec.ts`.
-    const readerFiles = new FilesPage(reader);
-    const readerOwnFolder = async () => {
-      await readerFiles.openFromSidebar();
-      await readerFiles.createFolder(READER_FOLDER);
-      await expect(readerFiles.row(READER_FOLDER)).toBeVisible();
-      await published(reader);
-    };
-    await Promise.all([online(page), readerOwnFolder()]);
+    // The reader's session resumes on the invite load, so the page offers the
+    // join at once.
+    await online(page);
     await ownerShare.open(FOLDER);
-    const ownerCode = await ownerShare.readOwnContactCode();
-    const readerShare = new SharePage(reader);
-    await readerShare.open(READER_FOLDER);
-    await readerShare.importContact(ownerCode);
-    const readerCode = await readerShare.readOwnContactCode();
-    await readerShare.close();
-    await ownerShare.grantTo(readerCode, 'read');
+    const again = await ownerShare.mintLink();
     await ownerShare.close();
+    const invite = new InvitePage(reader);
+    await invite.open(again);
+    await invite.expectState('joinable', 180_000);
+    await invite.name.fill('reader');
+    await invite.join();
+    await invite.expectFolderOpened(180_000);
     await readerShared.awaitStandingOf(scope, granted, PASS);
     await offline(page);
 
     await online(deviceB);
     await bShare.openUntilGranted(FOLDER, 1, PASS_MS);
-    await bShare.mintLink();
     await bShare.close();
-    await bShare.open(FOLDER);
+    await bShare.openUntilLinks(FOLDER, 1, PASS_MS);
     await bShare.revokeFirstLink();
     await expect(bShare.linkChips).toHaveCount(0);
     await expect(bShare.grantRows).toHaveCount(1);
@@ -181,35 +172,57 @@ test('the link-first flow runs across two owner devices', async ({
 
     await readerShared.awaitStandingOf(scope, granted, PASS);
     await readerShared.openShare(scope);
+    const readerFiles = new FilesPage(reader);
     await nudgedUntil(readerFiles, readerFiles.row(AFTER_REKEY), 1, PASS_MS);
   });
 
-  await test.step('4. a write link holder writes after device B converts, and device A reads the write', async () => {
-    await online(page);
-    await ownerShare.open(FOLDER);
-    const writeLink = await ownerShare.mintLink({ permission: 'write' });
+  const writerView =
+    await test.step('4. a write link holder writes after device B converts, and device A reads the write', async () => {
+      await online(page);
+      await ownerShare.open(FOLDER);
+      const writeLink = await ownerShare.mintLink({ permission: 'write' });
+      await ownerShare.close();
+      await offline(page);
+
+      const { page: writer } = await secondContext();
+      const writerShared = new SharedPage(writer);
+      await join(writer, writeLink, 'writer');
+      await writerShared.awaitStandingOf(scope, granted, PASS);
+      await bShare.openUntilGranted(FOLDER, 2, PASS_MS);
+      await bShare.close();
+
+      // The session that joined through the link writes, with no new sign-in.
+      const writerFiles = new FilesPage(writer);
+      await writerShared.open();
+      await writerShared.openShare(scope);
+      await nudgedUntil(writerFiles, writerFiles.newFolderButton, 1, PASS_MS);
+      await writerFiles.upload(WRITTEN, new Uint8Array(2_048).fill(7));
+      await expect(writerFiles.row(WRITTEN)).toBeVisible({ timeout: 180_000 });
+      await published(writer);
+
+      await online(page);
+      await ownerFiles.open(FOLDER);
+      await nudgedUntil(ownerFiles, ownerFiles.row(WRITTEN), 1, PASS_MS);
+      await ownerFiles.openFromSidebar();
+      return writerShared;
+    });
+
+  await test.step('5. device A revokes the write link with its joiners; the writer fails closed and the reader keeps access', async () => {
+    // Step 6 left no read link, so the write link stands alone.
+    await ownerShare.openUntilLinks(FOLDER, 1, PASS_MS);
+    await ownerShare.askToRevoke(ownerShare.writeLinkChips);
+    await expect(ownerShare.removeGrantees.locator('..')).toHaveText(
+      'also remove the 1 person who joined through it'
+    );
+    await ownerShare.removeGrantees.check();
+    await ownerShare.confirmLinkRevoke();
+    await expect(ownerShare.linkChips).toHaveCount(0);
+    await expect(ownerShare.grantRows).toHaveCount(1);
+    await expect(ownerShare.grantRows).toContainText('reader');
     await ownerShare.close();
-    await offline(page);
 
-    const { page: writer } = await secondContext();
-    const writerShared = new SharedPage(writer);
-    await join(writer, writeLink, 'writer');
-    await writerShared.awaitStandingOf(scope, granted, PASS);
-    await bShare.openUntilGranted(FOLDER, 2, PASS_MS);
-    await bShare.close();
-
-    // A new session: see step 4 of `tests/link-first.spec.ts`.
-    const writerFiles = await online(writer);
-    await writerShared.open();
-    await writerShared.openShare(scope);
-    await nudgedUntil(writerFiles, writerFiles.newFolderButton, 1, PASS_MS);
-    await writerFiles.upload(WRITTEN, new Uint8Array(2_048).fill(7));
-    await expect(writerFiles.row(WRITTEN)).toBeVisible({ timeout: 180_000 });
-    await published(writer);
-
-    await online(page);
-    await ownerFiles.open(FOLDER);
-    await nudgedUntil(ownerFiles, ownerFiles.row(WRITTEN), 1, PASS_MS);
+    await writerView.awaitStandingOf(scope, (row) => row === 'gone' || revoked(row), PASS);
+    await readerShared.awaitStandingOf(scope, granted, PASS);
   });
 
   await test.step('7. the sweep on device B cuts an expired link, and its chip leaves device A', async () => {
