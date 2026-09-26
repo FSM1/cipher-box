@@ -25,6 +25,7 @@ pub(crate) mod drain;
 pub mod model;
 pub mod op;
 pub mod overlay;
+pub(crate) mod pass;
 pub mod pointer;
 pub(crate) mod project;
 pub(crate) mod provision;
