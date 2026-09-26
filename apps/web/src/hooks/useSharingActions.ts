@@ -6,12 +6,12 @@
  * a reload.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toHex } from '@cipherbox/client';
 import type { EngineFacade, Permission, SharingDescriptor } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { useEngine } from '../providers/EngineProvider';
-import { sharingStore, type VerifiedContact } from '../stores/sharing.store';
+import { sharingFor, sharingStore, type VerifiedContact } from '../stores/sharing.store';
 import { useCommandRunner } from './useCommandRunner';
 
 /** Which call is in flight, or `null` when the sharing surface is idle. */
@@ -114,10 +114,15 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
   const scopeKey = toHex(scope);
   const target = useMemo(() => scope, [scopeKey]);
 
+  // Only the latest read publishes: an event read that finishes after a
+  // command's read holds older state.
+  const readSeq = useRef(0);
   const read = useCallback(
     async (facade: EngineFacade) => {
+      const seq = ++readSeq.current;
       const view = await facade.sharing(target);
-      sharingStore.reported(view, await fingerprintsOf(facade, view));
+      const fingerprints = await fingerprintsOf(facade, view);
+      if (seq === readSeq.current) sharingStore.reported(view, fingerprints);
       return view;
     },
     [target]
@@ -149,8 +154,13 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
         });
     };
     return client.facade.subscribe((event) => {
-      // A conversion pass that moves only the claim counts reports them here.
-      if (event.kind === 'snapshotUpdated') return reread();
+      // A conversion pass that moves only the claim counts reports them here,
+      // and only a scope with a link has claim counts.
+      if (event.kind === 'snapshotUpdated') {
+        const links = sharingFor(sharingStore.getState(), scopeKey)?.inviteLinks.length ?? 0;
+        if (links > 0) reread();
+        return;
+      }
       if (event.kind !== 'granteeJoined' || toHex(event.scopeRoot) !== scopeKey) return;
       setJoined(joinedLabel(event.name, event.fingerprint));
       reread();

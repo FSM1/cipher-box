@@ -232,6 +232,37 @@ describe('reading', () => {
     expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
   });
 
+  it('reads nothing on a snapshot update where the scope carries no link', async () => {
+    const engine = sharingEngine();
+    const { result } = mount(engine.client);
+    await expect(result.current.open()).resolves.toBe(true);
+
+    engine.emit({ kind: 'snapshotUpdated' });
+    await new Promise((settle) => setTimeout(settle, 0));
+
+    expect(engine.facade.sharing).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a command's view when an older event read finishes after it", async () => {
+    const engine = sharingEngine();
+    const { result } = mount(engine.client);
+    await result.current.grant(CONTACT, 'write');
+    let finishStale: (stale: SharingDescriptor) => void = () => undefined;
+    engine.facade.sharing.mockImplementationOnce(
+      () => new Promise<SharingDescriptor>((settle) => (finishStale = settle))
+    );
+
+    engine.emit({ kind: 'granteeJoined', scopeRoot: DOCS, name: 'Ada', fingerprint: FINGERPRINT });
+    await expect(result.current.changePermission(CONTACT, 'read')).resolves.toBe(true);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
+
+    finishStale(view(['write'], NO_LINKS));
+    await new Promise((settle) => setTimeout(settle, 0));
+
+    expect(engine.facade.sharing).toHaveBeenCalledTimes(3);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
+  });
+
   it('reads a row with no fingerprint where the engine forms none for its key', async () => {
     const engine = sharingEngine();
     engine.facade.identityFingerprint.mockImplementation(() =>
