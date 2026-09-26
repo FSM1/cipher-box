@@ -76,8 +76,8 @@ use crate::grants::grafted::{
 };
 use crate::grants::inbox::{OwnedClaim, ShareInbox, owned_claims};
 use crate::grants::link_read::{
-    JoinRead, JoinSeams, LinkReadRefusal, PreviewRead, join_read, pending_link_bookmark,
-    preview_read, repost_held_claims,
+    JoinRead, JoinSeams, LinkReadRefusal, LinkReader, PreviewRead, join_read,
+    pending_link_bookmark, preview_read, repost_held_claims,
 };
 use crate::grants::received_status::{
     ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name, live_permission,
@@ -10202,20 +10202,19 @@ where {
 
         // Ahead of every write: a refused read, an expired link and a revoked
         // one post no claim and record nothing.
-        match join_read(
-            &seams,
-            &share,
-            &hold,
-            &owner,
-            &invitee,
-            self.seams.scheduler.now(),
-        )
-        .await
-        {
-            Ok(JoinRead::Live { root }) => {
-                share.scope_root_name = root.as_str().as_bytes().to_vec()
+        let link = LinkReader {
+            share: &share,
+            hold: &hold,
+            owner: &owner,
+            invitee: &invitee,
+            my_enc_secret: session.enc_subkey(),
+        };
+        let live_personal = match join_read(&seams, &link, self.seams.scheduler.now()).await {
+            Ok(JoinRead::Live { root, personal }) => {
+                share.scope_root_name = root.as_str().as_bytes().to_vec();
+                Some(personal)
             }
-            Ok(JoinRead::Unavailable) => {}
+            Ok(JoinRead::Unavailable) => None,
             Ok(JoinRead::Expired) => {
                 return Err(EngineError::from_invite(InviteError::LinkExpired));
             }
@@ -10223,7 +10222,7 @@ where {
                 return Err(EngineError::from_invite(InviteError::LinkNotCommitted));
             }
             Err(refusal) => return Err(link_read_refused(refusal)),
-        }
+        };
 
         // Held to the persist below, so no other list writer lands between
         // the claimed check and the hold this call writes.
@@ -10237,10 +10236,10 @@ where {
         let bookmarked = received.find(&key).is_some();
         // A personal bookmark already reads the folder, and a hold that
         // already posted a claim through this link posts it again on the tick.
-        let personal = bookmarked && received.link_hold(&key).is_none();
-        let claimed = received
-            .link_hold(&key)
-            .is_some_and(|held| held.claim.is_some() && held.invite_secret == hold.invite_secret);
+        // A read that did not answer falls back to the bookmark's own shape.
+        let personal =
+            bookmarked && live_personal.unwrap_or_else(|| received.link_hold(&key).is_none());
+        let claimed = received.claimed_through(&key, &hold.invite_secret);
         if personal || claimed {
             return Ok(());
         }
@@ -10276,7 +10275,8 @@ where {
             .await
             .map_err(EngineError::from_contact_store)?;
 
-        if !bookmarked {
+        // A cut bookmark heals to the root and the shape this live read found.
+        if !bookmarked || live_personal == Some(false) {
             received.reconcile(share);
         }
         if let Some(previous) = received.link_hold(&key)
@@ -11565,32 +11565,38 @@ where {
             seams,
             ..
         } = self.open_link_fragment(fragment)?;
-        let joined = self
+        let received = self
             .received_share_store(session)
             .load()
             .await
-            .map_err(EngineError::from_received_share_store)?
-            .find(&share.key())
-            .is_some();
-        let read = preview_read(
-            &seams,
-            &share,
-            &hold,
-            &owner,
-            &invitee,
-            self.seams.scheduler.now(),
-        )
-        .await
-        .map_err(link_read_refused)?;
+            .map_err(EngineError::from_received_share_store)?;
+        let key = share.key();
+        let bookmarked = received.find(&key).is_some();
+        let claimed_here = received.claimed_through(&key, &hold.invite_secret);
+        let link = LinkReader {
+            share: &share,
+            hold: &hold,
+            owner: &owner,
+            invitee: &invitee,
+            my_enc_secret: session.enc_subkey(),
+        };
+        let read = preview_read(&seams, &link, self.seams.scheduler.now())
+            .await
+            .map_err(link_read_refused)?;
+        let mut joined = bookmarked;
         let (state, permission, children) = match read {
             PreviewRead::Live {
                 conversion_permission,
                 children,
-            } => (
-                LinkPreviewState::Live,
-                Some(conversion_permission),
-                children,
-            ),
+                personal,
+            } => {
+                joined = bookmarked && (personal || claimed_here);
+                (
+                    LinkPreviewState::Live,
+                    Some(conversion_permission),
+                    children,
+                )
+            }
             PreviewRead::Expired {
                 conversion_permission,
             } => (

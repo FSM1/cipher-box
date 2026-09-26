@@ -345,6 +345,13 @@ impl ReceivedSharesList {
         self.links.get(key)
     }
 
+    /// Whether the bookmark under `key` holds the link `invite_secret` opens and
+    /// has posted a claim through it.
+    pub(crate) fn claimed_through(&self, key: &BookmarkKey, invite_secret: &SecretBytes) -> bool {
+        self.link_hold(key)
+            .is_some_and(|held| held.claim.is_some() && held.invite_secret == *invite_secret)
+    }
+
     /// Read the bookmark under `key` through `hold`, replacing any hold it had.
     pub(crate) fn hold_link(&mut self, key: BookmarkKey, hold: LinkHold) {
         self.links.insert(key, hold);

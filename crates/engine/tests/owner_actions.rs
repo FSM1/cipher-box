@@ -8238,6 +8238,84 @@ fn a_preview_of_a_joined_link_reads_the_root_the_join_adopted() {
     );
 }
 
+/// ADR 0025 E4: a person the owner cut keeps the bookmark at rest, but the
+/// owner-signed set no longer grants that person. A new live link previews as
+/// not joined, and the join posts a claim and holds the link again, which the
+/// owner converts back into a personal grant.
+#[test]
+fn a_person_the_owner_cut_joins_again_through_a_new_link() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &holder, &mut holder_tasks);
+    let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
+    assert_eq!(fx.revoke_person(&recipient), Ok(CommandOutcome::Done));
+    fx.world.scheduler.advance(holder.profile().stale_after);
+    poll_tasks_until_parked(&mut holder_tasks);
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(
+        shares[0].resolution,
+        Some(ResolutionClass::RevocationSignal)
+    );
+    assert!(inbox(&fx.owner_device).is_empty(), "nothing waits");
+
+    let again = fx.mint_link();
+    let seen = preview(&holder, &again).expect("the preview reads");
+    assert_eq!(seen.state, LinkPreviewState::Live);
+    assert!(!seen.joined, "a cut bookmark is not a join");
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, again),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(inbox(&fx.owner_device).len(), 1, "the join posted a claim");
+    assert!(
+        stored_link_hold(&fx).is_some_and(|hold| hold.claim.is_some()),
+        "the join holds the new link with its claim"
+    );
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &holder, &mut holder_tasks);
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(shares.len(), 1);
+    assert_eq!(shares[0].resolution, Some(ResolutionClass::Granted));
+    assert!(!shares[0].via_link, "the owner granted the person again");
+    assert!(stored_link_hold(&fx).is_none(), "the link keys dropped");
+}
+
+/// A person the owner still grants who opens another link of the same folder
+/// has joined already: the preview says so, and the join posts nothing.
+#[test]
+fn a_granted_person_previews_a_new_link_as_joined_and_posts_nothing() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &holder, &mut holder_tasks);
+
+    let second = fx.mint_link();
+    let seen = preview(&holder, &second).expect("the preview reads");
+    assert_eq!(seen.state, LinkPreviewState::Live);
+    assert!(seen.joined, "a granted person has joined");
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, second),
+        Ok(CommandOutcome::Done)
+    );
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "the join posted nothing"
+    );
+    assert!(stored_link_hold(&fx).is_none(), "and holds no link");
+}
+
 /// Gate stage 2 refuses a scope root whose owner commitment does not verify,
 /// here one a later cut on this device's floor superseded: a trust violation,
 /// never an unresolvable link, and no store changes.
