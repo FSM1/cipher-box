@@ -3,7 +3,7 @@
   "checkpoint_id": "153aded16599",
   "strategy": "manual-commit",
   "branch": "chore/adr-0029-0051-comment-cites",
-  "checkpoints_count": 4,
+  "checkpoints_count": 6,
   "files_touched": [
     ".github/workflows/ci-e2e.yml",
     ".github/workflows/desktop-e2e.yml",
@@ -27,13 +27,20 @@
       "compact_transcript": "/15/3aded16599/0/transcript.jsonl",
       "content_hash": "/15/3aded16599/0/content_hash.txt",
       "prompt": "/15/3aded16599/0/prompt.txt"
+    },
+    {
+      "metadata": "/15/3aded16599/1/metadata.json",
+      "transcript": "/15/3aded16599/1/full.jsonl",
+      "compact_transcript": "/15/3aded16599/1/transcript.jsonl",
+      "content_hash": "/15/3aded16599/1/content_hash.txt",
+      "prompt": "/15/3aded16599/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 262,
-    "cache_creation_tokens": 23263,
-    "cache_read_tokens": 4187082,
-    "output_tokens": 9203,
-    "api_call_count": 11
+    "input_tokens": 330,
+    "cache_creation_tokens": 25471,
+    "cache_read_tokens": 5496301,
+    "output_tokens": 10104,
+    "api_call_count": 15
   }
 }
