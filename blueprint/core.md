@@ -72,18 +72,20 @@ Functional decomposition, not final file layout:
 
 ## Crypto suite
 
-| Role                        | Algorithm                                                                    | Used for                                                                                                                                                                                         |
-| --------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Symmetric sealing           | XChaCha20-Poly1305 (24-byte nonce)                                           | All sealed bodies and structures, content bytes                                                                                                                                                  |
-| Key derivation              | BLAKE3 `derive_key` / `keyed_hash`                                           | The whole edge catalog; a primitive-internal key schedule is not an edge                                                                                                                         |
-| Sealing to a person         | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305)                      | Base mode: grant blobs, owner blob, owner-write-blob, ascent links, mailbox payloads; auth mode (owner to owner): op record, settings record, content key, owner-local, write-plane history link |
-| Sealing to a rendezvous key | In-repo ECIES on secp256k1 (ECDH + BLAKE3 key schedule + XChaCha20-Poly1305) | The device-approval factor seal, and nothing else; full-envelope KAT under a fixed ephemeral scalar (FSM1/cipher-box-next ADR 0015)                                                              |
-| Pairwise secrets            | X25519 ECDH                                                                  | Blinded tags, grantee pseudonym derivation                                                                                                                                                       |
-| Identity signing            | secp256k1 ECDSA (RFC 6979) over det-CBOR                                     | Grant-set commitment, subkey binding, re-point object, mailbox sender signature, invite-fragment names                                                                                           |
-| Pseudonym + record signing  | Ed25519                                                                      | Structure signatures; IPNS records                                                                                                                                                               |
+| Role                        | Algorithm                                                                    | Used for                                                                                                                                                                                                   |
+| --------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Symmetric sealing           | XChaCha20-Poly1305 (24-byte nonce)                                           | All sealed bodies and structures, content bytes                                                                                                                                                            |
+| Key derivation              | BLAKE3 `derive_key` / `keyed_hash`                                           | The whole edge catalog; a primitive-internal key schedule is not an edge                                                                                                                                   |
+| Sealing to a person         | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305)                      | Base mode: grant blobs, owner blob, owner-write-blob, ascent links, mailbox payloads; auth mode (owner to owner, ADR 0030): op record, settings record, content key, owner-local, write-plane history link |
+| Sealing to a rendezvous key | In-repo ECIES on secp256k1 (ECDH + BLAKE3 key schedule + XChaCha20-Poly1305) | The device-approval factor seal, and nothing else; full-envelope KAT under a fixed ephemeral scalar (FSM1/cipher-box-next ADR 0015)                                                                        |
+| Pairwise secrets            | X25519 ECDH                                                                  | Blinded tags, grantee pseudonym derivation                                                                                                                                                                 |
+| Identity signing            | secp256k1 ECDSA (RFC 6979) over det-CBOR                                     | Grant-set commitment, subkey binding, re-point object, mailbox sender signature, invite-fragment names                                                                                                     |
+| Pseudonym + record signing  | Ed25519                                                                      | Structure signatures; IPNS records                                                                                                                                                                         |
 
 - Every user derives an **X25519 encryption subkey** from their login secret;
-  the identity key only signs, the subkey only seals. The **subkey binding**
+  the identity key only signs, and the subkey seals and, as the HPKE auth-mode
+  sender, authenticates the owner's own self-sealed records (ADR 0030 D1). The
+  **subkey binding**
   (ECDSA over det-CBOR `{identityPk, encSubkey}`) and the **contact code**
   codec (`{identityPk, encSubkey, bindingSig}`, ~130 bytes, QR/URL-encodable,
   binding verify mandatory and fail-closed at import) are core exports. So is
@@ -93,15 +95,15 @@ Functional decomposition, not final file layout:
   ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
   D7).
 - An **X25519 public key** is adopted only as the **canonical encoding of a
-  prime-order point** — the u-coordinate is lifted to Edwards, tested for
-  torsion, and re-encoded back to the input. Both halves close one attack: ECDH
-  decides on the point while HPKE binds the supplied bytes into `kem_context`,
-  so any second encoding reaching one point lets a blob be addressed to a key
-  whose real holder can never open it, under a blinded tag that still verifies.
-  A small-order blacklist is not sufficient for the first half — clamping
-  collapses every cofactor twin `P + t` (`t` in `E[8]`) onto `P` in the shared
-  secret — and masking bit 255 is not sufficient for the second, since the
-  ignored bit and the mod-`p` wraparound both survive into `to_bytes`.
+  prime-order point** (ADR 0033) — the u-coordinate is lifted to Edwards, tested
+  for torsion, and re-encoded back to the input. Both halves close one attack:
+  ECDH decides on the point while HPKE binds the supplied bytes into
+  `kem_context`, so any second encoding reaching one point lets a blob be
+  addressed to a key whose real holder can never open it, under a blinded tag
+  that still verifies. A small-order blacklist is not sufficient for the first
+  half — clamping collapses every cofactor twin `P + t` (`t` in `E[8]`) onto `P`
+  in the shared secret — and masking bit 255 is not sufficient for the second,
+  since the ignored bit and the mod-`p` wraparound both survive into `to_bytes`.
 - Writer pseudonyms sign with **Ed25519** (deterministic derivation from the
   pairwise secret, or from `ownerPseudonymSeed` for the owner; secp256k1 stays
   confined to identity signing and the device-approval rendezvous seal —
@@ -138,7 +140,8 @@ node UUID.
   ([ADR 0004](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0004-read-body-child-names-on-the-name-wave.md)).
   A node's own body still
   moves names untouched, since `ipnsName` is not in the AAD (FSM1/cipher-box-next#39 D7).
-- **Carried unknown fields** (FSM1/cipher-box-next#27 D10): a rewrite preserves every top-level
+- **Carried unknown fields** (FSM1/cipher-box-next#27 D10, as ADR 0042 amends
+  it): a rewrite preserves every top-level
   and `epochTag` field it does not type, byte-stable, so an old client never
   strips a newer one's. The set comes off a resolved record and so runs to the
   same 2 MiB block ceiling every read enforces — which makes it
@@ -146,7 +149,8 @@ node UUID.
   push every later re-author of that node past the ceiling and stop the owner's
   own publishes there, the revoking rotation included. So the produce side
   **truncates, never refuses**: an encode over the ceiling cuts carried fields
-  until the block fits, and refuses only what the typed fields alone overflow.
+  until the block fits, and refuses only what the typed and the uncuttable
+  fields overflow.
   `grantSection` and `writeSealed` are never cut — losing either publishes a
   record the reader rejects outright, which is the refusal the cut exists to
   avoid. Cuts run largest first, so the fewest fields go and one pass relieves
@@ -162,7 +166,8 @@ node UUID.
   can. The canonical map-key comparator is length-first over the encoded key, so
   a one-byte prefix perturbs no ordering semantics, and the marker is honoured
   inside `epochTag` as well as at top level. `grantSection` and `writeSealed`
-  stay uncuttable under their own **reserved names**, from before the marker;
+  stay uncuttable under their own **reserved names** at top level, from before
+  the marker; the same names inside `epochTag` are cuttable and not budgeted;
   those names are frozen in the manifest beside the prefix
   (`seal.uncuttableKeys`), since honouring the marker alone would cut them and
   publish a record every reader rejects.
@@ -172,22 +177,22 @@ node UUID.
   would hand the untrusted server the one bit the envelope exists to withhold.
   The marker ships with a frozen **critical-bytes budget**,
   `MAX_CRITICAL_CARRIED_BYTES` = 16 KiB, over the encoded cost of every marked
-  field plus `writeSealed`, at both levels. Without it a hostile publisher marks
-  padding critical and wedges the name for good — strictly worse than the refusal
-  the cut replaced, since no rotation clears an uncuttable field. Decode and
-  encode refuse an over-budget envelope with the same `too-many-structures`
-  verdict, release-active on the encode side. `grantSection` is the budget's one
-  exclusion, and only because it carries its own `MAX_GRANT_SECTION_BYTES`: a
-  budget large enough to hold a grant section would be no budget at all. The
-  budget stays well under the write-body's 64 KiB re-seal headroom, so a maximal
-  critical set cannot make a maximal write-body's re-seal unencodable. The value
-  is frozen in the KAT manifest (`seal.criticalCarriedMaxBytes`, beside
-  `seal.criticalKeyPrefix`).
+  field at either level plus `writeSealed` at top level. Without it a hostile
+  publisher marks padding critical and wedges the name for good — strictly worse
+  than the refusal the cut replaced, since no rotation clears an uncuttable
+  field. Decode and encode refuse an over-budget envelope with the same
+  `too-many-structures` verdict, release-active on the encode side.
+  `grantSection` is the budget's one exclusion, and only because it carries its
+  own `MAX_GRANT_SECTION_BYTES`: a budget large enough to hold a grant section
+  would be no budget at all. The budget stays well under the write-body's 64 KiB
+  re-seal headroom, so a maximal critical set cannot make a maximal write-body's
+  re-seal unencodable. The value is frozen in the KAT manifest
+  (`seal.criticalCarriedMaxBytes`, beside `seal.criticalKeyPrefix`).
   What the budget bounds is the **size** of that wedge, not its permanence: a
   publisher who fills the budget exactly still claims it for as long as the name
   lives, because a marked field is carried verbatim by every later re-author and
-  only a fresh node id sheds it. Whether a re-author may drop a marked field it
-  has never seen adopted is open, and has to be settled before a `!` field ships.
+  only a fresh node id sheds it. A re-author never drops a marked field, whether
+  or not it saw the field adopted (ADR 0042 D8).
   Preservation also moves a field **across a scope change**, wherever an
   authoring path re-seals a carried record under another scope's AAD. Every new
   envelope-level or `epochTag`-level structure is therefore either
@@ -195,22 +200,22 @@ node UUID.
   so the move claims nothing in the destination — or refused by name at that
   authoring path, the way the grant section already is. The duty falls on the
   structure's author, because the client that preserves the field cannot type it.
-- **Envelope size bounds**: the decoder refuses on the **raw length before it
-  walks anything**, at the same 2 MiB block ceiling every read enforces
-  (`seal.envelopeMaxBytes`). The input is attacker-supplied and the carried set
-  it holds is preserved by construction, so the total is the only cap on the
-  walk itself — the same shape the grant section already refuses in, rather than
-  two decode paths guarding one class of malformed input differently.
-  `readSealed` carries a bound of its own, `MAX_READ_SEALED_BYTES` = the block
-  ceiling minus a frozen 32 KiB envelope headroom, so 2,064,384 bytes. It is the
-  envelope's one attacker-sized typed field and, unlike the carried set, it is
-  uncuttable: bounding it lets the refusal **name the field that broke** instead
-  of reporting only that the record was too big, which a whole-record ceiling
-  applied before any structure is known cannot do. Its floor is honest use —
-  `seal_read_body` mints whatever a folder's child listing needs, so a bound near
-  the framing headroom would refuse folders this codec's own encoder produces,
-  the produce-side wedge one layer up that the grant section's floor also
-  avoids.
+- **Envelope size bounds** (ADR 0033): the decoder refuses on the **raw length
+  before it walks anything**, at the same 2 MiB block ceiling every read
+  enforces (`seal.envelopeMaxBytes`). The input is attacker-supplied and the
+  carried set it holds is preserved by construction, so the total is the only
+  cap on the walk itself — the same shape the grant section already refuses in,
+  rather than two decode paths guarding one class of malformed input
+  differently. `readSealed` carries a bound of its own, `MAX_READ_SEALED_BYTES`
+  = the block ceiling minus a frozen 32 KiB envelope headroom, so 2,064,384
+  bytes. It is the envelope's one attacker-sized typed field and, unlike the
+  carried set, it is uncuttable: bounding it lets the refusal **name the field
+  that broke** instead of reporting only that the record was too big, which a
+  whole-record ceiling applied before any structure is known cannot do. Its
+  floor is honest use — `seal_read_body` mints whatever a folder's child listing
+  needs, so a bound near the framing headroom would refuse folders this codec's
+  own encoder produces, the produce-side wedge one layer up that the grant
+  section's floor also avoids.
   **What each bound is charged against is part of the frozen number**, because
   the bounds around it disagree: `seal.envelopeMaxBytes` is charged on the
   **whole encoded envelope**, det-CBOR head included; `seal.readSealedMaxBytes`
@@ -240,10 +245,10 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
   row's owner signature covers `{ipnsName, recipientEncPk, recipientIdentityPk,
 tag}` and each optional field only when it is present, so a row minted
   before those fields keeps its bytes and its signature, and a removed field
-  still fails the verify. A row carries no deadline. The codec refuses a
-  malformed grantee name on decode and, release-active, on encode. A write
-  wave re-mints every row at a new tag and re-maps each via-link reference in
-  the same pass
+  still fails the verify (ADR 0032). A row carries no deadline. The codec
+  refuses a malformed grantee name on decode and, release-active, on encode. A
+  write wave re-mints every row at a new tag and re-maps each via-link reference
+  in the same pass
   ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
   D2 and consequence 1, ADR 0027 D3). The
   child-scope index enumerates directly-descendant scope roots for the F-4
@@ -259,15 +264,15 @@ tag}` and each optional field only when it is present, so a row minted
   preserved unknown maps at every level are the one thing a decoder must keep
   byte-stable, so refusing a body for the size of what it preserves would refuse
   honest forward-compatible bodies too. What closes it is a **total encoded-size
-  bound**, `MAX_WRITE_BODY_BYTES` = the block ceiling (2 MiB) minus a frozen
-  64 KiB re-seal headroom for the seal, section and envelope framing a re-seal
-  wraps the body in. The headroom reserves nothing for the grant section's own
-  contents, which are bounded far above it, so the bound narrows the head-size
-  lever rather than closing it — the whole-record ceiling stays the engine's
-  `HeadTooLarge` backstop. Decode and encode refuse an over-bound body with the
-  same `too-many-structures` verdict, release-active on the encode side; the
-  value is frozen in the KAT manifest (`grant.writeBodyMaxBytes`) rather than in
-  a multi-megabyte reject vector.
+  bound** (ADR 0033), `MAX_WRITE_BODY_BYTES` = the block ceiling (2 MiB) minus a
+  frozen 64 KiB re-seal headroom for the seal, section and envelope framing a
+  re-seal wraps the body in. The headroom reserves nothing for the grant
+  section's own contents, which are bounded far above it, so the bound narrows
+  the head-size lever rather than closing it — the whole-record ceiling stays
+  the engine's `HeadTooLarge` backstop. Decode and encode refuse an over-bound
+  body with the same `too-many-structures` verdict, release-active on the encode
+  side; the value is frozen in the KAT manifest (`grant.writeBodyMaxBytes`)
+  rather than in a multi-megabyte reject vector.
   The measured length **charges `writeHistoryLink` at its own 512-byte ceiling**
   whatever the body actually carries. That field is the one thing a re-seal
   replaces, so charging it flat is what makes "this body decodes" imply "this
@@ -284,30 +289,31 @@ tag}` and each optional field only when it is present, so a row minted
   The write-plane history link departs from the read plane's ratchet
   construction and carries its own struct tag, `write-history-link` (`0x0e`): it
   is **HPKE auth-mode sealed by the owner to the owner**
-  (`enc(32) || ciphertext||tag`), not symmetrically sealed under the fresh
-  `writeScopeSeed`'s structure key. That seed ships in every write grantee's
-  grant blob, while the retiring seed the link carries derives the IPNS signing
-  key of every pre-rotation name in the scope, and the link's only consumer —
-  the resumed name wave — is owner-only. Auth mode rather than base because the
-  field lives inside a body every committed writer can author and the owner's
-  enc subkey is public: base mode would let a writer hand the resumed wave a
-  seed of their choosing to derive signing keys from. Only a re-sealer holding
-  the owner encryption subkey can mint one, so a write-grantee re-seal carries
-  the existing link and never cuts. The field is bounded fail-closed at decode
-  and encode at 512 bytes (`too-many-structures`); over-length bytes make the
-  record undecodable, so — like a duplicate ledger tag — a committed writer can
-  stall the scope's rotations until the owner republishes the root from a
-  gate-passed earlier record. A re-seal handed an over-length link drops it
-  rather than failing, so the produce side can never emit a body its own
-  decoder refuses.
+  (`enc(32) || ciphertext||tag`, ADR 0030 D10), not symmetrically sealed under
+  the fresh `writeScopeSeed`'s structure key. That seed ships in every write
+  grantee's grant blob, while the retiring seed the link carries derives the
+  IPNS signing key of every pre-rotation name in the scope, and the link's only
+  consumer — the resumed name wave — is owner-only. Auth mode rather than base
+  because the field lives inside a body every committed writer can author and
+  the owner's enc subkey is public: base mode would let a writer hand the
+  resumed wave a seed of their choosing to derive signing keys from. Only a
+  re-sealer holding the owner encryption subkey can mint one, so a write-grantee
+  re-seal carries the existing link and never cuts. The field is bounded
+  fail-closed at decode and encode at 512 bytes (`too-many-structures`);
+  over-length bytes make the record undecodable, so — like a duplicate ledger
+  tag — a committed writer can stall the scope's rotations until the owner
+  republishes the root from a gate-passed earlier record. A re-seal handed an
+  over-length carried link refuses before any seal, because an empty link in its
+  place would publish the state the genesis arm refuses; the bound is the
+  decoder's own, so no gate-passed record reaches the refusal (ADR 0033 D6).
 - **Grant section** (scope roots only): grant blobs keyed by blinded tag
   (`tag → HPKE{readScopeSeed[, writeScopeSeed], epoch, pointerReadKey}`), the
   grant-set commitment (ECDSA over det-CBOR `{cutEpoch, ipnsName,
-ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`,
-  where each entry may also carry the optional `kind`, `deadline`, conversion
-  permission and admission cap). An absent `kind` means `personal`; the
-  `deadline`, the cap and the conversion permission are link fields. The codec
-  refuses a `deadline` on a `personal` entry and a `link` entry whose
+ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
+  per ADR 0032, where each entry may also carry the optional `kind`, `deadline`,
+  conversion permission and admission cap). An absent `kind` means `personal`;
+  the `deadline`, the cap and the conversion permission are link fields. The
+  codec refuses a `deadline` on a `personal` entry and a `link` entry whose
   `permission` is not `read`, on decode and, release-active, on encode: every
   re-sealer selects blob material by the committed permission (ADR 0023 D2,
   D9;
@@ -321,11 +327,11 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`,
   additive evolution: records predating the tag, and read-only records, decode
   with `None`). Every repeated collection in the grant section is bounded
   fail-closed at decode and
-  encode — `historyLinks` at 256, `grantBlobs` and the commitment's `entries`
-  both at 1024 (`too-many-structures`) — the commitment additionally refuses a
-  repeated `tag` (`duplicate-grant-tag`), and two history links may not carry
-  equal sealed bytes (`duplicate-history-link`): the gate's stage-3 work is
-  `pseudonyms + structures` (engine.md "One section, one signer"), so an
+  encode (ADR 0033) — `historyLinks` at 256, `grantBlobs` and the commitment's
+  `entries` both at 1024 (`too-many-structures`) — the commitment additionally
+  refuses a repeated `tag` (`duplicate-grant-tag`), and two history links may
+  not carry equal sealed bytes (`duplicate-history-link`): the gate's stage-3
+  work is `pseudonyms + structures` (engine.md "One section, one signer"), so an
   unbounded collection on **either** side of that sum is a reader-CPU amplifier,
   and each epoch mints one link under a fresh nonce, so a repeat is an authored
   anomaly. The two 1024 ceilings
@@ -364,24 +370,27 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`,
   at that root could fit. Honest use is nowhere near it: producers prune history
   links to a far smaller retained window, and a body only approaches its bound
   through preserved unknowns.
-- **History-link retention**: a link minted at epoch `e` is sealed under **its
-  own** epoch's structure key and carries the _preceding_ epoch's seed, so the
-  ratchet is a **contiguous chain** walkable only backward, one epoch per step.
-  A **rotation** holds the one key that starts that walk — the previous epoch's
-  seed — so it keeps the newest 64 links (`MAX_RETAINED_HISTORY_LINKS`) that
-  actually walk and drops the rest. Order is therefore proven, not assumed, and
-  the chain is bounded by design rather than by the 2 MiB block ceiling; the two
-  constants are coupled, retention staying under the decode bound so that bound
-  remains a malformed-input guard an honest rotator never approaches. An
-  unwalkable remainder is **truncated, never refused**: the carried set is
-  attacker-influenced, so failing the cut would let a committed write-grantee
-  block the rotation that revokes them. A **sweep** publishes at the floor epoch
+- **History-link retention** (ADR 0033): a link minted at epoch `e` is sealed
+  under **its own** epoch's structure key and carries the _preceding_ epoch's
+  seed, so the ratchet is a **contiguous chain** walkable only backward, one
+  epoch per step. A **rotation** holds the one key that starts that walk — the
+  previous epoch's seed — so it keeps the newest 64 links
+  (`MAX_RETAINED_HISTORY_LINKS`) that actually walk and drops the rest. Order is
+  therefore proven, not assumed, and the chain is bounded by design rather than
+  by the 2 MiB block ceiling; the two constants are coupled, retention staying
+  under the decode bound so that bound remains a malformed-input guard an honest
+  rotator never approaches. An unwalkable remainder is **truncated, never
+  refused**: the carried set is attacker-influenced, so failing the cut would
+  let a committed write-grantee block the rotation that revokes them. A re-seal
+  also drops a carried read-plane link past the engine's per-link retention
+  budget (`MAX_RETAINED_HISTORY_LINK_BYTES`, 256 bytes), with every older link,
+  and never refuses for it (ADR 0033). A **sweep** publishes at the floor epoch
   without minting a link, so the record's epoch label can outrun the newest
   link's minting epoch — the AAD a walk needs — leaving it unable to walk or
   prune; it appends nothing, so the set cannot grow there, but it no longer
   trims an oversized one either. The window is the deepest epoch lag a backward
-  walk can cover; a node past it is not lost, since the sweep re-seals it
-  forward from the scope's _current_ seed.
+  walk can cover. A node past it is readable by nobody: the sweep reports it
+  unreachable and does not re-seal it.
 - **Owner-write-blob** (`structTag` `owner-write-blob`): the write-plane mirror
   of the owner blob — the scope's `writeScopeSeed` HPKE-sealed to the owner's
   **own** enc subkey, payload det-CBOR `{writeEpoch, writeScopeSeed}`. The seed
@@ -403,17 +412,17 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`,
 H(signed bytes)}` — covering grant blobs, owner blob, owner-write-blob, ascent
   link, history links, and the write-body. The signed bytes are the structure's
   `ciphertext`, with one exception: an **ascent link** signs over the det-CBOR
-  binding `{ascentPublic, ciphertext, enc}`, so its plaintext public half is
-  covered too. Outside the signature that field is authenticated by possession of
-  `writeScopeSeed` alone — a holder could republish the root with `ascentPublic`
-  swapped for a key it holds, leaving every ciphertext, signature and commitment
-  byte-identical, and the next honest scope-exit rotation would seal a freshly
-  minted override seed to the planted key. The binding does not make the field
-  unforgeable — a **committed** writer can plant its own key and sign the swapped
-  body — but it makes the swap attributable to a pseudonym the owner committed,
-  and an owner cut overwrites it by deriving the public half from the parent seed
-  instead of carrying it. Verification is per-structure and pure; the
-  whole-record fail-closed policy is the engine's gate stage.
+  binding `{ascentPublic, ciphertext, enc}` (ADR 0032), so its plaintext public
+  half is covered too. Outside the signature that field is authenticated by
+  possession of `writeScopeSeed` alone — a holder could republish the root with
+  `ascentPublic` swapped for a key it holds, leaving every ciphertext, signature
+  and commitment byte-identical, and the next honest scope-exit rotation would
+  seal a freshly minted override seed to the planted key. The binding does not
+  make the field unforgeable — a **committed** writer can plant its own key and
+  sign the swapped body — but it makes the swap attributable to a pseudonym the
+  owner committed, and an owner cut overwrites it by deriving the public half
+  from the parent seed instead of carrying it. Verification is per-structure and
+  pure; the whole-record fail-closed policy is the engine's gate stage.
 - **Pointer payloads**: the re-point object `{scopeId, currentRootName,
 writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the
   record, sealed under the scope's stable `pointerReadKey`. The vault pointer
@@ -463,11 +472,11 @@ enc + ephemeral, then reading its header keylessly and opening) and
 `ownerTag`, a forward `v`, and a **base-mode forgery** — a correctly framed,
 correctly AAD-bound record sealed to the owner's own clear tag by a writer who
 lacks the enc secret). That last vector is the sender-authentication gate: the
-op record seals HPKE **auth mode** (RFC 9180 §5.1.1) with the owner's enc subkey
-as both static sender and recipient, because the recipient half is public by
-construction and stamped in the clear beside the records, so base mode would let
-any writer sharing the per-origin queue enqueue an op that publishes under the
-owner's write keys. The clear header — `v`, `ownerTag`,
+op record seals HPKE **auth mode** (RFC 9180 §5.1.1, ADR 0030) with the owner's
+enc subkey as both static sender and recipient, because the recipient half is
+public by construction and stamped in the clear beside the records, so base mode
+would let any writer sharing the per-origin queue enqueue an op that publishes
+under the owner's write keys. The clear header — `v`, `ownerTag`,
 `contentRootCid`, `enc`, `ciphertext` — is **frozen across format versions**: a
 later `v` may change the sealed body, the suite, or the AAD layout, but never
 these five keys, so any build can read any record's header. That is what lets a
@@ -480,15 +489,15 @@ ephemeral, then opening) and `settings_record_reject` (tampered ciphertext, a
 foreign recipient, a **cross-family transplant** of the op record's KEM output
 into settings framing, a short and a low-order `enc`, a missing `enc` and a
 missing `ciphertext`, a forward `v`, an unknown clear-header field, and the same
-base-mode forgery). It seals HPKE **auth mode** to the owner's own enc subkey
-for the same reason the op record does, but over a three-key clear header — `v`,
-`enc`, `ciphertext`: the owner tag is bound into the AAD and **never
-serialized**, because this record is published and therefore server-visible,
-while the enc-subkey public half is otherwise disclosed only by out-of-band
-contact-code exchange. The opener rebuilds the tag from its own key, so a record
-another identity could open is unrepresentable rather than compared away, and
-the transplant vector is what proves tag `0x0b` plus the distinct HPKE info
-string — not the framing — keep the two families apart.
+base-mode forgery). It seals HPKE **auth mode** (ADR 0030) to the owner's own
+enc subkey for the same reason the op record does, but over a three-key clear
+header — `v`, `enc`, `ciphertext`: the owner tag is bound into the AAD and
+**never serialized**, because this record is published and therefore
+server-visible, while the enc-subkey public half is otherwise disclosed only by
+out-of-band contact-code exchange. The opener rebuilds the tag from its own key,
+so a record another identity could open is unrepresentable rather than compared
+away, and the transplant vector is what proves tag `0x0b` plus the distinct HPKE
+info string — not the framing — keep the two families apart.
 
 The `content-key` KAT set is `content_key_accept` (a genesis-epoch and a
 max-epoch blob, each reproducing its exact bytes from a fixed enc + ephemeral,
@@ -498,26 +507,29 @@ the same base-mode forgery, `scope` and `epoch` transplants, a **swapped
 `contentCid`** — the binding that stops a key being moved onto another version's
 blocks — a forward `v` with and without an unknown clear-header field, an
 unknown clear-header field alone, a missing `enc`, and a wide, a low-order, a
-non-prime-order and a non-canonical `enc`). It seals HPKE **auth mode** to the owner's own enc subkey over the same
-three-key clear header as the settings record, with `{scope, epoch}` bound in
-the AAD and the `contentCid` bound inside the seal. Both directions refuse a
-malformed `contentCid` release-actively (AGENTS.md rule 8): a blob whose CID the
-open path would refuse is a version whose key is gone.
+non-prime-order and a non-canonical `enc`). It seals HPKE **auth mode**
+(ADR 0030) to the owner's own enc subkey over the same three-key clear header as
+the settings record, with `{scope, epoch}` bound in the AAD and the `contentCid`
+bound inside the seal. Both directions refuse a malformed `contentCid`
+release-actively (AGENTS.md rule 8): a blob whose CID the open path would refuse
+is a version whose key is gone.
 
 The `owner-local` structure carries **every durable store the owner alone
 authors and reads** — received shares, the contact book, and the engine's
 per-owner staging bookkeeping (the retire ledger and the doomed-name journal) —
 under one format rather than one module per store (FSM1/cipher-box-next ADR
-0006). It seals HPKE **auth mode** to the owner's own enc subkey over the same
-three-key clear header as the settings record (`v`, `enc`, `ciphertext`), with
+0006). It seals HPKE **auth mode** (ADR 0030) to the owner's own enc subkey
+over the same three-key clear header as the settings record (`v`, `enc`,
+`ciphertext`), with
 the owner tag bound into the AAD and never serialized. What is new is the
 **store kind**: a frozen registry of `(name, discriminator)` pairs —
 `received-shares` (`0x01`), `contact-book` (`0x02`), `retire-ledger` (`0x04`),
-`doomed-journal` (`0x05`) — whose discriminator rides the AAD and whose name
-completes the HPKE `info` string `cipherbox/v2/owner-local/<name>`. Kind `0x03`,
-the retired `invite-records` store, stays reserved for ever (ADR 0023 D2,
-consequence 2). The kind is a key-schedule input and **never a wire field**, so
-a blob offered as the wrong store is refused by the AEAD rather than by a
+`doomed-journal` (`0x05`), `scope-exit-debt` (`0x06`), `pending-conversions`
+(`0x07`), `grantee-names` (`0x08`) — whose discriminator rides the AAD and whose
+name completes the HPKE `info` string `cipherbox/v2/owner-local/<name>`. Kind
+`0x03`, the retired `invite-records` store, stays reserved for ever (ADR 0023
+D2, consequence 2). The kind is a key-schedule input and **never a wire field**,
+so a blob offered as the wrong store is refused by the AEAD rather than by a
 comparison: a decryption failure, not a parse failure. The KAT set is
 `owner_local_accept` (an empty body, plus one populated body per kind, each
 reproducing its exact bytes from a fixed enc + ephemeral, then opening) and
@@ -533,11 +545,11 @@ that distinct per-store `info` strings used to give for free).
 The recycle bin is one owner-sealed, vault-level index record
 ([ADR 0010](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0010-recycle-bin-is-an-owner-sealed-index.md)).
 It is published at the `bin-index-ipns-keypair` name and sealed
-**symmetrically** under `bin-index-seal-key`. That follows the rule the record
-family runs on: a structure whose readership is exactly one, forever, seals
-symmetrically under its own login-secret edge, because possession of the key is
-already the author proof; a structure a public half must address seals
-HPKE-to-self. Its clear header is two keys, `v` and `sealed`, frozen across
+**symmetrically** under `bin-index-seal-key`. It is the one owner-only
+structure that seals symmetrically: a key that only the login secret derives
+already proves the author, and no public half addresses this record (ADR 0031);
+every other owner-only structure seals in HPKE auth mode to the owner itself
+(ADR 0030). Its clear header is two keys, `v` and `sealed`, frozen across
 format versions; the version is bound into the AAD
 `[cipherbox/v2/aad, v, 0x0f]`, so rewriting the clear copy fails the tag.
 
@@ -547,13 +559,15 @@ The body is `{entries[], pad, revision}`. Each entry carries `nodeId`,
 route to a record no folder names, and `heldKey` is the scope-seed-shaped key
 the delete re-keyed the doomed subtree under: every node of that subtree keys at
 `readKey(nodeSeed(held, nodeId))`, so the one key opens the whole subtree. Every
-soft delete re-keys, so every entry this build writes carries one. `revision` is
+soft delete re-keys, so every entry this build writes carries one (ADR 0043).
+`revision` is
 what the floor law orders two records by when the outer IPNS sequence cannot
 tell them apart. Duplicate
 `nodeId` is fail-closed at decode: two entries for one node would let restore and
 purge pick a winner by position.
 
-**The body pads to a fixed rung before the seal.** The record is published, so
+**The body pads to a fixed rung before the seal** (ADR 0031). The record is
+published, so
 its ciphertext length is server-visible, and an unpadded body would disclose the
 soft-delete count to within one entry. That is a deletion-activity count, not a
 size. The rungs are 4 KiB,
@@ -665,9 +679,10 @@ their suite entry in the KAT manifest (ADR 0015 D3).
 the published commitment without naming it: the mask is keyed on the scope's
 `pointerReadKey`, which the owner derives and every grant blob carries, and its
 message is the blinded tag, so one recipient masks to unrelated bytes at every
-scope root.
+scope root (ADR 0032).
 
-The contact-label pair is the one edge whose output never reaches the wire: the
+The contact-label pair is the one edge whose output never reaches the wire
+(ADR 0032): the
 label keys durable device-local state that would otherwise name a contact in the
 clear, and the seed is the account's alone, so no observer who holds the identity
 key can recompute it. `name-label` is the seed's second consumer, on the same
@@ -677,12 +692,12 @@ whole store key rather than a fixed-width id — the catalog's one variable-leng
 `keyed_hash` message, sound because the context stays fixed and `keyed_hash` is
 a pseudorandom function over a message of any length.
 
-The three bin edges are the owner's alone: no grant carries them, which is what
-makes a soft delete cut a grantee's access that key regression cannot undo
-(ADR 0010). No scope seed of any epoch is an input, so no grantee can reach one.
-`bin-held-key` binds `deletedAt` as well as the node id, so a node that is
-binned, restored, and binned again re-keys under fresh bytes and a disclosed
-held key opens one bin generation rather than every later one.
+The three bin edges are the owner's alone (ADR 0031): no grant carries them,
+which is what makes a soft delete cut a grantee's access that key regression
+cannot undo (ADR 0010). No scope seed of any epoch is an input, so no grantee
+can reach one. `bin-held-key` binds `deletedAt` as well as the node id, so a
+node that is binned, restored, and binned again re-keys under fresh bytes and a
+disclosed held key opens one bin generation rather than every later one.
 
 `bin-index-seal-key` takes no epoch input, so it never rotates. Every publish of
 the bin index, on every device, seals under it, and two devices publish that
@@ -718,12 +733,13 @@ byte movers injected by the engine.
 - **Name codec**: `ipnsName` = base36 CIDv1 libp2p-key of the Ed25519 public
   key. Encode + strict decode are core exports; everything downstream treats
   names as opaque.
-- **Content-CID string codec**: a scope's IPNS record value `/ipfs/<head_cid>`
-  carries the head block's binary CIDv1 in base32-lowercase multibase (`b…`).
-  Encode + strict decode are core exports; decode fail-closes on a wrong/missing
-  `b` prefix, a non-base32 or non-canonical body, or any bytes that are not the
-  frozen content-plane CIDv1 framing — the Adopter recovers the trust anchor from
-  the record string before `read_block` verifies the fetched head.
+- **Content-CID string codec** (ADR 0033): a scope's IPNS record value
+  `/ipfs/<head_cid>` carries the head block's binary CIDv1 in base32-lowercase
+  multibase (`b…`). Encode + strict decode are core exports; decode fail-closes
+  on a wrong/missing `b` prefix, a non-base32 or non-canonical body, or any
+  bytes that are not the frozen content-plane CIDv1 framing — the Adopter
+  recovers the trust anchor from the record string before `read_block` verifies
+  the fetched head.
 - **Keyless re-PUT** is a first-class shape: marshal/unmarshal round-trips a
   foreign signed record byte-stable without key material (the republisher and
   every accelerator depend on this).
@@ -739,19 +755,22 @@ dependency majors, WASM-target divergence) and pin the acceptance domain.
   strings, HPKE envelope, structure-signature preimages, IPNS record and name
   codecs, the structure-tag registry — and the vector files that lock each.
   Tests and CI consume the manifest; "what is KAT-locked" is never folklore
-  (the v1 lesson).
-- **Every byte bound names its charged measure.** The measures differ per bound
-  — the whole encoding, a byte-string payload with its det-CBOR head excluded,
-  an entry's value plus its key, or a whole encoding with `writeHistoryLink`
-  charged at its maximum — so the number alone does not say which bytes it
-  charges, and a reader that honours the number without the measure refuses at
-  a byte this implementation accepts. The manifest's `bounds` table carries,
-  per bound, the measure's label, the wire key the refusal reports, and an
-  at-the-bound artifact as a recipe rather than as a megabyte-long vector: a
-  base encoding, the top-level field to pad, the largest pad the bound admits,
-  the length that pads to, and its BLAKE3. The bound must admit the rebuilt
-  artifact, on both the decode and the encode side, and refuse it one byte
-  larger.
+  (the v1 lesson). The manifest covers the core formats; the engine keeps its
+  own KAT set under this regime for the formats and predicates core cannot
+  reach (testing.md "crates/engine — seam fakes and the simulation harness",
+  ADR 0049).
+- **Every byte bound names its charged measure** (ADR 0033). The measures differ
+  per bound — the whole encoding, a byte-string payload with its det-CBOR head
+  excluded, an entry's value plus its key, or a whole encoding with
+  `writeHistoryLink` charged at its maximum — so the number alone does not say
+  which bytes it charges, and a reader that honours the number without the
+  measure refuses at a byte this implementation accepts. The manifest's `bounds`
+  table carries, per bound, the measure's label, the wire key the refusal
+  reports, and an at-the-bound artifact as a recipe rather than as a
+  megabyte-long vector: a base encoding, the top-level field to pad, the largest
+  pad the bound admits, the length that pads to, and its BLAKE3. The bound must
+  admit the rebuilt artifact, on both the decode and the encode side, and refuse
+  it one byte larger.
 - **Accept and reject vectors for every codec**: malformed-input verdicts are
   part of the frozen contract from day one — duplicate keys, non-canonical
   encodings, wrong types, truncations, AAD transplants, bad signatures.

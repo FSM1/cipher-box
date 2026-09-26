@@ -71,10 +71,11 @@ The freeze is one commit boundary, executed in this order:
    with the single-component config below, and begin the layout demolition.
    Workflows, docker files, and scripts are edited in place, in history —
    never forked into `-v2` copies.
-4. **Re-point branch protection.** Required checks on `main` track the v2
-   PR-gate job names as each suite lands (testing.md law 1: a suite exists
-   only if it blocks merges). Job names are the contract; renames update
-   the ruleset in the same PR.
+4. **Re-point branch protection.** Required checks on `main` are the area
+   result contexts and the standalone contexts (ADR 0018). A suite that
+   asserts the behavior of a change reports through one of them the day it
+   lands (testing.md law 1), and a suite of the non-blocking class is not a
+   required check (ADR 0050).
 
 Staging redeployability during the build: `deploy-staging.yml` is
 tag-triggered, and workflow runs execute the workflow file **at the tag** —
@@ -138,7 +139,9 @@ library validation refuses the third-party `libfuse-t.dylib` the mount needs.
 Developer ID signing and notarization are optional: the macOS job exports the
 `APPLE_*` credentials only when the repository holds every one of them, so a
 repository with no Apple Developer account still gets the ad hoc signed
-bundle.
+bundle (ADR 0051). The Apple Developer Program enrolment is not planned for
+v2.0.0. The macOS install note for v2.0.0 must tell a member to use System
+Settings > Privacy & Security > Open Anyway on first launch.
 
 ## Staging pipeline
 
@@ -159,7 +162,7 @@ release management that worked:
    `staging-YYYYMMDD-release-N` → call `deploy-staging.yml`.
 4. Call `staging-e2e.yml` against the deployed front. The deploy carries no
    health gate of its own, so this run is both the release verdict and the
-   first signal that the containers came up.
+   first signal that the containers came up (ADR 0050).
 
 ### The staging stack
 
@@ -184,9 +187,10 @@ starved), same GHCR image flow, same scp-env + `compose pull` + migrations
 trustless gateway is Caddy in front of Kubo's gateway port —
 `forward_auth` to a lightweight API token-verification endpoint, then
 proxy to Kubo for block/CAR responses. The API process serves no bytes;
-Caddy enforces membership; Kubo serves. Token format and TTL are API
-build-time detail. Public trustless gateways remain the no-auth fallback,
-so this path can fail without breaking reads.
+Caddy enforces membership; Kubo serves. The token is the opaque per-session
+pseudonym that api.md (Identity and auth) fixes (ADR 0036). Public trustless
+gateways remain the no-auth fallback, so this path can fail without breaking
+reads.
 
 Two vhosts, `gateway-staging` and `routing-staging`, both under the origin
 certificate the other vhosts use — so a new hostname needs its SAN and a DNS
@@ -200,7 +204,8 @@ in front of it. Caddy is given Cloudflare's published ranges as
 its own beside it: two entries arrive and the count is 2. The two settings are
 one unit — trust without the count keys every IP-keyed limit on Cloudflare's
 edge, the count without the trust runs off the end of the header onto an entry
-the caller wrote — so the same **Lint** gate holds them to each other.
+the caller wrote — so the same **Lint** gate holds them to each other
+(ADR 0035).
 
 `{client_ip}` reads **`CF-Connecting-IP`** under `trusted_proxies_strict`, not
 `X-Forwarded-For`. Cloudflare _appends_ to the latter, so every entry left of the
@@ -209,7 +214,7 @@ first entry outside them — which for a caller whose own address sits inside a
 Cloudflare range (a Worker, WARP, a Tunnel) is an entry it wrote. Cloudflare
 writes and overwrites `CF-Connecting-IP` itself, so it has no prepend surface;
 strict still refuses both headers from an untrusted peer, so a direct-to-origin
-request cannot forge either.
+request cannot forge either (ADR 0035).
 
 The ranges alone are _Cloudflare-wide_, not zone-specific: any Cloudflare tenant
 can point a proxied record at the origin address and arrive from inside a
@@ -221,7 +226,7 @@ it. Caddy routes on the `Host` header rather than on SNI, so the gate covers
 every vhost _and_ the matcher-less fallback policy: a partial one is walked
 around with a forged `Host`, and Caddy writes that fallback itself when a config
 leaves it out. The **Lint** gate holds every adapted connection policy to the
-mode and to that one CA path.
+mode and to that one CA path (ADR 0035).
 
 The range list is a hand-mirrored snapshot, watched daily rather than assumed:
 the **Lint** gate pins the set against edits, and the nightly **Cloudflare Range
@@ -229,7 +234,7 @@ Watch** diffs it against Cloudflare's published list, so an upstream change is
 visible within a day. A departed range is not a trust hole on its own — its new
 owner still cannot complete the origin-pull handshake above — but a range
 Cloudflare adds collapses every member behind the new POP into one rate-limit
-bucket, and that degradation is silent without the watch.
+bucket, and that degradation is silent without the watch (ADR 0035).
 
 The open `/routing/v1` **PUT** publish leg (api.md, Egress) carries no token, so
 a size cap and a per-caller rate are its whole abuse budget; both are asserted in
@@ -242,7 +247,7 @@ rather than enforced. The limiter is a module stock Caddy lacks, so the proxy
 ships as an image built from `docker/caddy/Dockerfile` — pushed beside the API
 image, and built again by the checker so the config is adapted under what runs.
 Its refusals log under a namespace of their own, which is discarded with the
-front's other logs rather than reaching the default sink.
+front's other logs rather than reaching the default sink (ADR 0035).
 
 **Web hosting**: Caddy keeps serving the static bundle from
 `/opt/cipherbox/web` — but the artifact deployed is the production build
@@ -304,8 +309,10 @@ GitHub-hosted only; no self-hosted runners in v2.0.
 
 ### Caching and hygiene
 
-The v1 strategy ports: `setup-node` pnpm cache keyed on the lockfile;
-`actions/cache` on cargo registry/git/target keyed per-OS on `Cargo.lock`.
+The v1 strategy ports: `setup-node` pnpm cache keyed on the lockfile. The
+cargo jobs of the PR gate restore through `Swatinem/rust-cache` with one
+`shared-key` per group, keyed on `Cargo.toml` and `Cargo.lock`; only a run on
+`main` writes those caches (testing.md "CI gates", ADR 0050).
 The WASM build (`crates/wasm`, wasm-pack/wasm-bindgen) joins the cargo
 cache key-space; `cargo-llvm-cov` and other cargo-installed tools move to a
 cached install instead of v1's cold `cargo install` per run. Codecov ports
@@ -316,7 +323,8 @@ workflow.
 
 ### Scheduled tier
 
-One `nightly.yml` (cron) owns the scheduled slots testing.md defined:
+One `nightly.yml` (cron) owns the scheduled slots testing.md defined
+(ADR 0050):
 
 - **Long-horizon liveness**: the compressed-EOL profile run — lease
   renewal at seq+1, the republisher inventory walk, >24 h-no-re-PUT
@@ -327,8 +335,9 @@ One `nightly.yml` (cron) owns the scheduled slots testing.md defined:
   change filter to apply. With `retries: 0` as policy, this distinguishes
   "main broke" (revert) from "environment drifted" (fix the harness)
   before it blocks a release.
-- **Cloudflare Range Watch**: the trusted-proxy snapshot diffed against
-  Cloudflare's published list, so the mirror above cannot go stale unseen.
+- **Cloudflare Range Watch** (ADR 0035 D9): the trusted-proxy snapshot
+  diffed against Cloudflare's published list, so the mirror above cannot go
+  stale unseen.
 
 Every slot reports through one job: a failure opens, or comments on, a
 single `comp:ci` tracking issue, so a scheduled red is never a square
@@ -338,7 +347,7 @@ default branch alone, so the file is inert until it lands on `main`.
 Dispatch-only (unscheduled): the load harness against local or staging
 (`load-test.yml` re-engaged over `crates/load`; the BYO scenario covers the
 API-side advisory-pin path, and external-provider throughput waits on the
-engine's provider layer); never a PR gate.
+engine's provider layer); never a PR gate (ADR 0049).
 
 ## Disposition of the v1 inventory
 
@@ -388,9 +397,6 @@ cutover):
 - **Cutover trigger** — the criteria for scheduling the destructive
   redeploy (v2 contract suite + smoke green on a VPS dry-run); build-time
   judgment, announced in advance.
-- **Gateway token detail** — format, TTL, and the verify endpoint's shape
-  behind Caddy `forward_auth`; API build-time work within the shape fixed
-  above.
 - **Dashboard rewrite** — the v2 Grafana dashboard set (republisher walk,
   mailbox depth, gateway auth hit-rate) lands with the metrics that feed
   it.
