@@ -1,4 +1,4 @@
-//! One focus-window tick pass (blueprint/engine.md "Sync core", "Liveness").
+//! One sync pass (CONTEXT.md "Sync pass"; blueprint/engine.md "Sync core", "Liveness").
 //!
 //! [`TickPass::run`] is the body [`run_tick_loop`](crate::sync::tick::run_tick_loop)
 //! calls once per tick. It reconciles the vault root and the focus window,
@@ -23,14 +23,13 @@ use crate::facade::claim_conversion::{
     ConversionPass, CutAuthority, PointerIndex, TickSites, placed, scope_pointer_index,
 };
 use crate::facade::{
-    Boundaries, ConsultWindow, EngineError, Event, GraftedWritePass, NodeId,
-    POINTER_PAYLOAD_VERSION, ScopeSeeds, SeedFloors, SweepKeys, SweepTaskFactory,
-    adopt_settings_summary, ascent_node_seed, bin_retention_days, cached_seed, consult_pointers,
-    deposit_seed, deposit_write_seed, emit_trust_violation, focus_scope_roots,
-    grafted_write_passes, install_descendant_scopes, install_unproved_scopes, leg_file_share,
-    memoized_scan, nodes_in_scope, own_descendant_scopes, queue_unprojected_children,
-    refresh_seed_floors, report_settings_verdict, scope_root_record_name, second_end_scope,
-    settle_focus_leg, walked_boundary_material,
+    ConsultWindow, EngineError, Event, GraftedWritePass, NodeId, POINTER_PAYLOAD_VERSION,
+    ScopeSeeds, SeedFloors, SweepKeys, SweepTaskFactory, adopt_settings_summary,
+    bin_retention_days, cached_seed, consult_pointers, deposit_seed, deposit_write_seed,
+    emit_trust_violation, focus_scope_roots, grafted_write_passes, install_descendant_scopes,
+    install_unproved_scopes, leg_file_share, memoized_scan, nodes_in_scope, own_descendant_scopes,
+    queue_unprojected_children, refresh_seed_floors, report_settings_verdict,
+    scope_root_record_name, second_end_scope, settle_focus_leg, walked_boundary_material,
 };
 use crate::grants::grafted::{
     BookmarkedPermissions, BookmarkedScopeRoots, ContestedNodes, FloorNamespace, GraftedPlane,
@@ -49,8 +48,8 @@ use crate::net::{
 };
 use crate::rotation::scope_material::ScopeMaterial;
 use crate::rotation::{
-    ResolveFailure, RotateError, RotateOnExit, ScopeExitArm, cut_exited_scope, derive_write_name,
-    install_walked_read_epochs,
+    Boundaries, ResolveFailure, RotateError, RotateOnExit, ScopeExitArm, ascent_node_seed,
+    cut_exited_scope, derive_write_name, install_walked_read_epochs,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
@@ -164,7 +163,7 @@ where
             let conversion = self.conversion_pass(state, &pass, &owner);
             self.convert_claims(state, &conversion, &owner, &pointers, claims)
                 .await;
-            self.link_sweep(state, &pass, &conversion, &owner.root_name, &pointers)
+            self.link_sweep(state, &pass, &conversion, &owner, &pointers)
                 .await;
         }
         self.repost_claims(state, &pass).await;
@@ -282,7 +281,7 @@ where
             }
         }
         // Carries the member's BYO bearer, so the pass owns a copy on the
-        // same terms as the enc subkey above.
+        // same terms as the enc subkey the loop gate copied.
         let SessionPlacement { decision, .. } = placement.borrow().clone()?;
         Some(decision)
     }
@@ -311,7 +310,7 @@ where
         let mode = pass.mode;
         let now = pass.now;
         // The polled pointer consult (#38 D4), ahead of the floor
-        // refresh below so a write epoch this pass sights evicts the
+        // refresh that follows so a write epoch this pass sights evicts the
         // seed it retired in the same pass.
         // A manual refresh resolves nocache everywhere, so it
         // consults every scope in the window rather than waiting out
@@ -809,7 +808,7 @@ where
         let reconciled = root_verdict == RefreshVerdict::Reconciled;
         // Answer the manual requests on every read leg the pass forced,
         // the focus window included — a refresh that left the folder in
-        // view unresolved has not landed. The drain below reports its own
+        // view unresolved has not landed. The drain stage reports its own
         // progress through the op events.
         manual.settle(root_verdict.worst(folder_verdict));
         // A vault that keeps no bin captures no unlink either: the
@@ -1189,12 +1188,9 @@ where
         let root_id = self.root_id;
         let enc_subkey = &pass.enc_subkey;
         let contact_label_seed = &pass.contact_label_seed;
-        // Last, and after the drain above: the grantee's own read
-        // leg is the slowest in the pass, and a host refresh waits
-        // on nothing it reports.
-        //
-        // The mailbox pull leads it, so a share this pass accepts is
-        // classified by the refresh below rather than a pass later.
+        // The mailbox pull leads the received-share refresh, so a share
+        // this pass accepts is classified by that refresh rather than a
+        // pass later.
         let owner_keys = consult_keys.borrow().clone();
         let pointers = match (boundaries, &owner_keys) {
             (Some(boundaries), Some(keys)) => {
@@ -1364,7 +1360,7 @@ where
         state: &SessionState,
         pass: &Pass,
         conversion: &ConversionPass<'_, T, H, C, F, Sch, S, St>,
-        root_name: &IpnsName,
+        owner: &ConversionOwner<'_>,
         pointers: &PointerIndex,
     ) {
         let EngineSeams {
@@ -1375,10 +1371,10 @@ where
         } = state;
         let link_swept = &self.link_swept;
         let now = pass.now;
-        // After the conversion above, so a claim acked this
+        // After the claim conversion, so a claim acked this
         // pass converts before its link can be cut.
         if pace_due(now, link_swept.get(), profile.link_sweep_cadence)
-            && let Some(swept) = conversion.sweep_links(root_name, pointers).await
+            && let Some(swept) = conversion.sweep_links(&owner.root_name, pointers).await
         {
             // A capped sweep continues on the next tick.
             if !swept.more {
@@ -1425,7 +1421,9 @@ where
         .await;
     }
 
-    /// The received-share status refresh.
+    /// The received-share status refresh. Last, after the drain: the
+    /// grantee's own read leg is the slowest in the pass, and a host refresh
+    /// waits on nothing it reports.
     async fn refresh_received_shares(&self, state: &SessionState, pass: &Pass) {
         let EngineSeams {
             transport,
@@ -1505,7 +1503,7 @@ where
         status.reconcile_in_flight = false;
         if reconciled {
             status.last_success = Some(scheduler.now());
-            // Set after the drain above, so the pass that converges
+            // Set after the drain stage, so the pass that converges
             // the base is never the pass that decides against it.
             converged_tick.set(true);
         }

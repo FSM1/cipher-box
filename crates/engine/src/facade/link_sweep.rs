@@ -20,7 +20,7 @@ const SWEEP_CUT_MOVES_THE_WRITE_PLANE: &str = "an expired-link cut named a write
 /// The most cuts that land in one sweep. The rest wait for the next sweep, so
 /// one sweep holds [`Running`] for a bounded time. A failed cut does not
 /// count, so failures cannot hide the scope roots behind them.
-pub(crate) const MAX_SWEEP_CUTS: usize = 8;
+pub(super) const MAX_SWEEP_CUTS: usize = 8;
 
 /// What one sweep did.
 #[derive(Debug, Default)]

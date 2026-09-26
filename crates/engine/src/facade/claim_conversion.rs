@@ -24,25 +24,25 @@ use crate::rotation::cut_for_write_scope;
 use crate::sync::BookkeepingSeal;
 
 /// The refusal a record change answers while a conversion pass runs.
-pub(crate) const CONVERSION_RUNNING: &str = "a-conversion-pass-is-running";
+pub(super) const CONVERSION_RUNNING: &str = "a-conversion-pass-is-running";
 
 /// The failure of an intake that left a claim on the mailbox because the
 /// conversion record is full.
-pub(crate) const CONVERSION_RECORD_FULL: &str = "the-conversion-record-is-full";
+pub(super) const CONVERSION_RECORD_FULL: &str = "the-conversion-record-is-full";
 
 /// The failure of an intake that left a claim on the mailbox because the
 /// conversion record did not persist before the delete.
-pub(crate) const CLAIM_NOT_HELD: &str = "a-claim-could-not-be-held";
+pub(super) const CLAIM_NOT_HELD: &str = "a-claim-could-not-be-held";
 
 /// What a conversion pass answers. An intake failure leaves a claim on the
 /// mailbox; a conversion failure leaves its entry in the record.
 pub(crate) struct PassOutcome {
-    pub(crate) intake: Result<(), EngineError>,
-    pub(crate) conversion: Result<(), EngineError>,
+    pub(super) intake: Result<(), EngineError>,
+    pub(super) conversion: Result<(), EngineError>,
 }
 
 impl PassOutcome {
-    pub(crate) fn unheld(e: EngineError) -> Self {
+    pub(super) fn unheld(e: EngineError) -> Self {
         Self {
             intake: Err(e),
             conversion: Ok(()),
@@ -106,7 +106,7 @@ impl ClaimCounts {
 
 /// The scope pointer an acked claim names, or `None` for a payload that does
 /// not decode.
-pub(crate) fn claimed_pointer(claim: &AckedClaim) -> Option<IpnsName> {
+pub(super) fn claimed_pointer(claim: &AckedClaim) -> Option<IpnsName> {
     InviteClaim::decode(&claim.payload)
         .ok()
         .map(|claim| claim.scope_pointer_name)
@@ -192,11 +192,11 @@ pub(crate) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, 
 /// A cut of a link holds it too: the cut removes the link row a conversion
 /// reads, so the cut and the pass exclude each other, and a link with a
 /// pending conversion entry is never cut (ADR 0023 D4).
-pub(crate) struct Running<'a>(&'a Cell<bool>);
+pub(super) struct Running<'a>(&'a Cell<bool>);
 
 impl<'a> Running<'a> {
     /// The flag, or `None` while another holder has it.
-    pub(crate) fn take(flag: &'a Cell<bool>) -> Option<Self> {
+    pub(super) fn take(flag: &'a Cell<bool>) -> Option<Self> {
         (!flag.replace(true)).then(|| Self(flag))
     }
 }
@@ -209,7 +209,7 @@ impl Drop for Running<'_> {
 
 /// The conversion record, read under [`Running`] for a cut of a link.
 /// [`ConversionPass::settle`] writes back the entries it retired.
-pub(crate) struct HeldRecord<'a> {
+pub(super) struct HeldRecord<'a> {
     _running: Running<'a>,
     record: ConversionRecord,
     retired: bool,
@@ -217,7 +217,7 @@ pub(crate) struct HeldRecord<'a> {
 
 impl HeldRecord<'_> {
     /// The ephemeral identities that send a pending conversion entry.
-    pub(crate) fn pending_links(&self) -> Vec<[u8; IDENTITY_PUBLIC_LEN]> {
+    pub(super) fn pending_links(&self) -> Vec<[u8; IDENTITY_PUBLIC_LEN]> {
         self.record.pending().map(|claim| claim.sender).collect()
     }
 
@@ -229,14 +229,14 @@ impl HeldRecord<'_> {
 
     /// Retire the refused entries the links in `cut` sent, once their cut
     /// landed.
-    pub(crate) fn retire_cut(&mut self, cut: &[[u8; IDENTITY_PUBLIC_LEN]]) {
+    pub(super) fn retire_cut(&mut self, cut: &[[u8; IDENTITY_PUBLIC_LEN]]) {
         self.retire(|claim| cut.contains(&claim.sender));
     }
 
     /// Retire the refused entries at the scope root `node` that no link in
     /// `links`, the set it commits now, sent. This catches the entries of a
     /// landed cut whose own retire did not persist.
-    pub(crate) fn retire_uncommitted(
+    pub(super) fn retire_uncommitted(
         &mut self,
         node: NodeId,
         links: &[CommittedLink],
@@ -280,7 +280,7 @@ where
         BookkeepingSeal::new(self.enc_secret, self.entropy)
     }
 
-    pub(crate) fn keys(&self) -> OwnerRotationKeys<'_> {
+    pub(super) fn keys(&self) -> OwnerRotationKeys<'_> {
         OwnerRotationKeys {
             enc_secret: self.enc_secret,
             identity: self.owner_identity,
@@ -288,7 +288,7 @@ where
         }
     }
 
-    pub(crate) fn net(
+    pub(super) fn net(
         &self,
         target: &OwnerScope,
         pointer_consult: PointerConsultArm,
@@ -329,7 +329,7 @@ where
 
     /// Hold the pass off and read the record, for a cut of a link. `None`
     /// while a pass or another cut holds it.
-    pub(crate) async fn hold_record(&self) -> Result<Option<HeldRecord<'_>>, EngineError> {
+    pub(super) async fn hold_record(&self) -> Result<Option<HeldRecord<'_>>, EngineError> {
         let Some(running) = Running::take(self.running) else {
             return Ok(None);
         };
@@ -341,7 +341,7 @@ where
     }
 
     /// Write back the entries `held` retired, and release [`Running`].
-    pub(crate) async fn settle(
+    pub(super) async fn settle(
         &self,
         held: HeldRecord<'_>,
         pointers: &PointerIndex,
@@ -360,7 +360,7 @@ where
     ///
     /// `vault_pointer_signer` re-points the vault pointer when a write wave
     /// moves the vault root.
-    pub(crate) async fn rotate_cut(
+    pub(super) async fn rotate_cut(
         &self,
         node: NodeId,
         target: &OwnerScope,
@@ -407,7 +407,7 @@ where
     }
 
     /// Show the counts `record` holds, and repaint when they moved.
-    pub(crate) fn show_counts(&self, record: &ConversionRecord, pointers: &PointerIndex) {
+    pub(super) fn show_counts(&self, record: &ConversionRecord, pointers: &PointerIndex) {
         let counts = ClaimCounts::of(record, pointers);
         if *self.counts.borrow() != counts {
             *self.counts.borrow_mut() = counts;
@@ -501,7 +501,7 @@ where
 
     /// Drop the refused entries `retired` names: the owner dismissed them, or
     /// the cut of their link ended them.
-    pub(crate) async fn retire_refused(
+    pub(super) async fn retire_refused(
         &self,
         pointers: &PointerIndex,
         retired: impl Fn(&AckedClaim) -> bool,
@@ -1009,10 +1009,10 @@ where
 
 /// The command's sites: the engine's own owner walk, which places a folder
 /// through the parent's direct-child-scope index.
-pub(crate) struct EngineSites<'a, T: SeamTypes> {
-    pub(crate) engine: &'a Engine<T>,
-    pub(crate) session: &'a SessionIdentity,
-    pub(crate) api: &'a Rc<ApiClient<T::Http, T::CredentialStore>>,
+pub(super) struct EngineSites<'a, T: SeamTypes> {
+    pub(super) engine: &'a Engine<T>,
+    pub(super) session: &'a SessionIdentity,
+    pub(super) api: &'a Rc<ApiClient<T::Http, T::CredentialStore>>,
 }
 
 impl<T: SeamTypes> ConversionSites for EngineSites<'_, T> {

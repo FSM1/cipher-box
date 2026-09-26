@@ -84,7 +84,9 @@ pub use rotate_write::{
     WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, build_repoint_object,
     derive_write_name, rotate_scope_write,
 };
-pub(crate) use scope_material::{WalkedReadEpochs, install_walked_read_epochs};
+pub(crate) use scope_material::{
+    Boundaries, WalkedReadEpochs, ascent_node_seed, install_walked_read_epochs, proved_scope_ref,
+};
 pub use sweep::{
     LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
     SweepResolver, SweepRun, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep,

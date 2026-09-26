@@ -13,10 +13,7 @@ use super::{AscentAuthority, CommittedSet, ResolveFailure, RotateScopePlan, Scop
 use crate::api::ApiClient;
 use crate::content::read::Gateway;
 use crate::entropy::{Entropy, SharedEntropy};
-use crate::facade::{
-    Boundaries, Event, NodeId, POINTER_PAYLOAD_VERSION, SweepKeys, SweepTaskFactory,
-    ascent_node_seed, proved_scope_ref,
-};
+use crate::facade::{Event, NodeId, POINTER_PAYLOAD_VERSION, SweepKeys, SweepTaskFactory};
 use crate::net::rotation::{
     GatedRoots, MovedScopeSeed, OnAccessMisses, RotationAncestry, SweptScopeState,
 };
@@ -25,6 +22,7 @@ use crate::net::{
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::WalkedReadEpochs;
+use crate::rotation::scope_material::{Boundaries, ascent_node_seed, proved_scope_ref};
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache,
 };

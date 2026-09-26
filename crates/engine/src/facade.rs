@@ -126,7 +126,7 @@ use crate::rotation::{
     derive_write_name, record_grant_floor, reseal_at_current_epoch, reseal_scope_root,
     revoke_grants, revoke_write_grant, rotate_on_cut, run_sweep, run_sweep_job,
 };
-use crate::rotation::{FlatCut, flat_root_cut};
+use crate::rotation::{Boundaries, FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
 use crate::seams::{
     BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId,
     OwnerScopedFloorStore, QueueGeneration, QueueGenerationStore, RecordTransport, Scheduler,
@@ -2961,47 +2961,6 @@ pub(crate) async fn memoized_scan<St: StagingStore + QueueGeneration>(
     Ok(scan)
 }
 
-/// The boundaries this session has proved, and the vault root they hang under —
-/// what both the second-end lookup and the scope-exit cut read.
-pub(crate) struct Boundaries<'a> {
-    /// The gate-passing base a boundary's place is read off.
-    pub(crate) base: &'a BaseSnapshot,
-    /// The known set ([`Engine::relocation_scope_roots`]).
-    pub(crate) scope_roots: Vec<NodeId>,
-    /// What each **walked** boundary seals under, assembled from the read epoch
-    /// this tick's walk proved and the two seed caches
-    /// ([`crate::rotation::scope_material`]).
-    pub(crate) material: BTreeMap<NodeId, ScopeMaterial>,
-    /// The vault root: the ascent authority of every boundary directly below it.
-    pub(crate) root: NodeId,
-    pub(crate) root_read_seed: &'a Zeroizing<[u8; 32]>,
-}
-
-/// `nodeSeed(enclosingOverrideSeed, scopeId)` — the ascent authority an interior
-/// scope root's gate derives its expected ascent keypair from
-/// (`RootAdopter::under_parent_node_seed`).
-///
-/// `None` where the enclosing scope's own seed is not in hand: the gate then
-/// refuses the read, which is the fail-closed answer for a boundary this session
-/// cannot place.
-pub(crate) fn ascent_node_seed(
-    base: &Snapshot,
-    material: &BTreeMap<NodeId, ScopeMaterial>,
-    root: NodeId,
-    root_read_seed: &Zeroizing<[u8; 32]>,
-    scope: NodeId,
-) -> Option<Zeroizing<[u8; 32]>> {
-    let parent = base.parent_of(scope)?;
-    let listed: Vec<NodeId> = material.keys().copied().collect();
-    let enclosing = enclosing_scope_root(base, parent, &listed).unwrap_or(root);
-    let seed = if enclosing == root {
-        root_read_seed
-    } else {
-        &material.get(&enclosing)?.read_scope_seed
-    };
-    Some(Zeroizing::new(*kdf::node_seed(seed, &scope.0).as_bytes()))
-}
-
 /// The task a rotation enqueues once its cut is durable: [`SWEEP_MAX_PASSES`]
 /// passes, and whatever it leaves is the idle sweep job's.
 fn sweep_task_factory(sweeper: Sweeper) -> SweepTaskFactory {
@@ -3048,17 +3007,6 @@ fn owned_sweep_targets(
         });
     }
     targets
-}
-
-/// A proved boundary's scope root at the name its write scope seed derives.
-pub(crate) fn proved_scope_ref(scope_root: NodeId, proved: &ScopeMaterial) -> ChildScopeRef {
-    ChildScopeRef::new(
-        scope_root.0,
-        derive_write_name(&proved.write_scope_seed, &scope_root.0)
-            .as_str()
-            .as_bytes()
-            .to_vec(),
-    )
 }
 
 /// Refuse a journal target outside this vault's own tree.
