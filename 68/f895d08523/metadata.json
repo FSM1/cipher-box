@@ -3,7 +3,7 @@
   "checkpoint_id": "68f895d08523",
   "strategy": "manual-commit",
   "branch": "chore/adr-links-to-decisions",
-  "checkpoints_count": 1,
+  "checkpoints_count": 5,
   "files_touched": [
     ".github/workflows/release-please.yml",
     "crates/engine/src/facade.rs",
@@ -25,13 +25,20 @@
       "compact_transcript": "/68/f895d08523/0/transcript.jsonl",
       "content_hash": "/68/f895d08523/0/content_hash.txt",
       "prompt": "/68/f895d08523/0/prompt.txt"
+    },
+    {
+      "metadata": "/68/f895d08523/1/metadata.json",
+      "transcript": "/68/f895d08523/1/full.jsonl",
+      "compact_transcript": "/68/f895d08523/1/transcript.jsonl",
+      "content_hash": "/68/f895d08523/1/content_hash.txt",
+      "prompt": "/68/f895d08523/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 454,
-    "cache_creation_tokens": 87873,
-    "cache_read_tokens": 1308006,
-    "output_tokens": 14490,
-    "api_call_count": 17
+    "input_tokens": 7978,
+    "cache_creation_tokens": 1898455,
+    "cache_read_tokens": 88809280,
+    "output_tokens": 326954,
+    "api_call_count": 374
   }
 }

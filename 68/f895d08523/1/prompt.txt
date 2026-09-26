@@ -1,0 +1,58 @@
+<task-notification>
+<task-id>br30t9ufu</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1bc4f48e-3cea-46dc-9862-0522f68dd410/tasks/br30t9ufu.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI on PR 2030" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6d45caea4cf61681</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1bc4f48e-3cea-46dc-9862-0522f68dd410/tasks/a6d45caea4cf61681.output</output-file>
+<status>completed</status>
+<summary>Agent "PR B: Rust comment links to decisions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I opened draft PR #2031: https://github.com/FSM1/cipher-box/pull/2031. It is based on `main`, and the body says to merge it after #2030. I posted the `@coderabbitai review` comment. The PR body has no attribution line.
+
+**Files changed (12 files, comments only)**
+- The ADR links in 10 engine files now point at `decisions/&lt;file&gt;`: `facade.rs`, `facade/link_sweep.rs`, `gate/adoption.rs`, `gate/floor.rs`, `grants/append.rs`, `grants/cut_set.rs`, `grants/name_cache.rs`, `grants/received_status.rs`, `net/resolve.rs` and `rotation/sweep.rs`, all in `crates/engine/src/`. All `FSM1/cipher-box-next#N` mentions and issue URLs are unchanged.
+- `scripts/check-tracker-refs.mjs` has one added line. It says that the old corpus is archived and that its ADRs now live in `decisions/`.
+- `.github/workflows/release-please.yml` line 1 now cites only `blueprint/deploy.md`.
+- There were no `cipher-box-next/blob` links in `apps/` or `packages/`.
+
+**Checks**
+- `cargo fmt --all --check`: pass.
+- `cargo check -p cipherbox-engine`: pass.
+- `prettier --check` on the `.mjs` and `.yml` files: pass.
+- `pnpm lint:tracker-refs`: pass (1066 files).
+
+**Skill findings**
+- `simplify`: it found two short `D4).` lines left alone at the end of a comment, in `name_cache.rs` and `resolve.rs`. I joined each one to the line above. The other review angles found nothing.
+- `security-review`: no findings. Every changed line is in a comment, and no code, regex or workflow key changed.
+
+**Commit**
+There is one commit: `chore: point code comments at the in-repo ADR corpus`. After the simplify fix, I did not amend. I did a soft reset and made the commit again. The hook then added a new trailer, `Entire-Checkpoint: 68f895d08523`, which is on the pushed commit. The trailer from the first commit, `5fadb11f4888`, is not on the branch now.
+
+**Out of scope, your decision**
+About 24 comments in `crates/`, `apps/` and `packages/` still say an ADR is in the old repo, with no URL. Examples are `crates/core/src/seal/owner_local.rs:2` "(ADR 0006 in FSM1/cipher-box-next)" and `crates/core/src/kdf/mod.rs:21,426,578`. The brief included only blob URLs, so I did not change them. After #2030 merges, these comments give an old location. They can be changed in a follow-up, or I can add them to this PR.</result>
+<usage><subagent_tokens>75220</subagent_tokens><tool_uses>18</tool_uses><duration_ms>249663</duration_ms></usage>
+</task-notification>
+
+---
+
+also, why is the spec staying in the `-next` repo rather than being moved across?
+
+---
+
+ahhh ok got it - i thought that the `specs/` folder was the v2 spec
+
+---
+
+Is there any purpose to the V1 `docs/` remaining in the repo?
+
+---
+
+go
