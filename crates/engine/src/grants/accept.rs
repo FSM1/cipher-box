@@ -356,7 +356,10 @@ impl ReceivedSharesList {
         live_personal: Option<bool>,
     ) -> JoinStanding {
         if self.find(key).is_none() {
-            return JoinStanding::Absent;
+            return match live_personal {
+                Some(true) => JoinStanding::Unbookmarked,
+                _ => JoinStanding::Absent,
+            };
         }
         let hold = self.link_hold(key);
         if hold.is_some_and(|held| held.claim.is_some() && held.invite_secret == *invite_secret) {
@@ -849,6 +852,10 @@ pub(super) fn reject_unknown(map: &Map, known: &[&str]) -> Result<(), CodecError
 pub(crate) enum JoinStanding {
     /// No bookmark names the folder.
     Absent,
+    /// The owner grants this account in its own name, but this device holds
+    /// no bookmark for the folder. A join records the bookmark and posts no
+    /// claim.
+    Unbookmarked,
     /// The owner still grants this account in its own name.
     Personal,
     /// The bookmark holds this link and has posted a claim through it.

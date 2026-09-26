@@ -250,6 +250,7 @@ async fn sight_write_seed<T: RecordTransport, F: FloorStore>(
     let epoch = consulted.write_floor;
     Ok(Some(PointerSighting {
         current_root: consulted.current_root,
+        deferred: consulted.deferred,
         opened: open_write_scope_seed_at(enc_secret, envelope, owb, epoch)
             .map(|seed| (seed, epoch)),
     }))
@@ -259,6 +260,8 @@ async fn sight_write_seed<T: RecordTransport, F: FloorStore>(
 /// with the epoch it opened at, when the blob opened.
 struct PointerSighting {
     current_root: IpnsName,
+    /// See [`ConsultedPointer::deferred`].
+    deferred: bool,
     opened: Option<(Zeroizing<[u8; SECRET_LEN]>, u64)>,
 }
 
@@ -1990,6 +1993,11 @@ where
                 self.on_access_misses.clear(&scope_id);
                 root.write_scope_seed = Some(seed);
                 return Ok(());
+            }
+            // The lease holder settles the floor, so the next access reads
+            // the pointer again rather than a miss kept from before it.
+            Ok(Some(PointerSighting { deferred: true, .. })) => {
+                return Err(ResolveFailure::Unavailable);
             }
             Ok(Some(PointerSighting { current_root, .. })) => {
                 OnAccessMiss::Vouched(Box::new(current_root))
@@ -13946,6 +13954,31 @@ mod tests {
         }
     }
 
+    /// A consult whose floor raise a write-epoch lease deferred leaves the blob
+    /// closed, and keeps no miss: once the lease drops, the next access
+    /// consults again and opens the seed.
+    #[test]
+    fn an_on_access_consult_a_write_epoch_lease_deferred_keeps_no_miss() {
+        let root = swept_root(Vec::new(), &[]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, None);
+        stage_pointer_at(&harness, SCOPE, &repoint_at(SCOPE, OWNER_ROOT_EPOCH));
+        let net = harness.net(&[]);
+        let scope = child_ref(SCOPE, &root);
+
+        let lease = floor::acquire_write_epoch_lease(&SCOPE).expect("the scope starts free");
+        assert!(matches!(
+            block_on(net.resolve_scope(&scope)),
+            Err(SweepResolveFailure::Unavailable)
+        ));
+        drop(lease);
+
+        assert!(
+            block_on(net.resolve_scope(&scope)).is_ok(),
+            "the access after the lease opens the seed at the vouched epoch"
+        );
+    }
+
     fn repoint_at(scope_id: [u8; 16], write_epoch: u64) -> RepointObject {
         RepointObject {
             scope_id,
@@ -14228,6 +14261,7 @@ mod tests {
             ConsultedPointer {
                 current_root: scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE),
                 write_floor: 1,
+                deferred: false,
                 record_bytes: b"a record read before the flip".to_vec(),
                 value: b"the block read before the flip".to_vec(),
             },

@@ -10258,31 +10258,38 @@ where {
             return Ok(());
         }
 
-        let mut entropy = SharedEntropy(&self.entropy);
-        let claim = InviteClaim::mint(
-            &mut entropy,
-            fragment.scope_pointer_name.clone(),
-            session.contact_code(),
-            name,
-        )
-        .map_err(EngineError::from_invite)?;
-        let ephemeral = fresh_ephemeral(&mut entropy).map_err(EngineError::from_entropy)?;
-        // Fresh random and unlabelled: the API keeps only sha256(senderPublicKey
-        // : idempotencyKey) but sees the key itself, so a derivable one hands
-        // back the sender edge and a named one hands back the message class.
-        let idempotency: [u8; CLAIM_KEY_LEN] = fresh_bytes(&mut entropy, "claim idempotency key")
-            .map_err(EngineError::from_entropy)?;
-        post_invite_claim(
-            api.as_ref(),
-            &owner,
-            &invitee,
-            &ephemeral,
-            ENVELOPE_V,
-            &claim.encode().map_err(EngineError::from_invite)?,
-            &hex_lower(&idempotency),
-        )
-        .await
-        .map_err(EngineError::from_seam)?;
+        let posted = if standing == JoinStanding::Unbookmarked {
+            None
+        } else {
+            let mut entropy = SharedEntropy(&self.entropy);
+            let claim = InviteClaim::mint(
+                &mut entropy,
+                fragment.scope_pointer_name.clone(),
+                session.contact_code(),
+                name,
+            )
+            .map_err(EngineError::from_invite)?;
+            let ephemeral = fresh_ephemeral(&mut entropy).map_err(EngineError::from_entropy)?;
+            // Fresh random and unlabelled: the API keeps only
+            // sha256(senderPublicKey : idempotencyKey) but sees the key itself,
+            // so a derivable one hands back the sender edge and a named one
+            // hands back the message class.
+            let idempotency: [u8; CLAIM_KEY_LEN] =
+                fresh_bytes(&mut entropy, "claim idempotency key")
+                    .map_err(EngineError::from_entropy)?;
+            post_invite_claim(
+                api.as_ref(),
+                &owner,
+                &invitee,
+                &ephemeral,
+                ENVELOPE_V,
+                &claim.encode().map_err(EngineError::from_invite)?,
+                &hex_lower(&idempotency),
+            )
+            .await
+            .map_err(EngineError::from_seam)?;
+            Some((claim, idempotency))
+        };
 
         self.contact_store(session)
             .record(&fragment.owner_contact_code)
@@ -10290,20 +10297,24 @@ where {
             .map_err(EngineError::from_contact_store)?;
 
         // A lapsed bookmark heals to the root and the shape this live read found.
-        if standing == JoinStanding::Absent || live_personal.is_some() {
+        if matches!(standing, JoinStanding::Absent | JoinStanding::Unbookmarked)
+            || live_personal.is_some()
+        {
             received.reconcile(share);
         }
-        if let Some(previous) = received.link_hold(&key)
-            && previous.invite_secret == hold.invite_secret
-        {
-            hold.deadline = previous.deadline;
+        if let Some((claim, idempotency)) = posted {
+            if let Some(previous) = received.link_hold(&key)
+                && previous.invite_secret == hold.invite_secret
+            {
+                hold.deadline = previous.deadline;
+            }
+            hold.claim = Some(HeldClaim::first_post(
+                claim,
+                idempotency,
+                self.seams.scheduler.now(),
+            ));
+            received.hold_link(key, hold);
         }
-        hold.claim = Some(HeldClaim::first_post(
-            claim,
-            idempotency,
-            self.seams.scheduler.now(),
-        ));
-        received.hold_link(key, hold);
         store
             .persist(&received)
             .await

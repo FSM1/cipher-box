@@ -91,6 +91,9 @@ pub(crate) struct ConsultedPointer {
     /// epoch, or the standing floor when a write-epoch lease deferred the
     /// raise.
     pub(crate) write_floor: u64,
+    /// A write-epoch lease deferred the raise, so `write_floor` is below the
+    /// epoch the re-point vouched.
+    pub(crate) deferred: bool,
     /// The record this consult authenticated. It rides out so the caller that
     /// seats it holds those exact bytes: a second read of the same name lets an
     /// endpoint set that serves fresh then stale seat a record no consult
@@ -142,6 +145,7 @@ impl PointerConsult<'_> {
         Ok(Some(ConsultedPointer {
             current_root: repoint.current_root,
             write_floor,
+            deferred: write_floor < repoint.write_epoch,
             record_bytes,
             value: block,
         }))

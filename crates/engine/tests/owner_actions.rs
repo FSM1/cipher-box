@@ -8350,6 +8350,53 @@ fn a_person_the_owner_cut_joins_again_through_a_new_link() {
     assert!(stored_link_hold(&fx).is_none(), "the link keys dropped");
 }
 
+/// Bookmarks live on each device. A device of a granted account that holds no
+/// bookmark for the folder is offered the join, and the join records the
+/// bookmark with no claim and no link hold.
+#[test]
+fn a_granted_account_on_a_device_with_no_bookmark_joins_with_no_claim() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &holder, &mut holder_tasks);
+
+    let laptop = fx.world.device(b"the recipient's second device");
+    serve_http(&laptop, &fx.blocks, 8_000);
+    let (mut second, _second_events) = engine_on_api(&laptop, 23);
+    block_on(second.start(LoginSecret::new(RECIPIENT_SECRET.to_vec())))
+        .expect("the recipient's second session starts");
+    let mut second_tasks = fx.world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut second_tasks);
+    assert!(
+        block_on(second.received_shares())
+            .expect("the list reads")
+            .is_empty()
+    );
+
+    let again = fx.mint_link();
+    let seen = preview(&second, &again).expect("the preview reads");
+    assert_eq!(seen.state, LinkPreviewState::Live);
+    assert!(!seen.joined, "this device holds no bookmark to open");
+    assert_eq!(
+        join_link(&mut second, &mut second_tasks, again),
+        Ok(CommandOutcome::Done)
+    );
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "the join posted no claim"
+    );
+    settle(&fx, &second, &mut second_tasks);
+    let shares = block_on(second.received_shares()).expect("the list reads");
+    assert_eq!(shares.len(), 1, "the join recorded the bookmark");
+    assert_eq!(shares[0].resolution, Some(ResolutionClass::Granted));
+    assert!(!shares[0].via_link, "it reads through the personal grant");
+}
+
 /// A person the owner still grants who opens another link of the same folder
 /// has joined already: the preview says so, and the join posts nothing.
 #[test]
