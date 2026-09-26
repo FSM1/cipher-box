@@ -245,11 +245,20 @@ fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRe
     // the only name a browse can show.
     let label = grafted_root_name(&share.display_name, root);
     let renamed = match base.node_mut(root) {
-        Some(meta) if meta.name() != *label => {
-            meta.rename(label.as_str());
-            true
+        Some(meta) => {
+            // A write-scope cut moves the root, and the bookmark heals to the
+            // name the owner re-pointed it to. The grafted drain pass publishes
+            // under this node's name, so it follows the bookmark.
+            let moved = meta.ipns_name.as_deref() != Some(share.scope_root_name.as_slice());
+            if moved {
+                meta.ipns_name = Some(share.scope_root_name.clone());
+            }
+            let relabelled = meta.name() != *label;
+            if relabelled {
+                meta.rename(label.as_str());
+            }
+            moved || relabelled
         }
-        Some(_) => false,
         None => {
             let mut meta = NodeMeta::new(root, label.as_str(), NodeKind::Folder);
             meta.ipns_name = Some(share.scope_root_name.clone());
@@ -3829,6 +3838,29 @@ mod tests {
                 fx.permissions.borrow().get(&SCOPE),
                 Some(&Permission::Read),
                 "a link reads at read, whatever it converts to"
+            );
+        }
+
+        /// A session that rendered the root before a write wave moved it moves
+        /// the render node to the healed bookmark name, which is the name the
+        /// grafted drain pass publishes under.
+        #[test]
+        fn a_rendered_root_follows_the_bookmark_a_write_wave_healed() {
+            let mut fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            let mut rendered = NodeMeta::new(NodeId(SCOPE), "photos-folder", NodeKind::Folder);
+            rendered.ipns_name = Some(old_root_name().as_str().as_bytes().to_vec());
+            fx.base.borrow_mut().upsert_node(rendered);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(DEADLINE)], 0, 1);
+
+            assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+            assert_eq!(
+                fx.base
+                    .borrow()
+                    .node(NodeId(SCOPE))
+                    .and_then(|meta| meta.ipns_name.clone()),
+                Some(scope_root_name().as_str().as_bytes().to_vec()),
             );
         }
 

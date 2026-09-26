@@ -7599,8 +7599,14 @@ where {
                             &scope_write_seeds,
                         )
                     };
-                    *grafted_write_roots.borrow_mut() =
+                    let write_roots: BTreeSet<NodeId> =
                         grafted.iter().map(|pass| pass.root).collect();
+                    // The snapshot's permission reads this set, so a host
+                    // repaints on the tick that proves or drops a write pass.
+                    if *grafted_write_roots.borrow() != write_roots {
+                        *grafted_write_roots.borrow_mut() = write_roots;
+                        let _ = events.unbounded_send(Event::SnapshotUpdated);
+                    }
                     // A graft this vault may only read — a read grant, or a write
                     // grant the sharer cut — publishes an op below it on no
                     // pass. Listed keyless, so the pass holding the identity's

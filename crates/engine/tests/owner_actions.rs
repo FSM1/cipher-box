@@ -9530,6 +9530,97 @@ fn recipient_session(fx: &GrantScenario) -> (Engine<FakeSeamTypes>, EventStream,
     (engine, events, tasks)
 }
 
+/// ADR 0024 D4: the conversion of a write claim cuts the write scope, which
+/// moves the scope root. The session that joined through the link renders the
+/// root at the name it joined at, so the root must move to the healed bookmark
+/// name, or the drain writes under a name the new write seed does not derive.
+/// The host also hears of the tick that makes the folder writable.
+#[test]
+fn a_write_link_holder_writes_in_the_joining_session_after_the_other_device_converts() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link_at(Permission::Write);
+    let joined_at = fx.granted_scope_repoint().current_root;
+    let (mut holder, mut holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..4 {
+        fx.world.scheduler.advance(holder.profile().stale_after);
+        poll_tasks_until_parked(&mut holder_tasks);
+    }
+    let shared = block_on(holder.received_shares()).expect("the list reads")[0].scope;
+    assert_eq!(
+        block_on(holder.snapshot(shared))
+            .expect("a view")
+            .permission,
+        Permission::Read,
+        "a link holder reads before the conversion"
+    );
+    let phone = fx.world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut phone_engine, _phone_events, mut phone_tasks) =
+        boot_owner(&fx.world, &fx.blocks, &phone);
+    tick(&fx.world, &phone_engine, &mut phone_tasks);
+    assert_ne!(
+        fx.granted_scope_repoint().current_root,
+        joined_at,
+        "the conversion moved the scope root"
+    );
+
+    let mut writable = false;
+    for _ in 0..4 {
+        events_so_far(&mut holder_events);
+        tick(&fx.world, &holder, &mut holder_tasks);
+        let repainted = events_so_far(&mut holder_events)
+            .iter()
+            .any(|event| matches!(event, Event::SnapshotUpdated));
+        if block_on(holder.snapshot(shared))
+            .expect("a view")
+            .permission
+            == Permission::Write
+        {
+            assert!(
+                repainted,
+                "the tick that makes the folder writable repaints"
+            );
+            writable = true;
+            break;
+        }
+    }
+    assert!(writable, "the joining session gets write");
+
+    block_on(holder.command(Command::Create {
+        parent: shared,
+        name: "from the link holder".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create journals");
+    for _ in 0..4 {
+        tick(&fx.world, &holder, &mut holder_tasks);
+    }
+    assert!(
+        block_on(fx.recipient_device.staging_store.queued_ops())
+            .expect("the queue reads")
+            .is_empty(),
+        "the drain published the create under the moved root"
+    );
+    block_on(phone_engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the phone opens the folder");
+    for _ in 0..4 {
+        tick(&fx.world, &phone_engine, &mut phone_tasks);
+    }
+    assert!(
+        block_on(phone_engine.view())
+            .expect("a rendered view")
+            .children(fx.folder)
+            .iter()
+            .any(|child| child.name == "from the link holder"),
+        "the owner reads the write at the moved root"
+    );
+}
+
 /// A write grantee's delete only unlinks the node from its folder in the granted
 /// scope. The owner's engine then bins the node by owner capture, and the
 /// grantee's own bin stays empty (CONTEXT.md "Owner capture").
