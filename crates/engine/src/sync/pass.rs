@@ -11,16 +11,20 @@ use std::rc::Rc;
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::Permission as CommittedPermission;
-use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
+use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
+use cipherbox_core::suite::ed25519::Ed25519Signer;
+use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
+use crate::bin_index::BinIndexKeys;
 use crate::content::RetentionPolicy;
 use crate::facade::claim_conversion::{
     ConversionPass, CutAuthority, PointerIndex, TickSites, placed, scope_pointer_index,
 };
 use crate::facade::{
-    Boundaries, ConsultWindow, EngineError, Event, NodeId, POINTER_PAYLOAD_VERSION, ScopeSeeds,
+    Boundaries, ConsultWindow, EngineError, Event, GraftedWritePass, NodeId,
+    POINTER_PAYLOAD_VERSION, ScopeSeeds, SeedFloors, SweepKeys, SweepTaskFactory,
     adopt_settings_summary, ascent_node_seed, bin_retention_days, cached_seed, consult_pointers,
     deposit_seed, deposit_write_seed, emit_trust_violation, focus_scope_roots,
     grafted_write_passes, install_descendant_scopes, install_unproved_scopes, leg_file_share,
@@ -29,18 +33,19 @@ use crate::facade::{
     settle_focus_leg, walked_boundary_material,
 };
 use crate::grants::grafted::{
-    BookmarkedPermissions, FloorNamespace, GraftedPlane, GraftedSharers, evict_grafted_read_seeds,
-    evict_grafted_write_seeds, floor_namespace, floor_view, is_own_scope,
+    BookmarkedPermissions, BookmarkedScopeRoots, ContestedNodes, FloorNamespace, GraftedPlane,
+    GraftedSharers, evict_grafted_read_seeds, evict_grafted_write_seeds, floor_namespace,
+    floor_view, is_own_scope,
 };
-use crate::grants::inbox::ShareInbox;
+use crate::grants::inbox::{OwnedClaim, ShareInbox};
 use crate::grants::link_read::repost_held_claims;
 use crate::grants::received_status::{ReceivedShareStatus, ScopeRender};
 use crate::grants::{ContactStore, StagingContactStore};
 use crate::net::author::ENVELOPE_V;
 use crate::net::{
-    FolderRefresh, GraftedLeg, HeldKey, HeldMaterial, HeldRecords, ResolveOutcome, RootAdopter,
-    ScopeWalk, WalkFailure, WritePlaneDark, observed_at, refresh_base_from_resolved,
-    resolve_and_hold,
+    DescendantScopeRoot, FolderRefresh, GraftedLeg, HeldKey, HeldMaterial, HeldRecords,
+    ResolveOutcome, Resolved, RootAdopter, ScopeWalk, WalkFailure, WritePlaneDark, observed_at,
+    refresh_base_from_resolved, resolve_and_hold,
 };
 use crate::rotation::scope_material::ScopeMaterial;
 use crate::rotation::{
@@ -48,13 +53,13 @@ use crate::rotation::{
     install_walked_read_epochs,
 };
 use crate::seams::{
-    CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SnapshotCache,
-    StagingStore, UnixMillis,
+    CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
+    SnapshotCache, StagingStore, UnixMillis,
 };
 use crate::session::{SessionSecrets, SessionState};
 use crate::settings::{
-    SessionPlacement, SettingsOrigin, VaultSettingsSummary, load_settings_at, redecide_placement,
-    summarize_settings,
+    PlacementDecision, SessionPlacement, SettingsOrigin, VaultSettingsSummary, load_settings_at,
+    redecide_placement, summarize_settings,
 };
 use crate::sync::drain::{
     Drain, DrainScope, EngineSeams, GrantedPass, ScopeEnd, SealPlane, TickInputs, TickScopes,
@@ -83,6 +88,38 @@ pub(crate) struct TickPass<T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) link_swept: Cell<UnixMillis>,
 }
 
+/// What the loop gate hands every later stage of one pass.
+struct Pass {
+    mode: ResolveMode,
+    now: UnixMillis,
+    /// The consult stage moves it to the anchor's owner-vouched current root.
+    root_name: IpnsName,
+    enc_subkey: X25519Secret,
+    contact_label_seed: SecretBytes,
+    bin_keys: Rc<BinIndexKeys>,
+    settings_signer: Rc<Ed25519Signer>,
+}
+
+/// The passes one tick drains, owned for the drain that borrows them.
+struct Assembly {
+    write_seed: Option<Zeroizing<[u8; 32]>>,
+    grafted: Vec<GraftedWritePass>,
+    read_only_grafts: Vec<NodeId>,
+    grafted_scope_roots: BookmarkedScopeRoots,
+    grafted_contested: ContestedNodes,
+    proved_roots: Vec<NodeId>,
+}
+
+/// The owner material a tick's claim conversion runs under, owned for the
+/// conversion pass that borrows it.
+struct ConversionOwner<'b> {
+    boundaries: &'b Boundaries<'b>,
+    signer: Rc<EcdsaSigner>,
+    keys: Rc<SweepKeys>,
+    sweep: SweepTaskFactory,
+    root_name: IpnsName,
+}
+
 impl<T, H, C, F, S, St, Sch> TickPass<T, H, C, F, S, St, Sch>
 where
     T: RecordTransport + Clone + 'static,
@@ -95,97 +132,117 @@ where
 {
     /// One tick: [`TickControl::Stop`] once the session is gone.
     pub(crate) async fn run(&self, state: &SessionState, cause: TickCause) -> TickControl {
-        let EngineSeams {
-            transport,
-            api,
-            floors,
-            snapshot_cache,
-            staging,
-            scheduler,
-            http,
-            gateway,
-            entropy,
-            events,
-            profile,
-            ..
-        } = &self.seams;
+        let Some(mut pass) = self.loop_gate(state, cause) else {
+            return TickControl::Stop;
+        };
+        let Some(decision) = self.redecide_settings(state, &pass).await else {
+            return TickControl::Stop;
+        };
+        self.consult_scope_pointers(state, &mut pass).await;
+        let (floors_before, grafted) = self.refresh_floors(state, &pass).await;
+        let (resolved, read_seed) = self.adopt_root(state, &pass, &floors_before).await;
+        let descendants = self.walk_scopes(state, &pass).await;
+        let (folder_verdict, proved_scope_ids, unproved_scope_ids) =
+            self.refresh_focus(state, &pass, &grafted).await;
+        let reconciled = self.settle_verdict(state, &resolved, folder_verdict);
+        let assembly = self
+            .assemble_scopes(state, &pass, &proved_scope_ids, &unproved_scope_ids)
+            .await;
+        let boundaries = self
+            .drain(
+                state,
+                &pass,
+                &decision,
+                &read_seed,
+                &descendants,
+                &proved_scope_ids,
+                assembly,
+            )
+            .await;
+        let (owner_keys, pointers, claims) = self.pull_mailbox(state, &pass, &boundaries).await;
+        if let Some(owner) = self.conversion_owner(state, boundaries.as_ref(), owner_keys) {
+            let conversion = self.conversion_pass(state, &pass, &owner);
+            self.convert_claims(state, &conversion, &owner, &pointers, claims)
+                .await;
+            self.link_sweep(state, &pass, &conversion, &owner.root_name, &pointers)
+                .await;
+        }
+        self.repost_claims(state, &pass).await;
+        self.refresh_received_shares(state, &pass).await;
+        self.classify_staleness(state, reconciled);
+        TickControl::Continue
+    }
+
+    /// The loop gate: the pass's own copy of every secret it runs under, or
+    /// `None` once the session is gone.
+    fn loop_gate(&self, state: &SessionState, cause: TickCause) -> Option<Pass> {
+        let EngineSeams { scheduler, .. } = &self.seams;
         let SessionState {
-            observed_unlinks,
-            scope_write_seeds,
-            converged_tick,
-            placement,
-            settings_summary,
-            byo_reconciled,
-            held_records: held,
-            snapshot: base,
-            sync_status,
-            scope_read_seeds,
-            descendant_scope_roots: descendant_roots,
-            unproved_scope_roots: unproved_roots,
-            boundary_walk_rejected,
-            scope_roots_walked,
-            walked_read_epochs,
-            current_root_name,
-            focus,
-            focus_refreshed,
-            pointer_consulted,
-            on_access_misses,
-            received_verdicts,
-            received_shares_lock,
-            grafted_sharers,
-            bookmarked_scope_roots,
-            bookmarked_permissions,
-            grafted_write_roots,
-            grafted_claims,
-            minted_scope_roots: minted_roots,
-            pending_invite_claims,
-            conversion_running,
-            sweep_tasks,
-            queue_scan,
-            ..
+            current_root_name, ..
         } = state;
         let SessionSecrets {
             tick_enc_subkey,
             tick_bin_keys,
             tick_settings_signer,
             tick_contact_label_seed,
-            sweep_keys: consult_keys,
-            tick_owner_signer,
+            ..
         } = &*self.secrets;
         let alive = &self.alive;
-        let manual = &self.manual;
-        let owner_identity = self.owner_identity;
-        let root_id = self.root_id;
-        let settings_rechecked = &self.settings_rechecked;
-        let link_swept = &self.link_swept;
         if !alive.get() {
-            return TickControl::Stop;
+            return None;
         }
         let mode = resolve_mode(cause);
         // The session cell is the root's only current name: a wave
         // this session drove between passes has already moved it.
-        let Some(mut root_name) = current_root_name.borrow().clone() else {
-            return TickControl::Stop;
-        };
+        let root_name = current_root_name.borrow().clone()?;
         // The pass owns a copy for exactly its own duration; the engine
         // emptied the cell if it is already gone.
-        let enc_subkey = tick_enc_subkey.borrow().clone();
-        let Some(enc_subkey) = enc_subkey else {
-            return TickControl::Stop;
-        };
-        let contact_label_seed = tick_contact_label_seed.borrow().clone();
-        let Some(contact_label_seed) = contact_label_seed else {
-            return TickControl::Stop;
-        };
-        let bin_keys = tick_bin_keys.borrow().clone();
-        let Some(bin_keys) = bin_keys else {
-            return TickControl::Stop;
-        };
-        let settings_signer = tick_settings_signer.borrow().clone();
-        let Some(settings_signer) = settings_signer else {
-            return TickControl::Stop;
-        };
+        let enc_subkey = tick_enc_subkey.borrow().clone()?;
+        let contact_label_seed = tick_contact_label_seed.borrow().clone()?;
+        let bin_keys = tick_bin_keys.borrow().clone()?;
+        let settings_signer = tick_settings_signer.borrow().clone()?;
         let now = scheduler.now();
+        Some(Pass {
+            mode,
+            now,
+            root_name,
+            enc_subkey,
+            contact_label_seed,
+            bin_keys,
+            settings_signer,
+        })
+    }
+
+    /// The settings re-decide, paced by the recheck interval, then the placement
+    /// the pass drains under.
+    async fn redecide_settings(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+    ) -> Option<PlacementDecision> {
+        let EngineSeams {
+            transport,
+            floors,
+            snapshot_cache,
+            scheduler,
+            http,
+            gateway,
+            events,
+            profile,
+            ..
+        } = &self.seams;
+        let SessionState {
+            placement,
+            settings_summary,
+            byo_reconciled,
+            held_records: held,
+            ..
+        } = state;
+        let alive = &self.alive;
+        let settings_rechecked = &self.settings_rechecked;
+        let now = pass.now;
+        let enc_subkey = &pass.enc_subkey;
+        let settings_signer = &pass.settings_signer;
         // What this paces is a revocation window
         // ([`redecide_placement`]).
         if pace_due(
@@ -203,8 +260,8 @@ where
                 snapshot_cache,
                 scheduler,
                 profile,
-                &enc_subkey,
-                &settings_signer,
+                enc_subkey,
+                settings_signer,
             )
             .await;
             // A teardown that landed inside the load already
@@ -214,7 +271,7 @@ where
             // it resident again and re-arm the pass the cleared
             // cell stops below (security rules 1 and 7).
             if !alive.get() {
-                return TickControl::Stop;
+                return None;
             }
             let load = read.enrol(held, observed);
             report_settings_verdict(events, &load);
@@ -226,9 +283,33 @@ where
         }
         // Carries the member's BYO bearer, so the pass owns a copy on the
         // same terms as the enc subkey above.
-        let Some(SessionPlacement { decision, .. }) = placement.borrow().clone() else {
-            return TickControl::Stop;
-        };
+        let SessionPlacement { decision, .. } = placement.borrow().clone()?;
+        Some(decision)
+    }
+
+    /// The polled pointer consult over the scopes due this pass.
+    async fn consult_scope_pointers(&self, state: &SessionState, pass: &mut Pass) {
+        let EngineSeams {
+            transport,
+            floors,
+            events,
+            profile,
+            ..
+        } = &self.seams;
+        let SessionState {
+            snapshot: base,
+            current_root_name,
+            focus,
+            pointer_consulted,
+            ..
+        } = state;
+        let SessionSecrets {
+            sweep_keys: consult_keys,
+            ..
+        } = &*self.secrets;
+        let root_id = self.root_id;
+        let mode = pass.mode;
+        let now = pass.now;
         // The polled pointer consult (#38 D4), ahead of the floor
         // refresh below so a write epoch this pass sights evicts the
         // seed it retired in the same pass.
@@ -260,8 +341,28 @@ where
         .await
         {
             *current_root_name.borrow_mut() = Some(current_root.clone());
-            root_name = current_root;
+            pass.root_name = current_root;
         }
+    }
+
+    /// The seed-floor refresh: evict every seed a raised floor revoked, and report
+    /// the floors the root adopt stamps with.
+    async fn refresh_floors(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+    ) -> (SeedFloors, GraftedSharers) {
+        let EngineSeams { floors, .. } = &self.seams;
+        let SessionState {
+            scope_write_seeds,
+            scope_read_seeds,
+            descendant_scope_roots: descendant_roots,
+            grafted_sharers,
+            minted_scope_roots: minted_roots,
+            ..
+        } = state;
+        let root_id = self.root_id;
+        let contact_label_seed = &pass.contact_label_seed;
         // Before the steady-state hold consults them: a floor raised
         // since the last pass revokes the seeds this pass would
         // otherwise read and seal under. The floors it reports stamp
@@ -273,7 +374,7 @@ where
         evict_grafted_read_seeds(
             floors,
             &grafted,
-            &contact_label_seed,
+            contact_label_seed,
             &root_id,
             &own_before,
             scope_read_seeds,
@@ -282,22 +383,55 @@ where
         evict_grafted_write_seeds(
             floors,
             &grafted,
-            &contact_label_seed,
+            contact_label_seed,
             &root_id,
             &own_before,
             scope_write_seeds,
         )
         .await;
-        let adopter =
-            RootAdopter::new(gateway, http, floors, &enc_subkey, &owner_identity, root_id).holding(
-                steady_state_hold(
-                    held,
-                    root_id,
-                    &root_name,
-                    scope_read_seeds,
-                    scope_write_seeds,
-                ),
-            );
+        (floors_before, grafted)
+    }
+
+    /// The root adopt: resolve the vault root through the gate, deposit the seeds
+    /// it surfaces, and answer the root's read seed after it.
+    async fn adopt_root(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+        floors_before: &SeedFloors,
+    ) -> (Result<Resolved, SeamError>, Option<Zeroizing<[u8; 32]>>) {
+        let EngineSeams {
+            transport,
+            floors,
+            snapshot_cache,
+            http,
+            gateway,
+            events,
+            ..
+        } = &self.seams;
+        let SessionState {
+            observed_unlinks,
+            scope_write_seeds,
+            held_records: held,
+            snapshot: base,
+            sync_status,
+            scope_read_seeds,
+            ..
+        } = state;
+        let owner_identity = self.owner_identity;
+        let root_id = self.root_id;
+        let mode = pass.mode;
+        let now = pass.now;
+        let root_name = &pass.root_name;
+        let enc_subkey = &pass.enc_subkey;
+        let adopter = RootAdopter::new(gateway, http, floors, enc_subkey, &owner_identity, root_id)
+            .holding(steady_state_hold(
+                held,
+                root_id,
+                root_name,
+                scope_read_seeds,
+                scope_write_seeds,
+            ));
         // Own-root material: the write-scope seed the owner cannot
         // re-derive rides the adopt (recovered from the owner-write-blob),
         // so the caller-side seed is `None` and the gate's authenticated
@@ -315,7 +449,7 @@ where
             transport,
             snapshot_cache,
             &adopter,
-            &root_name,
+            root_name,
             held,
             &material,
             mode,
@@ -340,7 +474,7 @@ where
                     scope_write_seeds,
                     node_id,
                     seed,
-                    Some(&root_name),
+                    Some(root_name),
                     floors_before.write,
                 );
             }
@@ -360,6 +494,41 @@ where
             );
         }
         let read_seed = cached_seed(scope_read_seeds, &root_id);
+        (resolved, read_seed)
+    }
+
+    /// The scope walk below the vault root, and the boundaries it proved.
+    async fn walk_scopes(&self, state: &SessionState, pass: &Pass) -> Vec<DescendantScopeRoot> {
+        let EngineSeams {
+            transport,
+            floors,
+            snapshot_cache,
+            http,
+            gateway,
+            events,
+            ..
+        } = &self.seams;
+        let SessionState {
+            observed_unlinks,
+            scope_write_seeds,
+            held_records: held,
+            snapshot: base,
+            scope_read_seeds,
+            descendant_scope_roots: descendant_roots,
+            unproved_scope_roots: unproved_roots,
+            boundary_walk_rejected,
+            scope_roots_walked,
+            walked_read_epochs,
+            ..
+        } = state;
+        let SessionSecrets {
+            sweep_keys: consult_keys,
+            ..
+        } = &*self.secrets;
+        let owner_identity = self.owner_identity;
+        let root_id = self.root_id;
+        let now = pass.now;
+        let enc_subkey = &pass.enc_subkey;
         // The held record is the root this pass reconciled, so the
         // walk needs no second read of either plane to start.
         let held_root = held
@@ -376,7 +545,7 @@ where
             gateway,
             http,
             floors,
-            enc_secret: &enc_subkey,
+            enc_secret: enc_subkey,
             identity: &owner_identity,
             scope_keys: &keys.scope_keys,
             payload_version: POINTER_PAYLOAD_VERSION,
@@ -424,6 +593,44 @@ where
                 Some(WalkFailure::Unavailable) => {}
             }
         }
+        descendants
+    }
+
+    /// The focus-window legs, one per scope, and the scope sets they grouped by.
+    async fn refresh_focus(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+        grafted: &GraftedSharers,
+    ) -> (RefreshVerdict, BTreeSet<NodeId>, BTreeSet<NodeId>) {
+        let EngineSeams {
+            transport,
+            floors,
+            snapshot_cache,
+            scheduler,
+            http,
+            gateway,
+            events,
+            profile,
+            ..
+        } = &self.seams;
+        let SessionState {
+            observed_unlinks,
+            snapshot: base,
+            scope_read_seeds,
+            descendant_scope_roots: descendant_roots,
+            unproved_scope_roots: unproved_roots,
+            focus,
+            focus_refreshed,
+            bookmarked_scope_roots,
+            grafted_claims,
+            ..
+        } = state;
+        let root_id = self.root_id;
+        let mode = pass.mode;
+        let now = pass.now;
+        let root_name = &pass.root_name;
+        let contact_label_seed = &pass.contact_label_seed;
         expire_touched_folders(&mut focus.borrow_mut(), scheduler.now(), profile);
         expire_focus_stamps(&mut focus_refreshed.borrow_mut(), scheduler.now(), profile);
         // The focus window's folders below each scope root — the read
@@ -476,8 +683,8 @@ where
             };
             let Some(scope_floors) = floor_view(
                 floors,
-                &grafted,
-                &contact_label_seed,
+                grafted,
+                contact_label_seed,
                 &root_id,
                 &proved_scope_ids,
                 &scope_root.0,
@@ -485,7 +692,7 @@ where
                 continue;
             };
             let scope_root_name =
-                scope_root_record_name(&base.borrow(), Some(&root_name), &scope_root.0);
+                scope_root_record_name(&base.borrow(), Some(root_name), &scope_root.0);
             let refresh = FolderRefresh {
                 transport,
                 snapshot_cache,
@@ -565,11 +772,28 @@ where
             .borrow_mut()
             .open_files
             .retain(|row| !attempted_files.contains(&row.node));
+        (folder_verdict, proved_scope_ids, unproved_scope_ids)
+    }
+
+    /// The verdict and manual settle: answer the manual requests, and report
+    /// whether the root leg reconciled.
+    fn settle_verdict(
+        &self,
+        state: &SessionState,
+        resolved: &Result<Resolved, SeamError>,
+        folder_verdict: RefreshVerdict,
+    ) -> bool {
+        let SessionState {
+            observed_unlinks,
+            settings_summary,
+            ..
+        } = state;
+        let manual = &self.manual;
         // `Adopted`/`Current` are the reconciled outcomes: both prove the
         // record plane answered with gate-passing state, so both stamp
         // the ladder's `last_success` (#33 D4). A gate rejection is a
         // trust verdict, never the staleness the other failures are.
-        let root_verdict = match &resolved {
+        let root_verdict = match resolved {
             Ok(r) => match &r.outcome {
                 ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. } => {
                     RefreshVerdict::Reconciled
@@ -594,6 +818,38 @@ where
         if bin_retention_days(settings_summary) == 0 {
             observed_unlinks.borrow_mut().clear();
         }
+        reconciled
+    }
+
+    /// The scope assembly: every pass the drain runs, owned.
+    async fn assemble_scopes(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+        proved_scope_ids: &BTreeSet<NodeId>,
+        unproved_scope_ids: &BTreeSet<NodeId>,
+    ) -> Assembly {
+        let EngineSeams {
+            staging,
+            entropy,
+            events,
+            ..
+        } = &self.seams;
+        let SessionState {
+            scope_write_seeds,
+            snapshot: base,
+            scope_read_seeds,
+            grafted_sharers,
+            bookmarked_scope_roots,
+            bookmarked_permissions,
+            grafted_write_roots,
+            grafted_claims,
+            minted_scope_roots: minted_roots,
+            ..
+        } = state;
+        let root_id = self.root_id;
+        let enc_subkey = &pass.enc_subkey;
+        let contact_label_seed = &pass.contact_label_seed;
         // The drain rides the same tick: it publishes onto exactly the
         // gate-passing state this pass just reconciled. Both scope seeds
         // are required — without them there is no name to publish under
@@ -602,7 +858,7 @@ where
         let write_grafts =
             write_grant_sharers(&bookmarked_permissions.borrow(), &grafted_sharers.borrow());
         let sharer_encs = write_grant_sharer_encs(
-            &StagingContactStore::new(staging, &enc_subkey, entropy),
+            &StagingContactStore::new(staging, enc_subkey, entropy),
             write_grafts,
         )
         .await;
@@ -628,9 +884,9 @@ where
                 |scope_id| {
                     floor_namespace(
                         &sharers,
-                        &contact_label_seed,
+                        contact_label_seed,
                         &root_id,
-                        &proved_scope_ids,
+                        proved_scope_ids,
                         scope_id,
                     )
                 },
@@ -655,7 +911,7 @@ where
             .iter()
             .filter(|(scope_id, permission)| {
                 **permission == CommittedPermission::Read
-                    && !is_own_scope(&root_id, &proved_scope_ids, scope_id)
+                    && !is_own_scope(&root_id, proved_scope_ids, scope_id)
                     && !minted_roots.borrow().contains(&NodeId(**scope_id))
                     && !unproved_scope_ids.contains(&NodeId(**scope_id))
             })
@@ -669,6 +925,71 @@ where
             .chain(grafted.iter().map(|pass| pass.root))
             .chain(read_only_grafts.iter().copied())
             .collect();
+        Assembly {
+            write_seed,
+            grafted,
+            read_only_grafts,
+            grafted_scope_roots,
+            grafted_contested,
+            proved_roots,
+        }
+    }
+
+    /// The per-scope drain, and the boundaries the later stages read.
+    #[allow(clippy::too_many_arguments)]
+    async fn drain<'a>(
+        &'a self,
+        state: &'a SessionState,
+        pass: &Pass,
+        decision: &PlacementDecision,
+        read_seed: &'a Option<Zeroizing<[u8; 32]>>,
+        descendants: &[DescendantScopeRoot],
+        proved_scope_ids: &BTreeSet<NodeId>,
+        assembly: Assembly,
+    ) -> Option<Boundaries<'a>> {
+        let EngineSeams {
+            transport,
+            api,
+            floors,
+            snapshot_cache,
+            staging,
+            scheduler,
+            http,
+            gateway,
+            entropy,
+            events,
+            profile,
+            ..
+        } = &self.seams;
+        let SessionState {
+            scope_write_seeds,
+            settings_summary,
+            snapshot: base,
+            scope_read_seeds,
+            walked_read_epochs,
+            on_access_misses,
+            minted_scope_roots: minted_roots,
+            sweep_tasks,
+            queue_scan,
+            ..
+        } = state;
+        let SessionSecrets {
+            sweep_keys: consult_keys,
+            ..
+        } = &*self.secrets;
+        let owner_identity = self.owner_identity;
+        let root_id = self.root_id;
+        let root_name = &pass.root_name;
+        let enc_subkey = &pass.enc_subkey;
+        let bin_keys = &pass.bin_keys;
+        let Assembly {
+            write_seed,
+            grafted,
+            read_only_grafts,
+            grafted_scope_roots,
+            grafted_contested,
+            proved_roots,
+        } = assembly;
         let vault_seeds = read_seed.as_ref().zip(write_seed.as_ref());
         let drivable: Vec<_> = descendants
             .iter()
@@ -689,7 +1010,7 @@ where
             base,
             scope_roots: minted_roots
                 .borrow()
-                .union(&proved_scope_ids)
+                .union(proved_scope_ids)
                 .copied()
                 .collect(),
             material: walked_boundary_material(
@@ -702,7 +1023,7 @@ where
         });
         let second = match &boundaries {
             Some(boundaries) => {
-                queued_second_end(staging, &enc_subkey, queue_scan, boundaries).await
+                queued_second_end(staging, enc_subkey, queue_scan, boundaries).await
             }
             None => None,
         };
@@ -735,7 +1056,7 @@ where
         let vault = vault_seeds.map(|(read_seed, write_seed)| DrainScope {
             source: ScopeEnd {
                 root: NodeId(root_id),
-                root_name: &root_name,
+                root_name,
                 read_scope_seed: read_seed,
                 write_scope_seed: write_seed,
                 // The vault root carries no ascent link.
@@ -756,7 +1077,7 @@ where
             scope_roots: &proved_roots,
             keyless_roots: &keyless_roots,
             charges_the_identity: false,
-            enc_secret: &enc_subkey,
+            enc_secret: enc_subkey,
             owner_identity: &owner_identity,
             granted: None,
         });
@@ -778,7 +1099,7 @@ where
                 scope_roots: &proved_roots,
                 keyless_roots: &keyless_roots,
                 charges_the_identity: false,
-                enc_secret: &enc_subkey,
+                enc_secret: enc_subkey,
                 owner_identity: &owner_identity,
                 granted: None,
             })
@@ -803,7 +1124,7 @@ where
                 scope_roots: &proved_roots,
                 keyless_roots: &keyless_roots,
                 charges_the_identity: false,
-                enc_secret: &enc_subkey,
+                enc_secret: enc_subkey,
                 owner_identity: &pass.sharer_identity,
                 granted: Some(GrantedPass {
                     sharer_enc: &pass.sharer_enc,
@@ -819,8 +1140,8 @@ where
             &self.seams,
             state.drain_cells(),
             TickInputs {
-                placement: &decision,
-                bin_keys: &bin_keys,
+                placement: decision,
+                bin_keys,
                 bin_retention_days: owner_bin_retention_days(settings_summary),
                 retention: owner_retention(settings_summary),
             },
@@ -835,6 +1156,39 @@ where
                 &exits,
             )
             .await;
+        boundaries
+    }
+
+    /// The mailbox pull, placed against the pointer index of the boundaries this
+    /// pass knows.
+    async fn pull_mailbox(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+        boundaries: &Option<Boundaries<'_>>,
+    ) -> (Option<Rc<SweepKeys>>, PointerIndex, Option<Vec<OwnedClaim>>) {
+        let EngineSeams {
+            transport,
+            api,
+            floors,
+            staging,
+            http,
+            gateway,
+            entropy,
+            events,
+            ..
+        } = &self.seams;
+        let SessionState {
+            received_shares_lock,
+            ..
+        } = state;
+        let SessionSecrets {
+            sweep_keys: consult_keys,
+            ..
+        } = &*self.secrets;
+        let root_id = self.root_id;
+        let enc_subkey = &pass.enc_subkey;
+        let contact_label_seed = &pass.contact_label_seed;
         // Last, and after the drain above: the grantee's own read
         // leg is the slowest in the pass, and a host refresh waits
         // on nothing it reports.
@@ -842,7 +1196,7 @@ where
         // The mailbox pull leads it, so a share this pass accepts is
         // classified by the refresh below rather than a pass later.
         let owner_keys = consult_keys.borrow().clone();
-        let pointers = match (&boundaries, &owner_keys) {
+        let pointers = match (boundaries, &owner_keys) {
             (Some(boundaries), Some(keys)) => {
                 scope_pointer_index(&keys.scope_keys, boundaries.scope_roots.iter().copied())
             }
@@ -854,8 +1208,8 @@ where
             gateway,
             http,
             floors,
-            enc_secret: &enc_subkey,
-            contact_label_seed: &contact_label_seed,
+            enc_secret: enc_subkey,
+            contact_label_seed,
             vault_root_scope: root_id,
             list_lock: received_shares_lock,
         }
@@ -867,104 +1221,248 @@ where
             events,
         )
         .await;
+        (owner_keys, pointers, claims)
+    }
+
+    /// The owner material the claim conversion runs under, or `None` where the
+    /// pass knows no boundaries or the session no longer holds that material.
+    fn conversion_owner<'b>(
+        &self,
+        state: &SessionState,
+        boundaries: Option<&'b Boundaries<'b>>,
+        owner_keys: Option<Rc<SweepKeys>>,
+    ) -> Option<ConversionOwner<'b>> {
+        let SessionState {
+            current_root_name,
+            sweep_tasks,
+            ..
+        } = state;
+        let SessionSecrets {
+            tick_owner_signer, ..
+        } = &*self.secrets;
         // Any owner device converts on every pass (ADR 0023 D4), at
         // the boundaries this pass's own walk proved. A failed poll
         // still converts the claims already acked.
         let owner_signer = tick_owner_signer.borrow().clone();
         let sweep = sweep_tasks.borrow().clone();
         let vault_root_name = current_root_name.borrow().clone();
-        if let (Some(boundaries), Some(signer), Some(keys), Some(sweep), Some(root_name)) = (
-            boundaries.as_ref(),
-            owner_signer,
-            owner_keys,
+        let (Some(boundaries), Some(signer), Some(keys), Some(sweep), Some(root_name)) =
+            (boundaries, owner_signer, owner_keys, sweep, vault_root_name)
+        else {
+            return None;
+        };
+        Some(ConversionOwner {
+            boundaries,
+            signer,
+            keys,
             sweep,
-            vault_root_name,
-        ) {
-            let pass = ConversionPass {
-                transport,
-                api: api.as_ref(),
-                gateway,
-                http,
-                floors,
-                snapshot_cache,
-                events,
-                scheduler,
-                profile,
-                on_access_misses,
-                entropy,
-                staging,
-                identity: &signer,
-                enc_secret: &enc_subkey,
-                owner_identity: &owner_identity,
-                scope_keys: &keys.scope_keys,
-                cut: CutAuthority {
-                    owner_pointer_seed: keys.scope_keys.pointer_seed(),
-                    held,
-                    sweep: &sweep,
-                    vault_root: NodeId(root_id),
+            root_name,
+        })
+    }
+
+    /// The conversion pass over `owner`'s material, which the claim conversion
+    /// and the link sweep share.
+    fn conversion_pass<'s>(
+        &'s self,
+        state: &'s SessionState,
+        pass: &'s Pass,
+        owner: &'s ConversionOwner<'_>,
+    ) -> ConversionPass<'s, T, H, C, F, Sch, S, St> {
+        let EngineSeams {
+            transport,
+            api,
+            floors,
+            snapshot_cache,
+            staging,
+            scheduler,
+            http,
+            gateway,
+            entropy,
+            events,
+            profile,
+            ..
+        } = &self.seams;
+        let SessionState {
+            held_records: held,
+            scope_roots_walked,
+            on_access_misses,
+            pending_invite_claims,
+            conversion_running,
+            ..
+        } = state;
+        let ConversionOwner {
+            signer,
+            keys,
+            sweep,
+            ..
+        } = owner;
+        ConversionPass {
+            transport,
+            api: api.as_ref(),
+            gateway,
+            http,
+            floors,
+            snapshot_cache,
+            events,
+            scheduler,
+            profile,
+            on_access_misses,
+            entropy,
+            staging,
+            identity: signer,
+            enc_secret: &pass.enc_subkey,
+            owner_identity: &self.owner_identity,
+            scope_keys: &keys.scope_keys,
+            cut: CutAuthority {
+                owner_pointer_seed: keys.scope_keys.pointer_seed(),
+                held,
+                sweep,
+                vault_root: NodeId(self.root_id),
+            },
+            scope_roots_walked,
+            counts: pending_invite_claims,
+            running: conversion_running,
+        }
+    }
+
+    /// The claim conversion at the boundaries this pass's own walk proved.
+    async fn convert_claims(
+        &self,
+        state: &SessionState,
+        conversion: &ConversionPass<'_, T, H, C, F, Sch, S, St>,
+        owner: &ConversionOwner<'_>,
+        pointers: &PointerIndex,
+        claims: Option<Vec<OwnedClaim>>,
+    ) {
+        let EngineSeams { events, .. } = &self.seams;
+        let SessionState {
+            scope_roots_walked, ..
+        } = state;
+        let converted = conversion
+            .run(
+                &TickSites {
+                    boundaries: owner.boundaries,
+                    root_name: &owner.root_name,
+                    walked: scope_roots_walked.get(),
                 },
-                scope_roots_walked,
-                counts: pending_invite_claims,
-                running: conversion_running,
-            };
-            let converted = pass
-                .run(
-                    &TickSites {
-                        boundaries,
-                        root_name: &root_name,
-                        walked: scope_roots_walked.get(),
-                    },
-                    &pointers,
-                    claims.unwrap_or_default(),
-                    None,
-                )
-                .await
-                .into_result();
-            if let Err(EngineError::TrustViolation { message }) = converted {
+                pointers,
+                claims.unwrap_or_default(),
+                None,
+            )
+            .await
+            .into_result();
+        if let Err(EngineError::TrustViolation { message }) = converted {
+            let _ = events.unbounded_send(Event::AttributableAbuse {
+                description: message,
+            });
+        }
+    }
+
+    /// The link sweep, paced by the link-sweep cadence.
+    async fn link_sweep(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+        conversion: &ConversionPass<'_, T, H, C, F, Sch, S, St>,
+        root_name: &IpnsName,
+        pointers: &PointerIndex,
+    ) {
+        let EngineSeams {
+            events, profile, ..
+        } = &self.seams;
+        let SessionState {
+            walked_read_epochs, ..
+        } = state;
+        let link_swept = &self.link_swept;
+        let now = pass.now;
+        // After the conversion above, so a claim acked this
+        // pass converts before its link can be cut.
+        if pace_due(now, link_swept.get(), profile.link_sweep_cadence)
+            && let Some(swept) = conversion.sweep_links(root_name, pointers).await
+        {
+            // A capped sweep continues on the next tick.
+            if !swept.more {
+                link_swept.set(now);
+            }
+            // A cut supersedes the material this session
+            // walked for every scope root it re-keyed.
+            let mut walked = walked_read_epochs.borrow_mut();
+            for node in &swept.rekeyed {
+                walked.remove(node);
+            }
+            drop(walked);
+            if let Some(EngineError::TrustViolation { message }) = swept.failure {
                 let _ = events.unbounded_send(Event::AttributableAbuse {
                     description: message,
                 });
             }
-            // After the conversion above, so a claim acked this
-            // pass converts before its link can be cut.
-            if pace_due(now, link_swept.get(), profile.link_sweep_cadence)
-                && let Some(swept) = pass.sweep_links(&root_name, &pointers).await
-            {
-                // A capped sweep continues on the next tick.
-                if !swept.more {
-                    link_swept.set(now);
-                }
-                // A cut supersedes the material this session
-                // walked for every scope root it re-keyed.
-                let mut walked = walked_read_epochs.borrow_mut();
-                for node in &swept.rekeyed {
-                    walked.remove(node);
-                }
-                drop(walked);
-                if let Some(EngineError::TrustViolation { message }) = swept.failure {
-                    let _ = events.unbounded_send(Event::AttributableAbuse {
-                        description: message,
-                    });
-                }
-            }
         }
+    }
+
+    /// The claim repost.
+    async fn repost_claims(&self, state: &SessionState, pass: &Pass) {
+        let EngineSeams {
+            api,
+            staging,
+            scheduler,
+            entropy,
+            ..
+        } = &self.seams;
+        let SessionState {
+            received_shares_lock,
+            ..
+        } = state;
+        let enc_subkey = &pass.enc_subkey;
         repost_held_claims(
             api.as_ref(),
             staging,
             entropy,
-            &enc_subkey,
+            enc_subkey,
             received_shares_lock,
             ENVELOPE_V,
             scheduler.now(),
         )
         .await;
+    }
+
+    /// The received-share status refresh.
+    async fn refresh_received_shares(&self, state: &SessionState, pass: &Pass) {
+        let EngineSeams {
+            transport,
+            floors,
+            staging,
+            http,
+            gateway,
+            entropy,
+            events,
+            profile,
+            ..
+        } = &self.seams;
+        let SessionState {
+            scope_write_seeds,
+            snapshot: base,
+            scope_read_seeds,
+            descendant_scope_roots: descendant_roots,
+            received_verdicts,
+            received_shares_lock,
+            grafted_sharers,
+            bookmarked_scope_roots,
+            bookmarked_permissions,
+            grafted_claims,
+            ..
+        } = state;
+        let root_id = self.root_id;
+        let mode = pass.mode;
+        let now = pass.now;
+        let enc_subkey = &pass.enc_subkey;
+        let contact_label_seed = &pass.contact_label_seed;
         ReceivedShareStatus {
             transport,
             gateway,
             http,
             floors,
-            enc_secret: &enc_subkey,
-            contact_label_seed: &contact_label_seed,
+            enc_secret: enc_subkey,
+            contact_label_seed,
             list_lock: received_shares_lock,
             mode,
         }
@@ -988,6 +1486,21 @@ where
             profile,
         )
         .await;
+    }
+
+    /// The staleness classify: stamp the ladder, and report a rung change.
+    fn classify_staleness(&self, state: &SessionState, reconciled: bool) {
+        let EngineSeams {
+            scheduler,
+            events,
+            profile,
+            ..
+        } = &self.seams;
+        let SessionState {
+            converged_tick,
+            sync_status,
+            ..
+        } = state;
         let mut status = sync_status.borrow_mut();
         status.reconcile_in_flight = false;
         if reconciled {
@@ -1008,7 +1521,6 @@ where
             let _ = events.unbounded_send(Event::StalenessChanged { level: rung });
         }
         drop(status);
-        TickControl::Continue
     }
 }
 
