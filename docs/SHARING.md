@@ -43,12 +43,12 @@ A direct grant to an identity that already holds a row is a permission change wh
 
 ### Mint
 
-`Command::CreateInviteLink { node, permission, expires_at, owner_name }` mints a link.
+`Command::CreateInviteLink { node, permission, expires_at, owner_name, admission_cap }` mints a link.
 
 - The link is a grant blob wrapped to an ephemeral identity that derives from one random invite secret. Its ledger row has the shape of a personal row.
 - The engine commits the link entry and its row at `read`, whatever `permission` is. `permission` is the conversion permission. So a write link runs no write-scope cut and no name wave at mint, and its blob holds no write seed (ADR 0024 D4).
 - Every link has a deadline. With no `expires_at`, the deadline is `DEFAULT_LINK_LIFETIME` (7 days) from the injected `now`.
-- The mint sets the admission cap to `DEFAULT_ADMISSION_CAP` (25).
+- With no `admission_cap`, the mint sets the admission cap to `DEFAULT_ADMISSION_CAP` (25). The engine refuses a cap of zero or a cap above `MAX_ADMISSION_CAP` (1023) with `invite-admission-cap-out-of-range`.
 - No owner device stores the invite secret or a record of the link. The link lives in the owner-signed record alone. The fragment shows only once, at the mint (ADR 0023 D2).
 - The engine returns the fragment once the scope root that commits the link has landed. A later handover failure does not discard the only copy of the invite secret.
 
@@ -246,8 +246,6 @@ The received-share refresh reports one class per bookmark (ADR 0025 D5):
 
 These gaps are in the code on `main`.
 
-- The web host does not show the link-first share dialog yet. It shows one live link and a control that runs a conversion pass at once, and it mints every link with an empty owner name. It has a downgrade-only control and no upgrade, and it has no people-list names, rename, `remove_grantees` checkbox, joined notice or refused count.
-- The owner cannot set the admission cap yet, so every link carries the default of 25.
 - Only a command pass (`ConvertInviteClaims` or `RevokeInviteLink`) repairs a parent index that a failed re-point left stale, because the tick converts only at scope roots its own walk proved.
 - A downgrade over a stalled write scope runs two name waves: the owed wave, then the cut.
 - When the contact book of one device binds one encryption subkey to two contacts, now or before, a person revoke on that device cannot reach an unattested row under that subkey. When the person has no other row on the scope, the revoke answers `rot-revoke-not-granted`. No write path binds such a pair now. Only a book that an earlier build wrote can hold one.
