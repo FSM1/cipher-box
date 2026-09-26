@@ -32,6 +32,11 @@ export class InvitePage {
     return this.page.getByTestId('invite-entry');
   }
 
+  /** The name the claimant offers the owner, which the join carries. */
+  get name(): Locator {
+    return this.page.getByTestId('invite-name');
+  }
+
   get joinButton(): Locator {
     return this.page.getByTestId('invite-join');
   }

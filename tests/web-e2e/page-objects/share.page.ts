@@ -1,5 +1,14 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
+const DAY_MS = 86_400_000;
+
+/** What a mint carries beyond its lifetime; an absent field keeps the dialog's default. */
+export interface LinkTerms {
+  permission?: 'read' | 'write';
+  /** The owner's label, which the preview leads with once it verifies. */
+  ownerName?: string;
+}
+
 /**
  * The share dialog a folder row raises: the people table, the link row and
  * its chips, and the contact-code path under "advanced".
@@ -62,9 +71,36 @@ export class SharePage {
     return this.page.getByTestId('share-link-chip');
   }
 
+  /** The chips of the links that grant `permission`. */
+  linkChipsFor(permission: 'read' | 'write'): Locator {
+    const label = permission === 'write' ? 'edit' : 'view';
+    return this.linkChips.filter({
+      has: this.page.getByTestId('share-link-summary').filter({ hasText: `${label} · ` }),
+    });
+  }
+
   /** Cuts the first link, through the confirmation its chip raises. */
   async revokeFirstLink(): Promise<void> {
-    await this.page.getByTestId('share-revoke-link').first().click();
+    await this.askToRevoke(this.linkChips.first());
+    await this.confirmLinkRevoke();
+  }
+
+  /**
+   * The confirmation's "also remove the people who joined through it" choice,
+   * which cuts them with the link (ADR 0025 D1).
+   */
+  get removeGrantees(): Locator {
+    return this.page.getByTestId('share-link-remove-grantees');
+  }
+
+  /** Raises the revoke confirmation of the link `chip` names. */
+  async askToRevoke(chip: Locator): Promise<void> {
+    await chip.getByTestId('share-revoke-link').click();
+    await expect(this.page.getByTestId('share-link-revoke-prompt')).toBeVisible();
+  }
+
+  /** Confirms the raised link revoke and waits for the cut to land. */
+  async confirmLinkRevoke(): Promise<void> {
     await this.page.getByTestId('share-link-revoke-confirm').click();
     await expect(this.page.getByTestId('share-link-revoke-prompt')).toHaveCount(0, {
       timeout: 180_000,
@@ -110,10 +146,28 @@ export class SharePage {
    * reads the grants only when it opens.
    */
   async openUntilGranted(folder: string, count: number, timeout = 180_000): Promise<void> {
+    await this.openUntil(folder, this.grantRows, count, timeout);
+  }
+
+  /**
+   * Opens the dialog until `count` link chips show. An owner device's own
+   * tick and the sweep of another device move the links, and the dialog reads
+   * them only when it opens.
+   */
+  async openUntilLinks(folder: string, count: number, timeout = 180_000): Promise<void> {
+    await this.openUntil(folder, this.linkChips, count, timeout);
+  }
+
+  private async openUntil(
+    folder: string,
+    rows: Locator,
+    count: number,
+    timeout: number
+  ): Promise<void> {
     await expect(async () => {
       if ((await this.dialog.count()) > 0) await this.close();
       await this.open(folder);
-      await expect(this.grantRows).toHaveCount(count, { timeout: 30_000 });
+      await expect(rows).toHaveCount(count, { timeout: 30_000 });
     }).toPass({ timeout });
   }
 
@@ -201,9 +255,15 @@ export class SharePage {
    * Mints a link and returns the URL the dialog shows. The link is shown once,
    * so the caller keeps it.
    */
-  async mintLink(lifetime?: string): Promise<URL> {
+  async mintLink(lifetime?: string, terms: LinkTerms = {}): Promise<URL> {
     if (lifetime !== undefined) {
       await this.page.getByLabel('link expires').selectOption(lifetime);
+    }
+    if (terms.permission !== undefined) {
+      await this.permissionChoice.selectOption(terms.permission);
+    }
+    if (terms.ownerName !== undefined) {
+      await this.page.getByTestId('share-owner-name').fill(terms.ownerName);
     }
     await this.mintButton.click();
     // A mint publishes the link's own record, so it lands well after the click
@@ -212,6 +272,32 @@ export class SharePage {
     const shown = await this.mintedLink.locator('.details-copyable-text').textContent();
     expect(shown, 'the dialog showed no minted link').not.toBeNull();
     return new URL(shown!);
+  }
+
+  /**
+   * Mints a link whose deadline falls `inMs` after the click, which may be
+   * negative. The dialog offers days, so the tab's `Date.now` runs back by the
+   * shortest lifetime less `inMs` for the mint. The engine reads its own clock
+   * in its worker, which does not move.
+   */
+  async mintExpiringIn(inMs: number): Promise<void> {
+    await this.page.evaluate(
+      (by) => {
+        const real = Date.now;
+        Date.now = () => real() + by;
+        (window as unknown as { restoreNow: () => void }).restoreNow = () => {
+          Date.now = real;
+        };
+      },
+      inMs - 7 * DAY_MS
+    );
+    try {
+      await this.mintLink('7 days');
+    } finally {
+      await this.page.evaluate(() =>
+        (window as unknown as { restoreNow: () => void }).restoreNow()
+      );
+    }
   }
 
   /** Steps into the contact import, which replaces the dialog's body. */

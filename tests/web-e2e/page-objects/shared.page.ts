@@ -128,6 +128,18 @@ export class SharedPage {
       .toBe(expected);
   }
 
+  /**
+   * How the row for `scope` stands on one re-read of the list: `gone`, or its
+   * resolution and whether the vault holds it through a link.
+   */
+  async standingOf(scope: string): Promise<string> {
+    await this.readAgain();
+    const row = this.row(scope);
+    if ((await row.count()) === 0) return 'gone';
+    const resolution = await row.getByTestId('shared-standing').getAttribute('data-resolution');
+    return `${resolution} via-link=${await row.getAttribute('data-via-link')}`;
+  }
+
   /** The row for the scope root `scope`, as lowercase hex. */
   row(scope: string): Locator {
     return this.page.locator(`[data-testid="shared-row"][data-scope="${scope}"]`);

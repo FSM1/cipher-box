@@ -2,6 +2,9 @@ import { expect, type Page } from '@playwright/test';
 import type { IntrospectedView, Plain } from '@web/engine/introspection';
 import { fromHex, type EventDescriptor } from '@cipherbox/client';
 
+/** The binding a device context answers with its held login secret (`devices.ts`). */
+export const SECRET_BINDING = '__cipherboxE2eLoginSecret';
+
 /**
  * One browser tab over one vault, driven through the introspection hook
  * (`apps/web/src/engine/introspection.ts`). Every wait here polls engine state,
@@ -72,6 +75,20 @@ export class VaultPage {
       const hex = Array.from(secret, (byte) => byte.toString(16).padStart(2, '0')).join('');
       await window.__CIPHERBOX_ENGINE__!.signIn(hex, account);
     }, accountId);
+  }
+
+  /**
+   * Signs this tab in on `accountId` with the login secret its context's
+   * binding holds (`devices.ts`), so two contexts can sign in on one account.
+   */
+  async signInHeld(accountId: string): Promise<void> {
+    await this.page.evaluate(
+      async ({ account, binding }) => {
+        const held = (window as unknown as Record<string, () => Promise<string>>)[binding];
+        await window.__CIPHERBOX_ENGINE__!.signIn(await held(), account);
+      },
+      { account: accountId, binding: SECRET_BINDING }
+    );
   }
 
   /** The nocache manual refresh, the barrier `EngineIntrospection.refresh` documents. */
