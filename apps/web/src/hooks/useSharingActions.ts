@@ -127,11 +127,33 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
   const [joined, setJoined] = useState<string | null>(null);
   useEffect(() => {
     if (client === null) return;
+    // One re-read at a time: a burst of events folds into one trailing read. A
+    // sharing read emits no `snapshotUpdated`, so a re-read cannot loop.
+    let reading = false;
+    let again = false;
+    const reread = () => {
+      if (reading) {
+        again = true;
+        return;
+      }
+      reading = true;
+      // A failed re-read leaves the last view drawn.
+      void read(client.facade)
+        .catch(() => undefined)
+        .finally(() => {
+          reading = false;
+          if (again) {
+            again = false;
+            reread();
+          }
+        });
+    };
     return client.facade.subscribe((event) => {
+      // A conversion pass that moves only the claim counts reports them here.
+      if (event.kind === 'snapshotUpdated') return reread();
       if (event.kind !== 'granteeJoined' || toHex(event.scopeRoot) !== scopeKey) return;
       setJoined(joinedLabel(event.name, event.fingerprint));
-      // The notice stands on the event alone; a failed re-read leaves the last one drawn.
-      read(client.facade).catch(() => undefined);
+      reread();
     });
   }, [client, read, scopeKey]);
   useEffect(() => {
@@ -155,7 +177,7 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
         try {
           await facade.convertInviteClaims(target);
         } catch (refusal: unknown) {
-          // The running pass announces each join with `granteeJoined`, which re-reads.
+          // The running pass emits `granteeJoined` or `snapshotUpdated`, and each re-reads.
           if (errorMessage(refusal).endsWith(`: ${CONVERSION_RUNNING}`)) return;
           throw refusal;
         }

@@ -84,8 +84,12 @@ function sharingEngine(
   const ledger: Permission[] = [];
   const names: SharingGrantDescriptor['granteeName'][] = [];
   const links: SharingInviteLinkDescriptor[] = [...held];
+  const listeners = new Set<(event: EventDescriptor) => void>();
   const facade = {
-    subscribe: (_listener: (event: EventDescriptor) => void) => () => undefined,
+    subscribe: (listener: (event: EventDescriptor) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     snapshot: () => new Promise<never>(() => undefined),
     setFocus: () => Promise.resolve(),
     sharing: vi.fn(() =>
@@ -146,7 +150,8 @@ function sharingEngine(
     dispose: () => Promise.resolve(),
   } as unknown as EngineClient;
 
-  return { client, facade };
+  const emit = (event: EventDescriptor) => listeners.forEach((listener) => listener(event));
+  return { client, facade, links, emit };
 }
 
 function mount(client: EngineClient) {
@@ -209,6 +214,22 @@ describe('reading', () => {
 
     expect(engine.facade.convertInviteClaims).toHaveBeenCalledWith(DOCS);
     expect(result.current.error).toBeNull();
+  });
+
+  it('re-reads the view on a snapshot update, so a pass that moved only the counts shows', async () => {
+    const running = new EngineRequestError('seam error: a-conversion-pass-is-running', 'seam');
+    const engine = sharingEngine({ convertInviteClaims: running }, [MINTED]);
+    const { result } = mount(engine.client);
+    await expect(result.current.open()).resolves.toBe(true);
+    const pendingClaims = () =>
+      sharingFor(sharingStore.getState(), DOCS_KEY)?.inviteLinks[0]?.pendingClaims;
+    expect(pendingClaims()).toBe(0);
+
+    engine.links.splice(0, 1, { ...MINTED, pendingClaims: 2 });
+    engine.emit({ kind: 'snapshotUpdated' });
+
+    await waitFor(() => expect(pendingClaims()).toBe(2));
+    expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
   });
 
   it('reads a row with no fingerprint where the engine forms none for its key', async () => {
