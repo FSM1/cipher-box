@@ -1,6 +1,5 @@
 //! The rows one owner revoke removes, read off the owner-signed set
-//! ([ADR 0025](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0025-revocation-under-the-link-first-model.md)
-//! D1, D3, D4), and the links the expired-link sweep cuts (D2).
+//! (ADR 0025 D1, D3, D4), and the links the expired-link sweep cuts (D2).
 //!
 //! A grantee is found by the owner-attested ledger rows that name the
 //! identity, so any owner device revokes. A row with no attested label is

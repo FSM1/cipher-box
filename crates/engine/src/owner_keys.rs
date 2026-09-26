@@ -124,7 +124,7 @@ mod tests {
         );
     }
 
-    /// None of the three inputs FSM1/cipher-box-next ADR 0005 rejected may
+    /// None of the three inputs ADR 0005 rejected may
     /// stand in for `ownerPseudonymSeed` (why it is unrecoverable:
     /// [`SessionIdentity::owner_writer_pseudonym_signer`]).
     #[test]

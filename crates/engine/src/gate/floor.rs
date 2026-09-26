@@ -34,8 +34,7 @@
 //!    ([`crate::gate::record_cut_epoch_floor`]) — the one exception to item 1,
 //!    and the list of exceptions is closed. The owner signs the field and the
 //!    signed preimage names the scope root it is presented under, so stage 2 of
-//!    the gate proves it without a body ([ADR
-//!    0014](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)).
+//!    the gate proves it without a body (ADR 0014).
 //!    The floor it raises is read against commitments alone, so a raise from a
 //!    record a later stage rejects leaves every readable plane readable.
 //!

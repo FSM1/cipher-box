@@ -55,7 +55,7 @@ pub(crate) struct SessionIdentity {
     owner_pointer_seed: SecretBytes,
     /// The owner pseudonym seed (`owner-pseudonym-seed` edge) — the owner's
     /// `pseudonym-sign` input, kept off the encryption and pointer planes
-    /// (FSM1/cipher-box-next ADR 0005). Zeroizes on drop.
+    /// (ADR 0005). Zeroizes on drop.
     owner_pseudonym_seed: SecretBytes,
     /// The contact-label seed (`contact-label-seed` edge) — what a contact
     /// identity is labelled under before it keys durable local state

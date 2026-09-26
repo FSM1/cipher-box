@@ -18,7 +18,7 @@
 //! every scope seed a rotation or a grant cut mints — all random, none derived
 //! here; and a key schedule internal to one primitive, whose output never
 //! leaves it for other code to hold and name — HPKE's and the ECIES
-//! device-factor seal's (FSM1/cipher-box-next ADR 0015 D2). The genesis pair
+//! device-factor seal's (ADR 0015 D2). The genesis pair
 //! below is the one exception, and only because genesis has no predecessor to
 //! be idempotent against (ADR 0007).
 
@@ -423,7 +423,7 @@ pub fn blinded_tag(
 
 /// `owner-pseudonym-seed`: the owner's `pseudonym-sign` input, from the login
 /// secret. A dedicated edge keeps structure-signing authority off the
-/// encryption and pointer planes (FSM1/cipher-box-next ADR 0005).
+/// encryption and pointer planes (ADR 0005).
 pub fn owner_pseudonym_seed(login_secret: &[u8]) -> SecretBytes {
     owner_pseudonym_seed_bytes(login_secret)
 }
@@ -575,7 +575,7 @@ pub fn contact_label(
 
 /// `name-label`: a fixed-width local label for a durable sequence-namespace
 /// floor key, so a floor store that a reader of local storage can open names no
-/// record it bars replay on (FSM1/cipher-box-next ADR 0016).
+/// record it bars replay on (ADR 0016).
 ///
 /// The message is the whole store key, not only an `ipnsName`, so two keys that
 /// share a name but not a purpose label to unrelated bytes. It is the catalog's

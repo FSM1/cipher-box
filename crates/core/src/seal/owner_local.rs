@@ -1,5 +1,5 @@
 //! The owner-local sealed store: one structure for every durable store the
-//! owner alone authors and reads (ADR 0006 in FSM1/cipher-box-next).
+//! owner alone authors and reads (ADR 0006).
 //!
 //! Local durable state like the op record and the content-key blob, not a
 //! published body — so it binds its own clear header rather than an

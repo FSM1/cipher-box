@@ -1,6 +1,5 @@
-//! The owner's expired-link sweep
-//! ([ADR 0025](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0025-revocation-under-the-link-first-model.md)
-//! D2, blueprint/engine.md "Triggers"): walk `directChildScopeIndex` from the
+//! The owner's expired-link sweep (ADR 0025 D2,
+//! blueprint/engine.md "Triggers"): walk `directChildScopeIndex` from the
 //! vault root with one resolve and one unseal per scope root, and cut every
 //! link entry whose deadline is [`SyncTimingProfile::link_sweep_grace`] or
 //! more before the injected `now`.

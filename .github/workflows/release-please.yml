@@ -1,4 +1,4 @@
-# v2 release management (blueprint/deploy.md in FSM1/cipher-box-next): one
+# v2 release management (blueprint/deploy.md): one
 # product version vX.Y.Z, single-component release-please, no per-package
 # versioning. Every push to main updates one release PR; merging it mints the
 # `vX.Y.Z` tag that desktop-release.yml and tag-staging.yml key on.

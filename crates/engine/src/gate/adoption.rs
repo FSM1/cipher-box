@@ -385,8 +385,7 @@ pub(crate) async fn read_cut_epoch_floor<F: FloorStore>(
 /// Three paths reach one bar, which is what makes a rollback refusable
 /// everywhere. The cutting device raises it from the cut it just published; the
 /// gate raises it at the commit of an adoption; and the `/shared` classification
-/// path raises it from any commitment that clears stage 2
-/// ([ADR 0014](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)).
+/// path raises it from any commitment that clears stage 2 (ADR 0014).
 ///
 /// Without the cutting device's own raise the owner keeps accepting the set it
 /// just cut until its next resolve of that scope — long enough for the revokee

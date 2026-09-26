@@ -1,7 +1,5 @@
 //! The owner device's grantee name cache, the part of the contact book that
-//! pre-fills a name
-//! ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
-//! D4).
+//! pre-fills a name (ADR 0027 D4).
 //!
 //! It holds the last grantee name this device saw for each identity, so that
 //! when the owner names the same person on another folder the host can offer

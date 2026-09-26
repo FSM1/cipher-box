@@ -1,7 +1,6 @@
 //! Owner edits of a scope root that already stands: append a row
-//! ([ADR 0026](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0026-a-scope-root-takes-many-grants.md)
-//! D1), change a grantee's permission (ADR 0025 D6), and rename a grantee
-//! (ADR 0027 D3).
+//! (ADR 0026 D1), change a grantee's permission (ADR 0025 D6), and rename a
+//! grantee (ADR 0027 D3).
 //!
 //! Each edit authorises against the owner's own signature over the set it
 //! changes, re-signs the result, and leaves the publish to the caller: one

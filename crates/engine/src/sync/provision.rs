@@ -1210,7 +1210,7 @@ mod tests {
     }
 
     /// The same join, from the other side: none of the three owner secrets
-    /// FSM1/cipher-box-next ADR 0005 rejected may stand in for the pseudonym seed,
+    /// ADR 0005 rejected may stand in for the pseudonym seed,
     /// so swapping the derivation is caught here rather than at a first rotation.
     #[test]
     fn the_committed_pseudonym_is_none_of_the_rejected_owner_inputs() {

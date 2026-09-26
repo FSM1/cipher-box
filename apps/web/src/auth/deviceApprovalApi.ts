@@ -1,5 +1,5 @@
 /**
- * The rendezvous a requesting device speaks (FSM1/cipher-box-next ADR 0009 D1).
+ * The rendezvous a requesting device speaks (ADR 0009 D1).
  *
  * Spoken over plain HTTP for the same reason `@cipherbox/login`'s identity
  * exchange is: this device has no vault key yet, so the engine has no session to

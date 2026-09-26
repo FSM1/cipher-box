@@ -71,7 +71,7 @@ pub const STRUCT_TAG_CONTENT_KEY: u8 = 0x0c;
 /// HPKE-sealed to their own enc subkey ([`super::owner_local`]). Local durable
 /// state like `op-record`, so it binds its own clear header instead of an
 /// [`AadContext`]; the store kind separates the family from within
-/// (FSM1/cipher-box-next ADR 0006).
+/// (ADR 0006).
 pub const STRUCT_TAG_OWNER_LOCAL: u8 = 0x0d;
 /// `write-history-link` — the write plane's single history link, HPKE-sealed to
 /// the owner's enc subkey ([`super::grant::seal_owner_history_link`]). A
@@ -82,7 +82,7 @@ pub const STRUCT_TAG_WRITE_HISTORY_LINK: u8 = 0x0e;
 /// `bin-index` — the owner-sealed, vault-level recycle-bin index
 /// ([`super::bin_index`]). Published like the settings record, but sealed
 /// symmetrically under the `bin-index-seal-key` edge, so it binds its own clear
-/// header instead of an [`AadContext`] (FSM1/cipher-box-next ADR 0010).
+/// header instead of an [`AadContext`] (ADR 0010).
 pub const STRUCT_TAG_BIN_INDEX: u8 = 0x0f;
 
 /// One registry entry's frozen, machine-checkable metadata: the structure's

@@ -773,8 +773,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// [`facts_from`] reports as `owner_signed_record`, at the bookmarked scope
     /// — raises this device's cut-epoch floor here. It is the one floor advance
     /// the record plane makes with no unseal, and the cut epoch is the only
-    /// field that makes it
-    /// ([ADR 0014](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)).
+    /// field that makes it (ADR 0014).
     /// It is also the only raise a recipient the owner cut can reach: holding no
     /// blob in the post-cut set, that device adopts no post-cut record, so a
     /// replayed pre-cut set would re-grant its row for as long as it is served.
