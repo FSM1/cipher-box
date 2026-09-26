@@ -3489,6 +3489,51 @@ fn a_share_below_a_scope_root_the_index_lost_is_refused() {
     );
 }
 
+/// The derived-name probe asks only whether a live scope root answers there.
+/// A scope pointer the owner access would refuse, here one below this device's
+/// write-epoch floor, must not turn that root into "no scope here" and let the
+/// share anchor a level up.
+#[test]
+fn an_unindexed_scope_probe_does_not_read_a_refused_pointer_as_no_scope() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "in");
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert!(
+        fx.grant_folder_to_recipient().is_err(),
+        "the parent index update fails, so the scope goes live unnamed"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    let vouched = fx.granted_scope_repoint().write_epoch;
+    block_on(floor::advance_write_epoch_on_sight(
+        &fx.owner_device.floors(&SECRET),
+        &fx.folder.0,
+        vouched + 1,
+    ))
+    .expect("the floor store answers");
+    let inner_before = sequence_at(&fx.world, &write_name(inner));
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "enclosing-scope-index-lost-a-root"
+        }),
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(inner)),
+        inner_before,
+        "no scope root was minted over the inner folder"
+    );
+}
+
 /// The gate reports a record below this device's own read-epoch floor as a
 /// plain rejection, which the derived-name probe would otherwise read as "no
 /// scope here". Only a scope root ever raises a floor at its own scope id, so
@@ -5505,6 +5550,126 @@ fn a_write_claim_converts_on_the_other_owner_devices_tick_with_one_cut() {
         .expect("the claimant holds a row");
     assert_eq!(row.permission, Permission::Write);
     assert_eq!(state.invite_links[0].pending_claims, 0, "nothing waits");
+}
+
+/// The minting device holds the write-epoch floor its own mint seeded. The
+/// other device's write-scope cut seals the moved root's owner-write-blob one
+/// epoch higher, so the minting device must consult the scope pointer when it
+/// next reads that root, or it cannot read the sharing state nor act on it.
+#[test]
+fn the_minting_device_reads_the_root_another_owner_devices_write_cut_moved() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link_at(Permission::Write);
+    let minted = fx.granted_scope_repoint();
+    let claimants = fx.post_claims(&fragment, 1);
+    let floors = fx.owner_device.floors(&SECRET);
+    let floor_before =
+        block_on(floor::write_epoch_floor(&floors, &fx.folder.0)).expect("the floor store answers");
+    assert_eq!(
+        floor_before,
+        Some(minted.write_epoch),
+        "the mint seeded the floor"
+    );
+    let (phone_engine, _phone_events, mut phone_tasks) = fx.owner_phone();
+
+    tick(&fx.world, &phone_engine, &mut phone_tasks);
+
+    let moved = fx.granted_scope_repoint();
+    assert_eq!(
+        moved.write_epoch,
+        minted.write_epoch + 1,
+        "the phone cut the write scope"
+    );
+    let state = block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the minting device reads the moved root");
+    let row = state
+        .grants
+        .iter()
+        .find(|grant| grant.recipient_identity_public_key == claimants[0])
+        .expect("the claimant holds a row");
+    assert_eq!(row.permission, Permission::Write);
+    assert_eq!(
+        block_on(floor::write_epoch_floor(&floors, &fx.folder.0)).expect("the floor store answers"),
+        Some(moved.write_epoch),
+        "the pointer consult raised the floor to the epoch the owner signed"
+    );
+    assert!(
+        matches!(
+            fx.try_mint_link_at(Permission::Read),
+            Ok(CommandOutcome::InviteLinkMinted(_))
+        ),
+        "the minting device mints on the moved root"
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: Some(state.invite_links[0].tag.clone()),
+            remove_grantees: true,
+        })),
+        Ok(CommandOutcome::Done),
+        "the minting device revokes the write link with its joiner"
+    );
+    assert!(
+        !fx.granted_to().contains(&claimants[0]),
+        "the joiner leaves with the link"
+    );
+}
+
+/// A scope pointer below the write-epoch floor this device holds is a rollback,
+/// so the on-access consult refuses it as a trust violation. The verdict holds
+/// for the consult interval: an access inside it reads the pointer no more and
+/// reports nothing again, and the first access past it consults again.
+#[test]
+fn an_on_access_pointer_consult_below_the_floor_is_a_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link_at(Permission::Write);
+    fx.post_claims(&fragment, 1);
+    let (phone_engine, _phone_events, mut phone_tasks) = fx.owner_phone();
+    tick(&fx.world, &phone_engine, &mut phone_tasks);
+    let vouched = fx.granted_scope_repoint().write_epoch;
+    let floors = fx.owner_device.floors(&SECRET);
+    block_on(floor::advance_write_epoch_on_sight(
+        &floors,
+        &fx.folder.0,
+        vouched + 1,
+    ))
+    .expect("the floor store answers");
+    abuse_events(&mut fx._events);
+    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0);
+    let store = fx.world.record_store.clone();
+    let pointer_reads = || store.get_count(pointer.as_str());
+    let before = pointer_reads();
+
+    let sharing = block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
+
+    assert!(sharing.state.is_none(), "a refused root answers no state");
+    assert_eq!(abuse_events(&mut fx._events), 1, "the refusal is reported");
+    let consulted = pointer_reads();
+    assert!(consulted > before, "the access consulted the pointer");
+    assert!(
+        matches!(
+            fx.try_mint_link_at(Permission::Read),
+            Err(EngineError::TrustViolation { .. })
+        ),
+        "a command on the refused root fails closed"
+    );
+    assert_eq!(
+        pointer_reads(),
+        consulted,
+        "inside the interval, no second read"
+    );
+    assert_eq!(abuse_events(&mut fx._events), 0, "nor a second report");
+
+    fx.world
+        .scheduler
+        .advance(fx.engine.profile().pointer_consult_interval);
+    block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
+    assert!(
+        pointer_reads() > consulted,
+        "past the interval, it reads again"
+    );
 }
 
 /// A command pass before this session's first walk knows no scope root, so
@@ -8136,6 +8301,131 @@ fn a_preview_of_a_joined_link_reads_the_root_the_join_adopted() {
     );
 }
 
+/// ADR 0025 E4: a person the owner cut keeps the bookmark at rest, but the
+/// owner-signed set no longer grants that person. A new live link previews as
+/// not joined, and the join posts a claim and holds the link again, which the
+/// owner converts back into a personal grant.
+#[test]
+fn a_person_the_owner_cut_joins_again_through_a_new_link() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &holder, &mut holder_tasks);
+    let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
+    assert_eq!(fx.revoke_person(&recipient), Ok(CommandOutcome::Done));
+    fx.world.scheduler.advance(holder.profile().stale_after);
+    poll_tasks_until_parked(&mut holder_tasks);
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(
+        shares[0].resolution,
+        Some(ResolutionClass::RevocationSignal)
+    );
+    assert!(inbox(&fx.owner_device).is_empty(), "nothing waits");
+
+    let again = fx.mint_link();
+    let seen = preview(&holder, &again).expect("the preview reads");
+    assert_eq!(seen.state, LinkPreviewState::Live);
+    assert!(!seen.joined, "a cut bookmark is not a join");
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, again),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(inbox(&fx.owner_device).len(), 1, "the join posted a claim");
+    assert!(
+        stored_link_hold(&fx).is_some_and(|hold| hold.claim.is_some()),
+        "the join holds the new link with its claim"
+    );
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &holder, &mut holder_tasks);
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(shares.len(), 1);
+    assert_eq!(shares[0].resolution, Some(ResolutionClass::Granted));
+    assert!(!shares[0].via_link, "the owner granted the person again");
+    assert!(stored_link_hold(&fx).is_none(), "the link keys dropped");
+}
+
+/// Bookmarks live on each device. A device of a granted account that holds no
+/// bookmark for the folder is offered the join, and the join records the
+/// bookmark with no claim and no link hold.
+#[test]
+fn a_granted_account_on_a_device_with_no_bookmark_joins_with_no_claim() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &holder, &mut holder_tasks);
+
+    let laptop = fx.world.device(b"the recipient's second device");
+    serve_http(&laptop, &fx.blocks, 8_000);
+    let (mut second, _second_events) = engine_on_api(&laptop, 23);
+    block_on(second.start(LoginSecret::new(RECIPIENT_SECRET.to_vec())))
+        .expect("the recipient's second session starts");
+    let mut second_tasks = fx.world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut second_tasks);
+    assert!(
+        block_on(second.received_shares())
+            .expect("the list reads")
+            .is_empty()
+    );
+
+    let again = fx.mint_link();
+    let seen = preview(&second, &again).expect("the preview reads");
+    assert_eq!(seen.state, LinkPreviewState::Live);
+    assert!(!seen.joined, "this device holds no bookmark to open");
+    assert_eq!(
+        join_link(&mut second, &mut second_tasks, again),
+        Ok(CommandOutcome::Done)
+    );
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "the join posted no claim"
+    );
+    settle(&fx, &second, &mut second_tasks);
+    let shares = block_on(second.received_shares()).expect("the list reads");
+    assert_eq!(shares.len(), 1, "the join recorded the bookmark");
+    assert_eq!(shares[0].resolution, Some(ResolutionClass::Granted));
+    assert!(!shares[0].via_link, "it reads through the personal grant");
+}
+
+/// A person the owner still grants who opens another link of the same folder
+/// has joined already: the preview says so, and the join posts nothing.
+#[test]
+fn a_granted_person_previews_a_new_link_as_joined_and_posts_nothing() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &holder, &mut holder_tasks);
+
+    let second = fx.mint_link();
+    let seen = preview(&holder, &second).expect("the preview reads");
+    assert_eq!(seen.state, LinkPreviewState::Live);
+    assert!(seen.joined, "a granted person has joined");
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, second),
+        Ok(CommandOutcome::Done)
+    );
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "the join posted nothing"
+    );
+    assert!(stored_link_hold(&fx).is_none(), "and holds no link");
+}
+
 /// Gate stage 2 refuses a scope root whose owner commitment does not verify,
 /// here one a later cut on this device's floor superseded: a trust violation,
 /// never an unresolvable link, and no store changes.
@@ -9426,6 +9716,92 @@ fn recipient_session(fx: &GrantScenario) -> (Engine<FakeSeamTypes>, EventStream,
     }))
     .expect("the owner's code imports");
     (engine, events, tasks)
+}
+
+/// ADR 0024 D4: the conversion of a write claim cuts the write scope, which
+/// moves the scope root. The session that joined through the link renders the
+/// root at the name it joined at, so the root must move to the healed bookmark
+/// name, or the drain writes under a name the new write seed does not derive.
+/// The host also hears of the tick that makes the folder writable.
+#[test]
+fn a_write_link_holder_writes_in_the_joining_session_after_the_other_device_converts() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link_at(Permission::Write);
+    let joined_at = fx.granted_scope_repoint().current_root;
+    let (mut holder, mut holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    settle(&fx, &holder, &mut holder_tasks);
+    let shared = block_on(holder.received_shares()).expect("the list reads")[0].scope;
+    assert_eq!(
+        block_on(holder.snapshot(shared))
+            .expect("a view")
+            .permission,
+        Permission::Read,
+        "a link holder reads before the conversion"
+    );
+    let (mut phone_engine, _phone_events, mut phone_tasks) = fx.owner_phone();
+    tick(&fx.world, &phone_engine, &mut phone_tasks);
+    assert_ne!(
+        fx.granted_scope_repoint().current_root,
+        joined_at,
+        "the conversion moved the scope root"
+    );
+
+    let mut writable = false;
+    for _ in 0..4 {
+        events_so_far(&mut holder_events);
+        tick(&fx.world, &holder, &mut holder_tasks);
+        let repainted = events_so_far(&mut holder_events)
+            .iter()
+            .any(|event| matches!(event, Event::SnapshotUpdated));
+        if block_on(holder.snapshot(shared))
+            .expect("a view")
+            .permission
+            == Permission::Write
+        {
+            assert!(
+                repainted,
+                "the tick that makes the folder writable repaints"
+            );
+            writable = true;
+            break;
+        }
+    }
+    assert!(writable, "the joining session gets write");
+
+    block_on(holder.command(Command::Create {
+        parent: shared,
+        name: "from the link holder".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create journals");
+    for _ in 0..4 {
+        tick(&fx.world, &holder, &mut holder_tasks);
+    }
+    assert!(
+        block_on(fx.recipient_device.staging_store.queued_ops())
+            .expect("the queue reads")
+            .is_empty(),
+        "the drain published the create under the moved root"
+    );
+    block_on(phone_engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the phone opens the folder");
+    for _ in 0..4 {
+        tick(&fx.world, &phone_engine, &mut phone_tasks);
+    }
+    assert!(
+        block_on(phone_engine.view())
+            .expect("a rendered view")
+            .children(fx.folder)
+            .iter()
+            .any(|child| child.name == "from the link holder"),
+        "the owner reads the write at the moved root"
+    );
 }
 
 /// A write grantee's delete only unlinks the node from its folder in the granted

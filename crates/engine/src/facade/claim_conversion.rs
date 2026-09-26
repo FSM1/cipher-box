@@ -19,7 +19,7 @@ use crate::grants::{
     AckedClaim, ClaimDisposition, CommittedLink, GrantRecipient, fingerprint_identity_key,
     link_of_sender, post_share_pointer_at,
 };
-use crate::net::rotation::OwnerScopeKeys;
+use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys};
 use crate::rotation::cut_for_write_scope;
 use crate::sync::BookkeepingSeal;
 
@@ -166,6 +166,8 @@ pub(super) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, 
     pub(super) events: &'a mpsc::UnboundedSender<Event>,
     pub(super) scheduler: &'a Sch,
     pub(super) profile: &'a SyncTimingProfile,
+    /// The session's on-access consult misses ([`OnAccessMisses`]).
+    pub(super) on_access_misses: &'a OnAccessMisses,
     pub(super) entropy: &'a RefCell<Box<dyn Entropy>>,
     pub(super) staging: &'a St,
     /// Signs the re-signed commitment, each minted row and each share pointer.
@@ -305,6 +307,7 @@ where
             keys: self.keys(),
             ancestry: target.ancestry(),
             pointer_consult,
+            on_access_misses: self.on_access_misses,
             payload_version: POINTER_PAYLOAD_VERSION,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
@@ -376,6 +379,7 @@ where
             events: self.events,
             scheduler: self.scheduler,
             profile: self.profile,
+            on_access_misses: self.on_access_misses,
             entropy: self.entropy,
             keys: self.keys(),
             owner_signer: self.identity,
@@ -852,29 +856,44 @@ where
     /// vouches, or `None` when the pointer vouches the name `target` holds. A
     /// write-scope cut moves the root before the parent's index names the
     /// move, so an index that missed the move names a superseded root.
+    ///
+    /// The resolve that failed first may have consulted the pointer on access
+    /// already; its recorded answer stands in for a second read
+    /// ([`OnAccessMisses`]).
     async fn moved_root(
         &self,
         node: NodeId,
         target: &OwnerScope,
     ) -> Result<Option<OwnerScope>, EngineError> {
-        let consulted = PointerConsult {
-            scope_keys: self.scope_keys,
-            owner_identity: self.owner_identity,
-            payload_version: POINTER_PAYLOAD_VERSION,
-        }
-        .run(self.transport, self.floors, &node.0)
-        .await
-        .map_err(|failure| match failure {
-            PointerConsultError::Unavailable => EngineError::Seam {
-                message: "the scope pointer is unavailable".to_owned(),
-            },
-            PointerConsultError::Rejected => EngineError::TrustViolation {
-                message: "scope pointer unauthenticated, or vouched below the write-epoch floor"
-                    .to_owned(),
-            },
-        })?;
-        Ok(consulted
-            .map(|consulted| consulted.current_root)
+        let rejected = || EngineError::TrustViolation {
+            message: "scope pointer unauthenticated, or vouched below the write-epoch floor"
+                .to_owned(),
+        };
+        let recent = self.on_access_misses.recent(
+            &node.0,
+            self.scheduler.now(),
+            self.profile.pointer_consult_interval,
+        );
+        let vouched = match recent {
+            Some(OnAccessMiss::Absent) => None,
+            Some(OnAccessMiss::Vouched(root)) => Some(*root),
+            Some(OnAccessMiss::Rejected) => return Err(rejected()),
+            None => PointerConsult {
+                scope_keys: self.scope_keys,
+                owner_identity: self.owner_identity,
+                payload_version: POINTER_PAYLOAD_VERSION,
+            }
+            .run(self.transport, self.floors, &node.0)
+            .await
+            .map_err(|failure| match failure {
+                PointerConsultError::Unavailable => EngineError::Seam {
+                    message: "the scope pointer is unavailable".to_owned(),
+                },
+                PointerConsultError::Rejected => rejected(),
+            })?
+            .map(|consulted| consulted.current_root),
+        };
+        Ok(vouched
             .filter(|root| root.as_str().as_bytes() != target.scope.ipns_name.as_slice())
             .map(|root| OwnerScope {
                 scope: ChildScopeRef::new(node.0, root.as_str().as_bytes().to_vec()),

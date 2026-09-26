@@ -24,7 +24,7 @@ use crate::facade::{Event, NodeId};
 use crate::gate::floor;
 use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
-    GatedRoots, GatedWaveRoot, MovedScopeSeed, OwnerRotationKeys, OwnerRotationNet,
+    GatedRoots, GatedWaveRoot, MovedScopeSeed, OnAccessMisses, OwnerRotationKeys, OwnerRotationNet,
     PointerConsultArm, RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet,
 };
 use crate::profile::SyncTimingProfile;
@@ -56,6 +56,7 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     pub events: &'a mpsc::UnboundedSender<Event>,
     pub scheduler: &'a Sch,
     pub profile: &'a SyncTimingProfile,
+    pub on_access_misses: &'a OnAccessMisses,
     pub entropy: &'a RefCell<E>,
     /// The owner material both planes re-seal under.
     pub keys: OwnerRotationKeys<'a>,
@@ -158,6 +159,7 @@ where
             ancestry: RotationAncestry::default()
                 .under_parent_node_seed(self.scope_id, self.parent_node_seed),
             pointer_consult: PointerConsultArm::Permitted,
+            on_access_misses: self.on_access_misses,
             payload_version: self.payload_version,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),

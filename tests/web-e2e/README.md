@@ -51,8 +51,9 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
      write
   5. device A revokes the write link with its joiners: the writer fails closed
      and the reader keeps access
-  6. device B cuts the reader, device A admits it again, and the next re-key on
-     device B serves it (ADR 0025 D3)
+  6. device B cuts the reader, the reader joins again through a new link that
+     device A converts, and the next re-key on device B serves it (ADR 0025 D3,
+     E4)
   7. the sweep on device B cuts an expired link, and its chip leaves device A
 
 The slices split on the `@full` tag. The smoke slice keeps login, CRUD, the

@@ -48,6 +48,7 @@ use super::contact_store::{StagingContactStore, resolve_recipient};
 use super::invite::{EphemeralInvitee, InviteFragment, post_invite_claim};
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
 use super::received_share_store::StagingReceivedShareStore;
+use super::received_status::committed_blob;
 
 /// The bookmark a join records before its first read, and the link keys it
 /// reads through.
@@ -147,8 +148,8 @@ pub(crate) struct JoinSeams<'a, T, H, F> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum JoinRead {
     /// The owner-signed set at `root` commits the link, and its deadline
-    /// stands.
-    Live { root: Box<IpnsName> },
+    /// stands. `personal` is [`LinkEntryRead::Live`]'s.
+    Live { root: Box<IpnsName>, personal: bool },
     /// The link entry's deadline is reached (ADR 0025 D5).
     Expired,
     /// The owner-signed set commits no link entry at the link tag.
@@ -163,10 +164,16 @@ pub(crate) enum JoinRead {
 enum LinkEntryRead {
     /// The owner-signed set at `root` commits the link, and its deadline
     /// stands. `candidate` is that record, for the caller that opens it.
+    ///
+    /// `personal` says whether the same set still grants this account in its
+    /// own name. A person the owner cut keeps the bookmark at rest, and ADR
+    /// 0025 E4 lets that person join again through another live link, so a
+    /// bookmark alone does not make a join a no-op.
     Live {
         root: Box<IpnsName>,
         candidate: Box<Candidate>,
         conversion_permission: Permission,
+        personal: bool,
     },
     Expired {
         conversion_permission: Permission,
@@ -181,12 +188,16 @@ enum LinkEntryRead {
 /// the gate rejects, and a commitment that does not verify are the errors.
 async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
     seams: &JoinSeams<'_, T, H, F>,
-    share: &ReceivedShare,
-    hold: &LinkHold,
-    owner: &Contact,
-    invitee: &EphemeralInvitee,
+    link: &LinkReader<'_>,
     now: UnixMillis,
 ) -> Result<LinkEntryRead, LinkReadRefusal> {
+    let LinkReader {
+        share,
+        hold,
+        owner,
+        invitee,
+        my_enc_secret,
+    } = *link;
     let owner_identity = owner.identity_pk();
     let root =
         match held_scope_root(seams.transport, &seams.floors, share, hold, &owner_identity).await {
@@ -234,40 +245,56 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
             conversion_permission,
         });
     }
+    let personal = committed_blob(
+        &candidate.grant_section,
+        my_enc_secret,
+        &owner.enc_subkey(),
+        name,
+    )
+    .is_some();
     Ok(LinkEntryRead::Live {
         root: Box::new(root),
         candidate: Box::new(candidate),
         conversion_permission,
+        personal,
     })
+}
+
+/// What one read through a link reads with: the bookmark the fragment makes,
+/// its link keys, the owner the fragment names, and this account's own
+/// encryption secret, which locates its own grant in the owner-signed set.
+#[derive(Clone, Copy)]
+pub(crate) struct LinkReader<'a> {
+    pub share: &'a ReceivedShare,
+    pub hold: &'a LinkHold,
+    pub owner: &'a Contact,
+    pub invitee: &'a EphemeralInvitee,
+    pub my_enc_secret: &'a X25519Secret,
 }
 
 /// The join's one read (ADR 0024 D5), ahead of every write.
 pub(crate) async fn join_read<T: RecordTransport, H: Http, F: FloorStore>(
     seams: &JoinSeams<'_, T, H, F>,
-    share: &ReceivedShare,
-    hold: &LinkHold,
-    owner: &Contact,
-    invitee: &EphemeralInvitee,
+    link: &LinkReader<'_>,
     now: UnixMillis,
 ) -> Result<JoinRead, LinkReadRefusal> {
-    Ok(
-        match read_link_entry(seams, share, hold, owner, invitee, now).await? {
-            LinkEntryRead::Live { root, .. } => JoinRead::Live { root },
-            LinkEntryRead::Expired { .. } => JoinRead::Expired,
-            LinkEntryRead::Revoked => JoinRead::Revoked,
-            LinkEntryRead::Unavailable => JoinRead::Unavailable,
-        },
-    )
+    Ok(match read_link_entry(seams, link, now).await? {
+        LinkEntryRead::Live { root, personal, .. } => JoinRead::Live { root, personal },
+        LinkEntryRead::Expired { .. } => JoinRead::Expired,
+        LinkEntryRead::Revoked => JoinRead::Revoked,
+        LinkEntryRead::Unavailable => JoinRead::Unavailable,
+    })
 }
 
 /// What the preview read through the link (ADR 0028 D2, D5).
 #[derive(Debug)]
 pub(crate) enum PreviewRead {
-    /// The link stands: the permission conversion grants, and the scope
-    /// root's direct children.
+    /// The link stands: the permission conversion grants, the scope root's
+    /// direct children, and [`LinkEntryRead::Live`]'s `personal`.
     Live {
         conversion_permission: Permission,
         children: Vec<ChildRef>,
+        personal: bool,
     },
     Expired {
         conversion_permission: Permission,
@@ -291,10 +318,7 @@ pub(crate) enum LinkReadRefusal {
 /// over a view of `seams.floors` that persists nothing, so it raises no floor.
 pub(crate) async fn preview_read<T: RecordTransport, H: Http, F: FloorStore>(
     seams: &JoinSeams<'_, T, H, F>,
-    share: &ReceivedShare,
-    hold: &LinkHold,
-    owner: &Contact,
-    invitee: &EphemeralInvitee,
+    link: &LinkReader<'_>,
     now: UnixMillis,
 ) -> Result<PreviewRead, LinkReadRefusal> {
     let seams = JoinSeams {
@@ -303,13 +327,14 @@ pub(crate) async fn preview_read<T: RecordTransport, H: Http, F: FloorStore>(
         http: seams.http,
         floors: NoPersistFloorStore::over(&seams.floors),
     };
-    let (root, candidate, conversion_permission) =
-        match read_link_entry(&seams, share, hold, owner, invitee, now).await? {
+    let (root, candidate, conversion_permission, personal) =
+        match read_link_entry(&seams, link, now).await? {
             LinkEntryRead::Live {
                 root,
                 candidate,
                 conversion_permission,
-            } => (root, candidate, conversion_permission),
+                personal,
+            } => (root, candidate, conversion_permission, personal),
             LinkEntryRead::Expired {
                 conversion_permission,
             } => {
@@ -320,13 +345,21 @@ pub(crate) async fn preview_read<T: RecordTransport, H: Http, F: FloorStore>(
             LinkEntryRead::Revoked => return Ok(PreviewRead::Revoked),
             LinkEntryRead::Unavailable => return Ok(PreviewRead::Unavailable),
         };
-    let children = open_through_link(&seams.floors, &candidate, &root, share, owner, invitee)
-        .await
-        .map_err(LinkReadRefusal::Gate)?;
+    let children = open_through_link(
+        &seams.floors,
+        &candidate,
+        &root,
+        link.share,
+        link.owner,
+        link.invitee,
+    )
+    .await
+    .map_err(LinkReadRefusal::Gate)?;
     Ok(match children {
         LinkOpen::Opened(children) => PreviewRead::Live {
             conversion_permission,
             children,
+            personal,
         },
         LinkOpen::NoBlob => PreviewRead::Revoked,
         LinkOpen::Unavailable => PreviewRead::Unavailable,

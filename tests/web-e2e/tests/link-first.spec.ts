@@ -13,7 +13,6 @@ import { Device, freshLogin, type Login, type Tab } from '../devices';
 import { expect, test as base } from '../fixtures';
 import { FilesPage } from '../page-objects/files.page';
 import type { InvitePage } from '../page-objects/invite.page';
-import { SharePage } from '../page-objects/share.page';
 import { SharedPage, type RowStanding } from '../page-objects/shared.page';
 import { VaultPage } from '../page-objects/vault.page';
 import { claimHere } from '../sharing';
@@ -25,7 +24,6 @@ const SUBFOLDER = 'photos';
 const OWNER_NAME = 'dana';
 const WRITTEN = 'from-the-writer.bin';
 const AFTER_REKEY = 'after-the-rekey.txt';
-const READER_FOLDER = 'reader-own';
 
 /** The CI profile ticks every second, so a `/shared` verdict moves within a few. */
 const PASS = { timeout: 60_000, intervals: [1_000] };
@@ -57,6 +55,7 @@ interface Flow {
   /** Device B's tab, online since it converted the read claim. */
   readonly bTab: Tab;
   readonly scope: string;
+  readonly reader: Device;
   readonly readerPage: Page;
 }
 
@@ -145,17 +144,14 @@ async function readLinkOverTwoDevices(device: OpenDevice): Promise<Flow> {
       return tab;
     });
 
-  return { a, b, bTab, scope, readerPage };
+  return { a, b, bTab, scope, reader, readerPage };
 }
 
 /**
  * Step 4's first half: A mints a write link and goes offline, a second holder
  * joins it, and B converts the claim.
  */
-async function writeLinkConvertedOnB(
-  flow: Flow,
-  device: OpenDevice
-): Promise<{ writer: Device; writerPage: Page }> {
+async function writeLinkConvertedOnB(flow: Flow, device: OpenDevice): Promise<Page> {
   const aTab = await flow.a.online();
   await aTab.share.open(FOLDER);
   const link = await aTab.share.mintLink({ permission: 'write' });
@@ -169,7 +165,7 @@ async function writeLinkConvertedOnB(
   const shared = new SharedPage(writerPage);
   await shared.awaitStandingOf(flow.scope, granted, PASS);
   await expect(shared.row(flow.scope).getByTestId('shared-permission')).toHaveText('write');
-  return { writer, writerPage };
+  return writerPage;
 }
 
 test('a link minted on device A is read at once and converted on device B', async ({ device }) => {
@@ -183,14 +179,11 @@ test('@full a write link holder writes after device B converts, and device A rea
   const flow = await readLinkOverTwoDevices(device);
 
   await test.step('4. the write link holder writes after device B converts, and device A reads the write', async () => {
-    const { writer } = await writeLinkConvertedOnB(flow, device);
-    // A new session, because the joined one keeps a read view (the expected
-    // failure below).
-    const { page, vault, files } = await writer.online();
-    const shared = new SharedPage(page);
-    await shared.open();
-    await shared.openShare(flow.scope);
-    await refreshedUntil(vault, files.newFolderButton, 1, 60_000);
+    // The session that joined through the link writes, with no new sign-in.
+    const writerPage = await writeLinkConvertedOnB(flow, device);
+    const files = new FilesPage(writerPage);
+    await new SharedPage(writerPage).openShare(flow.scope);
+    await refreshedUntil(new VaultPage(writerPage), files.newFolderButton, 1, 60_000);
     await files.upload(WRITTEN, new Uint8Array(2_048).fill(7));
     await expect(files.row(WRITTEN)).toBeVisible();
     await files.published();
@@ -201,47 +194,15 @@ test('@full a write link holder writes after device B converts, and device A rea
   });
 });
 
-test('@full the session that joined through a write link writes after device B converts', async ({
-  device,
-}) => {
-  test.setTimeout(180_000);
-  const flow = await readLinkOverTwoDevices(device);
-  const { writerPage } = await writeLinkConvertedOnB(flow, device);
-
-  test.fail(
-    true,
-    'the session that joined through the link keeps a read view after the conversion'
-  );
-  await new SharedPage(writerPage).openShare(flow.scope);
-  await refreshedUntil(
-    new VaultPage(writerPage),
-    new FilesPage(writerPage).newFolderButton,
-    1,
-    30_000
-  );
-});
-
 test('@full device A revokes the write link with its joiners: the writer fails closed and the reader keeps access', async ({
   device,
 }) => {
   test.setTimeout(180_000);
   const flow = await readLinkOverTwoDevices(device);
-  const { writerPage } = await writeLinkConvertedOnB(flow, device);
+  const writerPage = await writeLinkConvertedOnB(flow, device);
 
   await test.step('5. device A revokes the write link with its joiners; the writer fails closed and the reader keeps access', async () => {
     const aTab = await flow.a.online();
-    await aTab.share.open(FOLDER);
-    // A refused sharing read never draws a chip.
-    await aTab.share.linkChips
-      .first()
-      .waitFor({ timeout: 30_000 })
-      .catch(() => undefined);
-    test.fail(
-      (await aTab.share.standingUnknown.count()) > 0,
-      "device A reads no sharing state for the folder after device B's write-scope cut moved its root"
-    );
-    await aTab.share.close();
-
     await aTab.share.openUntilLinks(FOLDER, 2, 60_000);
     await aTab.share.askToRevoke(aTab.share.writeLinkChips);
     await expect(aTab.share.removeGrantees.locator('..')).toHaveText(
@@ -267,11 +228,11 @@ test('@full a reader admitted again survives the next re-key on device B, and th
   device,
 }) => {
   test.setTimeout(240_000);
-  const { a, b, bTab, scope, readerPage } = await readLinkOverTwoDevices(device);
+  const { a, b, bTab, scope, reader, readerPage } = await readLinkOverTwoDevices(device);
   const readerShared = new SharedPage(readerPage);
 
   const bAgain =
-    await test.step('6. device B cuts the reader, device A admits it again, and the next re-key on B serves it (ADR 0025 D3)', async () => {
+    await test.step('6. device B cuts the reader, the reader joins again through a new link that device A converts, and the next re-key on B serves it (ADR 0025 D3, E4)', async () => {
       await bTab.share.open(FOLDER);
       await bTab.share.revokeGrantee();
       await expect(bTab.share.noGrants).toBeVisible({ timeout: 180_000 });
@@ -281,33 +242,24 @@ test('@full a reader admitted again survives the next re-key on device B, and th
       await readerShared.awaitStandingOf(scope, revoked, PASS);
       await b.offline();
 
-      // The invite page offers a person the owner cut only "open folder", so
-      // device A admits the reader again by a direct grant.
-      const readerFiles = new FilesPage(readerPage);
-      const readerOwnFolder = async () => {
-        await readerFiles.openFromSidebar();
-        await readerFiles.createFolder(READER_FOLDER);
-        await readerFiles.published();
-      };
-      const [aTab] = await Promise.all([a.online(), readerOwnFolder()]);
+      // A person the owner cut joins again through a new link, and device A
+      // converts the claim (ADR 0025 E4).
+      const aTab = await a.online();
       await aTab.share.open(FOLDER);
-      const ownerCode = await aTab.share.readOwnContactCode();
-      const readerShare = new SharePage(readerPage);
-      await readerShare.open(READER_FOLDER);
-      await readerShare.importContact(ownerCode);
-      const readerCode = await readerShare.readOwnContactCode();
-      await readerShare.close();
-      await aTab.share.grantTo(readerCode, 'read');
+      const again = await aTab.share.mintLink();
       await aTab.share.close();
+      const before = await joins(aTab, scope);
+      await holderJoins(reader, again, 'reader');
+      await converted(aTab, scope, before);
       await readerShared.awaitStandingOf(scope, granted, PASS);
       await a.offline();
 
-      // The re-key: a link revoke on B, which cuts the folder's read plane.
+      // The re-key: B revokes the link the reader joined through again, which
+      // cuts the folder's read plane and keeps the reader's grant.
       const tab = await b.online();
       await tab.share.openUntilGranted(FOLDER, 1);
-      await tab.share.mintLink();
       await tab.share.close();
-      await tab.share.open(FOLDER);
+      await tab.share.openUntilLinks(FOLDER, 1);
       await tab.share.revokeFirstLink();
       await expect(tab.share.linkChips).toHaveCount(0);
       await expect(tab.share.grantRows).toHaveCount(1);
@@ -322,7 +274,7 @@ test('@full a reader admitted again survives the next re-key on device B, and th
 
       await readerShared.awaitStandingOf(scope, granted, PASS);
       await readerShared.openShare(scope);
-      await refreshedUntil(new VaultPage(readerPage), readerFiles.row(AFTER_REKEY));
+      await refreshedUntil(new VaultPage(readerPage), new FilesPage(readerPage).row(AFTER_REKEY));
       return tab;
     });
 

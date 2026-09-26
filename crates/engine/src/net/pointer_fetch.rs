@@ -87,6 +87,13 @@ pub(crate) struct PointerConsult<'a> {
 pub(crate) struct ConsultedPointer {
     /// The owner-vouched current root name.
     pub(crate) current_root: IpnsName,
+    /// The write-epoch floor in force once the consult ran: the vouched
+    /// epoch, or the standing floor when a write-epoch lease deferred the
+    /// raise.
+    pub(crate) write_floor: u64,
+    /// A write-epoch lease deferred the raise, so `write_floor` is below the
+    /// epoch the re-point vouched.
+    pub(crate) deferred: bool,
     /// The record this consult authenticated. It rides out so the caller that
     /// seats it holds those exact bytes: a second read of the same name lets an
     /// endpoint set that serves fresh then stale seat a record no consult
@@ -131,11 +138,14 @@ impl PointerConsult<'_> {
         {
             return Err(PointerConsultError::Rejected);
         }
-        floor::advance_write_epoch_on_sight(floors, scope_id, repoint.write_epoch)
-            .await
-            .map_err(|_| PointerConsultError::Unavailable)?;
+        let write_floor =
+            floor::advance_write_epoch_on_sight(floors, scope_id, repoint.write_epoch)
+                .await
+                .map_err(|_| PointerConsultError::Unavailable)?;
         Ok(Some(ConsultedPointer {
             current_root: repoint.current_root,
+            write_floor,
+            deferred: write_floor < repoint.write_epoch,
             record_bytes,
             value: block,
         }))
