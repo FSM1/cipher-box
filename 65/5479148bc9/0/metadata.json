@@ -1,0 +1,323 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "655479148bc9",
+  "session_id": "1bc4f48e-3cea-46dc-9862-0522f68dd410",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-26T15:55:23.776033Z",
+  "branch": "docs/blueprint-rewords-adr-0029-0051",
+  "checkpoints_count": 10,
+  "save_step_count": 5,
+  "files_touched": [
+    "AGENTS.md",
+    "CONTEXT.md",
+    "blueprint/api.md",
+    "blueprint/core.md",
+    "blueprint/deploy.md",
+    "blueprint/desktop.md",
+    "blueprint/engine.md",
+    "blueprint/testing.md",
+    "blueprint/web-client.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "96504cac4210",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 6010,
+    "cache_creation_tokens": 1224236,
+    "cache_read_tokens": 66435974,
+    "output_tokens": 253164,
+    "api_call_count": 290
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Assess and close stale umbrella issues (#635, #991, #992) in the cipher-box GitHub repo, audit all open comp:engine issues for validity, then investigate whether the ADR decision corpus (in cipher-box-next) has kept pace with years of blueprint/CONTEXT.md changes before considering moving ADRs into the main repo, and finally draft/land the resulting retroactive ADRs and blueprint rewords.",
+    "outcome": "Closed #635/#991/#992 and filed follow-up issues; audited and updated 17 comp:engine issues; ran a multi-pass fresh-eyes investigation of a 314+ row commit-history/ADR-coverage audit; drafted, reviewed, and merged all 23 candidate ADRs (0029-0051) plus amendments to existing ADRs as draft PRs in cipher-box-next, all now merged and marked Accepted; applied ~230 blueprint/CONTEXT.md/AGENTS.md rewording edits across 9 files citing the new ADRs, lint-clean, with a docs PR in progress and several follow-up defects filed as new cipher-box issues.",
+    "learnings": {
+      "repo": [
+        "cipher-box's tracker-refs lint gate exempts bare 1-2 digit #NN issue references in blueprint text (assumed to only name cipher-box-next), which breaks if a citation number grows past 2 digits or references a cipher-box issue instead",
+        "comp:engine issue audits must re-check against origin/main HEAD because PRs merge mid-audit (PR #1989 shifted the head during the first audit pass)",
+        "Agent-authored GitHub comments/issue bodies posted under the owner's account (FSM1) are not proof of an owner decision — only an explicit in-session record (confirmed by orchestrator memory) counts, per the user's ruling",
+        "map #813 resolution comments (cb#818, #820, #825, #830, #841, #844) all use one shared agent template with no owner endorsement in-thread, but the user ruled that these are still owner decisions since he personally approved that resolution comment",
+        "cipher-box-next has no CI or lint config, so ADR PRs there only need markdownlint clean, no test gate",
+        "Worktrees created without running install lack node_modules, so pre-commit hooks (lint-staged) fail; lint by hand (prettier + markdownlint via stdin) and commit --no-verify",
+        "markdownlint refuses to lint files outside the repo path — pipe file content via --stdin --config .markdownlint.json instead",
+        "1Password commit signing can fail in a freshly cloned checkout; commit.gpgsign=false must be set locally in that clone (as already done for the main repo)"
+      ],
+      "code": [
+        {
+          "path": "crates/engine/src/net/record_publish.rs",
+          "line": 233,
+          "end_line": 235,
+          "finding": "publish_record unconditionally uploads every record head block to the hosted API regardless of placement mode, causing a lockout for External-placement (BYO) accounts once byo=true is set (issue #2006, later re-decided so heads follow placement)"
+        },
+        {
+          "path": "apps/api/src/content/content.service.ts",
+          "line": 245,
+          "end_line": 246,
+          "finding": "API throws ConflictException for any hosted upload when user.byo is true, with no exemption for record head blocks — root cause of the #2006 External-mode lockout"
+        },
+        {
+          "path": "crates/engine/src/rotation/reseal.rs",
+          "finding": "reseal_scope_root refuses (CarriedWriteHistoryLinkTooLarge) an over-length carried write-history link instead of dropping it as blueprint/core.md 'Write-body' claims (ADR 0033 E1 residual)"
+        },
+        {
+          "path": "crates/engine/src/content/limits.rs",
+          "line": 72,
+          "finding": "MAX_RETAINED_HISTORY_LINK_BYTES = 256 caps retained history links; not previously stated anywhere in the blueprint (ADR 0033 E6)"
+        }
+      ],
+      "workflow": [
+        "Splitting a large validity/history audit across multiple parallel sub-agents grouped by file/area works well, but nested sub-agents' completion results route to the top-level orchestrator instead of their direct parent agent — must forward via SendMessage",
+        "A batch pipeline of writer→independent reviewer→apply-fixes→open-PR per artifact (used for all 23 ADRs) scales well but needs the orchestrator to track many concurrent task IDs and dispatch reviews/writers incrementally as slots free up",
+        "When conflicting findings arise from parallel auditors, running one more targeted 'fresh eyes' challenge investigation pass per disputed item is an effective way to resolve disagreements before finalizing a summary document",
+        "For visual/diagrammatic explanations of technical tradeoffs (e.g. architecture options), the archify skill can generate delivered interactive HTML diagrams with browser-verified screenshots to support ELI5-style explanations",
+        "When the user pushes back with a valid architectural objection (e.g. 'CipherBox infra on the critical path'), re-verify assumptions with a fresh grep/trace pass rather than defending the original recommendation — it reversed the recommendation from Option A to Option B in this session"
+      ]
+    },
+    "friction": [
+      "Repeated iteration cycles where new PRs from other lanes (PR #1989) or draft PRs from parallel teams (PR #1999) shifted the ground truth mid-audit, forcing re-verification against the latest origin/main",
+      "GitHub API/GraphQL rate limits were hit while opening many ADR draft PRs in quick succession, requiring a wait and a switch of the PR-opening script from GraphQL to REST",
+      "The PR-decided ownership bar was inconsistent across the four initial audit sub-agents (one required explicit 'Decision' comments, others accepted issue bodies), requiring a whole extra re-rating pass over 21+46 sources",
+      "Nested agent handing off to its own sub-agents caused stalls where the parent reported 'still running' with no progress, requiring a SendMessage nudge to resume it",
+      "One agent's cleanup command (`rm *.orig.md` glob) risked deleting sibling agents' backup files in a shared scratch directory (turned out harmless since GitHub retains edit history)"
+    ],
+    "open_items": [
+      "13 amend targets from the audit (ADR files 0006, 0007, 0009, 0010, 0022, 0023 + 7 wayfinder thread decision sets) still need amendment PRs in cipher-box-next",
+      "Small chore PR still needed for code/workflow comment citation fixes (crates/engine various files, .github/workflows/ci-e2e.yml) collected during the reword pass",
+      "Draft PR #1999 (fixes #1992/#1995) has a known acceptance gap on the third acceptance item — row a write wave re-mints as an owner-signed placeholder is out of reach of the revoke fallback; must be checked before merge",
+      "Several ADR review-flagged 'owner must decide' items remain open in already-merged ADRs: #108 ADR 0047 E1 dead-letter abandonment exits classification, #100 ADR 0048 E6 conversion-entry-before-ack vs ADR 0023 D5 conflict, #104 ADR 0043 E2 cross-scope restore dead-letter vs re-seal promise, #107 ADR 0050 E7 nightly-only liveness suite gating",
+      "Newly filed defect issues (#2008 malformed contentCid panic, #2009 raw recipient subkey in revocation floor record, #2013–#2021 covering rename/move stamp mismatch, two-leg move parking, Windows GPLv3 notice, cut-floor read gaps, desktop forced-pass gaps, register batch body-size cap, observed-unlink data loss, cross-scope restore dead-letter, and registry row leak on dead-letter/trim/refusal) all remain unimplemented, tracked under #1702/#1262",
+      "The ADR-repo-move to a single repo (cipher-box) is still blocked pending resolution of the 13 amend targets, per the user's explicit ordering ('all this churn should be resolved before the move to 1 repo')",
+      "Reword docs PR (9 files: AGENTS.md, CONTEXT.md, blueprint/{api,core,deploy,desktop,engine,testing,web-client}.md) was mid-flight — final lint fixes applied but PR not yet committed/opened at end of transcript"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-26T15:54:42.76437Z",
+    "agent_lines": 0,
+    "agent_removed": 102,
+    "human_added": 0,
+    "human_modified": 421,
+    "human_removed": 40,
+    "total_committed": 81,
+    "total_lines_changed": 563,
+    "agent_percentage": 18.117229129662523,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7628,
+      "user_lines_removed": 88,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        "AGENTS.md": 1,
+        "CONTEXT.md": 16,
+        "blueprint/api.md": 24,
+        "blueprint/core.md": 15,
+        "blueprint/engine.md": 16,
+        "blueprint/testing.md": 36,
+        "designs/inventory/scratch-epic/INVENTORY-v1.txt": 163,
+        "designs/inventory/scratch-epic/INVENTORY-v2.txt": 220,
+        "designs/inventory/scratch-epic/att.tsv": 146,
+        "designs/inventory/scratch-epic/attachments.tsv": 146,
+        "designs/inventory/scratch-epic/body-att.md": 156,
+        "designs/inventory/scratch-epic/body-final.md": 156,
+        "designs/inventory/scratch-epic/body.md": 155,
+        "designs/inventory/scratch-epic/comments-att/01-login.md": 37,
+        "designs/inventory/scratch-epic/comments-att/02-shell.md": 42,
+        "designs/inventory/scratch-epic/comments-att/03-files.md": 32,
+        "designs/inventory/scratch-epic/comments-att/04-actions.md": 67,
+        "designs/inventory/scratch-epic/comments-att/05-previews.md": 42,
+        "designs/inventory/scratch-epic/comments-att/06-search.md": 7,
+        "designs/inventory/scratch-epic/comments-att/07-shared.md": 47,
+        "designs/inventory/scratch-epic/comments-att/08-bin.md": 27,
+        "designs/inventory/scratch-epic/comments-att/09-settings.md": 52,
+        "designs/inventory/scratch-epic/comments-att/10-invite-narrow.md": 12,
+        "designs/inventory/scratch-epic/comments/01-login.md": 37,
+        "designs/inventory/scratch-epic/comments/02-shell.md": 42,
+        "designs/inventory/scratch-epic/comments/03-files.md": 32,
+        "designs/inventory/scratch-epic/comments/04-actions.md": 67,
+        "designs/inventory/scratch-epic/comments/05-previews.md": 42,
+        "designs/inventory/scratch-epic/comments/06-search.md": 7,
+        "designs/inventory/scratch-epic/comments/07-shared.md": 47,
+        "designs/inventory/scratch-epic/comments/08-bin.md": 27,
+        "designs/inventory/scratch-epic/comments/09-settings.md": 52,
+        "designs/inventory/scratch-epic/comments/10-invite-narrow.md": 12,
+        "designs/inventory/scratch-epic/frame.md": 23,
+        "designs/inventory/scratch-epic/rows.md": 135,
+        "designs/inventory/scratch-epic/table-v1.md": 165,
+        "designs/inventory/scratch-epic/table-v2.md": 222,
+        "designs/inventory/scratch-v1/.wallet-key": 1,
+        "designs/inventory/scratch-v1/.wallet-key-b": 1,
+        "designs/inventory/scratch-v1/.wallet-key-c": 1,
+        "designs/inventory/scratch-v1/.wallet-key-d": 1,
+        "designs/inventory/scratch-v1/.wallet-key-e": 1,
+        "designs/inventory/scratch-v1/capture.mjs": 379,
+        "designs/inventory/scratch-v1/capture2.mjs": 248,
+        "designs/inventory/scratch-v1/capture3.mjs": 215,
+        "designs/inventory/scratch-v1/capture4.mjs": 110,
+        "designs/inventory/scratch-v1/capture5.mjs": 88,
+        "designs/inventory/scratch-v1/capture6.mjs": 246,
+        "designs/inventory/scratch-v1/capture7.mjs": 148,
+        "designs/inventory/scratch-v1/capture8.mjs": 77,
+        "designs/inventory/scratch-v1/lib.mjs": 86,
+        "designs/inventory/scratch-v1/notes.json": 129,
+        "designs/inventory/scratch-v1/notes.txt": 2,
+        "designs/inventory/scratch-v1/notes2.json": 116,
+        "designs/inventory/scratch-v1/notes3.json": 61,
+        "designs/inventory/scratch-v1/notes4.json": 26,
+        "designs/inventory/scratch-v1/notes5.json": 10,
+        "designs/inventory/scratch-v1/notes6.json": 105,
+        "designs/inventory/scratch-v1/notes7.json": 34,
+        "designs/inventory/scratch-v1/notes8.json": 21,
+        "designs/inventory/scratch-v1/probe.mjs": 59,
+        "designs/inventory/scratch-v1/readme.md": 3,
+        "designs/inventory/scratch-v2/capture.mjs": 412,
+        "designs/inventory/scratch-v2/capture2.mjs": 231,
+        "designs/inventory/scratch-v2/capture3.mjs": 40,
+        "designs/inventory/scratch-v2/context-menu-batch.json": 8,
+        "designs/inventory/scratch-v2/context-menu-file.json": 8,
+        "designs/inventory/scratch-v2/context-menu-folder.json": 7,
+        "designs/inventory/scratch-v2/context-menu-text.json": 9,
+        "designs/inventory/scratch-v2/dump-bin-purge.json": 39,
+        "designs/inventory/scratch-v2/dump-bin.json": 33,
+        "designs/inventory/scratch-v2/dump-delete.json": 41,
+        "designs/inventory/scratch-v2/dump-details.json": 41,
+        "designs/inventory/scratch-v2/dump-devices.json": 36,
+        "designs/inventory/scratch-v2/dump-files-empty.json": 33,
+        "designs/inventory/scratch-v2/dump-files-narrow.json": 29,
+        "designs/inventory/scratch-v2/dump-files-populated.json": 35,
+        "designs/inventory/scratch-v2/dump-folder-open.json": 34,
+        "designs/inventory/scratch-v2/dump-forget-device.json": 42,
+        "designs/inventory/scratch-v2/dump-invite.json": 14,
+        "designs/inventory/scratch-v2/dump-login.json": 15,
+        "designs/inventory/scratch-v2/dump-new-folder-dialog.json": 39,
+        "designs/inventory/scratch-v2/dump-offline-live.json": 3,
+        "designs/inventory/scratch-v2/dump-offline.json": 34,
+        "designs/inventory/scratch-v2/dump-recovery-setup.json": 40,
+        "designs/inventory/scratch-v2/dump-recovery-warning.json": 3,
+        "designs/inventory/scratch-v2/dump-selection.json": 39,
+        "designs/inventory/scratch-v2/dump-settings.json": 36,
+        "designs/inventory/scratch-v2/dump-share-minted.json": 45,
+        "designs/inventory/scratch-v2/dump-share.json": 43,
+        "designs/inventory/scratch-v2/dump-shared.json": 30,
+        "designs/inventory/scratch-v2/dump-user-menu.json": 36,
+        "designs/inventory/scratch-v2/dump2-after-upload-collision.json": 23,
+        "designs/inventory/scratch-v2/dump2-batch-delete.json": 35,
+        "designs/inventory/scratch-v2/dump2-batch-move.json": 35,
+        "designs/inventory/scratch-v2/dump2-bin-three.json": 18,
+        "designs/inventory/scratch-v2/dump2-drag-hover.json": 23,
+        "designs/inventory/scratch-v2/dump2-editor-after-save.json": 23,
+        "designs/inventory/scratch-v2/dump2-editor-cancel.json": 23,
+        "designs/inventory/scratch-v2/dump2-editor-dirty.json": 29,
+        "designs/inventory/scratch-v2/dump2-editor-idle.json": 29,
+        "designs/inventory/scratch-v2/dump2-editor-saving.json": 23,
+        "designs/inventory/scratch-v2/dump2-folder-collision.json": 23,
+        "designs/inventory/scratch-v2/dump2-preview-audio.json": 31,
+        "designs/inventory/scratch-v2/dump2-preview-image.json": 29,
+        "designs/inventory/scratch-v2/dump2-preview-pdf.json": 29,
+        "designs/inventory/scratch-v2/dump2-preview-video.json": 31,
+        "designs/inventory/scratch-v2/dump2-selection-three.json": 29,
+        "designs/inventory/scratch-v2/dump2-six-hydrating.json": 25,
+        "designs/inventory/scratch-v2/dump2-six-resolved.json": 23,
+        "designs/inventory/scratch-v2/dump2-upload-collision.json": 25,
+        "designs/inventory/scratch-v2/followup.mjs": 72,
+        "designs/inventory/scratch-v2/log-followup.json": 17,
+        "designs/inventory/scratch-v2/log.json": 187,
+        "designs/inventory/scratch-v2/log2.json": 117,
+        "designs/inventory/scratch-v2/notes.txt": 4,
+        "designs/inventory/scratch-v2/probe.mjs": 32,
+        "designs/inventory/scratch-v2/probe2.mjs": 32,
+        "designs/inventory/scratch-v2/readme.md": 3,
+        "designs/inventory/v1/INVENTORY.md": 163,
+        "designs/inventory/v2/INVENTORY.md": 220,
+        "tests/web-e2e/staging/wave-timing.spec.ts": 126
+      },
+      "user_removed_per_file": {
+        "AGENTS.md": 1,
+        "CONTEXT.md": 16,
+        "blueprint/api.md": 23,
+        "blueprint/core.md": 10,
+        "blueprint/engine.md": 15,
+        "blueprint/testing.md": 23
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 243,
+      "user_lines_removed": 200,
+      "agent_lines_added": 7656,
+      "agent_lines_removed": 114,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        "blueprint/core.md": 45,
+        "blueprint/deploy.md": 29,
+        "blueprint/desktop.md": 40,
+        "blueprint/engine.md": 65,
+        "blueprint/testing.md": 48,
+        "blueprint/web-client.md": 15
+      },
+      "user_removed_per_file": {
+        "blueprint/core.md": 34,
+        "blueprint/deploy.md": 23,
+        "blueprint/desktop.md": 32,
+        "blueprint/engine.md": 55,
+        "blueprint/testing.md": 44,
+        "blueprint/web-client.md": 12
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 7906,
+      "agent_lines_removed": 321,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 150,
+      "user_lines_removed": 147,
+      "agent_lines_added": 7915,
+      "agent_lines_removed": 338,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        "blueprint/core.md": 149
+      },
+      "user_removed_per_file": {
+        "blueprint/core.md": 147
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 29,
+      "user_lines_removed": 24,
+      "agent_lines_added": 8068,
+      "agent_lines_removed": 473,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        "blueprint/engine.md": 28
+      },
+      "user_removed_per_file": {
+        "blueprint/engine.md": 24
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 8167,
+      "agent_lines_removed": 561,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
