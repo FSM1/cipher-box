@@ -20,7 +20,7 @@ The normative source of truth for the v2 build:
 | `blueprint/deploy.md`     | Freeze mechanics, release management, staging pipeline                            |
 | `decisions/`              | Architecture decision records (ADRs); one file per decision, status in the header |
 
-The ADRs live in [`decisions/`](decisions/README.md). The as-built v1 spec corpus and the wayfinder threads (the design-decision history, indexed by issue 1) stay in the archived [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next), read-only. The `docs/` folder is v1 legacy — being rewritten during the build; trust `blueprint/` when they conflict.
+The ADRs live in [`decisions/`](decisions/README.md). The as-built v1 spec corpus and the wayfinder threads (the design-decision history, indexed by issue 1) stay in the archived [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next), read-only. The `docs/` folder holds the v2 sharing guide, the licence notice, and three operator references (`TESTING.md`, `CONFIGURATION.md`, `CAPACITY.md`) that still carry v1 detail; trust `blueprint/` when they conflict. The full v1 documentation is on the `v1` branch.
 
 ## Terminology Standards
 

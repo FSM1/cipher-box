@@ -430,11 +430,6 @@ row (e.g., by having the BYO user delete their reference), which will allow the 
 - `tests/load/src/scenarios/` -- 8 load test scenarios with threshold assertions
 - `.github/workflows/load-test.yml` -- CI workflow for staging load tests
 
-### Architecture
-
-- `docs/ARCHITECTURE.md` -- System architecture overview
-- `docs/METADATA_SCHEMAS.md` -- Metadata schema reference
-
 ---
 
 _This is a living document. Update when baselines change, infrastructure scales, or new performance data is captured._
