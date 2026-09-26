@@ -3489,6 +3489,51 @@ fn a_share_below_a_scope_root_the_index_lost_is_refused() {
     );
 }
 
+/// The derived-name probe asks only whether a live scope root answers there.
+/// A scope pointer the owner access would refuse, here one below this device's
+/// write-epoch floor, must not turn that root into "no scope here" and let the
+/// share anchor a level up.
+#[test]
+fn an_unindexed_scope_probe_does_not_read_a_refused_pointer_as_no_scope() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "in");
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert!(
+        fx.grant_folder_to_recipient().is_err(),
+        "the parent index update fails, so the scope goes live unnamed"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    let vouched = fx.granted_scope_repoint().write_epoch;
+    block_on(floor::advance_write_epoch_on_sight(
+        &fx.owner_device.floors(&SECRET),
+        &fx.folder.0,
+        vouched + 1,
+    ))
+    .expect("the floor store answers");
+    let inner_before = sequence_at(&fx.world, &write_name(inner));
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "enclosing-scope-index-lost-a-root"
+        }),
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(inner)),
+        inner_before,
+        "no scope root was minted over the inner folder"
+    );
+}
+
 /// The gate reports a record below this device's own read-epoch floor as a
 /// plain rejection, which the derived-name probe would otherwise read as "no
 /// scope here". Only a scope root ever raises a floor at its own scope id, so
@@ -5525,8 +5570,7 @@ fn the_minting_device_reads_the_root_another_owner_devices_write_cut_moved() {
         Some(minted.write_epoch),
         "the mint seeded the floor"
     );
-    let phone = fx.world.device(&owner_identity().verifying_key().to_sec1());
-    let (phone_engine, _phone_events, mut phone_tasks) = boot_owner(&fx.world, &fx.blocks, &phone);
+    let (phone_engine, _phone_events, mut phone_tasks) = fx.owner_phone();
 
     tick(&fx.world, &phone_engine, &mut phone_tasks);
 
@@ -5574,14 +5618,15 @@ fn the_minting_device_reads_the_root_another_owner_devices_write_cut_moved() {
 }
 
 /// A scope pointer below the write-epoch floor this device holds is a rollback,
-/// so the on-access consult refuses it as a trust violation.
+/// so the on-access consult refuses it as a trust violation. The verdict holds
+/// for the consult interval: an access inside it reads the pointer no more and
+/// reports nothing again, and the first access past it consults again.
 #[test]
 fn an_on_access_pointer_consult_below_the_floor_is_a_trust_violation() {
     let mut fx = GrantScenario::new();
     let fragment = fx.mint_link_at(Permission::Write);
     fx.post_claims(&fragment, 1);
-    let phone = fx.world.device(&owner_identity().verifying_key().to_sec1());
-    let (phone_engine, _phone_events, mut phone_tasks) = boot_owner(&fx.world, &fx.blocks, &phone);
+    let (phone_engine, _phone_events, mut phone_tasks) = fx.owner_phone();
     tick(&fx.world, &phone_engine, &mut phone_tasks);
     let vouched = fx.granted_scope_repoint().write_epoch;
     let floors = fx.owner_device.floors(&SECRET);
@@ -5592,20 +5637,38 @@ fn an_on_access_pointer_consult_below_the_floor_is_a_trust_violation() {
     ))
     .expect("the floor store answers");
     abuse_events(&mut fx._events);
+    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0);
+    let store = fx.world.record_store.clone();
+    let pointer_reads = || store.get_count(pointer.as_str());
+    let before = pointer_reads();
 
     let sharing = block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
 
-    assert!(
-        sharing.state.is_none(),
-        "a refused root reads as unreachable"
-    );
+    assert!(sharing.state.is_none(), "a refused root answers no state");
     assert_eq!(abuse_events(&mut fx._events), 1, "the refusal is reported");
+    let consulted = pointer_reads();
+    assert!(consulted > before, "the access consulted the pointer");
     assert!(
         matches!(
             fx.try_mint_link_at(Permission::Read),
             Err(EngineError::TrustViolation { .. })
         ),
         "a command on the refused root fails closed"
+    );
+    assert_eq!(
+        pointer_reads(),
+        consulted,
+        "inside the interval, no second read"
+    );
+    assert_eq!(abuse_events(&mut fx._events), 0, "nor a second report");
+
+    fx.world
+        .scheduler
+        .advance(fx.engine.profile().pointer_consult_interval);
+    block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
+    assert!(
+        pointer_reads() > consulted,
+        "past the interval, it reads again"
     );
 }
 
@@ -9623,10 +9686,7 @@ fn a_write_link_holder_writes_in_the_joining_session_after_the_other_device_conv
         join_link(&mut holder, &mut holder_tasks, fragment),
         Ok(CommandOutcome::Done)
     );
-    for _ in 0..4 {
-        fx.world.scheduler.advance(holder.profile().stale_after);
-        poll_tasks_until_parked(&mut holder_tasks);
-    }
+    settle(&fx, &holder, &mut holder_tasks);
     let shared = block_on(holder.received_shares()).expect("the list reads")[0].scope;
     assert_eq!(
         block_on(holder.snapshot(shared))
@@ -9635,9 +9695,7 @@ fn a_write_link_holder_writes_in_the_joining_session_after_the_other_device_conv
         Permission::Read,
         "a link holder reads before the conversion"
     );
-    let phone = fx.world.device(&owner_identity().verifying_key().to_sec1());
-    let (mut phone_engine, _phone_events, mut phone_tasks) =
-        boot_owner(&fx.world, &fx.blocks, &phone);
+    let (mut phone_engine, _phone_events, mut phone_tasks) = fx.owner_phone();
     tick(&fx.world, &phone_engine, &mut phone_tasks);
     assert_ne!(
         fx.granted_scope_repoint().current_root,

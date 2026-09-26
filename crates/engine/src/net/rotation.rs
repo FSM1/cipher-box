@@ -28,9 +28,9 @@ use cipherbox_core::seal::{
     AadContext, ChildScopeRef, Envelope, GrantBlobPayload, GrantLedgerEntry, GrantSection,
     GrantSetCommitment, GrantSetEntry, MAX_READ_SEALED_BYTES, NodeKind, Permission,
     PreservedFields, ReadBody, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY,
-    STRUCT_TAG_WRITE_HISTORY_LINK, SignedSealed, Version, WriteBody, decode_envelope,
-    decode_write_body, has_grant_section, open_grant_blob, open_owner_history_link, open_read_body,
-    sign_grant_set, sign_recipient_binding, unseal,
+    STRUCT_TAG_WRITE_HISTORY_LINK, SignedOwnerWriteBlob, SignedSealed, Version, WriteBody,
+    decode_envelope, decode_write_body, has_grant_section, open_grant_blob,
+    open_owner_history_link, open_read_body, sign_grant_set, sign_recipient_binding, unseal,
 };
 use cipherbox_core::suite::ecdsa::{
     EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
@@ -96,13 +96,14 @@ use crate::rotation::{
 };
 use crate::seams::{
     BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
-    SharerScopedFloorStore, SnapshotCache,
+    SharerScopedFloorStore, SnapshotCache, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::sync::pointer::{
     PointerFetch, PointerRecord, SessionRole, open_repoint, scope_pointer_name,
     scope_pointer_signer, seal_repoint,
 };
+use crate::sync::tick::elapsed_at_least;
 
 /// The owner key material the rotation edges run under. The owner is the
 /// terminal owner of its own key material, so nothing here is zeroized.
@@ -156,16 +157,109 @@ pub trait OwnerPointerSign {
 /// Refusing is not the same as skipping: a pass that runs no sweep has no
 /// consult to answer for, so one reached from it is a wiring error and reports
 /// as unavailable rather than resolving a plane nothing asked about.
-///
-/// The arm governs the sweep's consult only. The on-access consult of a root
-/// whose owner-write-blob does not open at the standing floor
-/// (`OwnerRotationNet::write_seed_on_access`) runs under either arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerConsultArm {
     /// The sweep's consult may run.
     Permitted,
     /// No sweep runs on this pass; a consult is refused.
     Refused,
+}
+
+/// What an on-access scope-pointer consult last found for a scope whose
+/// owner-write-blob it left closed.
+#[derive(Debug, Clone)]
+pub(crate) enum OnAccessMiss {
+    /// No pointer record stands at the scope's pointer name.
+    Absent,
+    /// The owner-signed re-point vouches this root, and the blob stayed closed
+    /// at the floor it left.
+    Vouched(Box<IpnsName>),
+    /// The re-point did not authenticate, or vouched below the floor.
+    Rejected,
+}
+
+impl OnAccessMiss {
+    fn failure(&self) -> ResolveFailure {
+        match self {
+            Self::Rejected => ResolveFailure::Rejected,
+            Self::Absent | Self::Vouched(_) => ResolveFailure::Unavailable,
+        }
+    }
+}
+
+/// The on-access consults of one session that left a root closed, and when.
+/// Every owner access of such a root inside `pointer_consult_interval` reads
+/// the recorded miss rather than the pointer again, so a root that stays
+/// closed costs one pointer read per interval, not one per access. A consult
+/// the transport could not answer records nothing.
+#[derive(Clone, Default)]
+pub struct OnAccessMisses(Rc<RefCell<BTreeMap<[u8; 16], RecordedMiss>>>);
+
+/// One recorded miss and when its consult ran.
+#[derive(Clone)]
+struct RecordedMiss {
+    at: UnixMillis,
+    miss: OnAccessMiss,
+}
+
+impl OnAccessMisses {
+    /// The miss recorded for `scope_id` inside `interval` before `now`.
+    pub(crate) fn recent(
+        &self,
+        scope_id: &[u8; 16],
+        now: UnixMillis,
+        interval: core::time::Duration,
+    ) -> Option<OnAccessMiss> {
+        self.0
+            .borrow()
+            .get(scope_id)
+            .filter(|recorded| !elapsed_at_least(now, recorded.at, interval))
+            .map(|recorded| recorded.miss.clone())
+    }
+
+    fn record(&self, scope_id: [u8; 16], now: UnixMillis, miss: OnAccessMiss) {
+        self.0
+            .borrow_mut()
+            .insert(scope_id, RecordedMiss { at: now, miss });
+    }
+
+    fn clear(&self, scope_id: &[u8; 16]) {
+        self.0.borrow_mut().remove(scope_id);
+    }
+
+    /// Forget every miss, at session teardown.
+    pub(crate) fn clear_all(&self) {
+        self.0.borrow_mut().clear();
+    }
+}
+
+/// A scope-pointer consult, then an open of `owb` at the write-epoch floor the
+/// consult leaves. `Ok(None)` when no pointer record stands.
+async fn sight_write_seed<T: RecordTransport, F: FloorStore>(
+    consult: &PointerConsult<'_>,
+    transport: &T,
+    floors: &F,
+    enc_secret: &X25519Secret,
+    envelope: &Envelope,
+    owb: &SignedOwnerWriteBlob,
+    scope_id: [u8; 16],
+) -> Result<Option<PointerSighting>, PointerConsultError> {
+    let Some(consulted) = consult.run(transport, floors, &scope_id).await? else {
+        return Ok(None);
+    };
+    let epoch = consulted.write_floor;
+    Ok(Some(PointerSighting {
+        current_root: consulted.current_root,
+        opened: open_write_scope_seed_at(enc_secret, envelope, owb, epoch)
+            .map(|seed| (seed, epoch)),
+    }))
+}
+
+/// What [`sight_write_seed`] found: the vouched root, and the write scope seed
+/// with the epoch it opened at, when the blob opened.
+struct PointerSighting {
+    current_root: IpnsName,
+    opened: Option<(Zeroizing<[u8; SECRET_LEN]>, u64)>,
 }
 
 /// The owner-arm rotation seams over the live net plane.
@@ -201,6 +295,8 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// Whether this pass may run the sweep's scope-pointer consult
     /// ([`PointerConsultArm`]). A pass that runs no sweep refuses one.
     pub pointer_consult: PointerConsultArm,
+    /// The session's on-access consult misses ([`OnAccessMisses`]).
+    pub on_access_misses: &'a OnAccessMisses,
     /// The pointer-payload envelope version a consulted re-point is read under.
     pub payload_version: u64,
     /// The record a re-key is about to replace, handed from the resolve that
@@ -1414,22 +1510,27 @@ where
             owner_identity: self.identity,
             payload_version: self.payload_version,
         };
-        match consult.run(self.transport, self.floors, &scope_id).await {
-            Ok(Some(_)) => {}
-            // An absent pointer, an unauthenticated re-point and an unreachable
-            // one all leave the epoch unvouched, and none of them says this
-            // record will never take a write.
-            Ok(None) | Err(_) => return Err(WritePlaneDark::Unavailable),
-        }
-        let epoch = floor::write_epoch_floor(self.floors, &scope_id)
-            .await
-            .map_err(|_| WritePlaneDark::Unavailable)?
-            .ok_or(WritePlaneDark::Unavailable)?;
-        // The record this pass read may still trail the epoch the pointer
-        // vouches for, which the next pass clears; only a section carrying no
-        // owner-write-blob names a scope no pass here will write.
-        let seed = open_write_scope_seed_at(self.enc_secret, &gated.envelope, owb, epoch)
-            .ok_or(WritePlaneDark::Unavailable)?;
+        // An absent pointer, an unauthenticated re-point and an unreachable one
+        // all leave the epoch unvouched, and none of them says this record will
+        // never take a write. Nor does a blob that stays closed: the record this
+        // pass read may still trail the epoch the pointer vouches for, which the
+        // next pass clears.
+        let Ok(Some(PointerSighting {
+            opened: Some((seed, epoch)),
+            ..
+        })) = sight_write_seed(
+            &consult,
+            self.transport,
+            self.floors,
+            self.enc_secret,
+            &gated.envelope,
+            owb,
+            scope_id,
+        )
+        .await
+        else {
+            return Err(WritePlaneDark::Unavailable);
+        };
         // Held to [`seed_names`] for the reason [`Self::write_plane`] holds the
         // gated seed: a drain pass mints every new node's name from this value.
         if !seed_names(&seed, &scope_id, Some(name)) {
@@ -1625,6 +1726,7 @@ impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerRotationNet<'_, T, H, C,
 where
     T: RecordTransport,
     F: FloorStore,
+    Sch: Scheduler,
     S: SnapshotCache,
 {
     /// The head of the record at `ipns_name`: the name parsed, the record
@@ -1819,9 +1921,8 @@ where
             .resealable_root(scope.scope_id, &name, anchor)
             .await
             .map_err(ResolveFailure::from)?;
-        if root.write_scope_seed.is_none() {
-            root.write_scope_seed = Some(self.write_seed_on_access(&root, scope.scope_id).await?);
-        }
+        self.open_write_seed_on_access(&mut root, scope.scope_id)
+            .await?;
         let GatedWriteBody {
             body: write_body,
             epoch: write_epoch,
@@ -1841,42 +1942,98 @@ where
         })
     }
 
-    /// The on-access scope-pointer consult (blueprint/engine.md "Pointer
-    /// planes") for a scope root whose owner-write-blob does not open at the
-    /// standing write-epoch floor: another owner device's write-scope cut
-    /// sealed it higher, and only an owner-signed re-point raises this device's
-    /// floor (floor law item 3). The blob is then opened again at that floor.
+    /// Open `root`'s owner-write-blob through an on-access scope-pointer
+    /// consult (blueprint/engine.md "Pointer planes") when the standing
+    /// write-epoch floor does not open it: another owner device's write-scope
+    /// cut sealed it higher, and only an owner-signed re-point raises this
+    /// device's floor (floor law item 3). Runs under either
+    /// [`PointerConsultArm`].
     ///
-    /// A rejected re-point is [`ResolveFailure::Rejected`]. Every other miss,
-    /// including a blob that still does not open, is availability.
-    async fn write_seed_on_access(
+    /// A rejected re-point is [`ResolveFailure::Rejected`], and the consult
+    /// that met it reports it. Every other miss is availability. A miss holds
+    /// for the consult interval ([`OnAccessMisses`]).
+    async fn open_write_seed_on_access(
         &self,
-        root: &GatedScopeRoot,
+        root: &mut GatedScopeRoot,
         scope_id: [u8; 16],
-    ) -> Result<Zeroizing<[u8; SECRET_LEN]>, ResolveFailure> {
+    ) -> Result<(), ResolveFailure> {
+        if root.write_scope_seed.is_some() {
+            return Ok(());
+        }
         let owb = root
             .section
             .owner_write_blob
             .as_ref()
             .ok_or(ResolveFailure::Unavailable)?;
-        let consult = PointerConsult {
+        let now = self.scheduler.now();
+        if let Some(miss) =
+            self.on_access_misses
+                .recent(&scope_id, now, self.profile.pointer_consult_interval)
+        {
+            return Err(miss.failure());
+        }
+        let miss = match sight_write_seed(
+            &self.pointer_consult(),
+            self.transport,
+            self.floors,
+            self.keys.enc_secret,
+            &root.envelope,
+            owb,
+            scope_id,
+        )
+        .await
+        {
+            Ok(Some(PointerSighting {
+                opened: Some((seed, _)),
+                ..
+            })) => {
+                self.on_access_misses.clear(&scope_id);
+                root.write_scope_seed = Some(seed);
+                return Ok(());
+            }
+            Ok(Some(PointerSighting { current_root, .. })) => {
+                OnAccessMiss::Vouched(Box::new(current_root))
+            }
+            Ok(None) => OnAccessMiss::Absent,
+            Err(PointerConsultError::Unavailable) => return Err(ResolveFailure::Unavailable),
+            Err(PointerConsultError::Rejected) => {
+                emit_trust_violation(
+                    self.events,
+                    &hex_lower(&scope_id),
+                    "scope pointer unauthenticated, or vouched below the write-epoch floor",
+                );
+                OnAccessMiss::Rejected
+            }
+        };
+        let failure = miss.failure();
+        self.on_access_misses.record(scope_id, now, miss);
+        Err(failure)
+    }
+
+    /// The scope-pointer consult under this net's owner material.
+    fn pointer_consult(&self) -> PointerConsult<'_> {
+        PointerConsult {
             scope_keys: self.keys.scope_keys,
             owner_identity: self.keys.identity,
             payload_version: self.payload_version,
-        };
-        match consult.run(self.transport, self.floors, &scope_id).await {
-            Ok(Some(_)) => {}
-            Ok(None) | Err(PointerConsultError::Unavailable) => {
-                return Err(ResolveFailure::Unavailable);
-            }
-            Err(PointerConsultError::Rejected) => return Err(ResolveFailure::Rejected),
         }
-        let epoch = floor::write_epoch_floor(self.floors, &scope_id)
+    }
+
+    /// Whether a live scope root answers at `scope`, on the gate verdict alone.
+    /// No write plane is read, so no pointer consult runs.
+    pub(crate) async fn scope_root_stands(
+        &self,
+        scope: &ChildScopeRef,
+    ) -> Result<(), ResolveFailure> {
+        let name = scope_name(&scope.ipns_name)?;
+        let anchor = match self.ancestry.parent_node_seed(&scope.scope_id) {
+            Some(_) => RootAnchor::Descendant,
+            None => RootAnchor::VaultRoot,
+        };
+        self.resealable_root(scope.scope_id, &name, anchor)
             .await
-            .map_err(|_| ResolveFailure::Unavailable)?
-            .ok_or(ResolveFailure::Unavailable)?;
-        open_write_scope_seed_at(self.keys.enc_secret, &root.envelope, owb, epoch)
-            .ok_or(ResolveFailure::Unavailable)
+            .map(|_| ())
+            .map_err(ResolveFailure::from)
     }
 
     /// [`CascadeResealResolver::resolve`] at [`RootAnchor::VaultRoot`]. Same
@@ -1974,6 +2131,7 @@ where
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> ChildIndexResolver
     for OwnerRotationNet<'_, T, H, C, F, Sch, E, S>
 where
+    Sch: Scheduler,
     T: RecordTransport,
     F: FloorStore,
     S: SnapshotCache,
@@ -1992,6 +2150,7 @@ where
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> CascadeResealResolver
     for OwnerRotationNet<'_, T, H, C, F, Sch, E, S>
 where
+    Sch: Scheduler,
     T: RecordTransport,
     F: FloorStore,
     S: SnapshotCache,
@@ -2815,6 +2974,7 @@ impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerRotationNet<'_, T, H, C,
 where
     T: RecordTransport,
     F: FloorStore,
+    Sch: Scheduler,
     S: SnapshotCache,
 {
     /// The scope `scope` names, as this pass gated it. A node read or publish
@@ -3035,13 +3195,9 @@ where
         if root.envelope.v != ENVELOPE_V {
             return Err(SweepResolveFailure::VersionSkew);
         }
-        if root.write_scope_seed.is_none() {
-            root.write_scope_seed = Some(
-                self.write_seed_on_access(&root, scope.scope_id)
-                    .await
-                    .map_err(SweepResolveFailure::from)?,
-            );
-        }
+        self.open_write_seed_on_access(&mut root, scope.scope_id)
+            .await
+            .map_err(SweepResolveFailure::from)?;
         let GatedWriteBody {
             write_scope_seed,
             body: write_body,
@@ -3100,20 +3256,16 @@ where
         if self.pointer_consult == PointerConsultArm::Refused {
             return Err(SweepResolveFailure::Unavailable);
         }
-        PointerConsult {
-            scope_keys: self.keys.scope_keys,
-            owner_identity: self.keys.identity,
-            payload_version: self.payload_version,
-        }
-        .run(self.transport, self.floors, scope_id)
-        .await
-        .map(|consulted| {
-            consulted.map(|consulted| consulted.current_root.as_str().as_bytes().to_vec())
-        })
-        .map_err(|failure| match failure {
-            PointerConsultError::Unavailable => SweepResolveFailure::Unavailable,
-            PointerConsultError::Rejected => SweepResolveFailure::Rejected,
-        })
+        self.pointer_consult()
+            .run(self.transport, self.floors, scope_id)
+            .await
+            .map(|consulted| {
+                consulted.map(|consulted| consulted.current_root.as_str().as_bytes().to_vec())
+            })
+            .map_err(|failure| match failure {
+                PointerConsultError::Unavailable => SweepResolveFailure::Unavailable,
+                PointerConsultError::Rejected => SweepResolveFailure::Rejected,
+            })
     }
 
     async fn resolve_child(
@@ -3402,6 +3554,7 @@ where
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> GrantResumeResolver
     for OwnerRotationNet<'_, T, H, C, F, Sch, E, S>
 where
+    Sch: Scheduler,
     T: RecordTransport,
     F: FloorStore,
     S: SnapshotCache,
@@ -5026,6 +5179,8 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
     pub walked: &'a Cell<bool>,
     /// The pointer-payload envelope version a consulted re-point is read under.
     pub payload_version: u64,
+    /// The session's on-access consult misses ([`OnAccessMisses`]).
+    pub on_access_misses: &'a OnAccessMisses,
 }
 
 /// Hold every scope pointer this owner session owns for renewal.
@@ -5101,6 +5256,7 @@ where
         },
         ancestry: RotationAncestry::default(),
         pointer_consult: PointerConsultArm::Refused,
+        on_access_misses: pass.on_access_misses,
         payload_version: pass.payload_version,
         gated: GatedRoots::default(),
         swept: SweptScopeState::default(),
@@ -5464,6 +5620,7 @@ mod tests {
         floors: InMemoryFloorStore,
         gateway: Gateway,
         profile: SyncTimingProfile,
+        on_access_misses: OnAccessMisses,
         entropy: RefCell<SeededEntropy>,
         enc_secret: X25519Secret,
         identity: EcdsaVerifier,
@@ -5504,6 +5661,7 @@ mod tests {
                     ..Default::default()
                 },
                 profile: SyncTimingProfile::CI,
+                on_access_misses: OnAccessMisses::default(),
                 entropy: RefCell::new(SeededEntropy::new(7)),
                 enc_secret: owner_enc(),
                 identity: owner_identity().verifying_key(),
@@ -5608,6 +5766,7 @@ mod tests {
                 },
                 ancestry,
                 pointer_consult: PointerConsultArm::Permitted,
+                on_access_misses: &self.on_access_misses,
                 payload_version: PAYLOAD_VERSION,
                 gated: GatedRoots::default(),
                 swept: SweptScopeState::default(),
@@ -13852,6 +14011,7 @@ mod tests {
             root_id: SCOPE,
             payload_version: PAYLOAD_VERSION,
             walked,
+            on_access_misses: &harness.on_access_misses,
         }))
     }
 
@@ -14067,6 +14227,7 @@ mod tests {
             &SCOPE,
             ConsultedPointer {
                 current_root: scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE),
+                write_floor: 1,
                 record_bytes: b"a record read before the flip".to_vec(),
                 value: b"the block read before the flip".to_vec(),
             },

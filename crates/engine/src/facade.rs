@@ -67,7 +67,7 @@ use crate::deadlines::DeadlinePolicy;
 use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprovalView};
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
-use crate::grants::accept::ReceivedSharesLock;
+use crate::grants::accept::{JoinStanding, ReceivedSharesLock};
 use crate::grants::create::MINT_EPOCH;
 use crate::grants::grafted::{
     BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, FloorNamespace, GraftedPlane,
@@ -108,7 +108,9 @@ use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
 use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
 use crate::net::rotation::scope_name;
-use crate::net::rotation::{GatedRoots, MovedScopeSeed, RotationAncestry, SweptScopeState};
+use crate::net::rotation::{
+    GatedRoots, MovedScopeSeed, OnAccessMisses, RotationAncestry, SweptScopeState,
+};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, DescendantScopeRoot, EolRenewResult, FolderRefresh,
     FolderRefreshReport, GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords,
@@ -3278,6 +3280,8 @@ struct ScopeExitArm<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// it names, so dropping that entry is what makes the next pass re-walk
     /// rather than seal under material the cut has replaced.
     walked_epochs: &'a RefCell<WalkedReadEpochs>,
+    /// The session's on-access consult misses ([`OnAccessMisses`]).
+    on_access_misses: &'a OnAccessMisses,
 }
 
 /// Run the flat [`RotationTrigger::ScopeExit`] cut at one scope root this vault
@@ -3333,6 +3337,7 @@ where
         ancestry: RotationAncestry::default()
             .under_parent_node_seed(scope_root.0, ascent.as_deref()),
         pointer_consult: PointerConsultArm::Refused,
+        on_access_misses: arm.on_access_misses,
         payload_version: POINTER_PAYLOAD_VERSION,
         gated: GatedRoots::default(),
         swept: SweptScopeState::default(),
@@ -5561,6 +5566,8 @@ pub struct Engine<T: SeamTypes> {
     /// poll cadence. In-memory: a floor only ever moves up, so a restart's first
     /// tick re-consults and re-derives it.
     pointer_consulted: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
+    /// The owner accesses' scope-pointer consult misses ([`OnAccessMisses`]).
+    on_access_misses: OnAccessMisses,
     /// The verdict the tick's last pass reached for each bookmarked shared
     /// scope. In-memory: a verdict is what a live resolve found, so a restart
     /// re-earns it rather than rendering one nothing observed this session.
@@ -5774,6 +5781,7 @@ impl<T: SeamTypes> Engine<T> {
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
                 pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
+                on_access_misses: OnAccessMisses::default(),
                 received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
                 received_shares_lock: Rc::new(ReceivedSharesLock::new(())),
                 grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
@@ -6212,6 +6220,7 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut consulted) = self.pointer_consulted.try_borrow_mut() {
             consulted.clear();
         }
+        self.on_access_misses.clear_all();
         if let Ok(mut verdicts) = self.received_verdicts.try_borrow_mut() {
             verdicts.clear();
         }
@@ -6761,6 +6770,7 @@ where {
         let entropy = self.entropy.clone();
         let alive = self.alive.clone();
         let profile = self.profile;
+        let on_access_misses = self.on_access_misses.clone();
 
         Some(Rc::new(
             move |scope: ChildScopeRef,
@@ -6777,6 +6787,7 @@ where {
                 let gateway = gateway.clone();
                 let entropy = entropy.clone();
                 let alive = alive.clone();
+                let on_access_misses = on_access_misses.clone();
                 Box::pin(async move {
                     // The pass owns a copy for exactly its own duration; the
                     // engine emptied the cell if the session is already gone.
@@ -6805,6 +6816,7 @@ where {
                         ancestry: RotationAncestry::default()
                             .under_parent_node_seed(scope.scope_id, parent_node_seed.as_deref()),
                         pointer_consult: PointerConsultArm::Permitted,
+                        on_access_misses: &on_access_misses,
                         payload_version: POINTER_PAYLOAD_VERSION,
                         gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
@@ -6932,6 +6944,7 @@ where {
         let pointer_keys = self.sweep_keys.clone();
         let scope_read_seeds = self.scope_read_seeds.clone();
         let scope_write_seeds = self.scope_write_seeds.clone();
+        let on_access_misses = self.on_access_misses.clone();
         let root_id = self.snapshot.borrow().root.0;
         self.seams.scheduler.spawn(Box::pin(async move {
             // One latch per session: the loop is spawned once per start.
@@ -6964,6 +6977,7 @@ where {
                         root_id,
                         payload_version: POINTER_PAYLOAD_VERSION,
                         walked: &scope_tree_walked,
+                        on_access_misses: &on_access_misses,
                     })
                     .await;
                     // The consult advances a sighted scope's write-epoch floor,
@@ -7066,6 +7080,7 @@ where {
         let focus = self.focus.clone();
         let focus_refreshed = self.focus_refreshed.clone();
         let pointer_consulted = self.pointer_consulted.clone();
+        let on_access_misses = self.on_access_misses.clone();
         let received_verdicts = self.received_verdicts.clone();
         let received_shares_lock = self.received_shares_lock.clone();
         let grafted_sharers = self.grafted_sharers.clone();
@@ -7690,6 +7705,7 @@ where {
                                 sweep: &sweep_tasks,
                                 boundaries,
                                 walked_epochs: &walked_read_epochs,
+                                on_access_misses: &on_access_misses,
                             },
                             scope_root,
                         )
@@ -7908,6 +7924,7 @@ where {
                             events: &events,
                             scheduler: &scheduler,
                             profile: &profile,
+                            on_access_misses: &on_access_misses,
                             entropy: &entropy,
                             staging: &staging,
                             identity: &signer,
@@ -8676,6 +8693,7 @@ where {
             keys,
             ancestry,
             pointer_consult,
+            on_access_misses: &self.on_access_misses,
             payload_version: POINTER_PAYLOAD_VERSION,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
@@ -9449,10 +9467,10 @@ where {
         };
         match self
             .owner_rotation_net(api, keys, probe.ancestry(), PointerConsultArm::Refused)
-            .resolve_anchored(&probe.scope)
+            .scope_root_stands(&probe.scope)
             .await
         {
-            Ok(_) => Err(EngineError::UnsupportedTarget { check }),
+            Ok(()) => Err(EngineError::UnsupportedTarget { check }),
             Err(ResolveFailure::Rejected) => Ok(()),
             Err(other) => Err(EngineError::from_resolve_failure(other)),
         }
@@ -10233,14 +10251,10 @@ where {
             .await
             .map_err(EngineError::from_received_share_store)?;
         let key = share.key();
-        let bookmarked = received.find(&key).is_some();
         // A personal bookmark already reads the folder, and a hold that
         // already posted a claim through this link posts it again on the tick.
-        // A read that did not answer falls back to the bookmark's own shape.
-        let personal =
-            bookmarked && live_personal.unwrap_or_else(|| received.link_hold(&key).is_none());
-        let claimed = received.claimed_through(&key, &hold.invite_secret);
-        if personal || claimed {
+        let standing = received.join_standing(&key, &hold.invite_secret, live_personal);
+        if standing.joined() {
             return Ok(());
         }
 
@@ -10275,8 +10289,8 @@ where {
             .await
             .map_err(EngineError::from_contact_store)?;
 
-        // A cut bookmark heals to the root and the shape this live read found.
-        if !bookmarked || live_personal == Some(false) {
+        // A lapsed bookmark heals to the root and the shape this live read found.
+        if standing == JoinStanding::Absent || live_personal.is_some() {
             received.reconcile(share);
         }
         if let Some(previous) = received.link_hold(&key)
@@ -10410,6 +10424,7 @@ where {
             events: &self.events,
             scheduler: &self.seams.scheduler,
             profile: &self.profile,
+            on_access_misses: &self.on_access_misses,
             entropy: &self.entropy,
             staging: &self.seams.staging_store,
             identity: session.identity(),
@@ -11570,9 +11585,6 @@ where {
             .load()
             .await
             .map_err(EngineError::from_received_share_store)?;
-        let key = share.key();
-        let bookmarked = received.find(&key).is_some();
-        let claimed_here = received.claimed_through(&key, &hold.invite_secret);
         let link = LinkReader {
             share: &share,
             hold: &hold,
@@ -11583,20 +11595,23 @@ where {
         let read = preview_read(&seams, &link, self.seams.scheduler.now())
             .await
             .map_err(link_read_refused)?;
-        let mut joined = bookmarked;
+        let live_personal = match &read {
+            PreviewRead::Live { personal, .. } => Some(*personal),
+            _ => None,
+        };
+        let joined = received
+            .join_standing(&share.key(), &hold.invite_secret, live_personal)
+            .joined();
         let (state, permission, children) = match read {
             PreviewRead::Live {
                 conversion_permission,
                 children,
-                personal,
-            } => {
-                joined = bookmarked && (personal || claimed_here);
-                (
-                    LinkPreviewState::Live,
-                    Some(conversion_permission),
-                    children,
-                )
-            }
+                ..
+            } => (
+                LinkPreviewState::Live,
+                Some(conversion_permission),
+                children,
+            ),
             PreviewRead::Expired {
                 conversion_permission,
             } => (
@@ -11781,22 +11796,11 @@ where {
                 invite_links: Vec::new(),
             });
         };
-        let current = match self
+        let current = self
             .owner_rotation_net(api, keys(), target.ancestry(), PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
             .await
-        {
-            Ok(current) => current,
-            Err(ResolveFailure::Rejected) => {
-                emit_trust_violation(
-                    &self.events,
-                    &hex_lower(&scope_root.0),
-                    "scope root refused on a sharing read",
-                );
-                return None;
-            }
-            Err(_) => return None,
-        };
+            .ok()?;
         // Fail closed on a ledger the owner's commitment does not commit: the
         // write body it rides in is authored by any committed writer, so the row
         // set is only as trustworthy as the owner's commitment over it.

@@ -48,7 +48,7 @@ use super::contact_store::{StagingContactStore, resolve_recipient};
 use super::invite::{EphemeralInvitee, InviteFragment, post_invite_claim};
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
 use super::received_share_store::StagingReceivedShareStore;
-use super::received_status::holds_committed_blob;
+use super::received_status::committed_blob;
 
 /// The bookmark a join records before its first read, and the link keys it
 /// reads through.
@@ -245,12 +245,13 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
             conversion_permission,
         });
     }
-    let personal = holds_committed_blob(
+    let personal = committed_blob(
         &candidate.grant_section,
         my_enc_secret,
         &owner.enc_subkey(),
         name,
-    );
+    )
+    .is_some();
     Ok(LinkEntryRead::Live {
         root: Box::new(root),
         candidate: Box::new(candidate),

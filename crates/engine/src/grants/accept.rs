@@ -345,11 +345,28 @@ impl ReceivedSharesList {
         self.links.get(key)
     }
 
-    /// Whether the bookmark under `key` holds the link `invite_secret` opens and
-    /// has posted a claim through it.
-    pub(crate) fn claimed_through(&self, key: &BookmarkKey, invite_secret: &SecretBytes) -> bool {
-        self.link_hold(key)
-            .is_some_and(|held| held.claim.is_some() && held.invite_secret == *invite_secret)
+    /// Where this account stands on the link `invite_secret` opens, for the
+    /// bookmark under `key`. `live_personal` is what a live read of the link
+    /// found about this account's own grant ([`JoinStanding::Personal`]), and
+    /// `None` when no read answered: the bookmark's own shape stands in then.
+    pub(crate) fn join_standing(
+        &self,
+        key: &BookmarkKey,
+        invite_secret: &SecretBytes,
+        live_personal: Option<bool>,
+    ) -> JoinStanding {
+        if self.find(key).is_none() {
+            return JoinStanding::Absent;
+        }
+        let hold = self.link_hold(key);
+        if hold.is_some_and(|held| held.claim.is_some() && held.invite_secret == *invite_secret) {
+            return JoinStanding::ClaimedHere;
+        }
+        if live_personal.unwrap_or(hold.is_none()) {
+            JoinStanding::Personal
+        } else {
+            JoinStanding::Lapsed
+        }
     }
 
     /// Read the bookmark under `key` through `hold`, replacing any hold it had.
@@ -824,6 +841,28 @@ pub(super) fn reject_unknown(map: &Map, known: &[&str]) -> Result<(), CodecError
     {
         Some((key, _)) => Err(Malformed::UnknownRecordField { key: key.clone() }.into()),
         None => Ok(()),
+    }
+}
+
+/// Where an account stands on one invite link ([`ReceivedSharesList::join_standing`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JoinStanding {
+    /// No bookmark names the folder.
+    Absent,
+    /// The owner still grants this account in its own name.
+    Personal,
+    /// The bookmark holds this link and has posted a claim through it.
+    ClaimedHere,
+    /// A bookmark that neither grant holds: a person the owner cut, or a
+    /// holder of another link. A join through this link posts a claim.
+    Lapsed,
+}
+
+impl JoinStanding {
+    /// Whether this account already joined through the link: a join posts
+    /// nothing, and the invite page offers only "open folder".
+    pub(crate) fn joined(self) -> bool {
+        matches!(self, Self::Personal | Self::ClaimedHere)
     }
 }
 

@@ -16,7 +16,7 @@ use cipherbox_core::error::TrustViolation;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, ChildRef, GrantSection, Permission, ReadBody, STRUCT_TAG_GRANT_BLOB,
-    open_grant_blob, open_read_body,
+    SignedGrantBlob, open_grant_blob, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::SecretBytes;
@@ -1093,15 +1093,12 @@ fn personal_blob_opens(
     enc_secret: &X25519Secret,
     sharer_enc_pub: &X25519Public,
 ) -> bool {
-    let section = &candidate.grant_section;
-    let Some(tag) = recipient_blinded_tag(enc_secret, sharer_enc_pub, &share.scope_root_name)
-    else {
-        return false;
-    };
-    if !section.commitment.entries.iter().any(|e| e.tag == tag) {
-        return false;
-    }
-    let Some(blob) = self_locate_signed(&section.grant_blobs, &tag) else {
+    let Some(blob) = committed_blob(
+        &candidate.grant_section,
+        enc_secret,
+        sharer_enc_pub,
+        &share.scope_root_name,
+    ) else {
         return false;
     };
     let aad = AadContext {
@@ -1151,28 +1148,30 @@ pub(crate) fn facts_from(
         })?;
     Ok(ResolutionFacts {
         owner_signed_record: true,
-        blob_present: holds_committed_blob(section, my_enc_secret, sharer_enc_pub, scope_root_name),
+        blob_present: committed_blob(section, my_enc_secret, sharer_enc_pub, scope_root_name)
+            .is_some(),
         record_epoch: candidate.envelope.epoch,
         epoch_floor: floors.epoch,
     })
 }
 
-/// Whether the section at `scope_root_name` commits this account's own tag and
-/// holds a signed blob there. Read it only after the commitment verifies.
+/// The signed blob at this account's own tag in the section at
+/// `scope_root_name`, when the commitment names that tag. Read it only after
+/// the commitment verifies.
 ///
 /// The owner-signed commitment is the authority, so a blob at an uncommitted
-/// tag is not a grant: it counts as removal, the same verdict the accept flow
-/// reaches by refusing an uncommitted tag.
-pub(crate) fn holds_committed_blob(
-    section: &GrantSection,
+/// tag is not a grant, as the accept flow refuses an uncommitted tag.
+pub(crate) fn committed_blob<'s>(
+    section: &'s GrantSection,
     my_enc_secret: &X25519Secret,
     sharer_enc_pub: &X25519Public,
     scope_root_name: &[u8],
-) -> bool {
-    recipient_blinded_tag(my_enc_secret, sharer_enc_pub, scope_root_name).is_some_and(|tag| {
-        section.commitment.entries.iter().any(|e| e.tag == tag)
-            && self_locate_signed(&section.grant_blobs, &tag).is_some()
-    })
+) -> Option<&'s SignedGrantBlob> {
+    let tag = recipient_blinded_tag(my_enc_secret, sharer_enc_pub, scope_root_name)?;
+    if !section.commitment.entries.iter().any(|e| e.tag == tag) {
+        return None;
+    }
+    self_locate_signed(&section.grant_blobs, &tag)
 }
 
 #[cfg(test)]
