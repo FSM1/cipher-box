@@ -31,6 +31,14 @@ impl UnixMillis {
         Self(self.0.saturating_add(millis))
     }
 
+    /// This instant moved back by `duration`, saturating at zero.
+    /// Sub-millisecond remainders round **up**, as in
+    /// [`saturating_add`](Self::saturating_add).
+    pub fn saturating_sub(self, duration: Duration) -> Self {
+        let millis = u64::try_from(duration.as_nanos().div_ceil(1_000_000)).unwrap_or(u64::MAX);
+        Self(self.0.saturating_sub(millis))
+    }
+
     /// Whether this instant has reached `deadline`. A deadline must be later
     /// than now to stand, so the instant itself counts as reached; `None` is
     /// never reached.

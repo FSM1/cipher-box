@@ -973,9 +973,9 @@ pub struct ConvertedClaim {
     /// is the only address the share pointer for this grant can be sent to: the
     /// item's sender is the link's ephemeral identity, not the claimant's.
     pub claimant: Contact,
-    /// The committed tag of the link the claim came in on. The owner charges
-    /// the contact it records to this link.
-    pub link_tag: [u8; 32],
+    /// The link the claim came in on. The owner charges the contact it records
+    /// to this link.
+    pub link: CommittedLink,
     /// The contact-code bytes [`claimant`](Self::claimant) imported from. The
     /// owner records them in the contact book before the grant publishes, so a
     /// later revoke or downgrade resolves the recipient it just granted.
@@ -1092,7 +1092,7 @@ pub fn convert_invite_claim(
         commitment,
         ledger,
         claimant: contact,
-        link_tag: link.tag,
+        link,
         claimant_code: claim.contact_code,
         outcome,
     })
@@ -1783,7 +1783,7 @@ mod tests {
         .expect("converts");
 
         assert_eq!(converted.outcome, ClaimOutcome::Granted);
-        assert_eq!(converted.link_tag, link_row.tag);
+        assert_eq!(converted.link.tag, link_row.tag);
         assert_eq!(
             converted.row.commitment_entry.kind,
             GrantSetEntryKind::Personal

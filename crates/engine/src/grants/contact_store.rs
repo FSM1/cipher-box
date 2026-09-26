@@ -41,6 +41,7 @@ use crate::sync::owner_scoped_key;
 
 use super::accept::{TooLong, reject_unknown, req, within};
 use super::contact::{Contact, MAX_CONTACT_CODE_BYTES};
+use super::invite::CommittedLink;
 
 /// The staging-key prefix the contact book is stored under, scoped per identity
 /// by [`owner_scoped_key`]. `is_bookkeeping` treats the whole prefix as
@@ -79,6 +80,12 @@ pub const MAX_LINK_CONTACTS: usize = 128;
 /// (AGENTS.md rule 8).
 pub const MAX_LINK_CONTACT_SCOPES: usize = 64;
 
+/// The frozen bound on the former encryption subkeys one hand-imported contact
+/// keeps, so a revoke still reaches a row granted under one. No key drops: a
+/// dropped key would leave its rows out of every revoke. Enforced
+/// release-active in both codec directions (AGENTS.md rule 8).
+pub const MAX_FORMER_SUBKEYS: usize = 4;
+
 /// Why a contact-book operation failed.
 #[derive(Debug)]
 pub enum ContactStoreError {
@@ -109,11 +116,20 @@ pub enum ContactStoreError {
     /// [`Encode`](Self::Encode), which says the whole book is unwritable: here
     /// the book is fine and one contact reached a frozen bound.
     LinkContactScopesFull,
-    /// A claim that granted nothing carries an encryption subkey other than the
-    /// one the book holds for that identity. A key change is a revoke and a
+    /// A claim carries an encryption subkey other than the one the book holds
+    /// for that identity. A key change is a revoke and a
     /// re-grant by the owner, never a silent book update: the revoke fallback
     /// reaches the old rows by the held subkey.
+    ///
+    /// Also a contact code whose subkey the book binds to another identity,
+    /// now or before: the revoke fallback names a row by its subkey, so one
+    /// subkey must name one identity.
     RecipientKeyChanged,
+    /// A re-import would replace a subkey on a contact that already keeps
+    /// [`MAX_FORMER_SUBKEYS`] former subkeys, so a fifth subkey rotation under
+    /// one identity is refused. The subkey derives from the login secret, so a
+    /// real contact does not rotate it.
+    FormerSubkeysFull,
     /// The book to store is not one this build may write: two codes for one
     /// identity, or a field past its bound. A write-path refusal, so never
     /// [`Unreadable`](Self::Unreadable) — nothing was read.
@@ -148,8 +164,12 @@ impl fmt::Display for ContactStoreError {
                 "that contact already holds a granted scope on {MAX_LINK_CONTACT_SCOPES} scopes"
             ),
             ContactStoreError::RecipientKeyChanged => {
-                f.write_str("the claim carries a key other than the one the book holds")
+                f.write_str("the contact carries a key other than the one the book holds")
             }
+            ContactStoreError::FormerSubkeysFull => write!(
+                f,
+                "that contact already keeps {MAX_FORMER_SUBKEYS} former subkeys"
+            ),
             ContactStoreError::Encode(e) => write!(f, "the contact book to store {e}"),
             ContactStoreError::Entropy(e) => write!(f, "contact book: {e}"),
             ContactStoreError::Seal(e) => write!(f, "contact book seal failed: {}", e.check()),
@@ -192,6 +212,13 @@ pub enum BookCodecError {
     /// A link-sourced entry holding no grant. It charges the link bound for a
     /// contact no cut needs, so it is refused rather than carried.
     LinkContactHoldsNothing,
+    /// A link-sourced entry that names its link by both the identity key and
+    /// the tag, or by neither.
+    LinkSourceNotOne,
+    /// A former-subkey list that is empty, repeats a key, names the current
+    /// subkey, or sits on a link-sourced entry. Only a hand import keeps
+    /// former subkeys, and an entry with none stores its bare code.
+    FormerSubkeys,
     /// A stored code that is not its own canonical re-encoding. This build only
     /// ever writes canonical codes, so anything else is bytes it did not author
     /// — refused rather than silently normalised.
@@ -220,6 +247,12 @@ impl fmt::Display for BookCodecError {
             }
             BookCodecError::LinkContactHoldsNothing => {
                 f.write_str("holds a link-sourced contact with no grant")
+            }
+            BookCodecError::LinkSourceNotOne => {
+                f.write_str("holds a link-sourced contact that does not name one link")
+            }
+            BookCodecError::FormerSubkeys => {
+                f.write_str("holds a former-subkey list this build does not write")
             }
             BookCodecError::NonCanonicalCode => {
                 f.write_str("holds a code that is not its canonical encoding")
@@ -255,7 +288,12 @@ pub trait ContactStore {
     /// Import a contact code and durably record it, returning the verified
     /// contact. A code already recorded for that identity key replaces it —
     /// both codes carry that identity's own signature, so a re-imported code is
-    /// the contact rotating their own subkey.
+    /// the contact rotating their own subkey. The entry keeps the subkeys it
+    /// bound before, so a revoke still reaches a row granted under one. A
+    /// rotation past [`MAX_FORMER_SUBKEYS`] is refused with
+    /// [`FormerSubkeysFull`](ContactStoreError::FormerSubkeysFull), and a
+    /// subkey the book binds to another identity with
+    /// [`RecipientKeyChanged`](ContactStoreError::RecipientKeyChanged).
     async fn record(&self, contact_code: &[u8]) -> Result<Contact, ContactStoreError>;
 
     /// Record a contact a claim conversion anchored, charged to that link's own
@@ -263,11 +301,13 @@ pub trait ContactStore {
     /// `scope_id`.
     ///
     /// A contact the owner imported by hand keeps that standing and owes the
-    /// link bound nothing.
+    /// link bound nothing. A claim under another encryption subkey than the
+    /// book holds, or under one the book binds to another identity, is
+    /// refused with [`RecipientKeyChanged`](ContactStoreError::RecipientKeyChanged).
     async fn record_from_link(
         &self,
         contact_code: &[u8],
-        link_tag: &[u8; 32],
+        link: &CommittedLink,
         scope_id: &[u8; 16],
     ) -> Result<Contact, ContactStoreError>;
 
@@ -281,7 +321,7 @@ pub trait ContactStore {
     async fn record_unchanged_from_link(
         &self,
         contact_code: &[u8],
-        link_tag: &[u8; 32],
+        link: &CommittedLink,
         scope_id: &[u8; 16],
     ) -> Result<Contact, ContactStoreError>;
 
@@ -311,7 +351,11 @@ pub trait ContactStore {
     /// both the book and [`link_budget_full`]'s input.
     async fn contacts_with_sources(
         &self,
-    ) -> Result<Vec<(Contact, Option<[u8; 32]>)>, ContactStoreError>;
+    ) -> Result<Vec<(Contact, Option<LinkSource>)>, ContactStoreError>;
+
+    /// Every recorded contact with each encryption subkey the book binds to
+    /// it and the link that sourced it.
+    async fn contacts_with_bindings(&self) -> Result<Vec<BoundContact>, ContactStoreError>;
 
     /// Drop the entry for `identity_pk`. Idempotent: an identity the book does
     /// not hold succeeds. Without it a book at [`MAX_CONTACTS`] would refuse
@@ -342,6 +386,27 @@ pub async fn resolve_recipient<S: ContactStore>(
         .ok_or(ContactStoreError::RecipientNotImported)
 }
 
+/// One recorded contact as a revoke reads it.
+pub struct BoundContact {
+    /// The verified contact.
+    pub contact: Contact,
+    /// The encryption subkeys the book bound to this identity before, oldest
+    /// first.
+    pub former: Vec<[u8; 32]>,
+    /// The link that sourced the contact, `None` for one the owner imported or
+    /// granted directly.
+    pub source: Option<LinkSource>,
+}
+
+impl BoundContact {
+    /// Every encryption subkey the book binds to this identity, now or before.
+    pub fn enc_subkeys(&self) -> Vec<[u8; 32]> {
+        core::iter::once(self.contact.enc_subkey().to_bytes())
+            .chain(self.former.iter().copied())
+            .collect()
+    }
+}
+
 /// Why a claim-sourced contact is in the book: the link that produced it, and
 /// the scopes its conversions took a grant on.
 ///
@@ -351,8 +416,33 @@ pub async fn resolve_recipient<S: ContactStore>(
 /// left to occupy the book ([`ContactStore::forget_link_grant`]).
 #[derive(Clone)]
 struct LinkOrigin {
-    link_tag: [u8; 32],
+    source: LinkSource,
     scopes: Vec<[u8; 16]>,
+}
+
+/// The link a claim-sourced contact came in on.
+///
+/// A link's blinded tag is bound to the scope root name, so every write wave
+/// at its scope moves it. The ephemeral identity key does not move, so the book
+/// records that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkSource {
+    /// The link's ephemeral identity key.
+    Identity([u8; IDENTITY_PUBLIC_LEN]),
+    /// The link's tag, as a book written before the identity key was recorded
+    /// holds it. It names the link only until the next write wave at its
+    /// scope, and a conversion through that link rebinds it to the identity.
+    Tag([u8; 32]),
+}
+
+impl LinkSource {
+    /// Whether this source names `link`.
+    pub fn names(&self, link: &CommittedLink) -> bool {
+        match self {
+            LinkSource::Identity(identity_pk) => *identity_pk == link.ephemeral_identity_pk,
+            LinkSource::Tag(tag) => *tag == link.tag,
+        }
+    }
 }
 
 impl LinkOrigin {
@@ -376,28 +466,65 @@ struct Recorded {
     contact: Contact,
     code: Vec<u8>,
     origin: Option<LinkOrigin>,
+    /// The encryption subkeys the book bound to this identity before, oldest
+    /// first. Only a hand import fills it.
+    former: Vec<[u8; 32]>,
 }
 
-/// Whether `link_tag`'s own claim conversions already hold its whole
+/// The former subkeys of `held` once `contact` replaces it: the held subkey
+/// joins them unless `contact` binds it again.
+fn former_after(held: Recorded, contact: &Contact) -> Result<Vec<[u8; 32]>, ContactStoreError> {
+    let current = contact.enc_subkey().to_bytes();
+    let mut former = held.former;
+    former.push(held.contact.enc_subkey().to_bytes());
+    former.retain(|key| *key != current);
+    if former.len() > MAX_FORMER_SUBKEYS {
+        return Err(ContactStoreError::FormerSubkeysFull);
+    }
+    Ok(former)
+}
+
+/// Whether an entry of `book` binds the subkey of `contact`, now or before.
+fn subkey_bound(book: &[Recorded], contact: &Contact) -> bool {
+    let subkey = contact.enc_subkey().to_bytes();
+    book.iter()
+        .any(|held| held.contact.enc_subkey().to_bytes() == subkey || held.former.contains(&subkey))
+}
+
+/// Whether `link`'s own claim conversions already hold its whole
 /// [`MAX_LINK_CONTACTS`] share of the book.
 ///
 /// `sourcing` is the link each recorded contact came from, `None` for a hand
 /// import ([`ContactStore::contacts_with_sources`]). The charge is per link, so
 /// one leaked link takes only its own share and denies no other link's claims.
-pub fn link_budget_full(sourcing: &[Option<[u8; 32]>], link_tag: &[u8; 32]) -> bool {
+pub fn link_budget_full(sourcing: &[Option<LinkSource>], link: &CommittedLink) -> bool {
     sourcing
         .iter()
-        .filter(|held| held.as_ref() == Some(link_tag))
+        .filter(|held| held.is_some_and(|source| source.names(link)))
         .count()
         >= MAX_LINK_CONTACTS
 }
 
 /// The link each entry of `book` came from, `None` for one the owner imported
 /// or granted directly.
-fn sources(book: &[Recorded]) -> Vec<Option<[u8; 32]>> {
+fn sources(book: &[Recorded]) -> Vec<Option<LinkSource>> {
     book.iter()
-        .map(|held| held.origin.as_ref().map(|origin| origin.link_tag))
+        .map(|held| held.origin.as_ref().map(|origin| origin.source))
         .collect()
+}
+
+/// Rebind each entry of `book` that names `link` by its tag to the link's
+/// identity key. Answers whether an entry moved.
+fn rebind_to_identity(book: &mut [Recorded], link: &CommittedLink) -> bool {
+    let source = LinkSource::Identity(link.ephemeral_identity_pk);
+    let mut moved = false;
+    for origin in book.iter_mut().filter_map(|held| held.origin.as_mut()) {
+        if origin.source != source && origin.source.names(link) {
+            origin.source = source;
+            moved = true;
+        }
+    }
+    moved
 }
 
 /// Verify a contact code and return it alongside its canonical re-encoding.
@@ -474,7 +601,15 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
         // A hand import outranks a claim: the owner vouched for this identity,
         // so the entry stops charging the link bound and stops being collectable
         // by a cut.
-        book.retain(|held| held.contact.identity_pk() != contact.identity_pk());
+        let former = book
+            .iter()
+            .position(|held| held.contact.identity_pk() == contact.identity_pk())
+            .map(|at| former_after(book.remove(at), &contact))
+            .transpose()?
+            .unwrap_or_default();
+        if subkey_bound(&book, &contact) {
+            return Err(ContactStoreError::RecipientKeyChanged);
+        }
         if book.len() >= MAX_CONTACTS {
             return Err(ContactStoreError::Full);
         }
@@ -482,6 +617,7 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
             contact,
             code,
             origin: None,
+            former,
         });
         self.put(&book).await?;
         Ok(contact)
@@ -490,66 +626,78 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
     async fn record_unchanged_from_link(
         &self,
         contact_code: &[u8],
-        link_tag: &[u8; 32],
+        link: &CommittedLink,
         scope_id: &[u8; 16],
     ) -> Result<Contact, ContactStoreError> {
         let (contact, _) = import_recorded(contact_code).map_err(ContactStoreError::Import)?;
-        let book = self.recorded().await?;
+        let mut book = self.recorded().await?;
         let Some(held) = book
             .iter()
             .find(|held| held.contact.identity_pk() == contact.identity_pk())
         else {
-            return self
-                .record_from_link(contact_code, link_tag, scope_id)
-                .await;
+            return self.record_from_link(contact_code, link, scope_id).await;
         };
         if held.contact.enc_subkey().to_bytes() != contact.enc_subkey().to_bytes() {
             return Err(ContactStoreError::RecipientKeyChanged);
         }
-        Ok(held.contact)
+        let held = held.contact;
+        if rebind_to_identity(&mut book, link) {
+            self.put(&book).await?;
+        }
+        Ok(held)
     }
 
     async fn record_from_link(
         &self,
         contact_code: &[u8],
-        link_tag: &[u8; 32],
+        link: &CommittedLink,
         scope_id: &[u8; 16],
     ) -> Result<Contact, ContactStoreError> {
         let (contact, code) = import_recorded(contact_code).map_err(ContactStoreError::Import)?;
         let mut book = self.recorded().await?;
+        let source = LinkSource::Identity(link.ephemeral_identity_pk);
+        rebind_to_identity(&mut book, link);
         let held = book
             .iter()
             .position(|held| held.contact.identity_pk() == contact.identity_pk())
             .map(|at| book.remove(at));
-        let origin = match held {
-            Some(Recorded { origin: None, .. }) => None,
+        if held.as_ref().is_some_and(|held| {
+            held.contact.enc_subkey().to_bytes() != contact.enc_subkey().to_bytes()
+        }) || subkey_bound(&book, &contact)
+        {
+            return Err(ContactStoreError::RecipientKeyChanged);
+        }
+        let (origin, former) = match held {
+            Some(Recorded {
+                origin: None,
+                former,
+                ..
+            }) => (None, former),
             Some(Recorded {
                 origin: Some(mut origin),
+                former,
                 ..
             }) => {
                 // A claim moves the entry onto the link it came in on, so the
                 // move is a charge on that link. Without it a holder of two
                 // links empties one by re-claiming its entries on the other,
                 // then refills it, past the per-link share.
-                if origin.link_tag != *link_tag && link_budget_full(&sources(&book), link_tag) {
-                    return Err(ContactStoreError::LinkBookFull {
-                        link_tag: *link_tag,
-                    });
+                if origin.source != source && link_budget_full(&sources(&book), link) {
+                    return Err(ContactStoreError::LinkBookFull { link_tag: link.tag });
                 }
-                origin.link_tag = *link_tag;
+                origin.source = source;
                 origin.hold(scope_id)?;
-                Some(origin)
+                (Some(origin), former)
             }
             None => {
-                if link_budget_full(&sources(&book), link_tag) {
-                    return Err(ContactStoreError::LinkBookFull {
-                        link_tag: *link_tag,
-                    });
+                if link_budget_full(&sources(&book), link) {
+                    return Err(ContactStoreError::LinkBookFull { link_tag: link.tag });
                 }
-                Some(LinkOrigin {
-                    link_tag: *link_tag,
+                let origin = LinkOrigin {
+                    source,
                     scopes: vec![*scope_id],
-                })
+                };
+                (Some(origin), Vec::new())
             }
         };
         if book.len() >= MAX_CONTACTS {
@@ -559,6 +707,7 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
             contact,
             code,
             origin,
+            former,
         });
         self.put(&book).await?;
         Ok(contact)
@@ -609,12 +758,25 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
 
     async fn contacts_with_sources(
         &self,
-    ) -> Result<Vec<(Contact, Option<[u8; 32]>)>, ContactStoreError> {
+    ) -> Result<Vec<(Contact, Option<LinkSource>)>, ContactStoreError> {
         Ok(self
             .recorded()
             .await?
             .into_iter()
-            .map(|held| (held.contact, held.origin.map(|origin| origin.link_tag)))
+            .map(|held| (held.contact, held.origin.map(|origin| origin.source)))
+            .collect())
+    }
+
+    async fn contacts_with_bindings(&self) -> Result<Vec<BoundContact>, ContactStoreError> {
+        Ok(self
+            .recorded()
+            .await?
+            .into_iter()
+            .map(|held| BoundContact {
+                contact: held.contact,
+                former: held.former,
+                source: held.origin.map(|origin| origin.source),
+            })
             .collect())
     }
 
@@ -661,7 +823,23 @@ fn encode_book(book: &[Recorded]) -> Result<Vec<u8>, BookCodecError> {
     for held in sorted {
         within("contactCode", held.code.len(), MAX_CONTACT_CODE_BYTES)?;
         match &held.origin {
-            None => imported.push(Value::Bytes(held.code.clone())),
+            None if held.former.is_empty() => imported.push(Value::Bytes(held.code.clone())),
+            None => {
+                check_former(&held.contact, &held.former)?;
+                let mut entry = Map::new();
+                entry.insert("code", Value::Bytes(held.code.clone()));
+                entry.insert(
+                    "formerSubkeys",
+                    Value::Array(
+                        held.former
+                            .iter()
+                            .map(|key| Value::Bytes(key.to_vec()))
+                            .collect(),
+                    ),
+                );
+                imported.push(Value::Map(entry));
+            }
+            Some(_) if !held.former.is_empty() => return Err(BookCodecError::FormerSubkeys),
             Some(origin) => {
                 within(
                     "linkContactScopes",
@@ -673,7 +851,12 @@ fn encode_book(book: &[Recorded]) -> Result<Vec<u8>, BookCodecError> {
                 }
                 let mut entry = Map::new();
                 entry.insert("code", Value::Bytes(held.code.clone()));
-                entry.insert("linkTag", Value::Bytes(origin.link_tag.to_vec()));
+                match origin.source {
+                    LinkSource::Identity(identity_pk) => {
+                        entry.insert("linkIdentity", Value::Bytes(identity_pk.to_vec()))
+                    }
+                    LinkSource::Tag(tag) => entry.insert("linkTag", Value::Bytes(tag.to_vec())),
+                };
                 let mut scopes = origin.scopes.clone();
                 scopes.sort_unstable();
                 scopes.dedup();
@@ -723,14 +906,32 @@ fn decode_book(bytes: &[u8]) -> Result<Vec<Recorded>, BookCodecError> {
     )?;
     let mut book: Vec<Recorded> = Vec::with_capacity(imported.len() + from_links.len());
     for item in imported {
-        let (contact, code) = decode_code(item.as_bytes()?)?;
-        push_unique(&mut book, contact, code, None)?;
+        if let Value::Bytes(code) = item {
+            let (contact, code) = decode_code(code)?;
+            push_unique(&mut book, contact, code, None, Vec::new())?;
+            continue;
+        }
+        let entry = item.as_map()?;
+        reject_unknown(entry, &["code", "formerSubkeys"])?;
+        let (contact, code) = decode_code(req(entry, "code")?.as_bytes()?)?;
+        let raw = req(entry, "formerSubkeys")?.as_array()?;
+        within("formerSubkeys", raw.len(), MAX_FORMER_SUBKEYS)?;
+        let former = raw
+            .iter()
+            .map(|key| -> Result<[u8; 32], BookCodecError> { fixed(key.as_bytes()?) })
+            .collect::<Result<Vec<_>, _>>()?;
+        check_former(&contact, &former)?;
+        push_unique(&mut book, contact, code, None, former)?;
     }
     for item in from_links {
         let entry = item.as_map()?;
-        reject_unknown(entry, &["code", "linkTag", "scopes"])?;
+        reject_unknown(entry, &["code", "linkIdentity", "linkTag", "scopes"])?;
         let (contact, code) = decode_code(req(entry, "code")?.as_bytes()?)?;
-        let link_tag = fixed(req(entry, "linkTag")?.as_bytes()?)?;
+        let source = match (entry.get("linkIdentity"), entry.get("linkTag")) {
+            (Some(identity_pk), None) => LinkSource::Identity(fixed(identity_pk.as_bytes()?)?),
+            (None, Some(tag)) => LinkSource::Tag(fixed(tag.as_bytes()?)?),
+            _ => return Err(BookCodecError::LinkSourceNotOne),
+        };
         let raw = req(entry, "scopes")?.as_array()?;
         within("linkContactScopes", raw.len(), MAX_LINK_CONTACT_SCOPES)?;
         let mut scopes: Vec<[u8; 16]> = Vec::with_capacity(raw.len());
@@ -751,10 +952,27 @@ fn decode_book(bytes: &[u8]) -> Result<Vec<Recorded>, BookCodecError> {
             &mut book,
             contact,
             code,
-            Some(LinkOrigin { link_tag, scopes }),
+            Some(LinkOrigin { source, scopes }),
+            Vec::new(),
         )?;
     }
     Ok(book)
+}
+
+/// Refuse a former-subkey list this build does not write beside `contact`:
+/// empty, past [`MAX_FORMER_SUBKEYS`], a repeated key, or the current subkey.
+/// Checked in both codec directions (AGENTS.md rule 8).
+fn check_former(contact: &Contact, former: &[[u8; 32]]) -> Result<(), BookCodecError> {
+    within("formerSubkeys", former.len(), MAX_FORMER_SUBKEYS)?;
+    let current = contact.enc_subkey().to_bytes();
+    let distinct = former
+        .iter()
+        .enumerate()
+        .all(|(at, key)| *key != current && !former[..at].contains(key));
+    if former.is_empty() || !distinct {
+        return Err(BookCodecError::FormerSubkeys);
+    }
+    Ok(())
 }
 
 /// Re-verify one stored code and prove it is the canonical spelling this build
@@ -785,6 +1003,7 @@ fn push_unique(
     contact: Contact,
     code: Vec<u8>,
     origin: Option<LinkOrigin>,
+    former: Vec<[u8; 32]>,
 ) -> Result<(), BookCodecError> {
     if book
         .iter()
@@ -796,6 +1015,7 @@ fn push_unique(
         contact,
         code,
         origin,
+        former,
     });
     Ok(())
 }
@@ -803,11 +1023,13 @@ fn push_unique(
 #[cfg(test)]
 mod tests {
     use cipherbox_core::kdf;
+    use cipherbox_core::seal::Permission;
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
     use super::super::contact::import_contact;
     use super::*;
+    use crate::seams::UnixMillis;
     use crate::testkit::fakes::InMemoryStagingStore;
     use crate::testkit::{FailingEntropy, SeededEntropy, SilentEntropy, block_on, conformance};
 
@@ -876,11 +1098,14 @@ mod tests {
         encode_fixed_depth(&Value::Map(m))
     }
 
-    /// One link-sourced entry as the book stores it.
-    fn framed_link_entry(code: &[u8], link_tag: [u8; 32], scopes: &[[u8; 16]]) -> Value {
+    /// One link-sourced entry as the book stores it, naming its link under
+    /// each of `link`'s keys.
+    fn framed_link_entry(code: &[u8], link: &[(&str, &[u8])], scopes: &[[u8; 16]]) -> Value {
         let mut m = Map::new();
         m.insert("code", Value::Bytes(code.to_vec()));
-        m.insert("linkTag", Value::Bytes(link_tag.to_vec()));
+        for (key, value) in link {
+            m.insert(*key, Value::Bytes(value.to_vec()));
+        }
         m.insert(
             "scopes",
             Value::Array(
@@ -1019,11 +1244,13 @@ mod tests {
                 contact,
                 code: encoded.clone(),
                 origin: None,
+                former: Vec::new(),
             },
             Recorded {
                 contact,
                 code: encoded,
                 origin: None,
+                former: Vec::new(),
             },
         ];
 
@@ -1189,6 +1416,7 @@ mod tests {
                 contact: import_contact(code).expect("valid code"),
                 code: code.clone(),
                 origin: None,
+                former: Vec::new(),
             })
             .collect();
         assert!(matches!(
@@ -1241,6 +1469,212 @@ mod tests {
         );
     }
 
+    fn subkey(scalar: u8) -> [u8; 32] {
+        kdf::enc_subkey(&[scalar; 32]).public().to_bytes()
+    }
+
+    fn former_of<St: StagingStore, E: Entropy>(
+        store: &StagingContactStore<'_, St, E>,
+    ) -> Vec<[u8; 32]> {
+        block_on(store.contacts_with_bindings())
+            .expect("the book opens")
+            .into_iter()
+            .flat_map(|bound| bound.former)
+            .collect()
+    }
+
+    /// A revoke reaches a row granted under a former subkey, so a re-import
+    /// keeps the subkeys it replaces, oldest first, and survives a restart. A
+    /// rotation past the bound is refused and drops no key.
+    #[test]
+    fn a_re_import_keeps_the_former_subkeys_and_refuses_past_the_bound() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x82);
+        let entropy = seeded(135);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        block_on(store.record(&bound_code(0x33, 0x90))).expect("first import");
+        block_on(store.record(&bound_code(0x33, 0x90))).expect("same subkey");
+        assert!(
+            former_of(&store).is_empty(),
+            "the same subkey is no rotation"
+        );
+
+        for rotated in 0x91..=0x94 {
+            block_on(store.record(&bound_code(0x33, rotated))).expect("rotated import");
+        }
+        let kept = vec![subkey(0x90), subkey(0x91), subkey(0x92), subkey(0x93)];
+        assert_eq!(
+            former_of(&StagingContactStore::new(&staging, &secret, &entropy)),
+            kept
+        );
+        assert!(matches!(
+            block_on(store.record(&bound_code(0x33, 0x95))),
+            Err(ContactStoreError::FormerSubkeysFull)
+        ));
+        assert_eq!(former_of(&store), kept, "no key drops");
+
+        block_on(store.record(&bound_code(0x33, 0x92))).expect("back to a former subkey");
+        assert_eq!(
+            former_of(&store),
+            vec![subkey(0x90), subkey(0x91), subkey(0x93), subkey(0x94)],
+            "a current subkey is never a former one"
+        );
+    }
+
+    /// A revoke names a row by its subkey, so the book refuses a contact
+    /// whose subkey another identity binds, now or before, on both write
+    /// paths.
+    #[test]
+    fn a_subkey_another_identity_binds_is_refused() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x84);
+        let entropy = seeded(137);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        block_on(store.record(&bound_code(0x33, 0x90))).expect("first import");
+        block_on(store.record(&bound_code(0x33, 0x91))).expect("rotated import");
+
+        for taken in [0x90, 0x91] {
+            assert!(matches!(
+                block_on(store.record(&bound_code(0x34, taken))),
+                Err(ContactStoreError::RecipientKeyChanged)
+            ));
+            assert!(matches!(
+                block_on(store.record_from_link(&bound_code(0x34, taken), &LINK, &SCOPE_A)),
+                Err(ContactStoreError::RecipientKeyChanged)
+            ));
+        }
+        assert_eq!(block_on(store.contacts()).expect("the book opens").len(), 1);
+        block_on(store.record(&bound_code(0x33, 0x90))).expect("back to its own former subkey");
+    }
+
+    /// A claim under another subkey than the book holds is refused, and the
+    /// book keeps the subkey it held.
+    #[test]
+    fn a_granted_claim_under_a_rotated_subkey_is_refused() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x83);
+        let entropy = seeded(136);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        block_on(store.record_from_link(&claimant_code(0), &LINK, &SCOPE_A))
+            .expect("the first claim converts");
+        block_on(store.record(&bound_code(0x33, 0x90))).expect("a hand import");
+
+        assert!(matches!(
+            block_on(store.record_from_link(&rotated_claimant_code(0), &LINK, &SCOPE_B)),
+            Err(ContactStoreError::RecipientKeyChanged)
+        ));
+        assert!(matches!(
+            block_on(store.record_from_link(&bound_code(0x33, 0x91), &LINK, &SCOPE_A)),
+            Err(ContactStoreError::RecipientKeyChanged)
+        ));
+        let held = block_on(store.contacts()).expect("the book opens");
+        assert_eq!(
+            held.iter()
+                .map(|contact| contact.enc_subkey().to_bytes())
+                .collect::<Vec<_>>(),
+            vec![
+                subkey(0x90),
+                import_contact(&claimant_code(0))
+                    .expect("valid code")
+                    .enc_subkey()
+                    .to_bytes(),
+            ]
+        );
+    }
+
+    /// One hand-imported entry with its former subkeys, as the book stores it.
+    fn framed_former(code: &[u8], former: &[[u8; 32]]) -> Vec<u8> {
+        let mut entry = Map::new();
+        entry.insert("code", Value::Bytes(code.to_vec()));
+        entry.insert(
+            "formerSubkeys",
+            Value::Array(
+                former
+                    .iter()
+                    .map(|key| Value::Bytes(key.to_vec()))
+                    .collect(),
+            ),
+        );
+        let mut m = Map::new();
+        m.insert("contacts", Value::Array(vec![Value::Map(entry)]));
+        m.insert("linkContacts", Value::Array(Vec::new()));
+        m.insert("v", Value::Unsigned(CONTACT_BOOK_V));
+        encode_fixed_depth(&Value::Map(m))
+    }
+
+    /// The former subkeys sit beside the code, and a book that has none (as
+    /// the current release writes every book) still reads. A list this build
+    /// does not write is refused in both directions (AGENTS.md rule 8).
+    #[test]
+    fn former_subkeys_round_trip_and_a_bad_list_is_refused_in_both_directions() {
+        let (contact, code) = import_recorded(&bound_code(0x33, 0x90)).expect("import");
+        assert_eq!(
+            decode_book(&framed(&[code.clone()])).expect("a bare code reads")[0].former,
+            Vec::<[u8; 32]>::new()
+        );
+        let book = [Recorded {
+            contact,
+            code: code.clone(),
+            origin: None,
+            former: vec![subkey(0x91), subkey(0x92)],
+        }];
+        let encoded = encode_book(&book).expect("encodes");
+        assert_eq!(encoded, framed_former(&code, &book[0].former));
+        assert_eq!(
+            decode_book(&encoded).expect("decodes")[0].former,
+            book[0].former
+        );
+
+        for former in [
+            Vec::new(),
+            vec![subkey(0x91), subkey(0x91)],
+            vec![subkey(0x90)],
+        ] {
+            let book = [Recorded {
+                contact,
+                code: code.clone(),
+                origin: None,
+                former: former.clone(),
+            }];
+            if !former.is_empty() {
+                assert!(matches!(
+                    encode_book(&book),
+                    Err(BookCodecError::FormerSubkeys)
+                ));
+            }
+            assert!(matches!(
+                decode_book(&framed_former(&code, &former)),
+                Err(BookCodecError::FormerSubkeys)
+            ));
+        }
+        let past_the_bound: Vec<[u8; 32]> = (0x91..=0x95).map(subkey).collect();
+        assert!(matches!(
+            encode_book(&[Recorded {
+                contact,
+                code: code.clone(),
+                origin: None,
+                former: past_the_bound.clone(),
+            }]),
+            Err(BookCodecError::TooLong(_))
+        ));
+        assert!(matches!(
+            decode_book(&framed_former(&code, &past_the_bound)),
+            Err(BookCodecError::TooLong(_))
+        ));
+        assert!(matches!(
+            encode_book(&[Recorded {
+                contact,
+                code,
+                origin: Some(LinkOrigin {
+                    source: LinkSource::Identity(LINK.ephemeral_identity_pk),
+                    scopes: vec![SCOPE_A],
+                }),
+                former: vec![subkey(0x91)],
+            }]),
+            Err(BookCodecError::FormerSubkeys)
+        ));
+    }
+
     /// The book is the only durable home for a recipient's subkey, so a full
     /// book must name its own remedy rather than read as corruption.
     #[test]
@@ -1266,6 +1700,7 @@ mod tests {
                     contact,
                     code,
                     origin: None,
+                    former: Vec::new(),
                 }
             })
             .collect();
@@ -1413,8 +1848,37 @@ mod tests {
             .to_sec1()
     }
 
-    const LINK: [u8; 32] = [0xAB; 32];
-    const OTHER_LINK: [u8; 32] = [0xCD; 32];
+    /// A committed link as the owner's set names it.
+    const fn committed_link(tag: u8, identity: u8) -> CommittedLink {
+        CommittedLink {
+            tag: [tag; 32],
+            ephemeral_identity_pk: [identity; IDENTITY_PUBLIC_LEN],
+            ephemeral_enc_pk: [identity; 32],
+            deadline: UnixMillis(u64::MAX),
+            conversion_permission: Permission::Read,
+            admission_cap: 1,
+        }
+    }
+
+    const LINK: CommittedLink = committed_link(0xAB, 0x02);
+    const OTHER_LINK: CommittedLink = committed_link(0xCD, 0x03);
+
+    /// The source the book records for a contact `link` admitted.
+    fn sourced_by(link: &CommittedLink) -> Option<LinkSource> {
+        Some(LinkSource::Identity(link.ephemeral_identity_pk))
+    }
+
+    /// The link each entry of `store`'s book came from.
+    fn sources_of<St: StagingStore, E: Entropy>(
+        store: &StagingContactStore<'_, St, E>,
+    ) -> Vec<Option<LinkSource>> {
+        block_on(store.contacts_with_sources())
+            .expect("the book opens")
+            .into_iter()
+            .map(|(_, source)| source)
+            .collect()
+    }
+
     const SCOPE_A: [u8; 16] = [0x0A; 16];
     const SCOPE_B: [u8; 16] = [0x0B; 16];
 
@@ -1442,7 +1906,7 @@ mod tests {
         assert!(
             matches!(
                 block_on(store.record_from_link(&claimant_code(over), &LINK, &SCOPE_A)),
-                Err(ContactStoreError::LinkBookFull { link_tag }) if link_tag == LINK
+                Err(ContactStoreError::LinkBookFull { link_tag }) if link_tag == LINK.tag
             ),
             "the refusal names the link the claim came in on"
         );
@@ -1516,12 +1980,15 @@ mod tests {
             .map(|(_, source)| source)
             .collect::<Vec<_>>();
         assert_eq!(
-            sources.iter().filter(|s| **s == Some(LINK)).count(),
+            sources.iter().filter(|s| **s == sourced_by(&LINK)).count(),
             1,
             "the entry stays with the link that admitted it"
         );
         assert_eq!(
-            sources.iter().filter(|s| **s == Some(OTHER_LINK)).count(),
+            sources
+                .iter()
+                .filter(|s| **s == sourced_by(&OTHER_LINK))
+                .count(),
             MAX_LINK_CONTACTS - 1,
             "and the second link took no share"
         );
@@ -1562,7 +2029,7 @@ mod tests {
         );
         assert_eq!(
             book[0].1,
-            Some(LINK),
+            sourced_by(&LINK),
             "and the link that admitted the contact"
         );
     }
@@ -1591,7 +2058,7 @@ mod tests {
         assert!(
             matches!(
                 block_on(store.record_from_link(&claimant_code(moved), &OTHER_LINK, &SCOPE_B)),
-                Err(ContactStoreError::LinkBookFull { link_tag }) if link_tag == OTHER_LINK
+                Err(ContactStoreError::LinkBookFull { link_tag }) if link_tag == OTHER_LINK.tag
             ),
             "the refusal names the link the entry would move onto"
         );
@@ -1601,12 +2068,15 @@ mod tests {
             .map(|(_, source)| source)
             .collect::<Vec<_>>();
         assert_eq!(
-            sources.iter().filter(|s| **s == Some(LINK)).count(),
+            sources.iter().filter(|s| **s == sourced_by(&LINK)).count(),
             1,
             "the refused move left the entry charged to the link it came from"
         );
         assert_eq!(
-            sources.iter().filter(|s| **s == Some(OTHER_LINK)).count(),
+            sources
+                .iter()
+                .filter(|s| **s == sourced_by(&OTHER_LINK))
+                .count(),
             MAX_LINK_CONTACTS,
             "and the full link took no further share"
         );
@@ -1719,9 +2189,10 @@ mod tests {
             contact,
             code: code.clone(),
             origin: Some(LinkOrigin {
-                link_tag: LINK,
+                source: LinkSource::Identity(LINK.ephemeral_identity_pk),
                 scopes: Vec::new(),
             }),
+            former: Vec::new(),
         }];
         assert!(matches!(
             encode_book(&book),
@@ -1730,7 +2201,7 @@ mod tests {
         assert!(matches!(
             decode_book(&framed_with_links(
                 &[],
-                vec![framed_link_entry(&code, LINK, &[])]
+                vec![framed_link_entry(&code, &[("linkTag", &LINK.tag)], &[])]
             )),
             Err(BookCodecError::LinkContactHoldsNothing)
         ));
@@ -1745,9 +2216,10 @@ mod tests {
             contact,
             code: code.clone(),
             origin: Some(LinkOrigin {
-                link_tag: LINK,
+                source: LinkSource::Identity(LINK.ephemeral_identity_pk),
                 scopes: vec![SCOPE_A, SCOPE_A],
             }),
+            former: Vec::new(),
         }];
         assert!(matches!(
             encode_book(&book),
@@ -1756,7 +2228,11 @@ mod tests {
         assert!(matches!(
             decode_book(&framed_with_links(
                 &[],
-                vec![framed_link_entry(&code, LINK, &[SCOPE_A, SCOPE_A])]
+                vec![framed_link_entry(
+                    &code,
+                    &[("linkTag", &LINK.tag)],
+                    &[SCOPE_A, SCOPE_A]
+                )]
             )),
             Err(BookCodecError::DuplicateScope)
         ));
@@ -1780,5 +2256,116 @@ mod tests {
             block_on(store.record_from_link(&claimant_code(0), &LINK, &SCOPE_B)),
             Err(ContactStoreError::LinkContactScopesFull)
         ));
+    }
+
+    /// A write wave moves a link's tag and keeps its ephemeral identity, so the
+    /// link's share still counts every contact it admitted after the wave.
+    #[test]
+    fn a_links_share_survives_a_wave_that_moves_its_tag() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x78);
+        let entropy = seeded(130);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        for i in 0..MAX_LINK_CONTACTS {
+            block_on(store.record_from_link(
+                &claimant_code(u16::try_from(i).expect("in range")),
+                &LINK,
+                &SCOPE_A,
+            ))
+            .expect("a claim under the link bound records");
+        }
+        let waved = CommittedLink {
+            tag: [0xEF; 32],
+            ..LINK
+        };
+
+        assert!(link_budget_full(&sources_of(&store), &waved));
+        assert!(matches!(
+            block_on(store.record_from_link(
+                &claimant_code(u16::try_from(MAX_LINK_CONTACTS).expect("in range")),
+                &waved,
+                &SCOPE_A
+            )),
+            Err(ContactStoreError::LinkBookFull { link_tag }) if link_tag == waved.tag
+        ));
+    }
+
+    /// A book written before the identity key was recorded names a link by its
+    /// tag. It still reads, and the next conversion through that link rebinds
+    /// every entry the tag names to the link's identity key.
+    #[test]
+    fn a_book_that_names_a_link_by_its_tag_reads_and_rebinds_at_the_next_conversion() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x79);
+        let entropy = seeded(131);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        let (_, code) = import_recorded(&claimant_code(0)).expect("import");
+        let body = framed_with_links(
+            &[],
+            vec![framed_link_entry(
+                &code,
+                &[("linkTag", &LINK.tag)],
+                &[SCOPE_A],
+            )],
+        );
+        block_on(staging.put_staged_bytes(store.staging_key(), &sealed(&secret, 132, &body)))
+            .expect("put");
+        assert_eq!(sources_of(&store), vec![Some(LinkSource::Tag(LINK.tag))]);
+
+        block_on(store.record_from_link(&claimant_code(1), &LINK, &SCOPE_A))
+            .expect("a second claim converts");
+
+        assert_eq!(
+            sources_of(&store),
+            vec![sourced_by(&LINK), sourced_by(&LINK)]
+        );
+    }
+
+    /// A claim that grants nothing also rebinds each entry that names its link
+    /// by the tag.
+    #[test]
+    fn a_claim_that_grants_nothing_rebinds_a_book_that_names_its_link_by_its_tag() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x79);
+        let entropy = seeded(133);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        let (_, code) = import_recorded(&claimant_code(0)).expect("import");
+        let body = framed_with_links(
+            &[],
+            vec![framed_link_entry(
+                &code,
+                &[("linkTag", &LINK.tag)],
+                &[SCOPE_A],
+            )],
+        );
+        block_on(staging.put_staged_bytes(store.staging_key(), &sealed(&secret, 134, &body)))
+            .expect("put");
+
+        block_on(store.record_unchanged_from_link(&claimant_code(0), &LINK, &SCOPE_A))
+            .expect("a claim that grants nothing converts");
+
+        assert_eq!(sources_of(&store), vec![sourced_by(&LINK)]);
+    }
+
+    /// A link-sourced entry names one link, by one key. Two keys or none leave
+    /// no defined link to charge, so the book is refused.
+    #[test]
+    fn a_link_entry_that_does_not_name_one_link_is_refused() {
+        let (_, code) = import_recorded(&claimant_code(0)).expect("import");
+        for keys in [
+            vec![
+                ("linkTag", LINK.tag.as_slice()),
+                ("linkIdentity", LINK.ephemeral_identity_pk.as_slice()),
+            ],
+            Vec::new(),
+        ] {
+            assert!(matches!(
+                decode_book(&framed_with_links(
+                    &[],
+                    vec![framed_link_entry(&code, &keys, &[SCOPE_A])]
+                )),
+                Err(BookCodecError::LinkSourceNotOne)
+            ));
+        }
     }
 }

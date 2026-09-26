@@ -35,6 +35,7 @@ use futures_channel::mpsc;
 use crate::content::Gateway;
 use crate::entropy::Entropy;
 use crate::facade::{Event, NodeId, emit_trust_violation, published_grant_blobs};
+use crate::gate::GateError;
 use crate::mailbox::{VerifiedMailboxItem, poll_verified};
 use crate::net::rotation::scope_name;
 use crate::net::{assemble_candidate, fanout_get_verify};
@@ -202,11 +203,16 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
                 continue;
             };
-            let Ok(candidate) =
-                assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await
-            else {
-                continue;
-            };
+            let candidate =
+                match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await
+                {
+                    Ok(candidate) => candidate,
+                    Err(e @ GateError::Rejected(_)) => {
+                        report(events, name.as_str(), &AcceptError::Gate(e));
+                        continue;
+                    }
+                    Err(GateError::Seam(_)) => continue,
+                };
             let blobs = published_grant_blobs(&candidate.grant_section);
             match accept_share(
                 self.floors,

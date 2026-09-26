@@ -2,7 +2,8 @@
 //! ([ADR 0025](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0025-revocation-under-the-link-first-model.md)
 //! D2, blueprint/engine.md "Triggers"): walk `directChildScopeIndex` from the
 //! vault root with one resolve and one unseal per scope root, and cut every
-//! link entry whose deadline the injected `now` has reached.
+//! link entry whose deadline is [`SyncTimingProfile::link_sweep_grace`] or
+//! more before the injected `now`.
 //!
 //! The tick runs it on [`SyncTimingProfile::link_sweep_cadence`], after the
 //! conversion pass, under [`Running`]. Each folder takes one cut for all its
@@ -109,7 +110,10 @@ where
                 return Some(report);
             }
         };
-        let now = self.scheduler.now();
+        let now = self
+            .scheduler
+            .now()
+            .saturating_sub(self.profile.link_sweep_grace);
         let pending = held.pending_links();
         let due = self
             .walk(root_name, now, &pending, &mut held, pointers, &mut report)
