@@ -1,332 +1,256 @@
-<!-- generated-by: gsd-doc-writer -->
+# CipherBox Sharing
 
-# CipherBox Sharing Specification
+This document describes sharing in CipherBox v2 as the engine on `main` builds it. The invite link is the primary sharing path. A contact-code grant is the advanced path. There is no approve step: any owner device converts a claim by itself.
 
-This document specifies the implemented file and folder sharing feature in CipherBox: user-to-user direct sharing and link-based sharing (invite links). Both flows are zero-knowledge — the server stores only ECIES-wrapped ciphertext and never sees a plaintext key.
+The normative source is [`blueprint/engine.md`](../blueprint/engine.md) "Grants and ledger" and "Mailbox logic". The terms come from [`CONTEXT.md`](../CONTEXT.md) "Envelope and grants" and "Sharing". When this document and the blueprint disagree, the blueprint is correct.
 
-Sharing is a v1.0 feature (read and write permission levels are both supported).
+## Decisions
 
-## Related documentation
+| ADR                                                                                                                                                   | Subject                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md) | The link is the primary path; conversion runs by itself    |
+| [0024](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)                            | A link holder reads at once from the link blob             |
+| [0025](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0025-revocation-under-the-link-first-model.md)                                     | Revocation under the link-first model                      |
+| [0026](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0026-a-scope-root-takes-many-grants.md)                                            | A scope root takes many grants                             |
+| [0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)                                         | A grantee name is not an identity                          |
+| [0028](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0028-the-invite-page-previews-before-join.md)                                      | The invite page previews the share before the person joins |
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — system overview and encryption primitives
-- [AUTHENTICATION_ARCHITECTURE.md](AUTHENTICATION_ARCHITECTURE.md) — vault keypair derivation (secp256k1)
-- [FILESYSTEM_SPECIFICATION.md](FILESYSTEM_SPECIFICATION.md) — folder/file metadata schema
-- [DATABASE_EVOLUTION_PROTOCOL.md](DATABASE_EVOLUTION_PROTOCOL.md) — migration discipline
+This document cites a decision as "ADR 0023 D3" (decision) or "ADR 0023 E2" (residual).
 
----
+## Where the grant lives
 
-## Design principles
+A grant lives in the published record of the shared folder, not on the server. When the owner shares a folder, the folder becomes a scope root. The scope root carries:
 
-1. **Zero-knowledge server.** The CipherBox API stores only ECIES ciphertext. It has no ability to decrypt a shared key, read a shared file, or observe the plaintext name of a shared item beyond the `itemName` stored for UX display.
-2. **Client-side re-wrapping.** All sharing operations begin with the sharer decrypting a key on their device and re-encrypting it for the recipient's public key. The server receives only the output ciphertext.
-3. **IPNS as share boundary.** A share record is anchored to a single `ipnsName`. Sharing a folder shares the folder's IPNS root; subfolders and files within it have their own keys propagated as child keys.
-4. **Lazy key rotation on revocation.** Revoking a share is a soft-delete. The sharer's key is not rotated immediately; rotation happens the next time the sharer modifies the shared folder (`executeLazyRotation` in `apps/web/src/services/share.service.ts`).
+- one grant blob per recipient, keyed by a blinded tag;
+- the grant ledger, sealed in the write-body;
+- the owner-signed grant-set commitment.
 
----
+Each commitment entry has a kind: `personal` or `link`. A link entry also carries the owner-signed deadline, the conversion permission and the admission cap (ADR 0023 D2, D9, ADR 0024 D4). Each ledger row carries an owner signature over its keys and tag. The signature also covers the via-link reference, the grantee name and the name source flag when they are present (ADR 0027 D3).
 
-## Cryptographic primitives
+The API holds no grant and no key. It carries the mailbox only: share pointers, claims, and nothing that safety depends on. Every owner act reads the record. The owner's contact book is no trust input for conversion or revoke (ADR 0025 D3).
 
-All key wrapping uses ECIES over secp256k1 (package `@cipherbox/crypto`, source at `packages/crypto/src/ecies/`).
+## A scope root takes many grants
 
-| Operation                       | Function                                               | File                                   |
-| ------------------------------- | ------------------------------------------------------ | -------------------------------------- |
-| Wrap a key for a public key     | `wrapKey(plainKey, publicKey)`                         | `packages/crypto/src/ecies/encrypt.ts` |
-| Unwrap a key with a private key | `unwrapKey(ciphertext, privateKey)`                    | `packages/crypto/src/ecies/decrypt.ts` |
-| Unwrap then re-wrap in one call | `reWrapKey(ciphertext, ownerPrivKey, recipientPubKey)` | `packages/crypto/src/ecies/rewrap.ts`  |
+A grant or a link on a folder that is not a scope root yet is a **fresh mint**. The engine converges the subtree, mints a scope with a fresh seed at epoch 1, re-seals the interior into it, and updates the parent's direct-child-scope index. The grantee reads from that first epoch.
 
-`reWrapKey` zeros the intermediate plaintext key via `fill(0)` before returning or on any error path, preventing key material from lingering in memory.
+A grant or a link on a scope root is an **append** (ADR 0026 D1). The engine adds one row and one grant blob, re-signs the commitment, and publishes the root once at the current epoch. There is no new seed, no re-seal and no converge step. Links and direct grants coexist, and a folder takes any number of live links (D2, D3).
 
----
+A new grantee on an append reads the whole history of the scope, because the history links walk the current seed back to every earlier epoch (D6).
 
-## Share key types
+A direct grant to an identity that already holds a row is a permission change when the permission differs. When the permission is the same, the engine posts the share pointer again and changes nothing (D4).
 
-Defined in `apps/api/src/shares/types.ts`:
+## Invite links
 
-| Type           | Value           | Meaning                                                        |
-| -------------- | --------------- | -------------------------------------------------------------- |
-| `ChildKeyType` | `'file'`        | `fileKey` for a specific file                                  |
-| `ChildKeyType` | `'folder'`      | `folderKey` for a subfolder                                    |
-| `ChildKeyType` | `'file-ipns'`   | IPNS private key for a file's metadata IPNS name               |
-| `ShareKeyType` | `'folder-ipns'` | IPNS private key for a subfolder IPNS name (write shares only) |
+### Mint
 
-`ShareKeyType` is the superset: `['file', 'folder', 'file-ipns', 'folder-ipns']`. `ChildKeyType` excludes `'folder-ipns'` because that key type is only stored after a share is created (it is added when a subfolder's write access is granted, not during initial share creation).
+`Command::CreateInviteLink { node, permission, expires_at, owner_name, admission_cap }` mints a link.
 
----
+- The link is a grant blob wrapped to an ephemeral identity that derives from one random invite secret. Its ledger row has the shape of a personal row.
+- The engine commits the link entry and its row at `read`, whatever `permission` is. `permission` is the conversion permission. So a write link runs no write-scope cut and no name wave at mint, and its blob holds no write seed (ADR 0024 D4).
+- Every link has a deadline. With no `expires_at`, the deadline is `DEFAULT_LINK_LIFETIME` (7 days) from the injected `now`.
+- With no `admission_cap`, the mint sets the admission cap to `DEFAULT_ADMISSION_CAP` (25). The engine refuses a cap of zero or a cap above `MAX_ADMISSION_CAP` (1023) with `invite-admission-cap-out-of-range`.
+- No owner device stores the invite secret or a record of the link. The link lives in the owner-signed record alone. The fragment shows only once, at the mint (ADR 0023 D2).
+- The engine returns the fragment once the scope root that commits the link has landed. A later handover failure does not discard the only copy of the invite secret.
 
-## Data model
+### The fragment
 
-Three database tables back the sharing feature.
+The URL fragment is the whole bearer capability. It is base64url text over one det-CBOR blob, and the blob bytes have a 2048-byte bound (`MAX_INVITE_FRAGMENT_BYTES`). The blob carries:
 
-### `shares`
+- the invite secret;
+- the owner contact code;
+- the scope id, the scope pointer name and the scope's stable `pointerReadKey`;
+- the owner name and the folder name, under an owner identity signature over `{scopePointerName, ownerName, folderName}` (ADR 0027 D5).
 
-Source: `apps/api/src/shares/entities/share.entity.ts`
+A host moves the fragment between a URL and a command, and never parses it. A bad names signature gives no names, and the link still works. The fragment carries no MAC, and its other fields fail closed on their own: a changed pointer name or read key opens no re-point object under the owner code.
 
-Primary sharing record. A unique partial index (`WHERE revoked_at IS NULL`) on `(sharer_id, recipient_id, ipns_name)` prevents duplicate active shares for the same triple while allowing revoked historical records to coexist (`apps/api/src/migrations/1740300000000-SharesPartialUniqueIndex.ts`).
+Anyone who holds the URL can unmask every committed recipient key with `pointerReadKey` (ADR 0024 E4).
 
-| Column                | Type           | Description                                                                                             |
-| --------------------- | -------------- | ------------------------------------------------------------------------------------------------------- |
-| `id`                  | `uuid`         | Primary key                                                                                             |
-| `sharer_id`           | `uuid`         | FK to `users.id` (CASCADE delete)                                                                       |
-| `recipient_id`        | `uuid`         | FK to `users.id` (CASCADE delete)                                                                       |
-| `item_type`           | `varchar(10)`  | `'folder'` or `'file'`                                                                                  |
-| `ipns_name`           | `varchar(255)` | IPNS name of the shared item (e.g., `k51...`)                                                           |
-| `item_name`           | `varchar(255)` | Plaintext display name (minimal privacy impact — server already knows involved user IDs)                |
-| `encrypted_key`       | `bytea`        | `folderKey` (for folder shares) or parent `folderKey` (for file shares) wrapped via ECIES for recipient |
-| `permission`          | `varchar(10)`  | `'read'` (default) or `'write'`                                                                         |
-| `encrypted_ipns_key`  | `bytea`        | IPNS private key wrapped via ECIES for recipient; `NULL` for read-only shares                           |
-| `hidden_by_recipient` | `boolean`      | Recipient has dismissed this share from their view                                                      |
-| `revoked_at`          | `timestamp`    | `NULL` = active; set = soft-deleted pending key rotation                                                |
-| `created_at`          | `timestamp`    | —                                                                                                       |
-| `updated_at`          | `timestamp`    | —                                                                                                       |
+### Preview before join
 
-### `share_keys`
+`Engine::preview_invite_link(fragment)` reads a link before the person joins (ADR 0028 D2, D3, D5). It runs in the signed-in session engine, in preview mode:
 
-Source: `apps/api/src/shares/entities/share-key.entity.ts`
+- It runs the checks of the join up to the open, and opens the scope root once through the link's grant blob under the adoption gate.
+- It checks against the floors the session already holds, and raises none. It posts no claim, persists nothing and deposits no seed.
+- It returns the names, only when the names signature verifies. It also returns the conversion permission, the state (`live`, `expired`, `revoked` or `unresolvable`) and whether this account already joined. It returns the names and kinds of the direct children of the scope root, and no sizes, no counts and no deeper level.
+- A refused re-point object, or a scope root that the gate refuses, is a trust violation.
 
-Stores individual child keys (file keys, subfolder keys, IPNS keys) for a share. A unique constraint on `(share_id, key_type, item_id)` prevents duplicate entries.
+### Join and the link-held read
 
-| Column          | Type           | Description                                           |
-| --------------- | -------------- | ----------------------------------------------------- |
-| `id`            | `uuid`         | Primary key                                           |
-| `share_id`      | `uuid`         | FK to `shares.id` (CASCADE delete)                    |
-| `key_type`      | `varchar(12)`  | One of the four `ShareKeyType` values                 |
-| `item_id`       | `varchar(255)` | UUID of the file or subfolder this key belongs to     |
-| `encrypted_key` | `bytea`        | ECIES ciphertext of the key wrapped for the recipient |
-| `created_at`    | `timestamp`    | —                                                     |
+`Command::ClaimInviteLink { fragment, name }` joins (ADR 0024 D1, D5). The link path runs these checks in order:
 
-The `key_type` column was widened from `varchar(10)` to `varchar(12)` in migration `1743100000000-WidenShareKeyType.ts` to accommodate `'folder-ipns'` (11 characters).
+1. The fragment decodes inside its bound.
+2. The owner contact code passes its binding verify.
+3. The fragment's scope id is not this vault's own root scope (`invite-names-the-own-vault-root`).
+4. The engine resolves the scope pointer, opens the re-point object under `pointerReadKey`, and verifies its owner-identity signature against the fragment's owner code. The record at `currentRootName` must verify at that name.
+5. A blob sits at the link tag, which the holder derives again at each `currentRootName`.
+6. The owner-signed commitment names that tag as a link entry, with a deadline later than `now`. The holder reads at `read`.
+7. The blob opens under the ephemeral subkey.
+8. The full adoption gate runs against the fragment owner's identity.
+9. The bookmark persists before the floor advance commits.
 
-### `share_invites`
+A refused read, an expired link (`link-expired`) and a revoked link (`link-not-committed`) post no claim and record nothing. A pointer that does not answer still posts the claim and writes the bookmark, and the tick reads again. The join records the owner contact code in the claimant's contact book.
 
-Source: `apps/api/src/shares/entities/share-invite.entity.ts`
+The received-share bookmark holds the link hold in four optional keys: `linkSecret`, `scopePointerName`, `linkDeadline` and `claim`. The list stays at version 2. ADR 0024 D1 names one key; the build uses four.
 
-Short-lived records backing link-based sharing. The token is a 22-character URL-safe base64 string (`randomBytes(16).toString('base64url')`). The default TTL is 7 days. Expired invites are hard-deleted on access.
+Each refresh pass reads the personal tag first. It reads the link tag only while no personal blob opens and `linkSecret` is held. The persist that records the first personal open drops the link hold, and the link holder is then a grantee (ADR 0024 D2). A link-held read also checks the deadline of the link entry, and stops at it.
 
-| Column                 | Type           | Description                                                                                                                   |
-| ---------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `id`                   | `uuid`         | Primary key                                                                                                                   |
-| `token`                | `varchar(44)`  | Unique URL-safe base64 token                                                                                                  |
-| `sharer_id`            | `uuid`         | FK to `users.id` (CASCADE delete)                                                                                             |
-| `item_type`            | `varchar(10)`  | `'folder'` or `'file'`                                                                                                        |
-| `ipns_name`            | `varchar(255)` | IPNS name of the shared item                                                                                                  |
-| `item_name`            | `varchar(255)` | Plaintext display name                                                                                                        |
-| `encrypted_key`        | `bytea`        | Item key wrapped with the ephemeral public key                                                                                |
-| `encrypted_child_keys` | `jsonb`        | Array of `{keyType, itemId, encryptedKey}` wrapped with ephemeral public key; `NULL` for single-file invites with no children |
-| `status`               | `varchar(20)`  | `'active'`, `'claimed'`, or `'revoked'`                                                                                       |
-| `max_claims`           | `integer`      | Maximum number of times this invite can be claimed (default `1`)                                                              |
-| `claim_count`          | `integer`      | Number of times the invite has been claimed                                                                                   |
-| `claimed_by`           | `uuid`         | User ID of the claimer (set on claim)                                                                                         |
-| `expires_at`           | `timestamp`    | Expiry timestamp                                                                                                              |
-| `created_at`           | `timestamp`    | —                                                                                                                             |
+### The claim
 
----
+The claim is a sealed mailbox item to the owner, signed by the link's ephemeral identity. Its payload is `{claimId, scopePointerName, contactCode, name}`. `name` is the grantee name the claimant suggests, and it may be empty (ADR 0027 D1).
 
-## User-to-user sharing flow
+The claimant device keeps the claim and its idempotency key in the link hold. The tick posts it again under the same key while no personal blob lands. The first wait is 10 minutes, and each wait doubles up to 24 hours. The posts stop at the deadline, or after 40 posts (ADR 0023 D6). A second claim of the same link posts nothing.
 
-### Overview
+## Conversion
 
-The sharer looks up the recipient's `publicKey` via the API, re-wraps keys on their device, and POSTs the ciphertext to the server. The recipient retrieves the wrapped keys at login and decrypts them locally.
+Conversion mints a claimant a personal row. There is no click and no approve step (ADR 0023 D1).
 
-### Step-by-step
+### Trigger
 
-1. **Recipient lookup.** The sharer calls `GET /shares/lookup?publicKey=0x04...` to verify the recipient is a registered CipherBox user. The endpoint validates the uncompressed secp256k1 format (`0x04` + 128 hex characters). Source: `apps/api/src/shares/shares.controller.ts` → `lookupUser`.
+Any owner device runs the conversion pass on every tick, over every folder. `Command::ConvertInviteClaims { node }` runs the same pass for one folder, for a host to issue when the share dialog opens (ADR 0023 D4). Each folder publishes its root once per pass.
 
-2. **Key collection.** The sharer's client traverses the item's metadata tree and re-wraps every key for the recipient's `publicKey`:
-   - For a folder: unwrap `folderKeyEncrypted` → `reWrapKey(ciphertext, ownerPrivKey, recipientPubKey)` for the root folder, plus all descendant subfolder keys and file keys via `collectChildKeys` (`apps/web/src/lib/crypto/key-wrapping.ts`).
-   - For a file: re-wrap the parent `folderKey` (recipient needs it to decrypt file metadata) and the `fileKey` as a `'file'` child key.
-   - For write permission: additionally re-wrap the IPNS private key of the shared item so the recipient can publish to that IPNS name.
+### Ack first
 
-3. **Create share.** The sharer POSTs to `POST /shares` with `CreateShareDto`:
+For a claim item, the engine acks first and converts only when the ack answers that this call removed the item (ADR 0023 D5). The `Mailbox` seam `ack` returns `true` only then. So two owner devices never both convert one claim on an honest ack.
 
-   ```json
-   {
-     "recipientPublicKey": "04abc...",
-     "itemType": "folder",
-     "ipnsName": "k51...",
-     "itemName": "Project Files",
-     "encryptedKey": "<hex ECIES ciphertext>",
-     "permission": "read",
-     "childKeys": [
-       { "keyType": "folder", "itemId": "<uuid>", "encryptedKey": "<hex>" },
-       { "keyType": "file", "itemId": "<uuid>", "encryptedKey": "<hex>" },
-       { "keyType": "file-ipns", "itemId": "<uuid>", "encryptedKey": "<hex>" }
-     ]
-   }
-   ```
+The engine holds the acked claim in the conversion record: a sealed owner-local record (`PendingConversions`, kind `0x07`). The engine writes each claim in the `acking` state before the delete runs, and writes it again as pending after the delete removed it. An entry is `acking`, pending, pointer-due or refused. A conversion that fails on availability stays pending, and a later pass runs it again, checks included (ADR 0023 D6). When the record does not open, the engine sets it aside, starts an empty record and emits `Event::ConversionRecordUnreadable`. The claimant re-post recovers the claims.
 
-   Source: `apps/api/src/shares/dto/create-share.dto.ts`. For write permission, include `"permission": "write"` and the `"encryptedIpnsKey"` field. Omitting `encryptedIpnsKey` with `"permission": "write"` returns HTTP 400; including it with `"permission": "read"` also returns HTTP 400.
+### The checks
 
-4. **Server stores share and child keys.** `SharesService.createShare` (`apps/api/src/shares/shares.service.ts`) validates the recipient exists, checks for duplicate active shares, creates the `shares` row, and bulk-inserts `share_keys` rows for the provided `childKeys`.
+The pass converts a claim only when every check passes (ADR 0023 D3):
 
-5. **Recipient access.** On the recipient's device, `GET /shares/received` returns active non-hidden shares with `sharerPublicKey`, `encryptedKey`, `permission`, and `encryptedIpnsKey`. The recipient decrypts `encryptedKey` with their own `privateKey` to obtain the `folderKey` for the shared item, then fetches child keys via `GET /shares/:shareId/keys`.
+1. The claim opens, and its sender signature verifies.
+2. The claim's scope pointer name is the pointer name of a scope root this owner holds, and the record there passes the adoption gate.
+3. The sender is the owner-attested `recipientIdentityPk` of a ledger row whose commitment entry is a link entry.
+4. The deadline of that entry is later than the ack time. The verdict uses the stored ack time, so a retry does not judge it again against a later `now`.
+5. The claimant contact code passes its binding verify.
+6. The attested rows whose via-link reference names this link are below its admission cap (ADR 0023 D9).
 
-### Post-upload key propagation
+A claimant identity that already holds a row makes the conversion a no-op. Conversion never changes an existing row (ADR 0026 consequence 5).
 
-When a sharer adds files or subfolders inside an already-shared folder, the new keys must be distributed to existing recipients. The function `reWrapForRecipients` in `apps/web/src/services/share.service.ts` handles this as a fire-and-forget operation after each upload or subfolder creation:
+### What conversion mints
 
-1. `findCoveringShares` walks the folder ancestor chain to find shares that cover the modified folder (the share may be on a parent folder, not the immediate folder).
-2. For each covering share recipient, `wrapKey(plaintextKey, recipientPubKey)` produces the wrapped key.
-3. `POST /shares/:shareId/keys` adds the new `ShareKey` rows.
+The pass appends a personal row at the conversion permission, with the via-link reference and the claimant's name as the grantee name under the flag `claimant`. It re-signs the commitment, publishes the root, raises the grant floor, and posts the share pointer to the claimant's contact. An entry settles when its pointer lands, or when the post still fails `POINTER_RETRY_WINDOW` after the conversion.
 
----
+A write claim that passes every check, on a folder that is not a write scope yet, runs one write-scope cut first (ADR 0024 D4). The tick holds the same cut authority as the command.
 
-## Link sharing flow (invite links)
+The device that converts records the claimant in its contact book and emits `Event::GranteeJoined { scope_root, name, fingerprint }`, a transient notice (ADR 0023 D7). The other owner devices see the new row in the record.
 
-Link sharing does not require the sharer to know the recipient's `publicKey` upfront. Instead, an ephemeral secp256k1 keypair acts as a cryptographic bridge.
+### Refusals
 
-### Security model
+These refusals keep the entry as refused. The sharing read counts them per link (`refusedClaims`), and they never block the pending entries:
 
-The ephemeral private key is placed in the URL hash fragment (`#/invite/:token?key=<hex>`). Hash fragments are never sent to the server by browsers, ensuring the server has no ability to decrypt the ciphertext stored in `share_invites.encrypted_key`. Source: `apps/web/src/services/invite.service.ts` → `buildInviteUrl`.
+| Check                         | Why                                                                                                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `link-admission-cap-reached`  | The link reached its admission cap. A revoke frees a slot.                                                                                                            |
+| `grant-set-full`              | The scope root holds 1024 rows (ADR 0026 E1).                                                                                                                         |
+| `contact-book-full`           | The contact book cannot record the claimant: the link's bound, the contact's scope bound or the book is full.                                                         |
+| `claim-recipient-key-changed` | A known identity claims under another encryption subkey, or the book binds the claimed subkey to another identity, now or before. The owner revokes and grants again. |
 
-### Invite creation
+One link can record at most `MAX_LINK_CONTACTS` (128) claimants in the owner's contact book, and the sharing read sets `contactBudgetFull` on a link at that bound. One leaked link therefore fills only its own part of the book, and it does not deny other links or a hand import. A fresh copy of a refused claim is pending again. `Command::DismissRefusedClaims { node }` clears the refused entries, and the cut of a link retires the claims it refused. The record keeps at most 64 refused entries, and `Event::RefusedClaimDropped` reports the oldest one when it goes.
 
-Source: `apps/web/src/services/invite.service.ts` → `createInviteLink`
+### Two owner devices
 
-1. Generate ephemeral secp256k1 keypair via `secp256k1.keygen()`.
-2. Unwrap the item's key using the sharer's `privateKey`.
-3. Wrap the plaintext key with the ephemeral `publicKey` via `wrapKey`.
-4. For folders: traverse children with `collectChildKeys`, wrapping each descendant key with the ephemeral `publicKey`.
-5. For files: wrap the parent `folderKey` as the root `encryptedKey` and the `fileKey` as a `'file'` child key.
-6. POST to `POST /shares/invites` (`CreateInviteDto`): server stores the invite with a 7-day expiry.
-7. Build URL: `${origin}${pathname}#/invite/${token}?key=${ephemeralPrivKeyHex}`.
-8. Zero the ephemeral private key from memory (`fill(0)`) in a `finally` block.
+The ack lock decides which device converts one claim. When two devices publish one scope root in one window, a publish that finds another record at its sequence or above is a lost race. The device that loses retries on a later pass, and signs above the sequence it observed.
 
-### Recipient claim flow
+## Grantee names and fingerprints
 
-Source: `apps/web/src/routes/InvitePage.tsx` and `apps/web/src/services/invite.service.ts` → `claimInvite`
+A grantee name is the owner-signed name on a grantee's ledger row. It is not an identity (ADR 0027 D3, D6).
 
-1. The recipient opens the URL; `InvitePage` reads the ephemeral private key from the hash fragment into a `ref` and immediately replaces the URL to remove the key from the address bar.
-2. `GET /invites/:token` (unauthenticated) checks whether the invite is active. The server returns only `{ status: 'active' }` or HTTP 404 — no file name or sharer identity is revealed before authentication (prevents token-existence oracle attacks).
-3. If valid, the page presents a login CTA. After the recipient authenticates, auto-claim begins.
-4. `GET /invites/:token/data` (authenticated) returns `encryptedKey`, `encryptedChildKeys`, `itemType`, `ipnsName`, `itemName`.
-5. Client unwraps `encryptedKey` with the ephemeral private key, then re-wraps with the recipient's own `publicKey`.
-6. All `encryptedChildKeys` are unwrapped and re-wrapped in the same pass.
-7. `POST /invites/:token/claim` sends the re-wrapped keys. The server atomically increments `claim_count` (`UPDATE ... WHERE status = 'active' AND claim_count < max_claims`) to enforce single-claim. A `Share` record and `ShareKey` rows are created inside a database transaction.
-8. On success, the recipient is redirected to `/shared`.
+- A claim suggests a name, and conversion copies it with the flag `claimant`.
+- `Command::Grant { grantee_name, .. }` names a contact-code grantee with the flag `owner` (D2).
+- `Command::RenameGrantee { node, recipient_identity_public_key, name }` re-signs the row with the flag `owner` and publishes the root once. The owner's edit wins.
+- A name is not empty, is at most 255 bytes, and has no control characters.
+- Every owner act binds to the identity key of the owner-signed row, never to a name.
+- Core's `identity_fingerprint` gives an 80-bit fingerprint of an identity key, in five groups of four hex digits. A host shows it next to the name (D7).
+- The grantee name cache (`GranteeNames`, kind `0x08`) keeps the last name this device saw for each identity. It pre-fills a name on another folder, it is never synced, and it is no authority (D4).
 
-The ephemeral private key is zeroed in a `finally` block after the claim call (`ephemeralPrivKey.fill(0)`).
+Every co-writer of the folder reads the grantee names, because the ledger is in the write-body (ADR 0027 consequence 2).
 
-### Public endpoint design
+## Permission changes
 
-`GET /invites/:token` intentionally leaks no information beyond whether the token is active. Expired, claimed, and revoked states all produce HTTP 404 from the server. Error reason discrimination (`'expired'` vs `'claimed'`) comes only from the HTTP 409 response of the claim endpoint, not the status check.
+`Command::ChangePermission { node, recipient_identity_public_key, permission }` changes a grantee's permission from the owner-attested row, so any owner device runs it (ADR 0025 D6).
 
----
+- An upgrade mints write material, after a write-scope cut when the folder is not a write scope yet.
+- A downgrade is a write revoke: a write rotation renames the subtree, and the grantee keeps a read row at the new name.
+- The engine refuses a link row, the owner, a stranger, a row that is not owner-attested, and a grantee that holds more than one attested row.
 
-## Permission levels
+The mint fixes the permission of a link. To change it, the owner revokes the link and mints a new one (ADR 0025 D7).
 
-| Permission | folderKey | encryptedIpnsKey | Can read files | Can write (add/modify) files |
-| ---------- | --------- | ---------------- | -------------- | ---------------------------- |
-| `'read'`   | Provided  | `NULL`           | Yes            | No                           |
-| `'write'`  | Provided  | Provided         | Yes            | Yes                          |
+## Revocation
 
-For write permission, the `encryptedIpnsKey` column stores the IPNS private key for the shared item's IPNS name, wrapped with the recipient's `publicKey`. This allows the recipient to publish updated metadata to the IPNS name.
+Revocation is discovered, not delivered. A fresh owner-signed record with no blob at a reader's tag is the revocation signal. The removed side keeps what it already saw, and loses everything new (ADR 0025 E2, ADR 0024 E5).
 
-The permission level can be changed by the sharer after the share is created via `PATCH /shares/:shareId/permission` (`UpdatePermissionDto`). Upgrading to write requires supplying `encryptedIpnsKey`; the API returns HTTP 400 if it is absent. Downgrading to read clears `encryptedIpnsKey` on the server.
+### One revoke is one cut
 
----
+Every row one revoke removes leaves in one cut set, with one cut-epoch step, one re-sign and one rotation (ADR 0025 D4). The read plane always rotates. The write plane rotates only when a cut row is a write row, so a link revoke runs no name wave. The rotation re-keys the scope root and every descendant scope root.
 
-## Revocation and lazy key rotation
+### Revoke a person
 
-### Revocation (soft-delete)
+`Command::Revoke { node, recipient_identity_public_key }` finds the grantee on the owner-attested ledger rows, so any owner device revokes, including one that never saw the person (ADR 0025 D3). A writer can break the owner signature of a row. The engine then finds that row through the committed `recipientEncPk`, when one contact on this device binds that key, now or before.
 
-`DELETE /shares/:shareId` sets `revoked_at` to the current timestamp. The share record remains in the database. The recipient continues to see their cached copy of the data until the sharer performs a key rotation.
+The cut also takes each committed link that the via-link reference of an attested row names (ADR 0024 D3). The engine runs a conversion pass first. When a link admitted the grantee, a failed pass refuses the revoke, with `mailbox-unavailable` when the engine cannot poll the inbox. A pending conversion through a link that admitted the grantee refuses it with `link-has-a-pending-conversion`. The revoke of a direct grantee does not wait for a conversion.
 
-### Lazy rotation protocol
+### Revoke a link
 
-Key rotation is deferred to the sharer's next folder modification. Before any write to a shared folder, the client checks `GET /shares/pending-rotations`. If any revoked shares exist for that folder, `executeLazyRotation` (`apps/web/src/services/share.service.ts`) runs:
+`Command::RevokeInviteLink { node, link_tag, remove_grantees }` cuts the link row, and every link holder of that link loses access at once (ADR 0025 D1).
 
-1. Generate a new random 32-byte `folderKey`.
-2. Fetch the revoked share IDs for the folder and the currently active shares.
-3. For each **remaining** (non-revoked) share recipient, re-wrap the new `folderKey` with their `publicKey` via `wrapKey` and call `PATCH /shares/:shareId/encrypted-key`.
-4. If any re-wrap fails, abort the rotation (throw) to prevent inconsistent state — the new `folderKey` is zeroed.
-5. Hard-delete revoked share records via `DELETE /shares/:shareId/complete-rotation`.
-6. Invalidate the sent shares cache so the next check fetches fresh state.
+- `link_tag` names the link. With no tag, the engine cuts the only link, and refuses with `link-ambiguous` when the folder carries more than one.
+- With `remove_grantees`, the same cut also takes every committed personal row whose via-link reference names the link. It also takes a row with no attested label whose committed `recipientEncPk` names a contact that the link admitted, before and after a write wave. The contact book keys that link by its ephemeral identity key, which a wave does not move. The grantees who joined through the link keep access otherwise.
+- The engine runs a conversion pass first, and never cuts a link while a conversion entry for it is pending (ADR 0023 D4).
 
-The actual folder metadata re-encryption (decrypt with old key, re-encrypt with new key, publish IPNS) is performed by the caller (`folder.service.ts`) which holds the IPNS private key.
+### The revocation floor and the D3 clear
 
-### Complete rotation API
+A cut records a per-recipient revocation floor on this device, so a later owner re-key withholds that recipient's blob. The cut also records the cut epoch of the set that removed the recipient, after the publish lands.
 
-`DELETE /shares/:shareId/complete-rotation` hard-deletes a revoked share row. It requires `revokedAt` to be non-null (HTTP 409 if the share has not been revoked first). Only the sharer can call this endpoint.
+When another owner device commits the recipient again, an owner-signed commitment at a cut epoch not below the recorded one clears this device's cut for that recipient (ADR 0025 D3). The clear raises a separate floor, so the grant floor does not change. A set below the recorded cut epoch clears nothing.
 
----
+### The expired-link sweep
 
-## Recipient-side actions
+The owner tick runs the sweep on `SyncTimingProfile::link_sweep_cadence` (600 s in production), after the conversion pass and under the same lock (ADR 0025 D2).
 
-### Hide a share
+- It walks the direct-child-scope index from the vault root, with one resolve and one unseal per scope root. A scope root counts as visited only after the gate passes it.
+- It cuts every link entry whose deadline is `SyncTimingProfile::link_sweep_grace` (1200 s in production) or more before the injected `now`, less every link with a pending conversion entry. The grace lets an owner device that acked a claim convert it first.
+- Each folder takes one cut for all its expired links. The engine resolves the scope root again right before it signs, so a link that another owner device already cut costs nothing.
+- One sweep lands at most eight cuts, deepest first. A failed cut does not count. When the sweep stops at the cap, the next tick sweeps again.
 
-Recipients can dismiss a share from their view without revoking it: `PATCH /shares/:shareId/hide` sets `hidden_by_recipient = true`. Hidden shares are excluded from `GET /shares/received`. Only the recipient can hide a share (HTTP 403 if the caller is the sharer). There is no unhide endpoint — the share remains accessible via direct API call with the `shareId`.
+A link holder's own engine stops at the deadline before the sweep runs (ADR 0024 D5). A hostile holder can read past the deadline until the sweep cuts the link (ADR 0025 E1).
 
----
+### What the removed side sees
 
-## API surface
+The received-share refresh reports one class per bookmark (ADR 0025 D5):
 
-All sharing endpoints require JWT authentication unless noted.
+| Class                                 | Host message          |
+| ------------------------------------- | --------------------- |
+| `revocation-signal` on a personal tag | The owner removed you |
+| `expired`                             | The link expired      |
+| `revocation-signal` with `via_link`   | The link was revoked  |
 
-### `SharesController` — `/shares`
+`unresolvable` and `epoch-lag` are not revocations.
 
-Source: `apps/api/src/shares/shares.controller.ts`
+## Command surface
 
-| Method   | Path                                 | Description                                          |
-| -------- | ------------------------------------ | ---------------------------------------------------- |
-| `POST`   | `/shares`                            | Create a user-to-user share                          |
-| `GET`    | `/shares/received`                   | Paginated list of active, non-hidden received shares |
-| `GET`    | `/shares/sent`                       | Paginated list of active sent shares                 |
-| `GET`    | `/shares/lookup?publicKey=`          | Verify a user exists by their `publicKey`            |
-| `GET`    | `/shares/pending-rotations`          | Revoked shares awaiting key rotation (sharer only)   |
-| `GET`    | `/shares/:shareId/keys`              | Child key list (accessible by sharer or recipient)   |
-| `POST`   | `/shares/:shareId/keys`              | Add child keys to an existing share                  |
-| `PATCH`  | `/shares/:shareId/permission`        | Change permission level (sharer only)                |
-| `DELETE` | `/shares/:shareId`                   | Soft-delete (revoke) a share (sharer only)           |
-| `PATCH`  | `/shares/:shareId/hide`              | Hide a share from recipient's view (recipient only)  |
-| `PATCH`  | `/shares/:shareId/encrypted-key`     | Update wrapped key after lazy rotation (sharer only) |
-| `DELETE` | `/shares/:shareId/complete-rotation` | Hard-delete after key rotation (sharer only)         |
+| Command or read          | Who         | Decision        |
+| ------------------------ | ----------- | --------------- |
+| `CreateInviteLink`       | owner       | ADR 0023, 0024  |
+| `preview_invite_link`    | link holder | ADR 0028        |
+| `ClaimInviteLink`        | link holder | ADR 0023, 0024  |
+| `ConvertInviteClaims`    | owner       | ADR 0023 D4     |
+| `DismissRefusedClaims`   | owner       | build detail    |
+| `ImportContact`, `Grant` | owner       | ADR 0026, 0027  |
+| `ChangePermission`       | owner       | ADR 0025 D6     |
+| `RenameGrantee`          | owner       | ADR 0027 D3     |
+| `Revoke`                 | owner       | ADR 0025 D3, D4 |
+| `RevokeInviteLink`       | owner       | ADR 0025 D1, D4 |
 
-Pagination query parameters: `limit` (max 100) and `offset`.
+## Known windows
 
-### `ShareInvitesController` — `/shares/invites`
+These gaps are in the code on `main`.
 
-Source: `apps/api/src/shares/share-invites.controller.ts`
+- Only a command pass (`ConvertInviteClaims` or `RevokeInviteLink`) repairs a parent index that a failed re-point left stale, because the tick converts only at scope roots its own walk proved.
+- A downgrade over a stalled write scope runs two name waves: the owed wave, then the cut.
+- When the contact book of one device binds one encryption subkey to two contacts, now or before, a person revoke on that device cannot reach an unattested row under that subkey. When the person has no other row on the scope, the revoke answers `rot-revoke-not-granted`. No write path binds such a pair now. Only a book that an earlier build wrote can hold one.
+- A cut floor has no recorded cut epoch when the publish lands but the floor raise or the cut-epoch record after it fails. A re-commit never clears that floor on that device. The device keeps the recipient withheld until it grants the recipient again.
 
-Authenticated management of invite links owned by the current user.
+## Accepted residuals
 
-| Method   | Path                        | Description                     |
-| -------- | --------------------------- | ------------------------------- |
-| `POST`   | `/shares/invites`           | Create an invite link           |
-| `GET`    | `/shares/invites?ipnsName=` | List active invites for an item |
-| `DELETE` | `/shares/invites/:inviteId` | Revoke an active invite link    |
-
-### `InvitesController` — `/invites`
-
-Source: `apps/api/src/shares/invites.controller.ts`
-
-Public-facing endpoints for the invite claim flow. Individual endpoints opt in to authentication.
-
-| Method | Path                    | Auth | Description                                               |
-| ------ | ----------------------- | ---- | --------------------------------------------------------- |
-| `GET`  | `/invites/:token`       | None | Status check — returns `{ status: 'active' }` or HTTP 404 |
-| `GET`  | `/invites/:token/data`  | JWT  | Full invite data for the claim flow                       |
-| `POST` | `/invites/:token/claim` | JWT  | Claim the invite with re-wrapped keys                     |
-
----
-
-## Web UI entry points
-
-| Component           | Path                                                         | Purpose                                                     |
-| ------------------- | ------------------------------------------------------------ | ----------------------------------------------------------- |
-| `ShareDialog`       | `apps/web/src/components/file-browser/ShareDialog.tsx`       | Direct share creation UI (user lookup + key wrapping)       |
-| `InviteLinkTab`     | `apps/web/src/components/file-browser/InviteLinkTab.tsx`     | Invite link creation and management within the share dialog |
-| `SharedFileBrowser` | `apps/web/src/components/file-browser/SharedFileBrowser.tsx` | "Shared with me" view at `/shared` route                    |
-| `InvitePage`        | `apps/web/src/routes/InvitePage.tsx`                         | Invite landing page at `#/invite/:token`                    |
-| `SharedPage`        | `apps/web/src/routes/SharedPage.tsx`                         | Route wrapper for `SharedFileBrowser`                       |
-
----
-
-## Database migrations
-
-| Migration                  | Timestamp       | Description                                                                         |
-| -------------------------- | --------------- | ----------------------------------------------------------------------------------- |
-| `AddSharesTables`          | `1740250000000` | Create `shares` and `share_keys` tables                                             |
-| `SharesPartialUniqueIndex` | `1740300000000` | Replace absolute unique index with partial index `WHERE revoked_at IS NULL`         |
-| `AddShareInvites`          | `1740400000000` | Create `share_invites` table                                                        |
-| `AddWritableShares`        | `1743000000000` | Add `permission` and `encrypted_ipns_key` columns to `shares`                       |
-| `WidenShareKeyType`        | `1743100000000` | Widen `share_keys.key_type` from `varchar(10)` to `varchar(12)` for `'folder-ipns'` |
+[`blueprint/engine.md`](../blueprint/engine.md) "Sharing residuals" lists the residuals of ADRs 0023 to 0028 once.

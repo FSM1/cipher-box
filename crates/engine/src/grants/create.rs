@@ -1,38 +1,22 @@
-//! Owner-side grant creation (blueprint/engine.md "Grants and ledger: Grant
-//! creation").
+//! A fresh grant mint: the owner-side grant on a folder that is not a scope
+//! root yet. blueprint/engine.md "Grants and ledger: Grant creation" gives the
+//! mint sequence (ADR 0026). A grant on a scope root that stands appends a row
+//! instead ([`super::append`]).
 //!
-//! Mints the owner-only sharing path in the sequence the blueprint fixes:
-//! converge the subtree, mint the grantee scope at read epoch 1, publish
-//! grantee-first, re-seal the granted folder's interior nodes into that scope,
-//! re-key the reparented descendants under the fresh derivation, update the
-//! parent index, and — for a write grant, after the name wave — post the sealed
-//! share pointer ([`post_share_pointer`]). Convergence is the load-bearing
-//! correctness rule — a grant over a subtree that cannot be proven
-//! epoch-converged is refused **fail-closed**, so a new grantee can never regress
-//! through an ancestor scope's history (CONTEXT.md "Epoch-converged").
+//! A subtree that cannot be proven epoch-converged is refused **fail-closed**,
+//! so a new grantee never regresses through an ancestor scope's history
+//! (`CONTEXT.md` "Epoch-converged"). An invite link mint on such a folder runs
+//! the same [`mint_grantee_scope`] ([`super::invite_mint`]).
 //!
-//! A **write** grant owes one further step this module does not run: the name
-//! wave that moves the minted scope off the names the scope it left derives.
-//! [`GranteeScopePlan::write_cut`] carries the fresh seed the mint seals under;
-//! the wave itself is
-//! [`rotate_scope_write`](crate::rotation::rotate_scope_write), driven by the
-//! caller over the minted root. The pointer post is split out of
-//! [`create_grant`] so the caller runs it past that wave: a pointer naming the
-//! scope root the wave moves off would send the grantee to a name their own
-//! seed does not derive.
+//! A **write** grant owes a name wave over the minted scope
+//! ([`rotate_scope_write`](crate::rotation::rotate_scope_write)), which the
+//! caller runs over the minted root. [`post_share_pointer`] is split out of
+//! [`create_grant`] so the caller posts the pointer after that wave: a pointer
+//! to the root the wave moves off carries a name the grantee's seed does not
+//! derive.
 //!
-//! # Simulation boundary
-//!
-//! Deterministic-simulation slice: entropy is the injected [`Entropy`] seam and
-//! the read/floor/publish/mailbox effects are faked in tests. Every seam this
-//! composes over has a production implementation in [`crate::net::rotation`].
-//!
-//! # Not implemented here
-//!
-//! - **Invites**: ephemeral-key blobs, bearer write-link flagging, claim
-//!   conversion.
-//!
-//! This module composes existing machinery only and holds no crypto of its own.
+//! Entropy is the injected [`Entropy`] seam. Every seam this composes over has
+//! a production implementation in [`crate::net::rotation`].
 
 use cipherbox_core::error::CodecError;
 use cipherbox_core::kdf;
