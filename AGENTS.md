@@ -158,6 +158,29 @@ Run each on the PR's own diff (`git diff main...HEAD`) and fold real findings ba
 
 An ADR is a `docs:` PR that adds one file to [`decisions/`](decisions/README.md) with the status Proposed. Open it as a draft, with `@coderabbitai ignore` in the body. The owner accepts it by merging it with the status changed to "Accepted on <date>". A blueprint or `CONTEXT.md` reword that the ADR's Consequences list goes in the same PR or the next one. An ADR that amends an older ADR adds one "Amended by ADR 00NN Dk on <date>: …" sentence at the amended item in the older file, in the same PR.
 
+Each decision item must pass all three hurdles. If no item passes all three, do not write the ADR.
+
+1. Hard to reverse. A later change has a meaningful cost: a wire format, a KDF edge, a trust boundary, a durable storage shape, a protocol, or a term that the corpus uses.
+2. Not clear without context. A reader of the code asks why.
+3. The result of a real trade-off. Genuine alternatives existed, and the ADR picked one for stated reasons.
+
+Some items are not decisions. The bug before a fix is not an alternative. A test duty, an accepted residual, a deferral, a schedule, a numeric default, or a "nothing changes" note is not a decision. Put it in Consequences or in the blueprint, in one line.
+
+One ADR records one decision. A second decision is a second ADR or an "Amended by" sentence. Use these sections:
+
+- The header list: Status, Date, Relates to, Implemented by, Amends.
+- Context: the reason, in one short paragraph at most.
+- Decision: the items, numbered D1, D2, and so on, so that other text can cite them.
+- Alternatives considered: real options only.
+- Consequences: one line for each document that changes.
+- Residuals: open owner questions only.
+
+Do not add a Gate section. `blueprint/testing.md` names the tests that prove an ADR. Do not cite a file and a line. Cite a module, a function, or a blueprint section. Keep an ADR under 120 lines.
+
+A retroactive ADR records a decision after the code shipped. It meets the same bar. If the blueprint already carries a rule, cite the blueprint and do not write an item for it.
+
+When you remove an item from an accepted ADR, do not reuse its number. Replace the item with one line: "Items Dx and Dy moved to `blueprint/<file>.md` "<section>" on <date>". Citations such as `ADR 0033 D2` then still resolve.
+
 ### Releases & Versioning
 
 See the `releases` skill (`.claude/skills/releases/SKILL.md`) for the v2 release scheme, version surfaces, staging tag pipeline, and the v1 freeze. Normative source: `blueprint/deploy.md`.

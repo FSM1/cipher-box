@@ -111,10 +111,9 @@ landed with FSM1/cipher-box#1212; this ADR records it.
 **D3 — The focus-window tick has no jitter.** The tick loop sleeps exactly the poll cadence after
 each pass and wakes early only on a manual refresh. The production cadence is 30 s. The
 `Scheduler` seam contract is timers, background task execution and wall clock; it has no jitter
-term and takes no entropy. No owner decision exists for this rule. The rule landed with
+term and takes no entropy. No earlier owner decision existed for this rule. The rule landed with
 FSM1/cipher-box#1212, which removed a jitter helper that no live path used and left a return of
-jitter to a later measured-constant change. This ADR proposes the rule to the owner as a new
-decision; it is not a record of an earlier one.
+jitter to a later measured-constant change. The owner accepted the rule on 2026-09-26.
 
 **D4 — `Mailbox` is not a host seam; the engine implements it over its own API client.** Every API
 mailbox route is JWT-guarded, and the access bearer never leaves the engine. The engine therefore
@@ -183,9 +182,8 @@ figure is not a measurement. On web, an estimate without both quota and usage, a
 is not a whole, in-range byte count, are unmeasured. On desktop, a path the host cannot measure
 is unmeasured. The host climbs to a parent directory only past a directory that does not exist
 yet, never past a refusal. A measured zero stays measured and reads as a full device. Metadata ops
-still queue unbounded (`#33` D6). No owner decision exists for this rule. The rule landed with
-FSM1/cipher-box#878. This ADR proposes the rule to the owner as a new decision; it is not a record
-of an earlier one.
+still queue unbounded (`#33` D6). No earlier owner decision existed for this rule. The rule landed
+with FSM1/cipher-box#878. The owner accepted the rule on 2026-09-26.
 
 ## Rationale
 

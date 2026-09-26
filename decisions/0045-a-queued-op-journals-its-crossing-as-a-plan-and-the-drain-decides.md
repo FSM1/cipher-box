@@ -159,8 +159,8 @@ The blueprint states a different set today: "Every op but a delete authors its t
 record, so the overlay stamps `mtime = authored_at`" (`blueprint/engine.md` "Sync core", the
 state-law bullet). That target-only form first appeared in the body of FSM1/cipher-box#878,
 which an agent wrote, and no owner decision stands behind it. It contradicts the resolution of
-FSM1/cipher-box#830. This ADR proposes the FSM1/cipher-box#830 set as the rule, for the owner
-to accept. The code does not meet it yet (E3).
+FSM1/cipher-box#830. The owner accepted the FSM1/cipher-box#830 set as the rule on 2026-09-26.
+The code does not meet it yet (E3).
 
 **D6 — A `move` is a relink and a rename in one entry, and one kernel rename is one
 command.** The intent op list of `#33` D5 gains `move`. A `move` carries the relink, the rename
@@ -175,10 +175,10 @@ relocation journals as one entry. A replace is never observable half-done.
 
 The single `move` landed with FSM1/cipher-box#897. The two-leg plan landed with
 FSM1/cipher-box#1765, which an agent wrote and which says that no blueprint sentence changes.
-No owner decision exists for either. The blueprint says "one POSIX rename is exactly one
+No earlier owner decision existed for either. The blueprint says "one POSIX rename is exactly one
 `move`" (`blueprint/engine.md` "Ops") and "exactly one facade intent op" (`blueprint/desktop.md`
 "Reads, writes, and the never-block law"), which the two-leg plan does not meet. The owner
-accepts the rule above with this ADR.
+accepted the rule above on 2026-09-26.
 
 **D7 — A conditional edit anchors on the head version and dead-letters on a mismatch.** The
 intent op list of `#33` D5 gains an edit-vs-edit rule. An edit names the head version it was

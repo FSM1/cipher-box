@@ -334,7 +334,8 @@ One `nightly.yml` (cron) owns the scheduled slots testing.md defined
   suites, and passes `force-all` because a night with no push has no
   change filter to apply. With `retries: 0` as policy, this distinguishes
   "main broke" (revert) from "environment drifted" (fix the harness)
-  before it blocks a release.
+  before it blocks a release. The full matrix runs every night: no cost
+  trim, no weeknights-only run, and no rotating operating system.
 - **Cloudflare Range Watch** (ADR 0035 D9): the trusted-proxy snapshot
   diffed against Cloudflare's published list, so the mirror above cannot go
   stale unseen.

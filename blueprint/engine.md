@@ -562,7 +562,9 @@ owner has binned.
   under its own scope's seed, which no grantee of the source scope holds.
 - **A re-key that does not land leaves the node linked.** The unlink publishes
   after the re-key, so a failure is retried whole rather than binning a node the
-  cut never reached.
+  cut never reached. The node is then sealed under the bin-held key and still
+  named by its parent for one pass on the authoring device, so a refresh in that
+  window reports an unseal rejection.
 - **Every soft delete re-keys, shared scope or not.** The drain carries the
   scope's read and write seeds, never its grant ledger, so it cannot tell a
   scope with live or historical grants from one without. A wrong "unshared"
@@ -1459,7 +1461,11 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   version that falls outside the rule loses that reference, and what it owes the
   registry is journaled to the retire ledger before the shortened history
   publishes. A write-rotation name wave registers every version's root and
-  leaves at the node's new name before the record moves (ADR 0047).
+  leaves at the node's new name before the record moves (ADR 0047). A version
+  whose root the name wave cannot fetch carries its root alone. Its leaves lose
+  their reference edges when the old name retires, and stay pinned only because
+  the registry deletes a pin row only for a CID that the batch names as a
+  target.
 - **Shortening history acts only on a member choice.** It retires bytes and
   cannot be undone, so a device whose settings load carried no member choice
   keeps every version rather than applying the documented default — the same

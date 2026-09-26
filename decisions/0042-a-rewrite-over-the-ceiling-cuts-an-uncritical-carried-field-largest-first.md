@@ -137,7 +137,7 @@ a hostile publisher's marked padding: both arrive as an unknown key in a record 
 adoption gate, and the gate checks no field that it cannot type. D5 bounds what this costs. This
 is the behaviour that ships today (`is_uncuttable` in `crates/core/src/seal/envelope.rs` has no
 adopted state). The blueprint records the question as open and requires an answer before a `!` field
-ships. This ADR proposes this answer for the owner to accept; no earlier decision records it.
+ships. The owner accepted this answer on 2026-09-26; no earlier decision records it.
 
 ## Trust argument
 

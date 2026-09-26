@@ -3,8 +3,8 @@
 - **Status:** Accepted on 2026-09-26 — retroactive for D2 to D8, which shipped in FSM1/cipher-box#1177,
   FSM1/cipher-box#1200, FSM1/cipher-box#1285, FSM1/cipher-box#1307, FSM1/cipher-box#1542 and
   FSM1/cipher-box#1750; the blueprint carries D5 to D8 and a wider wording of D2. D1 is a new
-  decision for the owner to accept: it extends D2 to D4 to the write-wave root arm, where no code
-  and no blueprint text reads the cut-epoch floor today; the `blueprint/*.md` and
+  decision, accepted on 2026-09-26: it extends D2 to D4 to the write-wave root arm, where no code
+  and no blueprint text reads the cut-epoch floor today (E1, FSM1/cipher-box#2016); the `blueprint/*.md` and
   `CONTEXT.md` rewording in FSM1/cipher-box follows
 - **Date:** 2026-09-26
 - **Relates to:**
@@ -95,9 +95,9 @@ the write-epoch floor (the `ownerWriteBlob` AAD), and, for a record that seals a
 commitment, the cut-epoch floor (stage 2). D2 to D4 are the instances in the code today; they
 landed across FSM1/cipher-box#1177, FSM1/cipher-box#1285, FSM1/cipher-box#1307 and
 FSM1/cipher-box#1750, and this ADR records them. D1 extends them to every publish that seals a
-grant-set commitment, the write-wave root arm included. That extension is a new decision, and
-the owner must accept it: the root arm reads no cut-epoch floor today (E1), and the blueprint
-states no such rule.
+grant-set commitment, the write-wave root arm included. The owner accepted that extension on
+2026-09-26. The root arm reads no cut-epoch floor today (E1), and the blueprint does not yet
+state the rule.
 
 **D2 — The name wave re-reads the read-epoch floor at every republish, and the write-epoch floor at
 the root.** Every republish, interior and root, re-reads the scope's read-epoch floor and refuses
