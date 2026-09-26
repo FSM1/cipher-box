@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8706d5d7686e",
+  "strategy": "manual-commit",
+  "branch": "refactor/2040-tick-pass-move",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/engine/src/sync/pass.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/87/06d5d7686e/0/metadata.json",
+      "transcript": "/87/06d5d7686e/0/full.jsonl",
+      "compact_transcript": "/87/06d5d7686e/0/transcript.jsonl",
+      "content_hash": "/87/06d5d7686e/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
