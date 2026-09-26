@@ -744,6 +744,8 @@ impl fmt::Debug for PreviewEntry {
 /// What the invite page shows before the join (ADR 0028 D2, D5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvitePreview {
+    /// The folder the join bookmarks, so a host can open it once joined.
+    pub scope: NodeId,
     /// The names, only when the owner signature over them verifies. A link
     /// with a bad signature shows none, and still works.
     pub names: Option<PreviewNames>,
@@ -11571,6 +11573,7 @@ where {
             PreviewRead::Unavailable => (LinkPreviewState::Unresolvable, None, Vec::new()),
         };
         Ok(InvitePreview {
+            scope: NodeId(share.scope_id),
             names,
             permission: permission.map(Permission::from),
             state,

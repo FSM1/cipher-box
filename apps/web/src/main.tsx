@@ -12,6 +12,7 @@ import './styles/dialogs.css';
 import './styles/context-menu.css';
 import './styles/settings.css';
 import './styles/shared.css';
+import './styles/invite.css';
 import './styles/devices.css';
 import './styles/responsive.css';
 

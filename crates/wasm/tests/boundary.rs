@@ -312,6 +312,7 @@ fn invite_preview_getters_cross_with_boundary_shapes() {
         Reflect::get(target, &JsValue::from_str(key)).expect("getter is readable")
     };
     let verified: JsValue = InvitePreview::from_facade(facade::InvitePreview {
+        scope: facade::NodeId([7u8; 16]),
         names: Some(facade::PreviewNames {
             owner_name: "Ada".into(),
             folder_name: "trips".into(),
@@ -338,6 +339,12 @@ fn invite_preview_getters_cross_with_boundary_shapes() {
         get(&verified, "permission"),
         JsValue::from(Permission::Write)
     );
+    assert_eq!(
+        get(&verified, "scope")
+            .unchecked_into::<Uint8Array>()
+            .to_vec(),
+        vec![7u8; 16]
+    );
     assert_eq!(get(&verified, "state").as_string().as_deref(), Some("live"));
     assert_eq!(get(&verified, "joined").as_bool(), Some(true));
     let listing = get(&verified, "listing");
@@ -356,6 +363,7 @@ fn invite_preview_getters_cross_with_boundary_shapes() {
     }
 
     let unverified: JsValue = InvitePreview::from_facade(facade::InvitePreview {
+        scope: facade::NodeId([8u8; 16]),
         names: None,
         permission: None,
         state: facade::LinkPreviewState::Unresolvable,

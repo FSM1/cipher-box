@@ -89,6 +89,7 @@ async function permissiveHost(): Promise<{ host: EngineHost; calls: unknown[][] 
       beginWrite = record('beginWrite');
       snapshot = record('snapshot', emptyView);
       previewInviteLink = record('previewInviteLink', {
+        scope: new Uint8Array([9]),
         state: 'revoked',
         joined: false,
         listing: [],
@@ -343,6 +344,7 @@ describe('EngineHost request fields', () => {
     const { host, calls } = await permissiveHost();
 
     await expect(host.read({ kind: 'invitePreview', fragment: 'abc-_' })).resolves.toEqual({
+      scope: new Uint8Array([9]),
       names: null,
       permission: null,
       state: 'revoked',

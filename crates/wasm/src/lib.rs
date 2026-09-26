@@ -1334,6 +1334,12 @@ pub struct InvitePreview {
 
 #[wasm_bindgen]
 impl InvitePreview {
+    /// The 16 raw bytes of the folder the join bookmarks.
+    #[wasm_bindgen(getter)]
+    pub fn scope(&self) -> Vec<u8> {
+        self.inner.scope.0.to_vec()
+    }
+
     /// The owner's name, or `undefined` when the owner signature over the
     /// names does not verify.
     #[wasm_bindgen(getter, js_name = ownerName)]

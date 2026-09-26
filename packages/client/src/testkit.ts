@@ -561,6 +561,7 @@ export class FakeEngineTransport implements EngineTransport {
   respondReceivedShares: () => Promise<ReceivedShareDescriptor[]> = () => Promise.resolve([]);
   respondInvitePreview: () => Promise<InvitePreviewDescriptor> = () =>
     Promise.resolve({
+      scope: new Uint8Array(16),
       names: null,
       permission: null,
       state: 'unresolvable',

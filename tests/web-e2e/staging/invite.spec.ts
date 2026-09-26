@@ -38,22 +38,18 @@ test('a minted link is claimed by a second identity and converted to a grant', a
   const invite = new InvitePage(claimant);
   await invite.open(link);
   await invite.expectState('waiting', 180_000);
-  await signInWithWallet(claimant, invite.confirm);
-  await invite.expectState('ready');
+  await signInWithWallet(claimant, invite.joinButton);
+  await invite.expectState('joinable');
   expect(new URL(claimant.url()).hash).not.toBe('');
   await expect(invite.account).not.toBeEmpty();
-  await invite.claim();
-  await invite.expectState('claimed', 180_000);
-  // The claim takes the capability out of the address, so a reload cannot spend
+  await expect(invite.headline).toHaveText(`${FOLDER} was shared with you`);
+  await invite.join();
+  await invite.expectFolderOpened(180_000);
+  // The join takes the capability out of the address, so a reload cannot spend
   // it a second time.
   expect(new URL(claimant.url()).hash).toBe('');
-  await claimant.getByRole('link', { name: 'go to your files' }).click();
 
-  // A claim is a standing request; the grant is what the owner converts it to.
-  await share.open(FOLDER);
-  await expect(share.convertClaimsButton).toBeEnabled({ timeout: 180_000 });
-  await share.convertClaimsButton.click();
-  await expect(share.grantRows).toHaveCount(1, { timeout: 180_000 });
+  await share.openUntilGranted(FOLDER, 1, 360_000);
   await expect(share.permission).toHaveText('read');
   await share.close();
 

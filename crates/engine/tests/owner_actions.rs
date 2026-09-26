@@ -8044,8 +8044,8 @@ fn a_preview_whose_pointer_does_not_answer_is_unresolvable() {
     assert!(preview.listing.is_empty());
 }
 
-/// ADR 0028 D5: a link this account joined previews as joined, and the root
-/// its pass adopted still lists.
+/// ADR 0028 D5: a link this account joined previews as joined, names the
+/// folder the join bookmarked, and the root its pass adopted still lists.
 #[test]
 fn a_preview_of_a_joined_link_reads_the_root_the_join_adopted() {
     let mut fx = GrantScenario::new();
@@ -8066,6 +8066,9 @@ fn a_preview_of_a_joined_link_reads_the_root_the_join_adopted() {
 
     let preview = preview(&holder, &fragment).expect("the preview reads");
     assert!(preview.joined);
+    assert_eq!(preview.scope, fx.folder);
+    let received = block_on(holder.received_shares()).expect("the list reads");
+    assert!(received.iter().any(|share| share.scope == preview.scope));
     assert_eq!(preview.state, LinkPreviewState::Live);
     assert_eq!(preview.listing.len(), 1);
     assert!(

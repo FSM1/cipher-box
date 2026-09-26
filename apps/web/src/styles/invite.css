@@ -1,0 +1,101 @@
+/* ==========================================================================
+   Invite page - the preview card before join
+   ========================================================================== */
+
+.invite-panel {
+  width: 100%;
+  max-width: 520px;
+  align-items: stretch;
+  gap: var(--spacing-sm);
+  text-align: left;
+}
+
+.invite-panel h1,
+.invite-panel .tagline,
+.invite-panel .login-description {
+  align-self: center;
+  text-align: center;
+}
+
+.invite-dim {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.invite-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.invite-headline {
+  font-family: var(--font-family-mono);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.invite-badge {
+  padding: 0 6px;
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-primary);
+  border: var(--border-thickness) solid var(--color-green-primary);
+}
+
+.invite-badge--write {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+}
+
+.invite-listing {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.invite-listing li {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: var(--spacing-xs);
+  padding: 6px var(--spacing-xs);
+  font-size: var(--font-size-sm);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.invite-listing li:last-child {
+  border-bottom: none;
+}
+
+.invite-kind {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.invite-entry-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+
+.invite-join {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  padding-top: var(--spacing-sm);
+  border-top: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.invite-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}

@@ -122,13 +122,6 @@ export class WebHost {
     return this.vault.refresh();
   }
 
-  /** Leaves the claim route for the vault browser the claimed copy offers. */
-  async leaveClaim(): Promise<void> {
-    await this.page.getByRole('link', { name: 'go to your files' }).click();
-    await this.page.waitForURL('**/files');
-    await expect(this.files.browser).toBeVisible();
-  }
-
   /**
    * Returns to the vault browser through the sidebar. The focus window drives
    * the sync pass, and the vault browser is the route that focuses the root; a
