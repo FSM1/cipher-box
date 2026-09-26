@@ -95,7 +95,8 @@ helper is `assert_within_bound` in `crates/core/src/seal/body.rs`. The rule land
 authored anomaly. The reason is the gate's stage-3 work, which is `pseudonyms + structures`
 (`blueprint/engine.md` "One section, one signer"): an unbounded collection on either side of that
 sum lets one record set another reader's CPU budget. `historyLinks` is ordered oldest epoch
-first. The rule landed with FSM1/cipher-box#1049; this ADR records it.
+first. The rule landed with FSM1/cipher-box#1049; this ADR records it. Amended by ADR 0052 D5 on
+2026-09-26: the bound's reason is stated in `blueprint/core.md` "Grant section".
 
 **D3 — The commitment's entries share the grant-blob bound.** The grant-set commitment refuses
 more than 1024 `entries` (`MAX_GRANT_BLOBS`) at decode, at encode and at `sign_grant_set`. The two

@@ -184,7 +184,8 @@ committed write-capable pseudonym, not only the owner's. The produce side runs t
 release-active in `crates/engine/src/net/author.rs::check_scope_root`, so this build never signs a
 section its own gate refuses. A future shape that needs per-structure signers needs a
 per-structure signer index on the wire: a format change, not a relaxation of this rule. The rule
-landed with FSM1/cipher-box#1120; this ADR records it.
+landed with FSM1/cipher-box#1120; this ADR records it. Amended by ADR 0052 D1 on 2026-09-26: the
+predicate lives in `crates/core`, and `check_scope_root` calls the core function.
 
 **D9 — The ascent link's structure signature covers its public half.** For every seed-bearing
 structure except the ascent link, the signed bytes are the structure's ciphertext. The ascent link
