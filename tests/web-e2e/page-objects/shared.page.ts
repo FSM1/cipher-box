@@ -4,7 +4,9 @@ import { expect, type Locator, type Page } from '@playwright/test';
  * The `/shared` route: the shares this vault accepted and the engine's standing
  * on each.
  *
- * A `shared-row` carries the scope node id on `data-scope`. Its `shared-standing`
+ * A `shared-row` carries the scope node id on `data-scope`, and `data-via-link`
+ * is `true` where the vault holds the share through a link's keys rather than a
+ * personal grant. Its `shared-standing`
  * carries the engine's own class name on `data-resolution` — `granted`,
  * `revocation-signal`, `unresolvable`, `epoch-lag`, or `none` where no pass has
  * answered — and the rendered weight on `data-tone`. Assert those, not the copy.

@@ -13,6 +13,8 @@ interface Row {
   sharer: string;
   displayName: string;
   permission: string;
+  /** Held through a link's keys rather than a personal grant. */
+  viaLink: boolean;
   /** The engine's own class name, or `none` where no pass has answered. */
   resolution: string;
   standing: ReceivedShareStanding;
@@ -34,6 +36,7 @@ export function SharedPage() {
         sharer: toHex(share.sharerIdentityPublicKey),
         displayName: shareName(share),
         permission: share.permission,
+        viaLink: share.viaLink,
         resolution: share.resolution ?? 'none',
         standing: shareStanding(share),
       })) ?? null,
@@ -72,6 +75,7 @@ export function SharedPage() {
                 className="sharing-row sharing-row--shared"
                 data-testid="shared-row"
                 data-scope={row.scope}
+                data-via-link={row.viaLink}
               >
                 <span className="shared-name" data-testid="shared-name">
                   {row.displayName}

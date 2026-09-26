@@ -87,8 +87,8 @@ use crate::grants::{
     ContactStoreError, ConvertedClaim, CreateGrantError, DEFAULT_ADMISSION_CAP,
     DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim,
     InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan, LinkHold,
-    LinkSource, LinkSources, LinkTerms, MintedInviteLink, OwnerAuthority, OwnerGrantKeys,
-    ParentScopePlan, PublishedGrantBlob, ReceivedShare, ReceivedShareStore,
+    LinkSource, LinkSources, LinkTerms, MAX_ADMISSION_CAP, MintedInviteLink, OwnerAuthority,
+    OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShare, ReceivedShareStore,
     ReceivedShareStoreError, ResolutionClass, RevokedPerson, StagingContactStore,
     StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_grantee, committed_links,
     convert_invite_claim, create_grant, enforce_committed_ledger, grantee_cut_set, import_contact,
@@ -539,6 +539,10 @@ pub struct SharingGrant {
     /// The grantee name on the owner-attested row, and who chose it
     /// (ADR 0027 D3). `None` for a row with no name or no owner attestation.
     pub grantee_name: Option<(String, NameSource)>,
+    /// The tag of the link that admitted this grantee, as
+    /// [`SharingInviteLink::tag`] names it (ADR 0023 D2). `None` for a direct
+    /// grant or a row with no owner attestation.
+    pub via_link: Option<Vec<u8>>,
 }
 
 impl fmt::Debug for SharingGrant {
@@ -556,6 +560,7 @@ impl fmt::Debug for SharingGrant {
                     .as_ref()
                     .map(|(name, source)| (RedactedText::of(name), source)),
             )
+            .field("via_link", &self.via_link.as_deref().map(RedactedBytes::of))
             .finish()
     }
 }
@@ -1428,6 +1433,10 @@ pub enum Command {
         /// The owner's name, which the fragment carries under the owner
         /// signature (ADR 0027 D5). May be empty.
         owner_name: String,
+        /// How many people the link may admit, or `None` for
+        /// [`DEFAULT_ADMISSION_CAP`]. Zero and a value above
+        /// [`MAX_ADMISSION_CAP`] are refused.
+        admission_cap: Option<u64>,
     },
     /// Revoke an invite link the owner minted at `node` (owner-only). Every
     /// link holder loses access at once. The grants that claims through the
@@ -3904,6 +3913,8 @@ enum ScopeShare<'a> {
         expires_at: Option<UnixMillis>,
         /// The owner's name the fragment carries.
         owner_name: &'a str,
+        /// How many people the link may admit.
+        admission_cap: u64,
     },
 }
 
@@ -4642,6 +4653,7 @@ fn project_grant_ledger<'a>(
                 .as_ref()
                 .filter(|_| attested)
                 .map(|name| (name.name().to_owned(), name.source())),
+            via_link: entry.via_link.filter(|_| attested).map(|tag| tag.to_vec()),
         });
     }
     projected
@@ -8292,8 +8304,9 @@ where {
                 permission,
                 expires_at,
                 owner_name,
+                admission_cap,
             } => {
-                self.create_invite_link(node, permission, expires_at, &owner_name)
+                self.create_invite_link(node, permission, expires_at, &owner_name, admission_cap)
                     .await
             }
             Command::RevokeInviteLink {
@@ -9073,12 +9086,20 @@ where {
         permission: Permission,
         expires_at: Option<UnixMillis>,
         owner_name: &str,
+        admission_cap: Option<u64>,
     ) -> Result<CommandOutcome, EngineError> {
+        let admission_cap = admission_cap.unwrap_or(DEFAULT_ADMISSION_CAP);
+        if !(1..=MAX_ADMISSION_CAP).contains(&admission_cap) {
+            return Err(EngineError::MalformedInput {
+                check: "invite-admission-cap-out-of-range",
+            });
+        }
         self.share_scope(
             node,
             ScopeShare::InviteLink {
                 expires_at,
                 owner_name,
+                admission_cap,
             },
             permission,
         )
@@ -9266,6 +9287,7 @@ where {
             ScopeShare::InviteLink {
                 expires_at,
                 owner_name,
+                admission_cap,
             } => {
                 let minted = mint_invite_link(
                     &mut SharedEntropy(&self.entropy),
@@ -9278,7 +9300,7 @@ where {
                         terms: LinkTerms {
                             deadline: self.link_deadline(*expires_at),
                             conversion_permission: permission.into(),
-                            admission_cap: DEFAULT_ADMISSION_CAP,
+                            admission_cap: *admission_cap,
                         },
                         scope_pointer_name: &session.scope_pointer_name(&node.0),
                         owner_name,
@@ -9617,6 +9639,7 @@ where {
             ScopeShare::InviteLink {
                 expires_at,
                 owner_name,
+                admission_cap,
             } => {
                 let invitee = EphemeralInvitee::mint(&mut SharedEntropy(&self.entropy))
                     .map_err(EngineError::from_invite)?;
@@ -9647,7 +9670,7 @@ where {
                     &LinkTerms {
                         deadline: self.link_deadline(expires_at),
                         conversion_permission: permission.into(),
-                        admission_cap: DEFAULT_ADMISSION_CAP,
+                        admission_cap,
                     },
                 )
                 .map_err(EngineError::from_invite)?;
@@ -13135,6 +13158,63 @@ mod tests {
         let _held = roots.borrow();
 
         clear_proved_scope_roots(&roots);
+    }
+
+    /// A via-link tag reaches the host only on a row the owner signed: any
+    /// committed writer authors the ledger, so an unsigned tag could credit a
+    /// grantee to a link that never admitted it.
+    #[test]
+    fn a_via_link_tag_reaches_the_host_only_on_an_owner_attested_row() {
+        use cipherbox_core::seal::{PreservedFields, sign_recipient_binding};
+        use cipherbox_core::suite::ecdsa::EcdsaSigner;
+        use cipherbox_core::suite::x25519::X25519Secret;
+
+        const NAME: &[u8] = b"scope-root-name";
+        const POINTER_READ_KEY: [u8; 32] = [0x55; 32];
+        const LINK_TAG: [u8; 32] = [0x44; 32];
+        let owner = EcdsaSigner::from_scalar(&[0x21; 32]).expect("valid scalar");
+        let grantee = EcdsaSigner::from_scalar(&[0x23; 32]).expect("valid scalar");
+        let mut joined = mint_grant_row(
+            &owner,
+            &X25519Secret::from_scalar([0x22; 32]),
+            &POINTER_READ_KEY,
+            grantee.verifying_key().to_sec1(),
+            &X25519Secret::from_scalar([0x24; 32]).public(),
+            &[0x6a; 16],
+            NAME,
+            CommittedPermission::Read,
+        )
+        .expect("a contributory recipient key")
+        .ledger_entry;
+        joined.via_link = Some(LINK_TAG);
+        joined.owner_sig = sign_recipient_binding(&owner, NAME, &joined).to_compact();
+        let mut forged = joined.clone();
+        forged.owner_sig[0] ^= 0xff;
+        let commitment = GrantSetCommitment {
+            ipns_name: NAME.to_vec(),
+            owner_pseudonym_pk: [0x33; 32],
+            cut_epoch: 0,
+            entries: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+
+        let projected = project_grant_ledger(
+            &GrantLabels {
+                owner_identity: &owner.verifying_key(),
+                scope_root_ipns_name: NAME,
+                commitment: &commitment,
+                pointer_read_key: &POINTER_READ_KEY,
+                contacts: &[],
+            },
+            [&joined, &forged],
+        );
+
+        let via_links: Vec<Option<Vec<u8>>> = projected
+            .grants
+            .into_iter()
+            .map(|grant| grant.via_link)
+            .collect();
+        assert_eq!(via_links, vec![Some(LINK_TAG.to_vec()), None]);
     }
 
     mod grafted_passes {

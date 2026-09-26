@@ -12,7 +12,12 @@
  */
 
 import { toHex } from '@cipherbox/client';
-import type { Permission, SharingDescriptor, SharingInviteLinkDescriptor } from '@cipherbox/client';
+import type {
+  Permission,
+  SharingDescriptor,
+  SharingGrantDescriptor,
+  SharingInviteLinkDescriptor,
+} from '@cipherbox/client';
 
 /** A contact the engine re-verified from its stored code; `key` is its identity, as hex. */
 export interface VerifiedContact {
@@ -28,6 +33,12 @@ export interface GrantRow {
    */
   readonly contact: VerifiedContact;
   readonly permission: Permission;
+  /** The name on the owner-attested row and who chose it, or `null`. */
+  readonly name: SharingGrantDescriptor['granteeName'];
+  /** The hex tag of the link that admitted this grantee; `null` for a direct grant or a row the owner does not attest. */
+  readonly viaLink: string | null;
+  /** The engine's fingerprint of the grantee's identity key, or `null` where it formed none. */
+  readonly fingerprint: string | null;
 }
 
 /** What one scope's own record says, as the engine last reported it. */
@@ -94,20 +105,27 @@ export const sharingStore = {
    * A view whose scope the engine could not reach leaves that scope as it stood
    * — last-known-good, never an empty list a render would read as "shared with
    * nobody".
+   *
+   * `fingerprints` maps a grantee's hex identity key to the engine's
+   * fingerprint of it.
    */
-  reported(view: SharingDescriptor): void {
+  reported(view: SharingDescriptor, fingerprints: ReadonlyMap<string, string> = new Map()): void {
     const scopes = new Map(state.scopes);
     if (view.state !== null) {
       scopes.set(
         toHex(view.scope),
         Object.freeze({
           grants: Object.freeze(
-            view.state.grants.map((grant) =>
-              Object.freeze({
-                contact: contactOf(grant.recipientIdentityPublicKey),
+            view.state.grants.map((grant) => {
+              const contact = contactOf(grant.recipientIdentityPublicKey);
+              return Object.freeze({
+                contact,
                 permission: grant.permission,
-              })
-            )
+                name: grant.granteeName,
+                viaLink: grant.viaLink === null ? null : toHex(grant.viaLink),
+                fingerprint: fingerprints.get(contact.key) ?? null,
+              });
+            })
           ),
           grantRefusal: view.state.grantRefusal,
           inviteLinkRefusal: view.state.inviteLinkRefusal,

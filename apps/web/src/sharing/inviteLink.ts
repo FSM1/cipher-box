@@ -1,5 +1,6 @@
-import type { SharingInviteLinkDescriptor } from '@cipherbox/client';
-import type { ScopeSharing } from '../stores/sharing.store';
+import { toHex } from '@cipherbox/client';
+import type { Permission, SharingInviteLinkDescriptor } from '@cipherbox/client';
+import type { GrantRow } from '../stores/sharing.store';
 import { formatDate, MAX_DATE_MILLIS } from '../utils/format';
 
 /** The claim route, so the mint and the router name one destination. */
@@ -24,6 +25,13 @@ export const LINK_LIFETIMES = {
 
 export type LinkLifetime = keyof typeof LINK_LIFETIMES;
 
+/**
+ * The engine's admission cap default and ceiling (ADR 0023 D9). The engine
+ * refuses a cap outside `1..=MAX_ADMISSION_CAP`; these only shape the field.
+ */
+export const DEFAULT_ADMISSION_CAP = 25;
+export const MAX_ADMISSION_CAP = 1023;
+
 /** The unix-millis deadline the engine takes. */
 export function expiryAt(lifetime: LinkLifetime, now: number): bigint {
   return BigInt(now + LINK_LIFETIMES[lifetime] * 86_400_000);
@@ -41,21 +49,32 @@ export function expiryLabel(expired: boolean, expiresAt: bigint): string {
     : `expires ${formatDate(Number(expiresAt))}`;
 }
 
-/** Which of the owner's three link situations a scope is in. */
-export type InviteLinkState =
-  | { kind: 'live'; link: SharingInviteLinkDescriptor }
-  | { kind: 'mintable' }
-  | { kind: 'refused'; check: string };
+/** How a permission reads on the share dialog. */
+export function accessLabel(permission: Permission): string {
+  return permission === 'write' ? 'edit' : 'view';
+}
+
+/** A link names itself by what it grants and when it ends, since it carries no name. */
+export function linkLabel(link: SharingInviteLinkDescriptor): string {
+  return `${accessLabel(link.permission)} link, ${expiryLabel(link.expired, link.expiresAt)}`;
+}
+
+/** The grants a link admitted, by the via-link tag each row carries. */
+export function joinedThrough(
+  grants: readonly GrantRow[],
+  link: SharingInviteLinkDescriptor
+): GrantRow[] {
+  const tag = toHex(link.tag);
+  return grants.filter((grant) => grant.viaLink === tag);
+}
 
 /**
- * A scope the engine reached carries a live link, takes a mint, or takes
- * neither. `live` draws the first link the commitment carries that has not
- * expired on the engine's clock. `refused` carries the engine's own check name,
- * because which ground refuses is the engine's to say.
+ * The grants a link revoke with remove-grantees can also take, though no row
+ * names the link. The engine shows a via-link tag and a name only on a row the
+ * owner attests. The cut also takes a row the owner does not attest when a
+ * contact the link sourced holds its key (`link_cut_set`). A named row is
+ * attested, so only a row with no name and no link is unclear.
  */
-export function inviteLinkState(scope: ScopeSharing): InviteLinkState {
-  const link = scope.inviteLinks.find((each) => !each.expired);
-  if (link !== undefined) return { kind: 'live', link };
-  const refusal = scope.inviteLinkRefusal;
-  return refusal === null ? { kind: 'mintable' } : { kind: 'refused', check: refusal };
+export function unclearGrants(grants: readonly GrantRow[]): GrantRow[] {
+  return grants.filter((grant) => grant.viaLink === null && grant.name === null);
 }

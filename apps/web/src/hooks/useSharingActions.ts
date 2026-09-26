@@ -6,9 +6,11 @@
  * a reload.
  */
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toHex } from '@cipherbox/client';
-import type { EngineFacade, Permission } from '@cipherbox/client';
+import type { EngineFacade, Permission, SharingDescriptor } from '@cipherbox/client';
+import { errorMessage } from '../lib/errorMessage';
+import { useEngine } from '../providers/EngineProvider';
 import { sharingStore, type VerifiedContact } from '../stores/sharing.store';
 import { useCommandRunner } from './useCommandRunner';
 
@@ -18,38 +20,93 @@ export type SharingCommand =
   | 'importContact'
   | 'grant'
   | 'revoke'
-  | 'downgrade'
+  | 'changePermission'
+  | 'renameGrantee'
   | 'createInviteLink'
   | 'revokeInviteLink'
-  | 'convertInviteClaims';
+  | 'convertInviteClaims'
+  | 'dismissRefusedClaims';
+
+/** How long the "joined" notice stays up. */
+export const JOINED_NOTICE_MS = 8_000;
+
+/** The least time between two event re-reads of the sharing view. */
+export const SNAPSHOT_REREAD_GAP_MS = 1_000;
+
+/** The engine's refusal of a conversion while another pass runs on this device. */
+const CONVERSION_RUNNING = 'a-conversion-pass-is-running';
+
+export interface RevokeLinkOptions {
+  /** Also cut the people who joined through the link (ADR 0025 D1). */
+  removeGrantees: boolean;
+}
 
 export interface SharingActions {
   busy: SharingCommand | null;
   /** The last refusal, in the engine's own words; cleared by the next dispatch. */
   error: string | null;
   clearError(): void;
-  /** Re-reads this scope's contacts and grants into the store. */
-  reload(): Promise<boolean>;
+  /** Who joined this scope through a link while the dialog was open, until the notice lapses. */
+  joined: string | null;
+  /**
+   * Reads this scope into the store and, where it carries a link, converts the
+   * claims that wait on it (ADR 0023 D4).
+   */
+  open(): Promise<boolean>;
   /** Resolves `true` once the engine verified the code and re-read the book. */
   importContact(contactCode: Uint8Array): Promise<boolean>;
   grant(contact: VerifiedContact, permission: Permission): Promise<boolean>;
   revoke(contact: VerifiedContact): Promise<boolean>;
-  downgrade(contact: VerifiedContact): Promise<boolean>;
+  changePermission(contact: VerifiedContact, permission: Permission): Promise<boolean>;
+  renameGrantee(contact: VerifiedContact, name: string): Promise<boolean>;
   /**
    * Mints a link over this scope, resolving with the engine's fragment
-   * (`MintedInviteLink`) or `null` where the engine refused. An omitted
-   * `expiresAt` takes the engine's default lifetime. The fragment is the link's whole
-   * capability and the engine hands it over once, so a caller that drops it
-   * cannot ask for it again.
+   * (`MintedInviteLink`) or `null` where the engine refused. The fragment is
+   * the link's whole capability and the engine hands it over once, so a caller
+   * that drops it cannot ask for it again.
    */
-  createInviteLink(permission: Permission, expiresAt?: bigint): Promise<string | null>;
+  createInviteLink(
+    permission: Permission,
+    expiresAt: bigint,
+    ownerName: string,
+    admissionCap: number
+  ): Promise<string | null>;
   /**
-   * Cuts the link `linkTag` names at this scope, or its only link: its future
-   * claims end, converted grants stand.
+   * Cuts the link `linkTag` names at this scope: its future claims end. With
+   * `removeGrantees`, the people who joined through it lose access too.
    */
-  revokeInviteLink(linkTag?: Uint8Array): Promise<boolean>;
-  /** Converts the claims waiting on this scope's link into grants. */
-  convertInviteClaims(): Promise<boolean>;
+  revokeInviteLink(linkTag: Uint8Array, options: RevokeLinkOptions): Promise<boolean>;
+  /** Drops the claims this scope's links refused at a cap from this device's record. */
+  dismissRefusedClaims(): Promise<boolean>;
+}
+
+/**
+ * How a joiner reads in the notice. The name is the claimant's own suggestion,
+ * so it never shows without the fingerprint prefix beside it.
+ */
+export function joinedLabel(name: string, fingerprint: string): string {
+  const prefix = fingerprint.split(' ').slice(0, 2).join(' ');
+  return name === '' ? prefix : `${name} (${prefix})`;
+}
+
+/**
+ * The engine's fingerprint of each grantee key, by hex key. A row whose key is
+ * not a curve point (an unattested row) has none, and neither does one whose
+ * read failed: the row still renders, only without it.
+ */
+async function fingerprintsOf(
+  facade: EngineFacade,
+  view: SharingDescriptor
+): Promise<Map<string, string>> {
+  const entries = await Promise.all(
+    (view.state?.grants ?? []).map((grant) =>
+      facade.identityFingerprint(grant.recipientIdentityPublicKey).then(
+        (fingerprint): [string, string] => [toHex(grant.recipientIdentityPublicKey), fingerprint],
+        () => null
+      )
+    )
+  );
+  return new Map(entries.filter((entry) => entry !== null));
 }
 
 export function useSharingActions(scope: Uint8Array): SharingActions {
@@ -60,16 +117,104 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
   const scopeKey = toHex(scope);
   const target = useMemo(() => scope, [scopeKey]);
 
+  // A read publishes only when it is newer than the last read that published:
+  // an older read that finishes late holds older state, and a newer read that
+  // failed publishes nothing and blocks nothing.
+  const startedSeq = useRef(0);
+  const publishedSeq = useRef(0);
   const read = useCallback(
-    async (facade: EngineFacade) => sharingStore.reported(await facade.sharing(target)),
+    async (facade: EngineFacade) => {
+      const seq = ++startedSeq.current;
+      const view = await facade.sharing(target);
+      const fingerprints = await fingerprintsOf(facade, view);
+      if (seq > publishedSeq.current) {
+        publishedSeq.current = seq;
+        sharingStore.reported(view, fingerprints);
+      }
+      return view;
+    },
     [target]
   );
+
+  const client = useEngine();
+  const [joined, setJoined] = useState<string | null>(null);
+  useEffect(() => {
+    if (client === null) return;
+    // One re-read in flight, and one start per `SNAPSHOT_REREAD_GAP_MS`: the
+    // events inside a gap fold into one trailing read. A sharing read emits no
+    // `snapshotUpdated`, so a re-read cannot loop.
+    let live = true;
+    let reading = false;
+    let again = false;
+    let lastStart = -Infinity;
+    let trailing: ReturnType<typeof setTimeout> | null = null;
+    const start = () => {
+      trailing = null;
+      if (reading) {
+        again = true;
+        return;
+      }
+      reading = true;
+      lastStart = Date.now();
+      // A failed re-read leaves the last view drawn.
+      void read(client.facade)
+        .catch(() => undefined)
+        .finally(() => {
+          reading = false;
+          if (again) {
+            again = false;
+            reread();
+          }
+        });
+    };
+    const reread = () => {
+      if (!live || trailing !== null) return;
+      const wait = lastStart + SNAPSHOT_REREAD_GAP_MS - Date.now();
+      if (wait > 0) trailing = setTimeout(start, wait);
+      else start();
+    };
+    const unsubscribe = client.facade.subscribe((event) => {
+      // A conversion pass that moves only the claim counts, or a link another
+      // device minted, reports here.
+      if (event.kind === 'snapshotUpdated') return reread();
+      if (event.kind !== 'granteeJoined' || toHex(event.scopeRoot) !== scopeKey) return;
+      setJoined(joinedLabel(event.name, event.fingerprint));
+      reread();
+    });
+    return () => {
+      live = false;
+      if (trailing !== null) clearTimeout(trailing);
+      unsubscribe();
+    };
+  }, [client, read, scopeKey]);
+  useEffect(() => {
+    if (joined === null) return;
+    const lapse = setTimeout(() => setJoined(null), JOINED_NOTICE_MS);
+    return () => clearTimeout(lapse);
+  }, [joined]);
 
   return {
     busy,
     error,
     clearError,
-    reload: useCallback(() => run('read', read), [run, read]),
+    joined,
+    open: useCallback(async () => {
+      let linked = false;
+      const reached = await run('read', async (facade) => {
+        linked = ((await read(facade)).state?.inviteLinks.length ?? 0) > 0;
+      });
+      if (!reached || !linked) return reached;
+      return run('convertInviteClaims', async (facade) => {
+        try {
+          await facade.convertInviteClaims(target);
+        } catch (refusal: unknown) {
+          // The running pass emits `granteeJoined` or `snapshotUpdated`, and each re-reads.
+          if (errorMessage(refusal).endsWith(`: ${CONVERSION_RUNNING}`)) return;
+          throw refusal;
+        }
+        await read(facade);
+      });
+    }, [run, read, target]),
     importContact: useCallback(
       (contactCode) =>
         run('importContact', async (facade) => {
@@ -94,19 +239,29 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
         }),
       [run, read, target]
     ),
-    downgrade: useCallback(
-      (contact) =>
-        run('downgrade', async (facade) => {
-          await facade.changePermission(target, contact.identityPublicKey, 'read');
+    changePermission: useCallback(
+      (contact, permission) =>
+        run('changePermission', async (facade) => {
+          await facade.changePermission(target, contact.identityPublicKey, permission);
+          await read(facade);
+        }),
+      [run, read, target]
+    ),
+    renameGrantee: useCallback(
+      (contact, name) =>
+        run('renameGrantee', async (facade) => {
+          await facade.renameGrantee(target, contact.identityPublicKey, name);
           await read(facade);
         }),
       [run, read, target]
     ),
     createInviteLink: useCallback(
-      async (permission, expiresAt) => {
+      async (permission, expiresAt, ownerName, admissionCap) => {
         let fragment: string | null = null;
         await run('createInviteLink', async (facade) => {
-          fragment = (await facade.createInviteLink(target, permission, expiresAt)).fragment;
+          fragment = (
+            await facade.createInviteLink(target, permission, expiresAt, ownerName, admissionCap)
+          ).fragment;
           await read(facade);
         });
         return fragment;
@@ -114,17 +269,17 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       [run, read, target]
     ),
     revokeInviteLink: useCallback(
-      (linkTag) =>
+      (linkTag, options) =>
         run('revokeInviteLink', async (facade) => {
-          await facade.revokeInviteLink(target, linkTag);
+          await facade.revokeInviteLink(target, linkTag, options.removeGrantees);
           await read(facade);
         }),
       [run, read, target]
     ),
-    convertInviteClaims: useCallback(
+    dismissRefusedClaims: useCallback(
       () =>
-        run('convertInviteClaims', async (facade) => {
-          await facade.convertInviteClaims(target);
+        run('dismissRefusedClaims', async (facade) => {
+          await facade.dismissRefusedClaims(target);
           await read(facade);
         }),
       [run, read, target]

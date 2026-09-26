@@ -5,13 +5,18 @@ import type {
   EventDescriptor,
   Permission,
   SharingDescriptor,
+  SharingGrantDescriptor,
   SharingInviteLinkDescriptor,
 } from '@cipherbox/client';
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
 import { sharingFor, sharingStore, type GrantRow } from '../stores/sharing.store';
-import { useSharingActions, type SharingCommand } from './useSharingActions';
+import {
+  SNAPSHOT_REREAD_GAP_MS,
+  useSharingActions,
+  type SharingCommand,
+} from './useSharingActions';
 
 const DOCS = new Uint8Array(16).fill(7);
 const DOCS_KEY = toHex(DOCS);
@@ -22,6 +27,7 @@ const CONTACT = { key: toHex(IDENTITY), identityPublicKey: IDENTITY };
 const FRAGMENT = 'a-bearer-fragment';
 const DEADLINE = 1_700_000_000_000n;
 const NO_LINKS: SharingInviteLinkDescriptor[] = [];
+const FINGERPRINT = 'fp-ada';
 /** The link a mint commits, as the engine then reports it. */
 const MINTED: SharingInviteLinkDescriptor = {
   tag: new Uint8Array(32).fill(0x7a),
@@ -34,12 +40,21 @@ const MINTED: SharingInviteLinkDescriptor = {
   refusedClaims: 0,
 };
 
+/** The row the one contact under test reads as, direct and unnamed. */
+function row(permission: Permission): GrantRow {
+  return { contact: CONTACT, permission, name: null, viaLink: null, fingerprint: FINGERPRINT };
+}
+
 function grantsFor(scopeKey: string): readonly GrantRow[] | null {
   return sharingFor(sharingStore.getState(), scopeKey)?.grants ?? null;
 }
 
 /** One engine sharing read: the book always holds the one contact under test. */
-function view(grants: Permission[], links: SharingInviteLinkDescriptor[]): SharingDescriptor {
+function view(
+  grants: Permission[],
+  links: SharingInviteLinkDescriptor[],
+  names: SharingGrantDescriptor['granteeName'][] = []
+): SharingDescriptor {
   return {
     scope: DOCS,
     contacts: [{ identityPublicKey: IDENTITY, cachedName: null }],
@@ -48,7 +63,8 @@ function view(grants: Permission[], links: SharingInviteLinkDescriptor[]): Shari
       grants: grants.map((permission) => ({
         recipientIdentityPublicKey: IDENTITY,
         permission,
-        granteeName: null,
+        granteeName: names[0] ?? null,
+        viaLink: null,
       })),
       grantRefusal: null,
       inviteLinkRefusal: null,
@@ -70,9 +86,14 @@ function sharingEngine(
     refusals[name] === undefined ? Promise.resolve(value) : Promise.reject(refusals[name]);
 
   const ledger: Permission[] = [];
+  const names: SharingGrantDescriptor['granteeName'][] = [];
   const links: SharingInviteLinkDescriptor[] = [...held];
+  const listeners = new Set<(event: EventDescriptor) => void>();
   const facade = {
-    subscribe: (_listener: (event: EventDescriptor) => void) => () => undefined,
+    subscribe: (listener: (event: EventDescriptor) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     snapshot: () => new Promise<never>(() => undefined),
     setFocus: () => Promise.resolve(),
     sharing: vi.fn(() =>
@@ -80,7 +101,8 @@ function sharingEngine(
         'read',
         view(
           ledger,
-          links.map((link) => ({ ...link }))
+          links.map((link) => ({ ...link })),
+          names
         )
       )
     ),
@@ -100,9 +122,14 @@ function sharingEngine(
       return answer('revoke', { kind: 'done' as const });
     }),
     changePermission: vi.fn((_scope: Uint8Array, _key: Uint8Array, permission: Permission) => {
-      if (refusals.downgrade === undefined) ledger.splice(0, ledger.length, permission);
-      return answer('downgrade', { kind: 'done' as const });
+      if (refusals.changePermission === undefined) ledger.splice(0, ledger.length, permission);
+      return answer('changePermission', { kind: 'done' as const });
     }),
+    renameGrantee: vi.fn((_scope: Uint8Array, _key: Uint8Array, name: string) => {
+      if (refusals.renameGrantee === undefined) names.splice(0, 1, { name, source: 'owner' });
+      return answer('renameGrantee', { kind: 'done' as const });
+    }),
+    identityFingerprint: vi.fn(() => Promise.resolve(FINGERPRINT)),
     createInviteLink: vi.fn(() => {
       if (refusals.createInviteLink === undefined) links.push({ ...MINTED });
       return answer('createInviteLink', { kind: 'inviteLinkMinted' as const, fragment: FRAGMENT });
@@ -127,7 +154,8 @@ function sharingEngine(
     dispose: () => Promise.resolve(),
   } as unknown as EngineClient;
 
-  return { client, facade };
+  const emit = (event: EventDescriptor) => listeners.forEach((listener) => listener(event));
+  return { client, facade, links, emit };
 }
 
 function mount(client: EngineClient) {
@@ -144,18 +172,166 @@ describe('reading', () => {
     const engine = sharingEngine();
     const { result } = mount(engine.client);
 
-    await expect(result.current.reload()).resolves.toBe(true);
+    await expect(result.current.open()).resolves.toBe(true);
 
     expect(engine.facade.sharing).toHaveBeenCalledWith(DOCS);
     expect(sharingStore.getState().contacts).toEqual([CONTACT]);
     expect(grantsFor(DOCS_KEY)).toEqual([]);
   });
 
+  it('converts nothing on open where the scope carries no link', async () => {
+    const engine = sharingEngine();
+    const { result } = mount(engine.client);
+
+    await expect(result.current.open()).resolves.toBe(true);
+
+    expect(engine.facade.convertInviteClaims).not.toHaveBeenCalled();
+  });
+
+  it('converts the waiting claims on open where the scope carries a link', async () => {
+    const engine = sharingEngine({}, [MINTED]);
+    const { result } = mount(engine.client);
+
+    await expect(result.current.open()).resolves.toBe(true);
+
+    expect(engine.facade.convertInviteClaims).toHaveBeenCalledWith(DOCS);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
+  });
+
+  it('keeps the read and reports a conversion the engine refused', async () => {
+    const refusal = new EngineRequestError('seam error: the mailbox did not answer');
+    const engine = sharingEngine({ convertInviteClaims: refusal }, [MINTED]);
+    const { result } = mount(engine.client);
+
+    await expect(result.current.open()).resolves.toBe(false);
+
+    expect(grantsFor(DOCS_KEY)).toEqual([]);
+    await waitFor(() => expect(result.current.error).toBe(refusal.message));
+  });
+
+  it('reports nothing on open while another conversion pass runs', async () => {
+    const running = new EngineRequestError('seam error: a-conversion-pass-is-running', 'seam');
+    const engine = sharingEngine({ convertInviteClaims: running }, [MINTED]);
+    const { result } = mount(engine.client);
+
+    await expect(result.current.open()).resolves.toBe(true);
+
+    expect(engine.facade.convertInviteClaims).toHaveBeenCalledWith(DOCS);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('re-reads the view on a snapshot update, so a pass that moved only the counts shows', async () => {
+    const running = new EngineRequestError('seam error: a-conversion-pass-is-running', 'seam');
+    const engine = sharingEngine({ convertInviteClaims: running }, [MINTED]);
+    const { result } = mount(engine.client);
+    await expect(result.current.open()).resolves.toBe(true);
+    const pendingClaims = () =>
+      sharingFor(sharingStore.getState(), DOCS_KEY)?.inviteLinks[0]?.pendingClaims;
+    expect(pendingClaims()).toBe(0);
+
+    engine.links.splice(0, 1, { ...MINTED, pendingClaims: 2 });
+    engine.emit({ kind: 'snapshotUpdated' });
+
+    await waitFor(() => expect(pendingClaims()).toBe(2));
+    expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-reads on a snapshot update where the scope carries no link yet', async () => {
+    const engine = sharingEngine();
+    const { result } = mount(engine.client);
+    await expect(result.current.open()).resolves.toBe(true);
+
+    engine.links.push({ ...MINTED });
+    engine.emit({ kind: 'snapshotUpdated' });
+
+    await waitFor(() =>
+      expect(sharingFor(sharingStore.getState(), DOCS_KEY)?.inviteLinks).toHaveLength(1)
+    );
+    expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts one re-read at once and one trailing read for a burst inside the gap', async () => {
+    vi.useFakeTimers();
+    try {
+      const engine = sharingEngine();
+      const { result } = mount(engine.client);
+      await expect(result.current.open()).resolves.toBe(true);
+
+      for (let i = 0; i < 3; i++) engine.emit({ kind: 'snapshotUpdated' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(engine.facade.sharing).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_REREAD_GAP_MS);
+      expect(engine.facade.sharing).toHaveBeenCalledTimes(3);
+
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_REREAD_GAP_MS * 5);
+      expect(engine.facade.sharing).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a command's view when an older event read finishes after it", async () => {
+    const engine = sharingEngine();
+    const { result } = mount(engine.client);
+    await result.current.grant(CONTACT, 'write');
+    let finishStale: (stale: SharingDescriptor) => void = () => undefined;
+    engine.facade.sharing.mockImplementationOnce(
+      () => new Promise<SharingDescriptor>((settle) => (finishStale = settle))
+    );
+
+    engine.emit({ kind: 'granteeJoined', scopeRoot: DOCS, name: 'Ada', fingerprint: FINGERPRINT });
+    await expect(result.current.changePermission(CONTACT, 'read')).resolves.toBe(true);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
+
+    finishStale(view(['write'], NO_LINKS));
+    await new Promise((settle) => setTimeout(settle, 0));
+
+    expect(engine.facade.sharing).toHaveBeenCalledTimes(3);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
+  });
+
+  it('publishes an older command read when the newer event read failed', async () => {
+    const engine = sharingEngine();
+    const { result } = mount(engine.client);
+    await result.current.grant(CONTACT, 'write');
+    let finishCommand: (current: SharingDescriptor) => void = () => undefined;
+    engine.facade.sharing
+      .mockImplementationOnce(
+        () => new Promise<SharingDescriptor>((settle) => (finishCommand = settle))
+      )
+      .mockImplementationOnce(() =>
+        Promise.reject(new EngineRequestError('seam error: the name did not resolve'))
+      );
+
+    const changed = result.current.changePermission(CONTACT, 'read');
+    await waitFor(() => expect(engine.facade.sharing).toHaveBeenCalledTimes(2));
+    engine.emit({ kind: 'granteeJoined', scopeRoot: DOCS, name: 'Ada', fingerprint: FINGERPRINT });
+    await waitFor(() => expect(engine.facade.sharing).toHaveBeenCalledTimes(3));
+
+    finishCommand(view(['read'], NO_LINKS));
+
+    await expect(changed).resolves.toBe(true);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
+  });
+
+  it('reads a row with no fingerprint where the engine forms none for its key', async () => {
+    const engine = sharingEngine();
+    engine.facade.identityFingerprint.mockImplementation(() =>
+      Promise.reject(new EngineRequestError('invalid identity public key'))
+    );
+    const { result } = mount(engine.client);
+
+    await expect(result.current.grant(CONTACT, 'read')).resolves.toBe(true);
+
+    expect(grantsFor(DOCS_KEY)).toEqual([{ ...row('read'), fingerprint: null }]);
+  });
+
   it('reports a refused read in the engine words, storing nothing', async () => {
     const engine = sharingEngine({ read: new EngineRequestError('the scope would not resolve') });
     const { result } = mount(engine.client);
 
-    await expect(result.current.reload()).resolves.toBe(false);
+    await expect(result.current.open()).resolves.toBe(false);
 
     expect(sharingStore.getState().contacts).toEqual([]);
     await waitFor(() => expect(result.current.error).toBe('the scope would not resolve'));
@@ -194,7 +370,7 @@ describe('grant commands', () => {
     await expect(result.current.grant(CONTACT, 'write')).resolves.toBe(true);
 
     expect(engine.facade.grant).toHaveBeenCalledWith(DOCS, IDENTITY, 'write');
-    expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'write' }]);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('write')]);
   });
 
   it('lists no row for a grant the engine refused', async () => {
@@ -227,29 +403,42 @@ describe('grant commands', () => {
 
     await expect(result.current.revoke(CONTACT)).resolves.toBe(false);
 
-    expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'read' }]);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
     await waitFor(() => expect(result.current.error).toBe('the publish was refused'));
   });
 
-  it('shows the downgraded row at the permission the ledger now commits', async () => {
+  it('shows the changed row at the permission the ledger now commits', async () => {
     const engine = sharingEngine();
     const { result } = mount(engine.client);
     await result.current.grant(CONTACT, 'write');
 
-    await expect(result.current.downgrade(CONTACT)).resolves.toBe(true);
+    await expect(result.current.changePermission(CONTACT, 'read')).resolves.toBe(true);
 
     expect(engine.facade.changePermission).toHaveBeenCalledWith(DOCS, IDENTITY, 'read');
-    expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'read' }]);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('read')]);
   });
 
-  it('keeps the write grant a refused downgrade left standing', async () => {
-    const engine = sharingEngine({ downgrade: new EngineRequestError('publish refused') });
+  it('keeps the write grant a refused change left standing', async () => {
+    const engine = sharingEngine({ changePermission: new EngineRequestError('publish refused') });
     const { result } = mount(engine.client);
     await result.current.grant(CONTACT, 'write');
 
-    await expect(result.current.downgrade(CONTACT)).resolves.toBe(false);
+    await expect(result.current.changePermission(CONTACT, 'read')).resolves.toBe(false);
 
-    expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'write' }]);
+    expect(grantsFor(DOCS_KEY)).toEqual([row('write')]);
+  });
+
+  it('shows the name the engine committed after a rename', async () => {
+    const engine = sharingEngine();
+    const { result } = mount(engine.client);
+    await result.current.grant(CONTACT, 'read');
+
+    await expect(result.current.renameGrantee(CONTACT, 'Ada')).resolves.toBe(true);
+
+    expect(engine.facade.renameGrantee).toHaveBeenCalledWith(DOCS, IDENTITY, 'Ada');
+    expect(grantsFor(DOCS_KEY)).toEqual([
+      { ...row('read'), name: { name: 'Ada', source: 'owner' } },
+    ]);
   });
 });
 
@@ -260,9 +449,11 @@ describe('invite link commands', () => {
     const engine = sharingEngine();
     const { result } = mount(engine.client);
 
-    await expect(result.current.createInviteLink('read', DEADLINE)).resolves.toBe(FRAGMENT);
+    await expect(result.current.createInviteLink('read', DEADLINE, 'Ada', 5)).resolves.toBe(
+      FRAGMENT
+    );
 
-    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', DEADLINE);
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', DEADLINE, 'Ada', 5);
     expect(linksNow()).toEqual([MINTED]);
   });
 
@@ -271,39 +462,45 @@ describe('invite link commands', () => {
     const engine = sharingEngine({ createInviteLink: refusal });
     const { result } = mount(engine.client);
 
-    await expect(result.current.createInviteLink('read')).resolves.toBeNull();
+    await expect(result.current.createInviteLink('read', DEADLINE, '', 25)).resolves.toBeNull();
     await waitFor(() => expect(result.current.error).toBe(refusal.message));
   });
 
   it('shows the link gone once the engine cut it', async () => {
     const engine = sharingEngine();
     const { result } = mount(engine.client);
-    await result.current.createInviteLink('read', DEADLINE);
+    await result.current.createInviteLink('read', DEADLINE, '', 25);
 
-    await expect(result.current.revokeInviteLink(MINTED.tag)).resolves.toBe(true);
+    await expect(
+      result.current.revokeInviteLink(MINTED.tag, { removeGrantees: false })
+    ).resolves.toBe(true);
 
-    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, MINTED.tag);
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, MINTED.tag, false);
     expect(linksNow()).toEqual(NO_LINKS);
   });
 
   it('keeps the link standing when the engine refused to cut it', async () => {
     const engine = sharingEngine({ revokeInviteLink: new EngineRequestError('publish refused') });
     const { result } = mount(engine.client);
-    await result.current.createInviteLink('read', DEADLINE);
+    await result.current.createInviteLink('read', DEADLINE, '', 25);
 
-    await expect(result.current.revokeInviteLink(MINTED.tag)).resolves.toBe(false);
+    await expect(
+      result.current.revokeInviteLink(MINTED.tag, { removeGrantees: false })
+    ).resolves.toBe(false);
 
     expect(linksNow()).toEqual([MINTED]);
   });
 
-  it('lists the grant a conversion committed, not the claim it was sent', async () => {
+  it('asks the engine to cut the people who joined when the owner chose it', async () => {
     const engine = sharingEngine();
     const { result } = mount(engine.client);
-    await result.current.createInviteLink('read', DEADLINE);
+    await result.current.createInviteLink('read', DEADLINE, '', 25);
 
-    await expect(result.current.convertInviteClaims()).resolves.toBe(true);
+    await expect(
+      result.current.revokeInviteLink(MINTED.tag, { removeGrantees: true })
+    ).resolves.toBe(true);
 
-    expect(engine.facade.convertInviteClaims).toHaveBeenCalledWith(DOCS);
-    expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'read' }]);
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, MINTED.tag, true);
+    expect(linksNow()).toEqual(NO_LINKS);
   });
 });

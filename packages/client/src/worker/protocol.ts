@@ -234,6 +234,8 @@ export interface SharingGrantDescriptor {
   permission: Permission;
   /** The name on the owner-attested row; `null` where the row carries none. */
   granteeName: { name: string; source: GranteeNameSource } | null;
+  /** The `SharingInviteLinkDescriptor.tag` of the link that admitted this grantee; `null` for a direct grant or a row the owner does not attest. */
+  viaLink: Uint8Array | null;
 }
 
 /**
@@ -616,6 +618,8 @@ export type CommandDescriptor =
       expiresAt: bigint | null;
       /** Shown to the holder, signed by the owner; the engine bounds it, empty is allowed. */
       ownerName: string;
+      /** How many people the link may admit; `null` takes the engine's default. The engine bounds it. */
+      admissionCap: number | null;
     }
   /** A `null` tag cuts the scope's only link; the engine refuses it where the scope carries more. */
   | {

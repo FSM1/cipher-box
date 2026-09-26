@@ -331,6 +331,11 @@ impl EphemeralInvitee {
 /// The admission cap a link carries when the owner sets none (ADR 0023 D9).
 pub const DEFAULT_ADMISSION_CAP: u64 = 25;
 
+/// The largest admission cap a mint accepts: every admission is one more row,
+/// so a cap past the grant-set ceiling less the link's own row promises
+/// admissions that `grant-set-full` refuses.
+pub const MAX_ADMISSION_CAP: u64 = MAX_GRANT_BLOBS as u64 - 1;
+
 /// The lifetime of a link whose owner sets no deadline. A link entry must
 /// carry one.
 pub const DEFAULT_LINK_LIFETIME: core::time::Duration =

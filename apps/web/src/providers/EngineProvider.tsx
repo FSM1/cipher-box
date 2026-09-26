@@ -11,6 +11,7 @@ import type { EngineClient, MediaService } from '@cipherbox/client';
 import { createMediaService } from '../engine/createMediaService';
 import { LoginSecretSource } from '../engine/loginHandoff';
 import { errorMessage } from '../lib/errorMessage';
+import { forgetOwnerName } from '../sharing/ownerName';
 import { sharingStore } from '../stores/sharing.store';
 import {
   createSnapshotStore,
@@ -52,8 +53,12 @@ export function EngineProvider({ createClient, children }: EngineProviderProps) 
   const factory = useRef(createClient);
 
   // `facade.logout` closes the client for good, so the tab needs a new one
-  // before it can log in again.
-  const rebuild = useCallback(() => setGeneration((current) => current + 1), []);
+  // before it can log in again. The owner name goes with the sign-out, not with
+  // an unmount, so a reload in this tab keeps it.
+  const rebuild = useCallback(() => {
+    forgetOwnerName();
+    setGeneration((current) => current + 1);
+  }, []);
 
   useEffect(() => {
     const secrets = new LoginSecretSource();

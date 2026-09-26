@@ -39,10 +39,10 @@ use cipherbox_engine::grants::conversion::{
 use cipherbox_engine::grants::{
     AckedClaim, CLAIM_ID_LEN, CLAIM_REPOST_FIRST_WAIT, CommittedLink, Contact, ContactStore,
     ContactStoreError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRow,
-    InviteClaim, InviteFragment, LinkHold, LinkTerms, MAX_LINK_CONTACTS, ReceivedShareStore,
-    ResolutionClass, StagingContactStore, StagingGranteeNameCache, StagingReceivedShareStore,
-    import_contact, mint_grant_row, mint_invite_grant, post_invite_claim, recipient_blinded_tag,
-    row_is_owner_attested,
+    InviteClaim, InviteFragment, LinkHold, LinkTerms, MAX_ADMISSION_CAP, MAX_LINK_CONTACTS,
+    ReceivedShareStore, ResolutionClass, StagingContactStore, StagingGranteeNameCache,
+    StagingReceivedShareStore, import_contact, mint_grant_row, mint_invite_grant,
+    post_invite_claim, recipient_blinded_tag, row_is_owner_attested,
 };
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::rotation::{
@@ -785,6 +785,7 @@ impl GrantScenario {
             permission,
             expires_at: None,
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         }))
     }
 
@@ -4665,6 +4666,7 @@ fn the_vault_root_refuses_both_shares_with_the_names_its_read_reports() {
             permission: Permission::Read,
             expires_at: None,
             owner_name: String::new(),
+            admission_cap: None,
         })),
         Err(EngineError::UnsupportedTarget {
             check: state
@@ -5249,6 +5251,54 @@ fn two_links_are_both_listed_and_a_revoke_by_tag_cuts_only_that_one() {
         .map(|entry| entry.tag.to_vec())
         .collect();
     assert_eq!(committed, vec![left.tag], "the named link is cut");
+}
+
+/// The owner's chosen cap is what the link entry commits, on the mint that
+/// makes the scope and on the mint that appends to it.
+#[test]
+fn a_chosen_admission_cap_shows_on_the_sharing_read() {
+    let mut fx = GrantScenario::new();
+    for cap in [3, MAX_ADMISSION_CAP] {
+        assert!(matches!(
+            block_on(fx.engine.command(Command::CreateInviteLink {
+                node: fx.folder,
+                permission: Permission::Read,
+                expires_at: None,
+                owner_name: String::new(),
+                admission_cap: Some(cap),
+            })),
+            Ok(CommandOutcome::InviteLinkMinted(_))
+        ));
+    }
+
+    let mut caps: Vec<u64> = folder_links(&fx)
+        .into_iter()
+        .map(|link| link.admission_cap)
+        .collect();
+    caps.sort_unstable();
+    assert_eq!(caps, vec![3, MAX_ADMISSION_CAP]);
+}
+
+/// A cap of zero admits no one, and one past the grant-set ceiling promises
+/// admissions the set cannot hold: both are refused before anything publishes.
+#[test]
+fn an_admission_cap_out_of_range_is_refused_and_publishes_nothing() {
+    let mut fx = GrantScenario::new();
+    for cap in [0, MAX_ADMISSION_CAP + 1] {
+        assert_eq!(
+            block_on(fx.engine.command(Command::CreateInviteLink {
+                node: fx.folder,
+                permission: Permission::Read,
+                expires_at: None,
+                owner_name: String::new(),
+                admission_cap: Some(cap),
+            })),
+            Err(EngineError::MalformedInput {
+                check: "invite-admission-cap-out-of-range"
+            })
+        );
+    }
+    assert!(published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none());
 }
 
 /// With two links and no tag, a revoke has no defined cut, so it refuses and
@@ -5927,6 +5977,7 @@ fn a_retry_after_a_failed_publish_runs_the_checks_again() {
             permission: Permission::Read,
             expires_at: Some(deadline),
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         }))
         .expect("the link mints")
     else {
@@ -6123,6 +6174,7 @@ impl GrantScenario {
             permission,
             expires_at: Some(deadline),
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         }))
         .expect("the link mints");
         let CommandOutcome::InviteLinkMinted(link) = outcome else {
@@ -6367,6 +6419,7 @@ fn a_sweep_past_its_cut_cap_continues_on_the_next_tick() {
                     permission: Permission::Read,
                     expires_at: Some(deadline),
                     owner_name: "owner".to_owned(),
+                    admission_cap: None,
                 })),
                 Ok(CommandOutcome::InviteLinkMinted(_))
             ));
@@ -6560,6 +6613,7 @@ fn an_expired_write_link_with_a_pending_write_claim_converts_then_the_sweep_cuts
         permission: Permission::Write,
         expires_at: Some(deadline),
         owner_name: "owner".to_owned(),
+        admission_cap: None,
     }));
     let Ok(CommandOutcome::InviteLinkMinted(link)) = outcome else {
         panic!("the phone mints the link: {outcome:?}");
@@ -6608,6 +6662,7 @@ fn a_direct_grantee_revoke_runs_while_the_sweep_holds_the_lock() {
             permission: Permission::Read,
             expires_at: None,
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         })),
         Ok(CommandOutcome::InviteLinkMinted(_))
     ));
@@ -6713,6 +6768,7 @@ fn the_sweep_cuts_a_link_under_its_real_parent_when_another_index_names_it() {
             permission: Permission::Read,
             expires_at: Some(deadline),
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         })),
         Ok(CommandOutcome::InviteLinkMinted(_))
     ));
@@ -7217,6 +7273,7 @@ fn a_write_claim_the_link_refuses_runs_no_write_cut() {
             permission: Permission::Write,
             expires_at: Some(deadline),
             owner_name: "owner".to_owned(),
+            admission_cap: None,
         }))
         .expect("the link mints")
     else {
@@ -7639,6 +7696,7 @@ fn a_join_past_the_link_deadline_is_refused_and_posts_nothing() {
         permission: Permission::Read,
         expires_at: Some(deadline),
         owner_name: String::new(),
+        admission_cap: None,
     }))
     .expect("the link mints");
     let CommandOutcome::InviteLinkMinted(link) = outcome else {
@@ -7873,6 +7931,7 @@ fn a_preview_past_the_link_deadline_is_expired() {
             permission: Permission::Read,
             expires_at: Some(deadline),
             owner_name: String::new(),
+            admission_cap: None,
         }))
         .expect("the link mints")
     else {

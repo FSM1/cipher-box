@@ -1,9 +1,16 @@
 import type { EngineClient, MediaService, SecretSource } from '@cipherbox/client';
-import { render, renderHook, screen } from '@testing-library/react';
+import { act, render, renderHook, screen } from '@testing-library/react';
 import { StrictMode, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sharingStore } from '../stores/sharing.store';
-import { EngineProvider, useEngine, useLoginSecretSource, useMediaService } from './EngineProvider';
+import { storedOwnerName, storeOwnerName } from '../sharing/ownerName';
+import {
+  EngineProvider,
+  useEngine,
+  useLoginSecretSource,
+  useMediaService,
+  useRebuildEngine,
+} from './EngineProvider';
 
 // The real factory reads `navigator.serviceWorker`, which jsdom does not
 // implement; the seam is what lets both outcomes be exercised.
@@ -122,6 +129,21 @@ describe('EngineProvider', () => {
 
     // A contact names this identity's peers; it must not reach the next session.
     expect(sharingStore.getState().contacts).toEqual([]);
+  });
+
+  it('keeps the owner name across a remount and forgets it on a sign-out', () => {
+    const { createClient } = clientLedger();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <EngineProvider createClient={createClient}>{children}</EngineProvider>
+    );
+    storeOwnerName('Ada');
+
+    renderHook(() => useRebuildEngine(), { wrapper }).unmount();
+    const { result } = renderHook(() => useRebuildEngine(), { wrapper });
+    expect(storedOwnerName()).toBe('Ada');
+
+    act(() => result.current());
+    expect(storedOwnerName()).toBe('');
   });
 
   it('leaves exactly one live client after a StrictMode double-mount', () => {

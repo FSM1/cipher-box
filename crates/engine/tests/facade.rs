@@ -310,6 +310,7 @@ fn minting_an_invite_link_refuses_the_vault_root() {
             permission: Permission::Read,
             expires_at: None,
             owner_name: String::new(),
+            admission_cap: None,
         })),
         Err(EngineError::UnsupportedTarget {
             check: "invite-target-is-the-vault-root"
@@ -335,6 +336,7 @@ fn minting_an_invite_link_on_an_unresolved_vault_reports_availability() {
                     permission,
                     expires_at: None,
                     owner_name: String::new(),
+                    admission_cap: None,
                 })),
                 Err(EngineError::ContentUnavailable { .. }),
             ),

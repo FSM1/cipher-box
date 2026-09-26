@@ -22,11 +22,12 @@ test('a folder offers sharing, and grants nothing before a recipient exists', as
 
   await expect(share.noGrants).toBeVisible();
   await expect(share.standingUnknown).toHaveCount(0);
+  await expect(share.mintButton).toBeEnabled();
   // No contact is imported, so the one recipient a fresh vault can name is the
   // bearer of a link.
+  await share.expandAdvanced();
   await expect(share.noContacts).toBeVisible();
   await expect(share.grantButton).toBeDisabled();
-  await expect(share.mintButton).toBeEnabled();
 });
 
 test('@full a minted invite link names the claim route and is held until it is dismissed', async ({
@@ -54,10 +55,10 @@ test('@full a minted invite link names the claim route and is held until it is d
   await share.close();
   await share.open(FOLDER);
 
-  // The scope now carries a link, so the mint gives way to the link's standing.
-  await expect(share.liveLink).toBeVisible();
-  await expect(share.liveLinkExpiry).toContainText('expires');
-  await expect(share.mintButton).toHaveCount(0);
+  // The scope now carries a link, which shows as a chip beside a further mint.
+  await expect(share.linkChips).toHaveCount(1);
+  await expect(share.linkChips).toContainText('expires');
+  await expect(share.mintButton).toBeVisible();
   // A second visit does not re-show the capability.
   await expect(share.mintedLink).toHaveCount(0);
 });
@@ -73,11 +74,11 @@ test('@full revoking the link leaves the scope it cut, and the scope takes a fur
   await share.mintLink();
   await share.close();
   await share.open(FOLDER);
-  await expect(share.liveLink).toBeVisible();
+  await expect(share.linkChips).toHaveCount(1);
 
-  await share.revokeLinkButton.click();
+  await share.revokeFirstLink();
 
-  await expect(share.liveLink).toHaveCount(0);
+  await expect(share.linkChips).toHaveCount(0);
   await expect(share.error).toHaveCount(0);
   // The mint cut a scope, and a scope outlives the link that cut it. A further
   // link or grant appends to that scope, so neither is refused.
@@ -116,5 +117,6 @@ test('@full the contact import refuses what it cannot read, and leaving retires 
   await share.cancelImport();
 
   await expect(share.error).toHaveCount(0);
+  await share.expandAdvanced();
   await expect(share.noContacts).toBeVisible();
 });
