@@ -927,7 +927,7 @@ injected `now`. It first converts the pending claims, and it keeps the
 pending-op rule of "Invites" (ADR 0023 D4). The sweep depends on the two-device
 publish fix: the drain re-resolves the root through the gate just before it
 signs and signs above the highest sequence it observed, and a confirm that reads
-a sibling's record at its own sequence is a lost race (#23 D4) the next pass
+a sibling's record at its own sequence is a lost race (FSM1/cipher-box-next#23 D4) the next pass
 rebases and signs above.
 
 ### Residuals (as amended by FSM1/cipher-box-next#38)
