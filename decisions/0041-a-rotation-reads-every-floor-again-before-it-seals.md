@@ -313,7 +313,8 @@ during the wave, from a `/shared` pass or a gated adoption of the owner's cut ma
 device, is not seen. The wave can then sign a root at a cut epoch that its own stage 2 refuses, at
 a higher sequence than the post-cut record: the defect FSM1/cipher-box#1750 closed on the owner
 re-seal. D1 covers this arm, and the code lags it. No test covers it. FSM1/cipher-box#2016 tracks
-the fix.
+the fix. FSM1/cipher-box#2063 closed this on 2026-09-27: every scope-root signer calls one gate check,
+`refuse_below_cut_floor`.
 
 **E2 — The lease holds the write-epoch floor alone.** D4 reads the cut-epoch and read-epoch floors
 under the write-epoch lease, but the lease does not stop a raise of either. The regression test
@@ -327,7 +328,8 @@ through `author_scope_root_envelope`). Its gated re-resolve (`reresolve_before_s
 ADR 0025 D2) reads the floor at stage 2, so its exposure is the E2 window. When the re-resolve is
 served no record (`NoUpdate`), the drain signs on its pass-start read with no floor read. A
 cut-epoch raise since the pass started is then not seen. FSM1/cipher-box#2016 tracks this case
-with E1.
+with E1. FSM1/cipher-box#2063 closed this on 2026-09-27: the drain reads the cut-epoch floor through the
+same gate check on every scope-root sign, whether or not the re-resolve served a record.
 
 **E4 — Nothing in the type system routes a new scope-root publish through D4.** The check lives in
 `RootPublish`, and every production `ScopeRootPublisher` uses it today. A future publisher that
