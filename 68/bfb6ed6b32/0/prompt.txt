@@ -1,0 +1,11 @@
+<task-notification>
+<task-id>a591c5240fbe0cb4c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/a591c5240fbe0cb4c.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane B: diagnose and fix #1956" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Waiting for the four review agents.</result>
+<usage><subagent_tokens>237796</subagent_tokens><tool_uses>128</tool_uses><duration_ms>1159684</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a591c5240fbe0cb4c</worktreePath><worktreeBranch>worktree-agent-a591c5240fbe0cb4c</worktreeBranch></worktree>
+</task-notification>
