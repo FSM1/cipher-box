@@ -4770,6 +4770,14 @@ where
                 if write_floor > plane.write_epoch {
                     return Err(WritePublishError::Rejected);
                 }
+                // The stage-2 mirror `RootPublish::check_publishable` runs: the
+                // re-seal signs the authorized commitment's cut epoch.
+                let cut_floor = read_cut_epoch_floor(self.floors, &self.scope_id)
+                    .await
+                    .map_err(|_| WritePublishError::NotLanded)?;
+                if self.authorized_commitment.cut_epoch < cut_floor {
+                    return Err(WritePublishError::Rejected);
+                }
                 let section = self.reseal_root(node, &plane, fresh.as_bytes(), read_epoch)?;
                 author_scope_root_with_section(
                     authoring,
@@ -11276,6 +11284,63 @@ mod tests {
             block_on(net.republish(&moved)),
             Err(WritePublishError::Rejected),
             "the seal is refused against the live floor, not the parked snapshot",
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
+    /// The wave arm of the cut bar: the root re-signs the authorized
+    /// commitment, so a cut-epoch floor raised after the enumeration parked the
+    /// root would sign a set this build's own stage 2 refuses (ADR 0041 D1).
+    #[test]
+    fn a_cut_floor_rise_before_the_root_republish_refuses_the_seal() {
+        let harness = Harness::plain();
+        let root = staged_childless_root(&harness);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
+
+        block_on(crate::gate::record_cut_epoch_floor(
+            &harness.floors,
+            &SCOPE,
+            root.grant_section.commitment.cut_epoch + 1,
+        ))
+        .expect("the cut floor rise lands");
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected),
+            "a commitment below the live cut floor must never be signed",
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
+    /// The same bar when the raise lands inside the root arm's own window, on
+    /// its write-epoch floor read.
+    #[test]
+    fn a_cut_floor_rise_inside_the_wave_publish_window_refuses_the_seal() {
+        let harness = Harness::plain();
+        let root = staged_childless_root(&harness);
+        let owner = owner_identity();
+        let floors = ConsultingFloors::wrapping(&harness.floors);
+        let net = wave_with(
+            &harness,
+            &owner,
+            &root.name,
+            &root.grant_section.commitment,
+            &floors,
+            &harness.entropy,
+        );
+        enumerate_root(&net);
+
+        floors.cut_on_write_read(1, root.grant_section.commitment.cut_epoch + 1);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected),
+        );
+        assert!(
+            floors.fired.get(),
+            "the raise must reach the guard's window"
         );
         assert!(!published_at(&harness, &moved.new_name));
     }

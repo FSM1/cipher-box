@@ -29,6 +29,7 @@ use std::rc::Rc;
 use cipherbox_core::content::{
     decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid, verify_cid,
 };
+use cipherbox_core::error::TrustViolation;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -58,7 +59,9 @@ use crate::facade::{
     emit_trust_violation,
 };
 use crate::gate::GateStage;
-use crate::gate::{Adopted, GateError, GateRejection, RejectionReason, floor};
+use crate::gate::{
+    Adopted, GateError, GateRejection, RejectionReason, floor, read_cut_epoch_floor,
+};
 use crate::grants::grafted::{FloorNamespace, GraftedPlane};
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
@@ -1264,6 +1267,8 @@ struct FolderState {
     /// The scope root carries the grant section and authors through a different
     /// envelope path; every other folder is a plain child record.
     is_scope_root: bool,
+    /// The cut epoch of the commitment a scope root carries; `None` on a child.
+    carried_cut_epoch: Option<u64>,
     envelope_unknown: PreservedFields,
     epoch_tag_unknown: PreservedFields,
     created_at: u64,
@@ -2350,16 +2355,16 @@ where
         let epoch = envelope.epoch;
         // A scope root the root gate passed carries a decodable section; bytes
         // that do not are not a root this pass may anchor a ratchet on.
-        let history_links = grant_section_bytes(&envelope)
+        let section = grant_section_bytes(&envelope)
             .and_then(|bytes| decode_grant_section(bytes).ok())
-            .ok_or(Halt::Unclassified)?
-            .history_links;
+            .ok_or(Halt::Unclassified)?;
         Ok(LoadedRoot {
             state: FolderState {
                 plane_root: source.root,
                 name: source.root_name.clone(),
                 record: record_bytes.to_vec(),
                 is_scope_root: true,
+                carried_cut_epoch: Some(section.commitment.cut_epoch),
                 envelope_unknown: envelope.unknown,
                 epoch_tag_unknown: envelope.epoch_tag_unknown,
                 created_at,
@@ -2369,7 +2374,7 @@ where
                 sequence,
             },
             epoch,
-            history_links,
+            history_links: section.history_links,
         })
     }
 
@@ -2661,6 +2666,7 @@ where
             name: loaded.name,
             record: loaded.record,
             is_scope_root: false,
+            carried_cut_epoch: None,
             envelope_unknown: loaded.envelope_unknown,
             epoch_tag_unknown: loaded.epoch_tag_unknown,
             created_at,
@@ -5916,11 +5922,20 @@ where
         modified_at: u64,
         completes: Option<OpId>,
     ) -> Result<u64, PublishHalt> {
-        let (name, is_scope_root, built_on, body, envelope_unknown, epoch_tag_unknown) = {
+        let (
+            name,
+            is_scope_root,
+            carried_cut_epoch,
+            built_on,
+            body,
+            envelope_unknown,
+            epoch_tag_unknown,
+        ) = {
             let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
             (
                 state.name.clone(),
                 state.is_scope_root,
+                state.carried_cut_epoch,
                 (state.sequence, state.record.clone()),
                 ReadBody::Folder {
                     created_at: state.created_at,
@@ -5935,7 +5950,7 @@ where
         let plane = scope
             .folder_plane(pass, folder)
             .map_err(PublishHalt::before_the_put)?;
-        self.reresolve_before_signing(scope, &plane, folder, &name, is_scope_root, &built_on)
+        self.reresolve_before_signing(scope, &plane, folder, &name, carried_cut_epoch, &built_on)
             .await
             .map_err(PublishHalt::before_the_put)?;
         let published = self
@@ -5969,16 +5984,19 @@ where
     /// publish mints above. A record above `built_on`, or a sequence the
     /// endpoints serve only with other bytes, halts this attempt so the next
     /// pass rebases onto what they serve.
+    ///
+    /// `carried_cut_epoch` is `Some` on a scope root, which then also re-reads
+    /// its cut-epoch floor ([`Self::refuse_below_cut_floor`]).
     async fn reresolve_before_signing(
         &self,
         scope: &DrainScope<'_>,
         plane: &SealPlane<'_>,
         folder: NodeId,
         name: &IpnsName,
-        is_scope_root: bool,
+        carried_cut_epoch: Option<u64>,
         built_on: &(u64, Vec<u8>),
     ) -> Result<(), Halt> {
-        let served = if is_scope_root {
+        let served = if carried_cut_epoch.is_some() {
             let resolved = self
                 .gated_scope_root(scope, &plane.end, ResolveMode::NoCache)
                 .await?;
@@ -5991,10 +6009,37 @@ where
         } else {
             self.served_child(plane, folder, name).await?
         };
-        match served {
-            Some(served) if served.moved_past(built_on) => Err(Halt::LostRace),
-            _ => Ok(()),
+        if served.is_some_and(|served| served.moved_past(built_on)) {
+            return Err(Halt::LostRace);
         }
+        match carried_cut_epoch {
+            Some(cut_epoch) => self.refuse_below_cut_floor(plane, name, cut_epoch).await,
+            None => Ok(()),
+        }
+    }
+
+    /// The stage-2 mirror on the scope root about to be signed, read after its
+    /// re-resolve. A resolve the endpoints answer with nothing raises no floor,
+    /// and the pass would otherwise sign its pass-start section over a cut it
+    /// never saw (ADR 0041 D1).
+    async fn refuse_below_cut_floor(
+        &self,
+        plane: &SealPlane<'_>,
+        name: &IpnsName,
+        cut_epoch: u64,
+    ) -> Result<(), Halt> {
+        let floors = plane.end.floors(&self.seams.floors);
+        let cut_floor = read_cut_epoch_floor(&floors, &plane.end.root.0)
+            .await
+            .map_err(seam)?;
+        if cut_epoch >= cut_floor {
+            return Ok(());
+        }
+        let rejection = GateRejection {
+            stage: GateStage::CommitmentVerify,
+            reason: RejectionReason::Trust(TrustViolation::CommitmentInvalid.into()),
+        };
+        Err(refuse_record(&self.seams.events, name, &rejection))
     }
 
     /// What an interior folder's name now serves, through the child gate. A
@@ -7140,6 +7185,7 @@ mod tests {
                     name: derive_write_name(&Zeroizing::new([4; 32]), &folder.0),
                     record: Vec::new(),
                     is_scope_root: false,
+                    carried_cut_epoch: None,
                     envelope_unknown: PreservedFields::new(),
                     epoch_tag_unknown: PreservedFields::new(),
                     created_at: 1,

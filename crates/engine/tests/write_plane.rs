@@ -35,6 +35,7 @@ use cipherbox_engine::content::{
     SessionBearer, assemble, decode_root,
 };
 use cipherbox_engine::facade::{BinOrigin, PendingClass, SnapshotView};
+use cipherbox_engine::gate::record_cut_epoch_floor;
 use cipherbox_engine::net::OrphanHeads;
 use cipherbox_engine::net::author::{
     AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
@@ -2557,6 +2558,45 @@ fn a_refused_root_authoring_names_the_check_that_fired_on_the_pass_it_fired() {
             .dead_letters
             .is_empty(),
         "and it arrives while the op is still being retried, not once its budget is spent"
+    );
+}
+
+/// A re-resolve the endpoints answer with nothing leaves the pass on the
+/// section it read at pass start. A cut-epoch floor raised since then must
+/// still refuse the scope-root sign, or the drain re-signs a pre-cut set above
+/// the owner's post-cut record (ADR 0041 D1).
+#[test]
+fn a_cut_floor_rise_behind_an_unserved_re_resolve_refuses_the_root_sign() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    world.record_store.fail_get_for(write_name(ROOT).as_str());
+    block_on(record_cut_epoch_floor(&alice.floors(&SECRET), &SCOPE, 1))
+        .expect("the cut floor rises");
+    create(&mut engine, "photos");
+    let _ = events_so_far(&mut events);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published(&world.record_store, ROOT).0,
+        1,
+        "no root is signed over a commitment below the live cut floor"
+    );
+    assert!(
+        events_so_far(&mut events)
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "the refusal is reported as a trust verdict"
+    );
+    assert_eq!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .len(),
+        1,
+        "the op stays queued for the pass that rebases on the post-cut root"
     );
 }
 
