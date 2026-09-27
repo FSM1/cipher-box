@@ -174,11 +174,11 @@ use crate::sync::staging::{
     read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
     release_version_blocks, stage_op, take_dead_letter_notice, take_preserved_dead_letter,
 };
-use crate::sync::staleness::{Connectivity, classify};
+use crate::sync::staleness::{Connectivity, classify, next_boundary};
 use crate::sync::tick::{
-    FocusFile, ResolveMode, TickControl, focus_folders_due, focus_scope_roots, nodes_in_scope,
-    on_access_refresh_due, queue_focus_file, queue_unprojected_children, run_tick_loop,
-    scope_root_record_name, settle_focus_leg,
+    FocusFile, ResolveMode, TickControl, elapsed_at_least, focus_folders_due, focus_scope_roots,
+    nodes_in_scope, on_access_refresh_due, queue_focus_file, queue_unprojected_children,
+    run_tick_loop, run_with_boundaries, scope_root_record_name, settle_focus_leg,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -1065,7 +1065,8 @@ impl From<cipherbox_core::seal::Permission> for Permission {
 pub enum Staleness {
     /// View is within the freshness window.
     Fresh,
-    /// A background reconcile is in flight (quiet indicator).
+    /// A background reconcile is in flight (quiet indicator), bounded by
+    /// [`SyncTimingProfile::refresh_deadline`].
     Reconciling,
     /// Past the profile threshold: stale badge, "last synced X ago".
     Stale,
@@ -4070,14 +4071,42 @@ fn count_nodes(snapshot: &Snapshot) -> u64 {
     seen.len() as u64
 }
 
-/// Staleness-ladder inputs (#33 D4): the last successful reconcile, whether one
-/// is in flight, and the last rung reported — [`Event::StalenessChanged`] fires
-/// only on a rung change.
+/// Staleness-ladder inputs (#33 D4): the last successful reconcile, when the
+/// pass in flight began, and the last rung the host was told.
+/// [`Event::StalenessChanged`] fires only on a change from `reported`.
 #[derive(Default)]
 pub(crate) struct SyncStatus {
     pub(crate) last_success: Option<UnixMillis>,
-    pub(crate) reconcile_in_flight: bool,
+    pub(crate) reconcile_started: Option<UnixMillis>,
+    /// Set by a host read as well as by an event: a read returns the
+    /// in-flight rung, so the pass that ends it must send its successor.
     pub(crate) reported: Option<Staleness>,
+}
+
+impl SyncStatus {
+    /// The rung at `now`, recorded as the one the host holds, and whether the
+    /// host held another.
+    fn observe(&mut self, now: UnixMillis, profile: &SyncTimingProfile) -> (Staleness, bool) {
+        let rung = classify(
+            now,
+            self.last_success,
+            self.reconcile_started,
+            Connectivity::Online,
+            profile,
+        );
+        (rung, self.reported.replace(rung) != Some(rung))
+    }
+
+    /// How long until the rung changes with no new input
+    /// ([`next_boundary`]).
+    fn until_boundary(
+        &self,
+        now: UnixMillis,
+        profile: &SyncTimingProfile,
+    ) -> Option<core::time::Duration> {
+        next_boundary(now, self.last_success, self.reconcile_started, profile)
+            .map(|at| core::time::Duration::from_millis(at.0 - now.0))
+    }
 }
 
 /// Drop the proved-descendant set a session leaves behind.
@@ -5663,7 +5692,27 @@ where {
                     &pass.manual,
                     interval,
                     async |cause| {
-                        let report = pass.run(&state, cause).await;
+                        let started = pass.seams.scheduler.now();
+                        state.sync_status.borrow_mut().reconcile_started = Some(started);
+                        let report = run_with_boundaries(
+                            &pass.seams.scheduler,
+                            pass.run(&state, cause),
+                            || {
+                                state
+                                    .sync_status
+                                    .borrow()
+                                    .until_boundary(pass.seams.scheduler.now(), &pass.seams.profile)
+                            },
+                            || {
+                                let now = pass.seams.scheduler.now();
+                                let deadline = pass.seams.profile.refresh_deadline;
+                                if elapsed_at_least(now, started, deadline) {
+                                    pass.manual.overdue();
+                                }
+                                report_rung(&state, now, &pass.seams.profile, &pass.seams.events);
+                            },
+                        )
+                        .await;
                         if report.stop {
                             return TickControl::Stop;
                         }
@@ -10013,16 +10062,14 @@ where {
             .collect()
     }
 
-    /// The staleness rung at this instant, off the injected clock.
+    /// The staleness rung at this instant, off the injected clock, handed to
+    /// the host ([`SyncStatus::observe`]).
     fn staleness_now(&self) -> Staleness {
-        let status = self.state.sync_status.borrow();
-        classify(
-            self.seams.scheduler.now(),
-            status.last_success,
-            status.reconcile_in_flight,
-            Connectivity::Online,
-            &self.profile,
-        )
+        self.state
+            .sync_status
+            .borrow_mut()
+            .observe(self.seams.scheduler.now(), &self.profile)
+            .0
     }
 
     /// Scan the durable staging store's queue for this session. Undecodable
@@ -10803,23 +10850,28 @@ fn stamp_staleness(
     profile: &SyncTimingProfile,
     events: &mpsc::UnboundedSender<Event>,
 ) {
-    let mut status = state.sync_status.borrow_mut();
-    status.reconcile_in_flight = false;
-    if converged {
-        status.last_success = Some(now);
-        // Set after the pass's drain stage, so the pass that converges the
-        // base is never the pass that decides against it.
-        state.converged_tick.set(true);
+    {
+        let mut status = state.sync_status.borrow_mut();
+        status.reconcile_started = None;
+        if converged {
+            status.last_success = Some(now);
+            // Set after the pass's drain stage, so the pass that converges the
+            // base is never the pass that decides against it.
+            state.converged_tick.set(true);
+        }
     }
-    let rung = classify(
-        now,
-        status.last_success,
-        status.reconcile_in_flight,
-        Connectivity::Online,
-        profile,
-    );
-    if status.reported != Some(rung) {
-        status.reported = Some(rung);
+    report_rung(state, now, profile, events);
+}
+
+/// Classify the ladder at `now`, and send the rung if the host holds another.
+fn report_rung(
+    state: &SessionState,
+    now: UnixMillis,
+    profile: &SyncTimingProfile,
+    events: &mpsc::UnboundedSender<Event>,
+) {
+    let (rung, changed) = state.sync_status.borrow_mut().observe(now, profile);
+    if changed {
         let _ = events.unbounded_send(Event::StalenessChanged { level: rung });
     }
 }

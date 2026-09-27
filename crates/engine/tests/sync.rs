@@ -405,7 +405,7 @@ fn staleness_ladder_climbs_fresh_reconciling_stale_offline() {
         classify(
             UnixMillis(10_000),
             Some(last),
-            false,
+            None,
             Connectivity::Online,
             &p
         ),
@@ -416,7 +416,7 @@ fn staleness_ladder_climbs_fresh_reconciling_stale_offline() {
         classify(
             UnixMillis(10_000),
             Some(last),
-            true,
+            Some(UnixMillis(5_000)),
             Connectivity::Online,
             &p
         ),
@@ -427,7 +427,7 @@ fn staleness_ladder_climbs_fresh_reconciling_stale_offline() {
         classify(
             UnixMillis(120_000),
             Some(last),
-            false,
+            None,
             Connectivity::Online,
             &p
         ),
@@ -438,7 +438,7 @@ fn staleness_ladder_climbs_fresh_reconciling_stale_offline() {
         classify(
             UnixMillis(120_000),
             Some(last),
-            false,
+            None,
             Connectivity::Offline,
             &p
         ),

@@ -88,6 +88,12 @@ pub struct SyncTimingProfile {
     /// device convert it first. A device offline past the grace loses the
     /// claim, as it does to a manual link revoke.
     pub link_sweep_grace: Duration,
+    /// How long a sync pass may run before a manual refresh waiting on it
+    /// reports a failure and the ladder stops showing `Reconciling`. One host
+    /// record-request deadline (web `RECORD_TIMEOUT_MS`, desktop
+    /// `ReqwestRecordTransport`), which neither profile compresses: a pass
+    /// that waits on more than one has stalled, not reconciled slowly.
+    pub refresh_deadline: Duration,
 }
 
 impl SyncTimingProfile {
@@ -116,6 +122,7 @@ impl SyncTimingProfile {
         settings_recheck_interval: Duration::from_secs(300),
         link_sweep_cadence: Duration::from_secs(600),
         link_sweep_grace: Duration::from_secs(1200),
+        refresh_deadline: Duration::from_secs(30),
     };
 
     /// CI policy: record TTL 1–5 s (small but nonzero) and compressed
@@ -134,6 +141,7 @@ impl SyncTimingProfile {
         settings_recheck_interval: Duration::from_secs(2),
         link_sweep_cadence: Duration::from_secs(3),
         link_sweep_grace: Duration::from_secs(6),
+        refresh_deadline: Duration::from_secs(30),
     };
 }
 
@@ -256,6 +264,10 @@ mod tests {
             assert!(
                 !profile.settings_load_budget.is_zero(),
                 "a zero budget would time out every settings load"
+            );
+            assert!(
+                !profile.refresh_deadline.is_zero(),
+                "a zero deadline would fail every manual refresh"
             );
         }
     }

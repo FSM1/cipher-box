@@ -21,6 +21,7 @@ use crate::facade::{Event, MAX_FOCUS_FILES, NodeId, NodeKind};
 use crate::net::FolderRefreshReport;
 use crate::net::rotation::scope_name;
 use crate::profile::SyncTimingProfile;
+use crate::record_plane::within;
 use crate::seams::{Scheduler, UnixMillis};
 use crate::sync::drain::hold_captures;
 use crate::sync::model::Snapshot;
@@ -477,6 +478,26 @@ pub(crate) async fn run_tick_loop<Sch>(
     manual.close();
 }
 
+/// Drive `work` to its end, calling `at_boundary` each time the wait
+/// `until_next` names elapses first; `until_next` is re-read after each call,
+/// and `None` waits for the work alone. Unlike [`within`], the work is never dropped: a pass cut
+/// mid-drain would strand what it had half published.
+pub(crate) async fn run_with_boundaries<S: Scheduler, W: core::future::Future>(
+    scheduler: &S,
+    work: W,
+    mut until_next: impl FnMut() -> Option<Duration>,
+    mut at_boundary: impl FnMut(),
+) -> W::Output {
+    let mut work = pin!(work);
+    while let Some(wait) = until_next() {
+        if let Some(out) = within(scheduler, wait, work.as_mut()).await {
+            return out;
+        }
+        at_boundary();
+    }
+    work.await
+}
+
 /// Stamp every folder a focus pass attempted against the caller's clock
 /// reading. Attempts, not merges: an unresolvable folder must not turn every
 /// navigation into a fresh endpoint fan-out, and the poll leg refreshes the
@@ -640,7 +661,7 @@ pub(crate) fn settle_focus_leg(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     /// The window a stream holds open, at `touched`.
     fn touched_at(nodes: &[(NodeId, u64)]) -> FocusWindow {
@@ -1035,6 +1056,44 @@ mod tests {
             manual.filed().is_none(),
             "no loop remains to answer a request"
         );
+    }
+
+    /// Each boundary the work outlives is reported once, and the work still
+    /// runs to its own end.
+    #[test]
+    fn work_outliving_its_boundaries_reports_each_and_still_finishes() {
+        use core::task::{Context, Waker};
+        let scheduler = VirtualScheduler::new();
+        let step = Duration::from_secs(30);
+        let mut waits = vec![step, step];
+        let reported = Cell::new(0u32);
+        let mut run = pin!(run_with_boundaries(
+            &scheduler,
+            async {
+                scheduler.sleep(step * 3).await;
+                7
+            },
+            || waits.pop(),
+            || reported.set(reported.get() + 1),
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(run.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(
+            reported.get(),
+            0,
+            "inside its first boundary nothing is reported"
+        );
+
+        scheduler.advance(step);
+        assert!(run.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(reported.get(), 1);
+        scheduler.advance(step);
+        assert!(run.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(reported.get(), 2);
+
+        scheduler.advance(step);
+        assert_eq!(run.as_mut().poll(&mut cx), Poll::Ready(7));
+        assert_eq!(reported.get(), 2, "no boundary is left to report");
     }
 
     #[test]

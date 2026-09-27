@@ -32,6 +32,9 @@ pub(crate) enum RefreshVerdict {
     /// The record plane served a record the adoption gate rejected —
     /// fail-closed, not staleness.
     Rejected,
+    /// The pass ran past `SyncTimingProfile::refresh_deadline` before it
+    /// settled. Availability: the pass runs on, and a later refresh may land.
+    Overdue,
 }
 
 impl RefreshVerdict {
@@ -43,6 +46,7 @@ impl RefreshVerdict {
         match (self, other) {
             (Self::Rejected, _) | (_, Self::Rejected) => Self::Rejected,
             (Self::Unreachable, _) | (_, Self::Unreachable) => Self::Unreachable,
+            (Self::Overdue, _) | (_, Self::Overdue) => Self::Overdue,
             (Self::Reconciled, Self::Reconciled) => Self::Reconciled,
         }
     }
@@ -73,6 +77,9 @@ impl ForcedPass {
             Ok(RefreshVerdict::Rejected) => Err(EngineError::TrustViolation {
                 message: "the record plane served a record the adoption gate rejected".to_owned(),
             }),
+            Ok(RefreshVerdict::Overdue) => Err(EngineError::RefreshFailed {
+                message: "the pass did not land within the refresh deadline".to_owned(),
+            }),
             Err(_) => Err(EngineError::RefreshFailed {
                 message: "the sync loop stopped before the pass ran".to_owned(),
             }),
@@ -93,8 +100,18 @@ impl ForcedPass {
 /// One filed request's two answers: the read verdict, and the end of the pass
 /// that carried it.
 struct Pending {
-    verdict: oneshot::Sender<RefreshVerdict>,
+    /// `None` once answered early ([`ManualRefresh::overdue`]); the request
+    /// still waits for its pass to drain.
+    verdict: Option<oneshot::Sender<RefreshVerdict>>,
     drained: oneshot::Sender<()>,
+}
+
+impl Pending {
+    fn answer(&mut self, verdict: RefreshVerdict) {
+        if let Some(sender) = self.verdict.take() {
+            let _ = sender.send(verdict);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -109,6 +126,8 @@ struct Inner {
     waker: Option<Waker>,
     /// Whether a tick loop is live to answer requests at all.
     armed: bool,
+    /// The pass in flight ran past its deadline; cleared at the end of its tick.
+    overdue: bool,
 }
 
 /// The shared handle both the tick loop and the command path hold.
@@ -129,11 +148,18 @@ impl ManualRefresh {
     pub(crate) fn filed(&self) -> Option<ForcedPass> {
         let (verdict, verdict_rx) = oneshot::channel();
         let (drained, drained_rx) = oneshot::channel();
-        let pending = Pending { verdict, drained };
+        let mut pending = Pending {
+            verdict: Some(verdict),
+            drained,
+        };
         let waker = {
             let mut inner = self.inner.borrow_mut();
             if !inner.armed {
                 return None;
+            }
+            // The pass it would wait behind has already stalled past the bound.
+            if inner.overdue {
+                pending.answer(RefreshVerdict::Overdue);
             }
             match &mut inner.running {
                 // Join the running pass rather than queueing a second: two
@@ -180,16 +206,31 @@ impl ManualRefresh {
     pub(crate) fn settle(&self, verdict: RefreshVerdict) {
         let running = self.inner.borrow_mut().running.take();
         let mut draining = Vec::new();
-        for pending in running.into_iter().flatten() {
-            let _ = pending.verdict.send(verdict);
+        for mut pending in running.into_iter().flatten() {
+            pending.answer(verdict);
             draining.push(pending.drained);
         }
         self.inner.borrow_mut().draining.append(&mut draining);
     }
 
+    /// Fails the read verdict of every request waiting on the pass in flight,
+    /// and of every request filed until its tick ends: that pass ran past the
+    /// refresh deadline. Each request still waits for a pass to drain it.
+    pub(crate) fn overdue(&self) {
+        let mut inner = self.inner.borrow_mut();
+        inner.overdue = true;
+        let Inner {
+            queued, running, ..
+        } = &mut *inner;
+        for pending in queued.iter_mut().chain(running.iter_mut().flatten()) {
+            pending.answer(RefreshVerdict::Overdue);
+        }
+    }
+
     /// Answers every request whose verdict this tick already settled, at the
     /// end of the tick that carried them.
     pub(crate) fn settle_drained(&self) {
+        self.inner.borrow_mut().overdue = false;
         let draining = core::mem::take(&mut self.inner.borrow_mut().draining);
         for sender in draining {
             let _ = sender.send(());
@@ -205,6 +246,7 @@ impl ManualRefresh {
         inner.running = None;
         inner.draining.clear();
         inner.waker = None;
+        inner.overdue = false;
     }
 }
 
@@ -242,9 +284,9 @@ mod tests {
 
     #[test]
     fn the_worst_leg_settles_the_pass() {
-        use RefreshVerdict::{Reconciled, Rejected, Unreachable};
+        use RefreshVerdict::{Overdue, Reconciled, Rejected, Unreachable};
         assert_eq!(Reconciled.worst(Reconciled), Reconciled);
-        for verdict in [Reconciled, Unreachable, Rejected] {
+        for verdict in [Reconciled, Unreachable, Rejected, Overdue] {
             assert_eq!(
                 verdict.worst(Rejected),
                 Rejected,
@@ -254,6 +296,7 @@ mod tests {
         }
         assert_eq!(Reconciled.worst(Unreachable), Unreachable);
         assert_eq!(Unreachable.worst(Reconciled), Unreachable);
+        assert_eq!(Reconciled.worst(Overdue), Overdue);
     }
 
     /// A filed pass carries the verdict mapping, so a host that awaits it off
@@ -275,6 +318,7 @@ mod tests {
                         .to_owned(),
                 }),
             ),
+            (RefreshVerdict::Overdue, Err(overdue())),
         ] {
             let manual = ManualRefresh::default();
             manual.arm();
@@ -283,6 +327,40 @@ mod tests {
             manual.settle(verdict);
             assert_eq!(block_on(pass.landed()), expected, "{verdict:?}");
         }
+    }
+
+    fn overdue() -> EngineError {
+        EngineError::RefreshFailed {
+            message: "the pass did not land within the refresh deadline".to_owned(),
+        }
+    }
+
+    /// An overdue pass fails every request waiting on it, and every request
+    /// filed until its tick ends, while each still waits for a pass to drain.
+    #[test]
+    fn an_overdue_pass_fails_its_requests_and_those_filed_behind_it() {
+        let manual = ManualRefresh::default();
+        manual.arm();
+        let running = manual.filed().expect("armed");
+        manual.begin();
+        manual.overdue();
+        let joined = manual.filed().expect("armed");
+        manual.settle(RefreshVerdict::Reconciled);
+        assert_eq!(landed(running), Err(overdue()));
+        assert_eq!(landed(joined), Err(overdue()));
+        manual.settle_drained();
+
+        // A poll pass takes no request, so one filed behind it queues.
+        let queued = manual.filed().expect("armed");
+        manual.overdue();
+        assert_eq!(landed(queued), Err(overdue()));
+        assert!(requested(&manual), "the failed request still brings a pass");
+        manual.settle_drained();
+
+        let next_tick = manual.filed().expect("armed");
+        manual.begin();
+        manual.settle(RefreshVerdict::Reconciled);
+        assert_eq!(landed(next_tick), Ok(()), "the next tick is not overdue");
     }
 
     /// A pass no tick will answer must fail rather than park past the engine —

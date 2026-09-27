@@ -414,7 +414,6 @@ where
         // A gate-passing `Adopted` repaints the shared base cell and emits
         // `SnapshotUpdated`; `Current`/`NoUpdate`/`TrustViolation` leave
         // last-known-good intact (fail-closed for data).
-        state.sync_status.borrow_mut().reconcile_in_flight = true;
         let mut held_resolve = resolve_and_hold(
             &self.seams.transport,
             &self.seams.snapshot_cache,

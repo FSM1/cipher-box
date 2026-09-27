@@ -283,8 +283,9 @@ impl InMemoryRecordStore {
         self.dropping_puts.store(true, Ordering::SeqCst);
     }
 
-    /// Park every GET under `routing_key` for ever once `budget` more of them
-    /// have answered, so a test can hold one caller mid-read.
+    /// Park every GET under `routing_key` once `budget` more of them have
+    /// answered, until [`release_gets_for`](Self::release_gets_for), so a test
+    /// can hold one caller mid-read.
     pub fn stall_gets_for_after(&self, routing_key: &str, budget: usize) {
         self.stalling_keys
             .lock()
@@ -297,6 +298,17 @@ impl InMemoryRecordStore {
     /// rather than spinning.
     pub fn stall_gets(&self) {
         self.stalling_gets.store(true, Ordering::SeqCst);
+    }
+
+    /// Answer every GET [`stall_gets_for_after`](Self::stall_gets_for_after)
+    /// parked under `routing_key`, and stop stalling it.
+    pub fn release_gets_for(&self, routing_key: &str) {
+        self.stalling_keys.lock().expect("lock").remove(routing_key);
+    }
+
+    /// Whether `routing_key`'s stall budget is spent.
+    fn stalls(&self, routing_key: &str) -> bool {
+        self.stalling_keys.lock().expect("lock").get(routing_key) == Some(&0)
     }
 
     /// Whether `routing_key`'s GET is currently injected to fail everywhere.
@@ -326,7 +338,7 @@ impl RecordTransport for InMemoryRecordStore {
             .expect("lock")
             .entry(routing_key.to_owned())
             .or_default() += 1;
-        let stalled = self
+        let parked = self
             .stalling_keys
             .lock()
             .expect("lock")
@@ -338,8 +350,18 @@ impl RecordTransport for InMemoryRecordStore {
                 }
                 None => true,
             });
-        if stalled || self.stalling_gets.load(Ordering::SeqCst) {
+        if self.stalling_gets.load(Ordering::SeqCst) {
             return core::future::poll_fn(|_| core::task::Poll::Pending).await;
+        }
+        if parked {
+            core::future::poll_fn(|_| {
+                if self.stalls(routing_key) {
+                    core::task::Poll::Pending
+                } else {
+                    core::task::Poll::Ready(())
+                }
+            })
+            .await;
         }
         if self.get_failing(endpoint) {
             return Err(SeamError::new(format!(

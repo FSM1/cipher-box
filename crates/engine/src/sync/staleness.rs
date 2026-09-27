@@ -16,6 +16,7 @@
 use crate::facade::Staleness;
 use crate::profile::SyncTimingProfile;
 use crate::seams::UnixMillis;
+use crate::sync::tick::elapsed_at_least;
 
 /// Host connectivity as the engine observes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,20 +31,25 @@ pub enum Connectivity {
 /// `Reconciling`, then `Stale`/`Fresh` split on the profile's `stale_after`
 /// (≈ 3 missed poll cycles).
 ///
+/// `reconcile_started` is when the pass in flight began; it shows
+/// `Reconciling` for one [`SyncTimingProfile::refresh_deadline`] only.
+///
 /// A cold cache (`last_success` is `None`) with no reconcile in flight while
 /// online reports `Reconciling`: the empty-cache cold-start *error* is the
 /// caller's separate concern, not a staleness rung.
 pub fn classify(
     now: UnixMillis,
     last_success: Option<UnixMillis>,
-    reconcile_in_flight: bool,
+    reconcile_started: Option<UnixMillis>,
     connectivity: Connectivity,
     profile: &SyncTimingProfile,
 ) -> Staleness {
     if connectivity == Connectivity::Offline {
         return Staleness::Offline;
     }
-    if reconcile_in_flight {
+    if reconcile_started
+        .is_some_and(|started| !elapsed_at_least(now, started, profile.refresh_deadline))
+    {
         return Staleness::Reconciling;
     }
     match last_success {
@@ -57,6 +63,24 @@ pub fn classify(
             }
         }
     }
+}
+
+/// The next instant after `now` at which [`classify`] changes rung with no new
+/// input: the end of the in-flight rung, which masks every later threshold, or
+/// else the stale threshold.
+pub(crate) fn next_boundary(
+    now: UnixMillis,
+    last_success: Option<UnixMillis>,
+    reconcile_started: Option<UnixMillis>,
+    profile: &SyncTimingProfile,
+) -> Option<UnixMillis> {
+    let end = |since: UnixMillis, after| {
+        Some(since.0.saturating_add(crate::sync::duration_millis(after))).filter(|&at| at > now.0)
+    };
+    reconcile_started
+        .and_then(|started| end(started, profile.refresh_deadline))
+        .or_else(|| last_success.and_then(|last| end(last, profile.stale_after)))
+        .map(UnixMillis)
 }
 
 /// Whether a shared-scope name pinned since `pinned_since` should raise the
@@ -88,7 +112,7 @@ mod tests {
             classify(
                 UnixMillis(0),
                 Some(UnixMillis(0)),
-                true,
+                Some(UnixMillis(0)),
                 Connectivity::Offline,
                 &P
             ),
@@ -102,11 +126,59 @@ mod tests {
             classify(
                 UnixMillis(1_000),
                 Some(UnixMillis(0)),
-                true,
+                Some(UnixMillis(0)),
                 Connectivity::Online,
                 &P
             ),
             Staleness::Reconciling
+        );
+    }
+
+    /// A pass that outruns the refresh deadline reads as the age of the last
+    /// success, so a stalled pass cannot hold the indicator on `Reconciling`.
+    #[test]
+    fn a_reconcile_past_the_refresh_deadline_reads_as_the_last_success() {
+        let deadline_ms = crate::sync::duration_millis(P.refresh_deadline);
+        let started = Some(UnixMillis(0));
+        let rung = |now| {
+            classify(
+                UnixMillis(now),
+                Some(UnixMillis(0)),
+                started,
+                Connectivity::Online,
+                &P,
+            )
+        };
+        assert_eq!(rung(deadline_ms - 1), Staleness::Reconciling);
+        assert_eq!(rung(deadline_ms), Staleness::Fresh);
+        assert_eq!(
+            rung(crate::sync::duration_millis(P.stale_after)),
+            Staleness::Stale
+        );
+    }
+
+    #[test]
+    fn the_next_boundary_is_the_nearest_rung_change_ahead() {
+        let deadline = crate::sync::duration_millis(P.refresh_deadline);
+        let stale = crate::sync::duration_millis(P.stale_after);
+        let boundary =
+            |now, started| next_boundary(UnixMillis(now), Some(UnixMillis(0)), started, &P);
+        assert_eq!(boundary(0, Some(UnixMillis(0))), Some(UnixMillis(deadline)));
+        assert_eq!(
+            boundary(deadline, Some(UnixMillis(0))),
+            Some(UnixMillis(stale)),
+            "a boundary reached is not the next one"
+        );
+        assert_eq!(boundary(stale, None), None, "nothing changes past stale");
+        assert_eq!(
+            next_boundary(
+                UnixMillis(stale - 1),
+                Some(UnixMillis(0)),
+                Some(UnixMillis(stale - 2)),
+                &P
+            ),
+            Some(UnixMillis(stale - 2 + deadline)),
+            "the stale threshold changes no rung while the pass reads as reconciling"
         );
     }
 
@@ -118,7 +190,7 @@ mod tests {
             classify(
                 UnixMillis(89_000),
                 Some(last),
-                false,
+                None,
                 Connectivity::Online,
                 &P
             ),
@@ -129,7 +201,7 @@ mod tests {
             classify(
                 UnixMillis(90_000),
                 Some(last),
-                false,
+                None,
                 Connectivity::Online,
                 &P
             ),
@@ -140,7 +212,7 @@ mod tests {
     #[test]
     fn cold_cache_online_is_reconciling_not_an_error_rung() {
         assert_eq!(
-            classify(UnixMillis(10_000), None, false, Connectivity::Online, &P),
+            classify(UnixMillis(10_000), None, None, Connectivity::Online, &P),
             Staleness::Reconciling
         );
     }
