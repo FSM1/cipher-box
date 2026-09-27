@@ -172,7 +172,7 @@ use crate::sync::staging::{
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    FocusFile, FocusQueueOrigin, FocusWindow, ResolveMode, focus_folders_due,
+    FocusFile, FocusQueueOrigin, FocusWindow, ResolveMode, TickControl, focus_folders_due,
     on_access_refresh_due, run_tick_loop, scope_root_of,
 };
 
@@ -6358,7 +6358,20 @@ where {
                     &pass.seams.scheduler,
                     &pass.manual,
                     interval,
-                    async |cause| pass.run(&state, cause).await,
+                    async |cause| {
+                        let report = pass.run(&state, cause).await;
+                        if report.stop {
+                            return TickControl::Stop;
+                        }
+                        stamp_staleness(
+                            &state,
+                            report.converged(),
+                            pass.seams.scheduler.now(),
+                            &pass.seams.profile,
+                            &pass.seams.events,
+                        );
+                        TickControl::Continue
+                    },
                 )
                 .await;
             }));
@@ -11473,6 +11486,35 @@ fn open_engine_error(error: OpenError) -> EngineError {
         OpenError::UnsupportedFormat { version } => {
             EngineError::UnsupportedContentFormat { version }
         }
+    }
+}
+
+/// Stamp the staleness ladder after one pass, and report a rung change.
+fn stamp_staleness(
+    state: &SessionState,
+    converged: bool,
+    now: UnixMillis,
+    profile: &SyncTimingProfile,
+    events: &mpsc::UnboundedSender<Event>,
+) {
+    let mut status = state.sync_status.borrow_mut();
+    status.reconcile_in_flight = false;
+    if converged {
+        status.last_success = Some(now);
+        // Set after the pass's drain stage, so the pass that converges the
+        // base is never the pass that decides against it.
+        state.converged_tick.set(true);
+    }
+    let rung = classify(
+        now,
+        status.last_success,
+        status.reconcile_in_flight,
+        Connectivity::Online,
+        profile,
+    );
+    if status.reported != Some(rung) {
+        status.reported = Some(rung);
+        let _ = events.unbounded_send(Event::StalenessChanged { level: rung });
     }
 }
 

@@ -2,8 +2,9 @@
 //!
 //! [`TickPass::run`] is the body [`run_tick_loop`](crate::sync::tick::run_tick_loop)
 //! calls once per tick. It reconciles the vault root and the focus window,
-//! drains the op queue onto that state, pulls the mailbox, converts claims,
-//! and reports the staleness rung.
+//! drains the op queue onto that state, pulls the mailbox, and converts
+//! claims. Its [`PassReport`] carries the verdict the facade stamps the
+//! staleness ladder from.
 
 use core::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -67,9 +68,8 @@ use crate::sync::drain::{
 use crate::sync::rebase::QueueScanMemo;
 use crate::sync::record::RecordReader;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
-use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    ResolveMode, TickCause, TickControl, consult_scopes, consult_scopes_due, expire_focus_stamps,
+    ResolveMode, TickCause, consult_scopes, consult_scopes_due, expire_focus_stamps,
     expire_touched_folders, focus_by_scope, focus_files, pace_due, resolve_mode, scope_root_of,
 };
 
@@ -84,6 +84,29 @@ pub(crate) struct TickPass<T, H: Http, C: CredentialStore, F, S, St, Sch> {
     root_id: [u8; 16],
     settings_rechecked: Cell<UnixMillis>,
     link_swept: Cell<UnixMillis>,
+}
+
+/// What one pass reports to the loop that ran it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PassReport {
+    /// The root leg's verdict. The ladder measures the record plane, which the
+    /// root leg alone proves answered: one focused folder that did not is
+    /// staleness on that folder, not a plane-wide outage.
+    pub(crate) verdict: RefreshVerdict,
+    /// The session is gone, so the loop stops.
+    pub(crate) stop: bool,
+}
+
+impl PassReport {
+    const STOPPED: Self = Self {
+        verdict: RefreshVerdict::Unreachable,
+        stop: true,
+    };
+
+    /// The record plane answered with gate-passing state.
+    pub(crate) fn converged(self) -> bool {
+        self.verdict == RefreshVerdict::Reconciled
+    }
 }
 
 /// What the loop gate hands every later stage of one pass.
@@ -156,20 +179,20 @@ where
         }
     }
 
-    /// One tick: [`TickControl::Stop`] once the session is gone.
-    pub(crate) async fn run(&self, state: &SessionState, cause: TickCause) -> TickControl {
+    /// One tick, and its report: a stopped one once the session is gone.
+    pub(crate) async fn run(&self, state: &SessionState, cause: TickCause) -> PassReport {
         let Some(mut pass) = self.loop_gate(state, cause) else {
-            return TickControl::Stop;
+            return PassReport::STOPPED;
         };
         let Some(decision) = self.redecide_settings(state, &pass).await else {
-            return TickControl::Stop;
+            return PassReport::STOPPED;
         };
         self.consult_scope_pointers(state, &mut pass).await;
         let (floors_before, grafted) = self.refresh_floors(state, &pass).await;
         let (resolved, read_seed) = self.adopt_root(state, &pass, &floors_before).await;
         let descendants = self.walk_scopes(state, &pass).await;
         let (folder_verdict, scopes) = self.refresh_focus(state, &pass, &grafted).await;
-        let reconciled = self.settle_verdict(state, &resolved, folder_verdict);
+        let verdict = self.settle_verdict(state, &resolved, folder_verdict);
         let assembly = self
             .assemble_scopes(state, &pass, &scopes, descendants)
             .await;
@@ -181,8 +204,10 @@ where
             .await;
         self.repost_claims(state, &pass).await;
         self.refresh_received_shares(state, &pass).await;
-        self.classify_staleness(state, reconciled);
-        TickControl::Continue
+        PassReport {
+            verdict,
+            stop: false,
+        }
     }
 
     /// The loop gate: the pass's own copy of every secret it runs under, or
@@ -682,13 +707,13 @@ where
     }
 
     /// The verdict and manual settle: answer the manual requests, and report
-    /// whether the root leg reconciled.
+    /// the root leg's verdict.
     fn settle_verdict(
         &self,
         state: &SessionState,
         resolved: &Result<Resolved, SeamError>,
         folder_verdict: RefreshVerdict,
-    ) -> bool {
+    ) -> RefreshVerdict {
         // `Adopted`/`Current` are the reconciled outcomes: both prove the
         // record plane answered with gate-passing state, so both stamp
         // the ladder's `last_success` (#33 D4). A gate rejection is a
@@ -703,10 +728,6 @@ where
             },
             Err(_) => RefreshVerdict::Unreachable,
         };
-        // The ladder measures the record plane, which the root leg alone
-        // proves answered: one focused folder that did not is staleness
-        // on that folder, not a plane-wide outage.
-        let reconciled = root_verdict == RefreshVerdict::Reconciled;
         // Answer the manual requests on every read leg the pass forced,
         // the focus window included — a refresh that left the folder in
         // view unresolved has not landed. The drain stage reports its own
@@ -718,7 +739,7 @@ where
         if bin_retention_days(&state.settings_summary) == 0 {
             state.observed_unlinks.borrow_mut().clear();
         }
-        reconciled
+        root_verdict
     }
 
     /// The scope assembly: every pass the drain runs, owned.
@@ -1204,32 +1225,6 @@ where
         )
         .await;
     }
-
-    /// The staleness classify: stamp the ladder, and report a rung change.
-    fn classify_staleness(&self, state: &SessionState, reconciled: bool) {
-        let mut status = state.sync_status.borrow_mut();
-        status.reconcile_in_flight = false;
-        if reconciled {
-            status.last_success = Some(self.seams.scheduler.now());
-            // Set after the drain stage, so the pass that converges
-            // the base is never the pass that decides against it.
-            state.converged_tick.set(true);
-        }
-        let rung = classify(
-            self.seams.scheduler.now(),
-            status.last_success,
-            status.reconcile_in_flight,
-            Connectivity::Online,
-            &self.seams.profile,
-        );
-        if status.reported != Some(rung) {
-            status.reported = Some(rung);
-            let _ = self
-                .seams
-                .events
-                .unbounded_send(Event::StalenessChanged { level: rung });
-        }
-    }
 }
 
 /// The interior scope the **first** queued op that names one needs
@@ -1382,4 +1377,197 @@ async fn write_grant_sharer_encs<C: ContactStore>(
             Some((scope_id, contact.enc_subkey()))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::kdf;
+    use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use futures_channel::mpsc;
+
+    use crate::api::ApiClient;
+    use crate::content::ContentProfile;
+    use crate::deadlines::DeadlinePolicy;
+    use crate::profile::SyncTimingProfile;
+    use crate::rotation::derive_write_name;
+    use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore};
+    use crate::settings::Placement;
+    use crate::storage_policy::StoragePolicy;
+    use crate::testkit::account::{EOL, ROOT, SECRET, TTL_NANOS};
+    use crate::testkit::fakes::{
+        InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache,
+        InMemoryStagingStore, ScriptedHttp, VirtualScheduler,
+    };
+    use crate::testkit::{
+        OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec,
+        SeededEntropy, block_on, gateway, owner_root_fixture, owner_root_pseudonym, serve,
+    };
+
+    const ENDPOINT: &str = "fake:someguy";
+
+    type FakePass = TickPass<
+        InMemoryRecordStore,
+        ScriptedHttp,
+        InMemoryCredentialStore,
+        OwnerScopedFloorStore<InMemoryFloorStore>,
+        InMemorySnapshotCache,
+        QueueGenerationStore<InMemoryStagingStore>,
+        VirtualScheduler,
+    >;
+
+    /// A live session's pass over the vault root at [`root_name`].
+    struct Harness {
+        pass: FakePass,
+        state: SessionState,
+        /// Held open: an events channel whose receiver dropped refuses sends.
+        _events: mpsc::UnboundedReceiver<Event>,
+    }
+
+    fn harness(
+        transport: InMemoryRecordStore,
+        blocks: &BTreeMap<String, Vec<u8>>,
+        alive: bool,
+    ) -> Harness {
+        let enc_subkey = kdf::enc_subkey(&SECRET);
+        let contact_label_seed = kdf::contact_label_seed(&SECRET);
+        let floors = OwnerScopedFloorStore::new(InMemoryFloorStore::default());
+        floors.bind(&enc_subkey, &contact_label_seed);
+        let (events, event_stream) = mpsc::unbounded();
+        let seams = EngineSeams {
+            transport,
+            api: Rc::new(ApiClient::new(
+                ScriptedHttp::default(),
+                InMemoryCredentialStore::default(),
+                "",
+            )),
+            floors,
+            snapshot_cache: InMemorySnapshotCache::default(),
+            staging: QueueGenerationStore::new(InMemoryStagingStore::default()),
+            scheduler: VirtualScheduler::new(),
+            http: serve(blocks),
+            gateway: gateway(),
+            entropy: Rc::new(RefCell::new(Box::new(SeededEntropy::new(42)))),
+            events,
+            deadlines: DeadlinePolicy::default(),
+            profile: SyncTimingProfile::CI,
+            storage_policy: StoragePolicy::CI,
+            content_profile: ContentProfile::CI,
+        };
+        let secrets = SessionSecrets::default();
+        *secrets.tick_enc_subkey.borrow_mut() = Some(enc_subkey);
+        *secrets.tick_contact_label_seed.borrow_mut() = Some(contact_label_seed);
+        *secrets.tick_bin_keys.borrow_mut() = Some(Rc::new(BinIndexKeys::derive(&SECRET)));
+        *secrets.tick_settings_signer.borrow_mut() =
+            Some(Rc::new(kdf::settings_ipns_keypair(&SECRET)));
+        let state = SessionState::new();
+        *state.current_root_name.borrow_mut() = Some(root_name());
+        *state.placement.borrow_mut() = Some(SessionPlacement::member(Ok(Placement::Hosted)));
+        let owner_identity = EcdsaSigner::from_scalar(&SECRET)
+            .expect("valid scalar")
+            .verifying_key();
+        Harness {
+            pass: TickPass::new(
+                seams,
+                Rc::new(secrets),
+                Rc::new(Cell::new(alive)),
+                ManualRefresh::default(),
+                owner_identity,
+                ROOT.0,
+            ),
+            state,
+            _events: event_stream,
+        }
+    }
+
+    fn root_name() -> IpnsName {
+        derive_write_name(&Zeroizing::new(OWNER_ROOT_WRITE_SCOPE_SEED), &ROOT.0)
+    }
+
+    fn unpublished() -> InMemoryRecordStore {
+        InMemoryRecordStore::new(vec![EndpointId::new(ENDPOINT)])
+    }
+
+    /// The owner's vault root, published at [`root_name`], and the head block
+    /// its record anchors.
+    fn published_root() -> (InMemoryRecordStore, BTreeMap<String, Vec<u8>>) {
+        let root = owner_root_fixture(OwnerRootSpec {
+            owner_identity: &EcdsaSigner::from_scalar(&SECRET).expect("valid scalar"),
+            owner_enc: &kdf::enc_subkey(&SECRET).public(),
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+            scope_id: ROOT.0,
+            root_id: ROOT.0,
+            children: Vec::new(),
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants: Vec::new(),
+        });
+        let signer =
+            kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
+        let value = format!("/ipfs/{}", root.head_cid_str);
+        let record = IpnsRecord::create_v2(&signer, value.as_bytes(), 1, TTL_NANOS, EOL).marshal();
+        let transport = unpublished();
+        transport.seed_record(&EndpointId::new(ENDPOINT), root.name.as_str(), record);
+        (
+            transport,
+            BTreeMap::from([(root.head_cid_str, root.head_block)]),
+        )
+    }
+
+    #[test]
+    fn a_pass_after_teardown_reports_a_stop() {
+        let harness = harness(unpublished(), &BTreeMap::new(), false);
+
+        let report = block_on(harness.pass.run(&harness.state, TickCause::Poll));
+
+        assert_eq!(report, PassReport::STOPPED);
+    }
+
+    #[test]
+    fn a_pass_with_no_placement_reports_a_stop() {
+        let harness = harness(unpublished(), &BTreeMap::new(), true);
+        *harness.state.placement.borrow_mut() = None;
+
+        let report = block_on(harness.pass.run(&harness.state, TickCause::Poll));
+
+        assert_eq!(report, PassReport::STOPPED);
+    }
+
+    #[test]
+    fn a_pass_whose_root_no_endpoint_serves_reports_unreachable() {
+        let harness = harness(unpublished(), &BTreeMap::new(), true);
+
+        let report = block_on(harness.pass.run(&harness.state, TickCause::Poll));
+
+        assert_eq!(
+            report,
+            PassReport {
+                verdict: RefreshVerdict::Unreachable,
+                stop: false,
+            }
+        );
+        assert!(!report.converged());
+    }
+
+    #[test]
+    fn a_pass_that_adopts_the_root_reports_converged() {
+        let (transport, blocks) = published_root();
+        let harness = harness(transport, &blocks, true);
+
+        let report = block_on(harness.pass.run(&harness.state, TickCause::Poll));
+
+        assert_eq!(
+            report,
+            PassReport {
+                verdict: RefreshVerdict::Reconciled,
+                stop: false,
+            }
+        );
+        assert!(report.converged());
+    }
 }
