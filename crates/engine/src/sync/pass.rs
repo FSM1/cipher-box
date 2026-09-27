@@ -10,27 +10,22 @@ use core::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::Permission as CommittedPermission;
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
+use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
 use crate::bin_index::BinIndexKeys;
-use crate::content::RetentionPolicy;
 use crate::facade::claim_conversion::{
     ConversionPass, CutAuthority, PointerIndex, TickSites, placed, scope_pointer_index,
 };
 use crate::facade::{
-    ConsultWindow, EngineError, Event, GraftedWritePass, NodeId, POINTER_PAYLOAD_VERSION,
-    ScopeSeeds, SeedFloors, SweepKeys, adopt_settings_summary, bin_retention_days, cached_seed,
-    consult_pointers, deposit_seed, deposit_write_seed, emit_trust_violation, focus_scope_roots,
-    grafted_write_passes, install_descendant_scopes, install_unproved_scopes, leg_file_share,
-    memoized_scan, nodes_in_scope, own_descendant_scopes, queue_unprojected_children,
-    refresh_seed_floors, report_settings_verdict, scope_root_record_name, second_end_scope,
-    settle_focus_leg, walked_boundary_material,
+    EngineError, Event, MAX_FOCUS_FILES, NodeId, emit_trust_violation, memoized_scan,
 };
 use crate::grants::grafted::{
     BookmarkedPermissions, BookmarkedScopeRoots, ContestedNodes, FloorNamespace, GraftedPlane,
@@ -44,13 +39,17 @@ use crate::grants::{ContactStore, StagingContactStore};
 use crate::net::author::ENVELOPE_V;
 use crate::net::{
     DescendantScopeRoot, FolderRefresh, GraftedLeg, HeldKey, HeldMaterial, HeldRecords,
-    ResolveOutcome, Resolved, RootAdopter, ScopeWalk, WalkFailure, WritePlaneDark, observed_at,
-    refresh_base_from_resolved, resolve_and_hold,
+    PointerConsult, PointerConsultError, ResolveOutcome, Resolved, RootAdopter, ScopeWalk,
+    WalkFailure, WritePlaneDark, observed_at, refresh_base_from_resolved, resolve_and_hold,
 };
 use crate::rotation::scope_material::ScopeMaterial;
 use crate::rotation::{
-    Boundaries, ResolveFailure, RotateError, RotateOnExit, ScopeExitArm, ascent_node_seed,
-    cut_exited_scope, derive_write_name, install_walked_read_epochs,
+    Boundaries, ResolveFailure, RotateError, RotateOnExit, ScopeExitArm, SweepKeys,
+    ascent_node_seed, cut_exited_scope, derive_write_name, install_walked_read_epochs,
+};
+use crate::scope_seeds::{
+    ScopeSeeds, SeedFloors, cached_seed, deposit_seed, deposit_write_seed, own_descendant_scopes,
+    refresh_seed_floors, walked_boundary_material,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
@@ -58,19 +57,27 @@ use crate::seams::{
 };
 use crate::session::{SessionSecrets, SessionState};
 use crate::settings::{
-    PlacementDecision, SessionPlacement, SettingsOrigin, VaultSettingsSummary, load_settings_at,
-    redecide_placement, summarize_settings,
+    PlacementDecision, SessionPlacement, adopt_settings_summary, bin_retention_days,
+    load_settings_at, owner_bin_retention_days, owner_retention, redecide_placement,
+    report_settings_verdict, summarize_settings,
 };
 use crate::sync::drain::{
     Drain, DrainScope, EngineSeams, GrantedPass, ScopeEnd, SealPlane, TickInputs, TickScopes,
     hold_captures,
 };
-use crate::sync::rebase::QueueScanMemo;
+use crate::sync::model::Snapshot;
+use crate::sync::op::{Op, OpKind};
+use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
+use crate::sync::project::{UnlinkedChild, merge_root};
+use crate::sync::rebase::{QueueScanMemo, enclosing_scope_root};
 use crate::sync::record::RecordReader;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
+use crate::sync::render::BaseSnapshot;
 use crate::sync::tick::{
     ResolveMode, TickCause, consult_scopes, consult_scopes_due, expire_focus_stamps,
-    expire_touched_folders, focus_by_scope, focus_files, pace_due, resolve_mode, scope_root_of,
+    expire_touched_folders, focus_by_scope, focus_files, focus_scope_roots, nodes_in_scope,
+    pace_due, queue_unprojected_children, resolve_mode, scope_root_of, scope_root_record_name,
+    settle_focus_leg,
 };
 
 /// The tick's per-session inputs: the seam set, the session secrets, and the
@@ -1315,31 +1322,6 @@ fn steady_state_hold(
     (record.routing_key == name.as_str()).then(|| record.record_bytes.clone())
 }
 
-/// The bin retention the owner actually chose, or `None` when this device's
-/// settings load carried no member choice.
-///
-/// The delete branch takes the documented default because binning is the
-/// reversible error ([`bin_retention_days`]); expiry destroys, so it acts only
-/// on a retention this device can show is the owner's.
-fn owner_bin_retention_days(summary: &RefCell<Option<VaultSettingsSummary>>) -> Option<u32> {
-    let summary = summary.borrow();
-    summary
-        .as_ref()
-        .filter(|summary| summary.origin != SettingsOrigin::Defaults)
-        .map(|summary| summary.bin_retention_days)
-}
-
-/// The version retention the owner actually chose, or [`RetentionPolicy::KeepAll`]
-/// when this device's settings load carried no member choice
-/// (blueprint/engine.md "Content plane").
-fn owner_retention(summary: &RefCell<Option<VaultSettingsSummary>>) -> RetentionPolicy {
-    let summary = summary.borrow();
-    summary
-        .as_ref()
-        .filter(|summary| summary.origin != SettingsOrigin::Defaults)
-        .map_or(RetentionPolicy::KeepAll, |summary| summary.retention)
-}
-
 /// Every write-granted graft, with the identity that granted it.
 fn write_grant_sharers(
     permissions: &BookmarkedPermissions,
@@ -1379,8 +1361,822 @@ async fn write_grant_sharer_encs<C: ContactStore>(
         .collect()
 }
 
+/// The interior scope one queued op needs a pass to hold beside its anchor: the
+/// far end of a crossing, or the one interior boundary a delete's target is
+/// linked from.
+///
+/// A delete unlinks its target from every folder that links it
+/// (blueprint/engine.md "Delete branch"), so a link in an interior scope is an
+/// end the pass owes. Links in two interior scopes are a span no pass pairs, and
+/// naming one of them here would leave the other standing: the replay
+/// dead-letters that shape instead.
+fn second_end_scope(base: &Snapshot, op: &Op, listed: &[NodeId]) -> Option<NodeId> {
+    if let Some((from_parent, new_parent, _)) = op.relocation() {
+        let source = enclosing_scope_root(base, from_parent, listed);
+        let destination = enclosing_scope_root(base, new_parent, listed);
+        if source == destination {
+            return None;
+        }
+        return source.or(destination);
+    }
+    if !matches!(op.kind, OpKind::Delete { .. }) {
+        return None;
+    }
+    let mut interior = base
+        .links_to(op.target)
+        .into_iter()
+        .filter_map(|link| enclosing_scope_root(base, link.parent, listed));
+    let first = interior.next()?;
+    interior.all(|root| root == first).then_some(first)
+}
+
+/// The share of the focus file queue one leg of a pass may spend: `queued` less
+/// what the pass attempted on an earlier leg, and no more than the budget
+/// [`MAX_FOCUS_FILES`] leaves.
+///
+/// The bound is per pass, not per leg (blueprint/desktop.md "Freshness"). Each
+/// leg refills the queue with its own scope's rows, so the budget is charged
+/// across the legs, and the newest rows take what is left of it. A bulk row
+/// yields the budget to a row a host access named, whatever their queue order:
+/// the fan-out over a large folder in view queues last and would otherwise
+/// spend the whole pass on rows nobody is waiting on.
+fn leg_file_share(
+    mut queued: Vec<NodeId>,
+    attempted: &[NodeId],
+    host_queued: &BTreeSet<NodeId>,
+) -> Vec<NodeId> {
+    queued.retain(|node| !attempted.contains(node));
+    let mut over = queued
+        .len()
+        .saturating_sub(MAX_FOCUS_FILES.saturating_sub(attempted.len()));
+    let mut kept: Vec<NodeId> = Vec::with_capacity(queued.len());
+    for node in queued {
+        if over > 0 && !host_queued.contains(&node) {
+            over -= 1;
+            continue;
+        }
+        kept.push(node);
+    }
+    // Host rows alone still charge the budget: the origin orders the spend, it
+    // does not lift the bound.
+    kept.drain(..over);
+    kept
+}
+
+/// One tick's pointer-consult window: the scopes due this pass
+/// ([`consult_scopes_due`]), which of
+/// them is the vault anchor, and the clock the stamps are taken from.
+pub(crate) struct ConsultWindow {
+    pub(crate) scopes: Vec<NodeId>,
+    pub(crate) anchor: NodeId,
+    pub(crate) now: UnixMillis,
+}
+
+/// The focus tick's polled scope-pointer consults (`crate::sync::pointer`:
+/// "Consult discipline: polled, not fallback").
+///
+/// Each consult advances the scope's write-epoch floor on sight, which is what
+/// evicts the `writeScopeSeed` a write-only rotation retired — that rotation
+/// leaves the read epoch untouched, so the sweep's event-driven consult never
+/// fires for it. An unavailable pointer leaves the stamp unset, so the next tick
+/// retries rather than waiting out the interval.
+///
+/// Returns the vault anchor's owner-vouched current root when this pass
+/// consulted one (see [`consult_scopes`]).
+pub(crate) async fn consult_pointers<T: RecordTransport, F: FloorStore>(
+    transport: &T,
+    floors: &F,
+    keys: &RefCell<Option<Rc<SweepKeys>>>,
+    events: &mpsc::UnboundedSender<Event>,
+    consulted: &RefCell<BTreeMap<NodeId, UnixMillis>>,
+    window: ConsultWindow,
+) -> Option<IpnsName> {
+    // The pass owns a copy for exactly its own duration, on the same terms as
+    // the tick's enc subkey: teardown empties the cell.
+    let keys = keys.borrow().clone()?;
+    let mut anchor_root = None;
+    for scope in window.scopes {
+        let consult = PointerConsult {
+            scope_keys: &keys.scope_keys,
+            owner_identity: &keys.owner_identity,
+            payload_version: POINTER_PAYLOAD_VERSION,
+        };
+        match consult.run(transport, floors, &scope.0).await {
+            Err(PointerConsultError::Unavailable) => continue,
+            // A verdict is stable, so a refusal is stamped like a clean
+            // consult: re-polling a rolled-back pointer every tick would
+            // repeat its abuse event forever without changing it.
+            Err(PointerConsultError::Rejected) => {
+                consulted.borrow_mut().insert(scope, window.now);
+                emit_trust_violation(
+                    events,
+                    &hex_lower(&scope.0),
+                    "scope pointer unauthenticated, or vouched below the write-epoch floor",
+                );
+            }
+            Ok(consult) => {
+                consulted.borrow_mut().insert(scope, window.now);
+                if scope == window.anchor {
+                    anchor_root = consult.map(|consult| consult.current_root);
+                }
+            }
+        }
+    }
+    anchor_root
+}
+
+/// One grafted scope this session may author in, owned for the pass that
+/// borrows it.
+struct GraftedWritePass {
+    root: NodeId,
+    name: IpnsName,
+    read_scope_seed: Zeroizing<[u8; 32]>,
+    write_scope_seed: Zeroizing<[u8; 32]>,
+    /// The granting identity, which is the owner a grafted record's commitment
+    /// and grant section verify under — never this vault's own.
+    sharer_identity: EcdsaVerifier,
+    /// The granting contact's encryption subkey, which locates this device's
+    /// grant blob in the root the pass publishes and self-adopts.
+    sharer_enc: X25519Public,
+    /// The namespace this scope's epoch floors ratchet in, as
+    /// [`floor_namespace`] picked it —
+    /// the granting identity's on every pass a grafted root reaches here.
+    floors: FloorNamespace,
+}
+
+/// Every grafted scope whose accepted grant the last pass found write-capable
+/// and whose two seeds that pass recovered.
+///
+/// Four facts, all of them from the live resolve rather than the bookmark: the
+/// owner's committed permission, both seeds, the sharer the floor namespace
+/// answers under, and the name the graft rendered the root with. A fifth, the
+/// granting contact's encryption subkey, comes from the verified contact book
+/// (`write_grant_sharer_encs` in [`crate::sync::pass`]). A scope short of any
+/// of them drains nothing this tick and waits for the pass that has them.
+///
+/// `namespace` is [`floor_namespace`]
+/// bound to this pass's own root and proved set, so a bookmark that names one of
+/// this vault's own roots yields no grafted pass rather than a pass that would
+/// ratchet an own scope's floors under a sharer.
+fn grafted_write_passes(
+    base: &BaseSnapshot,
+    permissions: &BookmarkedPermissions,
+    sharers: &GraftedSharers,
+    sharer_encs: &BTreeMap<[u8; 16], X25519Public>,
+    namespace: impl Fn(&[u8; 16]) -> Option<FloorNamespace>,
+    read_seeds: &RefCell<ScopeSeeds>,
+    write_seeds: &RefCell<ScopeSeeds>,
+) -> Vec<GraftedWritePass> {
+    let base = base.borrow();
+    permissions
+        .iter()
+        .filter(|(_, permission)| **permission == CommittedPermission::Write)
+        .filter_map(|(scope_id, _)| {
+            let root = NodeId(*scope_id);
+            let name = base.node(root)?.ipns_name.as_deref()?;
+            let floors = match namespace(scope_id)? {
+                FloorNamespace::Own => return None,
+                granted @ FloorNamespace::GrantedBy(_) => granted,
+            };
+            Some(GraftedWritePass {
+                root,
+                name: IpnsName::parse(core::str::from_utf8(name).ok()?).ok()?,
+                read_scope_seed: cached_seed(read_seeds, scope_id)?,
+                write_scope_seed: cached_seed(write_seeds, scope_id)?,
+                sharer_identity: EcdsaVerifier::from_sec1(sharers.get(scope_id)?)?,
+                sharer_enc: *sharer_encs.get(scope_id)?,
+                floors,
+            })
+        })
+        .collect()
+}
+
+/// Install what one walk proved: drop the seeds of every promotion it could not
+/// re-prove, then deposit and project the ones it did.
+///
+/// The promotion set only grows. A promotion a pass cannot prove is an outage on
+/// that scope's own leg, and forgetting it would regroup its whole subtree onto
+/// the enclosing scope's seed, where every record fails its unseal and is
+/// reported as abuse.
+///
+/// Each seed is stamped with the epoch its own recovery names: the read seed
+/// with the record's, the write seed with the write-epoch floor its
+/// owner-write-blob opened at (`deposit_seed`).
+///
+/// Answers the children each scope root stopped naming, stamped at
+/// `observed_at`: an unlink a write grantee published at the root of the scope
+/// it holds, which the owner's capture bins (CONTEXT.md "Owner capture").
+fn install_descendant_scopes(
+    known: &RefCell<BTreeSet<NodeId>>,
+    read_seeds: &RefCell<ScopeSeeds>,
+    write_seeds: &RefCell<ScopeSeeds>,
+    base: &BaseSnapshot,
+    events: &mpsc::UnboundedSender<Event>,
+    proved: &[DescendantScopeRoot],
+    observed_at: u64,
+) -> Vec<UnlinkedChild> {
+    let reached: BTreeSet<NodeId> = proved.iter().map(|s| NodeId(s.scope_id)).collect();
+    let unproved: Vec<NodeId> = known.borrow().difference(&reached).copied().collect();
+    for scope in unproved {
+        for cell in [read_seeds, write_seeds] {
+            cell.borrow_mut().remove(&scope.0);
+        }
+    }
+    let promoted: BTreeSet<NodeId> = reached.difference(&known.borrow()).copied().collect();
+    known.borrow_mut().extend(reached);
+    let mut departed = Vec::new();
+    for scope in proved {
+        // Past this boundary the eviction pass reads the scope as this vault's
+        // own and stops measuring its write seed against a granting identity's
+        // floor (`evict_grafted_write_seeds`). A seed the graft left behind
+        // would therefore be resident for good, so the promotion keeps only
+        // what this walk itself proved.
+        if promoted.contains(&NodeId(scope.scope_id)) {
+            write_seeds.borrow_mut().remove(&scope.scope_id);
+        }
+        deposit_seed(
+            read_seeds,
+            scope.scope_id,
+            scope.read_scope_seed.clone(),
+            Some(scope.adopted.epoch),
+        );
+        if let Ok(write) = &scope.write {
+            deposit_write_seed(
+                write_seeds,
+                scope.scope_id,
+                write.seed.clone(),
+                Some(&scope.name),
+                Some(write.epoch),
+            );
+        }
+        let root = NodeId(scope.scope_id);
+        let merged = merge_root(&mut base.borrow_mut(), root, &scope.adopted);
+        if merged.changed {
+            let _ = events.unbounded_send(Event::SnapshotUpdated);
+        }
+        departed.extend(merged.observed_unlinks(scope.scope_id, root, observed_at));
+    }
+    departed
+}
+
+/// Record the boundaries one walk named without material, and release every
+/// root the same walk proved: a proved root reads on its own leg from now on,
+/// and a stale entry here would skip it as unreachable for the rest of the
+/// session. Proof wins over a name: one parent's stale body can name a root
+/// another parent's index proves in the same walk.
+fn install_unproved_scopes(
+    unproved: &RefCell<BTreeSet<NodeId>>,
+    proved: impl IntoIterator<Item = NodeId>,
+    named: BTreeSet<NodeId>,
+) {
+    let mut unproved = unproved.borrow_mut();
+    unproved.extend(named);
+    for scope in proved {
+        unproved.remove(&scope);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use cipherbox_core::seal::ReadBody;
+
+    use crate::facade::NodeKind;
+    use crate::seams::SharerScopedFloorStore;
+    use crate::sync::model::NodeMeta;
+
+    /// A boundary a later walk proves reads on its own leg, so it must leave the
+    /// unproved set; the focus leg skips every root that set still holds.
+    #[test]
+    fn a_walk_that_proves_an_unproved_boundary_releases_it() {
+        let released = NodeId([3; 16]);
+        let still_named = NodeId([4; 16]);
+        let not_named = NodeId([5; 16]);
+        let unproved = RefCell::new(BTreeSet::from([released, not_named]));
+
+        install_unproved_scopes(&unproved, [released], BTreeSet::from([still_named]));
+
+        assert_eq!(*unproved.borrow(), BTreeSet::from([still_named, not_named]));
+    }
+
+    /// One parent's stale body can name a root another parent's index proves in
+    /// the same walk; the proof wins.
+    #[test]
+    fn a_root_one_walk_both_proves_and_names_stays_released() {
+        let both = NodeId([6; 16]);
+        let unproved = RefCell::new(BTreeSet::from([both]));
+
+        install_unproved_scopes(&unproved, [both], BTreeSet::from([both]));
+
+        assert!(unproved.borrow().is_empty());
+    }
+
+    mod grafted_passes {
+        use super::*;
+
+        use cipherbox_core::kdf;
+        use cipherbox_core::seal::PreservedFields;
+        use cipherbox_core::suite::ecdsa::EcdsaSigner;
+
+        use crate::gate::Adopted;
+        use crate::grants::grafted::GraftedSharers;
+        use crate::net::rotation::{ScopeWritePlane, WritePlaneDark};
+        use crate::seams::ContactLabel;
+
+        const VAULT_ROOT: NodeId = NodeId([0u8; 16]);
+        const SHARED: [u8; 16] = [0x6a; 16];
+        const WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
+        const READ_SCOPE_SEED: [u8; 32] = [0x11; 32];
+
+        fn sharer() -> EcdsaSigner {
+            EcdsaSigner::from_scalar(&[0x31; 32]).expect("valid scalar")
+        }
+
+        /// A render tree holding one grafted root, planted parentless under the
+        /// vault root exactly as `merge_grafted` plants it.
+        fn base() -> BaseSnapshot {
+            let mut snapshot = Snapshot::new(VAULT_ROOT);
+            let mut meta = NodeMeta::new(NodeId(SHARED), "shared", NodeKind::Folder);
+            meta.ipns_name = Some(
+                derive_write_name(&WRITE_SCOPE_SEED, &SHARED)
+                    .as_str()
+                    .as_bytes()
+                    .to_vec(),
+            );
+            snapshot.upsert_node(meta);
+            BaseSnapshot::new(snapshot)
+        }
+
+        fn sharers() -> GraftedSharers {
+            GraftedSharers::from([(SHARED, sharer().verifying_key().to_sec1())])
+        }
+
+        fn encs() -> BTreeMap<[u8; 16], X25519Public> {
+            BTreeMap::from([(SHARED, kdf::enc_subkey(&[0x31; 32]).public())])
+        }
+
+        fn seeds(scope_id: [u8; 16], seed: [u8; 32]) -> RefCell<ScopeSeeds> {
+            let cell = RefCell::new(ScopeSeeds::new());
+            deposit_seed(&cell, scope_id, Zeroizing::new(seed), Some(0));
+            cell
+        }
+
+        fn label_seed() -> SecretBytes {
+            kdf::contact_label_seed(&[0x4c; 32])
+        }
+
+        /// The namespace picker over a vault whose own tree holds the vault root
+        /// alone, which is every case but the owned-arm test below.
+        fn own_namespace(sharers: &GraftedSharers) -> impl Fn(&[u8; 16]) -> Option<FloorNamespace> {
+            let sharers = sharers.clone();
+            move |scope_id| {
+                floor_namespace(
+                    &sharers,
+                    &label_seed(),
+                    &VAULT_ROOT.0,
+                    &BTreeSet::new(),
+                    scope_id,
+                )
+            }
+        }
+
+        /// The whole point of the pass: a write grantee publishes under the
+        /// shared scope's own material, so both seeds and the granting identity
+        /// have to reach the drain.
+        #[test]
+        fn a_write_granted_graft_becomes_one_pass_on_the_sharers_own_material() {
+            let passes = grafted_write_passes(
+                &base(),
+                &BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]),
+                &sharers(),
+                &encs(),
+                own_namespace(&sharers()),
+                &seeds(SHARED, READ_SCOPE_SEED),
+                &seeds(SHARED, WRITE_SCOPE_SEED),
+            );
+
+            assert_eq!(passes.len(), 1);
+            let pass = &passes[0];
+            assert_eq!(pass.root, NodeId(SHARED));
+            assert_eq!(pass.name, derive_write_name(&WRITE_SCOPE_SEED, &SHARED));
+            assert_eq!(pass.sharer_identity, sharer().verifying_key());
+            assert_eq!(
+                pass.name,
+                IpnsName::from_public_key(
+                    &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &SHARED).as_bytes())
+                        .verifying_key()
+                ),
+                "the pass publishes under the name the shared root itself answers at",
+            );
+
+            let store = crate::testkit::fakes::InMemoryFloorStore::default();
+            crate::testkit::block_on(pass.floors.view(&store).raise_epoch_floor(&SHARED, 9))
+                .expect("the floor raises");
+            let sharer_label = ContactLabel::of(&label_seed(), &sharer().verifying_key().to_sec1());
+            assert_eq!(
+                crate::testkit::block_on(
+                    SharerScopedFloorStore::granted_by(&store, sharer_label).epoch_floor(&SHARED)
+                )
+                .expect("floor read"),
+                Some(9),
+                "the pass ratchets its epoch floors under the granting identity's label",
+            );
+            assert_eq!(
+                crate::testkit::block_on(SharerScopedFloorStore::own(&store).epoch_floor(&SHARED))
+                    .expect("floor read"),
+                None,
+                "and never in this vault's own namespace",
+            );
+        }
+
+        /// Each of the five facts the pass needs comes from the live resolve or
+        /// the verified contact book. A scope short of any one of them drains
+        /// nothing rather than publishing under half a set.
+        #[test]
+        fn a_graft_short_of_any_of_the_passs_five_facts_drains_nothing() {
+            let read = seeds(SHARED, READ_SCOPE_SEED);
+            let write = seeds(SHARED, WRITE_SCOPE_SEED);
+            let empty = RefCell::new(ScopeSeeds::new());
+            let write_permitted =
+                BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]);
+
+            for (case, permissions, sharers, sharer_encs, read_seeds, write_seeds) in [
+                (
+                    "the commitment grants read",
+                    BookmarkedPermissions::from([(SHARED, CommittedPermission::Read)]),
+                    sharers(),
+                    encs(),
+                    &read,
+                    &write,
+                ),
+                (
+                    "no read seed was recovered",
+                    write_permitted.clone(),
+                    sharers(),
+                    encs(),
+                    &empty,
+                    &write,
+                ),
+                (
+                    "no write seed was recovered",
+                    write_permitted.clone(),
+                    sharers(),
+                    encs(),
+                    &read,
+                    &empty,
+                ),
+                (
+                    "no identity answers for the scope",
+                    write_permitted.clone(),
+                    GraftedSharers::new(),
+                    encs(),
+                    &read,
+                    &write,
+                ),
+                (
+                    "the contact book holds no key for the sharer",
+                    write_permitted.clone(),
+                    sharers(),
+                    BTreeMap::new(),
+                    &read,
+                    &write,
+                ),
+            ] {
+                assert!(
+                    grafted_write_passes(
+                        &base(),
+                        &permissions,
+                        &sharers,
+                        &sharer_encs,
+                        own_namespace(&sharers),
+                        read_seeds,
+                        write_seeds,
+                    )
+                    .is_empty(),
+                    "{case}",
+                );
+            }
+        }
+
+        /// The floor namespace is `floor_namespace`'s verdict, and its owned arm
+        /// is decided ahead of the sharer map. A bookmark that names a scope
+        /// root this vault owns therefore yields no grafted pass, so no pass
+        /// ratchets an own scope's epoch floors under a contact label.
+        #[test]
+        fn a_bookmark_that_names_a_scope_this_vault_owns_drains_no_grafted_pass() {
+            for (case, own_root, own_descendants) in [
+                ("the vault root itself", SHARED, BTreeSet::new()),
+                (
+                    "a proved descendant scope root",
+                    VAULT_ROOT.0,
+                    BTreeSet::from([NodeId(SHARED)]),
+                ),
+            ] {
+                assert!(
+                    grafted_write_passes(
+                        &base(),
+                        &BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]),
+                        &sharers(),
+                        &encs(),
+                        |scope_id| {
+                            floor_namespace(
+                                &sharers(),
+                                &label_seed(),
+                                &own_root,
+                                &own_descendants,
+                                scope_id,
+                            )
+                        },
+                        &seeds(SHARED, READ_SCOPE_SEED),
+                        &seeds(SHARED, WRITE_SCOPE_SEED),
+                    )
+                    .is_empty(),
+                    "{case}",
+                );
+            }
+        }
+
+        /// One level as a boundary walk proved it, with `write` as the caller
+        /// gives it.
+        fn proved(write: Result<ScopeWritePlane, WritePlaneDark>) -> DescendantScopeRoot {
+            DescendantScopeRoot {
+                scope_id: SHARED,
+                name: derive_write_name(&WRITE_SCOPE_SEED, &SHARED),
+                parent_node_seed: Zeroizing::new([0x21; 32]),
+                adopted: Adopted {
+                    read_body: ReadBody::Folder {
+                        created_at: 0,
+                        modified_at: 0,
+                        children: Vec::new(),
+                        unknown: PreservedFields::new(),
+                    },
+                    sequence: 1,
+                    epoch: 3,
+                },
+                read_scope_seed: Zeroizing::new(READ_SCOPE_SEED),
+                write,
+            }
+        }
+
+        /// A scope a walk promotes into this vault's own set leaves its grafted
+        /// write seed behind. Past that boundary the eviction pass never
+        /// measures the entry again, so a seed the promotion cannot re-prove
+        /// would publish under a sharer's material on this vault's own plane.
+        ///
+        /// The clear is the promotion's alone: a scope the set already holds
+        /// keeps the seed of its last proved write plane through a pass that
+        /// merely could not open one.
+        #[test]
+        fn a_promotion_that_proves_no_write_plane_drops_the_grafted_write_seed() {
+            for (case, already_known, held) in [
+                ("the walk promotes the scope", false, false),
+                ("the set already holds the scope", true, true),
+            ] {
+                let known = RefCell::new(match already_known {
+                    true => BTreeSet::from([NodeId(SHARED)]),
+                    false => BTreeSet::new(),
+                });
+                let write_seeds = seeds(SHARED, WRITE_SCOPE_SEED);
+                let (events, _rx) = mpsc::unbounded();
+
+                install_descendant_scopes(
+                    &known,
+                    &seeds(SHARED, READ_SCOPE_SEED),
+                    &write_seeds,
+                    &base(),
+                    &events,
+                    &[proved(Err(WritePlaneDark::Keyless))],
+                    0,
+                );
+
+                assert_eq!(write_seeds.borrow().contains_key(&SHARED), held, "{case}",);
+            }
+        }
+
+        /// A promotion the walk did prove a write plane for keeps that plane:
+        /// the clear above is the stale graft's, not the proved material's.
+        #[test]
+        fn a_promotion_that_proves_a_write_plane_holds_the_proved_seed() {
+            let known = RefCell::new(BTreeSet::new());
+            let write_seeds = RefCell::new(ScopeSeeds::new());
+            let (events, _rx) = mpsc::unbounded();
+
+            install_descendant_scopes(
+                &known,
+                &seeds(SHARED, READ_SCOPE_SEED),
+                &write_seeds,
+                &base(),
+                &events,
+                &[proved(Ok(ScopeWritePlane {
+                    seed: Zeroizing::new(WRITE_SCOPE_SEED),
+                    epoch: 2,
+                }))],
+                0,
+            );
+
+            assert!(write_seeds.borrow().contains_key(&SHARED));
+        }
+
+        /// A scope the render tree does not hold has no name to publish under:
+        /// the graft carries it, and a revoked share leaves the tree.
+        #[test]
+        fn a_graft_the_render_tree_no_longer_holds_drains_nothing() {
+            assert!(
+                grafted_write_passes(
+                    &BaseSnapshot::new(Snapshot::new(VAULT_ROOT)),
+                    &BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]),
+                    &sharers(),
+                    &encs(),
+                    own_namespace(&sharers()),
+                    &seeds(SHARED, READ_SCOPE_SEED),
+                    &seeds(SHARED, WRITE_SCOPE_SEED),
+                )
+                .is_empty()
+            );
+        }
+    }
+
+    /// The pass, not the leg, is what `MAX_FOCUS_FILES` bounds: a second leg
+    /// takes only the budget the first one left, and the newest rows take it.
+    #[test]
+    fn a_legs_file_share_stays_inside_the_passes_own_budget() {
+        let node = |n: u8| NodeId([n; 16]);
+        let queued: Vec<NodeId> = (0..MAX_FOCUS_FILES as u8 + 4).map(node).collect();
+
+        let none = BTreeSet::new();
+
+        assert_eq!(
+            leg_file_share(queued.clone(), &[], &none),
+            queued[4..],
+            "the first leg takes the newest rows the bound admits"
+        );
+
+        let attempted: Vec<NodeId> = (100..100 + MAX_FOCUS_FILES as u8 - 2).map(node).collect();
+        assert_eq!(
+            leg_file_share(queued.clone(), &attempted, &none),
+            queued[queued.len() - 2..],
+            "a later leg takes only what the earlier legs left"
+        );
+        let spent: Vec<NodeId> = (100..100 + MAX_FOCUS_FILES as u8).map(node).collect();
+        assert!(
+            leg_file_share(queued, &spent, &none).is_empty(),
+            "a spent budget admits nothing more"
+        );
+    }
+
+    /// A stat the host is waiting on keeps its place in the pass however many
+    /// rows the fan-out over the folder in view queues behind it.
+    #[test]
+    fn a_legs_file_share_spends_a_bulk_row_before_a_host_queued_row() {
+        let node = |n: u8| NodeId([n; 16]);
+        let stat = node(200);
+        // The host row is oldest, so the plain recency rule would drop it first.
+        let mut queued = vec![stat];
+        queued.extend((0..MAX_FOCUS_FILES as u8 + 4).map(node));
+        let host_queued = BTreeSet::from([stat]);
+
+        let share = leg_file_share(queued.clone(), &[], &host_queued);
+        assert_eq!(share.len(), MAX_FOCUS_FILES);
+        assert!(
+            share.contains(&stat),
+            "the fan-out yields the budget to the row a caller waits on"
+        );
+        assert!(
+            !leg_file_share(queued, &[], &BTreeSet::new()).contains(&stat),
+            "and the same pass drops it when no host access named it"
+        );
+    }
+
+    /// Host rows alone still charge the budget: the origin orders the spend, it
+    /// does not lift the bound.
+    #[test]
+    fn host_queued_rows_do_not_lift_the_passes_budget() {
+        let node = |n: u8| NodeId([n; 16]);
+        let queued: Vec<NodeId> = (0..MAX_FOCUS_FILES as u8 + 4).map(node).collect();
+        let host_queued: BTreeSet<NodeId> = queued.iter().copied().collect();
+
+        assert_eq!(
+            leg_file_share(queued.clone(), &[], &host_queued),
+            queued[4..],
+            "with every row host-queued the newest still win"
+        );
+    }
+
+    /// A row an earlier leg attempted does not ride a second leg of the same
+    /// pass: the queue drains once, after every leg.
+    #[test]
+    fn a_legs_file_share_drops_what_the_pass_already_attempted() {
+        let node = |n: u8| NodeId([n; 16]);
+        let queued = vec![node(1), node(2), node(3)];
+
+        assert_eq!(
+            leg_file_share(queued, &[node(2)], &BTreeSet::new()),
+            vec![node(1), node(3)],
+            "the attempted row is gone, the rest keeps its order"
+        );
+    }
+
+    /// A vault root holding two granted folders, one file in each, and one
+    /// target the caller links where the case needs it.
+    fn boundaries_fixture() -> (Snapshot, NodeId) {
+        let root = NodeId([0; 16]);
+        let mut base = Snapshot::new(root);
+        for (parent, node, name) in [
+            (root, NodeId([5; 16]), "granted"),
+            (root, NodeId([8; 16]), "other"),
+            (NodeId([5; 16]), NodeId([10; 16]), "inside-granted"),
+            (NodeId([8; 16]), NodeId([9; 16]), "inside-other"),
+            (root, NodeId([6; 16]), "plain"),
+        ] {
+            base.upsert_node(NodeMeta::new(node, name, NodeKind::Folder));
+            base.link(parent, node, 1);
+        }
+        base.upsert_node(NodeMeta::new(NodeId([7; 16]), "shared.txt", NodeKind::File));
+        (base, NodeId([7; 16]))
+    }
+
+    fn delete_of(target: NodeId) -> Op {
+        Op::delete(target, 1, UnixMillis(0), 1, true)
+    }
+
+    /// A delete unlinks its target from every folder that links it, so the pass
+    /// owes an end for the interior boundary one of those folders sits under.
+    #[test]
+    fn a_delete_names_the_one_granted_scope_its_target_is_linked_from() {
+        let (mut base, target) = boundaries_fixture();
+        base.link(NodeId([6; 16]), target, 1);
+        base.link(NodeId([10; 16]), target, 2);
+
+        assert_eq!(
+            second_end_scope(
+                &base,
+                &delete_of(target),
+                &[NodeId([5; 16]), NodeId([8; 16])]
+            ),
+            Some(NodeId([5; 16])),
+            "the link outside every granted folder is the anchor's own"
+        );
+    }
+
+    /// Naming one of two interior boundaries would leave the other's link
+    /// standing, which is the span the replay refuses outright.
+    #[test]
+    fn a_delete_linked_from_two_granted_scopes_names_no_second_end() {
+        let (mut base, target) = boundaries_fixture();
+        base.link(NodeId([10; 16]), target, 1);
+        base.link(NodeId([9; 16]), target, 2);
+
+        assert_eq!(
+            second_end_scope(
+                &base,
+                &delete_of(target),
+                &[NodeId([5; 16]), NodeId([8; 16])]
+            ),
+            None,
+            "no pass pairs two interior ends"
+        );
+    }
+
+    /// Only a delete acts on every link its target has. Every other op acts on
+    /// the one place the target already sits, so its links name no end.
+    #[test]
+    fn a_rename_of_a_target_linked_across_two_scopes_names_no_second_end() {
+        let (mut base, target) = boundaries_fixture();
+        base.link(NodeId([6; 16]), target, 1);
+        base.link(NodeId([10; 16]), target, 2);
+
+        assert_eq!(
+            second_end_scope(
+                &base,
+                &Op::rename(target, "renamed.txt", 1, UnixMillis(0)),
+                &[NodeId([5; 16]), NodeId([8; 16])]
+            ),
+            None,
+            "the rename touches one child ref, not every link"
+        );
+    }
+
+    /// Every link outside the listed boundaries is the anchor's, and a pass
+    /// anchored there needs no second end at all.
+    #[test]
+    fn a_delete_linked_outside_every_granted_scope_names_no_second_end() {
+        let (mut base, target) = boundaries_fixture();
+        base.link(NodeId([6; 16]), target, 1);
+
+        assert_eq!(
+            second_end_scope(
+                &base,
+                &delete_of(target),
+                &[NodeId([5; 16]), NodeId([8; 16])]
+            ),
+            None,
+            "one end serves it"
+        );
+    }
+}
+
+#[cfg(test)]
+mod report_tests {
     use super::*;
 
     use cipherbox_core::ipns::IpnsRecord;

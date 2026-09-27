@@ -56,6 +56,7 @@ mod owner_keys;
 pub mod profile;
 pub mod record_plane;
 pub mod rotation;
+mod scope_seeds;
 pub mod seams;
 mod session;
 pub mod settings;

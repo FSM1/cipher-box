@@ -28,7 +28,6 @@ use zeroize::Zeroizing;
 
 use crate::content::Gateway;
 use crate::entropy::{Entropy, fresh_ephemeral};
-use crate::facade::POINTER_PAYLOAD_VERSION;
 use crate::gate::floor;
 use crate::gate::{
     Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
@@ -39,6 +38,7 @@ use crate::net::{PointerConsult, PointerConsultError, assemble_candidate, fanout
 use crate::seams::{
     FloorStore, Http, Mailbox, NoPersistFloorStore, RecordTransport, StagingStore, UnixMillis,
 };
+use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 
 use super::accept::{LinkHold, ReceivedShare, ReceivedShareStore, ReceivedSharesLock};
 use super::contact::Contact;

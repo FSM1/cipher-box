@@ -92,6 +92,7 @@ pub use sweep::{
     SweepResolver, SweepRun, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep,
     run_sweep_job, sweep_pass,
 };
+pub(crate) use sweep::{SweepKeys, SweepTaskFactory};
 pub use trigger::{
     CutRotationReport, CutRotator, GrantCutPlan, RevokeError, RevokedCommittedSet,
     RotateOnCutError, RotateOnExit, RotationPlanes, RotationTrigger, ScopeExitReport,

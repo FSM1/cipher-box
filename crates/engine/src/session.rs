@@ -35,8 +35,7 @@ use zeroize::Zeroizing;
 
 use crate::bin_index::BinIndexKeys;
 use crate::facade::{
-    ClaimCounts, EngineError, LoginSecret, NodeId, RetainedDeadLetters, ScopeSeeds, SweepKeys,
-    SweepTaskFactory, SyncStatus,
+    ClaimCounts, EngineError, LoginSecret, NodeId, RetainedDeadLetters, SyncStatus,
 };
 use crate::grants::accept::ReceivedSharesLock;
 use crate::grants::grafted::{
@@ -46,7 +45,8 @@ use crate::grants::received_status::ReceivedVerdicts;
 use crate::net::HeldRecords;
 use crate::net::retire::{OrphanHeads, ReclaimStall};
 use crate::net::rotation::OnAccessMisses;
-use crate::rotation::WalkedReadEpochs;
+use crate::rotation::{SweepKeys, SweepTaskFactory, WalkedReadEpochs};
+use crate::scope_seeds::ScopeSeeds;
 use crate::seams::UnixMillis;
 use crate::settings::{SessionPlacement, VaultSettingsSummary};
 use crate::sync::cancel::UploadCancels;

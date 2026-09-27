@@ -39,7 +39,7 @@ pub const SECRET: [u8; 32] = [7u8; 32];
 pub const SCOPE: [u8; 16] = [0u8; 16];
 /// The scope root's node id.
 pub const ROOT: NodeId = NodeId(SCOPE);
-/// The sole v2 re-point payload version (`facade::POINTER_PAYLOAD_VERSION`).
+/// The sole v2 re-point payload version (`sync::pointer::POINTER_PAYLOAD_VERSION`).
 pub const POINTER_PAYLOAD_VERSION: u64 = 1;
 /// The entropy seed the vault pointer's re-point seal draws its nonce from.
 /// Named so that a fixture growing a second sealed body draws from a distinct

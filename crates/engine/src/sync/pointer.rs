@@ -27,6 +27,11 @@ use crate::gate::floor;
 use crate::net::EndpointFailures;
 use crate::seams::{FloorStore, SeamError, SeamResult};
 
+/// The re-point pointer-payload wire version the owner's own vault seals under
+/// and the cold-start walk verifies against (`crates/core` pointer payload) — the
+/// sole v2 version (CONTEXT.md "Vault pointer").
+pub(crate) const POINTER_PAYLOAD_VERSION: u64 = 1;
+
 /// A safety bound on the vault-pointer index walk. The chain length is
 /// owner-authored (each index needs the owner's identity signature to open),
 /// so a valid chain is finite; this only guards against a misbehaving fetch
