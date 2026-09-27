@@ -50,12 +50,9 @@ debt reads the node's live record under a new class, `OwingRecord::Unconfirmed`:
 gated record is at or below the mark, while the endpoints serve other bytes at the same sequence,
 or while a mark exists that will not read. A confirmed publish above the mark removes it. A mark
 that will not read stands for any sequence, so the publish signs above the sequence floor plus the
-attempt budget.
-
-**D3 — A name with no record reads as an empty live set only on unanimous vacancy.** For a
-dropped create, the settle treats the name as holding nothing only when every endpoint answers that
-it holds no record, this device holds no sequence floor for the name, and no acknowledged-sequence
-mark exists for the node. Any other read waits.
+attempt budget. For a dropped create, the settle treats the name as holding nothing only when
+every endpoint answers that it holds no record, this device holds no sequence floor for the name,
+and no mark exists for the node; any other read waits.
 
 ## Alternatives considered
 
@@ -80,16 +77,14 @@ mark exists for the node. Any other read waits.
 3. ADR 0047 D2 reads with D2 here as its limit, and ADR 0047 E4 narrows to the content-gone case.
 4. One new owner-local key prefix, `cbx/ra/`, sealed under the retire-ledger kind. The key names
    the owner tag and the node, as the tombstone key does, and the value is sealed.
+5. A mark outlives a rotation. It is read against the current write name, so a mark held for an
+   old name reads as nothing and stays as one key per node until a confirmed publish removes it.
+6. A rotation re-seal or a liveness re-sign does not read the mark and can tie the dropped
+   record. The settle sees the tie and waits, so the exposure is a delay, not a loss.
 
 ## Residuals
 
-**E1 — A version whose staged root is already gone journals nothing.** `Preservation::ContentGone`
-has no manifest to read, so its rows stay charged. FSM1/cipher-box#2065 names the charge-time
-journal as the candidate.
-
-**E2 — A mark outlives a rotation.** The mark is read against the current write name, so a mark
-held for an old name reads as nothing and stays as one key per node until a confirmed publish
-removes it.
-
-**E3 — Another publisher can tie the dropped record.** A rotation re-seal or a liveness re-sign
-does not read the mark. The settle sees the tie and waits, so the exposure is a delay, not a loss.
+**E1 — Should a version's rows be journaled when they are charged?**
+`Preservation::ContentGone` has no manifest to read, so its rows stay charged. FSM1/cipher-box#2065
+names the charge-time journal, at one ledger write per version upload, as the candidate. The
+owner decides whether it lands.
