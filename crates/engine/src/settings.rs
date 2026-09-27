@@ -30,6 +30,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::hash::hash;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
+use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
 use crate::api::ApiClient;
@@ -38,6 +39,7 @@ use crate::content::{
     ByoBearer, ByoIpfsConfig, ByoKind, Gateway, PinMode, ProviderError, RetentionPolicy,
 };
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
+use crate::facade::{Event, emit_trust_violation};
 use crate::gate::floor;
 use crate::gate::floor::RevisionMintError;
 use crate::net::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue, hold_if_unchanged};
@@ -1154,6 +1156,83 @@ fn kind_str(kind: ByoKind) -> &'static str {
         ByoKind::Psa => BYO_KIND_PSA,
         ByoKind::Pinata => BYO_KIND_PINATA,
     }
+}
+
+/// Report a settings load that refused a replayed record. The load already
+/// rests on last-known-good or the defaults; the member still hears of it.
+///
+/// [`DefaultsReason::Unreadable`] is not reported here: a body a newer release
+/// wrote carries keys this build's exhaustive schema refuses, and that reads
+/// the same as a body that will not open.
+pub(crate) fn report_settings_verdict(events: &mpsc::UnboundedSender<Event>, load: &SettingsLoad) {
+    let (SettingsLoad::Stale { reason, .. } | SettingsLoad::Defaults(reason)) = load else {
+        return;
+    };
+    if matches!(
+        reason,
+        DefaultsReason::RolledBack { .. } | DefaultsReason::RevisionRolledBack { .. }
+    ) {
+        emit_trust_violation(
+            events,
+            "vault-settings",
+            format!("vault settings refused: {}", reason.check()),
+        );
+    }
+}
+
+/// Hold the host-visible settings summary, and report the adoption when it is
+/// not the summary the session already held. A host reads its own settings
+/// again on the event, so a re-decide that changed nothing must not cost it one.
+pub(crate) fn adopt_settings_summary(
+    summary: VaultSettingsSummary,
+    held: &RefCell<Option<VaultSettingsSummary>>,
+    events: &mpsc::UnboundedSender<Event>,
+) {
+    let changed = held.borrow().as_ref() != Some(&summary);
+    *held.borrow_mut() = Some(summary);
+    if changed {
+        let _ = events.unbounded_send(Event::VaultSettingsChanged);
+    }
+}
+
+/// The bin retention a session loaded, which decides whether a delete is soft
+/// and whether the poll leg's observed unlinks are captured
+/// (blueprint/engine.md "Delete branch"). A session with no settings summary
+/// yet takes the documented default, and so does one whose load degraded.
+pub(crate) fn bin_retention_days(summary: &RefCell<Option<VaultSettingsSummary>>) -> u32 {
+    summary
+        .borrow()
+        .as_ref()
+        .map_or(DEFAULT_BIN_RETENTION_DAYS, |summary| {
+            summary.bin_retention_days
+        })
+}
+
+/// The bin retention the owner actually chose, or `None` when this device's
+/// settings load carried no member choice.
+///
+/// The delete branch takes the documented default because binning is the
+/// reversible error ([`bin_retention_days`]); expiry destroys, so it acts only
+/// on a retention this device can show is the owner's.
+pub(crate) fn owner_bin_retention_days(
+    summary: &RefCell<Option<VaultSettingsSummary>>,
+) -> Option<u32> {
+    let summary = summary.borrow();
+    summary
+        .as_ref()
+        .filter(|summary| summary.origin != SettingsOrigin::Defaults)
+        .map(|summary| summary.bin_retention_days)
+}
+
+/// The version retention the owner actually chose, or [`RetentionPolicy::KeepAll`]
+/// when this device's settings load carried no member choice
+/// (blueprint/engine.md "Content plane").
+pub(crate) fn owner_retention(summary: &RefCell<Option<VaultSettingsSummary>>) -> RetentionPolicy {
+    let summary = summary.borrow();
+    summary
+        .as_ref()
+        .filter(|summary| summary.origin != SettingsOrigin::Defaults)
+        .map_or(RetentionPolicy::KeepAll, |summary| summary.retention)
 }
 
 #[cfg(test)]

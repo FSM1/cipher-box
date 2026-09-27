@@ -39,17 +39,39 @@ use cipherbox_core::codec::RedactedBytes;
 use core::fmt;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use cipherbox_core::seal::{ChildScopeRef, PreservedFields, ReadBody};
+use cipherbox_core::suite::ecdsa::EcdsaVerifier;
+use cipherbox_core::suite::x25519::X25519Secret;
+use zeroize::Zeroizing;
 
 use super::eager_set::ResolveFailure;
 use super::rotate::RotationPublishError;
 use crate::grants::child_index::{canonicalize, repair_observed};
-use crate::seams::Scheduler;
+use crate::owner_keys::OwnerSeedKeys;
+use crate::seams::{BoxedTask, Scheduler};
 use cipherbox_core::hex::lower as hex_lower;
 
 #[cfg(test)]
 pub(crate) mod sim;
+
+/// Builds the lazy-wave sweep task a rotation enqueues once its cut is durable
+/// ([`rotate_scope`](crate::rotation::rotate_scope)'s third effect), over the
+/// scope root the rotation read and the ancestor seed it read it under.
+pub(crate) type SweepTaskFactory =
+    Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>) -> BoxedTask>;
+
+/// The session material a spawned sweep opens and re-seals under, held in a cell
+/// the engine empties on drop so teardown revokes it rather than waiting out the
+/// task
+/// ([`SessionSecrets::tick_enc_subkey`](crate::session::SessionSecrets::tick_enc_subkey)
+/// carries the tick loop's on the same terms).
+pub(crate) struct SweepKeys {
+    pub(crate) enc_secret: X25519Secret,
+    pub(crate) owner_identity: EcdsaVerifier,
+    pub(crate) scope_keys: OwnerSeedKeys,
+}
 
 /// One node inside a scope, as the gated parent body named it. A node id locates
 /// nothing on its own — only a gated parent's read body binds it to a name.

@@ -9,11 +9,12 @@ use cipherbox_core::seal::ChildScopeRef;
 use futures_channel::mpsc;
 
 use super::rotate::{RotateError, RotationOutcome, complete_cut, rotate_scope};
+use super::sweep::{SweepKeys, SweepTaskFactory};
 use super::{AscentAuthority, CommittedSet, ResolveFailure, RotateScopePlan, ScopeRootIdentity};
 use crate::api::ApiClient;
 use crate::content::read::Gateway;
 use crate::entropy::{Entropy, SharedEntropy};
-use crate::facade::{Event, NodeId, POINTER_PAYLOAD_VERSION, SweepKeys, SweepTaskFactory};
+use crate::facade::{Event, NodeId};
 use crate::net::rotation::{
     GatedRoots, MovedScopeSeed, OnAccessMisses, RotationAncestry, SweptScopeState,
 };
@@ -26,6 +27,7 @@ use crate::rotation::scope_material::{Boundaries, ascent_node_seed, proved_scope
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache,
 };
+use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 
 /// What the tick's scope-exit arm needs to cut one interior scope of this vault.
 ///

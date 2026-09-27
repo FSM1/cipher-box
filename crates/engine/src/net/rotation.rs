@@ -66,7 +66,7 @@ use crate::content::read::{ContentPlane, read_block};
 use crate::content::retention::{RootPlacement, version_cids};
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
-use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row, seed_names};
+use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{
     Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor, read_cut_epoch_floor,
@@ -94,6 +94,7 @@ use crate::rotation::{
     WriteSubtreeResolver, WriteWavePublisher, derive_write_name, lagging_read_seed,
     published_override_seed, reseal_scope_root, rotate_scope,
 };
+use crate::scope_seeds::seed_names;
 use crate::seams::{
     BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
     SharerScopedFloorStore, SnapshotCache, UnixMillis,

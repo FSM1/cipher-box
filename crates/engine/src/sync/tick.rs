@@ -8,16 +8,24 @@
 //! mailbox poll — everything else refreshes on access past the staleness
 //! threshold, so there is no background churn over the whole tree.
 
+use core::cell::RefCell;
 use core::pin::pin;
 use core::task::Poll;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::facade::NodeId;
+use cipherbox_core::ipns::IpnsName;
+use futures_channel::mpsc;
+
+use crate::facade::{Event, MAX_FOCUS_FILES, NodeId, NodeKind};
+use crate::net::FolderRefreshReport;
+use crate::net::rotation::scope_name;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{Scheduler, UnixMillis};
+use crate::sync::drain::hold_captures;
 use crate::sync::model::Snapshot;
 use crate::sync::pointer::{ConsultReason, should_consult};
+use crate::sync::project::UnlinkedChild;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 
 /// The open focus of the UI: the folder navigation opened, the folders a host
@@ -467,6 +475,166 @@ pub(crate) async fn run_tick_loop<Sch>(
         }
     }
     manual.close();
+}
+
+/// Stamp every folder a focus pass attempted against the caller's clock
+/// reading. Attempts, not merges: an unresolvable folder must not turn every
+/// navigation into a fresh endpoint fan-out, and the poll leg refreshes the
+/// window regardless, so recovery stays automatic.
+fn stamp_focus_refreshed(
+    stamps: &RefCell<BTreeMap<NodeId, UnixMillis>>,
+    folders: &[NodeId],
+    now: UnixMillis,
+) {
+    let mut stamps = stamps.borrow_mut();
+    for folder in folders {
+        stamps.insert(*folder, now);
+    }
+}
+
+/// The boundaries a focus leg groups its targets against: the roots a gated
+/// descent proved, and the roots the same walk named but proved no material for
+/// ([`ScopeWalk::descendant_scope_roots`](crate::net::ScopeWalk::descendant_scope_roots)).
+///
+/// A boundary is a boundary whether or not this session holds its keys, so the
+/// unproved half splits the window too. Grouping its subtree onto the enclosing
+/// scope reads every row under a seed that cannot open it, and the child gate
+/// answers a wrong-scope record with a trust verdict, so an honest writer would
+/// be reported as abuse.
+pub(crate) fn focus_scope_roots(
+    proved: &BTreeSet<NodeId>,
+    unproved: &BTreeSet<NodeId>,
+) -> BTreeSet<NodeId> {
+    proved.union(unproved).copied().collect()
+}
+
+/// The subset of `nodes` the scope rooted at `root` seals.
+///
+/// One leg holds one scope's read material, so a node in a shared scope this
+/// vault accepted refreshes on that scope's own leg, never under another
+/// scope's seed.
+pub(crate) fn nodes_in_scope(
+    base: &Snapshot,
+    scope_roots: &BTreeSet<NodeId>,
+    root: NodeId,
+    nodes: Vec<NodeId>,
+) -> Vec<NodeId> {
+    nodes
+        .into_iter()
+        .filter(|node| scope_root_of(base, *node, scope_roots) == root)
+        .collect()
+}
+
+/// The record name of scope root `scope_id`, which a lagging child read walks
+/// the ratchet back from: the session's vault root name, or the name the base
+/// carries for a scope root below it.
+pub(crate) fn scope_root_record_name(
+    base: &Snapshot,
+    vault_root_name: Option<&IpnsName>,
+    scope_id: &[u8; 16],
+) -> Option<IpnsName> {
+    if *scope_id == base.root.0 {
+        return vault_root_name.cloned();
+    }
+    scope_name(base.node(NodeId(*scope_id))?.ipns_name.as_deref()?).ok()
+}
+
+/// Queue every direct file child of `folder` the base projects no size for, in
+/// child order.
+///
+/// A `ChildRef` mirrors no size or mtime, so a listing paints those rows off
+/// nothing until each child's own record resolves. Queueing them from the focus
+/// window serves every host, so a host that stats no row of its own still paints
+/// a length without a download.
+pub(crate) fn queue_unprojected_children(
+    base: &Snapshot,
+    focus: &RefCell<FocusWindow>,
+    focus_refreshed: &RefCell<BTreeMap<NodeId, UnixMillis>>,
+    profile: &SyncTimingProfile,
+    now: UnixMillis,
+    folder: NodeId,
+) {
+    let unprojected: Vec<NodeId> = base
+        .children(folder)
+        .into_iter()
+        .filter(|child| child.kind == NodeKind::File && child.size.is_none())
+        .map(|child| child.id)
+        .collect();
+    for child in unprojected {
+        queue_focus_file(focus, focus_refreshed, profile, now, FocusFile::bulk(child));
+    }
+}
+
+/// Put `row` on the on-access file queue, newest last and bounded by
+/// [`MAX_FOCUS_FILES`]. The focus window and the refresh hint do not move.
+///
+/// Damped by the same staleness threshold every other on-access refresh runs
+/// against. A file that has published no version projects no size however often
+/// a pass resolves it, so an undamped caller keyed on the absent size would
+/// spend a resolve on that node every pass, forever.
+///
+/// A full queue drops its oldest bulk row. A row a host access named is dropped
+/// only for another such row, and a bulk row that finds none to drop is refused:
+/// the caller waiting on a stat must outlive the fan-out over a folder in view.
+pub(crate) fn queue_focus_file(
+    focus: &RefCell<FocusWindow>,
+    focus_refreshed: &RefCell<BTreeMap<NodeId, UnixMillis>>,
+    profile: &SyncTimingProfile,
+    now: UnixMillis,
+    row: FocusFile,
+) {
+    let resolved = focus_refreshed.borrow().get(&row.node).copied();
+    if resolved.is_some_and(|last| !on_access_refresh_due(now, last, profile)) {
+        return;
+    }
+    let mut focus = focus.borrow_mut();
+    // A host access marks the row for as long as the row is queued: the fan-out
+    // that re-queues it behind the listing must not demote what a caller waits
+    // on.
+    let held = focus
+        .open_files
+        .iter()
+        .position(|held| held.node == row.node)
+        .map(|index| focus.open_files.remove(index));
+    let origin = if held.is_some_and(|held| held.origin == FocusQueueOrigin::Host) {
+        FocusQueueOrigin::Host
+    } else {
+        row.origin
+    };
+    if focus.open_files.len() >= MAX_FOCUS_FILES {
+        let bulk = focus
+            .open_files
+            .iter()
+            .position(|held| held.origin == FocusQueueOrigin::Bulk);
+        let evict = match (bulk, origin) {
+            (Some(index), _) => index,
+            (None, FocusQueueOrigin::Host) => 0,
+            (None, FocusQueueOrigin::Bulk) => return,
+        };
+        focus.open_files.remove(evict);
+    }
+    focus.open_files.push(FocusFile {
+        node: row.node,
+        origin,
+    });
+}
+
+/// Settle one focus read leg and report the verdict it earned: hold what it saw
+/// depart, stamp what it attempted, and announce a base it moved.
+pub(crate) fn settle_focus_leg(
+    observed_unlinks: &RefCell<Vec<UnlinkedChild>>,
+    focus_refreshed: &RefCell<BTreeMap<NodeId, UnixMillis>>,
+    events: &mpsc::UnboundedSender<Event>,
+    nodes: &[NodeId],
+    report: FolderRefreshReport,
+    now: UnixMillis,
+) -> RefreshVerdict {
+    hold_captures(observed_unlinks, report.departed);
+    stamp_focus_refreshed(focus_refreshed, nodes, now);
+    if report.changed {
+        let _ = events.unbounded_send(Event::SnapshotUpdated);
+    }
+    report.verdict
 }
 
 #[cfg(test)]

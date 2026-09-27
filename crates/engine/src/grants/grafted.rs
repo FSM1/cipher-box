@@ -10,7 +10,8 @@ use cipherbox_core::seal::{ChildRef, Permission};
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
 
-use crate::facade::{MAX_FOLDER_CHILDREN, NodeId, ScopeSeeds, SeedFloor, refresh_seed_floor};
+use crate::facade::{MAX_FOLDER_CHILDREN, NodeId};
+use crate::scope_seeds::{ScopeSeeds, SeedFloor, refresh_seed_floor};
 use crate::seams::{ContactLabel, FloorStore, SharerScopedFloorStore};
 use crate::sync::model::Snapshot;
 
@@ -469,8 +470,9 @@ mod tests {
     use cipherbox_core::kdf;
     use cipherbox_core::seal::{NodeKind as CoreNodeKind, PreservedFields};
 
-    use crate::facade::{NodeKind, deposit_seed};
+    use crate::facade::NodeKind;
     use crate::gate::floor;
+    use crate::scope_seeds::deposit_seed;
     use crate::sync::model::NodeMeta;
     use crate::testkit::block_on;
     use crate::testkit::fakes::InMemoryFloorStore;

@@ -26,9 +26,7 @@ use zeroize::Zeroizing;
 
 use crate::content::Gateway;
 use crate::entropy::Entropy;
-use crate::facade::{
-    Event, NodeId, NodeKind, ScopeSeeds, deposit_seed, deposit_write_seed, emit_trust_violation,
-};
+use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
 use crate::gate::floor;
 use crate::gate::{
     Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
@@ -38,6 +36,7 @@ use crate::name::validate_name;
 use crate::net::rotation::scope_name;
 use crate::net::{PointerConsultError, assemble_candidate, fanout_get_verify};
 use crate::profile::SyncTimingProfile;
+use crate::scope_seeds::{ScopeSeeds, deposit_seed, deposit_write_seed};
 use crate::seams::{
     ContactLabel, FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore,
     UnixMillis,
@@ -3667,12 +3666,12 @@ mod tests {
 
     mod link_held {
         use super::*;
-        use crate::facade::POINTER_PAYLOAD_VERSION;
         use crate::grants::accept::LinkHold;
         use crate::grants::invite::{EphemeralInvitee, LinkTerms, mint_invite_grant};
         use crate::grants::ledger::GrantRow;
         use crate::sync::pointer::{
-            SessionRole, scope_pointer_name, scope_pointer_signer, seal_repoint,
+            POINTER_PAYLOAD_VERSION, SessionRole, scope_pointer_name, scope_pointer_signer,
+            seal_repoint,
         };
         use cipherbox_core::payload::RepointObject;
 
