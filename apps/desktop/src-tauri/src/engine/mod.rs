@@ -231,8 +231,7 @@ fn rung(staleness: Staleness) -> &'static str {
 enum Request {
     /// Read the vault's status, and answer here.
     Status(oneshot::Sender<Result<VaultStatus, String>>),
-    /// Force a refresh with nocache semantics — the tray's "Sync Now", a
-    /// network reconnect, or a wake from sleep.
+    /// Force a refresh with nocache semantics.
     Refresh(oneshot::Sender<Result<(), String>>),
     /// End the session at the facade. A logout is not a quit: the durable
     /// stores survive both, but the credential survives only the quit
@@ -381,10 +380,9 @@ impl EngineHost {
         self.ask(Request::Refresh)?.await.map_err(|_| NO_SESSION)?
     }
 
-    /// Forces a refresh and waits for no verdict — a network reconnect or a
-    /// wake from sleep (blueprint/desktop.md "Freshness"). No member asked, so
-    /// what the pass landed reaches the tray on the event stream alone. A no-op
-    /// while no session is live.
+    /// Forces a refresh without waiting for its verdict: a network reconnect or
+    /// a wake from sleep, which no member asked for (blueprint/desktop.md
+    /// "Freshness"). A no-op while no session is live.
     pub fn force_pass(&self) {
         let _ = self.ask(Request::Refresh);
     }
@@ -792,6 +790,18 @@ mod tests {
         }
     }
 
+    /// A host whose live session is a channel the test holds the far end of,
+    /// served by no engine thread.
+    fn live_host(requests: mpsc::UnboundedSender<Request>, account_dir: PathBuf) -> EngineHost {
+        EngineHost {
+            live: Mutex::new(Some(Live {
+                requests,
+                thread: std::thread::spawn(|| {}),
+                account_dir,
+            })),
+        }
+    }
+
     fn account_dir(data_local_dir: &Path, secret: &[u8]) -> Result<PathBuf, String> {
         account_data_dir(data_local_dir, &account_id(secret)?).map_err(|error| error.to_string())
     }
@@ -917,13 +927,7 @@ mod tests {
         // Dropping the receiver fails the send exactly as a thread that has
         // already returned does.
         drop(inbox);
-        let host = EngineHost {
-            live: Mutex::new(Some(Live {
-                requests,
-                thread: std::thread::spawn(|| {}),
-                account_dir: dir.path().join("account"),
-            })),
-        };
+        let host = live_host(requests, dir.path().join("account"));
 
         assert!(
             host.log_out().is_err(),
@@ -938,13 +942,7 @@ mod tests {
         EngineHost::default().force_pass();
 
         let (requests, mut inbox) = mpsc::unbounded_channel();
-        let host = EngineHost {
-            live: Mutex::new(Some(Live {
-                requests,
-                thread: std::thread::spawn(|| {}),
-                account_dir: PathBuf::from("account"),
-            })),
-        };
+        let host = live_host(requests, PathBuf::from("account"));
         host.force_pass();
         assert!(matches!(inbox.try_recv(), Ok(Request::Refresh(_))));
         assert!(inbox.try_recv().is_err(), "one moment, one refresh");
@@ -1029,13 +1027,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a temp dir");
         for forget in [false, true] {
             let (requests, mut inbox) = mpsc::unbounded_channel();
-            let host = EngineHost {
-                live: Mutex::new(Some(Live {
-                    requests,
-                    thread: std::thread::spawn(|| {}),
-                    account_dir: dir.path().join("account"),
-                })),
-            };
+            let host = live_host(requests, dir.path().join("account"));
 
             // Neither verdict is read: no loop serves this channel, and which
             // request was sent is the whole of what this asserts.
