@@ -20,7 +20,7 @@ use crate::grants::{
     link_of_sender, post_share_pointer_at,
 };
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys};
-use crate::rotation::cut_for_write_scope;
+use crate::rotation::{Boundaries, cut_for_write_scope};
 use crate::sync::BookkeepingSeal;
 
 /// The refusal a record change answers while a conversion pass runs.
@@ -36,7 +36,7 @@ pub(super) const CLAIM_NOT_HELD: &str = "a-claim-could-not-be-held";
 
 /// What a conversion pass answers. An intake failure leaves a claim on the
 /// mailbox; a conversion failure leaves its entry in the record.
-pub(super) struct PassOutcome {
+pub(crate) struct PassOutcome {
     pub(super) intake: Result<(), EngineError>,
     pub(super) conversion: Result<(), EngineError>,
 }
@@ -50,7 +50,7 @@ impl PassOutcome {
     }
 
     /// The first failure, the intake's before the conversion's.
-    pub(super) fn into_result(self) -> Result<(), EngineError> {
+    pub(crate) fn into_result(self) -> Result<(), EngineError> {
         self.intake.and(self.conversion)
     }
 }
@@ -113,10 +113,10 @@ pub(super) fn claimed_pointer(claim: &AckedClaim) -> Option<IpnsName> {
 }
 
 /// Each owned scope root under its scope pointer name, in canonical form.
-pub(super) type PointerIndex = BTreeMap<String, NodeId>;
+pub(crate) type PointerIndex = BTreeMap<String, NodeId>;
 
 /// Each of `roots` under its scope pointer name, built once per pass.
-pub(super) fn scope_pointer_index(
+pub(crate) fn scope_pointer_index(
     keys: &dyn OwnerScopeKeys,
     roots: impl IntoIterator<Item = NodeId>,
 ) -> PointerIndex {
@@ -127,12 +127,12 @@ pub(super) fn scope_pointer_index(
 }
 
 /// The scope root `pointer` names in `index`.
-pub(super) fn placed(index: &PointerIndex, pointer: &IpnsName) -> Option<NodeId> {
+pub(crate) fn placed(index: &PointerIndex, pointer: &IpnsName) -> Option<NodeId> {
     index.get(pointer.as_str()).copied()
 }
 
 /// Where a conversion pass finds each folder it converts at.
-pub(super) trait ConversionSites {
+pub(crate) trait ConversionSites {
     /// The scope root at `node`, placed for a gated owner read.
     async fn place(&self, node: NodeId) -> Result<OwnerScope, EngineError>;
 
@@ -145,46 +145,46 @@ pub(super) trait ConversionSites {
 
 /// What a write-scope cut needs beyond the conversion itself (ADR 0024 D4).
 /// The command and the tick hold the same.
-pub(super) struct CutAuthority<'a> {
+pub(crate) struct CutAuthority<'a> {
     /// Derives the scope pointer's name and its record signer.
-    pub(super) owner_pointer_seed: &'a [u8; SECRET_LEN],
+    pub(crate) owner_pointer_seed: &'a [u8; SECRET_LEN],
     /// The session's held set, which the write wave enrols the flipped scope
     /// pointer in.
-    pub(super) held: &'a RefCell<HeldRecords>,
-    pub(super) sweep: &'a SweepTaskFactory,
-    pub(super) vault_root: NodeId,
+    pub(crate) held: &'a RefCell<HeldRecords>,
+    pub(crate) sweep: &'a SweepTaskFactory,
+    pub(crate) vault_root: NodeId,
 }
 
 /// The seams and the owner material one conversion pass runs on.
-pub(super) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, St> {
-    pub(super) transport: &'a T,
-    pub(super) api: &'a ApiClient<H, C>,
-    pub(super) gateway: &'a Gateway,
-    pub(super) http: &'a H,
-    pub(super) floors: &'a F,
-    pub(super) snapshot_cache: &'a S,
-    pub(super) events: &'a mpsc::UnboundedSender<Event>,
-    pub(super) scheduler: &'a Sch,
-    pub(super) profile: &'a SyncTimingProfile,
+pub(crate) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, St> {
+    pub(crate) transport: &'a T,
+    pub(crate) api: &'a ApiClient<H, C>,
+    pub(crate) gateway: &'a Gateway,
+    pub(crate) http: &'a H,
+    pub(crate) floors: &'a F,
+    pub(crate) snapshot_cache: &'a S,
+    pub(crate) events: &'a mpsc::UnboundedSender<Event>,
+    pub(crate) scheduler: &'a Sch,
+    pub(crate) profile: &'a SyncTimingProfile,
     /// The session's on-access consult misses ([`OnAccessMisses`]).
-    pub(super) on_access_misses: &'a OnAccessMisses,
-    pub(super) entropy: &'a RefCell<Box<dyn Entropy>>,
-    pub(super) staging: &'a St,
+    pub(crate) on_access_misses: &'a OnAccessMisses,
+    pub(crate) entropy: &'a RefCell<Box<dyn Entropy>>,
+    pub(crate) staging: &'a St,
     /// Signs the re-signed commitment, each minted row and each share pointer.
-    pub(super) identity: &'a EcdsaSigner,
-    pub(super) enc_secret: &'a X25519Secret,
-    pub(super) owner_identity: &'a EcdsaVerifier,
-    pub(super) scope_keys: &'a dyn OwnerScopeKeys,
-    pub(super) cut: CutAuthority<'a>,
+    pub(crate) identity: &'a EcdsaSigner,
+    pub(crate) enc_secret: &'a X25519Secret,
+    pub(crate) owner_identity: &'a EcdsaVerifier,
+    pub(crate) scope_keys: &'a dyn OwnerScopeKeys,
+    pub(crate) cut: CutAuthority<'a>,
     /// Whether a walk this session named every scope root it holds. Until one
     /// has, a claim that names no known folder may name one not walked yet.
-    pub(super) scope_roots_walked: &'a Cell<bool>,
+    pub(crate) scope_roots_walked: &'a Cell<bool>,
     /// Where the pass leaves the counts it read off the record.
-    pub(super) counts: &'a RefCell<ClaimCounts>,
+    pub(crate) counts: &'a RefCell<ClaimCounts>,
     /// Set while a pass or a record change runs. The tick and a command share
     /// one record, so a second writer that overlapped the first could write
     /// back a record that lacks the claims the first acked.
-    pub(super) running: &'a Cell<bool>,
+    pub(crate) running: &'a Cell<bool>,
 }
 
 /// Holds [`ConversionPass::running`] and clears it however the holder ends.
@@ -423,7 +423,7 @@ where
     /// Every folder converts on its own: a failure at one leaves its entries
     /// pending for a later pass and does not stop the rest. The first
     /// conversion failure is the answer.
-    pub(super) async fn run(
+    pub(crate) async fn run(
         &self,
         sites: &impl ConversionSites,
         pointers: &PointerIndex,
@@ -1060,13 +1060,13 @@ impl<T: SeamTypes> ConversionSites for EngineSites<'_, T> {
 }
 
 /// The tick's sites: the boundaries its own walk proved this pass.
-pub(super) struct TickSites<'a> {
-    pub(super) boundaries: &'a Boundaries<'a>,
+pub(crate) struct TickSites<'a> {
+    pub(crate) boundaries: &'a Boundaries<'a>,
     /// The vault root's current name.
-    pub(super) root_name: &'a IpnsName,
+    pub(crate) root_name: &'a IpnsName,
     /// Whether a walk this session named every scope root. Until one has, an
     /// ancestor scope root may be missing from the boundaries.
-    pub(super) walked: bool,
+    pub(crate) walked: bool,
 }
 
 impl ConversionSites for TickSites<'_> {

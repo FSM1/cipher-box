@@ -24,16 +24,16 @@ pub(super) const MAX_SWEEP_CUTS: usize = 8;
 
 /// What one sweep did.
 #[derive(Debug, Default)]
-pub(super) struct LinkSweepReport {
+pub(crate) struct LinkSweepReport {
     /// Every scope root a cut re-keyed, the cut scope roots and their
     /// descendants.
-    pub(super) rekeyed: Vec<NodeId>,
+    pub(crate) rekeyed: Vec<NodeId>,
     /// The first trust violation, else the first failure. A failed walk or
     /// cut leaves its links for the next sweep.
-    pub(super) failure: Option<EngineError>,
+    pub(crate) failure: Option<EngineError>,
     /// Whether the sweep stopped at [`MAX_SWEEP_CUTS`] landed cuts with
     /// scope roots left to cut.
-    pub(super) more: bool,
+    pub(crate) more: bool,
 }
 
 impl LinkSweepReport {
@@ -95,7 +95,7 @@ where
     /// Walk the vault from `root_name` and cut expired links until
     /// [`MAX_SWEEP_CUTS`] cuts land. `None` while a pass or a cut holds
     /// [`Running`].
-    pub(super) async fn sweep_links(
+    pub(crate) async fn sweep_links(
         &self,
         root_name: &IpnsName,
         pointers: &PointerIndex,

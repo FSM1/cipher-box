@@ -9,11 +9,17 @@
 use core::cell::RefCell;
 use std::collections::BTreeMap;
 
+use cipherbox_core::kdf;
+use cipherbox_core::seal::ChildScopeRef;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use zeroize::Zeroizing;
 
 use crate::facade::NodeId;
 use crate::net::DescendantScopeRoot;
+use crate::rotation::derive_write_name;
+use crate::sync::model::Snapshot;
+use crate::sync::rebase::enclosing_scope_root;
+use crate::sync::render::BaseSnapshot;
 
 /// What one scope root seals under: both its scope seeds, at the read epoch its
 /// own envelope carries. Assembled on read from the cells that own each part.
@@ -51,6 +57,58 @@ pub(crate) fn install_walked_read_epochs(
         .iter()
         .map(|scope| (NodeId(scope.scope_id), scope.adopted.epoch))
         .collect();
+}
+
+/// The boundaries this session has proved, and the vault root they hang under —
+/// what both the second-end lookup and the scope-exit cut read.
+pub(crate) struct Boundaries<'a> {
+    /// The gate-passing base a boundary's place is read off.
+    pub(crate) base: &'a BaseSnapshot,
+    /// The known set
+    /// ([`Engine::relocation_scope_roots`](crate::facade::Engine::relocation_scope_roots)).
+    pub(crate) scope_roots: Vec<NodeId>,
+    /// What each **walked** boundary seals under, assembled from the read epoch
+    /// this tick's walk proved and the two seed caches.
+    pub(crate) material: BTreeMap<NodeId, ScopeMaterial>,
+    /// The vault root: the ascent authority of every boundary directly below it.
+    pub(crate) root: NodeId,
+    pub(crate) root_read_seed: &'a Zeroizing<[u8; 32]>,
+}
+
+/// `nodeSeed(enclosingOverrideSeed, scopeId)` — the ascent authority an interior
+/// scope root's gate derives its expected ascent keypair from
+/// (`RootAdopter::under_parent_node_seed`).
+///
+/// `None` where the enclosing scope's own seed is not in hand: the gate then
+/// refuses the read, which is the fail-closed answer for a boundary this session
+/// cannot place.
+pub(crate) fn ascent_node_seed(
+    base: &Snapshot,
+    material: &BTreeMap<NodeId, ScopeMaterial>,
+    root: NodeId,
+    root_read_seed: &Zeroizing<[u8; 32]>,
+    scope: NodeId,
+) -> Option<Zeroizing<[u8; 32]>> {
+    let parent = base.parent_of(scope)?;
+    let listed: Vec<NodeId> = material.keys().copied().collect();
+    let enclosing = enclosing_scope_root(base, parent, &listed).unwrap_or(root);
+    let seed = if enclosing == root {
+        root_read_seed
+    } else {
+        &material.get(&enclosing)?.read_scope_seed
+    };
+    Some(Zeroizing::new(*kdf::node_seed(seed, &scope.0).as_bytes()))
+}
+
+/// A proved boundary's scope root at the name its write scope seed derives.
+pub(crate) fn proved_scope_ref(scope_root: NodeId, proved: &ScopeMaterial) -> ChildScopeRef {
+    ChildScopeRef::new(
+        scope_root.0,
+        derive_write_name(&proved.write_scope_seed, &scope_root.0)
+            .as_str()
+            .as_bytes()
+            .to_vec(),
+    )
 }
 
 #[cfg(test)]

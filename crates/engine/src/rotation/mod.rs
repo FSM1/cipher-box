@@ -49,6 +49,7 @@
 
 pub mod cascade;
 pub mod eager_set;
+pub(crate) mod flat_cut;
 pub mod reseal;
 pub mod retry;
 pub mod rotate;
@@ -65,6 +66,7 @@ pub use cascade::{
 pub use eager_set::{
     ChildIndexResolver, EagerSet, EnumerationError, ResolveFailure, enumerate_eager_set,
 };
+pub(crate) use flat_cut::{FlatCut, ScopeExitArm, cut_exited_scope, flat_root_cut};
 pub use reseal::{
     AscentAuthority, CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ResealSite,
     ScopeRootIdentity, WriteHistory, published_override_seed, reseal_at_current_epoch,
@@ -72,7 +74,6 @@ pub use reseal::{
 };
 pub(crate) use reseal::{LaggingSeedMiss, lagging_read_seed};
 pub use retry::{MAX_ROTATION_ATTEMPTS, Retryable, bounded};
-pub(crate) use rotate::complete_cut;
 pub use rotate::{
     ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, RotationPublishError,
     ScopeRootPublisher, rotate_scope,
@@ -83,7 +84,9 @@ pub use rotate_write::{
     WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, build_repoint_object,
     derive_write_name, rotate_scope_write,
 };
-pub(crate) use scope_material::{WalkedReadEpochs, install_walked_read_epochs};
+pub(crate) use scope_material::{
+    Boundaries, WalkedReadEpochs, ascent_node_seed, install_walked_read_epochs, proved_scope_ref,
+};
 pub use sweep::{
     LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
     SweepResolver, SweepRun, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep,
