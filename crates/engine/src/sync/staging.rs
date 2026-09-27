@@ -20,7 +20,7 @@ use core::cell::RefCell;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use cipherbox_core::content::{encode_content_cid_str, verify_cid};
+use cipherbox_core::content::{CONTENT_CID_LEN, encode_content_cid_str, verify_cid};
 
 use crate::content::LocalBlocks;
 use crate::content::chunk::SEALED_LEAF_OVERHEAD;
@@ -32,13 +32,14 @@ use crate::grants::{CONTACTS_PREFIX, RECEIVED_SHARES_PREFIX};
 use crate::net::{NODE_TOMBSTONE_PREFIX, RETIRE_LEDGER_PREFIX, StagingRetireLedger};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
-    DebtOrigin, OpId, OwedRetire, RetireLedger, SeamError, SeamResult, StagingStore, UnixMillis,
+    DebtOrigin, DroppedFrom, OpId, OwedRetire, RetireLedger, SeamError, SeamResult, StagingStore,
+    UnixMillis,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX};
-use crate::sync::op::Op;
+use crate::sync::op::{Op, OpKind};
 use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{
     RecordClass, RecordReader, RecordSeal, encode_op_record, record_content_root_cid,
@@ -355,11 +356,14 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
         let manifest = block
             .filter(|block| verify_cid(root, block).is_ok())
             .and_then(|block| decode_root(block).ok());
-        if let (Some(block), true) = (block, manifest.is_some()) {
+        if let (Some(block), true, Some(from)) = (block, manifest.is_some(), dropped_from(op)) {
             let target = encode_content_cid_str(root);
             if let Ok(expansion) = expand_staged_root(&target, block, self.profile) {
                 let debt = OwedRetire {
-                    origin: DebtOrigin::DroppedVersion(expansion.targets),
+                    origin: DebtOrigin::DroppedVersion {
+                        targets: expansion.targets,
+                        from,
+                    },
                     ..OwedRetire::whole(op.target.0, target, expansion.pinned_bytes)
                 };
                 let _ = StagingRetireLedger::new(self.store, self.seal)
@@ -595,6 +599,23 @@ fn version_bytes(manifest: &RootManifest, root_block_len: usize, staged: &Staged
             plaintext.saturating_add(SEALED_LEAF_OVERHEAD)
         })
         .fold(root_block_len as u64, u64::saturating_add)
+}
+
+/// What `op`'s version was formed against; `None` for an op with no version
+/// or a base that is not a content CID, whose debt goes unjournaled.
+fn dropped_from(op: &Op) -> Option<DroppedFrom> {
+    match &op.kind {
+        OpKind::UpdateContent {
+            base_version_cid, ..
+        } => match base_version_cid {
+            None => Some(DroppedFrom::Edit(None)),
+            Some(base) => <[u8; CONTENT_CID_LEN]>::try_from(base.as_slice())
+                .ok()
+                .map(|base| DroppedFrom::Edit(Some(base))),
+        },
+        OpKind::Create { .. } => Some(DroppedFrom::Create),
+        _ => None,
+    }
 }
 
 /// Which of `sized` stay, as a keep-mask, against the age, count and byte
@@ -2009,7 +2030,7 @@ mod tests {
             assert_eq!(owed.len(), 1);
             assert_eq!(owed[0].node, id(1).0);
             assert_eq!(owed[0].target, encode_content_cid_str(&root_cid));
-            let DebtOrigin::DroppedVersion(targets) = &owed[0].origin else {
+            let DebtOrigin::DroppedVersion { targets, .. } = &owed[0].origin else {
                 panic!("a trimmed version's debt carries its targets");
             };
             let mut named: Vec<Vec<u8>> = blocks.iter().map(|block| block.cid.clone()).collect();

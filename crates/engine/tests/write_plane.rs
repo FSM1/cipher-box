@@ -10828,6 +10828,47 @@ fn a_discarded_parked_write_retires_the_rows_its_version_kept() {
     );
 }
 
+/// An edit whose PUT the endpoints acknowledged and never served may still
+/// land. While they serve the head it was formed against, its discarded version
+/// retires nothing: that read cannot tell a lagging endpoint from an edit that
+/// never landed.
+#[test]
+fn a_discarded_edit_retires_nothing_while_its_base_still_stands() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+
+    world.record_store.drop_puts();
+    let op_id = write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
+        "nothing the acknowledged edit names is retired"
+    );
+    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
 /// Recover re-queues the parked bytes under a **fresh** op anchored on the head
 /// that beat them. Resuming the parked op instead would replay the conditional
 /// edit it lost, so the member could never get their own bytes back.

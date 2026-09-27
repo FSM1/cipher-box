@@ -15,7 +15,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::content::{
-    decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid,
+    CONTENT_CID_LEN, decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid,
 };
 use cipherbox_core::seal::OwnerLocalKind;
 use zeroize::Zeroizing;
@@ -29,8 +29,8 @@ use crate::content::{
 use crate::net::publish::PublishError;
 use crate::net::record_publish::RecordPublishError;
 use crate::seams::{
-    CredentialStore, DebtOrigin, Http, OwedPage, OwedRetire, OwingRecord, RetireLedger, SeamError,
-    SeamResult, StagingStore,
+    CredentialStore, DebtOrigin, DroppedFrom, Http, OwedPage, OwedRetire, OwingRecord,
+    RetireLedger, SeamError, SeamResult, StagingStore,
 };
 use crate::sync::{BookkeepingSeal, MAX_BOOKKEEPING_OPENS};
 
@@ -404,8 +404,9 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
 /// - the previous release: `node(16) | owedBytes | manifestBytes | cid`, read
 ///   as a [`DebtOrigin::Prune`] debt;
 /// - this release: `ENTRY_V2 | origin | node(16) | owedBytes | manifestBytes |
-///   cid`, and for [`DebtOrigin::DroppedVersion`] one `cid | pinnedBytes` per
-///   target after it, the root last.
+///   cid`, and for [`DebtOrigin::DroppedVersion`] then `from`, then one
+///   `cid | pinnedBytes` per target, the root last. `from` is `FROM_CREATE`,
+///   `FROM_EDIT_UNVERSIONED`, or `FROM_EDIT | baseCid` ([`DroppedFrom`]).
 ///
 /// Figures are big-endian `u64`. `cid` is the binary CID the entry is keyed
 /// by, which binds the value to its key.
@@ -413,30 +414,43 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
 /// Zeroizing because the plaintext side of a sealed value is exactly what the
 /// tier exists to keep off the host ([`crate::sync::bookkeeping`]).
 ///
-/// Refuses a target set [`decode_entry`] would read as unwritten (AGENTS.md
-/// rule 8).
+/// Refuses a target set or a base [`decode_entry`] would read as unwritten
+/// (AGENTS.md rule 8).
 fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> SeamResult<Zeroizing<Vec<u8>>> {
-    let targets = match &entry.origin {
-        DebtOrigin::Prune => &[][..],
-        DebtOrigin::DroppedVersion(targets) => targets.as_slice(),
+    let (origin, dropped) = match &entry.origin {
+        DebtOrigin::Prune => (ORIGIN_PRUNE, None),
+        DebtOrigin::DroppedVersion { targets, from } => {
+            (ORIGIN_DROPPED_VERSION, Some((targets.as_slice(), *from)))
+        }
     };
+    let pairs = dropped.map_or(0, |(targets, _)| targets.len());
     let mut stored = Zeroizing::new(Vec::with_capacity(
-        2 + ENTRY_HEAD_LEN + (cid.len() + size_of::<u64>()) * (targets.len() + 1),
+        3 + ENTRY_HEAD_LEN + CONTENT_CID_LEN + (cid.len() + size_of::<u64>()) * (pairs + 1),
     ));
     stored.push(ENTRY_V2);
-    stored.push(match entry.origin {
-        DebtOrigin::Prune => ORIGIN_PRUNE,
-        DebtOrigin::DroppedVersion(_) => ORIGIN_DROPPED_VERSION,
-    });
+    stored.push(origin);
     stored.extend_from_slice(&entry.node);
     stored.extend_from_slice(&entry.owed_bytes.to_be_bytes());
     stored.extend_from_slice(&entry.manifest_bytes.to_be_bytes());
     stored.extend_from_slice(cid);
-    if let DebtOrigin::DroppedVersion(_) = entry.origin {
+    if let Some((targets, from)) = dropped {
         if !target_set_holds(targets, &entry.target, entry.manifest_bytes) {
             return Err(SeamError::new(
                 "retire-ledger target set does not end at its root or sum to its total",
             ));
+        }
+        match from {
+            DroppedFrom::Create => stored.push(FROM_CREATE),
+            DroppedFrom::Edit(None) => stored.push(FROM_EDIT_UNVERSIONED),
+            DroppedFrom::Edit(Some(base)) if is_wellformed_content_cid(&base) => {
+                stored.push(FROM_EDIT);
+                stored.extend_from_slice(&base);
+            }
+            DroppedFrom::Edit(Some(_)) => {
+                return Err(SeamError::new(
+                    "retire-ledger edit base is not a content CID",
+                ));
+            }
         }
         for target in targets {
             let binary = decode_content_cid_str(&target.cid)
@@ -454,6 +468,9 @@ fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> SeamResult<Zeroizing<Vec<u8>>
 const ENTRY_V2: u8 = 2;
 const ORIGIN_PRUNE: u8 = 0;
 const ORIGIN_DROPPED_VERSION: u8 = 1;
+const FROM_CREATE: u8 = 0;
+const FROM_EDIT_UNVERSIONED: u8 = 1;
+const FROM_EDIT: u8 = 2;
 
 /// Whether a dropped version's target set is one the settle may send: it is not
 /// empty, it ends at the entry's own root, and its figures sum to the total.
@@ -488,9 +505,11 @@ fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
     let origin = match origin_tag {
         ORIGIN_PRUNE if tail.is_empty() => DebtOrigin::Prune,
         ORIGIN_DROPPED_VERSION => {
+            let (from, tail) = decode_from(tail)?;
             let targets = decode_targets(tail, cid.len())?;
-            target_set_holds(&targets, &encode_content_cid_str(cid), manifest_bytes)
-                .then_some(DebtOrigin::DroppedVersion(targets))?
+            let root = is_wellformed_content_cid(cid).then(|| encode_content_cid_str(cid))?;
+            target_set_holds(&targets, &root, manifest_bytes)
+                .then_some(DebtOrigin::DroppedVersion { targets, from })?
         }
         _ => return None,
     };
@@ -501,6 +520,20 @@ fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
         manifest_bytes,
         origin,
     })
+}
+
+/// A dropped version's stored `from`, and the tail after it.
+fn decode_from(tail: &[u8]) -> Option<(DroppedFrom, &[u8])> {
+    let (&tag, rest) = tail.split_first()?;
+    match tag {
+        FROM_CREATE => Some((DroppedFrom::Create, rest)),
+        FROM_EDIT_UNVERSIONED => Some((DroppedFrom::Edit(None), rest)),
+        FROM_EDIT => {
+            let (base, rest) = rest.split_first_chunk::<CONTENT_CID_LEN>()?;
+            is_wellformed_content_cid(base).then_some((DroppedFrom::Edit(Some(*base)), rest))
+        }
+        _ => None,
+    }
 }
 
 /// A dropped version's stored target set, or `None` for a tail that is not a
@@ -606,10 +639,11 @@ where
     let mut stalls: Vec<ReclaimStall> = Vec::new();
     let mut still_owed = 0u64;
     let mut registry_up = true;
-    // One record read per owing node, not per entry — a prune drops several
-    // versions of one file. A node's set grows only with what actually retired,
-    // so a CID a deferred entry named is still reachable by the next one.
-    let mut live_of: BTreeMap<[u8; 16], (OwingRecord, Option<LiveRecord>)> = BTreeMap::new();
+    // One record read per owing node and class, not per entry — a prune drops
+    // several versions of one file. A node's set grows only with what actually
+    // retired, so a CID a deferred entry named is still reachable by the next
+    // one.
+    let mut live_of: BTreeMap<([u8; 16], OwingRecord), Option<LiveRecord>> = BTreeMap::new();
     // The nodes this pass classified, and those it leaves still owing: a
     // tombstone outlives nothing but the debts it classifies.
     let mut tombstoned: BTreeMap<[u8; 16], bool> = BTreeMap::new();
@@ -626,20 +660,13 @@ where
         };
         let owing = match (retired, &entry.origin) {
             (true, _) => OwingRecord::Retired,
-            (false, DebtOrigin::DroppedVersion(_)) => OwingRecord::Unconfirmed,
+            (false, DebtOrigin::DroppedVersion { from, .. }) => OwingRecord::Unconfirmed(*from),
             (false, DebtOrigin::Prune) => OwingRecord::Published,
         };
-        // A found record answers every class alike, so only a `Published` read
-        // that found none is asked again as `Unconfirmed`.
-        let (read_as, node) = match live_of.entry(entry.node) {
+        let node = match live_of.entry((entry.node, owing)) {
             Entry::Occupied(held) => held.into_mut(),
-            Entry::Vacant(slot) => slot.insert((owing, live(entry.node, owing).await)),
+            Entry::Vacant(slot) => slot.insert(live(entry.node, owing).await),
         };
-        if node.is_none() && *read_as == OwingRecord::Published && owing == OwingRecord::Unconfirmed
-        {
-            *read_as = owing;
-            *node = live(entry.node, owing).await;
-        }
         // Bounded like every other batch this module reports: the reasons are
         // there to be acted on, and the figure is what counts the debt.
         let stall = |reason| ReclaimStall {
@@ -781,7 +808,7 @@ pub enum ReclaimStallReason {
 /// prune quoted: a root no source served, or a manifest that is not this
 /// version's.
 async fn expand_owed<H: Http>(entry: &OwedRetire, source: &RootSource<'_, H>) -> Option<Expansion> {
-    if let DebtOrigin::DroppedVersion(targets) = &entry.origin {
+    if let DebtOrigin::DroppedVersion { targets, .. } = &entry.origin {
         return Some(Expansion {
             targets: targets.clone(),
             pinned_bytes: entry.manifest_bytes,
@@ -1552,7 +1579,10 @@ mod tests {
         )
         .expect("the staged root expands");
         let entry = OwedRetire {
-            origin: DebtOrigin::DroppedVersion(expansion.targets),
+            origin: DebtOrigin::DroppedVersion {
+                targets: expansion.targets,
+                from: DroppedFrom::Create,
+            },
             ..entry
         };
         (entry, leaf_cids)
@@ -1576,16 +1606,13 @@ mod tests {
         assert_eq!((remaining, owed), (0, Vec::new()));
     }
 
-    /// The settle reads a dropped version's node as one whose record may never
-    /// have published, and a prune's node as published.
+    /// The settle reads a dropped version's node by what the version was
+    /// formed against, and a prune's debt on the same node as published: one
+    /// class's read never answers for another's.
     #[test]
     fn a_dropped_versions_node_is_read_as_unconfirmed() {
         let (dropped, _) = dropped_version(&[5u8; 100]);
         let (pruned, pruned_block, _) = owed_version(&[6u8; 100]);
-        let pruned = OwedRetire {
-            node: [0x3C; 16],
-            ..pruned
-        };
         let store = InMemoryStagingStore::default();
         owe(&store, OWNER, &dropped);
         owe(&store, OWNER, &pruned);
@@ -1600,8 +1627,8 @@ mod tests {
         assert_eq!(
             asked.into_inner(),
             BTreeSet::from([
-                (NODE, OwingRecord::Unconfirmed),
-                ([0x3C; 16], OwingRecord::Published)
+                (NODE, OwingRecord::Unconfirmed(DroppedFrom::Create)),
+                (NODE, OwingRecord::Published)
             ])
         );
     }
@@ -1626,20 +1653,26 @@ mod tests {
     }
 
     /// Encode refuses what decode refuses (AGENTS.md rule 8): a target set that
-    /// does not end at the entry's root, or does not sum to its total.
+    /// does not end at the entry's root or does not sum to its total, and an
+    /// edit base that is not a content CID.
     #[test]
     fn a_target_set_the_settle_could_not_send_is_refused_at_owe() {
         let (entry, _) = dropped_version(&[8u8; 100]);
-        let DebtOrigin::DroppedVersion(targets) = &entry.origin else {
+        let DebtOrigin::DroppedVersion { targets, .. } = &entry.origin else {
             unreachable!("a dropped version carries its targets");
         };
         let mut rootless = targets.clone();
         rootless.pop();
         let mut short = targets.clone();
         short[0].pinned_bytes += 1;
-        for bad in [Vec::new(), rootless, short] {
+        let bad_sets = [Vec::new(), rootless, short].map(|bad| (bad, DroppedFrom::Create));
+        let bad_base = (
+            targets.clone(),
+            DroppedFrom::Edit(Some([0u8; CONTENT_CID_LEN])),
+        );
+        for (targets, from) in bad_sets.into_iter().chain([bad_base]) {
             let bad = OwedRetire {
-                origin: DebtOrigin::DroppedVersion(bad),
+                origin: DebtOrigin::DroppedVersion { targets, from },
                 ..entry.clone()
             };
             let cid = StagingRetireLedger::<InMemoryStagingStore>::cid(&bad.target).expect("a CID");
@@ -1653,10 +1686,14 @@ mod tests {
         let (entry, _) = dropped_version(&[9u8; 100]);
         let (stored, cid) = encoded(&entry);
         assert!(decode_entry(&stored, &cid).is_some());
+        let from_at = 2 + ENTRY_HEAD_LEN + cid.len();
+        let mut unknown_from = stored.clone();
+        unknown_from[from_at] = 9;
         for bytes in [
             stored[..stored.len() - 1].to_vec(),
             [&stored[..], &[0u8; 44]].concat(),
             [&[1u8][..], &stored[1..]].concat(),
+            unknown_from,
         ] {
             assert_eq!(decode_entry(&bytes, &cid), None);
         }
@@ -1665,9 +1702,26 @@ mod tests {
     #[test]
     fn a_dropped_version_round_trips_through_the_store() {
         let (entry, _) = dropped_version(&[10u8; 100]);
-        let store = InMemoryStagingStore::default();
-        owe(&store, OWNER, &entry);
-        assert_eq!(owed_entries(&store, OWNER), vec![entry]);
+        let DebtOrigin::DroppedVersion { targets, .. } = &entry.origin else {
+            unreachable!("a dropped version carries its targets");
+        };
+        let base = compute_cid(DAG_ROOT_CODEC, &[11u8; 20]);
+        for from in [
+            DroppedFrom::Create,
+            DroppedFrom::Edit(None),
+            DroppedFrom::Edit(Some(base.as_slice().try_into().expect("a content CID"))),
+        ] {
+            let entry = OwedRetire {
+                origin: DebtOrigin::DroppedVersion {
+                    targets: targets.clone(),
+                    from,
+                },
+                ..entry.clone()
+            };
+            let store = InMemoryStagingStore::default();
+            owe(&store, OWNER, &entry);
+            assert_eq!(owed_entries(&store, OWNER), vec![entry]);
+        }
     }
 
     /// A replayed prune must not move what the vault reports as pending.

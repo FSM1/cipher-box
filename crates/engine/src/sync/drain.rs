@@ -86,9 +86,9 @@ use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
 use crate::rotation::{LaggingSeedMiss, ScopeExitRotator, derive_write_name, lagging_read_seed};
 use crate::seams::{
-    CredentialStore, DebtOrigin, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
-    RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache, StagingStore,
-    UnixMillis,
+    CredentialStore, DebtOrigin, DroppedFrom, FloorStore, Http, OpId, OwedRetire, OwingRecord,
+    RecordTransport, RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache,
+    StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
@@ -5488,13 +5488,18 @@ where
         {
             Ok(loaded) => loaded,
             Err(_)
-                if owing == OwingRecord::Unconfirmed
+                if owing == OwingRecord::Unconfirmed(DroppedFrom::Create)
                     && self.holds_no_record(&end, &write_name).await? =>
             {
                 return reaching(BTreeSet::new());
             }
             Err(_) => return None,
         };
+        if let OwingRecord::Unconfirmed(DroppedFrom::Edit(base)) = owing
+            && head_content_cid(&loaded.body) == base.as_ref().map(|cid| &cid[..])
+        {
+            return None;
+        }
         // A record carrying no version list reaches no content.
         let ReadBody::File { versions, .. } = loaded.body else {
             return reaching(BTreeSet::new());
@@ -5506,7 +5511,7 @@ where
         reaching(live)
     }
 
-    /// Whether `name` holds no record by the [`OwingRecord::Unconfirmed`] rule:
+    /// Whether `name` holds no record by the [`DroppedFrom::Create`] rule:
     /// every endpoint answers that it holds none, and this device never adopted
     /// one there. `None` when the sequence floor will not read.
     async fn holds_no_record(&self, end: &ScopeEnd<'_>, name: &IpnsName) -> Option<bool> {
@@ -6854,6 +6859,15 @@ async fn op_mark<St: StagingStore>(staging: &St, key: &[u8]) -> SeamResult<Optio
         .await?
         .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok())
         .map(u64::from_be_bytes))
+}
+
+/// The head version's binary `contentCid` of a read body; `None` for a body
+/// with no version.
+fn head_content_cid(body: &ReadBody) -> Option<&[u8]> {
+    match body {
+        ReadBody::File { versions, .. } => versions.first().map(|v| v.content_cid.as_slice()),
+        _ => None,
+    }
 }
 
 /// The published-op mark for `enc_secret`'s identity. Read by the drain and by
