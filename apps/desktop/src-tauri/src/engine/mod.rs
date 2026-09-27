@@ -945,7 +945,7 @@ mod tests {
         let host = live_host(requests, PathBuf::from("account"));
         host.force_pass();
         assert!(matches!(inbox.try_recv(), Ok(Request::Refresh(_))));
-        assert!(inbox.try_recv().is_err(), "one moment, one refresh");
+        assert!(inbox.try_recv().is_err(), "one event, one refresh");
     }
 
     /// The session outlives a mount it could not make: the engine is still

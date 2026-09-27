@@ -1,7 +1,7 @@
-//! The two host moments that force a sync pass beside the tray's "Sync Now": a
-//! network reconnect and a wake from sleep (ADR 0044 D1). A moment forces one
-//! pass, on the moment only and never at launch, as the web host's refresh on
-//! wake does.
+//! The two host events that force a sync pass beside the tray's "Sync Now": a
+//! network reconnect and a wake from sleep (ADR 0044 D1). Each forces one pass,
+//! on the transition only and never at launch, and a wake waits for a network,
+//! as the web host's refresh on wake does.
 //!
 //! One sampler covers all three platforms. A sleep stops the clock a thread
 //! sleeps against but not the wall clock, so a sample that lands long after
@@ -17,7 +17,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::engine::EngineHost;
 
-/// How often the host is sampled — the most a forced pass trails its moment.
+/// How often the host is sampled — the most a forced pass trails its event.
 const PERIOD: Duration = Duration::from_secs(5);
 
 /// A wall-clock gap between two samples past this is a sleep. A shorter stall
@@ -61,31 +61,33 @@ fn network(address: IpAddr) -> IpAddr {
     }
 }
 
-/// Whether the host slept or reached a new network between two samples. A
-/// clock set back is no sleep.
-fn woke(last: &Sample, next: &Sample) -> bool {
+/// Whether the host woke onto a network or reached a new one between two
+/// samples. A clock set back is no sleep; a wake with no network waits for the
+/// reconnect.
+fn forces_pass(last: &Sample, next: &Sample) -> bool {
     let resumed = next
         .at
         .duration_since(last.at)
         .is_ok_and(|gap| gap > RESUME_GAP);
-    resumed || !next.networks.is_subset(&last.networks)
+    (resumed && !next.networks.is_empty()) || !next.networks.is_subset(&last.networks)
 }
 
-/// Forces one pass per sample that woke. The first sample is the baseline.
+/// Forces one pass per sample that calls for one. The first sample is the
+/// baseline.
 fn watch(samples: impl IntoIterator<Item = Sample>, mut force_pass: impl FnMut()) {
     let mut samples = samples.into_iter();
     let Some(mut last) = samples.next() else {
         return;
     };
     for next in samples {
-        if woke(&last, &next) {
+        if forces_pass(&last, &next) {
             force_pass();
         }
         last = next;
     }
 }
 
-/// Samples the host for the life of the app. A moment with no session live
+/// Samples the host for the life of the app. An event with no session live
 /// forces nothing.
 pub fn spawn(app: AppHandle) -> std::io::Result<()> {
     thread::Builder::new()
@@ -147,8 +149,8 @@ mod tests {
         );
     }
 
-    /// A network that goes is not a moment a pass can land in; only its
-    /// return is.
+    /// A network that goes is not an event a pass can land in; only its return
+    /// is.
     #[test]
     fn losing_the_network_forces_no_pass() {
         assert_eq!(
@@ -194,6 +196,22 @@ mod tests {
             ]),
             1
         );
+    }
+
+    /// Nothing can land while the host is offline, so the pass waits for the
+    /// network to return.
+    #[test]
+    fn a_wake_with_no_network_forces_one_pass_on_the_reconnect() {
+        let wifi = ["192.168.1.20"];
+        assert_eq!(
+            passes(vec![
+                sample(0, &wifi),
+                sample(3_600, &[]),
+                sample(3_605, &wifi)
+            ]),
+            1
+        );
+        assert_eq!(passes(vec![sample(0, &wifi), sample(3_600, &[])]), 0);
     }
 
     #[test]
