@@ -147,7 +147,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   target that never landed costs nothing. An op whose record PUT was
   **acknowledged** retires nothing: the record may be resolvable at its name, and
   unpinning content a live record still references is loss, where leaving the
-  rows charged is only a leak. A publish that fails **before the record reaches
+  rows charged is only a leak. A dead letter that later drops its staged
+  version — a discard, a refused preserved entry, or the preserved-set trim —
+  journals every row the version charged to the retire ledger first, and the
+  settle retires them once the name holds a record above the sequence its PUT
+  was acknowledged at (ADR 0054). A publish that fails **before the record reaches
   the transport** — register-first, the floor read, the head-CID echo, or an
   upload whose ack never came back — is the mirror case: its head block may
   already be pinned under its own charged row, no record can name it, and the
@@ -1460,7 +1464,8 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   under the file's own name on each publish, so orphan GC leaves it alone. A
   version that falls outside the rule loses that reference, and what it owes the
   registry is journaled to the retire ledger before the shortened history
-  publishes. A write-rotation name wave registers every version's root and
+  publishes. A version a dead letter drops journals its whole target set, root
+  and leaves, so the settle needs no gateway read (ADR 0054). A write-rotation name wave registers every version's root and
   leaves at the node's new name before the record moves (ADR 0047). A version
   whose root the name wave cannot fetch carries its root alone. Its leaves lose
   their reference edges when the old name retires, and stay pinned only because

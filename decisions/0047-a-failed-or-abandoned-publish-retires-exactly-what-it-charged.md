@@ -53,7 +53,11 @@ and the drop of a version cannot be undone.
 its name. Unpinning content that a live record still references is loss, and leaving the rows
 charged is only a leak. So a spent attempt budget on an acknowledged-but-unconfirmed publish
 (`Halt::Attempt`) dead-letters the op and retires neither the name nor a block. An unattributable
-upload refusal, which fails before any PUT, is a separate halt, `Halt::UploadAttempt`.
+upload refusal, which fails before any PUT, is a separate halt, `Halt::UploadAttempt`. Amended by
+[ADR 0054](./0054-a-dropped-versions-debt-carries-its-target-set-and-settles-above-the-acknowledged-sequence.md)
+D2 on 2026-09-27: a dead letter that drops its staged version journals the rows the version
+charged to the retire ledger, and the settle retires them once a record above the acknowledged
+sequence stands at the name.
 
 **D3 — A publish that fails before its record reaches the transport retires its head block, on
 each attempt.** Such a failure leaves a head block that is already uploaded and charged, and no
@@ -131,7 +135,8 @@ decide whether the carve-outs join this ADR as a Dn and the "Retirement" bullet.
 
 **E4 — An acknowledged PUT that never becomes live leaks everything it charged.** D2 keeps the
 name, the head and every content row of such an op, and no later pass learns that the record
-never landed. The attempt budget per op bounds the cost.
+never landed. The attempt budget per op bounds the cost. Narrowed by ADR 0054 on 2026-09-27 to a version
+whose staged root is already gone (ADR 0054 E1).
 
 **E5 — A version whose root the name wave cannot fetch carries its root alone.** Its leaves lose
 their reference edges when the old name retires. They stay pinned only because the registry
