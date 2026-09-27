@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "a6d6acae7e26",
+  "session_id": "d2eb5edf-3f69-4864-9e2f-56a9f4551475",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-27T21:00:05.387711Z",
+  "branch": "docs/adr-0055-bounded-manual-refresh",
+  "checkpoints_count": 28,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "453b5b9e0e9e",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 2402,
+    "cache_creation_tokens": 513506,
+    "cache_read_tokens": 19155447,
+    "output_tokens": 104113,
+    "api_call_count": 108
+  },
+  "session_metrics": {
+    "turn_count": 28
+  },
+  "summary": {
+    "intent": "Execute a handed-off multi-lane engineering pass: run three parallel background lanes (Opus agents in isolated worktrees) fixing four CipherBox issues (#2016, #2021, #1956, #2017), coordinate their nested review agents, drive each through CodeRabbit review and merge, then afterward write the resulting ADR/doc updates.",
+    "outcome": "All three PRs (2059, 2060, 2063) merged, closing all four issues; main stayed green through two post-merge check runs (2776 and 2800 engine tests). Cleaned up 37 stale placeholder branches. Follow-up issue #2065 filed for a residual gap. Began doc-update follow-up work: opened draft docs PRs for ADR 0054 and ADR 0055 covering the new durable storage shapes and blueprint/CONTEXT staleness-ladder wording, still in progress at session end.",
+    "learnings": {
+      "repo": [
+        "Merged/removed agent worktrees leave behind placeholder branches on main that accumulate and need periodic cleanup; verify unmerged ones against main's squash-merge history before deleting",
+        "CodeRabbit reviews are rate/slot-limited (one at a time across PRs); requests must be scheduled around a shared slot rather than fired immediately",
+        "Background Bash tool calls have a 10-minute cap; long waits for scheduled events (like a CodeRabbit slot >10min away) must be relaunched as detached processes or Monitor watchers",
+        "post-merge checks on main (engine clippy + full test suite) are run under a timed Monitor since they take a while",
+        "ADR index table in this repo is Prettier-formatted and reflows (column widths) when a new row is added, causing incidental diff noise",
+        "AGENTS.md enforces a 'no happy-path narration' comment rule — reviewers routinely flag comments that restate code or list callers as being against this rule"
+      ],
+      "code": [
+        {
+          "path": "crates/engine/src/sync/tick.rs",
+          "line": 484,
+          "finding": "run_past_deadline hand-wrote a poll_fn race duplicating the existing `within` combinator (record_plane.rs:153); flagged by reuse/simplify/altitude reviews as needing consolidation"
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "line": 10044,
+          "finding": "staleness_now took borrow_mut just to write `reported`, causing reads to have side effects; fixed in PR 2060 via SyncStatus::observe recording reads instead of firing duplicate events"
+        },
+        {
+          "path": "crates/engine/src/sync/drain.rs",
+          "line": 5498,
+          "finding": "live_owing_record's Edit rule only compared head CID, so a dropped version's acknowledged-but-unconfirmed PUT could resurface after a later record confirmed at the same sequence — real data-loss path found by crypto-privacy review, fixed via an acknowledged-sequence mark under cbx/ra/ in the retire ledger"
+        },
+        {
+          "path": "crates/engine/src/net/retire.rs",
+          "line": 409,
+          "finding": "retire ledger entries were unversioned and grammar disambiguation relied on CID-length coincidence; PR 2063 introduced a versioned entry format (0x02 origin|node|owedBytes|manifestBytes|cid + target set) while keeping old 68-byte entries decodable — flagged as a durable storage shape needing an ADR (became ADR 0054/0055)"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/wake.rs",
+          "finding": "Removed the Wake enum/list of moments in favor of a single woke(last,next)->bool decision, capping wake-triggered refresh to one pass per sample; also fixed IPv6 temporary addresses (keyed by /64) incorrectly forcing a sync pass on rotation"
+        }
+      ],
+      "workflow": [
+        "Multi-lane pattern: launch N independent fix lanes as background Opus agents in worktree isolation with draft PRs and no CodeRabbit request, then coordinate CodeRabbit slot usage, review-agent fan-out (simplify: reuse/efficiency/simplification/altitude), and merges centrally from the orchestrating thread",
+        "Nested review agents (simplify quad, security, crypto-privacy) report to the parent orchestrator, not directly to the lane agent — the orchestrator must explicitly forward/relay each result back into the lane for it to fold",
+        "When a lane agent stops with 'waiting for background children,' it needs an explicit resume message (SendMessage) once those children's results arrive; it does not auto-resume",
+        "Opus session rate limits can kill a long-running lane mid-task (observed here); the lane's local commit/worktree state survives and can be resumed after the reset window",
+        "CodeRabbit slot waits and post-merge checks are best handled via detached/backgrounded scripts or Monitor watchers rather than foreground Bash (which has a 10-min timeout)"
+      ]
+    },
+    "friction": [
+      "Background Bash tool's 10-minute timeout was too short for an 11-minute CodeRabbit slot wait, forcing a relaunch as a detached process",
+      "Lane A (PR 2063) hit an Opus session rate limit mid-task and failed outright, losing ~3 hours of wall-clock progress until the 8:20pm reset, requiring manual resume",
+      "CodeRabbit review on the large PR 2063 diff (~1800 lines) took over an hour to complete, requiring multiple re-armed Monitor polls",
+      "A prior session's background monitor (CodeRabbit request watcher for PR 2063) was left in an ambiguous 'stopped' state across a session boundary with no completion record, requiring re-verification of whether it had actually posted"
+    ],
+    "open_items": [
+      "ADR 0047 amendment / new ADRs (0054, 0055) for two new durable storage shapes from PR 2063 (versioned retire-ledger entry, acknowledged-sequence mark) — draft PR 2081 opened, still in progress",
+      "Two one-line documentation gaps from PR 2060 not yet fixed at handoff time (now being addressed in the current session): blueprint/engine.md staleness-ladder wording and CONTEXT.md manual-refresh overdue case",
+      "Follow-up issue #2065: dropped version whose staged root block is already gone leaves its rows unjournaled; candidate design is a charge-time (not release-time) journal",
+      "Drain signs a scope-root publish without holding the write-epoch lease (rationale documented in PR 2063 body citing ADR 0041 E2) — left as an open design point, not fixed",
+      "Stall reason NodeUnreadable is reused/misleading when a settle waits on an acknowledged-sequence mark; not changed since it would alter a public enum",
+      "Several accepted low-severity residuals left undocumented beyond PR body notes: acknowledged-sequence marks never cleaned up after rotation, mark write failure + dead-letter can silently lose a mark",
+      "One human-named branch fix/1959-review-followups intentionally left undeleted despite being merged"
+    ]
+  }
+}

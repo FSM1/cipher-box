@@ -1,0 +1,556 @@
+/var/folders/4x/s86wzqx141j785tv6jw_mkxw0000gn/T/handoff-pass-region-fixes.md
+
+---
+
+feel free to clean up some stale worktrees if any are present
+
+---
+
+<task-notification>
+<task-id>a93b43adb710cf1cf</task-id>
+<tool-use-id>toolu_01ChTapC8Eh5ZWq3t95tXYsK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/a93b43adb710cf1cf.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane C: fix #2017 desktop forced pass" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The `/simplify` pass is done. It found no reuse issues and no depth problems. I made five simplification changes in the working tree, did not commit them, and skipped two efficiency findings. After the changes, desktop clippy is clean and all 66 desktop tests pass.
+
+**Fixed:**
+- **One pass per sample:** `wake.rs` no longer has the `Wake` enum or the list of moments. `woke(last, next) -&gt; bool` now decides, and `watch` forces at most one pass per sample. A wake onto a new network therefore files one refresh, not two. This came from both the simplification and altitude agents. The tests now count passes.
+- **IPv6 temporary addresses:** an IPv6 address is now keyed by its /64. A temporary IPv6 address that rotates about once a day no longer forces a pass. A new test covers this: `a_rotated_temporary_address_is_not_a_reconnect`.
+- **Test helper:** a `live_host(requests, account_dir)` helper in `engine/mod.rs` replaces three copies of the same `EngineHost { live: … }` setup. One of those copies was new in this diff.
+- **Doc comments:** the `force_pass` comment is shorter. The `Request::Refresh` comment no longer lists its callers, so it does not go stale when a caller is added.
+
+**Skipped:**
+- **Replace the sampler with a plain loop:** the `watch(samples, force_pass)` iterator is the test seam the lane brief asked for. Tests inject samples and count forced passes through it.
+- **Use OS event sources instead of polling, or skip the address read with no session live:** OS events need three per-platform code paths. Polling costs one `getifaddrs` call every 5 s, which is small.
+- **Skip the `spawn_local` task when the reply receiver is closed:** that code is in the `serve` Refresh arm, which this diff does not change, and it causes no extra pass.
+
+Files changed:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a93b43adb710cf1cf/apps/desktop/src-tauri/src/wake.rs`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a93b43adb710cf1cf/apps/desktop/src-tauri/src/engine/mod.rs`</result>
+<usage><subagent_tokens>165495</subagent_tokens><tool_uses>48</tool_uses><duration_ms>845967</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a93b43adb710cf1cf</worktreePath><worktreeBranch>worktree-agent-a93b43adb710cf1cf</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a93b43adb710cf1cf</task-id>
+<tool-use-id>toolu_01MqUnuQ4Dz8pvNnvkuh28Yu</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/a93b43adb710cf1cf.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane C: fix #2017 desktop forced pass" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Security review: no findings
+
+The review found no vulnerabilities at confidence 8 or higher, so there is nothing to filter.
+
+What the review checked:
+
+- **`wake.rs`:** the only inputs are the local wall clock and the host's own interface addresses. Nothing from a remote party, the webview or IPC reaches this code. The addresses are compared and then dropped. They are never logged, stored or sent. The sampler can only call `force_pass()`, which carries no data into the engine.
+- **`EngineHost::force_pass`:** it uses the same `ask()` check for a live session that "Sync Now" uses. With no session live, it does nothing. It drops the reply receiver, and the `serve` loop already ignores a failed `reply.send`, so this cannot panic.
+- **Trust semantics:** a forced pass still runs every record through the adoption gate, because the gate runs inside `file_forced_pass` and `Command::ManualRefresh`. Someone on the network who makes a new address appear can only cause extra passes, and each of those is gated. That falls under the excluded DoS class.
+- **Secrets:** the diff adds no logging, no key handling and no crypto.
+- **Dependency:** `if-addrs` 0.15 depends only on `libc` and `windows-sys`, and `Cargo.lock` pins it by checksum. It adds no build script.</result>
+<usage><subagent_tokens>178189</subagent_tokens><tool_uses>51</tool_uses><duration_ms>911661</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a93b43adb710cf1cf</worktreePath><worktreeBranch>worktree-agent-a93b43adb710cf1cf</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bah9wmuew</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/bah9wmuew.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for the CodeRabbit slot, request the review on PR 2059, and record the outcome" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a591c5240fbe0cb4c</task-id>
+<tool-use-id>toolu_01P3hLFVqUTCJwZ11efuPpie</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/a591c5240fbe0cb4c.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane B: diagnose and fix #1956" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Lane B for #1956 is complete. PR 2060 is open as a draft, all local gates pass, and CI is green. I found the engine fault behind the indicator that stayed on `reconciling`, but the Playwright click wait in the failed run is still not explained.
+
+- **PR:** https://github.com/FSM1/cipher-box/pull/2060 (draft, no CodeRabbit request)
+- **Branch:** `fix/1956-manual-refresh-bounded`
+- **Head SHA:** `388f2bf0085a47370e7af22f7af491c17004588f`
+- **Diagnosis comment:** https://github.com/FSM1/cipher-box/issues/1956#issuecomment-5856697215
+
+## Diagnosis
+
+The report artifact of run 35938670706 shows both grantee rows in the owner's listing. The footer shows "syncing...". So the owner pass reconciled the grantee's writes. The indicator was wrong after the data landed.
+
+- **Mechanism 1 (found, this is the cause):** `status()` and `snapshot()` compute the staleness rung when the host reads it. A read during a pass returns `Reconciling`. After the pass, `stamp_staleness` sent `StalenessChanged` only when the rung differed from the last *event*, not from the last read. After a converged pass the rung is `Fresh` again, so no event went out. The web store reads the rung during a pass: on each `SnapshotUpdated` pull, and when `manualRefresh` resolves. So it kept `reconciling`, and no later event replaced it. A test holds the root read and reads the rung during the pass. On main it gets no event after the pass converges.
+- **Mechanism 2 (found):** the manual refresh and the `Reconciling` rung had no time bound. A test shows that on main a refresh on a stalled pass stays pending past 30 s. The run gives no proof that a pass actually waited on the record deadlines.
+- **Ruled out:** the lost-race loop. `Halt::LostRace` ends the drain for that pass. `UNATTRIBUTED_BUDGET` (120) limits the retries for each op. The test gave the owner no write in that window.
+- **Not explained:** Playwright waited on "visible, enabled and stable" and never clicked. A rung that does not change does not change the button box. The engine harness cannot reproduce this.
+- **Partial:** scope item 1 asked me to read the focus-window tick and the child resolve for a scope shared with write permission. I did not write up that read. The artifact shows the child resolve delivered both rows.
+
+## What the PR does
+
+- **Rung read recorded:** a host read of the rung records it as `SyncStatus::reported` (`SyncStatus::observe`). The pass that ends that rung then sends the next rung.
+- **New bound:** `SyncTimingProfile::refresh_deadline` is 30 s in both profiles, one host record-request deadline. All timing comes from one clock: the pass start, which the tick loop records in `reconcile_started`.
+- **Bounded rung:** `classify` shows `Reconciling` for one deadline only. After that it shows `Fresh` or `Stale` from the last success.
+- **Rung changes during a pass:** `run_with_boundaries` wakes at each time `staleness::next_boundary` returns. It sends the new rung and lets the pass continue. It never cancels the pass.
+- **Overdue refresh:** at the deadline, `ManualRefresh::overdue` sends the new `RefreshVerdict::Overdue` to every waiting request, and to each request filed later in that tick. `ForcedPass::landed` maps `Overdue` to `RefreshFailed`. The web command, the desktop path and the other `file_forced_pass` callers all get the bound.
+- **Gates:** three Engine-harness tests in `cargo test -p cipherbox-engine`:
+  - A read during the pass is replaced by an event when the pass converges.
+  - A forced refresh on a stalled pass fails at the deadline, and in the same instant the host gets a rung other than `Reconciling`.
+  - A refresh filed behind a stalled poll pass fails at that pass's deadline.
+
+## Gates
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test -p cipherbox-engine` | 1985 lib tests pass, all 24 suites green |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown` | pass |
+| `pnpm lint:tracker-refs` | pass |
+| `pnpm --filter @cipherbox/client test` | 792 tests pass |
+
+The commits and the live PR body contain no attribution strings. The body keeps the bare `Closes #1956.` line.
+
+## CI on `388f2bf00`
+
+All 37 check-runs have conclusion success, except "Desktop / Desktop Build", which is skipped because of path filters. The groups:
+
+- **API:** image, integration tests, migration drift, OpenAPI freshness, typecheck, unit tests.
+- **Rust:** Windows and macOS adapters, Core KATs native and WASM, engine simulation, FUSE Op Core, fmt and clippy, workspace tests.
+- **Web:** Client Browser Suite, shared packages, bundle, host tests, Web Engine WASM, Web E2E Smoke.
+- **Repo:** Lint, Mock Routing Store, Perf Tooling, Tracker Refs.
+- **Other:** Contract Suite, Desktop frontend, lint-pr-title, zizmor, and all Result checks.
+
+"Repo / Tracker Refs" reported conclusion success while its status still read in progress. I did not re-run any check.
+
+## Review results
+
+**Simplify, folded:**
+- **One clock (altitude 2):** I removed the timer that each `ForcedPass` started. The tick loop now fails overdue requests.
+- **Boundary watcher (altitude 4):** it replaces the one-shot overrun timer and also reports the stale threshold during a long pass. I did it in this PR, so no follow-up issue is needed.
+- **Reuse:**
+  - `run_with_boundaries` is built on `record_plane::within`.
+  - `classify` uses `elapsed_at_least`.
+  - The GET hold is part of `stall_gets_for_after` plus a new `release_gets_for`.
+  - One `SyncStatus::observe` helper replaces the three copies of the classify call.
+- **Comments:** I trimmed the ones that narrated code.
+- **Tests:** I made the test code tighter.
+- **The 30 s values:** `refresh_deadline` and the web `RECORD_TIMEOUT_MS` now name each other.
+
+**Simplify, rejected:**
+- **Altitude 1 (keep reads free of side effects and send an event at each pass start):** that sends two events per poll cycle and flips the footer label every 30 s. The indicator is specified as quiet, and the existing ladder test requires no repeated event within a rung. A read hands the host a rung, so recording it as `reported` is the dedup rule the fix needs.
+- **Efficiency 1 (the web `setTimeout` is not cancelled when the pass ends first):** at most about two timers are alive at once. The `Scheduler` seam has no cancel method, and adding one is outside this PR.
+- **Efficiency 4 and 5 (extra `borrow_mut` calls):** the cost is negligible.
+- **Altitude 5 (the host passes the deadline in):** outside this PR. The two values now name each other in comments.
+
+**Security review:** no findings at confidence 8 or higher. An early `Overdue` answer can hide a later gate rejection from the waiting request, but the host still gets `AttributableAbuse` through `emit_trust_violation`. The data path stays fail-closed.
+
+**Code review, folded:**
+- A spurious `Reconciling` event: `next_boundary` no longer returns the stale threshold while the pass still shows as reconciling.
+- The forced-pass gate now reads the rung during the pass, as the web host does.
+- The new gate for a refresh behind a stalled poll pass.
+- A rename to `until_next`, one narrating comment removed, and a doc now points to `refresh_deadline`.
+
+**Code review, left out:**
+- **Cold cache:** before the first success, the refresh fails at the deadline, but the rung stays `Reconciling`. That is the cold-start rung the corpus specifies.
+- **Tight bound:** the bound is one deadline, which is tighter than the spec's "several times" wording. The spec's own gate says "past one deadline".
+- **Waker in the test fake:** the parked GET does not register a waker. It is test-only and matches the existing stall.
+- **Small items:** a copied message string in tests, and a duplicated local `started` in the tick closure.
+
+## Needs an owner call (no ADR)
+
+No wire format, KDF edge, trust boundary or durable storage shape changed. `RefreshVerdict::Overdue` is crate-internal and maps to the existing `RefreshFailed`.
+
+The code review found two documents that do not match the new behaviour. I did not edit them, because blueprint changes need your process:
+- `blueprint/engine.md` "Staleness ladder" does not say that `Reconciling` lasts at most one `refresh_deadline`.
+- `CONTEXT.md` "Manual refresh" does not name the overdue failure, which is a third way a refresh can end.
+
+Each needs about one line.
+
+## Lane A overlap
+
+I did not touch `reresolve_before_signing`, `release_if_refused`, `abandon_keeping_its_name`, `apply_valve`, `net/rotation.rs`, `net/retire.rs` or `sync/staging.rs`. The shared files are `sync/pass.rs` (one line removed) and the test kit `record_store.rs`.</result>
+<usage><subagent_tokens>284808</subagent_tokens><tool_uses>58</tool_uses><duration_ms>1889148</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a591c5240fbe0cb4c</worktreePath><worktreeBranch>worktree-agent-a591c5240fbe0cb4c</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bul4dpajm</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/bul4dpajm.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the CodeRabbit slot, request the review on PR 2059, and record the outcome" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a32c3cf79b6d4e92a</task-id>
+<tool-use-id>toolu_01NmJCrEQTubXWXFZAqoDAHZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/a32c3cf79b6d4e92a.output</output-file>
+<status>failed</status>
+<summary>Agent "Lane A: fix #2016 + #2021" failed: Agent terminated early due to an API error: You've hit your session limit · resets 8:20pm (Europe/Berlin) (error type rate_limit, HTTP 429, request id req_011CfUAXaFcMUePF9BgMHwwX, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now the retire.rs tests: rework my added block.</result>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a32c3cf79b6d4e92a</worktreePath><worktreeBranch>worktree-agent-a32c3cf79b6d4e92a</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>brs6jeqge</task-id>
+<tool-use-id>toolu_012nbNQCLLKYDxtMkosKMKyi</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/brs6jeqge.output</output-file>
+<status>completed</status>
+<summary>Monitor "Slot wait leg 1 for the PR 2060 CodeRabbit request (until 15:35Z)" stream ended</summary>
+<event>LEG1 DONE 15:35:11Z: arm leg 2 to post @coderabbitai full review on PR 2060 at 16:06Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+please continue
+
+---
+
+<task-notification>
+<task-id>bku70j4vu</task-id>
+<tool-use-id>toolu_01TJkaPUXZZBgHtoTthE3SAf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/bku70j4vu.output</output-file>
+<status>completed</status>
+<summary>Monitor "Post-merge check on main after PR 2060: engine clippy and full engine test run" stream ended</summary>
+<event>POSTMERGE main 90a7ee043: 24 ok suites, 0 failure lines; 2776 passed 0 failed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a32c3cf79b6d4e92a</task-id>
+<tool-use-id>toolu_01UouQkHxxVxzRzCnvydxsdT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/a32c3cf79b6d4e92a.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane A: fix #2016 + #2021" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The crypto-privacy review is still running in the background. I'll rebase after it reports.</result>
+<usage><subagent_tokens>245076</subagent_tokens><tool_uses>62</tool_uses><duration_ms>889012</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a32c3cf79b6d4e92a</worktreePath><worktreeBranch>worktree-agent-a32c3cf79b6d4e92a</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a73f839c611e88fdc</task-id>
+<tool-use-id>toolu_01MxcMxG8zMk3oNsPnD3frH2</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/a73f839c611e88fdc.output</output-file>
+<status>completed</status>
+<summary>Agent "Crypto-privacy review of fold" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found no loss path in the fold for the case it targets. I found one real residual: the Edit rule compares only the head CID, and the next publish can reuse the same sequence number. That residual can still cause loss.
+
+## Findings
+
+### MEDIUM: a version from an unconfirmed edit can still surface at a sequence another record now holds (real, narrow)
+
+**Location:** `crates/engine/src/sync/drain.rs` in `live_owing_record` (line 5498), in the head publish (`min_current_sequence: None` at line 6308, `Unconfirmed =&gt; Err(Halt::Attempt)` at line 6325), and in `resolved_bytes` (line 7106), which drops `tied`.
+
+**Description:** An endpoint acknowledges the PUT of edit E at sequence N+1 but does not confirm it. The sequence floor stays at N. The version is dropped, and the user edits again. The new record Y also signs at N+1. If no endpoint serves E yet, Y confirms. The settle then reads head Y, and Y is not the base B. So the entry reads as `Published` and the settle retires E's CIDs. The background re-PUT (`spawn_background_reput`) can still put E on an endpoint that missed Y or refused it at the same sequence. `load_child_node` takes one record from a tie and ignores the others. A reader with floor N whose first endpoint serves E adopts E, and E's content is already unpinned.
+
+The same gap applies to your case of `Edit(None)` when the node has later versions, and to a record from another writer at N+1.
+
+**Impact:** Loss for new devices and share recipients. You need a lagging endpoint plus a refused or missed PUT at the same sequence. Honest endpoints can get there. A hostile endpoint gets there easily.
+
+**Recommendation:**
+- Record the acknowledged sequence S in the entry, for example `DroppedFrom::Edit { base, acked_seq }`, or keep a durable "acked-high" mark for each name.
+- Pass `min_current_sequence = S` on the next publish of that name, so it signs strictly above E.
+- In the settle, return `None` (wait) while the gated sequence is at or below S, or while `tied` is not empty. This rule does the job the head-CID check does now, and it does not depend on the base.
+
+### LOW: the Edit rule can wait forever (leak, not loss)
+
+**Location:** the same check at `drain.rs:5498`.
+
+**Description:** A record above N+1 whose head is B again stands the entry down for good. A prune, a RestoreVersion, or a lazy-wave re-seal can make such a record. The stall reason says `NodeUnreadable`, which is wrong. The sequence rule above fixes this too.
+
+### INFO: unjournaled debts are silent
+
+`dropped_from` returns `None` for a base that is not 36 bytes. `owe` returns an error for a base that is not well formed, and `let _ =` discards it (`staging.rs:369`). The result is a silent leak, not a loss. Emit a stall or an event.
+
+## Your checks
+
+1. **Create.** The drain publishes the parent only after the child confirms, and the vacancy rule needs a unanimous `Absent` and no floor. So no parent link names the dropped version. This is not a concrete issue.
+   - A RestoreVersion or prune that makes the head equal the base only causes a wait. No loss.
+   - For `Edit`, a failed load returns `None`. That is correct.
+2. **Encode/decode symmetry.** Encode and decode agree:
+   - Encode returns `Err` in release builds for a base that is not well formed. Decode refuses the same bytes.
+   - An unknown `from` tag and a short base both decode to `None`.
+   - A legacy entry is exactly `ENTRY_HEAD_LEN + cid.len()`, and every V2 entry is at least 2 bytes longer, so the lengths cannot collide.
+   - `ENTRY_V2` is new in this PR, so no released V2 entry lacks `from`.
+   - The root guard `is_wellformed_content_cid` fixes the assert.
+3. **Cut-floor paths.** All three fail closed:
+   - `check_publishable` and the root arm of `publish_moved` map a rejection to `Rejected` and a seam error to a retry.
+   - `reresolve_before_signing` sends a rejection to `refuse_record`, which emits a TrustViolation and returns `Halt::RecordRefused`.
+   - The commitment the check reads carries the same cut epoch as the one that is signed.
+4. **Key material.** The new types hold only public CIDs and node ids. There is no new logging. The stored value stays `Zeroizing` until the bookkeeping seal, and no callee zeroes a buffer its caller owns.
+
+## Tests to add
+
+- An edit is acknowledged but not confirmed, then dropped. The next local edit confirms at the same sequence, and E then surfaces on one endpoint. Nothing E names may retire.
+- An `Edit(None)` entry while the head has moved and E stands tied.
+- A load failure on an `Edit` entry retires nothing.
+- A head equal to the base above E's sequence settles (after the fix).
+- A test that shows the head publish uses a sequence above an acknowledged but unconfirmed one.</result>
+<usage><subagent_tokens>87068</subagent_tokens><tool_uses>19</tool_uses><duration_ms>249488</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a32c3cf79b6d4e92a</task-id>
+<tool-use-id>toolu_01VTgF6Z7L8UxGx5qZ8UCi17</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/a32c3cf79b6d4e92a.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane A: fix #2016 + #2021" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The attribution checks print nothing. The fold review is still running.</result>
+<usage><subagent_tokens>345173</subagent_tokens><tool_uses>130</tool_uses><duration_ms>1844875</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a32c3cf79b6d4e92a</worktreePath><worktreeBranch>worktree-agent-a32c3cf79b6d4e92a</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a24369cda933cd8d4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/a24369cda933cd8d4.output</output-file>
+<status>completed</status>
+<summary>Agent "Review the acked-sequence fold" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Security review of commit c827c0f26**
+
+**Summary:** The fold closes the MEDIUM loss path when the confirm returns `Unconfirmed`. That includes a record at N+1 from another writer or another device, and an Edit of a file with no version. One real loss path remains, through the `LostRace` arm. I found no new crypto or data-leak issue.
+
+### MEDIUM (real): an acknowledged PUT that ties at its own sequence gets no mark
+
+**Location:** `crates/engine/src/sync/drain.rs`, the `HeadPublish::Lost` arm of `publish_node`, with `net/publish.rs` `publish_pipeline`, the second confirm arm.
+
+**Description:** When the confirm reads `observed.sequence == sequence` and the bytes are not ours, or are ours with a non-empty `tied`, the outcome is `LostRace`. At least one endpoint acknowledged E, and the code comment says "Our PUT was acked either way". No mark is written. This is the case of another writer at N+1 that races E. If the op then dead-letters before a rebased publish, E and the winner W both stand at N+1. At the settle, `loaded.tied` protects the debt only when the gated read sees both records. The republisher or a background re-PUT can show E later, after its CIDs are retired.
+
+**Recommendation:** In the `Lost` arm, call `acknowledge(sequence)` when `observed_sequence == published_sequence`. Writing the mark for any acknowledged outcome that is not `Published` is also safe. Add a test in which the confirm reads a tie at the signed sequence and the op then dead-letters.
+
+### LOW (real code, theoretical exploit): an unopenable mark reads as none
+
+**Location:** `net/retire.rs` `acknowledged`.
+
+**Description:** A failed seal open or decode returns `Ok(None)`. A partial write, a future `ACKED_V1` change, or host corruption then makes the settle go on, and the next publish can tie E again. The host can delete the key and get the same result, so this does not give an attacker more power. But corruption fails open, not closed.
+
+**Recommendation:** Return a separate "present but unreadable" result. The settle then waits, and the publish signs above the durable floor plus the attempt count, or halts.
+
+### LOW (theoretical): the Create empty-name rule ignores the mark
+
+**Location:** `drain.rs` `live_owing_record`, the `Err(_) if owing == OwingRecord::Unconfirmed &amp;&amp; holds_no_record` arm.
+
+**Description:** An acknowledged create PUT can come back after every endpoint said "none", through a background re-PUT or the republisher. The empty live set then retires E's CIDs.
+
+**Recommendation:** Wait when a mark is held for the node.
+
+### LOW (theoretical): a failed mark write can lose the mark
+
+**Location:** `publish_node`, the `Unconfirmed` arm.
+
+**Description:** If `acknowledge` fails, the halt is `Unclassified`, not `Attempt`. If the op dead-letters on a rebase before it publishes again, no mark exists, and a later local record can sign N+1 again. The loss also needs the staging store to fail right after the PUT.
+
+**Recommendation:** Accept this and document it, or try the write again before the halt.
+
+### INFO
+
+- **Stale doc comment:** `Halt::Attempt` says "a retry re-signs at the same sequence". This is no longer true. Signing above the mark does not break `create_replays_a_publish`: the attempt charge is the same, and the floor stays unset after an unconfirmed create. It also does not break the attempt budget. Each unconfirmed attempt uses one extra sequence number, and the budget sets the limit.
+- **Marks are never removed after a rotation or delete:** `forget_acknowledged` runs only when `acked.is_some()`. After the write name changes, the old-name mark reads as none, so it stays for good. It is kept as bookkeeping. This is a small leak: one key per node.
+- **Other publishers ignore the mark:** rotation re-seal, liveness re-sign and revival can still tie E at N+1. The settle stays safe because it reads nothing at or below the mark. The tie itself is an existing issue.
+- **Debt can wait a long time:** it waits until a record above the mark lands. The next edit or the EOL re-sign gives that record. This is a leak, not a loss.
+- **Key metadata:** the key `cbx/ra/&lt;owner&gt;/&lt;node&gt;` shows the node id and the fact of an unconfirmed PUT. This matches the tombstone keys.
+
+### AGENTS.md rules
+
+- **Rule 8:** met. The encode side cannot make bytes that the decoder rejects.
+- **Zeroize:** met. The body is `Zeroizing` and is owned locally.
+- **Secret logging:** none.
+- **Comments:** short. The only drift is the `Halt::Attempt` comment above.
+- **Tracker refs:** none.
+
+### Event `RegistryDebtUnjournaled`
+
+The event has no payload, so it leaks no data. It is a sensible host signal. It fires on a failed expansion or a failed `owe`, and not when the root block is absent. The channel is unbounded, but the number of trimmed versions limits it.
+
+### Recommendations
+
+1. Write the mark on a `LostRace` at the signed sequence.
+2. Make an unreadable mark fail closed.
+3. Let a held mark block the Create empty-set rule.</result>
+<usage><subagent_tokens>78229</subagent_tokens><tool_uses>8</tool_uses><duration_ms>182020</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a32c3cf79b6d4e92a</task-id>
+<tool-use-id>toolu_01Xc5ZfqcHxcu9xCdRNAAabC</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/a32c3cf79b6d4e92a.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane A: fix #2016 + #2021" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Lane A report: PR 2063 (issues #2016 and #2021)
+
+The PR is https://github.com/FSM1/cipher-box/pull/2063. It is still a draft. I did not request a CodeRabbit review. Head is `b04f655ad5500b11062ee448dd516a79729e7a93` on branch `fix/2016-2021-floor-read-and-retire`, rebased onto `origin/main` at `90a7ee043`. There was one conflict, in `testkit/fakes/record_store.rs`, and I kept both sides. I pushed one time, with `--force-with-lease`.
+
+### D1-D9 coverage
+
+- **D1 to D5 and D7 to D9:** done in `9e558aada`, which was `ab2cea32d` before the rebase.
+  - **D1:** one check, `gate::refuse_below_cut_floor`. `check_publishable`, the wave root arm and the drain all use it. The drain does not take the lease; the PR body gives the reasons.
+  - **D2:** `FolderState::commitment`.
+  - **D3:** a versioned ledger entry with a target set. Entries the previous release wrote still read.
+  - **D4:** `DroppedVersionDebts::drop_version`.
+  - **D5:** the custody rule.
+  - **D7:** the drop builds its seal once for each tick.
+  - **D8:** the settle loads first and uses the vacancy rule only when the load fails.
+  - **D9:** the test helpers.
+- **D6:** I filed #2065 for the case where a dropped version's staged root is already gone, so nothing journals its rows. It has labels `v2-build` and `comp:engine`, milestone `post-cutover`, a "Part of #2021" link, and a native blocked-by edge on #2021. It names the charge-time journal as the candidate design.
+
+### Gates (all green on the pushed head)
+
+- `cargo fmt --all --check`, clippy with `-D warnings`, the wasm32 check and `pnpm lint:tracker-refs` pass.
+- `cargo test -p cipherbox-engine`: 2800 passed and 0 failed, over 24 targets. The lib has 1998 tests and `write_plane` has 264.
+- The `packages/client` codec test (136) and its typecheck pass.
+
+### CI on `b04f655ad`
+
+36 of 37 checks passed. The one skipped check is Desktop Build, which the changed-paths filter skips. All the Rust, Web, API, Contract Suite and Repo checks passed, and so did Web E2E Smoke. I did not need to re-run any flaky check.
+
+### Reviews
+
+**crypto-privacy-review, round 1:**
+- **MEDIUM-HIGH:** a dropped version could be retired while its acknowledged PUT still stood at the name. Folded; round 2 replaced this first fix with the sequence rule.
+- **LOW:** the settle cache now holds one read for each node and class.
+- **LOW:** decode now checks that the key CID is well formed before it spells it.
+
+**crypto-privacy-review, round 2** (you relayed it):
+- **MEDIUM:** a later record could tie the dropped version at the same sequence. Folded:
+  - The drain holds a sealed "acknowledged sequence" mark for each node, in the retire ledger's bookkeeping.
+  - The next publish at that name signs above the mark.
+  - The settle waits while the record it reads is at or below the mark, or tied.
+  - This rule replaces the rule that compared the head with the edit's base.
+- **LOW:** the old head-equals-base rule could wait for ever. The sequence rule removes it.
+- **INFO:** a debt that does not reach the ledger is now reported with the new unit event `Event::RegistryDebtUnjournaled`. It is bridged to the wasm crate and to the client worker protocol.
+
+**Fold review** (you relayed it; all folded):
+- **MEDIUM:** the lost-race arm now holds the mark too.
+- **LOW:** a mark that will not read returns `Acknowledged::Unreadable`, not "nothing held". The settle waits on it, and the next publish signs above the floor plus the attempt budget.
+- **LOW:** the empty-name rule for a create does not apply while a mark is held.
+- I corrected the stale "retry re-signs the same sequence" comments. The mark write now gets one retry before the op halts.
+- The INFO items are listed in the PR body as accepted residuals.
+
+**security-review:** no finding reached confidence 8. That review ran before the acknowledged-sequence fold. Your later security review of `c827c0f26` covered the fold.
+
+**code-review, Standards axis:**
+- Folded:
+  - `Sized` is renamed to `SizedEntry`, and a `Slot` enum names the trim's entries.
+  - The ledger grammar comments name the entry shapes by their tag, not by release.
+  - I removed the restated floor rationale and one absence-justifying comment.
+- Rejected:
+  - The shared error-mapping helper: it adds an abstraction for 3 call sites.
+  - Deriving `target` and `manifest_bytes` from the target set: that would change the grammar again, and encode and decode already enforce the invariant.
+  - Keying the memo by digest: that is a new hash use in the engine.
+
+**code-review, Spec axis:**
+- Folded:
+  - I added a test for the `abandon_keeping_its_name` call site: `a_refused_conditional_edit_loser_still_retires_its_rows`.
+  - I updated the stale facade comment about the trim.
+- Rejected: charging a cut-floor refusal as a trust violation. This follows the owner's ruling that a gate rejection is always a TrustViolation.
+
+### Tests added in this run
+
+Each test fails when its fix is removed; I checked this with toggle runs.
+- `a_discarded_edit_retires_nothing_at_or_below_its_acknowledged_sequence`. It also shows that the next edit signs above the mark and that the debt then settles.
+- `a_dropped_versions_debt_waits_while_its_record_is_tied`
+- `a_tie_lost_at_the_signed_sequence_holds_the_dropped_versions_debt`
+- `a_discarded_create_acknowledged_at_its_name_retires_nothing_on_vacancy`
+- `an_unreadable_acknowledged_sequence_makes_the_publish_sign_above_it`
+- `a_refused_conditional_edit_loser_still_retires_its_rows`
+- Retire-ledger unit tests: the mark keeps its highest value; a mark that will not read is "unreadable", not "absent".
+- Staging unit test: `a_trimmed_version_whose_debt_did_not_journal_is_reported`
+
+### Left out
+
+- **The content-gone case with the root already gone:** follow-up #2065.
+- **The stall reason:** while the settle waits on a mark, it still reports the reason `NodeUnreadable`. A new reason would change a public enum.
+- **Accepted residuals** (leaks, not losses; one line each in the PR body):
+  - a mark stays after a rotation, one key for each node;
+  - the mark key shows the node id, as the tombstone key does;
+  - if the mark write fails twice and the op dead-letters on a rebase, the mark is lost.
+
+### ADR flag
+
+This PR changes two durable storage shapes under ADR 0047:
+- **The retire-ledger entry:**
+  - The previous release's 68-byte entry, `node | owed | manifest | cid`, still reads as a prune debt.
+  - This release writes `0x02 | origin | node(16) | owedBytes | manifestBytes | cid`, then `n × (cid36 | pinnedBytes)` with the root last.
+- **The acknowledged-sequence mark:** under `cbx/ra/`, value `0x01 | node(16) | sequence | name`, sealed with the `RetireLedger` kind.
+
+Both are candidates for an ADR item or an ADR 0047 amendment. You decide.</result>
+<usage><subagent_tokens>394288</subagent_tokens><tool_uses>36</tool_uses><duration_ms>947497</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a32c3cf79b6d4e92a</worktreePath><worktreeBranch>worktree-agent-a32c3cf79b6d4e92a</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b2n7ryb10</task-id>
+<summary>Monitor event: "Request the CodeRabbit full review on PR 2063 at 19:59Z and report the outcome"</summary>
+<event>REQUESTED 2026-09-27T19:59:36Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b2n7ryb10</task-id>
+<summary>Monitor event: "Request the CodeRabbit full review on PR 2063 at 19:59Z and report the outcome"</summary>
+<event>[Monitor expired after 30m with 1 event delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bparbsamz</task-id>
+<tool-use-id>toolu_01Hn5SkFcc85QqtL7RowTxR5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/bparbsamz.output</output-file>
+<status>completed</status>
+<summary>Monitor "Poll for the CodeRabbit full review result on PR 2063" stream ended</summary>
+<event>CR_REVIEW_OBJECTS=1 :: 2026-09-27T14:39:38Z upd=2026-09-27T20:11:58Z      Navigate logical layers of code changes, visualize relationships, and explore their blast radius.     ## Walkthrough  The changes add cut-epoch floor checks to root publishing and extend retireme
+DONE 20:13:28Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bkfy23emn</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2eb5edf-3f69-4864-9e2f-56a9f4551475/tasks/bkfy23emn.output</output-file>
+<status>completed</status>
+<summary>Monitor "Post-merge check on main after PR 2063: engine clippy and full engine test run" stream ended</summary>
+<event>POSTMERGE main be3d181da: 24 ok suites, 0 failure lines; 2800 passed 0 failed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+please handle the doc updates now
