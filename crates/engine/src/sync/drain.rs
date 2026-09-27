@@ -74,8 +74,8 @@ use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use crate::net::retire::{
-    LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger, drain_owed_retires,
-    orphaned_head, retire,
+    Acknowledged, LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger,
+    drain_owed_retires, orphaned_head, retire,
 };
 use crate::net::{
     Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldKey, HeldRecord, HeldRecords, HeldValue,
@@ -394,8 +394,8 @@ enum Halt {
     /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
     /// The op's record reached the record plane and did not confirm. Charged
-    /// against the attempt budget, because a retry re-signs at the same
-    /// sequence and a jammed name would otherwise retry forever. The PUT was
+    /// against the attempt budget, because a jammed name would otherwise retry
+    /// forever. The PUT was
     /// acked, so a record may be resolvable at the name and a spent budget
     /// hands nothing back — cutting a name a live record carries would leave a
     /// reference outliving its referent.
@@ -591,8 +591,12 @@ impl From<PublishHalt> for Halt {
 enum HeadPublish {
     /// Our record confirmed at its name.
     Confirmed(Vec<u8>),
-    /// A lost CAS race, with the winning record when the confirm read one.
-    Lost { winner: Option<Vec<u8>> },
+    /// A lost CAS race at `sequence`, with the winning record when the
+    /// confirm read one.
+    Lost {
+        winner: Option<Vec<u8>>,
+        sequence: u64,
+    },
     /// Acknowledged at `sequence`, but the confirm did not see it.
     Unconfirmed { sequence: u64 },
 }
@@ -1693,6 +1697,24 @@ where
 
     fn retire_ledger<'s>(&'s self, scope: &'s DrainScope<'_>) -> StagingRetireLedger<'s, St> {
         StagingRetireLedger::new(&self.seams.staging, self.bookkeeping_seal(scope))
+    }
+
+    /// Hold `sequence` as `node`'s acknowledged sequence at `name`, retried
+    /// once: a lost mark reopens the tie it guards.
+    async fn hold_acknowledged(
+        &self,
+        scope: &DrainScope<'_>,
+        node: NodeId,
+        name: &IpnsName,
+        sequence: u64,
+    ) -> Result<(), Halt> {
+        let ledger = self.retire_ledger(scope);
+        let owner = owner_tag(scope.enc_secret);
+        let hold = || ledger.acknowledge(&owner, node.0, name.as_str(), sequence);
+        if hold().await.is_ok() {
+            return Ok(());
+        }
+        hold().await.map_err(seam)
     }
 
     /// The custody a dropped version's debt is journaled under, over `reader`,
@@ -5489,6 +5511,14 @@ where
             return reaching(BTreeSet::new());
         }
         let (plane, root) = self.ledger_plane(end).await?;
+        let acked = match owing {
+            OwingRecord::Unconfirmed => self
+                .retire_ledger(scope)
+                .acknowledged(&owner_tag(scope.enc_secret), node, write_name.as_str())
+                .await
+                .ok()?,
+            _ => Acknowledged::Nothing,
+        };
         // Nocache: the retire unpins, so what may be named is decided against
         // the freshest record the gate will pass, never a cached one a
         // concurrent writer has already moved past.
@@ -5499,21 +5529,22 @@ where
             Ok(loaded) => loaded,
             Err(_)
                 if owing == OwingRecord::Unconfirmed
+                    && acked == Acknowledged::Nothing
                     && self.holds_no_record(&end, &write_name).await? =>
             {
                 return reaching(BTreeSet::new());
             }
             Err(_) => return None,
         };
-        if owing == OwingRecord::Unconfirmed {
-            let acked = self
-                .retire_ledger(scope)
-                .acknowledged(&owner_tag(scope.enc_secret), node, write_name.as_str())
-                .await
-                .ok()?;
-            if loaded.tied || acked.is_some_and(|acked| loaded.sequence <= acked) {
-                return None;
-            }
+        if owing == OwingRecord::Unconfirmed
+            && (loaded.tied
+                || match acked {
+                    Acknowledged::Nothing => false,
+                    Acknowledged::At(acked) => loaded.sequence <= acked,
+                    Acknowledged::Unreadable => true,
+                })
+        {
+            return None;
         }
         // A record carrying no version list reaches no content.
         let ReadBody::File { versions, .. } = loaded.body else {
@@ -6200,13 +6231,35 @@ where
             .acknowledged(&owner, node.0, name.as_str())
             .await
             .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
+        let sign_above = match acked {
+            Acknowledged::Nothing => None,
+            Acknowledged::At(sequence) => Some(sequence),
+            // Any sequence may hide behind it: clear the most one op's charged
+            // attempts can have signed above the floor.
+            Acknowledged::Unreadable => {
+                let floor = floor::sequence_floor(
+                    &plane.end.floors(&self.seams.floors),
+                    name.as_str().as_bytes(),
+                )
+                .await
+                .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
+                Some(floor.unwrap_or(0).saturating_add(u64::from(ATTEMPT_BUDGET)))
+            }
+        };
         let record_bytes = match self
-            .publish_head(plane, name, &node.0, &head, content_cids.clone(), acked)
+            .publish_head(
+                plane,
+                name,
+                &node.0,
+                &head,
+                content_cids.clone(),
+                sign_above,
+            )
             .await
             .map_err(PublishHalt::before_the_put)?
         {
             HeadPublish::Confirmed(record_bytes) => {
-                if acked.is_some() {
+                if acked != Acknowledged::Nothing {
                     let _ = ledger.forget_acknowledged(&owner, node.0).await;
                 }
                 record_bytes
@@ -6214,13 +6267,16 @@ where
             // Its bytes may still surface at `sequence`, so the next publish
             // here signs above it rather than tying it.
             HeadPublish::Unconfirmed { sequence } => {
-                ledger
-                    .acknowledge(&owner, node.0, name.as_str(), sequence)
+                self.hold_acknowledged(scope, node, name, sequence)
                     .await
-                    .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
+                    .map_err(PublishHalt::before_the_put)?;
                 return Err(PublishHalt::before_the_put(Halt::Attempt));
             }
-            HeadPublish::Lost { winner } => {
+            HeadPublish::Lost { winner, sequence } => {
+                // A tie leaves our acked bytes standing beside the winner.
+                self.hold_acknowledged(scope, node, name, sequence)
+                    .await
+                    .map_err(PublishHalt::before_the_put)?;
                 // The retry must rebase onto the winner: the first-endpoint tie
                 // can keep serving our own record, which already holds this op.
                 // Our PUT was acked either way, so the halt stays an attempt.
@@ -6354,7 +6410,12 @@ where
         })?;
         match outcome {
             PublishOutcome::Published { .. } => Ok(HeadPublish::Confirmed(record_bytes)),
-            PublishOutcome::LostRace { .. } => Ok(HeadPublish::Lost { winner }),
+            PublishOutcome::LostRace {
+                published_sequence, ..
+            } => Ok(HeadPublish::Lost {
+                winner,
+                sequence: published_sequence,
+            }),
             PublishOutcome::Unconfirmed { sequence } => Ok(HeadPublish::Unconfirmed { sequence }),
         }
     }
@@ -6556,8 +6617,8 @@ where
     /// publishing it, and two durable reads answer that before the network is
     /// touched. An op with a charged attempt is one this device remembers
     /// trying: an acked PUT whose confirm-by-re-resolve missed leaves exactly
-    /// this record with exactly no floor, and the retry it is owed re-mints the
-    /// same sequence. A raised sequence floor says the same for a publish that
+    /// this record with exactly no floor, and the retry it is owed signs above
+    /// it. A raised sequence floor says the same for a publish that
     /// confirmed and then lost the parent naming it — the self-adopt raises the
     /// floor before that parent publishes, so a crash in the window re-authors
     /// as it always has. A restore rewinds both.

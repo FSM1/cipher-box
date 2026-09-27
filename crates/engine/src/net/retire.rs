@@ -194,26 +194,40 @@ const ENTRY_HEAD_LEN: usize = NODE_ID_LEN + 2 * size_of::<u64>();
 /// The engine's location-independent node id, as the entry stores it.
 const NODE_ID_LEN: usize = 16;
 
+/// A node's acknowledged sequence at one name, as the ledger holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Acknowledged {
+    /// None is held for the name.
+    Nothing,
+    /// The highest sequence acknowledged at the name.
+    At(u64),
+    /// A value is held under the node's key that this identity cannot open
+    /// or read, so any sequence may hide behind it.
+    Unreadable,
+}
+
 impl<St: StagingStore> StagingRetireLedger<'_, St> {
     /// The highest sequence at which a PUT of this device's at `name`, `node`'s
-    /// write-plane name, was acknowledged but never confirmed; `None` when none
-    /// is held for that name. A record at or below it may still surface on an
-    /// endpoint, so the next publish at `name` signs above it and a settle
-    /// reads nothing at or below it as the node's live record.
+    /// write-plane name, was acknowledged but never confirmed. A record at or
+    /// below it may still surface on an endpoint, so the next publish at `name`
+    /// signs above it and a settle reads nothing at or below it as the node's
+    /// live record.
     pub async fn acknowledged(
         &self,
         owner_tag: &[u8],
         node: [u8; 16],
         name: &str,
-    ) -> SeamResult<Option<u64>> {
-        let key = Self::acked_key(owner_tag, node)?;
+    ) -> SeamResult<Acknowledged> {
+        let key = Self::acknowledged_key(owner_tag, node)?;
         let Some(blob) = self.staging.staged_bytes(&key).await? else {
-            return Ok(None);
+            return Ok(Acknowledged::Nothing);
         };
         Ok(self
             .seal
             .open(OwnerLocalKind::RetireLedger, &blob)
-            .and_then(|body| decode_acked(&body, node, name)))
+            .map_or(Acknowledged::Unreadable, |body| {
+                decode_acked(&body, node, name)
+            }))
     }
 
     /// Hold `sequence` as `node`'s acknowledged sequence at `name`, keeping a
@@ -225,8 +239,9 @@ impl<St: StagingStore> StagingRetireLedger<'_, St> {
         name: &str,
         sequence: u64,
     ) -> SeamResult<()> {
-        let held = self.acknowledged(owner_tag, node, name).await?;
-        if held.is_some_and(|held| held >= sequence) {
+        if let Acknowledged::At(held) = self.acknowledged(owner_tag, node, name).await?
+            && held >= sequence
+        {
             return Ok(());
         }
         let mut body = Zeroizing::new(Vec::with_capacity(1 + NODE_ID_LEN + 8 + name.len()));
@@ -236,32 +251,42 @@ impl<St: StagingStore> StagingRetireLedger<'_, St> {
         body.extend_from_slice(name.as_bytes());
         let blob = self.seal.seal(OwnerLocalKind::RetireLedger, &body)?;
         self.staging
-            .put_staged_bytes(&Self::acked_key(owner_tag, node)?, &blob)
+            .put_staged_bytes(&Self::acknowledged_key(owner_tag, node)?, &blob)
             .await
     }
 
     /// Drop `node`'s acknowledged sequence, once a record above it confirmed.
     pub async fn forget_acknowledged(&self, owner_tag: &[u8], node: [u8; 16]) -> SeamResult<()> {
         self.staging
-            .remove_staged_bytes(&Self::acked_key(owner_tag, node)?)
+            .remove_staged_bytes(&Self::acknowledged_key(owner_tag, node)?)
             .await
     }
 
-    fn acked_key(owner_tag: &[u8], node: [u8; 16]) -> SeamResult<Vec<u8>> {
+    /// The staging key `node`'s acknowledged sequence is held under.
+    pub fn acknowledged_key(owner_tag: &[u8], node: [u8; 16]) -> SeamResult<Vec<u8>> {
         let mut key = Self::scope(ACKED_SEQUENCE_PREFIX, owner_tag)?;
         key.extend_from_slice(&node);
         Ok(key)
     }
 }
 
-/// A stored acknowledged sequence, when it is `node`'s at `name`: the node and
-/// the name ride inside the seal as the bound tail, for the reason an entry's
-/// CID does, and a mark for a name the node no longer publishes under reads as
-/// none.
-fn decode_acked(body: &[u8], node: [u8; 16], name: &str) -> Option<u64> {
-    let rest = body.strip_prefix(&[ACKED_V1])?.strip_prefix(&node)?;
-    let (sequence, stored_name) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
-    (stored_name == name.as_bytes()).then_some(u64::from_be_bytes(*sequence))
+/// A stored acknowledged sequence at `name`. The node and the name ride inside
+/// the seal as the bound tail, for the reason an entry's CID does. A mark for a
+/// name the node no longer publishes under reads as nothing; a value that is
+/// not `node`'s mark reads as unreadable.
+fn decode_acked(body: &[u8], node: [u8; 16], name: &str) -> Acknowledged {
+    let Some((sequence, stored_name)) = body
+        .strip_prefix(&[ACKED_V1])
+        .and_then(|rest| rest.strip_prefix(&node))
+        .and_then(|rest| rest.split_first_chunk::<{ size_of::<u64>() }>())
+    else {
+        return Acknowledged::Unreadable;
+    };
+    if stored_name == name.as_bytes() {
+        Acknowledged::At(u64::from_be_bytes(*sequence))
+    } else {
+        Acknowledged::Nothing
+    }
 }
 
 /// The [`RetireLedger`] every host gets for free, over the durable staging store
@@ -1753,23 +1778,59 @@ mod tests {
             ledger.acknowledge(OWNER, NODE, "k51-a", 2).await.unwrap();
             assert_eq!(
                 ledger.acknowledged(OWNER, NODE, "k51-a").await.unwrap(),
-                Some(4)
+                Acknowledged::At(4)
             );
             assert_eq!(
                 ledger.acknowledged(OWNER, NODE, "k51-b").await.unwrap(),
-                None
+                Acknowledged::Nothing
             );
             assert_eq!(
                 ledger
                     .acknowledged(OWNER, [0x3C; 16], "k51-a")
                     .await
                     .unwrap(),
-                None
+                Acknowledged::Nothing
             );
             ledger.forget_acknowledged(OWNER, NODE).await.unwrap();
             assert_eq!(
                 ledger.acknowledged(OWNER, NODE, "k51-a").await.unwrap(),
-                None
+                Acknowledged::Nothing
+            );
+        });
+    }
+
+    /// A value under a node's key that will not open, or that is another
+    /// node's mark moved onto it, may hide any sequence: it reads as
+    /// unreadable, never as nothing held.
+    #[test]
+    fn a_mark_that_will_not_read_is_unreadable_not_absent() {
+        let store = InMemoryStagingStore::default();
+        let session = Session::new();
+        let ledger = session.ledger(&store);
+        let other = [0x3C; 16];
+        block_on(async {
+            let key = |node| {
+                StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(OWNER, node).unwrap()
+            };
+            store
+                .put_staged_bytes(&key(NODE), b"garbage")
+                .await
+                .unwrap();
+            assert_eq!(
+                ledger.acknowledged(OWNER, NODE, "k51-a").await.unwrap(),
+                Acknowledged::Unreadable
+            );
+            ledger.acknowledge(OWNER, other, "k51-a", 3).await.unwrap();
+            let moved = store.staged_bytes(&key(other)).await.unwrap().unwrap();
+            store.put_staged_bytes(&key(NODE), &moved).await.unwrap();
+            assert_eq!(
+                ledger.acknowledged(OWNER, NODE, "k51-a").await.unwrap(),
+                Acknowledged::Unreadable
+            );
+            ledger.acknowledge(OWNER, NODE, "k51-a", 5).await.unwrap();
+            assert_eq!(
+                ledger.acknowledged(OWNER, NODE, "k51-a").await.unwrap(),
+                Acknowledged::At(5)
             );
         });
     }

@@ -10891,6 +10891,156 @@ fn a_discarded_edit_retires_nothing_at_or_below_its_acknowledged_sequence() {
     );
 }
 
+/// A create whose PUT was acknowledged and never served may still surface.
+/// Its dropped version retires nothing on the endpoints' word that the name
+/// holds no record.
+#[test]
+fn a_discarded_create_acknowledged_at_its_name_retires_nothing_on_vacancy() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    world.record_store.drop_puts();
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
+        "nothing the acknowledged create names is retired"
+    );
+    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
+/// A mark that will not read may hide any sequence, so the next publish at the
+/// name signs well above the floor rather than at the next sequence.
+#[test]
+fn an_unreadable_acknowledged_sequence_makes_the_publish_sign_above_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let key = StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(
+        &owner_tag(&kdf::enc_subkey(&SECRET)),
+        node.0,
+    )
+    .expect("a mark key");
+    block_on(alice.staging_store.put_staged_bytes(&key, b"garbage")).expect("the mark stages");
+
+    write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        sequence_at(&world, &write_name(node)) > 2,
+        "the edit signs above whatever the unreadable mark may hide"
+    );
+    assert!(
+        block_on(alice.staging_store.staged_bytes(&key))
+            .unwrap()
+            .is_none(),
+        "the confirmed publish drops the mark"
+    );
+}
+
+/// A confirm that reads a tie at our sequence loses the race, yet our PUT was
+/// acknowledged: our record may stand beside the winner. The dropped version
+/// retires nothing while the endpoints serve nothing above that sequence, even
+/// once the tie is no longer visible.
+#[test]
+fn a_tie_lost_at_the_signed_sequence_holds_the_dropped_versions_debt() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &first,
+    )
+    .expect("the create commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    let node = child_id(&engine_a, ROOT, "clip.bin");
+    let name = write_name(node);
+    let endpoints = world.record_store.endpoints();
+    let base = world
+        .record_store
+        .record_at(&endpoints[0], name.as_str())
+        .expect("the create published");
+
+    // Another writer's record at the next sequence, held back until our PUT.
+    let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+    write_file(&mut engine_b, version(node), &bobs).expect("the other edit commits");
+    tick(&world, &engine_b, &mut tasks_b);
+    let winner = world
+        .record_store
+        .record_at(&endpoints[0], name.as_str())
+        .expect("the other edit published");
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, name.as_str(), base.clone());
+    }
+    world.record_store.seed_record_after_put_at(
+        &endpoints[0],
+        name.as_str(),
+        name.as_str(),
+        winner.clone(),
+    );
+
+    let op_id = write_file(&mut engine_a, version(node), &alices).expect("our edit commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_until_dead_lettered(&world, &engine_a, &mut tasks_a);
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, name.as_str(), winner.clone());
+    }
+    block_on(engine_a.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine_a, &mut tasks_a);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
+        "nothing our tied record names is retired"
+    );
+    assert!(engine_a.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
 /// A record the endpoints serve tied with other bytes may not be the one a
 /// dropped version's PUT left there, so its debt waits while the tie stands.
 #[test]
