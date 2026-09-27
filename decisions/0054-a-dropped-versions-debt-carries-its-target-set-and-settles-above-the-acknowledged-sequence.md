@@ -1,6 +1,6 @@
 # ADR 0054 — A dropped version's debt carries its target set and settles above the acknowledged sequence
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-27
 - **Date:** 2026-09-27
 - **Relates to:**
   [ADR 0047](./0047-a-failed-or-abandoned-publish-retires-exactly-what-it-charged.md) D2 (an
