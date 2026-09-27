@@ -173,6 +173,7 @@ where
         target: root(3),
         owed_bytes: 11,
         manifest_bytes: 90,
+        dropped_root: None,
     };
     reopened.owe(alice, &[quoted.clone()]).await.unwrap();
     reopened

@@ -289,6 +289,20 @@ pub fn expand_retire_targets(
     profile: &ContentProfile,
     pinned_bytes: u64,
 ) -> Result<Expansion, ExpandError> {
+    let expansion = expand_staged_root(content_cid, root_block, profile)?;
+    if expansion.pinned_bytes != pinned_bytes {
+        return Err(ExpandError::ForeignManifest);
+    }
+    Ok(expansion)
+}
+
+/// [`expand_retire_targets`] with no quoted total to hold the manifest to: for
+/// a root this device staged, whose total is read off the result.
+pub fn expand_staged_root(
+    content_cid: &str,
+    root_block: &[u8],
+    profile: &ContentProfile,
+) -> Result<Expansion, ExpandError> {
     if root_block.len() > MAX_RESOLVED_RECORD_BYTES {
         return Err(DagError::RootTooLarge {
             size: root_block.len(),
@@ -331,13 +345,9 @@ pub fn expand_retire_targets(
     .map(|(cid, pinned_bytes)| RetireTarget { cid, pinned_bytes })
     .collect();
 
-    let accounted = sum_pinned(&targets);
-    if accounted != pinned_bytes {
-        return Err(ExpandError::ForeignManifest);
-    }
     Ok(Expansion {
+        pinned_bytes: sum_pinned(&targets),
         targets,
-        pinned_bytes: accounted,
     })
 }
 

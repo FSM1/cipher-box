@@ -36,8 +36,8 @@ pub use read::{
 };
 pub use retention::{
     ContentVersion, ExpandError, Expansion, PrunePlan, QuotaExceeded, RetentionPolicy,
-    RetireTarget, RootPlacement, expand_retire_targets, plan_prune, pre_flight_quota_check,
-    version_cids,
+    RetireTarget, RootPlacement, expand_retire_targets, expand_staged_root, plan_prune,
+    pre_flight_quota_check, version_cids,
 };
 pub use write::{ContentWriter, FinishedContent};
 

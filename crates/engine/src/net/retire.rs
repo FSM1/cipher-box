@@ -6,8 +6,8 @@
 //! scope-root name lingers until the migration window closes
 //! ([`root_retire_ready`], stubbed — see below).
 //!
-//! A pruned version's bytes are the one retirement that outlives the op that
-//! ordered it ([`drain_owed_retires`]).
+//! A pruned version's bytes, and a version a dead letter dropped, are the
+//! retirements that outlive the op that ordered them ([`drain_owed_retires`]).
 
 use core::cell::RefCell;
 use std::borrow::Cow;
@@ -293,7 +293,7 @@ impl<'a, St: StagingStore> StagingRetireLedger<'a, St> {
     async fn put(&self, key: &[u8], cid: &[u8], entry: &OwedRetire) -> SeamResult<()> {
         let blob = self
             .seal
-            .seal(OwnerLocalKind::RetireLedger, &encode_entry(entry, cid))?;
+            .seal(OwnerLocalKind::RetireLedger, &encode_entry(entry, cid)?)?;
         self.staging.put_staged_bytes(key, &blob).await
     }
 }
@@ -397,30 +397,51 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
 }
 
 /// One entry as the staging store holds it, inside the seal: the fixed head,
-/// then the binary CID of the target it is keyed by.
+/// then the binary CID of the target it is keyed by, then — for a dropped
+/// version only — [`DROPPED_ROOT_TAG`] and the carried root block. An entry the
+/// previous release wrote ends at the CID.
 ///
 /// Zeroizing because the plaintext side of a sealed value is exactly what the
 /// tier exists to keep off the host ([`crate::sync::bookkeeping`]).
-fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> Zeroizing<Vec<u8>> {
-    let mut stored = Zeroizing::new(Vec::with_capacity(ENTRY_HEAD_LEN + cid.len()));
+///
+/// Refuses an empty carried root, which [`decode_entry`] reads as unwritten
+/// (AGENTS.md rule 8).
+fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> SeamResult<Zeroizing<Vec<u8>>> {
+    let carried = entry.dropped_root.as_deref();
+    let mut stored = Zeroizing::new(Vec::with_capacity(
+        ENTRY_HEAD_LEN + cid.len() + carried.map_or(0, |block| 1 + block.len()),
+    ));
     stored.extend_from_slice(&entry.node);
     stored.extend_from_slice(&entry.owed_bytes.to_be_bytes());
     stored.extend_from_slice(&entry.manifest_bytes.to_be_bytes());
     stored.extend_from_slice(cid);
-    stored
+    if let Some(block) = carried {
+        if block.is_empty() {
+            return Err(SeamError::new("retire-ledger carried root is empty"));
+        }
+        stored.push(DROPPED_ROOT_TAG);
+        stored.extend_from_slice(block);
+    }
+    Ok(stored)
 }
+
+/// Marks a stored entry's tail as a dropped version's carried root block.
+const DROPPED_ROOT_TAG: u8 = 0x01;
 
 /// One entry's node and figures — or `None` for bytes this build did not write,
 /// which read as unwritten rather than as figures of their own. The `target` of
 /// what comes back is a placeholder: it lives in the key.
 ///
 /// A stored CID that is not `cid`, the one the entry's own key names, reads as
-/// unwritten too ([`StagingRetireLedger::entry`]).
+/// unwritten too ([`StagingRetireLedger::entry`]). Every well-formed content CID
+/// is one length, so no other key's CID is a prefix of `cid`.
 fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
     let (head, bound) = stored.split_at_checked(ENTRY_HEAD_LEN)?;
-    if bound != cid {
-        return None;
-    }
+    let dropped_root = match bound.strip_prefix(cid)?.split_first() {
+        None => None,
+        Some((&DROPPED_ROOT_TAG, block)) if !block.is_empty() => Some(block.to_vec()),
+        Some(_) => return None,
+    };
     let (node, rest) = head.split_first_chunk::<NODE_ID_LEN>()?;
     let (owed, rest) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
     let (manifest, _) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
@@ -429,6 +450,7 @@ fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
         target: String::new(),
         owed_bytes: u64::from_be_bytes(*owed),
         manifest_bytes: u64::from_be_bytes(*manifest),
+        dropped_root,
     })
 }
 
@@ -461,9 +483,10 @@ pub struct RootSource<'a, H> {
 /// settle did not ([`ReclaimStall`]). `None` when the ledger could not be read,
 /// so a store hiccup reports nothing rather than reporting no debt.
 ///
-/// Each entry is expanded from its own root block, fetched keyless (plaintext
-/// det-CBOR), and retired in [`expand_retire_targets`] order, less every CID
-/// `live` reports for the entry's own node ([`Expansion::minus`]).
+/// Each entry is expanded from its own root block — the copy it carries, or one
+/// fetched keyless (plaintext det-CBOR) — and retired in
+/// [`expand_retire_targets`] order, less every CID `live` reports for the
+/// entry's own node ([`Expansion::minus`]).
 ///
 /// `live` answers "what does this node's **currently published** record still
 /// reach, and under what name", read fresh so a version adopted since the prune
@@ -515,10 +538,11 @@ where
     let mut stalls: Vec<ReclaimStall> = Vec::new();
     let mut still_owed = 0u64;
     let mut registry_up = true;
-    // One record read per owing node, not per entry — a prune drops several
-    // versions of one file. A node's set grows only with what actually retired,
-    // so a CID a deferred entry named is still reachable by the next one.
-    let mut live_of: BTreeMap<[u8; 16], Option<LiveRecord>> = BTreeMap::new();
+    // One record read per owing node and class, not per entry — a prune drops
+    // several versions of one file. A node's set grows only with what actually
+    // retired, so a CID a deferred entry named is still reachable by the next.
+    let mut live_of: BTreeMap<([u8; 16], OwingRecord), Option<LiveRecord>> = BTreeMap::new();
+    let mut tombstone_of: BTreeMap<[u8; 16], bool> = BTreeMap::new();
     // The nodes this pass classified, and those it leaves still owing: a
     // tombstone outlives nothing but the debts it classifies.
     let mut tombstoned: BTreeSet<[u8; 16]> = BTreeSet::new();
@@ -527,18 +551,24 @@ where
     // counts it once whether or not the retire that names it lands.
     let mut counted: BTreeSet<String> = BTreeSet::new();
     for entry in page.entries {
-        let node = match live_of.entry(entry.node) {
-            Entry::Occupied(held) => held.into_mut(),
+        let retired = match tombstone_of.entry(entry.node) {
+            Entry::Occupied(held) => *held.get(),
             Entry::Vacant(slot) => {
-                let owing = match ledger.tombstoned(owner_tag, entry.node).await.ok()? {
-                    true => {
-                        tombstoned.insert(entry.node);
-                        OwingRecord::Retired
-                    }
-                    false => OwingRecord::Published,
-                };
-                slot.insert(live(entry.node, owing).await)
+                let retired = ledger.tombstoned(owner_tag, entry.node).await.ok()?;
+                if retired {
+                    tombstoned.insert(entry.node);
+                }
+                *slot.insert(retired)
             }
+        };
+        let owing = match (retired, entry.dropped_root.is_some()) {
+            (true, _) => OwingRecord::Retired,
+            (false, true) => OwingRecord::Unconfirmed,
+            (false, false) => OwingRecord::Published,
+        };
+        let node = match live_of.entry((entry.node, owing)) {
+            Entry::Occupied(held) => held.into_mut(),
+            Entry::Vacant(slot) => slot.insert(live(entry.node, owing).await),
         };
         // Bounded like every other batch this module reports: the reasons are
         // there to be acted on, and the figure is what counts the debt.
@@ -674,20 +704,27 @@ pub enum ReclaimStallReason {
     TargetUnexpandable,
 }
 
-/// One owed entry's whole expansion, off its own fetched root block. `None`
-/// leaves the entry owed for the figure the prune quoted: a root no source
-/// served, or a manifest that is not this version's.
+/// One owed entry's whole expansion, off the root block it carries or else one
+/// fetched. `None` leaves the entry owed for the figure the prune quoted: a
+/// root no source served, or a manifest that is not this version's.
 async fn expand_owed<H: Http>(entry: &OwedRetire, source: &RootSource<'_, H>) -> Option<Expansion> {
-    let expected = decode_content_cid_str(&entry.target).ok()?;
-    let root_block = read_block(
-        source.gateway,
-        source.http,
-        &entry.target,
-        &expected,
-        ContentPlane::Root,
-    )
-    .await
-    .ok()?;
+    let root_block = match &entry.dropped_root {
+        Some(carried) => Cow::Borrowed(carried.as_slice()),
+        None => {
+            let expected = decode_content_cid_str(&entry.target).ok()?;
+            Cow::Owned(
+                read_block(
+                    source.gateway,
+                    source.http,
+                    &entry.target,
+                    &expected,
+                    ContentPlane::Root,
+                )
+                .await
+                .ok()?,
+            )
+        }
+    };
     expand_retire_targets(
         &entry.target,
         &root_block,
@@ -1395,7 +1432,7 @@ mod tests {
     fn a_stored_entry_this_build_did_not_write_reads_as_nothing() {
         let (entry, ..) = owed_version(&[1u8; 40]);
         let cid = StagingRetireLedger::<InMemoryStagingStore>::cid(&entry.target).expect("a CID");
-        let stored = encode_entry(&entry, &cid);
+        let stored = encode_entry(&entry, &cid).expect("the entry encodes");
         assert_eq!(
             decode_entry(&stored, &cid),
             // The target rides the key, so the value round-trips without it.
@@ -1412,6 +1449,141 @@ mod tests {
         ] {
             assert_eq!(decode_entry(&bytes, &cid), None);
         }
+    }
+
+    /// The debt a dead letter journals for the version it drops: the staged
+    /// root block rides the entry.
+    fn dropped_version(plaintext: &[u8]) -> (OwedRetire, Vec<u8>, Vec<String>) {
+        let (mut entry, root_block, leaf_cids) = owed_version(plaintext);
+        entry.dropped_root = Some(root_block.clone());
+        (entry, root_block, leaf_cids)
+    }
+
+    /// A dropped version's root may never have reached a gateway, so the pass
+    /// expands the copy the entry carries.
+    #[test]
+    fn a_dropped_version_settles_off_its_own_root_with_no_gateway() {
+        let (entry, _, leaf_cids) = dropped_version(&(0..100u8).collect::<Vec<_>>());
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+
+        let http = ledger_http(&entry, None, Some(1));
+        let (remaining, owed) = drain(&store, OWNER, &http);
+
+        assert_eq!(
+            retire_batches(&http),
+            vec![leaf_cids, vec![entry.target.clone()]]
+        );
+        assert_eq!((remaining, owed), (0, Vec::new()));
+    }
+
+    /// The carried copy is held to the target by its CID, so a planted block
+    /// steers no CID into the retire.
+    #[test]
+    fn a_carried_root_that_is_not_the_targets_block_retires_nothing() {
+        let (mut entry, ..) = dropped_version(&[3u8; 100]);
+        let (_, foreign_block, _) = doomed_version(&[4u8; 100]);
+        entry.dropped_root = Some(foreign_block);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+
+        let http = ledger_http(&entry, None, Some(1));
+        let (_, owed) = drain(&store, OWNER, &http);
+
+        assert!(retired_targets(&http).is_empty());
+        assert_eq!(owed.len(), 1, "the entry stays owed");
+    }
+
+    /// The settle reads the owing node as one whose record may never have
+    /// published, and a prune's debt on the same node as published.
+    #[test]
+    fn a_dropped_versions_node_is_read_as_unconfirmed() {
+        let (dropped, dropped_block, _) = dropped_version(&[5u8; 100]);
+        let (pruned, pruned_block, _) = owed_version(&[6u8; 100]);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &dropped);
+        owe(&store, OWNER, &pruned);
+        let http = blocks_http(
+            vec![
+                (dropped.target.clone(), dropped_block),
+                (pruned.target.clone(), pruned_block),
+            ],
+            Some(1),
+        );
+        let asked = RefCell::new(BTreeSet::new());
+        let session = Session::new();
+        let api = ApiClient::new(
+            http.clone(),
+            InMemoryCredentialStore::default(),
+            "http://api.test",
+        );
+        block_on(drain_owed_retires(
+            &session.ledger(&store),
+            OWNER,
+            &api,
+            &RootSource {
+                gateway: &gateway(),
+                http: &http,
+                profile: &ContentProfile::CI,
+            },
+            &BTreeSet::new(),
+            None,
+            async |_, owing| {
+                asked.borrow_mut().insert(owing);
+                Some(owning(BTreeSet::new()))
+            },
+        ))
+        .expect("the ledger reads");
+
+        assert_eq!(
+            asked.into_inner(),
+            BTreeSet::from([OwingRecord::Published, OwingRecord::Unconfirmed])
+        );
+    }
+
+    /// The durable ledger must still read what the previous release wrote: an
+    /// entry with no carried root.
+    #[test]
+    fn an_entry_the_previous_release_wrote_still_reads() {
+        let (entry, ..) = owed_version(&[7u8; 40]);
+        let cid = StagingRetireLedger::<InMemoryStagingStore>::cid(&entry.target).expect("a CID");
+        let mut legacy = entry.node.to_vec();
+        legacy.extend_from_slice(&entry.owed_bytes.to_be_bytes());
+        legacy.extend_from_slice(&entry.manifest_bytes.to_be_bytes());
+        legacy.extend_from_slice(&cid);
+        assert_eq!(
+            decode_entry(&legacy, &cid),
+            Some(OwedRetire {
+                target: String::new(),
+                ..entry
+            })
+        );
+    }
+
+    /// Encode refuses what decode refuses (AGENTS.md rule 8): an empty carried
+    /// root would journal a debt no later pass can read.
+    #[test]
+    fn an_empty_carried_root_is_refused_at_owe() {
+        let (mut entry, ..) = owed_version(&[8u8; 40]);
+        entry.dropped_root = Some(Vec::new());
+        let store = InMemoryStagingStore::default();
+        assert!(
+            block_on(
+                Session::new()
+                    .ledger(&store)
+                    .owe(OWNER, core::slice::from_ref(&entry))
+            )
+            .is_err()
+        );
+        assert!(owed_entries(&store, OWNER).is_empty());
+    }
+
+    #[test]
+    fn a_carried_root_round_trips_through_the_store() {
+        let (entry, ..) = dropped_version(&[9u8; 100]);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+        assert_eq!(owed_entries(&store, OWNER), vec![entry]);
     }
 
     /// A replayed prune must not move what the vault reports as pending.
@@ -1582,7 +1754,9 @@ mod tests {
             .expect("the owe wrote it");
         assert_ne!(
             stored,
-            encode_entry(&entry, &cid).to_vec(),
+            encode_entry(&entry, &cid)
+                .expect("the entry encodes")
+                .to_vec(),
             "the entry grammar never reaches the store on its own"
         );
         assert_eq!(
@@ -1595,7 +1769,11 @@ mod tests {
             "another identity's key opens nothing"
         );
 
-        block_on(store.put_staged_bytes(&key, &encode_entry(&entry, &cid))).expect("plant");
+        block_on(store.put_staged_bytes(
+            &key,
+            &encode_entry(&entry, &cid).expect("the entry encodes"),
+        ))
+        .expect("plant");
         assert!(
             owed_entries(&store, OWNER).is_empty(),
             "an unsealed value is no debt"

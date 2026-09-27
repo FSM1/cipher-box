@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cipherbox_core::codec::Value;
-use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
+use cipherbox_core::content::{
+    CONTENT_CID_CODEC, compute_cid, encode_content_cid_str, is_wellformed_content_cid,
+};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::MAX_READ_SEALED_BYTES;
@@ -8944,6 +8946,96 @@ fn an_unconfirmed_publish_never_retires_the_version_it_may_already_name() {
 /// an engine internal.
 const PRESERVED_DEAD_LETTERS: &[u8] = b"cipherbox/preserved-dead-letters";
 
+/// A spent budget keeps its registry rows, and a preserved set that refuses the
+/// version then drops the only manifest listing them. The debt is journaled
+/// first, and the create never published, so the settle retires the whole
+/// version (ADR 0047).
+#[test]
+fn a_refused_version_that_kept_its_rows_still_retires_them() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(
+        alice
+            .staging_store
+            .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
+    )
+    .expect("the foreign set stages");
+    blocks.refuse_register(proxy_400());
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "refused.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    let (root_cid, leaves) = staged_version(&alice);
+    let (parked, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert_eq!(parked[0].reason, DeadLetterReason::PreservationRefused);
+
+    let retired: BTreeSet<String> = retire_targets(&alice).into_iter().collect();
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| retired.contains(&encode_content_cid_str(cid))),
+        "every block the version charged is retired: {retired:?}"
+    );
+}
+
+/// A name this device once adopted a record at is never read as empty on the
+/// endpoints' word alone: the debt waits rather than unpin what a record the
+/// endpoints have lost may still name.
+#[test]
+fn a_dropped_versions_debt_waits_at_a_name_this_device_adopted() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(
+        alice
+            .staging_store
+            .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
+    )
+    .expect("the foreign set stages");
+    blocks.refuse_register(proxy_400());
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "refused.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    let (root_cid, _) = staged_version(&alice);
+    let raw = block_on(alice.staging_store.queued_ops()).expect("the journal reads");
+    let (_, op) = decode_queue(&RecordReader::new(&kdf::enc_subkey(&SECRET)), &raw)
+        .mine
+        .remove(0);
+    block_on(
+        alice
+            .floors(&SECRET)
+            .raise_sequence_floor(write_name(op.target).as_str().as_bytes(), 1),
+    )
+    .expect("the floor rises");
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        !retire_targets(&alice).contains(&encode_content_cid_str(&root_cid)),
+        "nothing is retired against a record the endpoints may have lost"
+    );
+    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
 /// A preserved set this build cannot read is never overwritten — it holds dead
 /// letters whose records carry the only copy of their content keys. That refusal
 /// is terminal rather than a retry: returning the op to a strict-FIFO head would
@@ -10675,6 +10767,42 @@ fn discarding_a_parked_write_releases_the_version_it_held() {
         block_on(engine_b.command(Command::DiscardDeadLetter { op_id })),
         Err(EngineError::UnknownDeadLetter { op_id }),
         "a second discard names a write this device no longer holds"
+    );
+}
+
+/// Discard drops the only manifest that lists the rows the parked version kept
+/// charged. The retire is scoped to the node's record and leaves out what that
+/// record still names.
+#[test]
+fn a_discarded_parked_write_retires_the_rows_its_version_kept() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (bob, mut engine_b, mut tasks_b, node, op_id) = parked_write(&world, &blocks);
+    let staged = || -> BTreeSet<Vec<u8>> {
+        block_on(bob.staging_store.staged_keys())
+            .unwrap()
+            .into_iter()
+            .collect()
+    };
+    let before = staged();
+
+    block_on(engine_b.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    let released: BTreeSet<String> = before
+        .difference(&staged())
+        .filter(|key| is_wellformed_content_cid(key))
+        .map(|cid| encode_content_cid_str(cid))
+        .collect();
+    assert!(!released.is_empty(), "the discard released the version");
+    tick(&world, &engine_b, &mut tasks_b);
+
+    let named: BTreeSet<String> = retire_entries(&bob)
+        .into_iter()
+        .filter(|(name, _)| name.as_deref() == Some(write_name(node).as_str()))
+        .flat_map(|(_, targets)| targets)
+        .collect();
+    assert!(
+        released.is_subset(&named),
+        "every released block is retired under the node's record: {released:?} vs {named:?}"
     );
 }
 
@@ -13433,6 +13561,54 @@ fn a_preserved_dead_letter_past_its_age_bound_is_purged_on_a_poll_tick() {
             .chain([&root_cid])
             .all(|cid| !staged().contains(cid)),
         "past it the entry is purged and its whole version leaves the budget"
+    );
+}
+
+/// The purge drops the only manifest that lists the rows a parked version
+/// kept charged, so it journals them first and a later settle retires them.
+#[test]
+fn a_purged_parked_version_retires_the_rows_it_kept() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.refuse_register(proxy_400());
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "parked.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    let version: Vec<String> = leaves
+        .iter()
+        .chain([&root_cid])
+        .map(|cid| encode_content_cid_str(cid))
+        .collect();
+    let mark = retire_targets(&alice).len();
+    assert!(
+        version
+            .iter()
+            .all(|cid| !retire_targets(&alice).contains(cid)),
+        "a parked version keeps its rows"
+    );
+
+    world
+        .scheduler
+        .advance(engine.profile().preserved_dead_letter_ttl);
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired: BTreeSet<String> = retired_since(&alice, mark).into_iter().collect();
+    assert!(
+        version.iter().all(|cid| retired.contains(cid)),
+        "the purge journals what the version charged, and the settle retires it: {retired:?}"
     );
 }
 

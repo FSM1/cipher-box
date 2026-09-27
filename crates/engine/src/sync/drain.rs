@@ -78,9 +78,9 @@ use crate::net::retire::{
     orphaned_head, retire,
 };
 use crate::net::{
-    Adopter, ChildAdopter, GatedResolve, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead,
-    ResolveOutcome, RootAdopter, assemble_head_envelope, fanout_get_verify, observed_at, resolve,
-    resolve_gated,
+    Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldKey, HeldRecord, HeldRecords, HeldValue,
+    LocalHead, ResolveOutcome, RootAdopter, assemble_head_envelope, fanout_get_classified,
+    fanout_get_verify, observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
@@ -113,8 +113,9 @@ use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::render::BaseSnapshot;
 use crate::sync::scope_exit_debt::{owe_cut, settle_owed_cuts};
 use crate::sync::staging::{
-    DEAD_LETTER_NOTICES_PREFIX, LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter,
-    reconcile_staging, reconcile_staging_over, release_version_blocks, stage_op, version_leaf_cids,
+    DEAD_LETTER_NOTICES_PREFIX, DroppedVersionDebts, LiveBlocks, Preservation, PreservedBounds,
+    preserve_dead_letter, reconcile_staging, reconcile_staging_over, release_version_blocks,
+    stage_op, version_leaf_cids,
 };
 use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_mark_key};
 
@@ -1686,6 +1687,19 @@ where
         BookkeepingSeal::new(scope.enc_secret, &*self.seams.entropy)
     }
 
+    /// The custody `scope`'s identity journals a dropped version's debt under.
+    fn dropped_version_debts<'s>(
+        &'s self,
+        scope: &'s DrainScope<'_>,
+    ) -> DroppedVersionDebts<'s, St> {
+        DroppedVersionDebts::new(
+            &self.seams.staging,
+            scope.enc_secret,
+            &*self.seams.entropy,
+            &self.seams.content_profile,
+        )
+    }
+
     /// One tick's drain: every pass in [`ordered`] order, each report surfaced
     /// as its pass ends, then the tick's bookkeeping once.
     pub(crate) async fn run_tick<R: ScopeExitRotator>(&self, scopes: TickScopes<'_>, exits: &R) {
@@ -1706,10 +1720,14 @@ where
             // Settle sweeps staging on its own listing. Without it, an
             // abandoned write handle's residue still needs reclaiming at the
             // poll cadence.
+            let debts = passes
+                .first()
+                .map(|scope| self.dropped_version_debts(scope));
             reconcile_staging(
                 &self.seams.staging,
                 self.cells.live_blocks,
                 self.preserved_bounds(),
+                debts.as_ref(),
             )
             .await;
         }
@@ -1840,6 +1858,7 @@ where
             self.cells.live_blocks,
             &staged,
             self.preserved_bounds(),
+            Some(&self.dropped_version_debts(vault)),
         )
         .await;
     }
@@ -2091,7 +2110,7 @@ where
                     Ok(())
                 };
                 if handed_back.is_ok() && self.dequeue_op(op_id).await.is_ok() {
-                    self.release_if_refused(preserved, op).await;
+                    self.release_owing_its_rows(scope, preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -2118,7 +2137,7 @@ where
                 if self.retire_unreferenced_name(scope, op).await.is_ok()
                     && self.dequeue_op(op_id).await.is_ok()
                 {
-                    self.release_if_refused(preserved, op).await;
+                    self.release_owing_its_rows(scope, preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -5401,6 +5420,7 @@ where
                 target: version.content_cid.clone(),
                 owed_bytes: expansion.minus(&charged).pinned_bytes,
                 manifest_bytes: expansion.pinned_bytes,
+                dropped_root: None,
             });
             charged.extend(expansion.cids());
         }
@@ -5438,9 +5458,12 @@ where
         owing: OwingRecord,
     ) -> Option<LiveRecord> {
         let end = scope.end_of(&self.cells.base.borrow(), NodeId(node)).ok()?;
-        let name = end.write_name(&node).as_str().to_owned();
+        let write_name = end.write_name(&node);
+        let unpublished =
+            owing == OwingRecord::Unconfirmed && self.holds_no_record(&end, &write_name).await?;
+        let name = write_name.as_str().to_owned();
         let reaching = |cids| Some(LiveRecord { name, cids });
-        if owing == OwingRecord::Retired {
+        if owing == OwingRecord::Retired || unpublished {
             return reaching(BTreeSet::new());
         }
         let (plane, root) = self.ledger_plane(end).await?;
@@ -5460,6 +5483,24 @@ where
             live.extend(self.expand_version(&version).await.ok()?.cids());
         }
         reaching(live)
+    }
+
+    /// Whether `name` holds no record by the [`OwingRecord::Unconfirmed`] rule:
+    /// every endpoint answers that it holds none, and this device never adopted
+    /// one there. `None` when the sequence floor will not read.
+    async fn holds_no_record(&self, end: &ScopeEnd<'_>, name: &IpnsName) -> Option<bool> {
+        let floors = end.floors(&self.seams.floors);
+        if floor::sequence_floor(&floors, name.as_str().as_bytes())
+            .await
+            .ok()?
+            .is_some()
+        {
+            return Some(false);
+        }
+        Some(matches!(
+            fanout_get_classified(&self.seams.transport, name).await,
+            FanoutRecord::Absent
+        ))
     }
 
     /// The plane a retire-ledger entry's node reads under, and the root record
@@ -6404,6 +6445,23 @@ where
         }
     }
 
+    /// [`Self::release_if_refused`] for a dead letter that kept the registry
+    /// rows its version charged. A version no preserved entry holds —
+    /// [`Preservation::Refused`] or [`Preservation::ContentGone`] — journals
+    /// that debt first ([`DroppedVersionDebts`]), or its rows leak with the
+    /// only manifest listing them.
+    async fn release_owing_its_rows(
+        &self,
+        scope: &DrainScope<'_>,
+        preserved: Preservation,
+        op: &Op,
+    ) {
+        if preserved != Preservation::Kept {
+            self.dropped_version_debts(scope).owe(op).await;
+        }
+        self.release_if_refused(preserved, op).await;
+    }
+
     /// Abandon one op with its staged version preserved and its name left
     /// standing: the halt that took it gives no ground to believe no published
     /// record names the op's target, and cutting a name a live record carries
@@ -6420,7 +6478,7 @@ where
             return;
         };
         if self.dequeue_op(op_id).await.is_ok() {
-            self.release_if_refused(preserved, op).await;
+            self.release_owing_its_rows(scope, preserved, op).await;
             report
                 .dead_letters
                 .push((op_id, op.target, preserved.observed(reason)));

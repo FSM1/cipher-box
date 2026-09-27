@@ -9,7 +9,7 @@ use super::SeamResult;
 /// has and a hard-deleted one never will. The answer is a property of the node,
 /// so the ledger holds it once per node
 /// ([`tombstoned`](RetireLedger::tombstoned)) rather than once per entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OwingRecord {
     /// The node outlives the debt — a prune shortened its history. An
     /// unreadable record stands the entry down: retiring what this pass failed
@@ -20,16 +20,22 @@ pub enum OwingRecord {
     /// record reads as an empty live set. Without the distinction the debt is
     /// permanently unsettleable against a never-discard ledger.
     Retired,
+    /// The node's record may never have published — the debt is a version a
+    /// dead letter dropped ([`OwedRetire::dropped_root`]). A name the endpoints
+    /// all answer as holding no record reads as an empty live set, unless this
+    /// device ever adopted a record there; any other answer reads as
+    /// [`Published`](Self::Published).
+    Unconfirmed,
 }
 
 /// One owed retirement: a doomed version's **root** `contentCid` and the pinned
 /// bytes retiring its expansion frees.
 ///
-/// Only the root is journaled. Its leaves are re-derived at drain time from the
-/// root block, which is plaintext det-CBOR — so the ledger stays three orders of
-/// magnitude smaller than the CID set it stands for, and holds the half that is
-/// irrecoverable: nothing readable names a dropped root once the shortened
-/// history publishes, while a root always names its own leaves.
+/// A prune journals only the root. Its leaves are re-derived at drain time from
+/// the root block, which is plaintext det-CBOR — so the ledger stays three
+/// orders of magnitude smaller than the CID set it stands for, and holds the
+/// half that is irrecoverable: nothing readable names a dropped root once the
+/// shortened history publishes, while a root always names its own leaves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwedRetire {
     /// The node whose history dropped the target. The drain re-reads this
@@ -47,6 +53,11 @@ pub struct OwedRetire {
     /// The pinned total the doomed manifest must account for — the bound the
     /// expansion holds a hand-framed root to.
     pub manifest_bytes: u64,
+    /// The staged root block of a version a dead letter dropped, `None` for a
+    /// prune's debt. Such a root may never have reached a gateway, so the drain
+    /// expands this copy, held to `target` by its CID; and the owing node is
+    /// [`OwingRecord::Unconfirmed`].
+    pub dropped_root: Option<Vec<u8>>,
 }
 
 impl OwedRetire {
@@ -58,6 +69,7 @@ impl OwedRetire {
             target,
             owed_bytes: pinned_bytes,
             manifest_bytes: pinned_bytes,
+            dropped_root: None,
         }
     }
 }

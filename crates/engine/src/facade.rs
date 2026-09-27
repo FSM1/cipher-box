@@ -170,8 +170,8 @@ use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::ManualRefresh;
 use crate::sync::staging::{
-    DEAD_LETTER_NOTICES_PREFIX, PreservedBounds, PreservedDeadLetter, StagedBlocks,
-    read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
+    DEAD_LETTER_NOTICES_PREFIX, DroppedVersionDebts, PreservedBounds, PreservedDeadLetter,
+    StagedBlocks, read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
     release_version_blocks, stage_op, take_dead_letter_notice, take_preserved_dead_letter,
 };
 use crate::sync::staleness::{Connectivity, classify, next_boundary};
@@ -4619,6 +4619,14 @@ impl<T: SeamTypes> Engine<T> {
         // that residue can be reclaimed — and the first place a preserved set
         // that was already over its bounds when this store opened is cut back to
         // them, before a single tick runs.
+        let debts = self.session.as_ref().map(|session| {
+            DroppedVersionDebts::new(
+                &self.seams.staging_store,
+                session.enc_subkey(),
+                &*self.entropy,
+                &self.content_profile,
+            )
+        });
         reconcile_staging(
             &self.seams.staging_store,
             &self.state.live_blocks,
@@ -4627,6 +4635,7 @@ impl<T: SeamTypes> Engine<T> {
                 &self.storage_policy,
                 &self.profile,
             ),
+            debts.as_ref(),
         )
         .await;
 
@@ -10431,7 +10440,8 @@ where {
 
     /// The shortened set is durable before a byte is released, so a failed write
     /// leaves a list that still names the version rather than one naming blocks
-    /// that are already gone.
+    /// that are already gone. The version's registry debt is journaled in the
+    /// same window ([`DroppedVersionDebts`]).
     ///
     /// A notice holds no record and no blocks, so dropping one releases nothing
     /// and needs none of that ordering.
@@ -10445,10 +10455,19 @@ where {
             let _ = self.events.unbounded_send(Event::SnapshotUpdated);
             return Ok(());
         }
-        let (parked, _) = self.parked_write(op_id).await?;
+        let (parked, op) = self.parked_write(op_id).await?;
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         take_preserved_dead_letter(&self.seams.staging_store, op_id)
             .await
             .map_err(EngineError::from_seam)?;
+        DroppedVersionDebts::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &*self.entropy,
+            &self.content_profile,
+        )
+        .owe(&op)
+        .await;
         // A record whose clear root will not read names no blocks to release;
         // orphan GC reclaims them once this list no longer holds it.
         if let Some(root) = record_content_root_cid(&parked.record).ok().flatten() {
