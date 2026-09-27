@@ -17,6 +17,7 @@ mod mount;
 mod oauth;
 mod session;
 mod tray;
+mod wake;
 
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
@@ -78,6 +79,7 @@ fn main() {
                 .build()?;
 
             tray::build(app.handle())?;
+            wake::spawn(app.handle().clone())?;
             // After the tray: this opens a directory with an fsync barrier, and
             // nothing before the menu-bar icon should wait on a disk.
             session::open_key_custody(app.handle())?;
