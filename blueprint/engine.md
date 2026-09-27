@@ -733,6 +733,9 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   refused as _unmeasurable_ rather than reported as a full device.
 - **Staleness ladder** (FSM1/cipher-box-next#33 D4): fresh → reconciling (quiet indicator) →
   stale (badge + "last synced X ago" after ~3 missed cycles) → offline banner.
+  Reconciling lasts at most one record-request deadline from the pass start; past
+  it the ladder reads from the last success while the pass runs on, and a manual
+  refresh waiting on that pass fails as overdue (ADR 0055).
   Availability staleness keeps cached views usable indefinitely. Errors are
   exactly two things: trust violations and an empty-cache cold start. Manual
   refresh resolves with nocache semantics everywhere.
