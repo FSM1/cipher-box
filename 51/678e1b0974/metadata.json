@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "51678e1b0974",
+  "strategy": "manual-commit",
+  "branch": "docs/adr-0055-bounded-manual-refresh",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/51/678e1b0974/0/metadata.json",
+      "transcript": "/51/678e1b0974/0/full.jsonl",
+      "compact_transcript": "/51/678e1b0974/0/transcript.jsonl",
+      "content_hash": "/51/678e1b0974/0/content_hash.txt",
+      "prompt": "/51/678e1b0974/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2798,
+    "cache_creation_tokens": 538795,
+    "cache_read_tokens": 25727460,
+    "output_tokens": 121420,
+    "api_call_count": 126
+  }
+}
