@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "93201755b9f8",
+  "session_id": "d2eb5edf-3f69-4864-9e2f-56a9f4551475",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-27T21:13:12.398931Z",
+  "branch": "docs/adr-0055-bounded-manual-refresh",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "9d91ff296c76",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 2504,
+    "cache_creation_tokens": 521183,
+    "cache_read_tokens": 21293470,
+    "output_tokens": 111940,
+    "api_call_count": 114
+  },
+  "session_metrics": {
+    "turn_count": 31
+  },
+  "summary": {
+    "intent": "Execute a multi-lane background pass on the cipher-box repo to fix four GitHub issues (#2016, #2021, #1956, #2017) via three parallel agent lanes, review and merge their PRs, then write the resulting ADR/blueprint documentation updates.",
+    "outcome": "All three PRs (2059, 2060, 2063) merged closing all four issues, with main green after each merge (24 suites, up to 2800 engine tests). Wrote two ADRs (0054, 0055) as draft PRs (2081, 2082) with CI green, then fixed a structural gate issue (folding a weak D-item, moving accepted residuals into Consequences) per the repo's ADR quality rules.",
+    "learnings": {
+      "repo": [
+        "Cipher-box ADRs follow a 3-gate quality rubric: durable/hard-to-reverse shape, not-clear-without-context, and a real rejected-trade-off; Residuals section must hold only open owner questions, with accepted residuals moved into Consequences as one line each",
+        "ADR index is a shared markdown table — concurrent ADR PRs touching it need a rebase against each other, and prettier reflows the whole table when a wider row is added",
+        "Merged PRs use squash-merge with an explicit body; docs PRs carry `@coderabbitai ignore` and no attribution",
+        "Post-merge check on main (engine clippy + full engine test run) is run under a Monitor after every merge to catch integration breaks",
+        "CodeRabbit review requests are slotted (one at a time) and must wait for a floor/slot time before posting — background Bash calls have a 10-minute cap so slot waits near/over that must run as detached/Monitor-based processes instead",
+        "Removed agent worktrees leave behind placeholder branches (all typically merged into main) that accumulate and need periodic cleanup; always verify unmerged ones against main's squash-merge history before deleting",
+        "Opus session usage limits can kill a long-running lane mid-task; the lane resumes cleanly from its worktree with one local commit and a clean tree after reset"
+      ],
+      "code": [
+        {
+          "path": "crates/engine/src/sync/drain.rs",
+          "line": 5498,
+          "finding": "live_owing_record's Edit-rule / vacancy check for dropped versions only compared head CID vs base, missing that a later record can reuse the same sequence number, causing a real (MEDIUM) content-loss race; fixed by introducing an acknowledged-sequence mark (crates/engine/src/net/retire.rs 'cbx/ra/<owner>/<node>' key) that publishes must sign above and settles must wait on"
+        },
+        {
+          "path": "crates/engine/src/sync/tick.rs",
+          "line": 484,
+          "finding": "run_past_deadline hand-rolled a poll_fn race duplicating the existing `within` combinator in record_plane.rs:153; consolidated during PR 2060 fold to fix the reconciling-rung-never-cleared bug (host reads of staleness rung during a pass were never followed by an event after convergence)"
+        },
+        {
+          "path": "crates/engine/src/net/retire.rs",
+          "line": 409,
+          "finding": "Retire ledger entry format was tag-length disambiguated (relying on 'every well-formed CID is one length') and stored whole root blocks up to MAX_RESOLVED_RECORD_BYTES, breaking the ledger's 'much smaller than CID set' design goal; PR 2063 introduced a versioned entry grammar (0x02 | origin | node | owedBytes | manifestBytes | cid + target list) while keeping old 68-byte entries decodable"
+        }
+      ],
+      "workflow": [
+        "Fan out independent issue fixes into background Agent lanes (worktree isolation, draft PRs, no auto CodeRabbit request) and let each lane's own nested review sub-agents (simplify: reuse/efficiency/simplification/altitude, plus security and crypto-privacy) report back to the orchestrator, which forwards folded results and decisions rather than re-deriving them",
+        "Hold multiple parallel nested-review results until all have arrived, then forward them together with consolidated direction, instead of relaying one at a time",
+        "When a background agent's task-notification shows it stopped mid-task with uncommitted changes and no final report (e.g., after only a simplify pass), resume it explicitly with the remaining steps (commit, reviews, gates, push, PR, CI wait) rather than assuming failure",
+        "Use Monitor for long external waits (CI, CodeRabbit slot timers, post-merge test runs) instead of blocking Bash calls capped at 10 minutes"
+      ]
+    },
+    "friction": [
+      "Lane A (largest, most complex fix) died mid-run on an Opus session rate limit (reset 8:20pm Europe/Berlin), losing ~3 hours of wall-clock progress before it could be resumed, though its worktree state was preserved cleanly",
+      "Background Bash tool calls are capped at 10 minutes, which is shorter than some CodeRabbit slot wait times, requiring a workaround of relaunching the wait as a detached process/Monitor",
+      "A background Monitor/shell command ('Request the CodeRabbit full review on PR 2063...') did not finish before the previous session ended and left no completion record, requiring a fresh check and re-arming of the watcher",
+      "CodeRabbit full review on the ~1800-line PR 2063 diff took over 30 minutes, causing an initial Monitor to expire before the review completed and needing a second poll",
+      "37 stale placeholder branches from removed agent worktrees had accumulated and needed manual cleanup, including one unmerged branch requiring manual verification against main's squash-merge history before deletion"
+    ],
+    "open_items": [
+      "PR 2081 (ADR 0054) and PR 2082 (ADR 0055) are open as drafts awaiting user's merge/Accepted-status decision; second one merged needs a one-line rebase on the ADR index table, which also conflicts with the in-flight ADR 0053 PR",
+      "Follow-up issue #2065 filed for the case where a dropped version's staged root is already gone (nothing journals its rows), with charge-time journaling proposed as the candidate design",
+      "Drain signs a scope root without taking the write-epoch lease (documented rationale in PR 2063 body citing ADR 0041 E2) — flagged but not resolved",
+      "Several 'accepted residual' leaks (not losses) left undocumented in code beyond the ADR Consequences line: acknowledged-sequence marks never removed after rotation/delete (one key per node leak), mark write failure + dead-letter rebase can silently lose the mark",
+      "Efficiency findings from lane B's simplify review not fixed: web-side setTimeout not cancelled when a pass ends early (leaves timer/Promise/closures alive ~30s), extra borrow_mut calls in staleness reads (accepted as negligible)",
+      "T3 worktree on staging-soak branch (zero commits ahead of main) intentionally left for the other Claude Code thread that owns it, not closed"
+    ]
+  }
+}
