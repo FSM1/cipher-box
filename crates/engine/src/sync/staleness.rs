@@ -30,20 +30,26 @@ pub enum Connectivity {
 /// `Reconciling`, then `Stale`/`Fresh` split on the profile's `stale_after`
 /// (≈ 3 missed poll cycles).
 ///
+/// `reconcile_started` is when the pass in flight began. It shows
+/// `Reconciling` for one `refresh_deadline` only: a pass still running past
+/// that reads as the age of the last success, never as a reconcile without
+/// end.
+///
 /// A cold cache (`last_success` is `None`) with no reconcile in flight while
 /// online reports `Reconciling`: the empty-cache cold-start *error* is the
 /// caller's separate concern, not a staleness rung.
 pub fn classify(
     now: UnixMillis,
     last_success: Option<UnixMillis>,
-    reconcile_in_flight: bool,
+    reconcile_started: Option<UnixMillis>,
     connectivity: Connectivity,
     profile: &SyncTimingProfile,
 ) -> Staleness {
     if connectivity == Connectivity::Offline {
         return Staleness::Offline;
     }
-    if reconcile_in_flight {
+    let deadline_ms = crate::sync::duration_millis(profile.refresh_deadline);
+    if reconcile_started.is_some_and(|started| now.0.saturating_sub(started.0) < deadline_ms) {
         return Staleness::Reconciling;
     }
     match last_success {
@@ -88,7 +94,7 @@ mod tests {
             classify(
                 UnixMillis(0),
                 Some(UnixMillis(0)),
-                true,
+                Some(UnixMillis(0)),
                 Connectivity::Offline,
                 &P
             ),
@@ -102,11 +108,34 @@ mod tests {
             classify(
                 UnixMillis(1_000),
                 Some(UnixMillis(0)),
-                true,
+                Some(UnixMillis(0)),
                 Connectivity::Online,
                 &P
             ),
             Staleness::Reconciling
+        );
+    }
+
+    /// A pass that outruns the refresh deadline reads as the age of the last
+    /// success, so a stalled pass cannot hold the indicator on `Reconciling`.
+    #[test]
+    fn a_reconcile_past_the_refresh_deadline_reads_as_the_last_success() {
+        let deadline_ms = crate::sync::duration_millis(P.refresh_deadline);
+        let started = Some(UnixMillis(0));
+        let rung = |now| {
+            classify(
+                UnixMillis(now),
+                Some(UnixMillis(0)),
+                started,
+                Connectivity::Online,
+                &P,
+            )
+        };
+        assert_eq!(rung(deadline_ms - 1), Staleness::Reconciling);
+        assert_eq!(rung(deadline_ms), Staleness::Fresh);
+        assert_eq!(
+            rung(crate::sync::duration_millis(P.stale_after)),
+            Staleness::Stale
         );
     }
 
@@ -118,7 +147,7 @@ mod tests {
             classify(
                 UnixMillis(89_000),
                 Some(last),
-                false,
+                None,
                 Connectivity::Online,
                 &P
             ),
@@ -129,7 +158,7 @@ mod tests {
             classify(
                 UnixMillis(90_000),
                 Some(last),
-                false,
+                None,
                 Connectivity::Online,
                 &P
             ),
@@ -140,7 +169,7 @@ mod tests {
     #[test]
     fn cold_cache_online_is_reconciling_not_an_error_rung() {
         assert_eq!(
-            classify(UnixMillis(10_000), None, false, Connectivity::Online, &P),
+            classify(UnixMillis(10_000), None, None, Connectivity::Online, &P),
             Staleness::Reconciling
         );
     }

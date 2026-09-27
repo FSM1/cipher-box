@@ -759,3 +759,88 @@ fn staleness_rungs_transition_and_emit_once_per_change() {
     let view = block_on(engine.snapshot(ROOT)).unwrap();
     assert_eq!(view.staleness, Staleness::Fresh);
 }
+
+/// A host reads the ladder at any instant, so the in-flight rung is one it can
+/// hold. The pass that then converges must tell the host the rung moved on, or
+/// its indicator reads reconciling with nothing left to supersede it.
+#[test]
+fn a_rung_read_mid_pass_is_superseded_when_the_pass_converges() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (engine, mut events, mut tasks) = started_and_parked(&world, &device);
+    tick(&world, &device, &mut tasks);
+    assert!(drain(&mut events).contains(&Event::StalenessChanged {
+        level: Staleness::Fresh
+    }));
+
+    let (_, _, root_name) = owner_root();
+    device.record_store.hold_gets_for(root_name.as_str());
+    tick(&world, &device, &mut tasks);
+    assert_eq!(
+        block_on(engine.status()).unwrap().staleness,
+        Staleness::Reconciling,
+        "the host reads the pass in flight"
+    );
+
+    device.record_store.release_gets_for(root_name.as_str());
+    poll_tasks_once(&mut tasks);
+    assert_eq!(
+        drain(&mut events),
+        vec![Event::StalenessChanged {
+            level: Staleness::Fresh
+        }],
+        "the converged pass supersedes the rung the host read"
+    );
+}
+
+/// A pass whose read never answers must not hold a manual refresh, or the
+/// indicator, past one refresh deadline.
+#[test]
+fn a_manual_refresh_a_stalled_pass_holds_fails_within_one_deadline() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, mut events, mut tasks) = started_and_parked(&world, &device);
+    tick(&world, &device, &mut tasks);
+    let _ = drain(&mut events);
+
+    let (_, _, root_name) = owner_root();
+    device.record_store.hold_gets_for(root_name.as_str());
+    let deadline = engine.profile().refresh_deadline;
+    let mut cx = Context::from_waker(Waker::noop());
+    {
+        let mut refresh = Box::pin(engine.command(Command::ManualRefresh));
+        assert!(refresh.as_mut().poll(&mut cx).is_pending());
+        poll_tasks_once(&mut tasks);
+        assert!(refresh.as_mut().poll(&mut cx).is_pending());
+
+        world
+            .scheduler
+            .advance(deadline - core::time::Duration::from_millis(1));
+        poll_tasks_once(&mut tasks);
+        assert!(refresh.as_mut().poll(&mut cx).is_pending());
+
+        world
+            .scheduler
+            .advance(core::time::Duration::from_millis(1));
+        poll_tasks_once(&mut tasks);
+        assert!(
+            matches!(
+                refresh.as_mut().poll(&mut cx),
+                Poll::Ready(Err(EngineError::RefreshFailed { .. }))
+            ),
+            "the refresh reports a failure once the deadline passes"
+        );
+    }
+    assert_ne!(
+        block_on(engine.status()).unwrap().staleness,
+        Staleness::Reconciling,
+        "a pass past its deadline no longer reads as reconciling"
+    );
+    assert!(
+        drain(&mut events).iter().any(|event| matches!(
+            event,
+            Event::StalenessChanged { level } if *level != Staleness::Reconciling
+        )),
+        "the host is told the rung left reconciling"
+    );
+}

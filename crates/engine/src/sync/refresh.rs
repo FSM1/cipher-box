@@ -12,6 +12,8 @@
 //! two.
 
 use core::cell::RefCell;
+use core::future::{Future, poll_fn};
+use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 use std::rc::Rc;
 
@@ -56,14 +58,38 @@ impl RefreshVerdict {
 pub struct ForcedPass {
     verdict: oneshot::Receiver<RefreshVerdict>,
     drained: oneshot::Receiver<()>,
+    /// Resolves when the verdict is overdue; `None` waits for the verdict alone.
+    deadline: Option<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
 impl ForcedPass {
+    /// Fail [`landed`](Self::landed) once `deadline` resolves without a verdict.
+    pub(crate) fn bounded(mut self, deadline: Pin<Box<dyn Future<Output = ()>>>) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
+
     /// What the pass reconciled, in the verdicts
     /// [`Command::ManualRefresh`](crate::facade::Command::ManualRefresh)
     /// reports — this is where that mapping lives.
     pub async fn landed(self) -> Result<(), EngineError> {
-        match self.verdict.await {
+        let mut verdict = self.verdict;
+        let mut deadline = self.deadline;
+        let answered = poll_fn(|cx| match Pin::new(&mut verdict).poll(cx) {
+            Poll::Ready(answer) => Poll::Ready(Some(answer)),
+            Poll::Pending => match deadline.as_mut() {
+                Some(deadline) => deadline.as_mut().poll(cx).map(|()| None),
+                None => Poll::Pending,
+            },
+        })
+        .await;
+        let Some(answer) = answered else {
+            // Availability: the pass runs on, and a later refresh may land.
+            return Err(EngineError::RefreshFailed {
+                message: "the pass did not land within the refresh deadline".to_owned(),
+            });
+        };
+        match answer {
             Ok(RefreshVerdict::Reconciled) => Ok(()),
             Ok(RefreshVerdict::Unreachable) => Err(EngineError::RefreshFailed {
                 message: "no endpoint served a record this pass could adopt".to_owned(),
@@ -154,6 +180,7 @@ impl ManualRefresh {
         Some(ForcedPass {
             verdict: verdict_rx,
             drained: drained_rx,
+            deadline: None,
         })
     }
 
@@ -283,6 +310,32 @@ mod tests {
             manual.settle(verdict);
             assert_eq!(block_on(pass.landed()), expected, "{verdict:?}");
         }
+    }
+
+    /// A verdict that misses its deadline is an availability failure, and one
+    /// that beats it is reported as it is.
+    #[test]
+    fn a_bounded_pass_fails_only_once_its_deadline_resolves() {
+        let manual = ManualRefresh::default();
+        manual.arm();
+        let overdue = manual
+            .filed()
+            .expect("armed")
+            .bounded(Box::pin(core::future::ready(())));
+        assert_eq!(
+            landed(overdue),
+            Err(EngineError::RefreshFailed {
+                message: "the pass did not land within the refresh deadline".to_owned(),
+            })
+        );
+
+        let answered = manual
+            .filed()
+            .expect("armed")
+            .bounded(Box::pin(core::future::ready(())));
+        manual.begin();
+        manual.settle(RefreshVerdict::Reconciled);
+        assert_eq!(landed(answered), Ok(()));
     }
 
     /// A pass no tick will answer must fail rather than park past the engine —

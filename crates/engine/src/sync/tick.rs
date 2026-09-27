@@ -477,6 +477,34 @@ pub(crate) async fn run_tick_loop<Sch>(
     manual.close();
 }
 
+/// Drive `work` to its end, calling `overran` once if it is still running
+/// `deadline` after it began on the injected scheduler. Unlike
+/// [`within`](crate::record_plane::within), the work is never dropped: a pass
+/// cut mid-drain would strand what it had half published.
+pub(crate) async fn run_past_deadline<S: Scheduler, W: core::future::Future>(
+    scheduler: &S,
+    deadline: Duration,
+    work: W,
+    overran: impl FnOnce(),
+) -> W::Output {
+    let mut work = pin!(work);
+    let mut expiry = pin!(scheduler.sleep(deadline));
+    let mut overran = Some(overran);
+    core::future::poll_fn(|cx| {
+        if let Poll::Ready(out) = work.as_mut().poll(cx) {
+            return Poll::Ready(out);
+        }
+        // A finished sleep is never polled again.
+        if overran.is_some() && expiry.as_mut().poll(cx).is_ready() {
+            if let Some(overran) = overran.take() {
+                overran();
+            }
+        }
+        Poll::Pending
+    })
+    .await
+}
+
 /// Stamp every folder a focus pass attempted against the caller's clock
 /// reading. Attempts, not merges: an unresolvable folder must not turn every
 /// navigation into a fresh endpoint fan-out, and the poll leg refreshes the
@@ -640,7 +668,7 @@ pub(crate) fn settle_focus_leg(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     /// The window a stream holds open, at `touched`.
     fn touched_at(nodes: &[(NodeId, u64)]) -> FocusWindow {
@@ -1035,6 +1063,40 @@ mod tests {
             manual.filed().is_none(),
             "no loop remains to answer a request"
         );
+    }
+
+    /// The overrun is told once, and the work still runs to its own end.
+    #[test]
+    fn work_past_its_deadline_reports_once_and_still_finishes() {
+        use core::task::{Context, Waker};
+        let scheduler = VirtualScheduler::new();
+        let deadline = Duration::from_secs(30);
+        let overruns = Cell::new(0u32);
+        let mut run = pin!(run_past_deadline(
+            &scheduler,
+            deadline,
+            async {
+                scheduler.sleep(deadline * 2).await;
+                7
+            },
+            || overruns.set(overruns.get() + 1),
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(run.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(
+            overruns.get(),
+            0,
+            "inside its deadline the work reports nothing"
+        );
+
+        scheduler.advance(deadline);
+        assert!(run.as_mut().poll(&mut cx).is_pending());
+        assert!(run.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(overruns.get(), 1);
+
+        scheduler.advance(deadline);
+        assert_eq!(run.as_mut().poll(&mut cx), Poll::Ready(7));
+        assert_eq!(overruns.get(), 1);
     }
 
     #[test]

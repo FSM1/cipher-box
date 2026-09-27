@@ -64,6 +64,8 @@ pub struct InMemoryRecordStore {
     stalling_gets: Arc<AtomicBool>,
     /// ([`stall_gets_for_after`](InMemoryRecordStore::stall_gets_for_after)).
     stalling_keys: Arc<Mutex<HashMap<String, usize>>>,
+    /// ([`hold_gets_for`](InMemoryRecordStore::hold_gets_for)).
+    holding_keys: Arc<Mutex<HashSet<String>>>,
 }
 
 impl InMemoryRecordStore {
@@ -91,6 +93,7 @@ impl InMemoryRecordStore {
             dropping_puts: Arc::new(AtomicBool::new(false)),
             stalling_gets: Arc::new(AtomicBool::new(false)),
             stalling_keys: Arc::default(),
+            holding_keys: Arc::default(),
         }
     }
 
@@ -299,6 +302,22 @@ impl InMemoryRecordStore {
         self.stalling_gets.store(true, Ordering::SeqCst);
     }
 
+    /// Park every GET under `routing_key` until
+    /// [`release_gets_for`](Self::release_gets_for), so a test can read the
+    /// engine while one pass is mid-read and then let that pass finish.
+    pub fn hold_gets_for(&self, routing_key: &str) {
+        self.holding_keys
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned());
+    }
+
+    /// Let every GET [`hold_gets_for`](Self::hold_gets_for) parked answer on
+    /// its next poll.
+    pub fn release_gets_for(&self, routing_key: &str) {
+        self.holding_keys.lock().expect("lock").remove(routing_key);
+    }
+
     /// Whether `routing_key`'s GET is currently injected to fail everywhere.
     fn get_failing_key(&self, routing_key: &str) -> bool {
         self.get_failing_keys
@@ -341,6 +360,19 @@ impl RecordTransport for InMemoryRecordStore {
         if stalled || self.stalling_gets.load(Ordering::SeqCst) {
             return core::future::poll_fn(|_| core::task::Poll::Pending).await;
         }
+        core::future::poll_fn(|_| {
+            if self
+                .holding_keys
+                .lock()
+                .expect("lock")
+                .contains(routing_key)
+            {
+                core::task::Poll::Pending
+            } else {
+                core::task::Poll::Ready(())
+            }
+        })
+        .await;
         if self.get_failing(endpoint) {
             return Err(SeamError::new(format!(
                 "endpoint unreachable: {}",

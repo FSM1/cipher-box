@@ -177,8 +177,8 @@ use crate::sync::staging::{
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
     FocusFile, ResolveMode, TickControl, focus_folders_due, focus_scope_roots, nodes_in_scope,
-    on_access_refresh_due, queue_focus_file, queue_unprojected_children, run_tick_loop,
-    scope_root_record_name, settle_focus_leg,
+    on_access_refresh_due, queue_focus_file, queue_unprojected_children, run_past_deadline,
+    run_tick_loop, scope_root_record_name, settle_focus_leg,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -1065,7 +1065,8 @@ impl From<cipherbox_core::seal::Permission> for Permission {
 pub enum Staleness {
     /// View is within the freshness window.
     Fresh,
-    /// A background reconcile is in flight (quiet indicator).
+    /// A background reconcile is in flight, for at most one refresh deadline
+    /// (quiet indicator).
     Reconciling,
     /// Past the profile threshold: stale badge, "last synced X ago".
     Stale,
@@ -4070,13 +4071,15 @@ fn count_nodes(snapshot: &Snapshot) -> u64 {
     seen.len() as u64
 }
 
-/// Staleness-ladder inputs (#33 D4): the last successful reconcile, whether one
-/// is in flight, and the last rung reported — [`Event::StalenessChanged`] fires
-/// only on a rung change.
+/// Staleness-ladder inputs (#33 D4): the last successful reconcile, when the
+/// pass in flight began, and the last rung the host was told.
+/// [`Event::StalenessChanged`] fires only on a change from `reported`.
 #[derive(Default)]
 pub(crate) struct SyncStatus {
     pub(crate) last_success: Option<UnixMillis>,
-    pub(crate) reconcile_in_flight: bool,
+    pub(crate) reconcile_started: Option<UnixMillis>,
+    /// Set by a host read as well as by an event: a read returns the
+    /// in-flight rung, so the pass that ends it must send its successor.
     pub(crate) reported: Option<Staleness>,
 }
 
@@ -5663,7 +5666,26 @@ where {
                     &pass.manual,
                     interval,
                     async |cause| {
-                        let report = pass.run(&state, cause).await;
+                        // Stamped before the overrun timer starts, so the timer
+                        // never fires on a rung still inside its deadline. The
+                        // ladder leaves `Reconciling` there, and the host must
+                        // hear it while the pass still runs.
+                        state.sync_status.borrow_mut().reconcile_started =
+                            Some(pass.seams.scheduler.now());
+                        let report = run_past_deadline(
+                            &pass.seams.scheduler,
+                            pass.seams.profile.refresh_deadline,
+                            pass.run(&state, cause),
+                            || {
+                                report_rung(
+                                    &state,
+                                    pass.seams.scheduler.now(),
+                                    &pass.seams.profile,
+                                    &pass.seams.events,
+                                );
+                            },
+                        )
+                        .await;
                         if report.stop {
                             return TickControl::Stop;
                         }
@@ -8317,9 +8339,13 @@ where {
         if self.tick_loop_spawner.borrow().is_some() {
             return Ok(None);
         }
+        let scheduler = self.seams.scheduler.clone();
+        let deadline = self.profile.refresh_deadline;
         self.manual_refresh
             .filed()
-            .map(Some)
+            .map(|pass| {
+                Some(pass.bounded(Box::pin(async move { scheduler.sleep(deadline).await })))
+            })
             .ok_or_else(|| EngineError::RefreshFailed {
                 message: "no sync loop is running to force a pass".to_owned(),
             })
@@ -10013,16 +10039,19 @@ where {
             .collect()
     }
 
-    /// The staleness rung at this instant, off the injected clock.
+    /// The staleness rung at this instant, off the injected clock, recorded as
+    /// the rung the host now holds.
     fn staleness_now(&self) -> Staleness {
-        let status = self.state.sync_status.borrow();
-        classify(
+        let mut status = self.state.sync_status.borrow_mut();
+        let rung = classify(
             self.seams.scheduler.now(),
             status.last_success,
-            status.reconcile_in_flight,
+            status.reconcile_started,
             Connectivity::Online,
             &self.profile,
-        )
+        );
+        status.reported = Some(rung);
+        rung
     }
 
     /// Scan the durable staging store's queue for this session. Undecodable
@@ -10803,18 +10832,31 @@ fn stamp_staleness(
     profile: &SyncTimingProfile,
     events: &mpsc::UnboundedSender<Event>,
 ) {
-    let mut status = state.sync_status.borrow_mut();
-    status.reconcile_in_flight = false;
-    if converged {
-        status.last_success = Some(now);
-        // Set after the pass's drain stage, so the pass that converges the
-        // base is never the pass that decides against it.
-        state.converged_tick.set(true);
+    {
+        let mut status = state.sync_status.borrow_mut();
+        status.reconcile_started = None;
+        if converged {
+            status.last_success = Some(now);
+            // Set after the pass's drain stage, so the pass that converges the
+            // base is never the pass that decides against it.
+            state.converged_tick.set(true);
+        }
     }
+    report_rung(state, now, profile, events);
+}
+
+/// Classify the ladder at `now`, and send the rung if the host holds another.
+fn report_rung(
+    state: &SessionState,
+    now: UnixMillis,
+    profile: &SyncTimingProfile,
+    events: &mpsc::UnboundedSender<Event>,
+) {
+    let mut status = state.sync_status.borrow_mut();
     let rung = classify(
         now,
         status.last_success,
-        status.reconcile_in_flight,
+        status.reconcile_started,
         Connectivity::Online,
         profile,
     );

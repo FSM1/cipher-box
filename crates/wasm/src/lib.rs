@@ -358,7 +358,7 @@ impl VaultSettings {
 pub enum Staleness {
     /// View is within the freshness window.
     Fresh,
-    /// A background reconcile is in flight.
+    /// A background reconcile is in flight, for at most one refresh deadline.
     Reconciling,
     /// Past the profile threshold: "last synced X ago".
     Stale,
