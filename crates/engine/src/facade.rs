@@ -172,7 +172,7 @@ use crate::sync::staging::{
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    FocusFile, FocusQueueOrigin, FocusWindow, ResolveMode, focus_folders_due,
+    FocusFile, FocusQueueOrigin, FocusWindow, ResolveMode, TickControl, focus_folders_due,
     on_access_refresh_due, run_tick_loop, scope_root_of,
 };
 
@@ -6358,7 +6358,13 @@ where {
                     &pass.seams.scheduler,
                     &pass.manual,
                     interval,
-                    async |cause| pass.run(&state, cause).await,
+                    async |cause| {
+                        if pass.run(&state, cause).await.stop {
+                            TickControl::Stop
+                        } else {
+                            TickControl::Continue
+                        }
+                    },
                 )
                 .await;
             }));

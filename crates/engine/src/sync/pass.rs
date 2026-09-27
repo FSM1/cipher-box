@@ -69,7 +69,7 @@ use crate::sync::record::RecordReader;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    ResolveMode, TickCause, TickControl, consult_scopes, consult_scopes_due, expire_focus_stamps,
+    ResolveMode, TickCause, consult_scopes, consult_scopes_due, expire_focus_stamps,
     expire_touched_folders, focus_by_scope, focus_files, pace_due, resolve_mode, scope_root_of,
 };
 
@@ -84,6 +84,29 @@ pub(crate) struct TickPass<T, H: Http, C: CredentialStore, F, S, St, Sch> {
     root_id: [u8; 16],
     settings_rechecked: Cell<UnixMillis>,
     link_swept: Cell<UnixMillis>,
+}
+
+/// What one pass reports to the loop that ran it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PassReport {
+    /// The root leg's verdict. The ladder measures the record plane, which the
+    /// root leg alone proves answered: one focused folder that did not is
+    /// staleness on that folder, not a plane-wide outage.
+    pub(crate) verdict: RefreshVerdict,
+    /// The session is gone, so the loop stops.
+    pub(crate) stop: bool,
+}
+
+impl PassReport {
+    const STOPPED: Self = Self {
+        verdict: RefreshVerdict::Unreachable,
+        stop: true,
+    };
+
+    /// The record plane answered with gate-passing state.
+    pub(crate) fn converged(self) -> bool {
+        self.verdict == RefreshVerdict::Reconciled
+    }
 }
 
 /// What the loop gate hands every later stage of one pass.
@@ -156,20 +179,20 @@ where
         }
     }
 
-    /// One tick: [`TickControl::Stop`] once the session is gone.
-    pub(crate) async fn run(&self, state: &SessionState, cause: TickCause) -> TickControl {
+    /// One tick, and its report: a stopped one once the session is gone.
+    pub(crate) async fn run(&self, state: &SessionState, cause: TickCause) -> PassReport {
         let Some(mut pass) = self.loop_gate(state, cause) else {
-            return TickControl::Stop;
+            return PassReport::STOPPED;
         };
         let Some(decision) = self.redecide_settings(state, &pass).await else {
-            return TickControl::Stop;
+            return PassReport::STOPPED;
         };
         self.consult_scope_pointers(state, &mut pass).await;
         let (floors_before, grafted) = self.refresh_floors(state, &pass).await;
         let (resolved, read_seed) = self.adopt_root(state, &pass, &floors_before).await;
         let descendants = self.walk_scopes(state, &pass).await;
         let (folder_verdict, scopes) = self.refresh_focus(state, &pass, &grafted).await;
-        let reconciled = self.settle_verdict(state, &resolved, folder_verdict);
+        let verdict = self.settle_verdict(state, &resolved, folder_verdict);
         let assembly = self
             .assemble_scopes(state, &pass, &scopes, descendants)
             .await;
@@ -181,8 +204,12 @@ where
             .await;
         self.repost_claims(state, &pass).await;
         self.refresh_received_shares(state, &pass).await;
-        self.classify_staleness(state, reconciled);
-        TickControl::Continue
+        let report = PassReport {
+            verdict,
+            stop: false,
+        };
+        self.classify_staleness(state, report.converged());
+        report
     }
 
     /// The loop gate: the pass's own copy of every secret it runs under, or
@@ -682,13 +709,13 @@ where
     }
 
     /// The verdict and manual settle: answer the manual requests, and report
-    /// whether the root leg reconciled.
+    /// the root leg's verdict.
     fn settle_verdict(
         &self,
         state: &SessionState,
         resolved: &Result<Resolved, SeamError>,
         folder_verdict: RefreshVerdict,
-    ) -> bool {
+    ) -> RefreshVerdict {
         // `Adopted`/`Current` are the reconciled outcomes: both prove the
         // record plane answered with gate-passing state, so both stamp
         // the ladder's `last_success` (#33 D4). A gate rejection is a
@@ -703,10 +730,6 @@ where
             },
             Err(_) => RefreshVerdict::Unreachable,
         };
-        // The ladder measures the record plane, which the root leg alone
-        // proves answered: one focused folder that did not is staleness
-        // on that folder, not a plane-wide outage.
-        let reconciled = root_verdict == RefreshVerdict::Reconciled;
         // Answer the manual requests on every read leg the pass forced,
         // the focus window included — a refresh that left the folder in
         // view unresolved has not landed. The drain stage reports its own
@@ -718,7 +741,7 @@ where
         if bin_retention_days(&state.settings_summary) == 0 {
             state.observed_unlinks.borrow_mut().clear();
         }
-        reconciled
+        root_verdict
     }
 
     /// The scope assembly: every pass the drain runs, owned.
