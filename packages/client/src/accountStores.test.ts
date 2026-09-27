@@ -83,7 +83,7 @@ describe('reclaimOtherAccountStores', () => {
   // Floors are rollback protection, durable across logout, and are never swept.
   const floorStores = [`cipherbox-${live}-floors`, `cipherbox-${gone}-floors`];
 
-  it('takes a drained account snapshot cache and staged bytes, and no live one', async () => {
+  it('reclaims only a departed account snapshot cache, preserving its durable staging', async () => {
     const origin = stubOrigin(
       [...liveStores, ...goneStores, ...floorStores],
       [`cipherbox-${live}-staging-staged`, `cipherbox-${gone}-staging-staged`]
@@ -91,11 +91,9 @@ describe('reclaimOtherAccountStores', () => {
 
     const reclaimed = await reclaimOtherAccountStores(CONFIG, live);
 
-    expect(reclaimed.sort()).toEqual(
-      [`cipherbox-${gone}-snapshot-cache`, `cipherbox-${gone}-staging-staged`].sort()
-    );
+    expect(reclaimed.sort()).toEqual([`cipherbox-${gone}-snapshot-cache`]);
     expect(origin.deleted).toEqual([`cipherbox-${gone}-snapshot-cache`]);
-    expect(origin.removed).toEqual([`cipherbox-${gone}-staging-staged`]);
+    expect(origin.removed).toEqual([]);
   });
 
   it('leaves the staged bytes of an account whose op queue is not drained', async () => {
@@ -114,14 +112,11 @@ describe('reclaimOtherAccountStores', () => {
     expect(origin.deleted).toEqual([`cipherbox-${gone}-snapshot-cache`]);
   });
 
-  it('takes the staged bytes of an account whose op queue database is gone', async () => {
-    // No queue database at all: nothing was ever enqueued, so nothing is owed.
+  it('preserves owner-local staging even when the op queue database is gone', async () => {
     const origin = stubOrigin([...liveStores], [`cipherbox-${gone}-staging-staged`]);
 
-    expect(await reclaimOtherAccountStores(CONFIG, live)).toEqual([
-      `cipherbox-${gone}-staging-staged`,
-    ]);
-    expect(origin.removed).toEqual([`cipherbox-${gone}-staging-staged`]);
+    expect(await reclaimOtherAccountStores(CONFIG, live)).toEqual([]);
+    expect(origin.removed).toEqual([]);
   });
 
   it('leaves the staged bytes of an op queue it cannot read', async () => {

@@ -264,12 +264,7 @@ async function runHttpBehavioral(): Promise<void> {
   }
 }
 
-/**
- * Reclaiming the durable stores of accounts that signed in on this profile
- * before the live one, over real IndexedDB and OPFS. Namespacing made these per
- * account and nothing used to delete them, so an abandoned account's staged op
- * bodies were charged against the live account's staging budget for good.
- */
+/** Account switching preserves owner-local bytes over real IndexedDB and OPFS. */
 async function runStoreReclaimBehavioral(): Promise<void> {
   const config = {
     recordEndpoints: [`${scope.location.origin}/routing`],
@@ -280,7 +275,7 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   const gone = 'goneaccount';
   // A departed account with work still queued: its staged bytes are referenced.
   const busy = 'busyaccount';
-  // What a drained departed account gives back: its cache, and its staged bytes.
+  // Only refetchable snapshots can be reclaimed across accounts.
   const reclaimable = ['snapshot-cache'];
   const kept = ['floors', 'staging'];
   const named = (account: string, suffix: string): string =>
@@ -293,7 +288,7 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   for (const suffix of [...reclaimable, ...kept]) {
     const db = await openDatabase(named(gone, suffix), 1, (opened) => {
       // The op queue's own store, left empty: a drained queue holds nothing a
-      // second account's login must preserve.
+      // second account's login must preserve in the queue.
       opened.createObjectStore(suffix === 'staging' ? 'ops' : 'records', {
         autoIncrement: suffix === 'staging',
       });
@@ -322,7 +317,7 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   await seams.snapshotCache.put(new Uint8Array(8).fill(5), new Uint8Array([7, 7]));
 
   const reclaimed = (await reclaimOtherAccountStores(config, live)).sort();
-  const expected = [...reclaimable.map((suffix) => named(gone, suffix)), stagedDir(gone)].sort();
+  const expected = reclaimable.map((suffix) => named(gone, suffix)).sort();
   if (reclaimed.join('|') !== expected.join('|')) {
     throw new Error(
       `storeReclaim: reclaimed ${reclaimed.join(',')}, expected ${expected.join(',')}`
@@ -346,11 +341,16 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   }
   let busyStagedKept = false;
   for await (const name of root.keys()) {
-    if (name === stagedDir(gone)) throw new Error('storeReclaim: staged bytes survived the sweep');
     if (name === stagedDir(busy)) busyStagedKept = true;
   }
   if (!busyStagedKept) {
     throw new Error('storeReclaim: an undrained queue lost its staged bytes');
+  }
+
+  const reopened = makeBrowserSeams(config, gone);
+  const bytes = await reopened.stagingStore.stagedBytes(new Uint8Array([0xa1, 0xb2]));
+  if (bytes?.length !== 4096 || bytes.some((byte) => byte !== 9)) {
+    throw new Error('storeReclaim: account switching lost owner-local bookkeeping');
   }
 
   // The live account's stores are not merely present but still serving.

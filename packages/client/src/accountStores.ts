@@ -8,8 +8,8 @@
  * worker holding them is gone.
  */
 
-import { deleteDatabase, openDatabase, requestResult } from './seams/idb.js';
-import { STAGED_DIR_SUFFIX, STAGING_DB_VERSION, STAGING_OPS_STORE } from './seams/stagingStore.js';
+import { deleteDatabase } from './seams/idb.js';
+import { STAGED_DIR_SUFFIX } from './seams/stagingStore.js';
 
 /** What either sweep needs to spell a container name. */
 export interface AccountStoreNaming {
@@ -35,16 +35,7 @@ export const SNAPSHOT_CACHE = 'snapshot-cache';
 const ACCOUNT_DATABASES = [FLOORS, STAGING, SNAPSHOT_CACHE] as const;
 const ACCOUNT_DIRECTORIES = [`${STAGING}${STAGED_DIR_SUFFIX}`] as const;
 
-/**
- * What the sweep reclaims for an account the profile no longer holds, by name
- * suffix. Two of an account's four stores are deliberately absent: the `floors`
- * database is rollback protection, durable across logout by design
- * (`IdbFloorStore`) and what bounds replay on a device with none to compare
- * against (blueprint/engine.md "Floor law"); the `staging` database is the
- * durable op queue, whose records were acked to that account's UI. Neither is
- * bytes worth reclaiming, and an op whose staged body is gone dead-letters where
- * its own account can see it — which a deleted queue never would.
- */
+/** Only refetchable snapshots are reclaimable; staging holds owner-local state (ADR 0006). */
 const RECLAIMED_DATABASES = [SNAPSHOT_CACHE] as const;
 
 /** Whether `name` is `<dbPrefix>-<accountId>-<suffix>` for some account id. */
@@ -58,19 +49,7 @@ function namesAccountStore(dbPrefix: string, name: string, suffixes: readonly st
   });
 }
 
-/**
- * Reclaims what every account *but* `accountId` left on this origin, and
- * resolves with the names it took.
- *
- * An abandoned account's staged op bodies are upload-sized and are charged
- * against the same origin quota the live account measures its staging budget
- * from (`measureStorageHeadroomBytes`), so without this one sign-in taxes every
- * later one for good. They go only once that account's op queue has drained:
- * a second account's login must never destroy an unpublished queue, and its
- * staged root counts as referenced for exactly as long (`CONTEXT.md` "Retained
- * record"). Best-effort per store — an unconfirmed delete is not reported, and
- * the next cold start sweeps again.
- */
+/** Reclaims other accounts' snapshot caches, returning the names successfully removed. */
 export async function reclaimOtherAccountStores(
   config: AccountStoreNaming,
   accountId: string
@@ -88,24 +67,11 @@ export async function reclaimOtherAccountStores(
   const foreign = (name: string, suffixes: readonly string[]): boolean =>
     !live.has(name) && namesAccountStore(dbPrefix, name, suffixes);
 
-  const [root, names] = await Promise.all([stagedRoot(), databaseNames()]);
-  const entries = root ? await directoryNames(root) : [];
-  const staged = entries.filter((name) => foreign(name, ACCOUNT_DIRECTORIES));
-  const drained = await Promise.all(staged.map((name) => queueDrained(backingQueue(name), names)));
-
-  const [databases, directories] = await Promise.all([
-    reclaim(
-      names.filter((name) => foreign(name, RECLAIMED_DATABASES)),
-      deleteDatabase
-    ),
-    root
-      ? reclaim(
-          staged.filter((_name, index) => drained[index]),
-          (name) => root.removeEntry(name, { recursive: true })
-        )
-      : [],
-  ]);
-  return [...databases, ...directories];
+  const names = await databaseNames();
+  return reclaim(
+    names.filter((name) => foreign(name, RECLAIMED_DATABASES)),
+    deleteDatabase
+  );
 }
 
 /**
@@ -145,31 +111,6 @@ export async function eraseAccountStores(
   return [...databases, ...directories];
 }
 
-/** The op-queue database behind a staged directory. */
-function backingQueue(directory: string): string {
-  return directory.slice(0, -STAGED_DIR_SUFFIX.length);
-}
-
-/**
- * Whether that account's op queue holds nothing. A queue with no database never
- * held anything; one this sweep cannot read is not one it can prove is drained,
- * so it answers no and the bytes stay.
- */
-async function queueDrained(dbName: string, databases: string[]): Promise<boolean> {
-  if (!databases.includes(dbName)) return true;
-  try {
-    const db = await openDatabase(dbName, STAGING_DB_VERSION, () => undefined);
-    try {
-      const tx = db.transaction(STAGING_OPS_STORE, 'readonly');
-      return (await requestResult(tx.objectStore(STAGING_OPS_STORE).count())) === 0;
-    } finally {
-      db.close();
-    }
-  } catch {
-    return false;
-  }
-}
-
 /** Removes each name, answering with the ones it saw go; the rest wait for a later sweep. */
 async function reclaim(
   names: string[],
@@ -198,15 +139,4 @@ async function stagedRoot(): Promise<FileSystemDirectoryHandle | null> {
     return null;
   }
   return navigator.storage.getDirectory().catch(() => null);
-}
-
-/** The OPFS root's entries; a walk that faults yields what it saw. */
-async function directoryNames(root: FileSystemDirectoryHandle): Promise<string[]> {
-  const names: string[] = [];
-  try {
-    for await (const name of root.keys()) names.push(name);
-  } catch {
-    // best-effort, like every other step of the sweep
-  }
-  return names;
 }

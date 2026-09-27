@@ -56,7 +56,7 @@ test.describe('browser seam conformance', () => {
     expect(outcome.ok).toBe(true);
   });
 
-  test('the engine worker reclaims the durable stores of accounts it does not hold', async ({
+  test('account switching reclaims snapshots and preserves owner-local bookkeeping', async ({
     page,
   }) => {
     const outcome = await runSeam(page, 'storeReclaim');
