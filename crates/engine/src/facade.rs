@@ -145,6 +145,7 @@ use crate::settings::{
     report_settings_verdict, resolve_kept_bearer, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
+use crate::sync::BookkeepingSeal;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{EngineSeams, owner_scoped_key, published_op_mark};
@@ -159,7 +160,7 @@ use crate::sync::provision::{
     ProvisionedVault, VaultPointerProbe, provision_vault,
 };
 use crate::sync::rebase::{QueueKey, QueueScan, QueueScanMemo, decode_queue, enclosing_scope_root};
-use crate::sync::record::{RecordClass, record_content_root_cid};
+use crate::sync::record::RecordClass;
 use crate::sync::render::{RenderKey, RenderMemo};
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use cipherbox_core::hex::lower as hex_lower;
@@ -170,8 +171,8 @@ use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::ManualRefresh;
 use crate::sync::staging::{
-    DEAD_LETTER_NOTICES_PREFIX, PreservedBounds, PreservedDeadLetter, StagedBlocks,
-    read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
+    DEAD_LETTER_NOTICES_PREFIX, DroppedVersionDebts, PreservedBounds, PreservedDeadLetter,
+    StagedBlocks, read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
     release_version_blocks, stage_op, take_dead_letter_notice, take_preserved_dead_letter,
 };
 use crate::sync::staleness::{Connectivity, classify, next_boundary};
@@ -1697,6 +1698,9 @@ pub enum Event {
     /// listed nor released, and no later dead letter may join them. Terminal:
     /// no pass changes it, and the member is the only one who can.
     ParkedWritesUnreadable,
+    /// A dropped parked write's registry rows did not reach the retire ledger:
+    /// they stay charged, and the pending-reclaim figure does not count them.
+    RegistryDebtUnjournaled,
     /// This device's grantee name cache did not open, so it was cleared. It is a
     /// pre-fill and no authority: names the owner gave are still on the rows,
     /// and only the offer of a name for a new folder is lost.
@@ -1802,6 +1806,7 @@ impl fmt::Debug for Event {
                 .field("reason", reason)
                 .finish(),
             Self::ParkedWritesUnreadable => f.write_str("ParkedWritesUnreadable"),
+            Self::RegistryDebtUnjournaled => f.write_str("RegistryDebtUnjournaled"),
             Self::GranteeNamesCleared => f.write_str("GranteeNamesCleared"),
             Self::ConversionRecordUnreadable => f.write_str("ConversionRecordUnreadable"),
             Self::RefusedClaimDropped => f.write_str("RefusedClaimDropped"),
@@ -4618,7 +4623,16 @@ impl<T: SeamTypes> Engine<T> {
         // leaves them referenced by nothing, so cold start is the first place
         // that residue can be reclaimed — and the first place a preserved set
         // that was already over its bounds when this store opened is cut back to
-        // them, before a single tick runs.
+        // them, for the entries this session opens, before a single tick runs.
+        let reader = self
+            .session
+            .as_ref()
+            .map(|session| RecordReader::new(session.enc_subkey()));
+        let debts = self
+            .session
+            .as_ref()
+            .zip(reader.as_ref())
+            .map(|(session, reader)| self.dropped_version_debts(session, reader));
         reconcile_staging(
             &self.seams.staging_store,
             &self.state.live_blocks,
@@ -4627,6 +4641,7 @@ impl<T: SeamTypes> Engine<T> {
                 &self.storage_policy,
                 &self.profile,
             ),
+            debts.as_ref(),
         )
         .await;
 
@@ -10431,7 +10446,8 @@ where {
 
     /// The shortened set is durable before a byte is released, so a failed write
     /// leaves a list that still names the version rather than one naming blocks
-    /// that are already gone.
+    /// that are already gone. The version's registry debt is journaled in the
+    /// same window ([`DroppedVersionDebts`]).
     ///
     /// A notice holds no record and no blocks, so dropping one releases nothing
     /// and needs none of that ordering.
@@ -10445,18 +10461,34 @@ where {
             let _ = self.events.unbounded_send(Event::SnapshotUpdated);
             return Ok(());
         }
-        let (parked, _) = self.parked_write(op_id).await?;
+        let (_, op) = self.parked_write(op_id).await?;
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         take_preserved_dead_letter(&self.seams.staging_store, op_id)
             .await
             .map_err(EngineError::from_seam)?;
-        // A record whose clear root will not read names no blocks to release;
-        // orphan GC reclaims them once this list no longer holds it.
-        if let Some(root) = record_content_root_cid(&parked.record).ok().flatten() {
-            release_version_blocks(&self.seams.staging_store, root.as_slice()).await;
-        }
+        let reader = RecordReader::new(session.enc_subkey());
+        self.dropped_version_debts(session, &reader)
+            .drop_version(&op)
+            .await;
         self.state.dead_letters.borrow_mut().remove(&op_id);
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         Ok(())
+    }
+
+    /// The custody this session journals a dropped version's debt under.
+    fn dropped_version_debts<'s>(
+        &'s self,
+        session: &'s SessionIdentity,
+        reader: &'s RecordReader<'s>,
+    ) -> DroppedVersionDebts<'s, QueueGenerationStore<T::StagingStore>> {
+        DroppedVersionDebts::new(
+            &self.seams.staging_store,
+            reader,
+            BookkeepingSeal::new(session.enc_subkey(), &*self.entropy),
+            &self.content_profile,
+            &self.state.foreign_parked,
+            &self.events,
+        )
     }
 
     /// Re-queue one parked write ([`Command::RecoverDeadLetter`]).

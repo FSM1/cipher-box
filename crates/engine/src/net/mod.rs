@@ -44,8 +44,8 @@ pub use adopter::{LocalHead, RootAdopter};
 pub(crate) use adopter::{assemble_candidate, assemble_head_envelope, fetch_head_block};
 pub use child::ChildAdopter;
 pub(crate) use child::{ChildResolveError, resolve_child};
-pub(crate) use fanout::fanout_get_verify;
 pub use fanout::{EndpointFailure, EndpointFailures, FanoutRecord, MAX_RECORD_BYTES, VacancyRule};
+pub(crate) use fanout::{fanout_get_classified, fanout_get_verify};
 pub(crate) use focus::{FolderRefresh, FolderRefreshReport, GraftedLeg};
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
@@ -70,9 +70,9 @@ pub(crate) use resolve::{
     GatedResolve, HeldMaterial, refresh_base_from_resolved, resolve_and_hold, resolve_gated,
 };
 pub use retire::{
-    LiveRecord, NODE_TOMBSTONE_PREFIX, OrphanHeads, RETIRE_LEDGER_PREFIX, ReclaimPass,
-    ReclaimStall, ReclaimStallReason, StagingRetireLedger, drain_owed_retires, orphaned_head,
-    retire, root_retire_ready,
+    ACKED_SEQUENCE_PREFIX, Acknowledged, LiveRecord, NODE_TOMBSTONE_PREFIX, OrphanHeads,
+    RETIRE_LEDGER_PREFIX, ReclaimPass, ReclaimStall, ReclaimStallReason, StagingRetireLedger,
+    drain_owed_retires, orphaned_head, retire, root_retire_ready,
 };
 pub use revival::{ReviveError, ReviveRequest, revive};
 pub(crate) use rotation::{

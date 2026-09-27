@@ -32,8 +32,9 @@ use cipherbox_core::content::{
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    BinEntry, BinIndex, ChildRef, Envelope, NodeKind, PreservedFields, ReadBody, SignedSealed,
-    Version, decode_grant_section, grant_section_bytes, open_content_key, open_read_body,
+    BinEntry, BinIndex, ChildRef, Envelope, GrantSetCommitment, NodeKind, PreservedFields,
+    ReadBody, SignedSealed, Version, decode_grant_section, grant_section_bytes, open_content_key,
+    open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -58,7 +59,9 @@ use crate::facade::{
     emit_trust_violation,
 };
 use crate::gate::GateStage;
-use crate::gate::{Adopted, GateError, GateRejection, RejectionReason, floor};
+use crate::gate::{
+    Adopted, GateError, GateRejection, RejectionReason, floor, refuse_below_cut_floor,
+};
 use crate::grants::grafted::{FloorNamespace, GraftedPlane};
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
@@ -71,19 +74,19 @@ use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use crate::net::retire::{
-    LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger, drain_owed_retires,
-    orphaned_head, retire,
+    Acknowledged, LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger,
+    drain_owed_retires, orphaned_head, retire,
 };
 use crate::net::{
-    Adopter, ChildAdopter, GatedResolve, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead,
-    ResolveOutcome, RootAdopter, assemble_head_envelope, fanout_get_verify, observed_at, resolve,
-    resolve_gated,
+    Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldKey, HeldRecord, HeldRecords, HeldValue,
+    LocalHead, ResolveOutcome, RootAdopter, assemble_head_envelope, fanout_get_classified,
+    fanout_get_verify, observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
 use crate::rotation::{LaggingSeedMiss, ScopeExitRotator, derive_write_name, lagging_read_seed};
 use crate::seams::{
-    CredentialStore, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
+    CredentialStore, DebtOrigin, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
     RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache, StagingStore,
     UnixMillis,
 };
@@ -110,8 +113,9 @@ use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::render::BaseSnapshot;
 use crate::sync::scope_exit_debt::{owe_cut, settle_owed_cuts};
 use crate::sync::staging::{
-    DEAD_LETTER_NOTICES_PREFIX, LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter,
-    reconcile_staging, reconcile_staging_over, release_version_blocks, stage_op, version_leaf_cids,
+    DEAD_LETTER_NOTICES_PREFIX, DroppedVersionDebts, LiveBlocks, Preservation, PreservedBounds,
+    preserve_dead_letter, reconcile_staging, reconcile_staging_over, release_version_blocks,
+    stage_op, version_leaf_cids,
 };
 use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_mark_key};
 
@@ -390,8 +394,8 @@ enum Halt {
     /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
     /// The op's record reached the record plane and did not confirm. Charged
-    /// against the attempt budget, because a retry re-signs at the same
-    /// sequence and a jammed name would otherwise retry forever. The PUT was
+    /// against the attempt budget, because a jammed name would otherwise retry
+    /// forever. The PUT was
     /// acked, so a record may be resolvable at the name and a spent budget
     /// hands nothing back — cutting a name a live record carries would leave a
     /// reference outliving its referent.
@@ -587,8 +591,14 @@ impl From<PublishHalt> for Halt {
 enum HeadPublish {
     /// Our record confirmed at its name.
     Confirmed(Vec<u8>),
-    /// A lost CAS race, with the winning record when the confirm read one.
-    Lost { winner: Option<Vec<u8>> },
+    /// A lost CAS race at `sequence`, with the winning record when the
+    /// confirm read one.
+    Lost {
+        winner: Option<Vec<u8>>,
+        sequence: u64,
+    },
+    /// Acknowledged at `sequence`, but the confirm did not see it.
+    Unconfirmed { sequence: u64 },
 }
 
 /// What a name serves at its freshest sequence: that sequence, and every
@@ -1167,6 +1177,7 @@ pub(crate) struct EngineSeams<T, H: Http, C: CredentialStore, F, S, St, Sch> {
 /// which documents each cell.
 pub(crate) struct DrainCells<'a> {
     pub(crate) live_blocks: &'a RefCell<LiveBlocks>,
+    pub(crate) foreign_parked: &'a RefCell<BTreeSet<Vec<u8>>>,
     /// The session's base snapshot, repainted in place on each publish.
     pub(crate) base: &'a BaseSnapshot,
     /// The session's held records.
@@ -1261,9 +1272,10 @@ struct FolderState {
     /// The record bytes this folder was last loaded or published from, which
     /// the pre-signature re-resolve holds the endpoints to.
     record: Vec<u8>,
-    /// The scope root carries the grant section and authors through a different
-    /// envelope path; every other folder is a plain child record.
-    is_scope_root: bool,
+    /// The grant-set commitment a scope root carries. A scope root authors
+    /// through a different envelope path; a folder with none is a plain child
+    /// record.
+    commitment: Option<GrantSetCommitment>,
     envelope_unknown: PreservedFields,
     epoch_tag_unknown: PreservedFields,
     created_at: u64,
@@ -1500,6 +1512,8 @@ struct LoadedNode {
     name: IpnsName,
     record: Vec<u8>,
     sequence: u64,
+    /// The endpoints serve other bytes at `sequence` too.
+    tied: bool,
     envelope_unknown: PreservedFields,
     epoch_tag_unknown: PreservedFields,
     body: ReadBody,
@@ -1681,6 +1695,45 @@ where
         BookkeepingSeal::new(scope.enc_secret, &*self.seams.entropy)
     }
 
+    fn retire_ledger<'s>(&'s self, scope: &'s DrainScope<'_>) -> StagingRetireLedger<'s, St> {
+        StagingRetireLedger::new(&self.seams.staging, self.bookkeeping_seal(scope))
+    }
+
+    /// Hold `sequence` as `node`'s acknowledged sequence at `name`, retried
+    /// once: a lost mark reopens the tie it guards.
+    async fn hold_acknowledged(
+        &self,
+        scope: &DrainScope<'_>,
+        node: NodeId,
+        name: &IpnsName,
+        sequence: u64,
+    ) -> Result<(), Halt> {
+        let ledger = self.retire_ledger(scope);
+        let owner = owner_tag(scope.enc_secret);
+        let hold = || ledger.acknowledge(&owner, node.0, name.as_str(), sequence);
+        if hold().await.is_ok() {
+            return Ok(());
+        }
+        hold().await.map_err(seam)
+    }
+
+    /// The custody a dropped version's debt is journaled under, over `reader`,
+    /// which the caller builds once for the tick.
+    fn dropped_version_debts<'s>(
+        &'s self,
+        scope: &'s DrainScope<'_>,
+        reader: &'s RecordReader<'s>,
+    ) -> DroppedVersionDebts<'s, St> {
+        DroppedVersionDebts::new(
+            &self.seams.staging,
+            reader,
+            self.bookkeeping_seal(scope),
+            &self.seams.content_profile,
+            self.cells.foreign_parked,
+            &self.seams.events,
+        )
+    }
+
     /// One tick's drain: every pass in [`ordered`] order, each report surfaced
     /// as its pass ends, then the tick's bookkeeping once.
     pub(crate) async fn run_tick<R: ScopeExitRotator>(&self, scopes: TickScopes<'_>, exits: &R) {
@@ -1701,10 +1754,18 @@ where
             // Settle sweeps staging on its own listing. Without it, an
             // abandoned write handle's residue still needs reclaiming at the
             // poll cadence.
+            let reader = passes
+                .first()
+                .map(|scope| RecordReader::new(scope.enc_secret));
+            let debts = passes
+                .first()
+                .zip(reader.as_ref())
+                .map(|(scope, reader)| self.dropped_version_debts(scope, reader));
             reconcile_staging(
                 &self.seams.staging,
                 self.cells.live_blocks,
                 self.preserved_bounds(),
+                debts.as_ref(),
             )
             .await;
         }
@@ -1791,7 +1852,8 @@ where
         };
         // An X25519 base-point multiply, so the pass derives it once and threads
         // it through every consumer below.
-        let owner = owner_tag(vault.enc_secret);
+        let reader = RecordReader::new(vault.enc_secret);
+        let owner = reader.owner_tag();
         let seal = self.bookkeeping_seal(vault);
         let mut budget = JournalBudget::new(scopes.len());
         let mut owed_now = BTreeSet::new();
@@ -1835,6 +1897,7 @@ where
             self.cells.live_blocks,
             &staged,
             self.preserved_bounds(),
+            Some(&self.dropped_version_debts(vault, &reader)),
         )
         .await;
     }
@@ -1924,7 +1987,10 @@ where
             // has dropped its record from the queue.
             let preserved = self.preserve_dead_letter(scope, *op_id, *reason).await?;
             self.abandon(scope, *op_id, op).await?;
-            self.release_if_refused(preserved, op).await;
+            // The abandonment retired what the op registered.
+            if preserved == Preservation::Refused {
+                self.release_staged_blocks(op).await;
+            }
             report
                 .dead_letters
                 .push((*op_id, op.target, preserved.observed(*reason)));
@@ -2086,7 +2152,7 @@ where
                     Ok(())
                 };
                 if handed_back.is_ok() && self.dequeue_op(op_id).await.is_ok() {
-                    self.release_if_refused(preserved, op).await;
+                    self.release_unpreserved(scope, preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -2113,7 +2179,7 @@ where
                 if self.retire_unreferenced_name(scope, op).await.is_ok()
                     && self.dequeue_op(op_id).await.is_ok()
                 {
-                    self.release_if_refused(preserved, op).await;
+                    self.release_unpreserved(scope, preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -2350,16 +2416,15 @@ where
         let epoch = envelope.epoch;
         // A scope root the root gate passed carries a decodable section; bytes
         // that do not are not a root this pass may anchor a ratchet on.
-        let history_links = grant_section_bytes(&envelope)
+        let section = grant_section_bytes(&envelope)
             .and_then(|bytes| decode_grant_section(bytes).ok())
-            .ok_or(Halt::Unclassified)?
-            .history_links;
+            .ok_or(Halt::Unclassified)?;
         Ok(LoadedRoot {
             state: FolderState {
                 plane_root: source.root,
                 name: source.root_name.clone(),
                 record: record_bytes.to_vec(),
-                is_scope_root: true,
+                commitment: Some(section.commitment),
                 envelope_unknown: envelope.unknown,
                 epoch_tag_unknown: envelope.epoch_tag_unknown,
                 created_at,
@@ -2369,7 +2434,7 @@ where
                 sequence,
             },
             epoch,
-            history_links,
+            history_links: section.history_links,
         })
     }
 
@@ -2473,6 +2538,7 @@ where
         )
         .await
         .map_err(seam)?;
+        let tied = !resolved.tied.is_empty();
         // A drain publish is an ordinary write, so it carries the lazy wave
         // rather than refusing what a cut left behind: a record the epoch floor
         // rejects is re-read at the epoch it was sealed at, and the publish path
@@ -2505,6 +2571,7 @@ where
             name,
             record: record_bytes,
             sequence: adopted.sequence,
+            tied,
             envelope_unknown: envelope.unknown,
             epoch_tag_unknown: envelope.epoch_tag_unknown,
             body: adopted.read_body,
@@ -2660,7 +2727,7 @@ where
             plane_root: plane.end.root,
             name: loaded.name,
             record: loaded.record,
-            is_scope_root: false,
+            commitment: None,
             envelope_unknown: loaded.envelope_unknown,
             epoch_tag_unknown: loaded.epoch_tag_unknown,
             created_at,
@@ -5395,6 +5462,7 @@ where
                 target: version.content_cid.clone(),
                 owed_bytes: expansion.minus(&charged).pinned_bytes,
                 manifest_bytes: expansion.pinned_bytes,
+                origin: DebtOrigin::Prune,
             });
             charged.extend(expansion.cids());
         }
@@ -5432,19 +5500,52 @@ where
         owing: OwingRecord,
     ) -> Option<LiveRecord> {
         let end = scope.end_of(&self.cells.base.borrow(), NodeId(node)).ok()?;
-        let name = end.write_name(&node).as_str().to_owned();
-        let reaching = |cids| Some(LiveRecord { name, cids });
+        let write_name = end.write_name(&node);
+        let reaching = |cids| {
+            Some(LiveRecord {
+                name: write_name.as_str().to_owned(),
+                cids,
+            })
+        };
         if owing == OwingRecord::Retired {
             return reaching(BTreeSet::new());
         }
         let (plane, root) = self.ledger_plane(end).await?;
+        let acked = match owing {
+            OwingRecord::Unconfirmed => self
+                .retire_ledger(scope)
+                .acknowledged(&owner_tag(scope.enc_secret), node, write_name.as_str())
+                .await
+                .ok()?,
+            _ => Acknowledged::Nothing,
+        };
         // Nocache: the retire unpins, so what may be named is decided against
         // the freshest record the gate will pass, never a cached one a
         // concurrent writer has already moved past.
-        let loaded = self
+        let loaded = match self
             .load_child_node(&plane, root.anchor(), NodeId(node), ResolveMode::NoCache)
             .await
-            .ok()?;
+        {
+            Ok(loaded) => loaded,
+            Err(_)
+                if owing == OwingRecord::Unconfirmed
+                    && acked == Acknowledged::Nothing
+                    && self.holds_no_record(&end, &write_name).await? =>
+            {
+                return reaching(BTreeSet::new());
+            }
+            Err(_) => return None,
+        };
+        if owing == OwingRecord::Unconfirmed
+            && (loaded.tied
+                || match acked {
+                    Acknowledged::Nothing => false,
+                    Acknowledged::At(acked) => loaded.sequence <= acked,
+                    Acknowledged::Unreadable => true,
+                })
+        {
+            return None;
+        }
         // A record carrying no version list reaches no content.
         let ReadBody::File { versions, .. } = loaded.body else {
             return reaching(BTreeSet::new());
@@ -5454,6 +5555,24 @@ where
             live.extend(self.expand_version(&version).await.ok()?.cids());
         }
         reaching(live)
+    }
+
+    /// Whether `name` holds no record by the [`OwingRecord::Unconfirmed`] rule:
+    /// every endpoint answers that it holds none, and this device never adopted
+    /// one there. `None` when the sequence floor will not read.
+    async fn holds_no_record(&self, end: &ScopeEnd<'_>, name: &IpnsName) -> Option<bool> {
+        let floors = end.floors(&self.seams.floors);
+        if floor::sequence_floor(&floors, name.as_str().as_bytes())
+            .await
+            .ok()?
+            .is_some()
+        {
+            return Some(false);
+        }
+        Some(matches!(
+            fanout_get_classified(&self.seams.transport, name).await,
+            FanoutRecord::Absent
+        ))
     }
 
     /// The plane a retire-ledger entry's node reads under, and the root record
@@ -5916,11 +6035,11 @@ where
         modified_at: u64,
         completes: Option<OpId>,
     ) -> Result<u64, PublishHalt> {
-        let (name, is_scope_root, built_on, body, envelope_unknown, epoch_tag_unknown) = {
+        let (name, commitment, built_on, body, envelope_unknown, epoch_tag_unknown) = {
             let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
             (
                 state.name.clone(),
-                state.is_scope_root,
+                state.commitment.clone(),
                 (state.sequence, state.record.clone()),
                 ReadBody::Folder {
                     created_at: state.created_at,
@@ -5935,7 +6054,7 @@ where
         let plane = scope
             .folder_plane(pass, folder)
             .map_err(PublishHalt::before_the_put)?;
-        self.reresolve_before_signing(scope, &plane, folder, &name, is_scope_root, &built_on)
+        self.reresolve_before_signing(scope, &plane, folder, &name, commitment.as_ref(), &built_on)
             .await
             .map_err(PublishHalt::before_the_put)?;
         let published = self
@@ -5944,7 +6063,7 @@ where
                 &plane,
                 folder,
                 &name,
-                is_scope_root,
+                commitment.is_some(),
                 &body,
                 Vec::new(),
                 envelope_unknown,
@@ -5969,16 +6088,19 @@ where
     /// publish mints above. A record above `built_on`, or a sequence the
     /// endpoints serve only with other bytes, halts this attempt so the next
     /// pass rebases onto what they serve.
+    ///
+    /// A scope root's `commitment` is then held to the cut-epoch floor
+    /// ([`refuse_below_cut_floor`]).
     async fn reresolve_before_signing(
         &self,
         scope: &DrainScope<'_>,
         plane: &SealPlane<'_>,
         folder: NodeId,
         name: &IpnsName,
-        is_scope_root: bool,
+        commitment: Option<&GrantSetCommitment>,
         built_on: &(u64, Vec<u8>),
     ) -> Result<(), Halt> {
-        let served = if is_scope_root {
+        let served = if commitment.is_some() {
             let resolved = self
                 .gated_scope_root(scope, &plane.end, ResolveMode::NoCache)
                 .await?;
@@ -5991,9 +6113,19 @@ where
         } else {
             self.served_child(plane, folder, name).await?
         };
-        match served {
-            Some(served) if served.moved_past(built_on) => Err(Halt::LostRace),
-            _ => Ok(()),
+        if served.is_some_and(|served| served.moved_past(built_on)) {
+            return Err(Halt::LostRace);
+        }
+        let Some(commitment) = commitment else {
+            return Ok(());
+        };
+        let floors = plane.end.floors(&self.seams.floors);
+        match refuse_below_cut_floor(&floors, &plane.end.root.0, commitment).await {
+            Ok(()) => Ok(()),
+            Err(GateError::Rejected(rejection)) => {
+                Err(refuse_record(&self.seams.events, name, &rejection))
+            }
+            Err(GateError::Seam(error)) => Err(seam(error)),
         }
     }
 
@@ -6093,13 +6225,58 @@ where
         .map_err(|error| PublishHalt::before_the_put(self.report_author_refusal(name, error)))?;
         report_carried_cut(&self.seams.events, name, &head.cut);
 
+        let ledger = self.retire_ledger(scope);
+        let owner = owner_tag(scope.enc_secret);
+        let acked = ledger
+            .acknowledged(&owner, node.0, name.as_str())
+            .await
+            .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
+        let sign_above = match acked {
+            Acknowledged::Nothing => None,
+            Acknowledged::At(sequence) => Some(sequence),
+            // Any sequence may hide behind it: clear the most one op's charged
+            // attempts can have signed above the floor.
+            Acknowledged::Unreadable => {
+                let floor = floor::sequence_floor(
+                    &plane.end.floors(&self.seams.floors),
+                    name.as_str().as_bytes(),
+                )
+                .await
+                .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
+                Some(floor.unwrap_or(0).saturating_add(u64::from(ATTEMPT_BUDGET)))
+            }
+        };
         let record_bytes = match self
-            .publish_head(plane, name, &node.0, &head, content_cids.clone())
+            .publish_head(
+                plane,
+                name,
+                &node.0,
+                &head,
+                content_cids.clone(),
+                sign_above,
+            )
             .await
             .map_err(PublishHalt::before_the_put)?
         {
-            HeadPublish::Confirmed(record_bytes) => record_bytes,
-            HeadPublish::Lost { winner } => {
+            HeadPublish::Confirmed(record_bytes) => {
+                if acked != Acknowledged::Nothing {
+                    let _ = ledger.forget_acknowledged(&owner, node.0).await;
+                }
+                record_bytes
+            }
+            // Its bytes may still surface at `sequence`, so the next publish
+            // here signs above it rather than tying it.
+            HeadPublish::Unconfirmed { sequence } => {
+                self.hold_acknowledged(scope, node, name, sequence)
+                    .await
+                    .map_err(PublishHalt::before_the_put)?;
+                return Err(PublishHalt::before_the_put(Halt::Attempt));
+            }
+            HeadPublish::Lost { winner, sequence } => {
+                // A tie leaves our acked bytes standing beside the winner.
+                self.hold_acknowledged(scope, node, name, sequence)
+                    .await
+                    .map_err(PublishHalt::before_the_put)?;
                 // The retry must rebase onto the winner: the first-endpoint tie
                 // can keep serving our own record, which already holds this op.
                 // Our PUT was acked either way, so the halt stays an attempt.
@@ -6200,6 +6377,7 @@ where
         node_id: &[u8; 16],
         head: &AuthoredHead,
         content_cids: Vec<String>,
+        acked: Option<u64>,
     ) -> Result<HeadPublish, Halt> {
         let binding = plane.head_binding(node_id);
         let preflighted = preflight(&binding, &plane.end.read_key(node_id), head)
@@ -6220,7 +6398,7 @@ where
                 signer: &signer,
                 head: &preflighted,
                 content_cids,
-                min_current_sequence: None,
+                min_current_sequence: acked,
             },
         )
         .await
@@ -6232,10 +6410,13 @@ where
         })?;
         match outcome {
             PublishOutcome::Published { .. } => Ok(HeadPublish::Confirmed(record_bytes)),
-            PublishOutcome::LostRace { .. } => Ok(HeadPublish::Lost { winner }),
-            // It burned a CAS sequence at this name without a record we could
-            // adopt, so it is charged against the attempt budget.
-            PublishOutcome::Unconfirmed { .. } => Err(Halt::Attempt),
+            PublishOutcome::LostRace {
+                published_sequence, ..
+            } => Ok(HeadPublish::Lost {
+                winner,
+                sequence: published_sequence,
+            }),
+            PublishOutcome::Unconfirmed { sequence } => Ok(HeadPublish::Unconfirmed { sequence }),
         }
     }
 
@@ -6345,17 +6526,19 @@ where
         .map_err(seam)
     }
 
-    /// Drop the version a [`Preservation::Refused`] set could not hold, once the
-    /// op has left the queue. The refusal keeps nothing and the record takes the
-    /// version's only content key with it, so orphan GC — which the same
-    /// unreadable set stands down — would never collect the blocks.
-    ///
-    /// Ordered after the abandonment, never before: [`Self::registered_by`]
-    /// reads the manifest these blocks carry, and an abandonment that fails
-    /// leaves the op queued and still publishable.
-    async fn release_if_refused(&self, preserved: Preservation, op: &Op) {
-        if preserved == Preservation::Refused {
-            self.release_staged_blocks(op).await;
+    /// Drop the version no preserved entry holds — [`Preservation::Refused`]
+    /// or [`Preservation::ContentGone`] — once the op has left the queue, for a
+    /// dead letter that kept the registry rows the version charged. The drop
+    /// journals those rows first ([`DroppedVersionDebts::drop_version`]). A
+    /// refused record takes the version's only content key with it, and orphan
+    /// GC, which the same unreadable set stands down, would never collect the
+    /// blocks.
+    async fn release_unpreserved(&self, scope: &DrainScope<'_>, preserved: Preservation, op: &Op) {
+        if preserved != Preservation::Kept {
+            let reader = RecordReader::new(scope.enc_secret);
+            self.dropped_version_debts(scope, &reader)
+                .drop_version(op)
+                .await;
         }
     }
 
@@ -6375,7 +6558,7 @@ where
             return;
         };
         if self.dequeue_op(op_id).await.is_ok() {
-            self.release_if_refused(preserved, op).await;
+            self.release_unpreserved(scope, preserved, op).await;
             report
                 .dead_letters
                 .push((op_id, op.target, preserved.observed(reason)));
@@ -6434,8 +6617,8 @@ where
     /// publishing it, and two durable reads answer that before the network is
     /// touched. An op with a charged attempt is one this device remembers
     /// trying: an acked PUT whose confirm-by-re-resolve missed leaves exactly
-    /// this record with exactly no floor, and the retry it is owed re-mints the
-    /// same sequence. A raised sequence floor says the same for a publish that
+    /// this record with exactly no floor, and the retry it is owed signs above
+    /// it. A raised sequence floor says the same for a publish that
     /// confirmed and then lost the parent naming it — the self-adopt raises the
     /// floor before that parent publishes, so a crash in the window re-authors
     /// as it always has. A restore rewinds both.
@@ -7139,7 +7322,7 @@ mod tests {
                     plane_root,
                     name: derive_write_name(&Zeroizing::new([4; 32]), &folder.0),
                     record: Vec::new(),
-                    is_scope_root: false,
+                    commitment: None,
                     envelope_unknown: PreservedFields::new(),
                     epoch_tag_unknown: PreservedFields::new(),
                     created_at: 1,
@@ -8672,7 +8855,7 @@ mod tests {
         let loaded = block_on(drain.load_scope_root(&scope.source)).expect("the root loads");
 
         assert_eq!(loaded.epoch, OWNER_ROOT_EPOCH);
-        assert!(loaded.state.is_scope_root);
+        assert!(loaded.state.commitment.is_some());
     }
 
     /// A scope root whose grant section is absent or will not decode carries no

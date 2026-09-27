@@ -1,6 +1,7 @@
 //! `RetireLedger` — the durable owed-retirement set.
 
 use super::SeamResult;
+use crate::content::RetireTarget;
 
 /// Whether the node owing a retirement still publishes a record of its own.
 ///
@@ -9,7 +10,7 @@ use super::SeamResult;
 /// has and a hard-deleted one never will. The answer is a property of the node,
 /// so the ledger holds it once per node
 /// ([`tombstoned`](RetireLedger::tombstoned)) rather than once per entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OwingRecord {
     /// The node outlives the debt — a prune shortened its history. An
     /// unreadable record stands the entry down: retiring what this pass failed
@@ -20,16 +21,36 @@ pub enum OwingRecord {
     /// record reads as an empty live set. Without the distinction the debt is
     /// permanently unsettleable against a never-discard ledger.
     Retired,
+    /// The node's record may carry a version a dead letter dropped
+    /// ([`DebtOrigin::DroppedVersion`]), or may never have published.
+    ///
+    /// A record at or below the node's acknowledged sequence, or one the
+    /// endpoints serve tied with other bytes, stands the entry down: a PUT of
+    /// the dropped version may still surface there. A name the endpoints all
+    /// answer as holding no record reads as an empty live set, unless this
+    /// device ever adopted a record there. Any other read is
+    /// [`Published`](Self::Published).
+    Unconfirmed,
+}
+
+/// Where an owed retirement came from, which decides how the settle expands it
+/// and how it reads the owing node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DebtOrigin {
+    /// A prune shortened the node's history. Only the root is journaled: its
+    /// leaves are re-derived at drain time from the root block, which is
+    /// plaintext det-CBOR, and a root always names its own leaves. The owing
+    /// node reads as [`OwingRecord::Published`].
+    Prune,
+    /// A dead letter dropped a staged version whose root may never have reached
+    /// a gateway, so the entry carries the whole target set: every leaf, then
+    /// the root last, each with its pinned bytes. The owing node reads as
+    /// [`OwingRecord::Unconfirmed`].
+    DroppedVersion(Vec<RetireTarget>),
 }
 
 /// One owed retirement: a doomed version's **root** `contentCid` and the pinned
 /// bytes retiring its expansion frees.
-///
-/// Only the root is journaled. Its leaves are re-derived at drain time from the
-/// root block, which is plaintext det-CBOR — so the ledger stays three orders of
-/// magnitude smaller than the CID set it stands for, and holds the half that is
-/// irrecoverable: nothing readable names a dropped root once the shortened
-/// history publishes, while a root always names its own leaves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwedRetire {
     /// The node whose history dropped the target. The drain re-reads this
@@ -47,6 +68,8 @@ pub struct OwedRetire {
     /// The pinned total the doomed manifest must account for — the bound the
     /// expansion holds a hand-framed root to.
     pub manifest_bytes: u64,
+    /// Where the debt came from.
+    pub origin: DebtOrigin,
 }
 
 impl OwedRetire {
@@ -58,6 +81,7 @@ impl OwedRetire {
             target,
             owed_bytes: pinned_bytes,
             manifest_bytes: pinned_bytes,
+            origin: DebtOrigin::Prune,
         }
     }
 }

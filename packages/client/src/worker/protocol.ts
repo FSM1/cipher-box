@@ -783,6 +783,8 @@ export type EventDescriptor =
   | { kind: 'deadLetter'; opId: bigint; reason: DeadLetterReason }
   /** This device holds a preserved dead-letter record another build wrote. */
   | { kind: 'parkedWritesUnreadable' }
+  /** A dropped parked write's registry rows did not reach the retire ledger; they stay charged. */
+  | { kind: 'registryDebtUnjournaled' }
   /** This device's grantee-name cache did not open and was cleared; names on the rows stand. */
   | { kind: 'granteeNamesCleared' }
   /**

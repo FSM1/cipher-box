@@ -69,7 +69,7 @@ use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{
-    Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor, read_cut_epoch_floor,
+    Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor, refuse_below_cut_floor,
     write_body_signer,
 };
 use crate::grants::child_index::canonicalize;
@@ -2225,16 +2225,15 @@ where
             .await
             .map_err(|_| RotationPublishError::NotPublished)?
             .unwrap_or(0);
-        let cut_floor = read_cut_epoch_floor(self.floors, scope_id)
-            .await
-            .map_err(|_| RotationPublishError::NotPublished)?;
-        if record.read_epoch < read_floor
-            || record.write_epoch < write_floor
-            || record.section.commitment.cut_epoch < cut_floor
-        {
+        if record.read_epoch < read_floor || record.write_epoch < write_floor {
             return Err(RotationPublishError::Rejected);
         }
-        Ok(())
+        refuse_below_cut_floor(self.floors, scope_id, &record.section.commitment)
+            .await
+            .map_err(|error| match error {
+                GateError::Rejected(_) => RotationPublishError::Rejected,
+                GateError::Seam(_) => RotationPublishError::NotPublished,
+            })
     }
 
     /// Author `record`'s envelope over `current` — the record it replaces — dry
@@ -4770,6 +4769,12 @@ where
                 if write_floor > plane.write_epoch {
                     return Err(WritePublishError::Rejected);
                 }
+                refuse_below_cut_floor(self.floors, &self.scope_id, self.authorized_commitment)
+                    .await
+                    .map_err(|error| match error {
+                        GateError::Rejected(_) => WritePublishError::Rejected,
+                        GateError::Seam(_) => WritePublishError::NotLanded,
+                    })?;
                 let section = self.reseal_root(node, &plane, fresh.as_bytes(), read_epoch)?;
                 author_scope_root_with_section(
                     authoring,
@@ -11276,6 +11281,63 @@ mod tests {
             block_on(net.republish(&moved)),
             Err(WritePublishError::Rejected),
             "the seal is refused against the live floor, not the parked snapshot",
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
+    /// The wave arm of the cut bar: the root re-signs the authorized
+    /// commitment, so a cut-epoch floor raised after the enumeration parked the
+    /// root would sign a set this build's own stage 2 refuses (ADR 0041 D1).
+    #[test]
+    fn a_cut_floor_rise_before_the_root_republish_refuses_the_seal() {
+        let harness = Harness::plain();
+        let root = staged_childless_root(&harness);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
+
+        block_on(crate::gate::record_cut_epoch_floor(
+            &harness.floors,
+            &SCOPE,
+            root.grant_section.commitment.cut_epoch + 1,
+        ))
+        .expect("the cut floor rise lands");
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected),
+            "a commitment below the live cut floor must never be signed",
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
+    /// The same bar when the raise lands inside the root arm's own window, on
+    /// its write-epoch floor read.
+    #[test]
+    fn a_cut_floor_rise_inside_the_wave_publish_window_refuses_the_seal() {
+        let harness = Harness::plain();
+        let root = staged_childless_root(&harness);
+        let owner = owner_identity();
+        let floors = ConsultingFloors::wrapping(&harness.floors);
+        let net = wave_with(
+            &harness,
+            &owner,
+            &root.name,
+            &root.grant_section.commitment,
+            &floors,
+            &harness.entropy,
+        );
+        enumerate_root(&net);
+
+        floors.cut_on_write_read(1, root.grant_section.commitment.cut_epoch + 1);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected),
+        );
+        assert!(
+            floors.fired.get(),
+            "the raise must reach the guard's window"
         );
         assert!(!published_at(&harness, &moved.new_name));
     }

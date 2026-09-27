@@ -614,6 +614,8 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
       };
     case 'parkedWritesUnreadable':
       return { kind: 'parkedWritesUnreadable' };
+    case 'registryDebtUnjournaled':
+      return { kind: 'registryDebtUnjournaled' };
     case 'granteeNamesCleared':
       return { kind: 'granteeNamesCleared' };
     case 'conversionRecordUnreadable':

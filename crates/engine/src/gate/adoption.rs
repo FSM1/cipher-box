@@ -379,6 +379,21 @@ pub(crate) async fn read_cut_epoch_floor<F: FloorStore>(
         .unwrap_or(0))
 }
 
+/// The stage-2 cut bar every scope-root signer holds `commitment` to before it
+/// signs, read fresh (ADR 0041 D1): the same verdict the gate gives an arriving
+/// record whose commitment sits below `scope_id`'s cut-epoch floor.
+pub(crate) async fn refuse_below_cut_floor<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+    commitment: &GrantSetCommitment,
+) -> Result<(), GateError> {
+    let cut_epoch_floor = read_cut_epoch_floor(floors, scope_id)
+        .await
+        .map_err(GateError::Seam)?;
+    refuse_stale_cut_epoch(commitment, cut_epoch_floor)
+        .map_err(|e| reject(GateStage::CommitmentVerify, RejectionReason::Trust(e)))
+}
+
 /// Raise `scope_id`'s cut-epoch floor to `cut_epoch` — a maximum against the
 /// stored value, like every other floor advance.
 ///

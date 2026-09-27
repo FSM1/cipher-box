@@ -2321,6 +2321,7 @@ impl Event {
             facade::Event::WithheldUpdateEscalation { .. } => "withheldUpdateEscalation",
             facade::Event::DeadLetter { .. } => "deadLetter",
             facade::Event::ParkedWritesUnreadable => "parkedWritesUnreadable",
+            facade::Event::RegistryDebtUnjournaled => "registryDebtUnjournaled",
             facade::Event::GranteeNamesCleared => "granteeNamesCleared",
             facade::Event::ConversionRecordUnreadable => "conversionRecordUnreadable",
             facade::Event::RefusedClaimDropped => "refusedClaimDropped",

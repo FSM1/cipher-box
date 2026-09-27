@@ -1188,6 +1188,12 @@ describe('readEvent', () => {
     });
   });
 
+  it('maps the payload-free unjournaled registry debt', () => {
+    expect(readEvent(fakeWasm, { kind: 'registryDebtUnjournaled' })).toEqual({
+      kind: 'registryDebtUnjournaled',
+    });
+  });
+
   it('maps the payload-free grantee-name cache reset', () => {
     expect(readEvent(fakeWasm, { kind: 'granteeNamesCleared' })).toEqual({
       kind: 'granteeNamesCleared',

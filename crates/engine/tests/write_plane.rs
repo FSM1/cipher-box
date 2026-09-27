@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cipherbox_core::codec::Value;
-use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
+use cipherbox_core::content::{
+    CONTENT_CID_CODEC, compute_cid, encode_content_cid_str, is_wellformed_content_cid,
+};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::MAX_READ_SEALED_BYTES;
@@ -35,6 +37,7 @@ use cipherbox_engine::content::{
     SessionBearer, assemble, decode_root,
 };
 use cipherbox_engine::facade::{BinOrigin, PendingClass, SnapshotView};
+use cipherbox_engine::gate::record_cut_epoch_floor;
 use cipherbox_engine::net::OrphanHeads;
 use cipherbox_engine::net::author::{
     AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
@@ -2557,6 +2560,45 @@ fn a_refused_root_authoring_names_the_check_that_fired_on_the_pass_it_fired() {
             .dead_letters
             .is_empty(),
         "and it arrives while the op is still being retried, not once its budget is spent"
+    );
+}
+
+/// A re-resolve the endpoints answer with nothing leaves the pass on the
+/// section it read at pass start. A cut-epoch floor raised since then must
+/// still refuse the scope-root sign, or the drain re-signs a pre-cut set above
+/// the owner's post-cut record (ADR 0041 D1).
+#[test]
+fn a_cut_floor_rise_behind_an_unserved_re_resolve_refuses_the_root_sign() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    world.record_store.fail_get_for(write_name(ROOT).as_str());
+    block_on(record_cut_epoch_floor(&alice.floors(&SECRET), &SCOPE, 1))
+        .expect("the cut floor rises");
+    create(&mut engine, "photos");
+    let _ = events_so_far(&mut events);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published(&world.record_store, ROOT).0,
+        1,
+        "no root is signed over a commitment below the live cut floor"
+    );
+    assert!(
+        events_so_far(&mut events)
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "the refusal is reported as a trust verdict"
+    );
+    assert_eq!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .len(),
+        1,
+        "the op stays queued for the pass that rebases on the post-cut root"
     );
 }
 
@@ -8904,6 +8946,118 @@ fn an_unconfirmed_publish_never_retires_the_version_it_may_already_name() {
 /// an engine internal.
 const PRESERVED_DEAD_LETTERS: &[u8] = b"cipherbox/preserved-dead-letters";
 
+/// A new file whose registration the registry refuses, so the op spends its
+/// budget and dead-letters keeping every row it charged. With `refuse_parking`
+/// the preserved set is one this build cannot read, so the version is dropped
+/// rather than parked.
+struct RefusedFile {
+    alice: FakeDevice,
+    engine: Engine<FakeSeamTypes>,
+    tasks: Vec<BoxedTask>,
+    target: NodeId,
+    /// Every block the version charged, the root last, as the registry names
+    /// them.
+    version: Vec<String>,
+}
+
+fn refused_new_file(world: &FakeWorld, blocks: &Blocks, refuse_parking: bool) -> RefusedFile {
+    seed_account(world, blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, tasks) = boot(world, blocks, &alice, 42);
+    if refuse_parking {
+        block_on(
+            alice
+                .staging_store
+                .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
+        )
+        .expect("the foreign set stages");
+    }
+    blocks.refuse_register(proxy_400());
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "refused.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    let (root_cid, leaves) = staged_version(&alice);
+    let raw = block_on(alice.staging_store.queued_ops()).expect("the journal reads");
+    let (_, op) = decode_queue(&RecordReader::new(&kdf::enc_subkey(&SECRET)), &raw)
+        .mine
+        .remove(0);
+    let version = leaves
+        .iter()
+        .chain([&root_cid])
+        .map(|cid| encode_content_cid_str(cid))
+        .collect();
+    RefusedFile {
+        alice,
+        engine,
+        tasks,
+        target: op.target,
+        version,
+    }
+}
+
+/// A spent budget keeps its registry rows, and a preserved set that refuses the
+/// version then drops the only manifest listing them. The debt is journaled
+/// first, and the create never published, so the settle retires the whole
+/// version (ADR 0047).
+#[test]
+fn a_refused_version_that_kept_its_rows_still_retires_them() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let RefusedFile {
+        alice,
+        engine,
+        mut tasks,
+        version,
+        ..
+    } = refused_new_file(&world, &blocks, true);
+
+    let (parked, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert_eq!(parked[0].reason, DeadLetterReason::PreservationRefused);
+
+    let retired: BTreeSet<String> = retire_targets(&alice).into_iter().collect();
+    assert!(
+        version.iter().all(|cid| retired.contains(cid)),
+        "every block the version charged is retired: {retired:?}"
+    );
+}
+
+/// A name this device once adopted a record at is never read as empty on the
+/// endpoints' word alone: the debt waits rather than unpin what a record the
+/// endpoints have lost may still name.
+#[test]
+fn a_dropped_versions_debt_waits_at_a_name_this_device_adopted() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let RefusedFile {
+        alice,
+        engine,
+        mut tasks,
+        target,
+        version,
+    } = refused_new_file(&world, &blocks, true);
+    block_on(
+        alice
+            .floors(&SECRET)
+            .raise_sequence_floor(write_name(target).as_str().as_bytes(), 1),
+    )
+    .expect("the floor rises");
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        version.iter().all(|cid| !retired.contains(cid)),
+        "nothing is retired against a record the endpoints may have lost"
+    );
+    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
 /// A preserved set this build cannot read is never overwritten — it holds dead
 /// letters whose records carry the only copy of their content keys. That refusal
 /// is terminal rather than a retry: returning the op to a strict-FIFO head would
@@ -10635,6 +10789,351 @@ fn discarding_a_parked_write_releases_the_version_it_held() {
         block_on(engine_b.command(Command::DiscardDeadLetter { op_id })),
         Err(EngineError::UnknownDeadLetter { op_id }),
         "a second discard names a write this device no longer holds"
+    );
+}
+
+/// Discard drops the only manifest that lists the rows the parked version kept
+/// charged. The retire is scoped to the node's record and leaves out what that
+/// record still names.
+#[test]
+fn a_discarded_parked_write_retires_the_rows_its_version_kept() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (bob, mut engine_b, mut tasks_b, node, op_id) = parked_write(&world, &blocks);
+    let staged = || -> BTreeSet<Vec<u8>> {
+        block_on(bob.staging_store.staged_keys())
+            .unwrap()
+            .into_iter()
+            .collect()
+    };
+    let before = staged();
+
+    block_on(engine_b.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    let released: BTreeSet<String> = before
+        .difference(&staged())
+        .filter(|key| is_wellformed_content_cid(key))
+        .map(|cid| encode_content_cid_str(cid))
+        .collect();
+    assert!(!released.is_empty(), "the discard released the version");
+    tick(&world, &engine_b, &mut tasks_b);
+
+    let named: BTreeSet<String> = retire_entries(&bob)
+        .into_iter()
+        .filter(|(name, _)| name.as_deref() == Some(write_name(node).as_str()))
+        .flat_map(|(_, targets)| targets)
+        .collect();
+    assert!(
+        released.is_subset(&named),
+        "every released block is retired under the node's record: {released:?} vs {named:?}"
+    );
+}
+
+/// An edit whose PUT the endpoints acknowledged and never served may still
+/// surface at the sequence it was acknowledged at. Its discarded version
+/// retires nothing while the endpoints serve nothing above that sequence; the
+/// next publish at the name signs above it, and once that lands the version
+/// retires.
+#[test]
+fn a_discarded_edit_retires_nothing_at_or_below_its_acknowledged_sequence() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+
+    world.record_store.drop_puts();
+    let op_id = write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
+        "nothing the acknowledged edit names is retired"
+    );
+    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+
+    world.record_store.keep_puts();
+    write_file(&mut engine, version(node), &[3u8; 200]).expect("the next edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        sequence_at(&world, &write_name(node)) > 2,
+        "the next record signs above the acknowledged sequence, never tying it"
+    );
+    let named: BTreeSet<String> = retire_entries(&alice)
+        .into_iter()
+        .filter(|(name, _)| name.as_deref() == Some(write_name(node).as_str()))
+        .flat_map(|(_, targets)| targets)
+        .collect();
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| named.contains(&encode_content_cid_str(cid))),
+        "a record above the acknowledged sequence settles the debt: {named:?}"
+    );
+}
+
+/// A create whose PUT was acknowledged and never served may still surface.
+/// Its dropped version retires nothing on the endpoints' word that the name
+/// holds no record.
+#[test]
+fn a_discarded_create_acknowledged_at_its_name_retires_nothing_on_vacancy() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    world.record_store.drop_puts();
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    block_on(engine.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
+        "nothing the acknowledged create names is retired"
+    );
+    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
+/// A mark that will not read may hide any sequence, so the next publish at the
+/// name signs well above the floor rather than at the next sequence.
+#[test]
+fn an_unreadable_acknowledged_sequence_makes_the_publish_sign_above_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    let key = StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(
+        &owner_tag(&kdf::enc_subkey(&SECRET)),
+        node.0,
+    )
+    .expect("a mark key");
+    block_on(alice.staging_store.put_staged_bytes(&key, b"garbage")).expect("the mark stages");
+
+    write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        sequence_at(&world, &write_name(node)) > 2,
+        "the edit signs above whatever the unreadable mark may hide"
+    );
+    assert!(
+        block_on(alice.staging_store.staged_bytes(&key))
+            .unwrap()
+            .is_none(),
+        "the confirmed publish drops the mark"
+    );
+}
+
+/// A confirm that reads a tie at our sequence loses the race, yet our PUT was
+/// acknowledged: our record may stand beside the winner. The dropped version
+/// retires nothing while the endpoints serve nothing above that sequence, even
+/// once the tie is no longer visible.
+#[test]
+fn a_tie_lost_at_the_signed_sequence_holds_the_dropped_versions_debt() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &first,
+    )
+    .expect("the create commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    let node = child_id(&engine_a, ROOT, "clip.bin");
+    let name = write_name(node);
+    let endpoints = world.record_store.endpoints();
+    let base = world
+        .record_store
+        .record_at(&endpoints[0], name.as_str())
+        .expect("the create published");
+
+    // Another writer's record at the next sequence, held back until our PUT.
+    let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+    write_file(&mut engine_b, version(node), &bobs).expect("the other edit commits");
+    tick(&world, &engine_b, &mut tasks_b);
+    let winner = world
+        .record_store
+        .record_at(&endpoints[0], name.as_str())
+        .expect("the other edit published");
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, name.as_str(), base.clone());
+    }
+    world.record_store.seed_record_after_put_at(
+        &endpoints[0],
+        name.as_str(),
+        name.as_str(),
+        winner.clone(),
+    );
+
+    let op_id = write_file(&mut engine_a, version(node), &alices).expect("our edit commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_until_dead_lettered(&world, &engine_a, &mut tasks_a);
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, name.as_str(), winner.clone());
+    }
+    block_on(engine_a.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+    tick(&world, &engine_a, &mut tasks_a);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
+        "nothing our tied record names is retired"
+    );
+    assert!(engine_a.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
+/// A record the endpoints serve tied with other bytes may not be the one a
+/// dropped version's PUT left there, so its debt waits while the tie stands.
+#[test]
+fn a_dropped_versions_debt_waits_while_its_record_is_tied() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    block_on(
+        alice
+            .staging_store
+            .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
+    )
+    .expect("the foreign set stages");
+    let tie = IpnsRecord::create_v2(
+        &write_signer(node),
+        b"/ipfs/bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    let endpoint = world.record_store.endpoints()[1].clone();
+
+    blocks.refuse_register(proxy_400());
+    write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    world
+        .record_store
+        .seed_record(&endpoint, write_name(node).as_str(), tie);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
+        "nothing the dropped version names is retired against a tied record"
+    );
+    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+}
+
+/// A conditional-edit loser keeps its rows, and a preserved set that refuses
+/// it drops the only manifest listing them. The debt is journaled first, and
+/// the name has moved past the loser's base, so the settle retires what the
+/// winning record does not name.
+#[test]
+fn a_refused_conditional_edit_loser_still_retires_its_rows() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
+    let (bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+    block_on(
+        bob.staging_store
+            .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
+    )
+    .expect("the foreign set stages");
+
+    write_file(&mut engine_b, version(node), &bobs).expect("the second device's edit commits");
+    let (root_cid, leaves) = staged_version(&bob);
+    write_file(&mut engine_a, version(node), &alices).expect("the first device's edit commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    let (parked, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
+    assert_eq!(parked[0].reason, DeadLetterReason::PreservationRefused);
+    tick(&world, &engine_b, &mut tasks_b);
+
+    let named: BTreeSet<String> = retire_entries(&bob)
+        .into_iter()
+        .filter(|(name, _)| name.as_deref() == Some(write_name(node).as_str()))
+        .flat_map(|(_, targets)| targets)
+        .collect();
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| named.contains(&encode_content_cid_str(cid))),
+        "every block the loser charged is retired under the node's record: {named:?}"
     );
 }
 
@@ -13393,6 +13892,41 @@ fn a_preserved_dead_letter_past_its_age_bound_is_purged_on_a_poll_tick() {
             .chain([&root_cid])
             .all(|cid| !staged().contains(cid)),
         "past it the entry is purged and its whole version leaves the budget"
+    );
+}
+
+/// The purge drops the only manifest that lists the rows a parked version
+/// kept charged, so it journals them first and a later settle retires them.
+#[test]
+fn a_purged_parked_version_retires_the_rows_it_kept() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let RefusedFile {
+        alice,
+        engine,
+        mut tasks,
+        version,
+        ..
+    } = refused_new_file(&world, &blocks, false);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    let mark = retire_targets(&alice).len();
+    assert!(
+        version
+            .iter()
+            .all(|cid| !retire_targets(&alice).contains(cid)),
+        "a parked version keeps its rows"
+    );
+
+    world
+        .scheduler
+        .advance(engine.profile().preserved_dead_letter_ttl);
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired: BTreeSet<String> = retired_since(&alice, mark).into_iter().collect();
+    assert!(
+        version.iter().all(|cid| retired.contains(cid)),
+        "the purge journals what the version charged, and the settle retires it: {retired:?}"
     );
 }
 
