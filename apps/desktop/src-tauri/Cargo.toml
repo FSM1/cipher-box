@@ -57,6 +57,8 @@ base64.workspace = true
 # engine logic; this is host-side and never derives a key.
 getrandom.workspace = true
 zeroize.workspace = true
+# Lists the host's addresses, so a network reconnect can force a sync pass.
+if-addrs = "0.15"
 
 
 

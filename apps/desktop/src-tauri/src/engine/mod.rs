@@ -231,7 +231,8 @@ fn rung(staleness: Staleness) -> &'static str {
 enum Request {
     /// Read the vault's status, and answer here.
     Status(oneshot::Sender<Result<VaultStatus, String>>),
-    /// Force a refresh with nocache semantics — the tray's "Sync Now".
+    /// Force a refresh with nocache semantics — the tray's "Sync Now", a
+    /// network reconnect, or a wake from sleep.
     Refresh(oneshot::Sender<Result<(), String>>),
     /// End the session at the facade. A logout is not a quit: the durable
     /// stores survive both, but the credential survives only the quit
@@ -378,6 +379,14 @@ impl EngineHost {
     /// (blueprint/desktop.md "Tray").
     pub async fn refresh(&self) -> Result<(), String> {
         self.ask(Request::Refresh)?.await.map_err(|_| NO_SESSION)?
+    }
+
+    /// Forces a refresh and waits for no verdict — a network reconnect or a
+    /// wake from sleep (blueprint/desktop.md "Freshness"). No member asked, so
+    /// what the pass landed reaches the tray on the event stream alone. A no-op
+    /// while no session is live.
+    pub fn force_pass(&self) {
+        let _ = self.ask(Request::Refresh);
     }
 
     /// Files one request with the live session and hands back where its answer
@@ -920,6 +929,25 @@ mod tests {
             host.log_out().is_err(),
             "a session that ran no logout command must not report one",
         );
+    }
+
+    /// A reconnect or a wake files one refresh with the live session, and with
+    /// no session files nothing.
+    #[test]
+    fn a_forced_pass_files_one_refresh_with_the_live_session() {
+        EngineHost::default().force_pass();
+
+        let (requests, mut inbox) = mpsc::unbounded_channel();
+        let host = EngineHost {
+            live: Mutex::new(Some(Live {
+                requests,
+                thread: std::thread::spawn(|| {}),
+                account_dir: PathBuf::from("account"),
+            })),
+        };
+        host.force_pass();
+        assert!(matches!(inbox.try_recv(), Ok(Request::Refresh(_))));
+        assert!(inbox.try_recv().is_err(), "one moment, one refresh");
     }
 
     /// The session outlives a mount it could not make: the engine is still
