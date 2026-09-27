@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b14047be960e",
+  "strategy": "manual-commit",
+  "branch": "docs/adr-0054-dropped-version-debt",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/b1/4047be960e/0/metadata.json",
+      "transcript": "/b1/4047be960e/0/full.jsonl",
+      "compact_transcript": "/b1/4047be960e/0/transcript.jsonl",
+      "content_hash": "/b1/4047be960e/0/content_hash.txt",
+      "prompt": "/b1/4047be960e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2504,
+    "cache_creation_tokens": 521183,
+    "cache_read_tokens": 21293470,
+    "output_tokens": 111940,
+    "api_call_count": 114
+  }
+}
