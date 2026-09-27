@@ -3363,8 +3363,18 @@ fn sample_file() -> ReadBody {
         created_at: 1500,
         modified_at: 2500,
         versions: vec![
-            Version::new(b"content-cid-new".to_vec(), [0x77; 32], 8192, 2500),
-            Version::new(b"content-cid-old".to_vec(), [0x66; 32], 4096, 1500),
+            Version::new(
+                compute_cid(CONTENT_CID_CODEC, b"content-cid-new"),
+                [0x77; 32],
+                8192,
+                2500,
+            ),
+            Version::new(
+                compute_cid(CONTENT_CID_CODEC, b"content-cid-old"),
+                [0x66; 32],
+                4096,
+                1500,
+            ),
         ],
         unknown: PreservedFields::new(),
     }
@@ -3546,7 +3556,12 @@ fn build_read_body_accept() -> Vec<ReadBodyAcceptVector> {
     let single_version = ReadBody::File {
         created_at: 3,
         modified_at: 4,
-        versions: vec![Version::new(b"cid".to_vec(), [0x55; 32], 512, 4)],
+        versions: vec![Version::new(
+            compute_cid(CONTENT_CID_CODEC, b"cid"),
+            [0x55; 32],
+            512,
+            4,
+        )],
         unknown: PreservedFields::new(),
     };
     let cases: Vec<(&str, ReadBody)> = vec![
@@ -3598,7 +3613,7 @@ fn build_read_body_reject() -> Vec<RejectVector> {
 
     // (name, read-body Value, check, class). Each is hand-built so the defect is
     // explicit; the live decoder is asserted below to fire the named check.
-    let cases: Vec<(&str, Value, &str, &str)> = vec![
+    let mut cases: Vec<(&str, Value, &str, &str)> = vec![
         (
             "duplicate-child-id",
             map_of(vec![
@@ -3677,6 +3692,35 @@ fn build_read_body_reject() -> Vec<RejectVector> {
             "malformed",
         ),
     ];
+
+    for (name, cid) in [
+        ("version-empty-content-cid", Vec::new()),
+        ("version-truncated-content-cid", vec![1; 35]),
+        (
+            "version-wrong-content-cid-framing",
+            vec![0; CONTENT_CID_LEN],
+        ),
+    ] {
+        cases.push((
+            name,
+            map_of(vec![
+                ("kind", Value::Text("file".into())),
+                ("createdAt", Value::Unsigned(1)),
+                ("modifiedAt", Value::Unsigned(2)),
+                (
+                    "versions",
+                    Value::Array(vec![map_of(vec![
+                        ("contentCid", Value::Bytes(cid)),
+                        ("contentKey", Value::Bytes(vec![3; 32])),
+                        ("size", Value::Unsigned(4)),
+                        ("modifiedAt", Value::Unsigned(2)),
+                    ])]),
+                ),
+            ]),
+            "content-cid-malformed",
+            "malformed",
+        ));
+    }
 
     finish_hex_reject_vectors("read-body", cases, decode_read_body)
 }

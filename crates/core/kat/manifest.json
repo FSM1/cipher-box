@@ -273,14 +273,15 @@
     },
     "readBodyReject": {
       "file": "vectors/seal/read_body_reject.json",
-      "count": 6,
+      "count": 9,
       "checks": [
         "duplicate-id",
         "duplicate-ipns-name",
         "unexpected-type",
         "missing-field",
         "invalid-node-kind",
-        "invalid-field-length"
+        "invalid-field-length",
+        "content-cid-malformed"
       ]
     },
     "envelopeAccept": {

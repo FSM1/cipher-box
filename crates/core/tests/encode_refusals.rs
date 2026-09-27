@@ -132,3 +132,41 @@ fn a_signed_row_field_smuggled_through_preserved_fields_is_refused() {
         "unknown-field-collision"
     );
 }
+
+#[test]
+fn malformed_content_cids_are_refused_at_body_encode_and_decode() {
+    use cipherbox_core::codec::{Map, encode};
+    use cipherbox_core::content::compute_cid;
+    use cipherbox_core::seal::{ReadBody, Version, decode_read_body, encode_read_body};
+
+    let mut bad_framing = compute_cid(cipherbox_core::content::CONTENT_CID_CODEC, b"content");
+    bad_framing[0] = 0;
+    for cid in [Vec::new(), vec![1; 35], bad_framing] {
+        let body = ReadBody::File {
+            created_at: 1,
+            modified_at: 2,
+            versions: vec![Version::new(cid.clone(), [3; 32], 4, 2)],
+            unknown: PreservedFields::new(),
+        };
+        assert_eq!(
+            encode_read_body(&body).unwrap_err().check(),
+            "content-cid-malformed"
+        );
+        let mut version = Map::new();
+        version.insert("contentCid", Value::Bytes(cid));
+        version.insert("contentKey", Value::Bytes(vec![3; 32]));
+        version.insert("size", Value::Unsigned(4));
+        version.insert("modifiedAt", Value::Unsigned(2));
+        let mut wire = Map::new();
+        wire.insert("kind", Value::Text("file".into()));
+        wire.insert("createdAt", Value::Unsigned(1));
+        wire.insert("modifiedAt", Value::Unsigned(2));
+        wire.insert("versions", Value::Array(vec![Value::Map(version)]));
+        assert_eq!(
+            decode_read_body(&encode(&Value::Map(wire)).unwrap())
+                .unwrap_err()
+                .check(),
+            "content-cid-malformed"
+        );
+    }
+}

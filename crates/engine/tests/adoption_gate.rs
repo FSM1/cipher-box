@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 
 use cipherbox_core::codec::{Map, Value, encode};
-use cipherbox_core::error::TrustViolation;
+use cipherbox_core::error::{Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::{RepointObject, open_pointer_payload, seal_pointer_payload};
@@ -545,6 +545,10 @@ const MATRIX: &[(&str, Expect)] = &[
         Expect::Reject(GateStage::Unseal, "hpke-open-failed"),
     ),
     (
+        "unseal:content-cid-malformed",
+        Expect::Reject(GateStage::Unseal, "content-cid-malformed"),
+    ),
+    (
         "unseal:duplicate-id",
         Expect::Reject(GateStage::Unseal, "duplicate-id"),
     ),
@@ -554,8 +558,7 @@ const MATRIX: &[(&str, Expect)] = &[
     ),
 ];
 
-/// The exact reject surface the six-stage matrix must exercise: nine composed
-/// core `TrustViolation` checks plus the two engine floor-law verdicts.
+/// The composed core checks and engine floor-law verdicts the matrix exercises.
 const MATRIX_REJECT_SURFACE: &[&str] = &[
     "ipns-signature-invalid",
     "ipns-value-mismatch",
@@ -568,6 +571,7 @@ const MATRIX_REJECT_SURFACE: &[&str] = &[
     "hpke-open-failed",
     "duplicate-id",
     "duplicate-ipns-name",
+    "content-cid-malformed",
 ];
 
 /// Build a fresh fixture, apply the named mutation, and run the gate to a
@@ -624,6 +628,21 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
         }
         "unseal:hpke-open-failed" => {
             tamper_seed_blob = true;
+        }
+        "unseal:content-cid-malformed" => {
+            let mut version = Map::new();
+            version.insert("contentCid", Value::Bytes(vec![0; 36]));
+            version.insert("contentKey", Value::Bytes(vec![3; 32]));
+            version.insert("size", Value::Unsigned(1));
+            version.insert("modifiedAt", Value::Unsigned(0));
+            let mut body = Map::new();
+            body.insert("kind", Value::Text("file".into()));
+            body.insert("createdAt", Value::Unsigned(0));
+            body.insert("modifiedAt", Value::Unsigned(0));
+            body.insert("versions", Value::Array(vec![Value::Map(version)]));
+            candidate.envelope = fx.envelope_with_read_sealed(
+                fx.seal_read_plaintext(&encode(&Value::Map(body)).unwrap()),
+            );
         }
         "unseal:duplicate-id" => {
             candidate.envelope =
@@ -749,12 +768,16 @@ fn foreign_scope_label_rejected_at_stage_six_binding() {
 
 #[test]
 fn no_reject_check_is_an_engine_invented_crypto_code() {
-    let core: BTreeSet<&str> = TrustViolation::CHECKS.iter().copied().collect();
+    let core: BTreeSet<&str> = TrustViolation::CHECKS
+        .iter()
+        .chain(Malformed::CHECKS)
+        .copied()
+        .collect();
     let floor: BTreeSet<&str> = FLOOR_VERDICTS.iter().copied().collect();
     for check in MATRIX_REJECT_SURFACE {
         assert!(
             core.contains(check) || floor.contains(check),
-            "`{check}` must be a core TrustViolation or an engine floor verdict — never an engine-invented crypto code"
+            "`{check}` must be a core codec check or an engine floor verdict — never an engine-invented crypto code"
         );
     }
     // The only non-core checks are exactly the two floor verdicts.

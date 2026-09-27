@@ -210,6 +210,7 @@ impl Version {
     fn from_value(v: &Value) -> Result<Self, CodecError> {
         let map = v.as_map()?;
         let content_cid = req(map, "contentCid")?.as_bytes()?.to_vec();
+        validate_content_cid(&content_cid)?;
         let content_key = bytes_fixed::<SECRET_LEN>(req(map, "contentKey")?, "contentKey")?;
         let size = req(map, "size")?.as_unsigned()?;
         let modified_at = req(map, "modifiedAt")?.as_unsigned()?;
@@ -270,13 +271,15 @@ impl ReadBody {
         }
     }
 
-    /// The decode-time uniqueness invariants (#39 D7) re-checked on a
+    /// The decode-time body invariants re-checked on a
     /// *constructed* body: the seal path runs this so it never persists a body
     /// that decode would refuse to reopen.
     pub fn validate(&self) -> Result<(), CodecError> {
         match self {
             Self::Folder { children, .. } => assert_children_unique(children),
-            Self::File { .. } => Ok(()),
+            Self::File { versions, .. } => versions
+                .iter()
+                .try_for_each(|version| validate_content_cid(&version.content_cid)),
         }
     }
 }
@@ -420,6 +423,13 @@ pub(crate) fn assert_within_bound(
             limit,
         }
         .into());
+    }
+    Ok(())
+}
+
+fn validate_content_cid(cid: &[u8]) -> Result<(), CodecError> {
+    if !crate::content::is_wellformed_content_cid(cid) {
+        return Err(Malformed::ContentCidMalformed.into());
     }
     Ok(())
 }
@@ -658,8 +668,18 @@ mod tests {
             created_at: 1,
             modified_at: 2,
             versions: vec![
-                Version::new(b"cid-new".to_vec(), [9; 32], 4096, 2),
-                Version::new(b"cid-old".to_vec(), [8; 32], 1024, 1),
+                Version::new(
+                    crate::content::compute_cid(crate::content::CONTENT_CID_CODEC, b"cid-new"),
+                    [9; 32],
+                    4096,
+                    2,
+                ),
+                Version::new(
+                    crate::content::compute_cid(crate::content::CONTENT_CID_CODEC, b"cid-old"),
+                    [8; 32],
+                    1024,
+                    1,
+                ),
             ],
             unknown: PreservedFields::new(),
         };
@@ -873,11 +893,16 @@ mod tests {
     fn validate_rejects_duplicate_children() {
         let dup = folder(vec![child(1, "a", b"ipns-a"), child(1, "b", b"ipns-b")]);
         assert_eq!(dup.validate().unwrap_err().check(), "duplicate-id");
-        // A file (no children) always validates.
+        // A file with a well-formed content CID validates.
         let file = ReadBody::File {
             created_at: 1,
             modified_at: 2,
-            versions: vec![Version::new(b"c".to_vec(), [0; 32], 1, 1)],
+            versions: vec![Version::new(
+                crate::content::compute_cid(crate::content::CONTENT_CID_CODEC, b"c"),
+                [0; 32],
+                1,
+                1,
+            )],
             unknown: PreservedFields::new(),
         };
         assert!(file.validate().is_ok());
