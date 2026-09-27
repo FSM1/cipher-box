@@ -20,7 +20,7 @@ use crate::grants::{
     link_of_sender, post_share_pointer_at,
 };
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys};
-use crate::rotation::cut_for_write_scope;
+use crate::rotation::{Boundaries, cut_for_write_scope};
 use crate::sync::BookkeepingSeal;
 
 /// The refusal a record change answers while a conversion pass runs.

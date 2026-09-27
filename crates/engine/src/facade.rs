@@ -126,7 +126,7 @@ use crate::rotation::{
     derive_write_name, record_grant_floor, reseal_at_current_epoch, reseal_scope_root,
     revoke_grants, revoke_write_grant, rotate_on_cut, run_sweep, run_sweep_job,
 };
-use crate::rotation::{Boundaries, FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
+use crate::rotation::{FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
 use crate::seams::{
     BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId,
     OwnerScopedFloorStore, QueueGeneration, QueueGenerationStore, RecordTransport, Scheduler,
@@ -6339,8 +6339,6 @@ where {
             storage_policy: self.storage_policy,
             content_profile: self.content_profile,
         };
-        let settings_rechecked = Cell::new(self.seams.scheduler.now());
-        let link_swept = Cell::new(self.seams.scheduler.now());
         let alive = self.alive.clone();
         let interval = seams.profile.poll_cadence;
         let owner_identity = session.owner_identity();
@@ -6350,16 +6348,7 @@ where {
         let root_id = self.state.snapshot.borrow().root.0;
 
         let manual = self.manual_refresh.clone();
-        let pass = TickPass {
-            seams,
-            secrets,
-            alive,
-            manual,
-            owner_identity,
-            root_id,
-            settings_rechecked,
-            link_swept,
-        };
+        let pass = TickPass::new(seams, secrets, alive, manual, owner_identity, root_id);
 
         Some(Box::new(move || {
             pass.manual.arm();
