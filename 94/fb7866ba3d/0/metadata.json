@@ -1,0 +1,193 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "94fb7866ba3d",
+  "session_id": "e70f4b1a-ae1d-424e-ae42-dc4df2059ba8",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-27T09:55:58.060473Z",
+  "branch": "refactor/2041-pass-report",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/sync/pass.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a7512e9ca24e",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 2828,
+    "cache_creation_tokens": 563038,
+    "cache_read_tokens": 21103220,
+    "output_tokens": 87536,
+    "api_call_count": 111
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01HmUgwkYAfSekpqEDPfc6pM",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "mattpocock-skills:code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a7512e9ca24e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 404,
+        "end": 405,
+        "entry_ids": [
+          "d3e01f37-eaa4-4da6-81bf-11cf9b84d269"
+        ],
+        "tool_use_id": "toolu_01HmUgwkYAfSekpqEDPfc6pM"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HmUgwkYAfSekpqEDPfc6pM"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: mattpocock-skills:code-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01JkRhKV6qtu4iRGYgfWHVZ1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a7512e9ca24e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 587,
+        "end": 588,
+        "entry_ids": [
+          "0732102b-2eb8-44e3-8699-76d8ff0928ca"
+        ],
+        "tool_use_id": "toolu_01JkRhKV6qtu4iRGYgfWHVZ1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01JkRhKV6qtu4iRGYgfWHVZ1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_012yWV9iHu8JzJL8FX7BVhBL",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a7512e9ca24e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 720,
+        "end": 721,
+        "entry_ids": [
+          "dae2e8ef-fe7c-4a7a-9326-fd2d2c31e53e"
+        ],
+        "tool_use_id": "toolu_012yWV9iHu8JzJL8FX7BVhBL"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_012yWV9iHu8JzJL8FX7BVhBL"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Implement issue #2040: move the tick-loop closure body out of facade.rs into a new sync/pass.rs module, and move the scope-exit cut into rotation/, as part of an ongoing sync-pass refactor series, then push through review gates and land it.",
+    "outcome": "PR #2045 was merged after five commits, passing self-review gates (fmt/clippy/tests/wasm32/tracker-ref), a standards review, a spec review, a four-angle simplify pass, a security review, and CodeRabbit; issue #2037 was closed, follow-up issue #2056 filed, and work moved on to two parallel follow-ups (#2056 and #2041) which were interrupted by an Opus rate limit and relaunched.",
+    "learnings": {
+      "repo": [
+        "The tick closure in facade.rs is deeply entangled: moving it required widening visibility on SyncStatus fields, SweepKeys.scope_keys/owner_identity, SecondEnd, GraftedWritePass, SeedFloors, ConsultWindow, and the private child modules claim_conversion.rs/link_sweep.rs (pub(super) -> pub(crate))",
+        "Boundaries, ascent_node_seed, and proved_scope_ref were relocated from facade.rs to rotation/scope_material.rs (with rotation/mod.rs re-exporting pub(crate)) specifically so rotation/ no longer depends back on facade.rs for the scope-exit cut",
+        "TickPass::run in sync/pass.rs is the ordered list of 16 private stage methods that replaced the original tick closure; stage order and every await/RefCell borrow/event send point must remain identical to the original closure for it to be a strict refactor",
+        "facade.rs shrank from ~21998 to ~20592 lines (then sync/pass.rs itself was further trimmed from 1675 to 1385 lines) after the simplify pass removed per-stage field-list boilerplate",
+        "CONTEXT.md 'Sync and refresh' section is the canonical glossary location for new sync-related terms like 'Sync pass'",
+        "Comments that reference 'above'/'below' break when code is split into new functions during a move — must be re-anchored to name the specific stage instead of relying on physical proximity",
+        "EngineSeams<T,H,C,F,S,St,Sch> (sync/drain.rs:1142) and SessionState/SessionSecrets (session.rs:273/548) are the core structs threaded through every tick stage as pub(crate) Rc-wrapped fields",
+        "tracker-ref lint exempts '// #38 D4'-style frozen corpus citations from the orphaned-comment rule"
+      ],
+      "code": [
+        {
+          "path": "crates/engine/src/sync/pass.rs",
+          "line": 420,
+          "end_line": 420,
+          "finding": "owner_identity (EcdsaVerifier, a Copy secp256k1 key) was initially copied by value (`let owner_identity = self.owner_identity;`) in three stages instead of borrowed; fixed to `&self.owner_identity` to match the original closure's single-borrow pattern"
+        },
+        {
+          "path": "crates/engine/src/sync/pass.rs",
+          "line": 938,
+          "end_line": 947,
+          "finding": "drain() originally needed #[allow(clippy::too_many_arguments)] with 8 args; refactored so Assembly holds descendants and ScopeSets holds proved/unproved scope sets, dropping drain to 6 args and removing the allow"
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "line": 179,
+          "end_line": 182,
+          "finding": "Two #[cfg(test)] use imports (floor_namespace, expire_focus_stamps) were added at module level solely to keep unedited facade tests compiling after the move; identified as a follow-up to relocate into mod tests directly"
+        }
+      ],
+      "workflow": [
+        "When a background Explore/inventory agent surveys a file that another agent is concurrently editing, it can capture stale line numbers mid-edit — the agent itself flagged this and advised re-checking line numbers before applying its findings",
+        "Delegating a large mechanical move (identifiers + visibility inventory) to one Opus agent that also applies review fixes as follow-up commits keeps context/ownership with the agent that best understands the diff, rather than re-deriving context each round",
+        "Running standards review, spec review, and workspace clippy/wasm32 checks concurrently as independent background jobs (since none depend on each other) parallelizes the review-gate phase effectively",
+        "Batching multiple reviewer findings (standards + spec, or all 4 simplify angles) into one fix commit via SendMessage back to the implementing agent avoids fragmenting the branch history with many tiny commits",
+        "CodeRabbit reviews are rate-limited per PR/timeslot (~1 hour cadence observed: 23:00Z then next slot 00:34Z, then 01:09Z->02:09Z); must check elapsed time before requesting a new review",
+        "GitHub GraphQL secondary rate limits can be hit by long-running CI-watch polling loops; falling back to REST for status checks and comment posting works around it",
+        "Opus session limits can kill mid-flight worktree agents with no partial commits lost if they hadn't committed yet; relaunching with the same brief is safe in that case"
+      ]
+    },
+    "friction": [
+      "Facade.rs being edited concurrently by another process/agent caused the identifier-inventory Explore agent to report stale line numbers, requiring a re-check before applying its findings",
+      "GitHub GraphQL secondary rate limit was hit twice: once during CI-watch polling (had to TaskStop and fall back to REST) and once during the ready-flip/comment-post step (required a background retry loop)",
+      "Both parallel worktree agents (#2056 and #2041) were killed simultaneously by an Opus session rate limit (reset 4:50am Europe/Berlin), losing progress on two follow-up implementations though no commits were lost",
+      "Large diff output for the security-review skill was too large to inline (172.3KB) and had to be persisted to a scratch file"
+    ],
+    "open_items": [
+      "Issue #2056 (mechanical helper moves: second_end_scope, leg_file_share, consult_pointers+ConsultWindow, grafted_write_passes+GraftedWritePass, install_descendant_scopes, install_unproved_scopes, etc. out of facade.rs into sync/pass.rs) filed as sub-issue of #1702, relaunching after rate-limit interruption",
+      "Issue #2041 (PassReport value) relaunching after rate-limit interruption",
+      "Follow-up: move SweepKeys and SweepTaskFactory into rotation/sweep.rs, and POINTER_PAYLOAD_VERSION next to the pointer payload, to fully remove rotation's remaining dependency on facade.rs (noted as follow-up, 7 files touch these)",
+      "Follow-up: move TickSites and sweep_links out of facade/claim_conversion.rs and facade/link_sweep.rs into sync/pass.rs since only the tick pass uses them",
+      "Follow-up: relocate the two #[cfg(test)] top-level imports in facade.rs (lines 179-182) into mod tests / mod focus_access_tests directly",
+      "Follow-up: move shared helpers (seed-cache, settings, focus-leg) to their proper domain modules (ScopeSeeds, settings.rs, sync/tick.rs) rather than leaving them in facade.rs",
+      "Follow-ups from altitude review recorded as a comment on parent issue #2037 (now closed) rather than as tracked issues, aside from what became #2056",
+      "CodeRabbit review requested on PR 2045 merge; next CodeRabbit slot for the two new follow-up PRs opens at 02:09Z and was intentionally held off"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-27T09:55:24.505636Z",
+    "agent_lines": 21,
+    "agent_removed": 30,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 21,
+    "total_lines_changed": 51,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
