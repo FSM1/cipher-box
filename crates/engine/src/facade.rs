@@ -4934,8 +4934,8 @@ pub(crate) const POINTER_PAYLOAD_VERSION: u64 = 1;
 type TickLoopSpawner = Box<dyn FnOnce()>;
 
 /// Builds the lazy-wave sweep task a rotation enqueues once its cut is durable
-/// ([`rotate_scope`]'s third effect), over the scope root the rotation read and
-/// the ancestor seed it read it under.
+/// ([`rotate_scope`](crate::rotation::rotate_scope)'s third effect), over the
+/// scope root the rotation read and the ancestor seed it read it under.
 pub(crate) type SweepTaskFactory =
     Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>) -> BoxedTask>;
 
