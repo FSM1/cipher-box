@@ -1,7 +1,5 @@
 //! `RetireLedger` — the durable owed-retirement set.
 
-use cipherbox_core::content::CONTENT_CID_LEN;
-
 use super::SeamResult;
 use crate::content::RetireTarget;
 
@@ -24,26 +22,15 @@ pub enum OwingRecord {
     /// permanently unsettleable against a never-discard ledger.
     Retired,
     /// The node's record may carry a version a dead letter dropped
-    /// ([`DebtOrigin::DroppedVersion`]): an acknowledged PUT of it may stand
-    /// behind any read the endpoints still serve from before it.
+    /// ([`DebtOrigin::DroppedVersion`]), or may never have published.
     ///
-    /// For a [`DroppedFrom::Create`], a name the endpoints all answer as
-    /// holding no record reads as an empty live set, unless this device ever
-    /// adopted a record there; no record a parent links can name the version.
-    /// For a [`DroppedFrom::Edit`], a record that still holds the edit's base
-    /// at its head stands the entry down. Any other read is
+    /// A record at or below the node's acknowledged sequence, or one the
+    /// endpoints serve tied with other bytes, stands the entry down: a PUT of
+    /// the dropped version may still surface there. A name the endpoints all
+    /// answer as holding no record reads as an empty live set, unless this
+    /// device ever adopted a record there. Any other read is
     /// [`Published`](Self::Published).
-    Unconfirmed(DroppedFrom),
-}
-
-/// What a dropped version was formed against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DroppedFrom {
-    /// A create: the node had no record.
-    Create,
-    /// An edit formed against this head binary `contentCid`, or against a file
-    /// with no version yet.
-    Edit(Option<[u8; CONTENT_CID_LEN]>),
+    Unconfirmed,
 }
 
 /// Where an owed retirement came from, which decides how the settle expands it
@@ -59,12 +46,7 @@ pub enum DebtOrigin {
     /// a gateway, so the entry carries the whole target set: every leaf, then
     /// the root last, each with its pinned bytes. The owing node reads as
     /// [`OwingRecord::Unconfirmed`].
-    DroppedVersion {
-        /// The version's target set, the root last.
-        targets: Vec<RetireTarget>,
-        /// What the version was formed against.
-        from: DroppedFrom,
-    },
+    DroppedVersion(Vec<RetireTarget>),
 }
 
 /// One owed retirement: a doomed version's **root** `contentCid` and the pinned

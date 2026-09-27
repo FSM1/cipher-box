@@ -20,26 +20,29 @@ use core::cell::RefCell;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use cipherbox_core::content::{CONTENT_CID_LEN, encode_content_cid_str, verify_cid};
+use cipherbox_core::content::{encode_content_cid_str, verify_cid};
 
 use crate::content::LocalBlocks;
 use crate::content::chunk::SEALED_LEAF_OVERHEAD;
 use crate::content::dag::{LeafCid, RootManifest};
 use crate::content::{ContentProfile, decode_root, expand_staged_root};
-use crate::facade::WriteHandle;
+use futures_channel::mpsc;
+
+use crate::facade::{Event, WriteHandle};
 use crate::grants::conversion::CONVERSION_RECORD_PREFIX;
 use crate::grants::{CONTACTS_PREFIX, RECEIVED_SHARES_PREFIX};
-use crate::net::{NODE_TOMBSTONE_PREFIX, RETIRE_LEDGER_PREFIX, StagingRetireLedger};
+use crate::net::{
+    ACKED_SEQUENCE_PREFIX, NODE_TOMBSTONE_PREFIX, RETIRE_LEDGER_PREFIX, StagingRetireLedger,
+};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
-    DebtOrigin, DroppedFrom, OpId, OwedRetire, RetireLedger, SeamError, SeamResult, StagingStore,
-    UnixMillis,
+    DebtOrigin, OpId, OwedRetire, RetireLedger, SeamError, SeamResult, StagingStore, UnixMillis,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX};
-use crate::sync::op::{Op, OpKind};
+use crate::sync::op::Op;
 use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{
     RecordClass, RecordReader, RecordSeal, encode_op_record, record_content_root_cid,
@@ -51,7 +54,7 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// Whether `key` is engine bookkeeping rather than upload residue: a
 /// per-identity op-id high-water mark
 /// ([`owner_scoped_key`](crate::sync::drain::owner_scoped_key)), a retire-ledger entry, a
-/// retired node's tombstone, a
+/// retired node's tombstone, a node's acknowledged sequence, a
 /// doomed-name journal entry, a
 /// received-shares list, a contact book, or the
 /// notices of its versionless dead letters, the scope roots that still owe a
@@ -66,6 +69,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(PUBLISHED_OP_MARK_PREFIX)
         || key.starts_with(RETIRE_LEDGER_PREFIX)
         || key.starts_with(NODE_TOMBSTONE_PREFIX)
+        || key.starts_with(ACKED_SEQUENCE_PREFIX)
         || key.starts_with(DOOMED_JOURNAL_PREFIX)
         || key.starts_with(RECEIVED_SHARES_PREFIX)
         || key.starts_with(CONTACTS_PREFIX)
@@ -306,6 +310,7 @@ pub(crate) struct DroppedVersionDebts<'a, S> {
     seal: BookkeepingSeal<'a>,
     profile: &'a ContentProfile,
     foreign: &'a RefCell<BTreeSet<Vec<u8>>>,
+    events: &'a mpsc::UnboundedSender<Event>,
 }
 
 impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
@@ -315,6 +320,7 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
         seal: BookkeepingSeal<'a>,
         profile: &'a ContentProfile,
         foreign: &'a RefCell<BTreeSet<Vec<u8>>>,
+        events: &'a mpsc::UnboundedSender<Event>,
     ) -> Self {
         Self {
             store,
@@ -322,6 +328,7 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
             seal,
             profile,
             foreign,
+            events,
         }
     }
 
@@ -350,25 +357,29 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
 
     /// [`Self::drop_version`] over a root block the caller already read. The
     /// journal is best-effort: a failure leaves the rows charged, which is a
-    /// leak, never a loss. A root that is gone or does not expand names nothing
-    /// to journal.
+    /// leak, never a loss, and is reported ([`Event::RegistryDebtUnjournaled`]).
+    /// A root that is gone names nothing to journal.
     async fn drop_staged(&self, op: &Op, root: &[u8], block: Option<&[u8]>) {
         let manifest = block
             .filter(|block| verify_cid(root, block).is_ok())
             .and_then(|block| decode_root(block).ok());
-        if let (Some(block), true, Some(from)) = (block, manifest.is_some(), dropped_from(op)) {
+        if let (Some(block), true) = (block, manifest.is_some()) {
             let target = encode_content_cid_str(root);
-            if let Ok(expansion) = expand_staged_root(&target, block, self.profile) {
-                let debt = OwedRetire {
-                    origin: DebtOrigin::DroppedVersion {
-                        targets: expansion.targets,
-                        from,
-                    },
-                    ..OwedRetire::whole(op.target.0, target, expansion.pinned_bytes)
-                };
-                let _ = StagingRetireLedger::new(self.store, self.seal)
-                    .owe(&self.reader.owner_tag(), &[debt])
-                    .await;
+            let journaled = match expand_staged_root(&target, block, self.profile) {
+                Ok(expansion) => {
+                    let debt = OwedRetire {
+                        origin: DebtOrigin::DroppedVersion(expansion.targets),
+                        ..OwedRetire::whole(op.target.0, target, expansion.pinned_bytes)
+                    };
+                    StagingRetireLedger::new(self.store, self.seal)
+                        .owe(&self.reader.owner_tag(), &[debt])
+                        .await
+                        .is_ok()
+                }
+                Err(_) => false,
+            };
+            if !journaled {
+                let _ = self.events.unbounded_send(Event::RegistryDebtUnjournaled);
             }
         }
         let leaves = manifest
@@ -599,23 +610,6 @@ fn version_bytes(manifest: &RootManifest, root_block_len: usize, staged: &Staged
             plaintext.saturating_add(SEALED_LEAF_OVERHEAD)
         })
         .fold(root_block_len as u64, u64::saturating_add)
-}
-
-/// What `op`'s version was formed against; `None` for an op with no version
-/// or a base that is not a content CID, whose debt goes unjournaled.
-fn dropped_from(op: &Op) -> Option<DroppedFrom> {
-    match &op.kind {
-        OpKind::UpdateContent {
-            base_version_cid, ..
-        } => match base_version_cid {
-            None => Some(DroppedFrom::Edit(None)),
-            Some(base) => <[u8; CONTENT_CID_LEN]>::try_from(base.as_slice())
-                .ok()
-                .map(|base| DroppedFrom::Edit(Some(base))),
-        },
-        OpKind::Create { .. } => Some(DroppedFrom::Create),
-        _ => None,
-    }
 }
 
 /// Which of `sized` stay, as a keep-mask, against the age, count and byte
@@ -1250,19 +1244,22 @@ mod tests {
     }
 
     /// One reconcile pass over a listing taken now, under [`OWNER`]'s custody.
-    async fn reconcile<S: StagingStore>(store: &S, bounds: PreservedBounds) {
+    async fn reconcile<S: StagingStore>(store: &S, bounds: PreservedBounds) -> Vec<Event> {
         let staged = store.staged_keys().await.unwrap();
         let entropy = RefCell::new(SeededEntropy::new(7));
         let reader = RecordReader::new(&OWNER);
         let foreign = RefCell::new(BTreeSet::new());
+        let (events, mut sent) = mpsc::unbounded();
         let debts = DroppedVersionDebts::new(
             store,
             &reader,
             BookkeepingSeal::new(&OWNER, &entropy),
             &ContentProfile::CI,
             &foreign,
+            &events,
         );
         reconcile_preserved_dead_letters(store, &staged, bounds, Some(&debts)).await;
+        core::iter::from_fn(|| sent.try_recv().ok()).collect()
     }
 
     /// What [`OWNER`] owes the registry, as the settle reads it.
@@ -1474,6 +1471,7 @@ mod tests {
                 DRAINED_OP_MARK_PREFIX,
                 PUBLISHED_OP_MARK_PREFIX,
                 RETIRE_LEDGER_PREFIX,
+                ACKED_SEQUENCE_PREFIX,
                 DOOMED_JOURNAL_PREFIX,
                 RECEIVED_SHARES_PREFIX,
                 CONTACTS_PREFIX,
@@ -2036,7 +2034,7 @@ mod tests {
             assert_eq!(owed.len(), 1);
             assert_eq!(owed[0].node, id(1).0);
             assert_eq!(owed[0].target, encode_content_cid_str(&root_cid));
-            let DebtOrigin::DroppedVersion { targets, .. } = &owed[0].origin else {
+            let DebtOrigin::DroppedVersion(targets) = &owed[0].origin else {
                 panic!("a trimmed version's debt carries its targets");
             };
             let mut named: Vec<Vec<u8>> = blocks.iter().map(|block| block.cid.clone()).collect();
@@ -2049,6 +2047,28 @@ mod tests {
                 named,
                 "every leaf, then the root"
             );
+        });
+    }
+
+    /// A trimmed version whose debt did not reach the ledger is reported, not
+    /// dropped in silence.
+    #[test]
+    fn a_trimmed_version_whose_debt_did_not_journal_is_reported() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            park(&store, &record).await;
+            store.interrupt_staged_write_family_after(RETIRE_LEDGER_PREFIX, 0);
+            let expired = PreservedBounds {
+                ttl: Duration::ZERO,
+                ..bounds(ROOMY)
+            };
+            let events = reconcile(&store, expired).await;
+
+            assert!(owed_by_owner(&store).await.is_empty());
+            assert_eq!(events, vec![Event::RegistryDebtUnjournaled]);
         });
     }
 

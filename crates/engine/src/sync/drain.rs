@@ -86,9 +86,9 @@ use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
 use crate::rotation::{LaggingSeedMiss, ScopeExitRotator, derive_write_name, lagging_read_seed};
 use crate::seams::{
-    CredentialStore, DebtOrigin, DroppedFrom, FloorStore, Http, OpId, OwedRetire, OwingRecord,
-    RecordTransport, RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache,
-    StagingStore, UnixMillis,
+    CredentialStore, DebtOrigin, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
+    RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache, StagingStore,
+    UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
@@ -593,6 +593,8 @@ enum HeadPublish {
     Confirmed(Vec<u8>),
     /// A lost CAS race, with the winning record when the confirm read one.
     Lost { winner: Option<Vec<u8>> },
+    /// Acknowledged at `sequence`, but the confirm did not see it.
+    Unconfirmed { sequence: u64 },
 }
 
 /// What a name serves at its freshest sequence: that sequence, and every
@@ -1506,6 +1508,8 @@ struct LoadedNode {
     name: IpnsName,
     record: Vec<u8>,
     sequence: u64,
+    /// The endpoints serve other bytes at `sequence` too.
+    tied: bool,
     envelope_unknown: PreservedFields,
     epoch_tag_unknown: PreservedFields,
     body: ReadBody,
@@ -1687,6 +1691,10 @@ where
         BookkeepingSeal::new(scope.enc_secret, &*self.seams.entropy)
     }
 
+    fn retire_ledger<'s>(&'s self, scope: &'s DrainScope<'_>) -> StagingRetireLedger<'s, St> {
+        StagingRetireLedger::new(&self.seams.staging, self.bookkeeping_seal(scope))
+    }
+
     /// The custody a dropped version's debt is journaled under, over `reader`,
     /// which the caller builds once for the tick.
     fn dropped_version_debts<'s>(
@@ -1700,6 +1708,7 @@ where
             self.bookkeeping_seal(scope),
             &self.seams.content_profile,
             self.cells.foreign_parked,
+            &self.seams.events,
         )
     }
 
@@ -2507,6 +2516,7 @@ where
         )
         .await
         .map_err(seam)?;
+        let tied = !resolved.tied.is_empty();
         // A drain publish is an ordinary write, so it carries the lazy wave
         // rather than refusing what a cut left behind: a record the epoch floor
         // rejects is re-read at the epoch it was sealed at, and the publish path
@@ -2539,6 +2549,7 @@ where
             name,
             record: record_bytes,
             sequence: adopted.sequence,
+            tied,
             envelope_unknown: envelope.unknown,
             epoch_tag_unknown: envelope.epoch_tag_unknown,
             body: adopted.read_body,
@@ -5487,17 +5498,22 @@ where
         {
             Ok(loaded) => loaded,
             Err(_)
-                if owing == OwingRecord::Unconfirmed(DroppedFrom::Create)
+                if owing == OwingRecord::Unconfirmed
                     && self.holds_no_record(&end, &write_name).await? =>
             {
                 return reaching(BTreeSet::new());
             }
             Err(_) => return None,
         };
-        if let OwingRecord::Unconfirmed(DroppedFrom::Edit(base)) = owing
-            && head_content_cid(&loaded.body) == base.as_ref().map(|cid| &cid[..])
-        {
-            return None;
+        if owing == OwingRecord::Unconfirmed {
+            let acked = self
+                .retire_ledger(scope)
+                .acknowledged(&owner_tag(scope.enc_secret), node, write_name.as_str())
+                .await
+                .ok()?;
+            if loaded.tied || acked.is_some_and(|acked| loaded.sequence <= acked) {
+                return None;
+            }
         }
         // A record carrying no version list reaches no content.
         let ReadBody::File { versions, .. } = loaded.body else {
@@ -5510,7 +5526,7 @@ where
         reaching(live)
     }
 
-    /// Whether `name` holds no record by the [`DroppedFrom::Create`] rule:
+    /// Whether `name` holds no record by the [`OwingRecord::Unconfirmed`] rule:
     /// every endpoint answers that it holds none, and this device never adopted
     /// one there. `None` when the sequence floor will not read.
     async fn holds_no_record(&self, end: &ScopeEnd<'_>, name: &IpnsName) -> Option<bool> {
@@ -6178,12 +6194,32 @@ where
         .map_err(|error| PublishHalt::before_the_put(self.report_author_refusal(name, error)))?;
         report_carried_cut(&self.seams.events, name, &head.cut);
 
+        let ledger = self.retire_ledger(scope);
+        let owner = owner_tag(scope.enc_secret);
+        let acked = ledger
+            .acknowledged(&owner, node.0, name.as_str())
+            .await
+            .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
         let record_bytes = match self
-            .publish_head(plane, name, &node.0, &head, content_cids.clone())
+            .publish_head(plane, name, &node.0, &head, content_cids.clone(), acked)
             .await
             .map_err(PublishHalt::before_the_put)?
         {
-            HeadPublish::Confirmed(record_bytes) => record_bytes,
+            HeadPublish::Confirmed(record_bytes) => {
+                if acked.is_some() {
+                    let _ = ledger.forget_acknowledged(&owner, node.0).await;
+                }
+                record_bytes
+            }
+            // Its bytes may still surface at `sequence`, so the next publish
+            // here signs above it rather than tying it.
+            HeadPublish::Unconfirmed { sequence } => {
+                ledger
+                    .acknowledge(&owner, node.0, name.as_str(), sequence)
+                    .await
+                    .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
+                return Err(PublishHalt::before_the_put(Halt::Attempt));
+            }
             HeadPublish::Lost { winner } => {
                 // The retry must rebase onto the winner: the first-endpoint tie
                 // can keep serving our own record, which already holds this op.
@@ -6285,6 +6321,7 @@ where
         node_id: &[u8; 16],
         head: &AuthoredHead,
         content_cids: Vec<String>,
+        acked: Option<u64>,
     ) -> Result<HeadPublish, Halt> {
         let binding = plane.head_binding(node_id);
         let preflighted = preflight(&binding, &plane.end.read_key(node_id), head)
@@ -6305,7 +6342,7 @@ where
                 signer: &signer,
                 head: &preflighted,
                 content_cids,
-                min_current_sequence: None,
+                min_current_sequence: acked,
             },
         )
         .await
@@ -6318,9 +6355,7 @@ where
         match outcome {
             PublishOutcome::Published { .. } => Ok(HeadPublish::Confirmed(record_bytes)),
             PublishOutcome::LostRace { .. } => Ok(HeadPublish::Lost { winner }),
-            // It burned a CAS sequence at this name without a record we could
-            // adopt, so it is charged against the attempt budget.
-            PublishOutcome::Unconfirmed { .. } => Err(Halt::Attempt),
+            PublishOutcome::Unconfirmed { sequence } => Ok(HeadPublish::Unconfirmed { sequence }),
         }
     }
 
@@ -6857,15 +6892,6 @@ async fn op_mark<St: StagingStore>(staging: &St, key: &[u8]) -> SeamResult<Optio
         .await?
         .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok())
         .map(u64::from_be_bytes))
-}
-
-/// The head version's binary `contentCid` of a read body; `None` for a body
-/// with no version.
-fn head_content_cid(body: &ReadBody) -> Option<&[u8]> {
-    match body {
-        ReadBody::File { versions, .. } => versions.first().map(|v| v.content_cid.as_slice()),
-        _ => None,
-    }
 }
 
 /// The published-op mark for `enc_secret`'s identity. Read by the drain and by

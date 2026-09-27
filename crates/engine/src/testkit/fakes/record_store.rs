@@ -283,6 +283,11 @@ impl InMemoryRecordStore {
         self.dropping_puts.store(true, Ordering::SeqCst);
     }
 
+    /// Retain PUTs again after [`drop_puts`](Self::drop_puts).
+    pub fn keep_puts(&self) {
+        self.dropping_puts.store(false, Ordering::SeqCst);
+    }
+
     /// Park every GET under `routing_key` once `budget` more of them have
     /// answered, until [`release_gets_for`](Self::release_gets_for), so a test
     /// can hold one caller mid-read.

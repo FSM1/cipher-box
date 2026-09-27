@@ -1698,6 +1698,9 @@ pub enum Event {
     /// listed nor released, and no later dead letter may join them. Terminal:
     /// no pass changes it, and the member is the only one who can.
     ParkedWritesUnreadable,
+    /// A dropped parked write's registry rows did not reach the retire ledger:
+    /// they stay charged, and the pending-reclaim figure does not count them.
+    RegistryDebtUnjournaled,
     /// This device's grantee name cache did not open, so it was cleared. It is a
     /// pre-fill and no authority: names the owner gave are still on the rows,
     /// and only the offer of a name for a new folder is lost.
@@ -1803,6 +1806,7 @@ impl fmt::Debug for Event {
                 .field("reason", reason)
                 .finish(),
             Self::ParkedWritesUnreadable => f.write_str("ParkedWritesUnreadable"),
+            Self::RegistryDebtUnjournaled => f.write_str("RegistryDebtUnjournaled"),
             Self::GranteeNamesCleared => f.write_str("GranteeNamesCleared"),
             Self::ConversionRecordUnreadable => f.write_str("ConversionRecordUnreadable"),
             Self::RefusedClaimDropped => f.write_str("RefusedClaimDropped"),
@@ -10483,6 +10487,7 @@ where {
             BookkeepingSeal::new(session.enc_subkey(), &*self.entropy),
             &self.content_profile,
             &self.state.foreign_parked,
+            &self.events,
         )
     }
 

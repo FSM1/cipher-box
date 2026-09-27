@@ -10829,11 +10829,12 @@ fn a_discarded_parked_write_retires_the_rows_its_version_kept() {
 }
 
 /// An edit whose PUT the endpoints acknowledged and never served may still
-/// land. While they serve the head it was formed against, its discarded version
-/// retires nothing: that read cannot tell a lagging endpoint from an edit that
-/// never landed.
+/// surface at the sequence it was acknowledged at. Its discarded version
+/// retires nothing while the endpoints serve nothing above that sequence; the
+/// next publish at the name signs above it, and once that lands the version
+/// retires.
 #[test]
-fn a_discarded_edit_retires_nothing_while_its_base_still_stands() {
+fn a_discarded_edit_retires_nothing_at_or_below_its_acknowledged_sequence() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -10865,6 +10866,83 @@ fn a_discarded_edit_retires_nothing_while_its_base_still_stands() {
             .chain([&root_cid])
             .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
         "nothing the acknowledged edit names is retired"
+    );
+    assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
+
+    world.record_store.keep_puts();
+    write_file(&mut engine, version(node), &[3u8; 200]).expect("the next edit commits");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        sequence_at(&world, &write_name(node)) > 2,
+        "the next record signs above the acknowledged sequence, never tying it"
+    );
+    let named: BTreeSet<String> = retire_entries(&alice)
+        .into_iter()
+        .filter(|(name, _)| name.as_deref() == Some(write_name(node).as_str()))
+        .flat_map(|(_, targets)| targets)
+        .collect();
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| named.contains(&encode_content_cid_str(cid))),
+        "a record above the acknowledged sequence settles the debt: {named:?}"
+    );
+}
+
+/// A record the endpoints serve tied with other bytes may not be the one a
+/// dropped version's PUT left there, so its debt waits while the tie stands.
+#[test]
+fn a_dropped_versions_debt_waits_while_its_record_is_tied() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    block_on(
+        alice
+            .staging_store
+            .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
+    )
+    .expect("the foreign set stages");
+    let tie = IpnsRecord::create_v2(
+        &write_signer(node),
+        b"/ipfs/bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    let endpoint = world.record_store.endpoints()[1].clone();
+
+    blocks.refuse_register(proxy_400());
+    write_file(&mut engine, version(node), &[2u8; 200]).expect("the edit commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    world
+        .record_store
+        .seed_record(&endpoint, write_name(node).as_str(), tie);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| !retired.contains(&encode_content_cid_str(cid))),
+        "nothing the dropped version names is retired against a tied record"
     );
     assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
 }
