@@ -4619,7 +4619,7 @@ impl<T: SeamTypes> Engine<T> {
         // leaves them referenced by nothing, so cold start is the first place
         // that residue can be reclaimed — and the first place a preserved set
         // that was already over its bounds when this store opened is cut back to
-        // them, before a single tick runs.
+        // them, for the entries this session opens, before a single tick runs.
         let reader = self
             .session
             .as_ref()

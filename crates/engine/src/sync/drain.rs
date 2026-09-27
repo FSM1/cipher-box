@@ -1956,8 +1956,7 @@ where
             // has dropped its record from the queue.
             let preserved = self.preserve_dead_letter(scope, *op_id, *reason).await?;
             self.abandon(scope, *op_id, op).await?;
-            // After the abandonment, which retired what the op registered off
-            // the manifest these blocks carry: no debt is left to journal.
+            // The abandonment retired what the op registered.
             if preserved == Preservation::Refused {
                 self.release_staged_blocks(op).await;
             }
@@ -6044,8 +6043,7 @@ where
     /// pass rebases onto what they serve.
     ///
     /// A scope root's `commitment` is then held to the cut-epoch floor
-    /// ([`refuse_below_cut_floor`], ADR 0041 D1): a re-resolve the endpoints
-    /// answer with nothing raises no floor.
+    /// ([`refuse_below_cut_floor`]).
     async fn reresolve_before_signing(
         &self,
         scope: &DrainScope<'_>,

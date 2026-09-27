@@ -10869,6 +10869,46 @@ fn a_discarded_edit_retires_nothing_while_its_base_still_stands() {
     assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
 }
 
+/// A conditional-edit loser keeps its rows, and a preserved set that refuses
+/// it drops the only manifest listing them. The debt is journaled first, and
+/// the name has moved past the loser's base, so the settle retires what the
+/// winning record does not name.
+#[test]
+fn a_refused_conditional_edit_loser_still_retires_its_rows() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
+    let (bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+    block_on(
+        bob.staging_store
+            .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
+    )
+    .expect("the foreign set stages");
+
+    write_file(&mut engine_b, version(node), &bobs).expect("the second device's edit commits");
+    let (root_cid, leaves) = staged_version(&bob);
+    write_file(&mut engine_a, version(node), &alices).expect("the first device's edit commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    let (parked, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
+    assert_eq!(parked[0].reason, DeadLetterReason::PreservationRefused);
+    tick(&world, &engine_b, &mut tasks_b);
+
+    let named: BTreeSet<String> = retire_entries(&bob)
+        .into_iter()
+        .filter(|(name, _)| name.as_deref() == Some(write_name(node).as_str()))
+        .flat_map(|(_, targets)| targets)
+        .collect();
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| named.contains(&encode_content_cid_str(cid))),
+        "every block the loser charged is retired under the node's record: {named:?}"
+    );
+}
+
 /// Recover re-queues the parked bytes under a **fresh** op anchored on the head
 /// that beat them. Resuming the parked op instead would replay the conditional
 /// edit it lost, so the member could never get their own bytes back.

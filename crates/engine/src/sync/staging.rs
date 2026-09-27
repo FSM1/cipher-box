@@ -627,7 +627,7 @@ fn dropped_from(op: &Op) -> Option<DroppedFrom> {
 /// stands, even alone over the byte ceiling — it is the one the user is about to
 /// be told about, and a single version is already bounded by the admission cap
 /// that let it stage at all.
-fn trim_preserved(sized: &[Sized], bounds: PreservedBounds) -> Vec<bool> {
+fn trim_preserved(sized: &[SizedEntry], bounds: PreservedBounds) -> Vec<bool> {
     let mut keep: Vec<bool> = sized
         .iter()
         .map(|parked| !bounds.expired(&parked.entry))
@@ -653,8 +653,15 @@ fn trim_preserved(sized: &[Sized], bounds: PreservedBounds) -> Vec<bool> {
     keep
 }
 
+/// One preserved entry's place in the set, in order: one this session does not
+/// open stays as it is; an opened one is the next [`SizedEntry`].
+enum Slot {
+    Foreign(PreservedDeadLetter),
+    Opened,
+}
+
 /// One preserved entry this session opens, as the trim weighs it.
-struct Sized {
+struct SizedEntry {
     entry: PreservedDeadLetter,
     op: Op,
     root: Vec<u8>,
@@ -999,12 +1006,11 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
     }
     let staged: StagedKeys = staged.iter().map(Vec::as_slice).collect();
     let before = kept.len();
-    // `Err` holds an entry this session does not open, in its place.
-    let mut slots: Vec<Result<usize, PreservedDeadLetter>> = Vec::with_capacity(before);
+    let mut slots = Vec::with_capacity(before);
     let mut sized = Vec::with_capacity(before);
     for entry in kept {
         let Some(op) = debts.opens(&entry.record) else {
-            slots.push(Err(entry));
+            slots.push(Slot::Foreign(entry));
             continue;
         };
         let Ok(Some(root)) = record_content_root_cid(&entry.record) else {
@@ -1021,8 +1027,8 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
             // judge it.
             Ok(OpenedVersion::Opaque) | Err(_) => (None, 0),
         };
-        slots.push(Ok(sized.len()));
-        sized.push(Sized {
+        slots.push(Slot::Opened);
+        sized.push(SizedEntry {
             entry,
             op,
             root,
@@ -1031,17 +1037,17 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
         });
     }
     let keep = trim_preserved(&sized, bounds);
-    let mut judged: Vec<Option<Sized>> = sized.into_iter().map(Some).collect();
+    let mut opened = sized.into_iter().zip(keep);
     let mut live = Vec::with_capacity(before);
     let mut dropped = Vec::new();
     for slot in slots {
         match slot {
-            Err(foreign) => live.push(foreign),
-            Ok(at) => {
-                let Some(parked) = judged[at].take() else {
-                    continue;
+            Slot::Foreign(entry) => live.push(entry),
+            Slot::Opened => {
+                let Some((parked, kept)) = opened.next() else {
+                    break;
                 };
-                if keep[at] {
+                if kept {
                     live.push(parked.entry);
                 } else {
                     dropped.push(parked);

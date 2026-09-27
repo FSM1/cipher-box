@@ -397,13 +397,12 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     }
 }
 
-/// One entry as the staging store holds it, inside the seal. Two shapes, one
-/// per release; every well-formed content CID is one length, so they never
-/// share a length:
+/// One entry as the staging store holds it, inside the seal. Two shapes; every
+/// well-formed content CID is one length, so they never share a length:
 ///
-/// - the previous release: `node(16) | owedBytes | manifestBytes | cid`, read
-///   as a [`DebtOrigin::Prune`] debt;
-/// - this release: `ENTRY_V2 | origin | node(16) | owedBytes | manifestBytes |
+/// - unversioned, read only: `node(16) | owedBytes | manifestBytes | cid`, a
+///   [`DebtOrigin::Prune`] debt;
+/// - versioned: `ENTRY_V2 | origin | node(16) | owedBytes | manifestBytes |
 ///   cid`, and for [`DebtOrigin::DroppedVersion`] then `from`, then one
 ///   `cid | pinnedBytes` per target, the root last. `from` is `FROM_CREATE`,
 ///   `FROM_EDIT_UNVERSIONED`, or `FROM_EDIT | baseCid` ([`DroppedFrom`]).
@@ -464,7 +463,7 @@ fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> SeamResult<Zeroizing<Vec<u8>>
     Ok(stored)
 }
 
-/// The version byte a stored entry of this release leads with.
+/// The version byte a versioned entry leads with.
 const ENTRY_V2: u8 = 2;
 const ORIGIN_PRUNE: u8 = 0;
 const ORIGIN_DROPPED_VERSION: u8 = 1;
