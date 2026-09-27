@@ -1,0 +1,308 @@
+<task-notification>
+<task-id>bzyo8f8mz</task-id>
+<tool-use-id>toolu_016pDhbqWPgCMgoTiFcuK2iq</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/bzyo8f8mz.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for fmt, clippy, and the engine tests, then print the result lines" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4f9177782ea1e41a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/a4f9177782ea1e41a.output</output-file>
+<status>completed</status>
+<summary>Agent "Standards review of 2040 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found one breach of a documented standard and two orphaned comments. The other findings are judgement calls. I did not see a behavior change. The stage order in `TickPass::run` is the same as the original closure, and `conversion_owner` reads `current_root_name` again, as the original code did.
+
+**Standard breaches**
+
+1. **Terminology (hard, `AGENTS.md` Terminology Standards and `CONTEXT.md`).** This diff adds the term **Sync pass** to `CONTEXT.md`. But the code uses a different name: the header of `sync/pass.rs` says "One focus-window tick pass", and the type is `TickPass`. Rename the type and the header text to use "sync pass", or change the new glossary entry to match the code.
+
+2. **Orphaned comments (`AGENTS.md` Code Style → Comments).** The comments moved verbatim. Their "above" and "below" now point across function boundaries:
+   - In `pull_mailbox`: "Last, and after the drain above: the grantee's own read leg is the slowest…". This text explains `refresh_received_shares`, which is the last stage. It does not explain the mailbox pull, and three stages now come after it. Move it to `refresh_received_shares`.
+   - In `redecide_settings`: "on the same terms as the enc subkey above". The enc subkey copy is now in `loop_gate`, not above this line.
+   - `// #38 D4` and `#33 D4` are acceptable. They cite the frozen corpus, which the tracker-ref rule exempts.
+
+**Judgement calls (baseline smells)**
+
+- **Data Clumps:** `drain` takes eight parameters and needs `#[allow(clippy::too_many_arguments)]`. Also, `run` passes stage results around as tuples: `(folder_verdict, proved_scope_ids, unproved_scope_ids)`, `(floors_before, grafted)` and `(owner_keys, pointers, claims)`. Put the stage outputs in one struct, or add them to `Pass`.
+- **Mysterious Name:** `Pass` and `TickPass` are hard to tell apart, and `TickPass` is the per-session runner, not one pass. `ConversionPass` and `GraftedWritePass` add to the confusion. `Assembly` does not say what it holds; `DrainScopes` would.
+- **The `conversion_owner` / `conversion_pass` pair:** the split is correct, because `ConversionPass` borrows from `ConversionOwner`. But `link_sweep` gets `&amp;owner.root_name` as its own argument, while `convert_claims` gets `owner`. Make the two calls the same.
+- **Duplicated Code:** every stage opens with the same destructure of `EngineSeams` and `SessionState`, then re-aliases `pass.now` and `&amp;pass.enc_subkey`. This is acceptable for a strict move, but it is boilerplate.
+- **Feature Envy:** `consult_pointers`, `grafted_write_passes`, `install_unproved_scopes` and `leg_file_share` are still in `facade.rs`, but only `sync/pass.rs` uses them. `sync/pass.rs` also imports about 30 items from `crate::facade`. `rotation/flat_cut.rs` imports `Boundaries`, `SweepKeys` and others from `crate::facade`, so a rotation module now depends on the facade. That is the wrong dependency direction.
+- **`#[cfg(test)] use` at `facade.rs:179-182`:** these imports (`floor_namespace`, `expire_focus_stamps`) exist only for the tests. Put them in the imports of `mod tests`, not at the top of the module.
+- **Visibility is too wide.** It looks like one blanket replacement. `sync/pass.rs` needs only these: `ConversionPass`, `CutAuthority`, `TickSites` and their fields; `PointerIndex`, `placed`, `scope_pointer_index`; `ConversionSites` (a bound on `run`); `PassOutcome` and `into_result`; `run`, `sweep_links`; `LinkSweepReport` and its `rekeyed`/`more`/`failure` fields.
+
+  The other items can go back to `pub(super)`:
+  - `CONVERSION_RUNNING`, `CONVERSION_RECORD_FULL`, `CLAIM_NOT_HELD`
+  - `PassOutcome.intake` and `.conversion`, `unheld`, `claimed_pointer`
+  - `Running`/`take`
+  - `HeldRecord` and `pending_links`/`retire_cut`/`retire_uncommitted`
+  - `keys`, `net`, `hold_record`, `settle`, `rotate_cut`, `show_counts`, `retire_refused`
+  - `EngineSites` and its fields
+  - `MAX_SWEEP_CUTS`
+
+Security rules 7 and 8: no finding. `Zeroizing` ownership did not change, and the moved code adds no encode or decode path.</result>
+<usage><subagent_tokens>89474</subagent_tokens><tool_uses>14</tool_uses><duration_ms>94784</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bp3q0rkp3</task-id>
+<tool-use-id>toolu_019CH4TLn8HRLmwRRbCMrWLr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/bp3q0rkp3.output</output-file>
+<status>completed</status>
+<summary>Background command "Run workspace clippy and the wasm32 check, then print the result lines" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a808b48c7cdb8a87f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/a808b48c7cdb8a87f.output</output-file>
+<status>completed</status>
+<summary>Agent "Spec review of 2040 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found no blocking defect. The move is a strict refactor, and one spec sentence is only partly met. I did not build the crate or run the tests.
+
+**(a) Missing or partial**
+
+- Spec: "The drain then calls into `rotation/` and not back into the facade." This is partial. `sync/pass.rs` now calls `rotation::cut_exited_scope`. But `rotation/flat_cut.rs` now imports `Boundaries`, `SweepKeys`, `SweepTaskFactory`, `Event`, `POINTER_PAYLOAD_VERSION`, `ascent_node_seed` and `proved_scope_ref` from `crate::facade`. Before this change, `rotation/` took only `NodeId` from the facade. So the cut still calls back into the facade, and `rotation` and `facade` now depend on each other. `pass.rs` also imports about 30 facade helpers.
+- Spec: "The 17 stages become private fns of the module." The stages are private methods on `TickPass`: 16 stages plus two helpers, `conversion_owner` and `conversion_pass`. This is acceptable.
+
+**(b) Scope creep**
+
+I found no behaviour change. Some items became `pub(crate)` so that the pass can use them: about 30 facade helpers, and `claim_conversion` and `link_sweep`. The diff also changes some doc links, adds `#[allow(clippy::too_many_arguments)]` on `drain`, and adds two `#[cfg(test)] use` imports at facade module level. These imports keep the tests compiling without an edit.
+
+**(c) Implementation checks, all equivalent**
+
+- Spec: "Strict refactor. The pass keeps its Stop or Continue signal." `run` returns `TickControl`. Four exits give Stop, in the original order: the alive check, a missing root name or secret, the alive check after the settings load, and a missing placement. The normal end gives Continue.
+- The order of awaits, event sends and cell borrows is the same in each stage. No `Ref` now spans an await. The cells are read at the same points as before: `owner_keys` (just before the pointer index), `owner_signer`, `sweep` and `vault_root_name` (after the mailbox pull), `grafted_sharers` (at the floor refresh and at assembly), and `settings_summary` (at the settle and at the drain).
+- `manual.settle(root_verdict.worst(folder_verdict))` still runs after the focus retain and before the bin clear.
+- The drain locals now drop when `drain()` returns. `Drain` has no `Drop` impl, so nothing changes.
+- The six helpers that moved into `pass.rs` are byte-identical to the originals.
+- `ScopeExitArm`, `cut_exited_scope`, `flat_root_cut` and `FlatCut` are identical to the originals except for `pub(crate)` and the doc links. The `rotate_now` call site is unchanged.
+- Spec: "The ~30 tick tests in the facade stay where they are and pass without an edit." `grep cfg(test)` finds only the two module-level imports. The last facade diff hunk is far above `mod tests` and `mod focus_access_tests`. The tests do not use the names that moved.
+- Spec: "Add one line to `CONTEXT.md` under 'Sync and refresh'". The line is present, word for word, in that section.
+- `sync/tick.rs` did not change.
+
+**Minor**
+
+Some comments that moved now point across function boundaries. Examples: "the enc subkey above" in `redecide_settings`, and "the floor refresh below" and "the drain above" in other stages. They are not wrong, but the target is now in a different function.
+
+Key files are `/Users/myankelev/Code/random/cipher-box/crates/engine/src/sync/pass.rs`, `/Users/myankelev/Code/random/cipher-box/crates/engine/src/rotation/flat_cut.rs` and `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs`.</result>
+<usage><subagent_tokens>126158</subagent_tokens><tool_uses>21</tool_uses><duration_ms>149248</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab2c9502182792973</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/ab2c9502182792973.output</output-file>
+<status>completed</status>
+<summary>Agent "Move the tick pass body" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I applied all six fixes as one new commit, `6effe479b`, on `refactor/2040-tick-pass-move`. I did not push. `cargo fmt --all` and clippy with `-D warnings` are clean. The engine lib tests pass: 1974 tests, with no test edit.
+
+- **Item 1:** The module header now says "One sync pass (CONTEXT.md "Sync pass"; blueprint/engine.md ...)". The type name stays `TickPass`.
+- **Item 2:** I changed six comments that pointed into another fn. Each one now names the stage, and the three known cases use your wording. The first `pull_mailbox` sentence is now the doc of `refresh_received_shares`. The other "above" and "below" words point inside their own fn, so they stay.
+- **Item 3:** I set both files back to `pub(super)`. Then I widened only the items on your list. The compiler asked for no other item.
+  - I also put `ClaimCounts` and three of its methods back to `pub(crate)`, because they were `pub(crate)` before this branch.
+  - `OwnerScope` must stay `pub(crate)`. When I made it private, the build gave a private-interface warning on the `TickSites` impl of `ConversionSites`.
+- **Item 4:** `link_sweep` now takes `&amp;owner`, the same as `convert_claims`.
+- **Item 5:** `Boundaries`, `ascent_node_seed` and `proved_scope_ref` are now in `rotation/scope_material.rs`, and `rotation/mod.rs` re-exports them as `pub(crate)`.
+  - I changed the imports in `facade.rs`, `rotation/flat_cut.rs` and `sync/pass.rs`.
+  - `facade/claim_conversion.rs` needed no change, because it gets `Boundaries` through `use super::*`.
+  - The rustdoc warning set is the same as before the branch.
+- **Item 6:** I did not change the two `#[cfg(test)] use` lines.
+
+I did all six items.</result>
+<usage><subagent_tokens>233648</subagent_tokens><tool_uses>19</tool_uses><duration_ms>187417</duration_ms></usage>
+</task-notification>
+
+---
+
+yeah go ahead
+
+---
+
+<task-notification>
+<task-id>a01ea59e8099d4145</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/a01ea59e8099d4145.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review: efficiency" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No introduced waste of weight: the diff makes no new heap clone, no new `RefCell` clone, and adds no work to the hot path. There is one trivial item.
+
+**Finding**
+
+- `crates/engine/src/sync/pass.rs:420`, `:527`, `:979`: `let owner_identity = self.owner_identity;` copies the `EcdsaVerifier` (a `Copy` secp256k1 public key) by value in `adopt_root`, `walk_scopes` and `drain`. The original closure captured one copy and only borrowed it on each tick.
+  - Cost: three memcpys of the public key on each tick. Each stage future also holds its own copy across its awaits, so the tick future grows by that size. The cost is very small.
+  - Cheaper form: `let owner_identity = &amp;self.owner_identity;`, and pass `owner_identity` where the code now has `&amp;owner_identity`. `conversion_pass` already does this. The order of effects does not change.
+
+**Checked, no findings**
+
+- **Spawner closure (`facade.rs` about 6352-6376):** `TickPass` holds the same set the original closure captured: `seams`, `secrets`, `alive`, `manual`, `owner_identity`, `root_id` and the two `Cell` stamps. `state` and `interval` are captured beside it, as before. It does not capture `self`, `session` or any other field of the enclosing scope. The outer closure is FnOnce, as before.
+- **Values that cross a stage boundary:** `Pass`, `Assembly`, `grafted` (`GraftedSharers`), `proved_scope_ids`/`unproved_scope_ids`, `owner_keys` and `boundaries` all move or are passed by reference. The `Zeroizing` seeds in `Assembly.write_seed` and `GraftedWritePass` move and are not cloned.
+- **RefCell clones:** the clones of `current_root_name`, `sweep_keys`, `bookmarked_scope_roots` (two), `tick_owner_signer` and `sweep_tasks` each occur the same number of times as in the original. The second clones of `current_root_name` and `bookmarked_scope_roots` were already in the original, so this diff does not add them.
+- **Per-stage destructuring** of `EngineSeams`, `SessionState` and `SessionSecrets` binds only references, so it costs nothing.
+- **Moved code:** `rotation/flat_cut.rs`, plus `ascent_node_seed`, `proved_scope_ref` and `queued_second_end`, are byte-identical to the originals except for visibility.</result>
+<usage><subagent_tokens>109709</subagent_tokens><tool_uses>18</tool_uses><duration_ms>88706</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a957bd70027f43be5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/a957bd70027f43be5.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review: reuse" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No findings.
+
+I compared all new code in `crates/engine/src/sync/pass.rs`, `rotation/flat_cut.rs` and `rotation/scope_material.rs` against the rest of the engine crate. I also compared it with the `main` version of `facade.rs`. None of this code does again what an existing helper already does.
+
+Items I examined and cleared:
+
+- **`Pass`**: It holds copies of the `SessionSecrets` cells for one pass. `SessionSecrets`, `TickInputs` and `TickScopes` in `sync/drain.rs` do not have a copy or snapshot method that gives this set of values.
+- **`Assembly`**: Its fields are the values that `drain` takes apart again. No type in `drain.rs` or `grants/grafted.rs` holds this set.
+- **`ConversionOwner`**: It is similar to `PassKeys` in `facade.rs`, but `PassKeys` borrows from `SessionIdentity`, and the tick holds `Rc&lt;SweepKeys&gt;`. Thus `PassKeys` cannot be used here. The second read of `current_root_name` is the same as on `main`.
+- **`conversion_pass`**: It is similar to `Engine::conversion_pass` in `facade.rs`. Both existed on `main` (the tick closure built `ConversionPass` inline). The two get their values from different places (engine fields, or tick seams and `SessionState`), so one cannot call the other.
+- **`queued_second_end`, `SecondEnd`, `steady_state_hold`, `owner_bin_retention_days`, `owner_retention`, `write_grant_sharers`, `write_grant_sharer_encs`**: These moved without change from `main` `facade.rs`. There is no equivalent in `drain.rs`, `tick.rs`, `grants/` or `net/`. `grants::contact_store::resolve_recipient` finds one contact, but it reads the contact book again for each call. Thus it is not a good replacement for the batched search in `write_grant_sharer_encs`.
+- **`Boundaries`, `ascent_node_seed`, `proved_scope_ref`, `cut_exited_scope`, `flat_root_cut`**: These moved without change. Each one now has only one definition in the crate.
+
+Observation only, not a finding: the code that reports `EngineError::TrustViolation` as `Event::AttributableAbuse` occurs inline three times:
+
+- `pass.rs` `convert_claims`
+- `pass.rs` `link_sweep`
+- `facade.rs` `convert_before_link_cut`
+
+`emit_trust_violation` does not match this case, because it formats a routing key. Thus no existing helper covers these three copies.</result>
+<usage><subagent_tokens>105546</subagent_tokens><tool_uses>19</tool_uses><duration_ms>112335</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae99bf2c190667025</task-id>
+<tool-use-id>toolu_01X19uP1B9fQD7VNJfu5qkMT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/ae99bf2c190667025.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review: altitude" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The PR puts each change at the right depth for a strict refactor. None of the findings blocks it. Two small changes are worth doing now; the rest can wait for a follow-up.
+
+**Correction to the premise:** only 6 of the widened helpers (plus 2 structs) are used by `sync/pass.rs` alone. The facade unit tests use all 6 of them through `use super::*`. The other ~15 widened helpers still have callers in the facade's own non-test code, so `facade.rs` is still a correct home for them today.
+
+- `crates/engine/src/facade.rs:179-182` — two `#[cfg(test)] use` lines keep the unedited test module compiling. — Cost: the facade's import list now depends on what the tests use, and each later move adds another such line. — Deeper change: none that leaves the tests unedited, so this is the minimum. Later, move the tick tests next to `TickPass`, then delete both lines. — Follow-up.
+
+- `facade.rs:2922,3823,4079/4096,4600/4631,4689,4747` — `second_end_scope`, `leg_file_share`, `consult_pointers`+`ConsultWindow`, `grafted_write_passes`+`GraftedWritePass`, `install_descendant_scopes`, `install_unproved_scopes` are used only by the pass, and facade tests use each one. — Cost: 8 widened items live away from their only non-test caller. — Deeper change: move each helper together with its tests into `sync/pass.rs`. Moving them without the tests adds 6 more `cfg(test)` lines, which is worse. — Follow-up.
+
+- `facade.rs:2948,3775-3928,4013-4142,4514-4577,4665` — the shared helpers have both facade and pass callers. — Cost: `facade.rs` stays the shared utility module. — Deeper change: move them to their domains. Seed-cache helpers go next to `ScopeSeeds`, settings helpers to `settings.rs`, focus-leg helpers to `sync/tick.rs`. — Follow-up.
+
+- `rotation/flat_cut.rs:16` and `sync/pass.rs:25` — they import `SweepKeys`, `SweepTaskFactory` and `POINTER_PAYLOAD_VERSION` from `crate::facade`. These three were already `pub(crate)` on main, and `session.rs` already imports them from there. — Cost: `rotation/` depends on the facade again, which works against the issue's goal. — Deeper change: move `SweepKeys` and `SweepTaskFactory` into `rotation/sweep.rs`, and `POINTER_PAYLOAD_VERSION` next to the pointer payload. — Follow-up, because 7 files touch these and open fixes wait on this PR. `Event` and `EngineError` are re-exported at the crate root, so importing them from the facade is fine.
+
+- `sync/pass.rs:78-89` and `facade.rs:6353` — `TickPass` has `pub(crate)` fields and the facade builds it with a struct literal. — Cost: the doc comment on `settings_rechecked` states that the first re-decide comes one interval on, but `facade.rs` sets both cells to "now". The rule is written in one file and enforced in another. — Deeper change: add `TickPass::new(..)`, which reads `now` from `seams.scheduler`. Keep only `seams` and `manual` visible to the facade. — Now: small and strict.
+
+- `sync/pass.rs:92,104,140/343` — `Pass` and `Assembly` are at the right altitude. The stages hand values to each other through return values, so the fixed order is enforced by the types. One shared context with `Option` fields would lose that. One flaw: `consult_scope_pointers` takes `&amp;mut Pass` only to change `root_name`. — Deeper change: return the new root name from that stage and keep `Pass` read-only. — Now: optional.
+
+- `sync/pass.rs:21`, `facade/claim_conversion.rs:1063` and `facade/link_sweep.rs:98` — `TickSites` and `sweep_links` are used only by the tick, but they stay under `facade/` with their visibility widened. — Deeper change: move `TickSites` into `pass.rs`, then move `claim_conversion` and `link_sweep` out of `facade/`. — Follow-up.</result>
+<usage><subagent_tokens>87465</subagent_tokens><tool_uses>18</tool_uses><duration_ms>146324</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa8444ddb15ce222e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/aa8444ddb15ce222e.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review: simplification" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Nine findings. All are in `crates/engine/src/sync/pass.rs` unless the finding names `facade.rs`. No fix changes the order of an await, a RefCell borrow or an event send.
+
+1. **`pass.rs:177-1520` (the top of every stage)**: Each stage starts with the same field lists for `EngineSeams`, `SessionState` and `SessionSecrets`, plus lines like `let now = pass.now;`. There are about 295 lines of field lists and 46 of these lines. Cost: about 340 of the 1460 lines in the impl. The same renames come back many times: `snapshot: base` 7 times, `sweep_keys: consult_keys` 4 times, `held_records: held` 3 times. Simpler form: read `state.x`, `self.seams.x` and `pass.x` where the code uses them. Delete the renames and the copies.
+
+2. **`pass.rs:420,527,979`**: `let owner_identity = self.owner_identity;` copies the verifier into 3 stages, only to lend it. Simpler form: `&amp;self.owner_identity`, as `conversion_pass` already does.
+
+3. **`pass.rs:938-947`**: `drain` needs `#[allow(clippy::too_many_arguments)]` only because it takes self plus 7 arguments. `descendants` comes from `walk_scopes` and only `drain` reads it. Simpler form: `assemble_scopes` takes `descendants` by value and puts it in `Assembly`. `drain` then has 7 inputs and the `allow` can go.
+
+4. **`pass.rs:599-604`**: `refresh_focus` gives back a 3-tuple. Two of its items (the proved and unproved clones) do not belong to the focus refresh. Simpler form: add a `ScopeSets { proved, unproved }` struct, clone it in `run` just before `refresh_focus`, and lend it to all 3 stages. There is no await before that clone, and it touches no other cell. `refresh_focus` then gives back only the verdict.
+
+5. **`pass.rs:114-120, 1225-1323`**: `ConversionOwner` exists only to own the Rc clones that `ConversionPass` borrows. After that, `convert_claims` and `link_sweep` take both structs and read only `boundaries` and `root_name` from the owner. Cost: one extra struct, two methods with lifetime parameters, and 5-argument stage signatures. Simpler form: one `convert` stage. It does the clones and the let-else, then makes `ConversionPass` and the `TickSites` as locals, in the same order. Then it runs the conversion and the link sweep inline.
+
+6. **`pass.rs:1521`**: `drop(status);` is now the last statement of the function, so it does nothing. In `main` it came before `TickControl::Continue`. Delete it.
+
+7. **`facade.rs:129`**: `Boundaries` is imported, but `facade.rs` does not use it. Only `claim_conversion.rs` uses it, through `use super::*`. Simpler form: import it in `claim_conversion.rs` from `crate::rotation`.
+
+8. **`facade.rs:179-182`**: Two top-level `#[cfg(test)]` imports (`floor_namespace`, `expire_focus_stamps`) remain for the tests only. Simpler form: put them inside `mod tests` and `mod focus_access_tests`.
+
+9. **`facade.rs` visibility**: `consult_pointers`, `ConsultWindow`, `second_end_scope`, `leg_file_share` and `SeedFloors` were private in `main`. Now they are `pub(crate)`, but no code in `facade.rs` other than tests uses them. The only caller is `pass.rs`. Cost: the facade surface is wider with no second caller. Simpler form: move them, and their unit tests, into `sync/pass.rs` as private items.
+
+The `pub(super)` to `pub(crate)` changes in `claim_conversion.rs` and `link_sweep.rs` are necessary, because the tick now lives in `sync/`. They are not findings.</result>
+<usage><subagent_tokens>104051</subagent_tokens><tool_uses>20</tool_uses><duration_ms>168595</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab2c9502182792973</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/ab2c9502182792973.output</output-file>
+<status>completed</status>
+<summary>Agent "Move the tick pass body" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I applied all eight findings as one new commit, `d6b3365d1`, on `refactor/2040-tick-pass-move`. I did not push.
+
+- **Line count:** `sync/pass.rs` went from 1675 lines to 1385 lines.
+- **Gates:** `cargo fmt --all` passes, and `cargo clippy --workspace --all-targets -- -D warnings` is clean. The engine lib tests pass: 1974 tests, with no test edit.
+- **Field reads:** The stages read `self.seams.x`, `state.x` and `pass.x` where they use them. Two single locals stay because they have many uses: `enc_subkey` in `drain`, and `seams` in `convert_claims`. `drain` also still unpacks `Assembly`, which it owns.
+- **Items 2 and 6:** `owner_identity` is now a borrow in each stage. I deleted `drop(status)`.
+- **Items 3 and 4:** `Assembly` now holds `descendants`, and `ScopeSets` holds the two scope sets. `drain` takes 6 arguments plus `self`, so I removed the clippy allow.
+- **Item 5:** The four conversion fns and `ConversionOwner` are now one stage fn, `convert_claims`. The statements stay in the old order. The two comments you named stay with their code.
+  - I added one small struct, `MailboxPull`, which `pull_mailbox` returns. It keeps `convert_claims` at 7 arguments, the clippy limit, without the allow.
+  - The `TickSites` value is now a local. It is built after `ConversionPass` and before the conversion runs, as before.
+- **Item 7:** `facade/claim_conversion.rs` imports `Boundaries` directly, and `facade.rs` does not import it now.
+- **Item 8:** `TickPass::new` does the two clock reads. They now come after the other prelude values instead of before `interval` and `owner_identity`. No tick test failed, so I did not move them back.
+
+I did all eight items.</result>
+<usage><subagent_tokens>275529</subagent_tokens><tool_uses>21</tool_uses><duration_ms>263428</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bgy6qdxtp</task-id>
+<summary>Monitor event: "CodeRabbit reply on PR 2045"</summary>
+<event>CR: 5851306658 2026-09-27T00:34:46Z &lt;!-- This is an auto-generated reply by CodeRabbit --&gt; &lt;!-- CodeRabbit review command invocation: v2:c909b47cf27a2d45295a3b40e7e755ad15b10545a4128004cb761b3b6c1a0fad --&gt; &lt;details&gt; &lt;summary&gt;Action performed&lt;/summary&gt;  Rev</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bgy6qdxtp</task-id>
+<summary>Monitor event: "CodeRabbit reply on PR 2045"</summary>
+<event>CR: 5851306658 2026-09-27T00:42:17Z &lt;!-- This is an auto-generated reply by CodeRabbit --&gt; &lt;!-- CodeRabbit review command invocation: v2:c909b47cf27a2d45295a3b40e7e755ad15b10545a4128004cb761b3b6c1a0fad --&gt; &lt;details&gt; &lt;summary&gt;✅ Action performed&lt;/summary&gt;  R</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bgy6qdxtp</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/e70f4b1a-ae1d-424e-ae42-dc4df2059ba8/tasks/bgy6qdxtp.output</output-file>
+<status>completed</status>
+<summary>Monitor "CodeRabbit reply on PR 2045" stream ended</summary>
+<event>CR review objects: 1</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
