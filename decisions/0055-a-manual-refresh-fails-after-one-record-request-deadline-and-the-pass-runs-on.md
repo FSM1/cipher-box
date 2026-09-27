@@ -57,14 +57,13 @@ half published, and a later refresh may still land.
    host's own dedup drops a repeat.
 5. The tick loop wakes at each rung boundary while a pass runs, so the stale threshold is also
    reported during a long pass.
+6. A cold cache stays `Reconciling` past the deadline. The ladder has no other rung without a
+   last success, and the refresh itself fails at the deadline.
+7. The web scheduler seam has no cancel, so a per-pass deadline timer outlives a short pass on
+   web. About two such timers are alive at once at the poll cadence.
 
 ## Residuals
 
-**E1 — A cold cache stays `Reconciling` past the deadline.** The ladder has no other rung without
-a last success, and the refresh itself fails at the deadline.
-
-**E2 — The web scheduler seam has no cancel.** A per-pass deadline timer outlives a short pass on
-web. About two such timers are alive at once at the poll cadence.
-
-**E3 — The engine deadline and the host record deadline are two values.** They name each other in
-comments and are both 30 s. A host that tunes its record timeout must tune the profile too.
+**E1 — Should the host pass its record deadline into the profile?** `refresh_deadline` and the
+host record timeout are two values of 30 s that name each other in comments. A host that tunes
+one must tune the other. The owner decides whether the host supplies the value.
