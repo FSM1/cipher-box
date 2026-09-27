@@ -78,8 +78,7 @@ pub const MAX_BIN_RETENTION_DAYS: u32 = 3650;
 
 /// The retention a vault gets before its owner chooses one (ADR 0010 item 6).
 ///
-/// The delete branch reads it. The expiry sweep that would act on the window it
-/// names is not landed, so a soft-deleted node waits in the bin without bound.
+/// The delete branch and the drain tick's expiry sweep apply this window.
 pub const DEFAULT_BIN_RETENTION_DAYS: u32 = 30;
 
 /// How many versions of a file a vault keeps before its owner chooses
