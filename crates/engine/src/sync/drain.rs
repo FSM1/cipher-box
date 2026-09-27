@@ -107,7 +107,7 @@ use crate::sync::project::{
     UnlinkedChild, project_child_version, project_folder, project_folder_partial,
 };
 use crate::sync::rebase::{
-    AppliedOp, DeadLetterReason, decode_queue, enclosing_scope_root, replay,
+    AppliedOp, DeadLetterReason, DropReason, decode_queue, enclosing_scope_root, replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::render::BaseSnapshot;
@@ -1998,7 +1998,17 @@ where
         // A drop is not an abandonment: `AlreadySatisfied` on a create is the
         // create having *landed*, so retiring its name would cut a live record
         // its parent already references.
-        for (op_id, _) in &rebased.dropped {
+        for (op_id, reason) in &rebased.dropped {
+            if *reason == DropReason::AlreadySatisfied
+                && let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id)
+                && matches!(op.kind, OpKind::Delete { to_bin: true, .. })
+            {
+                if let Err(halt) = self.finish_binned_delete(scope, &pass, op.target).await {
+                    self.apply_valve(scope, *op_id, op, halt, attempts, report)
+                        .await;
+                    return Err(halt);
+                }
+            }
             self.dequeue_op(*op_id).await?;
             report.dropped.push(*op_id);
         }
@@ -3010,8 +3020,11 @@ where
             named.get_or_insert(child);
             unlink_from.push(parent);
         }
-        // Removing an absent ref is the op already satisfied, never a publish.
         let (Some(&origin), Some(child)) = (unlink_from.first(), named) else {
+            // A peer can unlink while the authored delete's re-key is unfinished.
+            if to_bin {
+                self.finish_binned_delete(scope, pass, target).await?;
+            }
             return Ok(());
         };
 
@@ -3105,6 +3118,27 @@ where
                 }
             }
             (false, None) => {}
+        }
+        Ok(())
+    }
+
+    /// A vanished parent link does not discharge the bin entry's access cut.
+    async fn finish_binned_delete(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &Pass,
+        target: NodeId,
+    ) -> Result<(), Halt> {
+        scope.refuse_vault_surface()?;
+        if let Some((entry, plane)) = self.bin_entry(scope, pass, target).await? {
+            self.rekey_into_bin(
+                scope,
+                &plane,
+                pass.anchor_for(&plane)?,
+                target,
+                entry.deleted_at,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -3693,24 +3727,23 @@ where
             let standing = index
                 .entries
                 .iter()
-                .any(|entry| entry.node_id == unlinked.node.0);
+                .find(|entry| entry.node_id == unlinked.node.0);
+            let deleted_at = standing.map_or(unlinked.deleted_at, |entry| entry.deleted_at);
             if self
                 .rekey_into_bin(
                     scope,
                     &scope.source.at(root.epoch),
                     root.anchor(),
                     unlinked.node,
-                    unlinked.deleted_at,
+                    deleted_at,
                 )
                 .await
                 .is_err()
             {
-                if !standing {
-                    unfinished.push(unlinked);
-                }
+                unfinished.push(unlinked);
                 continue;
             }
-            if standing {
+            if standing.is_some() {
                 continue;
             }
             index.entries.push(BinEntry::new(
