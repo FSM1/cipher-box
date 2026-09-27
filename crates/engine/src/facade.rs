@@ -147,7 +147,7 @@ use crate::sync::drain::{EngineSeams, hold_captures, owner_scoped_key, published
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::pass::{PassReport, TickPass};
+use crate::sync::pass::TickPass;
 use crate::sync::pointer::{PointerFetch, vault_pointer_name};
 use crate::sync::project::{UnlinkedChild, map_kind, merge_root, project_child_version};
 use crate::sync::provision::{
@@ -6365,7 +6365,7 @@ where {
                         }
                         stamp_staleness(
                             &state,
-                            report,
+                            report.converged(),
                             pass.seams.scheduler.now(),
                             &pass.seams.profile,
                             &pass.seams.events,
@@ -11489,17 +11489,17 @@ fn open_engine_error(error: OpenError) -> EngineError {
     }
 }
 
-/// Stamp the staleness ladder from one pass's report, and report a rung change.
+/// Stamp the staleness ladder after one pass, and report a rung change.
 fn stamp_staleness(
     state: &SessionState,
-    report: PassReport,
+    converged: bool,
     now: UnixMillis,
     profile: &SyncTimingProfile,
     events: &mpsc::UnboundedSender<Event>,
 ) {
     let mut status = state.sync_status.borrow_mut();
     status.reconcile_in_flight = false;
-    if report.converged() {
+    if converged {
         status.last_success = Some(now);
         // Set after the pass's drain stage, so the pass that converges the
         // base is never the pass that decides against it.

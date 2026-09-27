@@ -1383,21 +1383,20 @@ async fn write_grant_sharer_encs<C: ContactStore>(
 mod tests {
     use super::*;
 
-    use cipherbox_core::content::{compute_cid, encode_content_cid_str};
     use cipherbox_core::ipns::IpnsRecord;
     use cipherbox_core::kdf;
-    use cipherbox_core::seal::encode_envelope;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use futures_channel::mpsc;
 
     use crate::api::ApiClient;
-    use crate::content::{ContentProfile, DAG_ROOT_CODEC};
+    use crate::content::ContentProfile;
     use crate::deadlines::DeadlinePolicy;
     use crate::profile::SyncTimingProfile;
     use crate::rotation::derive_write_name;
     use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore};
     use crate::settings::Placement;
     use crate::storage_policy::StoragePolicy;
+    use crate::testkit::account::{EOL, ROOT, SECRET, TTL_NANOS};
     use crate::testkit::fakes::{
         InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache,
         InMemoryStagingStore, ScriptedHttp, VirtualScheduler,
@@ -1407,8 +1406,6 @@ mod tests {
         SeededEntropy, block_on, gateway, owner_root_fixture, owner_root_pseudonym, serve,
     };
 
-    const SECRET: [u8; 32] = [7u8; 32];
-    const ROOT: [u8; 16] = [0u8; 16];
     const ENDPOINT: &str = "fake:someguy";
 
     type FakePass = TickPass<
@@ -1478,7 +1475,7 @@ mod tests {
                 Rc::new(Cell::new(alive)),
                 ManualRefresh::default(),
                 owner_identity,
-                ROOT,
+                ROOT.0,
             ),
             state,
             _events: event_stream,
@@ -1486,7 +1483,7 @@ mod tests {
     }
 
     fn root_name() -> IpnsName {
-        derive_write_name(&Zeroizing::new(OWNER_ROOT_WRITE_SCOPE_SEED), &ROOT)
+        derive_write_name(&Zeroizing::new(OWNER_ROOT_WRITE_SCOPE_SEED), &ROOT.0)
     }
 
     fn unpublished() -> InMemoryRecordStore {
@@ -1496,36 +1493,30 @@ mod tests {
     /// The owner's vault root, published at [`root_name`], and the head block
     /// its record anchors.
     fn published_root() -> (InMemoryRecordStore, BTreeMap<String, Vec<u8>>) {
-        let envelope = owner_root_fixture(OwnerRootSpec {
+        let root = owner_root_fixture(OwnerRootSpec {
             owner_identity: &EcdsaSigner::from_scalar(&SECRET).expect("valid scalar"),
             owner_enc: &kdf::enc_subkey(&SECRET).public(),
             writer_pseudonym: &owner_root_pseudonym(),
             pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
-            scope_id: ROOT,
-            root_id: ROOT,
+            scope_id: ROOT.0,
+            root_id: ROOT.0,
             children: Vec::new(),
             child_scope_index: Vec::new(),
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
             write_history_link: Vec::new(),
             grants: Vec::new(),
-        })
-        .envelope;
-        let head_block = encode_envelope(&envelope).expect("the fixture encodes");
-        let head_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+        });
         let signer =
-            kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &ROOT).as_bytes());
-        let record = IpnsRecord::create_v2(
-            &signer,
-            format!("/ipfs/{head_cid}").as_bytes(),
-            1,
-            2_000_000_000,
-            "2099-01-01T00:00:00Z",
-        )
-        .marshal();
+            kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
+        let value = format!("/ipfs/{}", root.head_cid_str);
+        let record = IpnsRecord::create_v2(&signer, value.as_bytes(), 1, TTL_NANOS, EOL).marshal();
         let transport = unpublished();
-        transport.seed_record(&EndpointId::new(ENDPOINT), root_name().as_str(), record);
-        (transport, BTreeMap::from([(head_cid, head_block)]))
+        transport.seed_record(&EndpointId::new(ENDPOINT), root.name.as_str(), record);
+        (
+            transport,
+            BTreeMap::from([(root.head_cid_str, root.head_block)]),
+        )
     }
 
     #[test]
