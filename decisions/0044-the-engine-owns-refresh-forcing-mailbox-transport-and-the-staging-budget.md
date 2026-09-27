@@ -106,7 +106,10 @@ answers success. A pass in which no endpoint served a record it could adopt answ
 rejected a served record answers `EngineError::TrustViolation`, and a host never retries it
 (AGENTS.md rule 6). A failed pass leaves the host's last-known-good view standing, and the host
 renders the failure over that view. It does not render a success from cached bytes. The rule
-landed with FSM1/cipher-box#1212; this ADR records it.
+landed with FSM1/cipher-box#1212; this ADR records it. Amended by
+[ADR 0055](./0055-a-manual-refresh-fails-after-one-record-request-deadline-and-the-pass-runs-on.md)
+D1 on 2026-09-27: a pass that runs past one record-request deadline also answers
+`EngineError::RefreshFailed`, and the pass runs on.
 
 **D3 — The focus-window tick has no jitter.** The tick loop sleeps exactly the poll cadence after
 each pass and wakes early only on a manual refresh. The production cadence is 30 s. The
@@ -363,7 +366,9 @@ and no code in `apps/desktop/src-tauri/src` listens for a reconnect or a wake. T
 FSM1/cipher-box#2017. On web, both triggers are wired (`useRefreshOnWake`). The TTL check is not
 part of this gap: it puts a stale node in the focus window, and the tick refreshes it (`ttl_check`
 in `crates/fuse/src/ops.rs`, over `Engine::note_focus_access`), which is the D1 rule.
-`FuseOpCore::refresh_hint`, which records the stale node, is read only by tests.
+`FuseOpCore::refresh_hint`, which records the stale node, is read only by tests. FSM1/cipher-box#2059
+closed this on 2026-09-27: the desktop shell samples the wall clock and the routable networks
+every 5 s, and files a forced pass on a wake from sleep and on a network reconnect.
 
 **E2 — On web, the CI cadence does not pin a small staging budget.** The desktop shell pins
 `StoragePolicy::CI` in the CI environment (`pinned_storage_policy` in
