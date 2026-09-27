@@ -147,7 +147,7 @@ use crate::sync::drain::{EngineSeams, hold_captures, owner_scoped_key, published
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::pass::TickPass;
+use crate::sync::pass::{PassReport, TickPass};
 use crate::sync::pointer::{PointerFetch, vault_pointer_name};
 use crate::sync::project::{UnlinkedChild, map_kind, merge_root, project_child_version};
 use crate::sync::provision::{
@@ -6359,11 +6359,18 @@ where {
                     &pass.manual,
                     interval,
                     async |cause| {
-                        if pass.run(&state, cause).await.stop {
-                            TickControl::Stop
-                        } else {
-                            TickControl::Continue
+                        let report = pass.run(&state, cause).await;
+                        if report.stop {
+                            return TickControl::Stop;
                         }
+                        stamp_staleness(
+                            &state,
+                            report,
+                            pass.seams.scheduler.now(),
+                            &pass.seams.profile,
+                            &pass.seams.events,
+                        );
+                        TickControl::Continue
                     },
                 )
                 .await;
@@ -11479,6 +11486,35 @@ fn open_engine_error(error: OpenError) -> EngineError {
         OpenError::UnsupportedFormat { version } => {
             EngineError::UnsupportedContentFormat { version }
         }
+    }
+}
+
+/// Stamp the staleness ladder from one pass's report, and report a rung change.
+fn stamp_staleness(
+    state: &SessionState,
+    report: PassReport,
+    now: UnixMillis,
+    profile: &SyncTimingProfile,
+    events: &mpsc::UnboundedSender<Event>,
+) {
+    let mut status = state.sync_status.borrow_mut();
+    status.reconcile_in_flight = false;
+    if report.converged() {
+        status.last_success = Some(now);
+        // Set after the pass's drain stage, so the pass that converges the
+        // base is never the pass that decides against it.
+        state.converged_tick.set(true);
+    }
+    let rung = classify(
+        now,
+        status.last_success,
+        status.reconcile_in_flight,
+        Connectivity::Online,
+        profile,
+    );
+    if status.reported != Some(rung) {
+        status.reported = Some(rung);
+        let _ = events.unbounded_send(Event::StalenessChanged { level: rung });
     }
 }
 

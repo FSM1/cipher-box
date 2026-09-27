@@ -2,8 +2,9 @@
 //!
 //! [`TickPass::run`] is the body [`run_tick_loop`](crate::sync::tick::run_tick_loop)
 //! calls once per tick. It reconciles the vault root and the focus window,
-//! drains the op queue onto that state, pulls the mailbox, converts claims,
-//! and reports the staleness rung.
+//! drains the op queue onto that state, pulls the mailbox, and converts
+//! claims. Its [`PassReport`] carries the verdict the facade stamps the
+//! staleness ladder from.
 
 use core::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -67,7 +68,6 @@ use crate::sync::drain::{
 use crate::sync::rebase::QueueScanMemo;
 use crate::sync::record::RecordReader;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
-use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
     ResolveMode, TickCause, consult_scopes, consult_scopes_due, expire_focus_stamps,
     expire_touched_folders, focus_by_scope, focus_files, pace_due, resolve_mode, scope_root_of,
@@ -204,12 +204,10 @@ where
             .await;
         self.repost_claims(state, &pass).await;
         self.refresh_received_shares(state, &pass).await;
-        let report = PassReport {
+        PassReport {
             verdict,
             stop: false,
-        };
-        self.classify_staleness(state, report.converged());
-        report
+        }
     }
 
     /// The loop gate: the pass's own copy of every secret it runs under, or
@@ -1226,32 +1224,6 @@ where
             &self.seams.profile,
         )
         .await;
-    }
-
-    /// The staleness classify: stamp the ladder, and report a rung change.
-    fn classify_staleness(&self, state: &SessionState, reconciled: bool) {
-        let mut status = state.sync_status.borrow_mut();
-        status.reconcile_in_flight = false;
-        if reconciled {
-            status.last_success = Some(self.seams.scheduler.now());
-            // Set after the drain stage, so the pass that converges
-            // the base is never the pass that decides against it.
-            state.converged_tick.set(true);
-        }
-        let rung = classify(
-            self.seams.scheduler.now(),
-            status.last_success,
-            status.reconcile_in_flight,
-            Connectivity::Online,
-            &self.seams.profile,
-        );
-        if status.reported != Some(rung) {
-            status.reported = Some(rung);
-            let _ = self
-                .seams
-                .events
-                .unbounded_send(Event::StalenessChanged { level: rung });
-        }
     }
 }
 
