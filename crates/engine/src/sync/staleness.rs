@@ -66,23 +66,21 @@ pub fn classify(
 }
 
 /// The next instant after `now` at which [`classify`] changes rung with no new
-/// input: the end of the in-flight rung, or the stale threshold.
+/// input: the end of the in-flight rung, which masks every later threshold, or
+/// else the stale threshold.
 pub(crate) fn next_boundary(
     now: UnixMillis,
     last_success: Option<UnixMillis>,
     reconcile_started: Option<UnixMillis>,
     profile: &SyncTimingProfile,
 ) -> Option<UnixMillis> {
-    [
-        reconcile_started.map(|started| (started, profile.refresh_deadline)),
-        last_success.map(|last| (last, profile.stale_after)),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|(since, after)| since.0.saturating_add(crate::sync::duration_millis(after)))
-    .filter(|&at| at > now.0)
-    .min()
-    .map(UnixMillis)
+    let end = |since: UnixMillis, after| {
+        Some(since.0.saturating_add(crate::sync::duration_millis(after))).filter(|&at| at > now.0)
+    };
+    reconcile_started
+        .and_then(|started| end(started, profile.refresh_deadline))
+        .or_else(|| last_success.and_then(|last| end(last, profile.stale_after)))
+        .map(UnixMillis)
 }
 
 /// Whether a shared-scope name pinned since `pinned_since` should raise the
@@ -172,6 +170,16 @@ mod tests {
             "a boundary reached is not the next one"
         );
         assert_eq!(boundary(stale, None), None, "nothing changes past stale");
+        assert_eq!(
+            next_boundary(
+                UnixMillis(stale - 1),
+                Some(UnixMillis(0)),
+                Some(UnixMillis(stale - 2)),
+                &P
+            ),
+            Some(UnixMillis(stale - 2 + deadline)),
+            "the stale threshold changes no rung while the pass reads as reconciling"
+        );
     }
 
     #[test]

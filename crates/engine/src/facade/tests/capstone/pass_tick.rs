@@ -796,16 +796,15 @@ fn a_rung_read_mid_pass_is_superseded_when_the_pass_converges() {
 }
 
 /// A pass whose read never answers must not hold a manual refresh, or the
-/// indicator, past one refresh deadline.
+/// indicator a host read mid-pass, past one refresh deadline.
 #[test]
 fn a_manual_refresh_a_stalled_pass_holds_fails_within_one_deadline() {
     use core::time::Duration;
 
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
-    let (mut engine, mut events, mut tasks) = started_and_parked(&world, &device);
+    let (engine, mut events, mut tasks) = started_and_parked(&world, &device);
     tick(&world, &device, &mut tasks);
-    let _ = drain(&mut events);
 
     let (_, _, root_name) = owner_root();
     device
@@ -813,33 +812,82 @@ fn a_manual_refresh_a_stalled_pass_holds_fails_within_one_deadline() {
         .stall_gets_for_after(root_name.as_str(), 0);
     let deadline = engine.profile().refresh_deadline;
     let mut cx = Context::from_waker(Waker::noop());
-    let mut refresh = Box::pin(engine.command(Command::ManualRefresh));
-    assert!(refresh.as_mut().poll(&mut cx).is_pending());
+    let forced = engine
+        .file_forced_pass()
+        .expect("a tick loop is running")
+        .expect("the pass is filed");
+    let mut landed = Box::pin(forced.landed());
     poll_tasks_once(&mut tasks); // the forced pass starts, and stalls on the root
+    assert_eq!(
+        block_on(engine.status()).unwrap().staleness,
+        Staleness::Reconciling,
+        "the host reads the pass in flight"
+    );
+    let _ = drain(&mut events);
+
     world.scheduler.advance(deadline - Duration::from_millis(1));
     poll_tasks_once(&mut tasks);
-    assert!(refresh.as_mut().poll(&mut cx).is_pending());
+    assert!(landed.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(
+        drain(&mut events),
+        vec![],
+        "inside the deadline nothing changes"
+    );
 
     world.scheduler.advance(Duration::from_millis(1));
     poll_tasks_once(&mut tasks);
     assert!(
         matches!(
-            refresh.as_mut().poll(&mut cx),
+            landed.as_mut().poll(&mut cx),
             Poll::Ready(Err(EngineError::RefreshFailed { .. }))
         ),
         "the refresh reports a failure once the deadline passes"
     );
-    drop(refresh);
-    assert_ne!(
-        block_on(engine.status()).unwrap().staleness,
-        Staleness::Reconciling,
-        "a pass past its deadline no longer reads as reconciling"
-    );
     assert!(
-        drain(&mut events).iter().any(|event| matches!(
-            event,
-            Event::StalenessChanged { level } if *level != Staleness::Reconciling
-        )),
-        "the host is told the rung left reconciling"
+        matches!(
+            drain(&mut events).as_slice(),
+            [Event::StalenessChanged { level }] if *level != Staleness::Reconciling
+        ),
+        "at the same instant, the host is told the rung left reconciling"
     );
+}
+
+/// A refresh filed behind a stalled poll pass waits for no pass start: it
+/// fails at that pass's deadline.
+#[test]
+fn a_manual_refresh_behind_a_stalled_poll_pass_fails_at_its_deadline() {
+    use core::time::Duration;
+
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+    tick(&world, &device, &mut tasks);
+
+    let (_, _, root_name) = owner_root();
+    device
+        .record_store
+        .stall_gets_for_after(root_name.as_str(), 0);
+    world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
+    poll_tasks_once(&mut tasks); // the poll pass starts, and stalls on the root
+
+    let mut cx = Context::from_waker(Waker::noop());
+    let forced = engine
+        .file_forced_pass()
+        .expect("a tick loop is running")
+        .expect("the pass is filed");
+    let mut landed = Box::pin(forced.landed());
+    assert!(landed.as_mut().poll(&mut cx).is_pending());
+
+    world
+        .scheduler
+        .advance(engine.profile().refresh_deadline - Duration::from_millis(1));
+    poll_tasks_once(&mut tasks);
+    assert!(landed.as_mut().poll(&mut cx).is_pending());
+
+    world.scheduler.advance(Duration::from_millis(1));
+    poll_tasks_once(&mut tasks);
+    assert!(matches!(
+        landed.as_mut().poll(&mut cx),
+        Poll::Ready(Err(EngineError::RefreshFailed { .. }))
+    ));
 }

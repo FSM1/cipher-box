@@ -478,18 +478,18 @@ pub(crate) async fn run_tick_loop<Sch>(
     manual.close();
 }
 
-/// Drive `work` to its end, calling `at_boundary` each time the wait `next`
-/// names elapses first; `next` is re-read after each call, and `None` waits for
-/// the work alone. Unlike [`within`], the work is never dropped: a pass cut
+/// Drive `work` to its end, calling `at_boundary` each time the wait
+/// `until_next` names elapses first; `until_next` is re-read after each call,
+/// and `None` waits for the work alone. Unlike [`within`], the work is never dropped: a pass cut
 /// mid-drain would strand what it had half published.
 pub(crate) async fn run_with_boundaries<S: Scheduler, W: core::future::Future>(
     scheduler: &S,
     work: W,
-    mut next: impl FnMut() -> Option<Duration>,
+    mut until_next: impl FnMut() -> Option<Duration>,
     mut at_boundary: impl FnMut(),
 ) -> W::Output {
     let mut work = pin!(work);
-    while let Some(wait) = next() {
+    while let Some(wait) = until_next() {
         if let Some(out) = within(scheduler, wait, work.as_mut()).await {
             return out;
         }

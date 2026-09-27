@@ -1065,8 +1065,8 @@ impl From<cipherbox_core::seal::Permission> for Permission {
 pub enum Staleness {
     /// View is within the freshness window.
     Fresh,
-    /// A background reconcile is in flight, for at most one refresh deadline
-    /// (quiet indicator).
+    /// A background reconcile is in flight (quiet indicator), bounded by
+    /// [`SyncTimingProfile::refresh_deadline`].
     Reconciling,
     /// Past the profile threshold: stale badge, "last synced X ago".
     Stale,
@@ -5694,8 +5694,6 @@ where {
                     async |cause| {
                         let started = pass.seams.scheduler.now();
                         state.sync_status.borrow_mut().reconcile_started = Some(started);
-                        // A rung boundary inside a long pass reaches the host
-                        // while the pass runs on.
                         let report = run_with_boundaries(
                             &pass.seams.scheduler,
                             pass.run(&state, cause),
