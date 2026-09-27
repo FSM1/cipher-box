@@ -21,6 +21,7 @@ use crate::facade::{Event, MAX_FOCUS_FILES, NodeId, NodeKind};
 use crate::net::FolderRefreshReport;
 use crate::net::rotation::scope_name;
 use crate::profile::SyncTimingProfile;
+use crate::record_plane::within;
 use crate::seams::{Scheduler, UnixMillis};
 use crate::sync::drain::hold_captures;
 use crate::sync::model::Snapshot;
@@ -477,32 +478,24 @@ pub(crate) async fn run_tick_loop<Sch>(
     manual.close();
 }
 
-/// Drive `work` to its end, calling `overran` once if it is still running
-/// `deadline` after it began on the injected scheduler. Unlike
-/// [`within`](crate::record_plane::within), the work is never dropped: a pass
-/// cut mid-drain would strand what it had half published.
-pub(crate) async fn run_past_deadline<S: Scheduler, W: core::future::Future>(
+/// Drive `work` to its end, calling `at_boundary` each time the wait `next`
+/// names elapses first; `next` is re-read after each call, and `None` waits for
+/// the work alone. Unlike [`within`], the work is never dropped: a pass cut
+/// mid-drain would strand what it had half published.
+pub(crate) async fn run_with_boundaries<S: Scheduler, W: core::future::Future>(
     scheduler: &S,
-    deadline: Duration,
     work: W,
-    overran: impl FnOnce(),
+    mut next: impl FnMut() -> Option<Duration>,
+    mut at_boundary: impl FnMut(),
 ) -> W::Output {
     let mut work = pin!(work);
-    let mut expiry = pin!(scheduler.sleep(deadline));
-    let mut overran = Some(overran);
-    core::future::poll_fn(|cx| {
-        if let Poll::Ready(out) = work.as_mut().poll(cx) {
-            return Poll::Ready(out);
+    while let Some(wait) = next() {
+        if let Some(out) = within(scheduler, wait, work.as_mut()).await {
+            return out;
         }
-        // A finished sleep is never polled again.
-        if overran.is_some() && expiry.as_mut().poll(cx).is_ready() {
-            if let Some(overran) = overran.take() {
-                overran();
-            }
-        }
-        Poll::Pending
-    })
-    .await
+        at_boundary();
+    }
+    work.await
 }
 
 /// Stamp every folder a focus pass attempted against the caller's clock
@@ -1065,38 +1058,42 @@ mod tests {
         );
     }
 
-    /// The overrun is told once, and the work still runs to its own end.
+    /// Each boundary the work outlives is reported once, and the work still
+    /// runs to its own end.
     #[test]
-    fn work_past_its_deadline_reports_once_and_still_finishes() {
+    fn work_outliving_its_boundaries_reports_each_and_still_finishes() {
         use core::task::{Context, Waker};
         let scheduler = VirtualScheduler::new();
-        let deadline = Duration::from_secs(30);
-        let overruns = Cell::new(0u32);
-        let mut run = pin!(run_past_deadline(
+        let step = Duration::from_secs(30);
+        let mut waits = vec![step, step];
+        let reported = Cell::new(0u32);
+        let mut run = pin!(run_with_boundaries(
             &scheduler,
-            deadline,
             async {
-                scheduler.sleep(deadline * 2).await;
+                scheduler.sleep(step * 3).await;
                 7
             },
-            || overruns.set(overruns.get() + 1),
+            || waits.pop(),
+            || reported.set(reported.get() + 1),
         ));
         let mut cx = Context::from_waker(Waker::noop());
         assert!(run.as_mut().poll(&mut cx).is_pending());
         assert_eq!(
-            overruns.get(),
+            reported.get(),
             0,
-            "inside its deadline the work reports nothing"
+            "inside its first boundary nothing is reported"
         );
 
-        scheduler.advance(deadline);
+        scheduler.advance(step);
         assert!(run.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(reported.get(), 1);
+        scheduler.advance(step);
         assert!(run.as_mut().poll(&mut cx).is_pending());
-        assert_eq!(overruns.get(), 1);
+        assert_eq!(reported.get(), 2);
 
-        scheduler.advance(deadline);
+        scheduler.advance(step);
         assert_eq!(run.as_mut().poll(&mut cx), Poll::Ready(7));
-        assert_eq!(overruns.get(), 1);
+        assert_eq!(reported.get(), 2, "no boundary is left to report");
     }
 
     #[test]

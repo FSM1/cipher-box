@@ -90,8 +90,9 @@ pub struct SyncTimingProfile {
     pub link_sweep_grace: Duration,
     /// How long a sync pass may run before a manual refresh waiting on it
     /// reports a failure and the ladder stops showing `Reconciling`. One host
-    /// record-request deadline, which neither profile compresses: a pass that
-    /// waits on more than one has stalled, not reconciled slowly.
+    /// record-request deadline (web `RECORD_TIMEOUT_MS`, desktop
+    /// `ReqwestRecordTransport`), which neither profile compresses: a pass
+    /// that waits on more than one has stalled, not reconciled slowly.
     pub refresh_deadline: Duration,
 }
 

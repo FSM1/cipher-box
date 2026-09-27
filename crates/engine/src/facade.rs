@@ -174,11 +174,11 @@ use crate::sync::staging::{
     read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
     release_version_blocks, stage_op, take_dead_letter_notice, take_preserved_dead_letter,
 };
-use crate::sync::staleness::{Connectivity, classify};
+use crate::sync::staleness::{Connectivity, classify, next_boundary};
 use crate::sync::tick::{
-    FocusFile, ResolveMode, TickControl, focus_folders_due, focus_scope_roots, nodes_in_scope,
-    on_access_refresh_due, queue_focus_file, queue_unprojected_children, run_past_deadline,
-    run_tick_loop, scope_root_record_name, settle_focus_leg,
+    FocusFile, ResolveMode, TickControl, elapsed_at_least, focus_folders_due, focus_scope_roots,
+    nodes_in_scope, on_access_refresh_due, queue_focus_file, queue_unprojected_children,
+    run_tick_loop, run_with_boundaries, scope_root_record_name, settle_focus_leg,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -4083,6 +4083,32 @@ pub(crate) struct SyncStatus {
     pub(crate) reported: Option<Staleness>,
 }
 
+impl SyncStatus {
+    /// The rung at `now`, recorded as the one the host holds, and whether the
+    /// host held another.
+    fn observe(&mut self, now: UnixMillis, profile: &SyncTimingProfile) -> (Staleness, bool) {
+        let rung = classify(
+            now,
+            self.last_success,
+            self.reconcile_started,
+            Connectivity::Online,
+            profile,
+        );
+        (rung, self.reported.replace(rung) != Some(rung))
+    }
+
+    /// How long until the rung changes with no new input
+    /// ([`next_boundary`]).
+    fn until_boundary(
+        &self,
+        now: UnixMillis,
+        profile: &SyncTimingProfile,
+    ) -> Option<core::time::Duration> {
+        next_boundary(now, self.last_success, self.reconcile_started, profile)
+            .map(|at| core::time::Duration::from_millis(at.0 - now.0))
+    }
+}
+
 /// Drop the proved-descendant set a session leaves behind.
 ///
 /// Unconditional, unlike the best-effort clears it sits among: this set decides
@@ -5666,23 +5692,26 @@ where {
                     &pass.manual,
                     interval,
                     async |cause| {
-                        // Stamped before the overrun timer starts, so the timer
-                        // never fires on a rung still inside its deadline. The
-                        // ladder leaves `Reconciling` there, and the host must
-                        // hear it while the pass still runs.
-                        state.sync_status.borrow_mut().reconcile_started =
-                            Some(pass.seams.scheduler.now());
-                        let report = run_past_deadline(
+                        let started = pass.seams.scheduler.now();
+                        state.sync_status.borrow_mut().reconcile_started = Some(started);
+                        // A rung boundary inside a long pass reaches the host
+                        // while the pass runs on.
+                        let report = run_with_boundaries(
                             &pass.seams.scheduler,
-                            pass.seams.profile.refresh_deadline,
                             pass.run(&state, cause),
                             || {
-                                report_rung(
-                                    &state,
-                                    pass.seams.scheduler.now(),
-                                    &pass.seams.profile,
-                                    &pass.seams.events,
-                                );
+                                state
+                                    .sync_status
+                                    .borrow()
+                                    .until_boundary(pass.seams.scheduler.now(), &pass.seams.profile)
+                            },
+                            || {
+                                let now = pass.seams.scheduler.now();
+                                let deadline = pass.seams.profile.refresh_deadline;
+                                if elapsed_at_least(now, started, deadline) {
+                                    pass.manual.overdue();
+                                }
+                                report_rung(&state, now, &pass.seams.profile, &pass.seams.events);
                             },
                         )
                         .await;
@@ -8339,13 +8368,9 @@ where {
         if self.tick_loop_spawner.borrow().is_some() {
             return Ok(None);
         }
-        let scheduler = self.seams.scheduler.clone();
-        let deadline = self.profile.refresh_deadline;
         self.manual_refresh
             .filed()
-            .map(|pass| {
-                Some(pass.bounded(Box::pin(async move { scheduler.sleep(deadline).await })))
-            })
+            .map(Some)
             .ok_or_else(|| EngineError::RefreshFailed {
                 message: "no sync loop is running to force a pass".to_owned(),
             })
@@ -10039,19 +10064,14 @@ where {
             .collect()
     }
 
-    /// The staleness rung at this instant, off the injected clock, recorded as
-    /// the rung the host now holds.
+    /// The staleness rung at this instant, off the injected clock, handed to
+    /// the host ([`SyncStatus::observe`]).
     fn staleness_now(&self) -> Staleness {
-        let mut status = self.state.sync_status.borrow_mut();
-        let rung = classify(
-            self.seams.scheduler.now(),
-            status.last_success,
-            status.reconcile_started,
-            Connectivity::Online,
-            &self.profile,
-        );
-        status.reported = Some(rung);
-        rung
+        self.state
+            .sync_status
+            .borrow_mut()
+            .observe(self.seams.scheduler.now(), &self.profile)
+            .0
     }
 
     /// Scan the durable staging store's queue for this session. Undecodable
@@ -10852,16 +10872,8 @@ fn report_rung(
     profile: &SyncTimingProfile,
     events: &mpsc::UnboundedSender<Event>,
 ) {
-    let mut status = state.sync_status.borrow_mut();
-    let rung = classify(
-        now,
-        status.last_success,
-        status.reconcile_started,
-        Connectivity::Online,
-        profile,
-    );
-    if status.reported != Some(rung) {
-        status.reported = Some(rung);
+    let (rung, changed) = state.sync_status.borrow_mut().observe(now, profile);
+    if changed {
         let _ = events.unbounded_send(Event::StalenessChanged { level: rung });
     }
 }

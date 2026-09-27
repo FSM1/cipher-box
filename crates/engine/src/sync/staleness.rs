@@ -16,6 +16,7 @@
 use crate::facade::Staleness;
 use crate::profile::SyncTimingProfile;
 use crate::seams::UnixMillis;
+use crate::sync::tick::elapsed_at_least;
 
 /// Host connectivity as the engine observes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,10 +31,8 @@ pub enum Connectivity {
 /// `Reconciling`, then `Stale`/`Fresh` split on the profile's `stale_after`
 /// (≈ 3 missed poll cycles).
 ///
-/// `reconcile_started` is when the pass in flight began. It shows
-/// `Reconciling` for one `refresh_deadline` only: a pass still running past
-/// that reads as the age of the last success, never as a reconcile without
-/// end.
+/// `reconcile_started` is when the pass in flight began; it shows
+/// `Reconciling` for one [`SyncTimingProfile::refresh_deadline`] only.
 ///
 /// A cold cache (`last_success` is `None`) with no reconcile in flight while
 /// online reports `Reconciling`: the empty-cache cold-start *error* is the
@@ -48,8 +47,9 @@ pub fn classify(
     if connectivity == Connectivity::Offline {
         return Staleness::Offline;
     }
-    let deadline_ms = crate::sync::duration_millis(profile.refresh_deadline);
-    if reconcile_started.is_some_and(|started| now.0.saturating_sub(started.0) < deadline_ms) {
+    if reconcile_started
+        .is_some_and(|started| !elapsed_at_least(now, started, profile.refresh_deadline))
+    {
         return Staleness::Reconciling;
     }
     match last_success {
@@ -63,6 +63,26 @@ pub fn classify(
             }
         }
     }
+}
+
+/// The next instant after `now` at which [`classify`] changes rung with no new
+/// input: the end of the in-flight rung, or the stale threshold.
+pub(crate) fn next_boundary(
+    now: UnixMillis,
+    last_success: Option<UnixMillis>,
+    reconcile_started: Option<UnixMillis>,
+    profile: &SyncTimingProfile,
+) -> Option<UnixMillis> {
+    [
+        reconcile_started.map(|started| (started, profile.refresh_deadline)),
+        last_success.map(|last| (last, profile.stale_after)),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|(since, after)| since.0.saturating_add(crate::sync::duration_millis(after)))
+    .filter(|&at| at > now.0)
+    .min()
+    .map(UnixMillis)
 }
 
 /// Whether a shared-scope name pinned since `pinned_since` should raise the
@@ -137,6 +157,21 @@ mod tests {
             rung(crate::sync::duration_millis(P.stale_after)),
             Staleness::Stale
         );
+    }
+
+    #[test]
+    fn the_next_boundary_is_the_nearest_rung_change_ahead() {
+        let deadline = crate::sync::duration_millis(P.refresh_deadline);
+        let stale = crate::sync::duration_millis(P.stale_after);
+        let boundary =
+            |now, started| next_boundary(UnixMillis(now), Some(UnixMillis(0)), started, &P);
+        assert_eq!(boundary(0, Some(UnixMillis(0))), Some(UnixMillis(deadline)));
+        assert_eq!(
+            boundary(deadline, Some(UnixMillis(0))),
+            Some(UnixMillis(stale)),
+            "a boundary reached is not the next one"
+        );
+        assert_eq!(boundary(stale, None), None, "nothing changes past stale");
     }
 
     #[test]

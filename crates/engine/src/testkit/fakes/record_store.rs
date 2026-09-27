@@ -64,8 +64,6 @@ pub struct InMemoryRecordStore {
     stalling_gets: Arc<AtomicBool>,
     /// ([`stall_gets_for_after`](InMemoryRecordStore::stall_gets_for_after)).
     stalling_keys: Arc<Mutex<HashMap<String, usize>>>,
-    /// ([`hold_gets_for`](InMemoryRecordStore::hold_gets_for)).
-    holding_keys: Arc<Mutex<HashSet<String>>>,
 }
 
 impl InMemoryRecordStore {
@@ -93,7 +91,6 @@ impl InMemoryRecordStore {
             dropping_puts: Arc::new(AtomicBool::new(false)),
             stalling_gets: Arc::new(AtomicBool::new(false)),
             stalling_keys: Arc::default(),
-            holding_keys: Arc::default(),
         }
     }
 
@@ -286,8 +283,9 @@ impl InMemoryRecordStore {
         self.dropping_puts.store(true, Ordering::SeqCst);
     }
 
-    /// Park every GET under `routing_key` for ever once `budget` more of them
-    /// have answered, so a test can hold one caller mid-read.
+    /// Park every GET under `routing_key` once `budget` more of them have
+    /// answered, until [`release_gets_for`](Self::release_gets_for), so a test
+    /// can hold one caller mid-read.
     pub fn stall_gets_for_after(&self, routing_key: &str, budget: usize) {
         self.stalling_keys
             .lock()
@@ -302,20 +300,15 @@ impl InMemoryRecordStore {
         self.stalling_gets.store(true, Ordering::SeqCst);
     }
 
-    /// Park every GET under `routing_key` until
-    /// [`release_gets_for`](Self::release_gets_for), so a test can read the
-    /// engine while one pass is mid-read and then let that pass finish.
-    pub fn hold_gets_for(&self, routing_key: &str) {
-        self.holding_keys
-            .lock()
-            .expect("lock")
-            .insert(routing_key.to_owned());
+    /// Answer every GET [`stall_gets_for_after`](Self::stall_gets_for_after)
+    /// parked under `routing_key`, and stop stalling it.
+    pub fn release_gets_for(&self, routing_key: &str) {
+        self.stalling_keys.lock().expect("lock").remove(routing_key);
     }
 
-    /// Let every GET [`hold_gets_for`](Self::hold_gets_for) parked answer on
-    /// its next poll.
-    pub fn release_gets_for(&self, routing_key: &str) {
-        self.holding_keys.lock().expect("lock").remove(routing_key);
+    /// Whether `routing_key`'s stall budget is spent.
+    fn stalls(&self, routing_key: &str) -> bool {
+        self.stalling_keys.lock().expect("lock").get(routing_key) == Some(&0)
     }
 
     /// Whether `routing_key`'s GET is currently injected to fail everywhere.
@@ -345,7 +338,7 @@ impl RecordTransport for InMemoryRecordStore {
             .expect("lock")
             .entry(routing_key.to_owned())
             .or_default() += 1;
-        let stalled = self
+        let parked = self
             .stalling_keys
             .lock()
             .expect("lock")
@@ -357,22 +350,19 @@ impl RecordTransport for InMemoryRecordStore {
                 }
                 None => true,
             });
-        if stalled || self.stalling_gets.load(Ordering::SeqCst) {
+        if self.stalling_gets.load(Ordering::SeqCst) {
             return core::future::poll_fn(|_| core::task::Poll::Pending).await;
         }
-        core::future::poll_fn(|_| {
-            if self
-                .holding_keys
-                .lock()
-                .expect("lock")
-                .contains(routing_key)
-            {
-                core::task::Poll::Pending
-            } else {
-                core::task::Poll::Ready(())
-            }
-        })
-        .await;
+        if parked {
+            core::future::poll_fn(|_| {
+                if self.stalls(routing_key) {
+                    core::task::Poll::Pending
+                } else {
+                    core::task::Poll::Ready(())
+                }
+            })
+            .await;
+        }
         if self.get_failing(endpoint) {
             return Err(SeamError::new(format!(
                 "endpoint unreachable: {}",

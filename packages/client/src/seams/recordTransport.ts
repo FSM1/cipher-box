@@ -18,7 +18,8 @@ const IPNS_RECORD_MEDIA_TYPE = 'application/vnd.ipfs.ipns-record';
 /**
  * Whole-request deadline for one record GET/PUT, so a stalled public endpoint
  * cannot park fan-out. Host policy, not a seam term — keep it in step with
- * desktop's `ReqwestRecordTransport` client timeout.
+ * desktop's `ReqwestRecordTransport` client timeout and the engine's
+ * `SyncTimingProfile::refresh_deadline`.
  */
 const RECORD_TIMEOUT_MS = 30_000;
 
