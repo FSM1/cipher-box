@@ -1,6 +1,6 @@
 # ADR 0055 — A manual refresh fails after one record-request deadline, and the pass runs on
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-27
 - **Date:** 2026-09-27
 - **Relates to:**
   [ADR 0044](./0044-the-engine-owns-refresh-forcing-mailbox-transport-and-the-staging-budget.md)
