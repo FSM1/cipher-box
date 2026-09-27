@@ -77,8 +77,9 @@ build of every member, for the one value that the architecture exists to protect
 2. **`blueprint/testing.md` changes.** Law 1 and the dispatch and scheduled row name
    `Staging Soak`.
 3. **`blueprint/web-client.md` changes.** "Composition" states the IPNS name row in the details
-   dialog and the epoch row in the share dialog. The soak reads the sequence and the epochs from
-   product surfaces, never from a hook (ADR 0049 D3).
+   dialog and the epoch row in the share dialog. The soak reads the name and the epochs from
+   product surfaces, never from a hook (ADR 0049 D3), and reads the record sequence by resolving
+   that name through the public routing path.
 4. **`tests/web-e2e/staging/README.md` is new.** It carries the account rules and the reset
    runbook.
 5. **The soak issue body changes.** It is rewritten to the settled design.
