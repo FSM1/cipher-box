@@ -21,7 +21,9 @@ pub use adoption::{
     Adopted, Candidate, FLOOR_VERDICTS, GateError, GateRejection, GateStage, PendingAdoption,
     ReaderContext, RejectionReason, SeedBlob, adopt, adopt_deferred, record_cut_epoch_floor,
 };
-pub(crate) use adoption::{read_cut_epoch_floor, verify_commitment_in_force};
+pub(crate) use adoption::{
+    read_cut_epoch_floor, refuse_below_cut_floor, verify_commitment_in_force,
+};
 // A fake floor store fails one key by its suffix; the constant keeps that in
 // step with the key the gate reads.
 #[cfg(test)]

@@ -8946,25 +8946,33 @@ fn an_unconfirmed_publish_never_retires_the_version_it_may_already_name() {
 /// an engine internal.
 const PRESERVED_DEAD_LETTERS: &[u8] = b"cipherbox/preserved-dead-letters";
 
-/// A spent budget keeps its registry rows, and a preserved set that refuses the
-/// version then drops the only manifest listing them. The debt is journaled
-/// first, and the create never published, so the settle retires the whole
-/// version (ADR 0047).
-#[test]
-fn a_refused_version_that_kept_its_rows_still_retires_them() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_account(&world, &blocks);
-    let alice = world.device(b"alice");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    block_on(
-        alice
-            .staging_store
-            .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
-    )
-    .expect("the foreign set stages");
-    blocks.refuse_register(proxy_400());
+/// A new file whose registration the registry refuses, so the op spends its
+/// budget and dead-letters keeping every row it charged. With `refuse_parking`
+/// the preserved set is one this build cannot read, so the version is dropped
+/// rather than parked.
+struct RefusedFile {
+    alice: FakeDevice,
+    engine: Engine<FakeSeamTypes>,
+    tasks: Vec<BoxedTask>,
+    target: NodeId,
+    /// Every block the version charged, the root last, as the registry names
+    /// them.
+    version: Vec<String>,
+}
 
+fn refused_new_file(world: &FakeWorld, blocks: &Blocks, refuse_parking: bool) -> RefusedFile {
+    seed_account(world, blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, tasks) = boot(world, blocks, &alice, 42);
+    if refuse_parking {
+        block_on(
+            alice
+                .staging_store
+                .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
+        )
+        .expect("the foreign set stages");
+    }
+    blocks.refuse_register(proxy_400());
     write_file(
         &mut engine,
         WriteTarget::NewFile {
@@ -8975,15 +8983,46 @@ fn a_refused_version_that_kept_its_rows_still_retires_them() {
     )
     .unwrap();
     let (root_cid, leaves) = staged_version(&alice);
+    let raw = block_on(alice.staging_store.queued_ops()).expect("the journal reads");
+    let (_, op) = decode_queue(&RecordReader::new(&kdf::enc_subkey(&SECRET)), &raw)
+        .mine
+        .remove(0);
+    let version = leaves
+        .iter()
+        .chain([&root_cid])
+        .map(|cid| encode_content_cid_str(cid))
+        .collect();
+    RefusedFile {
+        alice,
+        engine,
+        tasks,
+        target: op.target,
+        version,
+    }
+}
+
+/// A spent budget keeps its registry rows, and a preserved set that refuses the
+/// version then drops the only manifest listing them. The debt is journaled
+/// first, and the create never published, so the settle retires the whole
+/// version (ADR 0047).
+#[test]
+fn a_refused_version_that_kept_its_rows_still_retires_them() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let RefusedFile {
+        alice,
+        engine,
+        mut tasks,
+        version,
+        ..
+    } = refused_new_file(&world, &blocks, true);
+
     let (parked, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
     assert_eq!(parked[0].reason, DeadLetterReason::PreservationRefused);
 
     let retired: BTreeSet<String> = retire_targets(&alice).into_iter().collect();
     assert!(
-        leaves
-            .iter()
-            .chain([&root_cid])
-            .all(|cid| retired.contains(&encode_content_cid_str(cid))),
+        version.iter().all(|cid| retired.contains(cid)),
         "every block the version charged is retired: {retired:?}"
     );
 }
@@ -8995,42 +9034,25 @@ fn a_refused_version_that_kept_its_rows_still_retires_them() {
 fn a_dropped_versions_debt_waits_at_a_name_this_device_adopted() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    seed_account(&world, &blocks);
-    let alice = world.device(b"alice");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    block_on(
-        alice
-            .staging_store
-            .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
-    )
-    .expect("the foreign set stages");
-    blocks.refuse_register(proxy_400());
-
-    write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "refused.bin".into(),
-        },
-        &(0..200u8).collect::<Vec<u8>>(),
-    )
-    .unwrap();
-    let (root_cid, _) = staged_version(&alice);
-    let raw = block_on(alice.staging_store.queued_ops()).expect("the journal reads");
-    let (_, op) = decode_queue(&RecordReader::new(&kdf::enc_subkey(&SECRET)), &raw)
-        .mine
-        .remove(0);
+    let RefusedFile {
+        alice,
+        engine,
+        mut tasks,
+        target,
+        version,
+    } = refused_new_file(&world, &blocks, true);
     block_on(
         alice
             .floors(&SECRET)
-            .raise_sequence_floor(write_name(op.target).as_str().as_bytes(), 1),
+            .raise_sequence_floor(write_name(target).as_str().as_bytes(), 1),
     )
     .expect("the floor rises");
     tick_until_dead_lettered(&world, &engine, &mut tasks);
     tick(&world, &engine, &mut tasks);
 
+    let retired = retire_targets(&alice);
     assert!(
-        !retire_targets(&alice).contains(&encode_content_cid_str(&root_cid)),
+        version.iter().all(|cid| !retired.contains(cid)),
         "nothing is retired against a record the endpoints may have lost"
     );
     assert!(engine.pending_reclaim_bytes() > 0, "the debt stays owed");
@@ -13570,27 +13592,14 @@ fn a_preserved_dead_letter_past_its_age_bound_is_purged_on_a_poll_tick() {
 fn a_purged_parked_version_retires_the_rows_it_kept() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    seed_account(&world, &blocks);
-    let alice = world.device(b"alice");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    blocks.refuse_register(proxy_400());
-
-    write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "parked.bin".into(),
-        },
-        &(0..200u8).collect::<Vec<u8>>(),
-    )
-    .unwrap();
-    let (root_cid, leaves) = staged_version(&alice);
+    let RefusedFile {
+        alice,
+        engine,
+        mut tasks,
+        version,
+        ..
+    } = refused_new_file(&world, &blocks, false);
     tick_until_dead_lettered(&world, &engine, &mut tasks);
-    let version: Vec<String> = leaves
-        .iter()
-        .chain([&root_cid])
-        .map(|cid| encode_content_cid_str(cid))
-        .collect();
     let mark = retire_targets(&alice).len();
     assert!(
         version

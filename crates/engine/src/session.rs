@@ -274,6 +274,9 @@ pub(crate) struct SessionState {
     /// The staging keys the live write handles hold — orphan GC's live set, shared with
     /// the tick loop that sweeps after each drain pass.
     pub(crate) live_blocks: Rc<RefCell<LiveBlocks>>,
+    /// The preserved dead-letter records this session's keys do not open
+    /// ([`DroppedVersionDebts`](crate::sync::staging::DroppedVersionDebts)).
+    pub(crate) foreign_parked: Rc<RefCell<BTreeSet<Vec<u8>>>>,
     /// The upload-cancel interlock, shared with the drain the tick loop runs.
     pub(crate) cancels: Rc<RefCell<UploadCancels>>,
     /// The last-known-good gate-passing base snapshot (state law's left
@@ -475,6 +478,7 @@ impl SessionState {
     pub(crate) fn new() -> Self {
         Self {
             live_blocks: Rc::new(RefCell::new(LiveBlocks::default())),
+            foreign_parked: Rc::new(RefCell::new(BTreeSet::new())),
             cancels: Rc::new(RefCell::new(UploadCancels::default())),
             // The anchored all-zero root until cold-start/resolve replaces
             // the base snapshot; children come from the pending-op overlay.
@@ -527,6 +531,7 @@ impl SessionState {
     pub(crate) fn drain_cells(&self) -> DrainCells<'_> {
         DrainCells {
             live_blocks: &self.live_blocks,
+            foreign_parked: &self.foreign_parked,
             base: &self.snapshot,
             held: &self.held_records,
             hold: &self.queue_hold,

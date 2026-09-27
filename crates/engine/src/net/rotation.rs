@@ -69,7 +69,7 @@ use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{
-    Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor, read_cut_epoch_floor,
+    Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor, refuse_below_cut_floor,
     write_body_signer,
 };
 use crate::grants::child_index::canonicalize;
@@ -2225,16 +2225,15 @@ where
             .await
             .map_err(|_| RotationPublishError::NotPublished)?
             .unwrap_or(0);
-        let cut_floor = read_cut_epoch_floor(self.floors, scope_id)
-            .await
-            .map_err(|_| RotationPublishError::NotPublished)?;
-        if record.read_epoch < read_floor
-            || record.write_epoch < write_floor
-            || record.section.commitment.cut_epoch < cut_floor
-        {
+        if record.read_epoch < read_floor || record.write_epoch < write_floor {
             return Err(RotationPublishError::Rejected);
         }
-        Ok(())
+        refuse_below_cut_floor(self.floors, scope_id, &record.section.commitment)
+            .await
+            .map_err(|error| match error {
+                GateError::Rejected(_) => RotationPublishError::Rejected,
+                GateError::Seam(_) => RotationPublishError::NotPublished,
+            })
     }
 
     /// Author `record`'s envelope over `current` — the record it replaces — dry
@@ -4770,14 +4769,12 @@ where
                 if write_floor > plane.write_epoch {
                     return Err(WritePublishError::Rejected);
                 }
-                // The stage-2 mirror `RootPublish::check_publishable` runs: the
-                // re-seal signs the authorized commitment's cut epoch.
-                let cut_floor = read_cut_epoch_floor(self.floors, &self.scope_id)
+                refuse_below_cut_floor(self.floors, &self.scope_id, self.authorized_commitment)
                     .await
-                    .map_err(|_| WritePublishError::NotLanded)?;
-                if self.authorized_commitment.cut_epoch < cut_floor {
-                    return Err(WritePublishError::Rejected);
-                }
+                    .map_err(|error| match error {
+                        GateError::Rejected(_) => WritePublishError::Rejected,
+                        GateError::Seam(_) => WritePublishError::NotLanded,
+                    })?;
                 let section = self.reseal_root(node, &plane, fresh.as_bytes(), read_epoch)?;
                 author_scope_root_with_section(
                     authoring,

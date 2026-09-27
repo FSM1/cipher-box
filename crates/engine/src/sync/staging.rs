@@ -20,21 +20,19 @@ use core::cell::RefCell;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use cipherbox_core::content::{encode_content_cid_str, is_wellformed_content_cid, verify_cid};
-use cipherbox_core::suite::x25519::X25519Secret;
+use cipherbox_core::content::{encode_content_cid_str, verify_cid};
 
 use crate::content::LocalBlocks;
 use crate::content::chunk::SEALED_LEAF_OVERHEAD;
 use crate::content::dag::{LeafCid, RootManifest};
 use crate::content::{ContentProfile, decode_root, expand_staged_root};
-use crate::entropy::Entropy;
 use crate::facade::WriteHandle;
 use crate::grants::conversion::CONVERSION_RECORD_PREFIX;
 use crate::grants::{CONTACTS_PREFIX, RECEIVED_SHARES_PREFIX};
 use crate::net::{NODE_TOMBSTONE_PREFIX, RETIRE_LEDGER_PREFIX, StagingRetireLedger};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
-    OpId, OwedRetire, RetireLedger, SeamError, SeamResult, StagingStore, UnixMillis,
+    DebtOrigin, OpId, OwedRetire, RetireLedger, SeamError, SeamResult, StagingStore, UnixMillis,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
@@ -282,76 +280,97 @@ impl<S: StagingStore> LocalBlocks for StagedBlocks<'_, S> {
 ///
 /// Best-effort: a failed removal is orphan residue a later GC pass collects.
 pub(crate) async fn release_version_blocks<S: StagingStore>(store: &S, root_cid: &[u8]) {
-    for leaf_cid in version_leaf_cids(store, root_cid).await {
-        let _ = store.remove_staged_bytes(&leaf_cid).await;
+    release_blocks(store, root_cid, &version_leaf_cids(store, root_cid).await).await;
+}
+
+async fn release_blocks<S: StagingStore>(store: &S, root_cid: &[u8], leaves: &[LeafCid]) {
+    for leaf_cid in leaves {
+        let _ = store.remove_staged_bytes(leaf_cid).await;
     }
     let _ = store.remove_staged_bytes(root_cid).await;
     let _ = store.remove_staged_bytes(&upload_mark_key(root_cid)).await;
 }
 
-/// Journals what a dropped version charged the registry, from the staged root
-/// block that is the only manifest listing it, before the release loses that
-/// block (ADR 0047). The settle subtracts what the owing node's live record
-/// still names ([`OwingRecord::Unconfirmed`](crate::seams::OwingRecord)), so
-/// nothing here retires.
+/// Drops a dead letter's staged version once nothing holds it, journaling
+/// first what the version charged the registry (ADR 0047). The staged root is
+/// the only manifest listing those rows, so the debt carries the whole target
+/// set; the settle subtracts what the owing node's live record still names
+/// ([`OwingRecord::Unconfirmed`](crate::seams::OwingRecord)).
+///
+/// `foreign` is the session's memory of preserved records its keys do not
+/// open, so a trim classifies each at most once.
 pub(crate) struct DroppedVersionDebts<'a, S> {
     store: &'a S,
-    reader: RecordReader<'a>,
+    reader: &'a RecordReader<'a>,
     seal: BookkeepingSeal<'a>,
     profile: &'a ContentProfile,
+    foreign: &'a RefCell<BTreeSet<Vec<u8>>>,
 }
 
 impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
     pub(crate) fn new(
         store: &'a S,
-        enc_secret: &'a X25519Secret,
-        entropy: &'a RefCell<dyn Entropy + 'static>,
+        reader: &'a RecordReader<'a>,
+        seal: BookkeepingSeal<'a>,
         profile: &'a ContentProfile,
+        foreign: &'a RefCell<BTreeSet<Vec<u8>>>,
     ) -> Self {
         Self {
             store,
-            reader: RecordReader::new(enc_secret),
-            seal: BookkeepingSeal::new(enc_secret, entropy),
+            reader,
+            seal,
             profile,
+            foreign,
         }
     }
 
-    /// The op `record` holds, when this session's keys open it. A version only
-    /// this session can journal a debt for is one only it may drop.
+    /// The op a preserved `record` holds, when this session's keys open it.
     pub(crate) fn opens(&self, record: &[u8]) -> Option<Op> {
+        if self.foreign.borrow().contains(record) {
+            return None;
+        }
         match self.reader.classify(record) {
             RecordClass::Mine(op) => Some(op),
-            _ => None,
+            _ => {
+                self.foreign.borrow_mut().insert(record.to_vec());
+                None
+            }
         }
     }
 
-    /// Journal the debt of the version `op` staged, best-effort: a failure
-    /// leaves the rows charged, which is a leak, never a loss. A root that is
-    /// gone or does not expand names nothing to journal.
-    pub(crate) async fn owe(&self, op: &Op) {
-        let Some(root) = op
-            .content_root_cid()
-            .filter(|cid| is_wellformed_content_cid(cid))
-        else {
+    /// Journal and release the version `op` staged.
+    pub(crate) async fn drop_version(&self, op: &Op) {
+        let Some(root) = op.content_root_cid() else {
             return;
         };
-        let Ok(Some(block)) = self.store.staged_bytes(root).await else {
-            return;
-        };
-        let target = encode_content_cid_str(root);
-        let Ok(expansion) = expand_staged_root(&target, &block, self.profile) else {
-            return;
-        };
-        let debt = OwedRetire {
-            node: op.target.0,
-            target,
-            owed_bytes: expansion.pinned_bytes,
-            manifest_bytes: expansion.pinned_bytes,
-            dropped_root: Some(block),
-        };
-        let _ = StagingRetireLedger::new(self.store, self.seal)
-            .owe(&self.reader.owner_tag(), &[debt])
-            .await;
+        let block = self.store.staged_bytes(root).await.ok().flatten();
+        self.drop_staged(op, root, block.as_deref()).await;
+    }
+
+    /// [`Self::drop_version`] over a root block the caller already read. The
+    /// journal is best-effort: a failure leaves the rows charged, which is a
+    /// leak, never a loss. A root that is gone or does not expand names nothing
+    /// to journal.
+    async fn drop_staged(&self, op: &Op, root: &[u8], block: Option<&[u8]>) {
+        let manifest = block
+            .filter(|block| verify_cid(root, block).is_ok())
+            .and_then(|block| decode_root(block).ok());
+        if let (Some(block), true) = (block, manifest.is_some()) {
+            let target = encode_content_cid_str(root);
+            if let Ok(expansion) = expand_staged_root(&target, block, self.profile) {
+                let debt = OwedRetire {
+                    origin: DebtOrigin::DroppedVersion(expansion.targets),
+                    ..OwedRetire::whole(op.target.0, target, expansion.pinned_bytes)
+                };
+                let _ = StagingRetireLedger::new(self.store, self.seal)
+                    .owe(&self.reader.owner_tag(), &[debt])
+                    .await;
+            }
+        }
+        let leaves = manifest
+            .map(|manifest| manifest.leaf_cids)
+            .unwrap_or_default();
+        release_blocks(self.store, root, &leaves).await;
     }
 }
 
@@ -529,8 +548,8 @@ enum OpenedVersion {
     /// is lost. Neither judged nor destroyed — the same fail-closed direction
     /// [`orphan_staging_keys`] takes on a referenced root it cannot expand.
     Opaque,
-    /// The decoded manifest and the root block's own staged length.
-    Open(RootManifest, usize),
+    /// The decoded manifest and the root block it decoded from.
+    Open(RootManifest, Vec<u8>),
 }
 
 /// The version at `root_cid`, as far as its root block establishes it. A seam
@@ -545,7 +564,7 @@ async fn open_version<S: StagingStore>(store: &S, root_cid: &[u8]) -> SeamResult
         return Ok(OpenedVersion::Gone);
     }
     Ok(match decode_root(&root_block) {
-        Ok(manifest) => OpenedVersion::Open(manifest, root_block.len()),
+        Ok(manifest) => OpenedVersion::Open(manifest, root_block),
         Err(_) => OpenedVersion::Opaque,
     })
 }
@@ -578,8 +597,8 @@ fn version_bytes(manifest: &RootManifest, root_block_len: usize, staged: &Staged
         .fold(root_block_len as u64, u64::saturating_add)
 }
 
-/// The positions in `sized` whose versions go, against the age, count and
-/// byte bounds. The list is append-ordered, so its head is the oldest entry.
+/// Which of `sized` stay, as a keep-mask, against the age, count and byte
+/// bounds. The list is append-ordered, so its head is the oldest entry.
 ///
 /// Age goes first and exempts nothing: a parked version past the bound is
 /// reclaimed whether or not the set is otherwise within its ceilings. The count
@@ -587,30 +606,40 @@ fn version_bytes(manifest: &RootManifest, root_block_len: usize, staged: &Staged
 /// stands, even alone over the byte ceiling — it is the one the user is about to
 /// be told about, and a single version is already bounded by the admission cap
 /// that let it stage at all.
-fn trim_preserved(
-    sized: &[(PreservedDeadLetter, Vec<u8>, u64)],
-    bounds: PreservedBounds,
-) -> BTreeSet<usize> {
-    let mut released: BTreeSet<usize> = (0..sized.len())
-        .filter(|at| bounds.expired(&sized[*at].0))
-        .collect();
-    let live: Vec<usize> = (0..sized.len())
-        .filter(|at| !released.contains(at))
-        .collect();
-    let mut total = live
+fn trim_preserved(sized: &[Sized], bounds: PreservedBounds) -> Vec<bool> {
+    let mut keep: Vec<bool> = sized
         .iter()
-        .map(|at| sized[*at].2)
+        .map(|parked| !bounds.expired(&parked.entry))
+        .collect();
+    let mut left = keep.iter().filter(|kept| **kept).count();
+    let mut total = sized
+        .iter()
+        .zip(&keep)
+        .filter(|(_, kept)| **kept)
+        .map(|(parked, _)| parked.bytes)
         .fold(0, u64::saturating_add);
-    let mut evicted = 0usize;
-    // Both clauses in one unit — how many entries would survive.
-    while live.len() - evicted > 1
-        && (live.len() - evicted > MAX_PRESERVED_DEAD_LETTERS || total > bounds.budget_bytes)
-    {
-        total = total.saturating_sub(sized[live[evicted]].2);
-        released.insert(live[evicted]);
-        evicted += 1;
+    // Oldest first; both clauses in one unit — how many entries would survive.
+    for (parked, kept) in sized.iter().zip(keep.iter_mut()) {
+        if left <= 1 || (left <= MAX_PRESERVED_DEAD_LETTERS && total <= bounds.budget_bytes) {
+            break;
+        }
+        if *kept {
+            *kept = false;
+            left -= 1;
+            total = total.saturating_sub(parked.bytes);
+        }
     }
-    released
+    keep
+}
+
+/// One preserved entry this session opens, as the trim weighs it.
+struct Sized {
+    entry: PreservedDeadLetter,
+    op: Op,
+    root: Vec<u8>,
+    /// The root block the sizing read, when it read one.
+    block: Option<Vec<u8>>,
+    bytes: u64,
 }
 
 /// The dead letters the store holds. `None` when the record is present but not
@@ -930,14 +959,17 @@ pub(crate) async fn reconcile_staging_over<S: StagingStore>(
 /// which the next pass reclaims. A dropped version's debt is journaled in the
 /// same window, so no debt stands for a version the list still holds.
 ///
-/// Only an entry `debts` opens is dropped; every other entry is kept, and with
-/// no `debts` nothing is.
+/// The bounds hold the entries this session's keys open; every other entry is
+/// kept in its place, and with no `debts` the pass keeps the whole set.
 async fn reconcile_preserved_dead_letters<S: StagingStore>(
     store: &S,
     staged: &[Vec<u8>],
     bounds: PreservedBounds,
     debts: Option<&DroppedVersionDebts<'_, S>>,
 ) {
+    let Some(debts) = debts else {
+        return;
+    };
     let Ok(Some(kept)) = read_preserved_dead_letters(store).await else {
         return;
     };
@@ -946,34 +978,54 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
     }
     let staged: StagedKeys = staged.iter().map(Vec::as_slice).collect();
     let before = kept.len();
+    // `Err` holds an entry this session does not open, in its place.
+    let mut slots: Vec<Result<usize, PreservedDeadLetter>> = Vec::with_capacity(before);
     let mut sized = Vec::with_capacity(before);
     for entry in kept {
+        let Some(op) = debts.opens(&entry.record) else {
+            slots.push(Err(entry));
+            continue;
+        };
         let Ok(Some(root)) = record_content_root_cid(&entry.record) else {
             continue;
         };
-        match open_version(store, &root).await {
-            Ok(OpenedVersion::Open(manifest, root_len)) => {
-                let bytes = version_bytes(&manifest, root_len, &staged);
-                sized.push((entry, root, bytes));
+        let (block, bytes) = match open_version(store, &root).await {
+            Ok(OpenedVersion::Open(manifest, block)) => {
+                let bytes = version_bytes(&manifest, block.len(), &staged);
+                (Some(block), bytes)
             }
-            Ok(OpenedVersion::Gone) => {}
+            Ok(OpenedVersion::Gone) => continue,
             // A root this build cannot decode, or a store that cannot answer,
             // decides nothing: keep the entry, unsized, and let the next pass
             // judge it.
-            Ok(OpenedVersion::Opaque) | Err(_) => sized.push((entry, root, 0)),
-        }
-    }
-    let released = trim_preserved(&sized, bounds);
-    let mut live = Vec::with_capacity(sized.len());
-    let mut dropped = Vec::new();
-    for (at, (entry, root, _)) in sized.into_iter().enumerate() {
-        let opened = match (released.contains(&at), debts) {
-            (true, Some(debts)) => debts.opens(&entry.record),
-            _ => None,
+            Ok(OpenedVersion::Opaque) | Err(_) => (None, 0),
         };
-        match opened {
-            Some(op) => dropped.push((op, root)),
-            None => live.push(entry),
+        slots.push(Ok(sized.len()));
+        sized.push(Sized {
+            entry,
+            op,
+            root,
+            block,
+            bytes,
+        });
+    }
+    let keep = trim_preserved(&sized, bounds);
+    let mut judged: Vec<Option<Sized>> = sized.into_iter().map(Some).collect();
+    let mut live = Vec::with_capacity(before);
+    let mut dropped = Vec::new();
+    for slot in slots {
+        match slot {
+            Err(foreign) => live.push(foreign),
+            Ok(at) => {
+                let Some(parked) = judged[at].take() else {
+                    continue;
+                };
+                if keep[at] {
+                    live.push(parked.entry);
+                } else {
+                    dropped.push(parked);
+                }
+            }
         }
     }
     if live.len() == before {
@@ -982,11 +1034,10 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
     if write_preserved_dead_letters(store, &live).await.is_err() {
         return;
     }
-    for (op, root) in dropped {
-        if let Some(debts) = debts {
-            debts.owe(&op).await;
-        }
-        release_version_blocks(store, &root).await;
+    for parked in dropped {
+        debts
+            .drop_staged(&parked.op, &parked.root, parked.block.as_deref())
+            .await;
     }
 }
 
@@ -1084,7 +1135,7 @@ mod tests {
     use crate::sync::record::{RecordClass, RecordReader};
     use crate::testkit::fakes::InMemoryStagingStore;
     use crate::testkit::{SeededEntropy, block_on, frame_version};
-    use cipherbox_core::content::compute_cid;
+    use cipherbox_core::content::{compute_cid, decode_content_cid_str};
     use cipherbox_core::suite::aead::KEY_LEN;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::sync::LazyLock;
@@ -1175,7 +1226,15 @@ mod tests {
     async fn reconcile<S: StagingStore>(store: &S, bounds: PreservedBounds) {
         let staged = store.staged_keys().await.unwrap();
         let entropy = RefCell::new(SeededEntropy::new(7));
-        let debts = DroppedVersionDebts::new(store, &OWNER, &entropy, &ContentProfile::CI);
+        let reader = RecordReader::new(&OWNER);
+        let foreign = RefCell::new(BTreeSet::new());
+        let debts = DroppedVersionDebts::new(
+            store,
+            &reader,
+            BookkeepingSeal::new(&OWNER, &entropy),
+            &ContentProfile::CI,
+            &foreign,
+        );
         reconcile_preserved_dead_letters(store, &staged, bounds, Some(&debts)).await;
     }
 
@@ -1803,14 +1862,14 @@ mod tests {
             put_blocks(&store, &first_blocks, &first_root, &first).await;
             let first_root_cid = first.root_cid.clone();
             let staged = store.staged_keys().await.unwrap();
-            let OpenedVersion::Open(manifest, root_len) =
+            let OpenedVersion::Open(manifest, root_block) =
                 open_version(&store, &first_root_cid).await.unwrap()
             else {
                 panic!("the version opens");
             };
             let one_version = version_bytes(
                 &manifest,
-                root_len,
+                root_block.len(),
                 &staged.iter().map(Vec::as_slice).collect(),
             );
             // Room for one version and no more, so the second admission must
@@ -1950,7 +2009,19 @@ mod tests {
             assert_eq!(owed.len(), 1);
             assert_eq!(owed[0].node, id(1).0);
             assert_eq!(owed[0].target, encode_content_cid_str(&root_cid));
-            assert_eq!(owed[0].dropped_root.as_deref(), Some(root_block.as_slice()));
+            let DebtOrigin::DroppedVersion(targets) = &owed[0].origin else {
+                panic!("a trimmed version's debt carries its targets");
+            };
+            let mut named: Vec<Vec<u8>> = blocks.iter().map(|block| block.cid.clone()).collect();
+            named.push(root_cid.clone());
+            assert_eq!(
+                targets
+                    .iter()
+                    .map(|target| decode_content_cid_str(&target.cid).unwrap())
+                    .collect::<Vec<_>>(),
+                named,
+                "every leaf, then the root"
+            );
         });
     }
 

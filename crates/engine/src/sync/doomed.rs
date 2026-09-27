@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use crate::facade::NodeId;
 use zeroize::Zeroizing;
 
-use crate::seams::{OwedRetire, SeamError, SeamResult};
+use crate::seams::{DebtOrigin, OwedRetire, SeamError, SeamResult};
 use crate::sync::BookkeepingSeal;
 
 /// The staging-key prefix the doomed-name journal writes under. One key per
@@ -381,7 +381,7 @@ fn take_owed(rest: &mut &[u8]) -> Option<Vec<OwedRetire>> {
             target,
             owed_bytes,
             manifest_bytes,
-            dropped_root: None,
+            origin: DebtOrigin::Prune,
         });
     }
     Some(owed)

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 
 use crate::content::DAG_ROOT_CODEC;
-use crate::seams::{OwedRetire, RetireLedger};
+use crate::seams::{DebtOrigin, OwedRetire, RetireLedger};
 use crate::sync::MAX_BOOKKEEPING_OPENS;
 
 /// A distinct doomed-version root address, spelled as the ledger stores them.
@@ -173,7 +173,7 @@ where
         target: root(3),
         owed_bytes: 11,
         manifest_bytes: 90,
-        dropped_root: None,
+        origin: DebtOrigin::Prune,
     };
     reopened.owe(alice, &[quoted.clone()]).await.unwrap();
     reopened

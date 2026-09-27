@@ -29,12 +29,12 @@ use std::rc::Rc;
 use cipherbox_core::content::{
     decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid, verify_cid,
 };
-use cipherbox_core::error::TrustViolation;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    BinEntry, BinIndex, ChildRef, Envelope, NodeKind, PreservedFields, ReadBody, SignedSealed,
-    Version, decode_grant_section, grant_section_bytes, open_content_key, open_read_body,
+    BinEntry, BinIndex, ChildRef, Envelope, GrantSetCommitment, NodeKind, PreservedFields,
+    ReadBody, SignedSealed, Version, decode_grant_section, grant_section_bytes, open_content_key,
+    open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -60,7 +60,7 @@ use crate::facade::{
 };
 use crate::gate::GateStage;
 use crate::gate::{
-    Adopted, GateError, GateRejection, RejectionReason, floor, read_cut_epoch_floor,
+    Adopted, GateError, GateRejection, RejectionReason, floor, refuse_below_cut_floor,
 };
 use crate::grants::grafted::{FloorNamespace, GraftedPlane};
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
@@ -86,7 +86,7 @@ use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
 use crate::rotation::{LaggingSeedMiss, ScopeExitRotator, derive_write_name, lagging_read_seed};
 use crate::seams::{
-    CredentialStore, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
+    CredentialStore, DebtOrigin, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
     RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache, StagingStore,
     UnixMillis,
 };
@@ -1171,6 +1171,7 @@ pub(crate) struct EngineSeams<T, H: Http, C: CredentialStore, F, S, St, Sch> {
 /// which documents each cell.
 pub(crate) struct DrainCells<'a> {
     pub(crate) live_blocks: &'a RefCell<LiveBlocks>,
+    pub(crate) foreign_parked: &'a RefCell<BTreeSet<Vec<u8>>>,
     /// The session's base snapshot, repainted in place on each publish.
     pub(crate) base: &'a BaseSnapshot,
     /// The session's held records.
@@ -1265,11 +1266,10 @@ struct FolderState {
     /// The record bytes this folder was last loaded or published from, which
     /// the pre-signature re-resolve holds the endpoints to.
     record: Vec<u8>,
-    /// The scope root carries the grant section and authors through a different
-    /// envelope path; every other folder is a plain child record.
-    is_scope_root: bool,
-    /// The cut epoch of the commitment a scope root carries; `None` on a child.
-    carried_cut_epoch: Option<u64>,
+    /// The grant-set commitment a scope root carries. A scope root authors
+    /// through a different envelope path; a folder with none is a plain child
+    /// record.
+    commitment: Option<GrantSetCommitment>,
     envelope_unknown: PreservedFields,
     epoch_tag_unknown: PreservedFields,
     created_at: u64,
@@ -1687,16 +1687,19 @@ where
         BookkeepingSeal::new(scope.enc_secret, &*self.seams.entropy)
     }
 
-    /// The custody `scope`'s identity journals a dropped version's debt under.
+    /// The custody a dropped version's debt is journaled under, over `reader`,
+    /// which the caller builds once for the tick.
     fn dropped_version_debts<'s>(
         &'s self,
         scope: &'s DrainScope<'_>,
+        reader: &'s RecordReader<'s>,
     ) -> DroppedVersionDebts<'s, St> {
         DroppedVersionDebts::new(
             &self.seams.staging,
-            scope.enc_secret,
-            &*self.seams.entropy,
+            reader,
+            self.bookkeeping_seal(scope),
             &self.seams.content_profile,
+            self.cells.foreign_parked,
         )
     }
 
@@ -1720,9 +1723,13 @@ where
             // Settle sweeps staging on its own listing. Without it, an
             // abandoned write handle's residue still needs reclaiming at the
             // poll cadence.
+            let reader = passes
+                .first()
+                .map(|scope| RecordReader::new(scope.enc_secret));
             let debts = passes
                 .first()
-                .map(|scope| self.dropped_version_debts(scope));
+                .zip(reader.as_ref())
+                .map(|(scope, reader)| self.dropped_version_debts(scope, reader));
             reconcile_staging(
                 &self.seams.staging,
                 self.cells.live_blocks,
@@ -1814,7 +1821,8 @@ where
         };
         // An X25519 base-point multiply, so the pass derives it once and threads
         // it through every consumer below.
-        let owner = owner_tag(vault.enc_secret);
+        let reader = RecordReader::new(vault.enc_secret);
+        let owner = reader.owner_tag();
         let seal = self.bookkeeping_seal(vault);
         let mut budget = JournalBudget::new(scopes.len());
         let mut owed_now = BTreeSet::new();
@@ -1858,7 +1866,7 @@ where
             self.cells.live_blocks,
             &staged,
             self.preserved_bounds(),
-            Some(&self.dropped_version_debts(vault)),
+            Some(&self.dropped_version_debts(vault, &reader)),
         )
         .await;
     }
@@ -1948,7 +1956,11 @@ where
             // has dropped its record from the queue.
             let preserved = self.preserve_dead_letter(scope, *op_id, *reason).await?;
             self.abandon(scope, *op_id, op).await?;
-            self.release_if_refused(preserved, op).await;
+            // After the abandonment, which retired what the op registered off
+            // the manifest these blocks carry: no debt is left to journal.
+            if preserved == Preservation::Refused {
+                self.release_staged_blocks(op).await;
+            }
             report
                 .dead_letters
                 .push((*op_id, op.target, preserved.observed(*reason)));
@@ -2110,7 +2122,7 @@ where
                     Ok(())
                 };
                 if handed_back.is_ok() && self.dequeue_op(op_id).await.is_ok() {
-                    self.release_owing_its_rows(scope, preserved, op).await;
+                    self.release_unpreserved(scope, preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -2137,7 +2149,7 @@ where
                 if self.retire_unreferenced_name(scope, op).await.is_ok()
                     && self.dequeue_op(op_id).await.is_ok()
                 {
-                    self.release_owing_its_rows(scope, preserved, op).await;
+                    self.release_unpreserved(scope, preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -2382,8 +2394,7 @@ where
                 plane_root: source.root,
                 name: source.root_name.clone(),
                 record: record_bytes.to_vec(),
-                is_scope_root: true,
-                carried_cut_epoch: Some(section.commitment.cut_epoch),
+                commitment: Some(section.commitment),
                 envelope_unknown: envelope.unknown,
                 epoch_tag_unknown: envelope.epoch_tag_unknown,
                 created_at,
@@ -2684,8 +2695,7 @@ where
             plane_root: plane.end.root,
             name: loaded.name,
             record: loaded.record,
-            is_scope_root: false,
-            carried_cut_epoch: None,
+            commitment: None,
             envelope_unknown: loaded.envelope_unknown,
             epoch_tag_unknown: loaded.epoch_tag_unknown,
             created_at,
@@ -5420,7 +5430,7 @@ where
                 target: version.content_cid.clone(),
                 owed_bytes: expansion.minus(&charged).pinned_bytes,
                 manifest_bytes: expansion.pinned_bytes,
-                dropped_root: None,
+                origin: DebtOrigin::Prune,
             });
             charged.extend(expansion.cids());
         }
@@ -5459,21 +5469,32 @@ where
     ) -> Option<LiveRecord> {
         let end = scope.end_of(&self.cells.base.borrow(), NodeId(node)).ok()?;
         let write_name = end.write_name(&node);
-        let unpublished =
-            owing == OwingRecord::Unconfirmed && self.holds_no_record(&end, &write_name).await?;
-        let name = write_name.as_str().to_owned();
-        let reaching = |cids| Some(LiveRecord { name, cids });
-        if owing == OwingRecord::Retired || unpublished {
+        let reaching = |cids| {
+            Some(LiveRecord {
+                name: write_name.as_str().to_owned(),
+                cids,
+            })
+        };
+        if owing == OwingRecord::Retired {
             return reaching(BTreeSet::new());
         }
         let (plane, root) = self.ledger_plane(end).await?;
         // Nocache: the retire unpins, so what may be named is decided against
         // the freshest record the gate will pass, never a cached one a
         // concurrent writer has already moved past.
-        let loaded = self
+        let loaded = match self
             .load_child_node(&plane, root.anchor(), NodeId(node), ResolveMode::NoCache)
             .await
-            .ok()?;
+        {
+            Ok(loaded) => loaded,
+            Err(_)
+                if owing == OwingRecord::Unconfirmed
+                    && self.holds_no_record(&end, &write_name).await? =>
+            {
+                return reaching(BTreeSet::new());
+            }
+            Err(_) => return None,
+        };
         // A record carrying no version list reaches no content.
         let ReadBody::File { versions, .. } = loaded.body else {
             return reaching(BTreeSet::new());
@@ -5963,20 +5984,11 @@ where
         modified_at: u64,
         completes: Option<OpId>,
     ) -> Result<u64, PublishHalt> {
-        let (
-            name,
-            is_scope_root,
-            carried_cut_epoch,
-            built_on,
-            body,
-            envelope_unknown,
-            epoch_tag_unknown,
-        ) = {
+        let (name, commitment, built_on, body, envelope_unknown, epoch_tag_unknown) = {
             let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
             (
                 state.name.clone(),
-                state.is_scope_root,
-                state.carried_cut_epoch,
+                state.commitment.clone(),
                 (state.sequence, state.record.clone()),
                 ReadBody::Folder {
                     created_at: state.created_at,
@@ -5991,7 +6003,7 @@ where
         let plane = scope
             .folder_plane(pass, folder)
             .map_err(PublishHalt::before_the_put)?;
-        self.reresolve_before_signing(scope, &plane, folder, &name, carried_cut_epoch, &built_on)
+        self.reresolve_before_signing(scope, &plane, folder, &name, commitment.as_ref(), &built_on)
             .await
             .map_err(PublishHalt::before_the_put)?;
         let published = self
@@ -6000,7 +6012,7 @@ where
                 &plane,
                 folder,
                 &name,
-                is_scope_root,
+                commitment.is_some(),
                 &body,
                 Vec::new(),
                 envelope_unknown,
@@ -6026,18 +6038,19 @@ where
     /// endpoints serve only with other bytes, halts this attempt so the next
     /// pass rebases onto what they serve.
     ///
-    /// `carried_cut_epoch` is `Some` on a scope root, which then also re-reads
-    /// its cut-epoch floor ([`Self::refuse_below_cut_floor`]).
+    /// A scope root's `commitment` is then held to the cut-epoch floor
+    /// ([`refuse_below_cut_floor`], ADR 0041 D1): a re-resolve the endpoints
+    /// answer with nothing raises no floor.
     async fn reresolve_before_signing(
         &self,
         scope: &DrainScope<'_>,
         plane: &SealPlane<'_>,
         folder: NodeId,
         name: &IpnsName,
-        carried_cut_epoch: Option<u64>,
+        commitment: Option<&GrantSetCommitment>,
         built_on: &(u64, Vec<u8>),
     ) -> Result<(), Halt> {
-        let served = if carried_cut_epoch.is_some() {
+        let served = if commitment.is_some() {
             let resolved = self
                 .gated_scope_root(scope, &plane.end, ResolveMode::NoCache)
                 .await?;
@@ -6053,34 +6066,17 @@ where
         if served.is_some_and(|served| served.moved_past(built_on)) {
             return Err(Halt::LostRace);
         }
-        match carried_cut_epoch {
-            Some(cut_epoch) => self.refuse_below_cut_floor(plane, name, cut_epoch).await,
-            None => Ok(()),
-        }
-    }
-
-    /// The stage-2 mirror on the scope root about to be signed, read after its
-    /// re-resolve. A resolve the endpoints answer with nothing raises no floor,
-    /// and the pass would otherwise sign its pass-start section over a cut it
-    /// never saw (ADR 0041 D1).
-    async fn refuse_below_cut_floor(
-        &self,
-        plane: &SealPlane<'_>,
-        name: &IpnsName,
-        cut_epoch: u64,
-    ) -> Result<(), Halt> {
-        let floors = plane.end.floors(&self.seams.floors);
-        let cut_floor = read_cut_epoch_floor(&floors, &plane.end.root.0)
-            .await
-            .map_err(seam)?;
-        if cut_epoch >= cut_floor {
+        let Some(commitment) = commitment else {
             return Ok(());
-        }
-        let rejection = GateRejection {
-            stage: GateStage::CommitmentVerify,
-            reason: RejectionReason::Trust(TrustViolation::CommitmentInvalid.into()),
         };
-        Err(refuse_record(&self.seams.events, name, &rejection))
+        let floors = plane.end.floors(&self.seams.floors);
+        match refuse_below_cut_floor(&floors, &plane.end.root.0, commitment).await {
+            Ok(()) => Ok(()),
+            Err(GateError::Rejected(rejection)) => {
+                Err(refuse_record(&self.seams.events, name, &rejection))
+            }
+            Err(GateError::Seam(error)) => Err(seam(error)),
+        }
     }
 
     /// What an interior folder's name now serves, through the child gate. A
@@ -6431,35 +6427,20 @@ where
         .map_err(seam)
     }
 
-    /// Drop the version a [`Preservation::Refused`] set could not hold, once the
-    /// op has left the queue. The refusal keeps nothing and the record takes the
-    /// version's only content key with it, so orphan GC — which the same
-    /// unreadable set stands down — would never collect the blocks.
-    ///
-    /// Ordered after the abandonment, never before: [`Self::registered_by`]
-    /// reads the manifest these blocks carry, and an abandonment that fails
-    /// leaves the op queued and still publishable.
-    async fn release_if_refused(&self, preserved: Preservation, op: &Op) {
-        if preserved == Preservation::Refused {
-            self.release_staged_blocks(op).await;
-        }
-    }
-
-    /// [`Self::release_if_refused`] for a dead letter that kept the registry
-    /// rows its version charged. A version no preserved entry holds —
-    /// [`Preservation::Refused`] or [`Preservation::ContentGone`] — journals
-    /// that debt first ([`DroppedVersionDebts`]), or its rows leak with the
-    /// only manifest listing them.
-    async fn release_owing_its_rows(
-        &self,
-        scope: &DrainScope<'_>,
-        preserved: Preservation,
-        op: &Op,
-    ) {
+    /// Drop the version no preserved entry holds — [`Preservation::Refused`]
+    /// or [`Preservation::ContentGone`] — once the op has left the queue, for a
+    /// dead letter that kept the registry rows the version charged. The drop
+    /// journals those rows first ([`DroppedVersionDebts::drop_version`]). A
+    /// refused record takes the version's only content key with it, and orphan
+    /// GC, which the same unreadable set stands down, would never collect the
+    /// blocks.
+    async fn release_unpreserved(&self, scope: &DrainScope<'_>, preserved: Preservation, op: &Op) {
         if preserved != Preservation::Kept {
-            self.dropped_version_debts(scope).owe(op).await;
+            let reader = RecordReader::new(scope.enc_secret);
+            self.dropped_version_debts(scope, &reader)
+                .drop_version(op)
+                .await;
         }
-        self.release_if_refused(preserved, op).await;
     }
 
     /// Abandon one op with its staged version preserved and its name left
@@ -6478,7 +6459,7 @@ where
             return;
         };
         if self.dequeue_op(op_id).await.is_ok() {
-            self.release_owing_its_rows(scope, preserved, op).await;
+            self.release_unpreserved(scope, preserved, op).await;
             report
                 .dead_letters
                 .push((op_id, op.target, preserved.observed(reason)));
@@ -7242,8 +7223,7 @@ mod tests {
                     plane_root,
                     name: derive_write_name(&Zeroizing::new([4; 32]), &folder.0),
                     record: Vec::new(),
-                    is_scope_root: false,
-                    carried_cut_epoch: None,
+                    commitment: None,
                     envelope_unknown: PreservedFields::new(),
                     epoch_tag_unknown: PreservedFields::new(),
                     created_at: 1,
@@ -8776,7 +8756,7 @@ mod tests {
         let loaded = block_on(drain.load_scope_root(&scope.source)).expect("the root loads");
 
         assert_eq!(loaded.epoch, OWNER_ROOT_EPOCH);
-        assert!(loaded.state.is_scope_root);
+        assert!(loaded.state.commitment.is_some());
     }
 
     /// A scope root whose grant section is absent or will not decode carries no

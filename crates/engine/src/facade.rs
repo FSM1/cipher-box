@@ -145,6 +145,7 @@ use crate::settings::{
     report_settings_verdict, resolve_kept_bearer, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
+use crate::sync::BookkeepingSeal;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{EngineSeams, owner_scoped_key, published_op_mark};
@@ -159,7 +160,7 @@ use crate::sync::provision::{
     ProvisionedVault, VaultPointerProbe, provision_vault,
 };
 use crate::sync::rebase::{QueueKey, QueueScan, QueueScanMemo, decode_queue, enclosing_scope_root};
-use crate::sync::record::{RecordClass, record_content_root_cid};
+use crate::sync::record::RecordClass;
 use crate::sync::render::{RenderKey, RenderMemo};
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use cipherbox_core::hex::lower as hex_lower;
@@ -4619,14 +4620,15 @@ impl<T: SeamTypes> Engine<T> {
         // that residue can be reclaimed — and the first place a preserved set
         // that was already over its bounds when this store opened is cut back to
         // them, before a single tick runs.
-        let debts = self.session.as_ref().map(|session| {
-            DroppedVersionDebts::new(
-                &self.seams.staging_store,
-                session.enc_subkey(),
-                &*self.entropy,
-                &self.content_profile,
-            )
-        });
+        let reader = self
+            .session
+            .as_ref()
+            .map(|session| RecordReader::new(session.enc_subkey()));
+        let debts = self
+            .session
+            .as_ref()
+            .zip(reader.as_ref())
+            .map(|(session, reader)| self.dropped_version_debts(session, reader));
         reconcile_staging(
             &self.seams.staging_store,
             &self.state.live_blocks,
@@ -10455,27 +10457,33 @@ where {
             let _ = self.events.unbounded_send(Event::SnapshotUpdated);
             return Ok(());
         }
-        let (parked, op) = self.parked_write(op_id).await?;
+        let (_, op) = self.parked_write(op_id).await?;
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         take_preserved_dead_letter(&self.seams.staging_store, op_id)
             .await
             .map_err(EngineError::from_seam)?;
-        DroppedVersionDebts::new(
-            &self.seams.staging_store,
-            session.enc_subkey(),
-            &*self.entropy,
-            &self.content_profile,
-        )
-        .owe(&op)
-        .await;
-        // A record whose clear root will not read names no blocks to release;
-        // orphan GC reclaims them once this list no longer holds it.
-        if let Some(root) = record_content_root_cid(&parked.record).ok().flatten() {
-            release_version_blocks(&self.seams.staging_store, root.as_slice()).await;
-        }
+        let reader = RecordReader::new(session.enc_subkey());
+        self.dropped_version_debts(session, &reader)
+            .drop_version(&op)
+            .await;
         self.state.dead_letters.borrow_mut().remove(&op_id);
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         Ok(())
+    }
+
+    /// The custody this session journals a dropped version's debt under.
+    fn dropped_version_debts<'s>(
+        &'s self,
+        session: &'s SessionIdentity,
+        reader: &'s RecordReader<'s>,
+    ) -> DroppedVersionDebts<'s, QueueGenerationStore<T::StagingStore>> {
+        DroppedVersionDebts::new(
+            &self.seams.staging_store,
+            reader,
+            BookkeepingSeal::new(session.enc_subkey(), &*self.entropy),
+            &self.content_profile,
+            &self.state.foreign_parked,
+        )
     }
 
     /// Re-queue one parked write ([`Command::RecoverDeadLetter`]).
