@@ -895,7 +895,7 @@ fn keyless_re_put_runs_as_an_hourly_scheduler_job_on_virtual_time() {
 }
 
 #[test]
-fn a_held_record_dropped_from_an_endpoint_is_alive_again_after_one_interval() {
+fn a_held_record_dropped_from_an_endpoint_is_alive_again_at_session_start() {
     let world = FakeWorld::new();
     let device = world.device(b"me");
     let s = signer(33);
@@ -912,7 +912,7 @@ fn a_held_record_dropped_from_an_endpoint_is_alive_again_after_one_interval() {
         held_record(&name, record(&s, VALUE, 1, 0)),
     );
 
-    // Drive exactly one interval over the populated set, then stop.
+    // Drive the immediate pass over the populated set, then stop.
     let scheduler = world.scheduler.clone().with_auto_advance();
     block_on(run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
         let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
@@ -923,8 +923,8 @@ fn a_held_record_dropped_from_an_endpoint_is_alive_again_after_one_interval() {
     assert_all_endpoints_at(&world.record_store, &name, 1);
     assert_eq!(
         scheduler.now(),
-        UnixMillis(60 * 60 * 1000),
-        "one interval elapsed"
+        UnixMillis(0),
+        "the first pass runs before any interval elapses"
     );
 }
 
@@ -1706,8 +1706,8 @@ fn run_liveness_loop_fires_a_pass_per_interval_off_the_injected_clock() {
     assert_eq!(*passes.lock().unwrap(), 3, "one pass per hourly interval");
     assert_eq!(
         scheduler.now(),
-        UnixMillis(3 * 60 * 60 * 1000),
-        "three hourly intervals elapsed on virtual time, no direct clock"
+        UnixMillis(2 * 60 * 60 * 1000),
+        "the immediate pass is followed by two hourly intervals"
     );
 }
 
@@ -1734,7 +1734,7 @@ fn run_liveness_loop_keyless_re_puts_the_held_set_each_pass() {
     }));
 
     // The loop drove the job body: the dropped record is alive on every
-    // endpoint again after one interval.
+    // endpoint again before the first sleep.
     assert_all_endpoints_at(&world.record_store, &name, 1);
-    assert_eq!(scheduler.now(), UnixMillis(60 * 60 * 1000));
+    assert_eq!(scheduler.now(), UnixMillis(0));
 }

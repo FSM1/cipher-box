@@ -7,7 +7,6 @@ use cipherbox_core::kdf;
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_engine::grants::{ContactStore, StagingContactStore, resolve_recipient};
-use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{HttpResponse, Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
@@ -575,8 +574,8 @@ fn cold_start_spawns_the_hourly_liveness_loop_and_the_idle_sweep_job() {
     block_on(tasks.next().expect("the liveness loop"));
     assert_eq!(
         scheduler.now(),
-        UnixMillis(u64::try_from(RE_PUT_INTERVAL.as_millis()).unwrap()),
-        "the loop slept one hourly interval before the drop latch stopped it"
+        UnixMillis(0),
+        "the drop latch stops the loop before its first sleep"
     );
     for task in tasks {
         block_on(task);

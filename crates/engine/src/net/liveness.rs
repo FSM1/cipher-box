@@ -10,7 +10,7 @@
 //!   held and the live copy, byte-for-byte with no key material (core's keyless
 //!   marshal, blueprint/core.md), so actively used vaults keep themselves alive
 //!   on endpoints that may have dropped the record.
-//! - **Sub-EOL renewal** ([`eol_republish`]): on session start and periodically,
+//! - **Sub-EOL renewal** ([`eol_renew_pass`]): on session start and hourly,
 //!   a name with below-threshold EOL remaining is republished at seq+1 through
 //!   the normal CAS path with a fresh 90-day EOL.
 //!
@@ -338,7 +338,7 @@ pub enum LivenessControl {
 }
 
 /// Drive a liveness pass on a fixed cadence off the injected [`Scheduler`]
-/// clock: sleep `interval`, run `pass`, repeat until it returns
+/// clock: run `pass` immediately, then sleep `interval` between passes until
 /// [`LivenessControl::Stop`]. This is the ~hourly loop the facade spawns at
 /// [`RE_PUT_INTERVAL`] over [`keyless_re_put`]. Determinism law: the only time
 /// source is `scheduler.sleep`.
@@ -349,10 +349,10 @@ where
     Fut: Future<Output = LivenessControl>,
 {
     loop {
-        scheduler.sleep(interval).await;
         if pass().await == LivenessControl::Stop {
             break;
         }
+        scheduler.sleep(interval).await;
     }
 }
 
@@ -773,6 +773,64 @@ mod tests {
             .verify(name)
             .unwrap()
             .sequence
+    }
+
+    #[test]
+    fn liveness_renews_a_held_name_before_the_first_sleep() {
+        use crate::seams::Scheduler;
+        use core::future::Future;
+        use core::task::{Context, Poll, Waker};
+
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let scheduler = world.scheduler.clone();
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let (name, held) = seeded_held(&device, [1; 32], [2; 16], "bafyhead", 0);
+        scheduler.advance(Duration::from_secs(65 * DAY));
+        let start = scheduler.now();
+        let held = vec![held];
+        device.http.enqueue_response(ok_200());
+        let profile = SyncTimingProfile::CI;
+        let mut task = Box::pin(super::run_liveness_loop(
+            &scheduler,
+            super::RE_PUT_INTERVAL,
+            || async {
+                let outcomes = eol_renew_pass(
+                    &device.record_store,
+                    &api,
+                    &device.floor_store,
+                    &scheduler,
+                    &profile,
+                    &held,
+                )
+                .await;
+                assert!(outcomes.iter().all(|result| result.outcome.is_ok()));
+                super::LivenessControl::Continue
+            },
+        ));
+        assert_eq!(
+            task.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        );
+        assert_eq!(scheduler.now(), start);
+        assert_eq!(seq_at(&device, &name), 2);
+        let endpoint = device.record_store.endpoints()[0].clone();
+        let bytes = device
+            .record_store
+            .record_at(&endpoint, name.as_str())
+            .unwrap();
+        assert_eq!(
+            IpnsRecord::unmarshal(&bytes)
+                .unwrap()
+                .verify(&name)
+                .unwrap()
+                .validity,
+            eol::eol_from(start).into_bytes(),
+        );
     }
 
     #[test]
