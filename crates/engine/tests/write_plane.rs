@@ -4871,10 +4871,16 @@ fn an_unlinked_delete_with_a_refused_descendant_dead_letters_and_unblocks_the_qu
     interrupted_delete_then_unlink(BinRecovery::Refused);
 }
 
+#[test]
+fn an_unlinked_delete_with_an_unreachable_epoch_dead_letters_and_unblocks_the_queue() {
+    interrupted_delete_then_unlink(BinRecovery::UnreachableEpoch);
+}
+
 enum BinRecovery {
     Observed,
     Restart,
     Refused,
+    UnreachableEpoch,
 }
 
 fn interrupted_delete_then_unlink(recovery: BinRecovery) {
@@ -4953,6 +4959,32 @@ fn interrupted_delete_then_unlink(recovery: BinRecovery) {
             body: &body,
         },
     );
+    if matches!(recovery, BinRecovery::UnreachableEpoch) {
+        blocks.refuse_upload(Box::new(|_| None));
+        let head = author_child_envelope(EnvelopeAuthoring {
+            node_id: leaf.0,
+            scope_id: SCOPE,
+            epoch: EPOCH - 1,
+            read_key: &read_key_of(leaf),
+            nonce: &[0x5A; 24],
+            body: &ReadBody::File {
+                created_at: 0,
+                modified_at: 1,
+                versions: Vec::new(),
+                unknown: PreservedFields::new(),
+            },
+            carried_unknown: PreservedFields::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
+        })
+        .unwrap();
+        publish_next_record(&world.record_store, &blocks, leaf, &head);
+        block_on(
+            alice
+                .snapshot_cache
+                .remove(write_name(leaf).as_str().as_bytes()),
+        )
+        .unwrap();
+    }
     if matches!(recovery, BinRecovery::Refused) {
         blocks.refuse_upload(Box::new(move |block| {
             decode_envelope(block)
@@ -4960,6 +4992,11 @@ fn interrupted_delete_then_unlink(recovery: BinRecovery) {
                 .filter(|envelope| envelope.id == leaf.0)
                 .map(|_| pin_store_unavailable())
         }));
+    }
+    if matches!(
+        recovery,
+        BinRecovery::Refused | BinRecovery::UnreachableEpoch
+    ) {
         block_on(engine.command(Command::Create {
             parent: ROOT,
             name: "later".into(),

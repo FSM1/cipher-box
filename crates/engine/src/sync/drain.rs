@@ -3138,7 +3138,8 @@ where
                 target,
                 entry.deleted_at,
             )
-            .await?;
+            .await
+            .map_err(charge_bin_read)?;
         }
         Ok(())
     }
