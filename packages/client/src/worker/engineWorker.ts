@@ -44,9 +44,9 @@ function onBootstrap(event: MessageEvent<EngineWorkerBootstrap>): void {
 }
 
 /**
- * Opens this account's seams and sweeps the stores of every account the profile
- * no longer holds. The sweep runs alongside the cold start: the origin quota was
- * already measured, so the bytes it frees are the *next* start's headroom.
+ * Opens this account's seams and reclaims other accounts' snapshot caches.
+ * The sweep runs alongside the cold start; reclaimed bytes count toward the
+ * next start's headroom.
  */
 function openAccount(config: EngineWorkerBootstrap, accountId: string): BrowserSeams {
   // Detached, so its own best-effort contract is the only thing holding a sweep
