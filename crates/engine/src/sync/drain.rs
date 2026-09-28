@@ -393,7 +393,7 @@ enum Halt {
     /// (CONTEXT.md "Epoch lag"). Charged nothing, and re-driven at the pass that
     /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
-    /// The bin entry belongs to another scope pass; leave its op queued without charge.
+    /// The bin entry belongs to another scope; only the identity-owning pass charges its wait.
     OtherBinScope,
     /// The op's record reached the record plane and did not confirm. Charged
     /// against the attempt budget, because a jammed name would otherwise retry
@@ -2099,11 +2099,12 @@ where
             self.release_hold();
         }
         match halt {
-            Halt::EpochLagged | Halt::OtherBinScope => {}
+            Halt::EpochLagged => {}
+            Halt::OtherBinScope if !scope.charges_the_identity => {}
             // Its own budget, its own count: an outage must not spend the
             // attempt budget, and a spent attempt is what tells
             // [`Self::create_replays_a_publish`] this device already published.
-            Halt::Unclassified | Halt::LostRace => {
+            Halt::Unclassified | Halt::LostRace | Halt::OtherBinScope => {
                 if attempts.charge_unattributed(op_id) < UNATTRIBUTED_BUDGET {
                     return;
                 }
@@ -9142,6 +9143,87 @@ mod tests {
             op_id,
             still_queued: harness.queued_op_ids(),
         }
+    }
+
+    #[test]
+    fn bin_recovery_without_an_owning_pass_exhausts_one_budget_per_tick() {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let target = NodeId([0x45; 16]);
+        let op = Op::delete(target, 1, UnixMillis(0), 1, true);
+        let op_id = harness.queue_an_op(&op);
+        let mut index = BinIndex::new(1);
+        index.entries.push(BinEntry::new(
+            target.0,
+            derive_write_name(&harness.write_scope_seed, &target.0)
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+            NodeKind::File,
+            HARNESS_ROOT.0,
+            "stranded.txt".to_owned(),
+            0,
+            [0x99; 16],
+            None,
+        ));
+        let block = cipherbox_core::seal::seal_bin_index(
+            kdf::bin_index_seal_key(&HARNESS_SECRET).as_bytes(),
+            &[0x55; 24],
+            &index,
+        )
+        .unwrap();
+        let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+        let record = IpnsRecord::create_v2(
+            &kdf::bin_index_ipns_keypair(&HARNESS_SECRET),
+            format!("/ipfs/{cid}").as_bytes(),
+            1,
+            HARNESS_TTL_NANOS,
+            HARNESS_EOL,
+        )
+        .marshal();
+        for endpoint in harness.seams.transport.endpoints() {
+            harness.seams.transport.seed_record(
+                &endpoint,
+                harness.bin_keys.name().as_str(),
+                record.clone(),
+            );
+        }
+        harness.seams.http = ScriptedHttp::default();
+        for _ in 0..UNATTRIBUTED_BUDGET * 3 {
+            harness
+                .seams
+                .http
+                .enqueue_response(crate::seams::HttpResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: block.clone(),
+                });
+        }
+        let drain = harness.drain();
+        let first = DrainScope {
+            charges_the_identity: true,
+            ..harness.scope()
+        };
+        let later = harness.scope();
+        let mut attempts = Attempts::default();
+        let mut report = DrainReport::default();
+        for _ in 0..UNATTRIBUTED_BUDGET - 1 {
+            for scope in [&first, &later, &later] {
+                let halt = block_on(drain.finish_binned_delete(scope, &harness_pass(), target))
+                    .unwrap_err();
+                assert_eq!(halt, Halt::OtherBinScope);
+                block_on(drain.apply_valve(scope, op_id, &op, halt, &mut attempts, &mut report));
+            }
+        }
+        assert_eq!(harness.queued_op_ids(), vec![op_id]);
+        assert!(report.dead_letters.is_empty());
+        let halt =
+            block_on(drain.finish_binned_delete(&first, &harness_pass(), target)).unwrap_err();
+        block_on(drain.apply_valve(&first, op_id, &op, halt, &mut attempts, &mut report));
+        assert!(harness.queued_op_ids().is_empty());
+        assert_eq!(
+            report.dead_letters,
+            vec![(op_id, target, DeadLetterReason::AttemptsExhausted)]
+        );
     }
 
     /// An outage must not abandon an op, so a halt the valve cannot attribute
