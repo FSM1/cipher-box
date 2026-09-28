@@ -3736,6 +3736,10 @@ where
                 .entries
                 .iter()
                 .find(|entry| entry.node_id == unlinked.node.0);
+            if standing.is_some_and(|entry| entry.scope_id != unlinked.scope_id) {
+                unfinished.push(unlinked);
+                continue;
+            }
             let deleted_at = standing.map_or(unlinked.deleted_at, |entry| entry.deleted_at);
             if self
                 .rekey_into_bin(
@@ -9407,6 +9411,68 @@ mod tests {
                 .as_bytes()
                 .to_vec(),
             deleted_at: 9,
+        }
+    }
+
+    #[test]
+    fn a_capture_with_a_standing_entry_in_another_scope_waits_before_rekeying() {
+        for entry_scope in [HARNESS_ROOT.0, [0x99; 16]] {
+            let mut harness = drain_harness(Some(harness_root_envelope()));
+            let unlinked = capture(&harness.write_scope_seed);
+            let target_name = derive_write_name(&harness.write_scope_seed, &unlinked.node.0);
+            let mut index = BinIndex::new(1);
+            index.entries.push(BinEntry::new(
+                unlinked.node.0,
+                unlinked.ipns_name.clone(),
+                unlinked.kind,
+                unlinked.parent.0,
+                unlinked.name.clone(),
+                1,
+                entry_scope,
+                None,
+            ));
+            let block = cipherbox_core::seal::seal_bin_index(
+                kdf::bin_index_seal_key(&HARNESS_SECRET).as_bytes(),
+                &[0x55; 24],
+                &index,
+            )
+            .unwrap();
+            let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+            let record = IpnsRecord::create_v2(
+                &kdf::bin_index_ipns_keypair(&HARNESS_SECRET),
+                format!("/ipfs/{cid}").as_bytes(),
+                1,
+                HARNESS_TTL_NANOS,
+                HARNESS_EOL,
+            )
+            .marshal();
+            for endpoint in harness.seams.transport.endpoints() {
+                harness.seams.transport.seed_record(
+                    &endpoint,
+                    harness.bin_keys.name().as_str(),
+                    record.clone(),
+                );
+            }
+            let root = encode_envelope(&harness_root_envelope()).unwrap();
+            let root_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &root));
+            harness.seams.http = serve(&BTreeMap::from([(cid, block), (root_cid, root)]));
+            *harness.state.observed_unlinks.borrow_mut() = vec![unlinked.clone()];
+            block_on(harness.drain().adopt_observed_unlinks(&harness.scope()));
+            let retained = harness.state.observed_unlinks.borrow();
+            assert_eq!(retained.len(), 1);
+            assert_eq!(
+                (
+                    retained[0].node,
+                    retained[0].scope_id,
+                    retained[0].deleted_at
+                ),
+                (unlinked.node, unlinked.scope_id, unlinked.deleted_at)
+            );
+            assert_eq!(
+                harness.seams.transport.get_count(target_name.as_str()) > 0,
+                entry_scope == HARNESS_ROOT.0,
+                "only a same-scope capture may begin resolving the subtree for re-keying",
+            );
         }
     }
 
