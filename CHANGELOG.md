@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.7.1](https://github.com/FSM1/cipher-box/compare/v2.7.0...v2.7.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **client:** preserve owner-local state across account switches ([#2085](https://github.com/FSM1/cipher-box/issues/2085)) ([2addd5b](https://github.com/FSM1/cipher-box/commit/2addd5b7b508230bf284ab2056334c29634882bd))
+* **core:** reject malformed file version content CIDs ([#2084](https://github.com/FSM1/cipher-box/issues/2084)) ([d9e10ed](https://github.com/FSM1/cipher-box/commit/d9e10edbfbacd55944d056a6ca0e93289f0c20e6)), closes [#2008](https://github.com/FSM1/cipher-box/issues/2008)
+* **desktop:** force a sync pass on a network reconnect and a wake from sleep ([#2059](https://github.com/FSM1/cipher-box/issues/2059)) ([8457ffa](https://github.com/FSM1/cipher-box/commit/8457ffa7b63c0b77a38de5a1ddb60a05620205fc))
+* **engine:** bound the manual refresh and supersede the rung a host read mid-pass ([#2060](https://github.com/FSM1/cipher-box/issues/2060)) ([90a7ee0](https://github.com/FSM1/cipher-box/commit/90a7ee0432bf08527ff541dbf7c5281d1c1a2cb8))
+* **engine:** read the cut-epoch floor before every scope-root sign and retire what a dropped version charged ([#2063](https://github.com/FSM1/cipher-box/issues/2063)) ([be3d181](https://github.com/FSM1/cipher-box/commit/be3d181da3b45b76ad414b7212e6eefe2e0ef847))
+* **engine:** recover interrupted bin rekeys after unlinks ([#2086](https://github.com/FSM1/cipher-box/issues/2086)) ([a1f3360](https://github.com/FSM1/cipher-box/commit/a1f33609d6efbd00c82111b664b831fe8c6e9a5a))
+* **engine:** renew held names at session start ([#2083](https://github.com/FSM1/cipher-box/issues/2083)) ([3de30cf](https://github.com/FSM1/cipher-box/commit/3de30cfbb68ba0acdd20c0d1aa6facc08ca23125))
+* **engine:** renew held names before the first liveness sleep ([3de30cf](https://github.com/FSM1/cipher-box/commit/3de30cfbb68ba0acdd20c0d1aa6facc08ca23125)), closes [#2046](https://github.com/FSM1/cipher-box/issues/2046)
+
 ## [2.7.0](https://github.com/FSM1/cipher-box/compare/v2.6.0...v2.7.0) (2026-09-26)
 
 
