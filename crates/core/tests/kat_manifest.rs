@@ -2569,7 +2569,12 @@ fn read_body_reject_vectors_fire_the_named_check() {
         "manifest checks vs read_body_reject.json"
     );
     // The uniqueness trust checks (#39 D7) and the structural checks are covered.
-    for required in ["duplicate-id", "duplicate-ipns-name", "invalid-node-kind"] {
+    for required in [
+        "duplicate-id",
+        "duplicate-ipns-name",
+        "invalid-node-kind",
+        "content-cid-malformed",
+    ] {
         assert!(
             listed.contains(required),
             "read-body reject must cover {required}"

@@ -76,7 +76,17 @@ fn arb_version() -> impl Strategy<Value = Version> {
         any::<u64>(),
         any::<u64>(),
     )
-        .prop_map(|(cid, key, size, modified_at)| Version::new(cid, key, size, modified_at))
+        .prop_map(|(cid, key, size, modified_at)| {
+            Version::new(
+                cipherbox_core::content::compute_cid(
+                    cipherbox_core::content::CONTENT_CID_CODEC,
+                    &cid,
+                ),
+                key,
+                size,
+                modified_at,
+            )
+        })
 }
 
 /// Keep only children with pairwise-distinct ids and pairwise-distinct

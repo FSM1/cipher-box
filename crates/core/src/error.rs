@@ -382,6 +382,8 @@ pub enum Malformed {
     /// slot, not a non-canonical encoding of a real CID — the strict decode keeps
     /// the recovered head anchor fail-closed before a fetch trusts it.
     ContentCidStrMalformed,
+    /// A file version carries bytes outside the content CID framing.
+    ContentCidMalformed,
     /// A durable op record at this build's version carried a key outside its
     /// frozen five. *Malformed*: the five keys are exhaustive at a given `v`
     /// (a bump is the extension mechanism), and anything else is unauthenticated
@@ -439,6 +441,7 @@ impl Malformed {
         "invalid-field-length",
         "ipns-name-malformed",
         "content-cid-str-malformed",
+        "content-cid-malformed",
         "unknown-record-field",
         "unsupported-record-version",
         "ipns-record-malformed",
@@ -477,6 +480,7 @@ impl Malformed {
             Self::InvalidFieldLength { .. } => "invalid-field-length",
             Self::IpnsNameMalformed => "ipns-name-malformed",
             Self::ContentCidStrMalformed => "content-cid-str-malformed",
+            Self::ContentCidMalformed => "content-cid-malformed",
             Self::UnknownRecordField { .. } => "unknown-record-field",
             Self::UnsupportedRecordVersion { .. } => "unsupported-record-version",
             Self::IpnsRecordMalformed => "ipns-record-malformed",
@@ -532,6 +536,7 @@ impl fmt::Display for Malformed {
             | Self::InvalidNameSource
             | Self::IpnsNameMalformed
             | Self::ContentCidStrMalformed
+            | Self::ContentCidMalformed
             | Self::IpnsRecordMalformed => Ok(()),
         }
     }

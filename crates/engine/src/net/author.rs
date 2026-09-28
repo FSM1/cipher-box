@@ -1326,7 +1326,15 @@ mod tests {
     #[test]
     fn a_new_child_agrees_with_its_parent_ref_on_kind_for_every_kind() {
         let versioned = NewNodeBody::File {
-            versions: vec![Version::new(vec![1, 2, 3], [4u8; 32], 9, 77)],
+            versions: vec![Version::new(
+                cipherbox_core::content::compute_cid(
+                    cipherbox_core::content::CONTENT_CID_CODEC,
+                    &[1, 2, 3],
+                ),
+                [4u8; 32],
+                9,
+                77,
+            )],
         };
         for (node, expected) in [
             (NewNodeBody::Folder, NodeKind::Folder),
@@ -1346,7 +1354,15 @@ mod tests {
 
     #[test]
     fn a_new_file_child_carries_the_versions_it_was_built_from() {
-        let version = Version::new(vec![1, 2, 3], [4u8; 32], 9, 77);
+        let version = Version::new(
+            cipherbox_core::content::compute_cid(
+                cipherbox_core::content::CONTENT_CID_CODEC,
+                &[1, 2, 3],
+            ),
+            [4u8; 32],
+            9,
+            77,
+        );
         let child = new_child(
             [4u8; 16],
             "n".into(),
