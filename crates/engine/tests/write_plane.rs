@@ -4856,6 +4856,227 @@ fn a_re_key_that_cannot_publish_leaves_the_node_linked() {
     );
 }
 
+#[test]
+fn an_observed_unlink_uses_the_standing_bin_entry_key_after_a_failed_delete() {
+    interrupted_delete_then_unlink(BinRecovery::Observed);
+}
+
+#[test]
+fn an_unlinked_delete_finishes_its_descendants_after_a_restart() {
+    interrupted_delete_then_unlink(BinRecovery::Restart);
+}
+
+#[test]
+fn an_unlinked_delete_with_a_refused_descendant_dead_letters_and_unblocks_the_queue() {
+    interrupted_delete_then_unlink(BinRecovery::Refused);
+}
+
+#[test]
+fn an_unlinked_delete_with_an_unreachable_epoch_dead_letters_and_unblocks_the_queue() {
+    interrupted_delete_then_unlink(BinRecovery::UnreachableEpoch);
+}
+
+enum BinRecovery {
+    Observed,
+    Restart,
+    Refused,
+    UnreachableEpoch,
+}
+
+fn interrupted_delete_then_unlink(recovery: BinRecovery) {
+    let fail_descendant = !matches!(recovery, BinRecovery::Observed);
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "shared".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let parent = child_id(&engine, ROOT, "shared");
+    block_on(engine.command(Command::Create {
+        parent,
+        name: "box".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, parent, "box");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: doomed,
+            name: "notes.txt".into(),
+        },
+        b"recoverable content",
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let leaf = child_id(&engine, doomed, "notes.txt");
+    block_on(engine.command(Command::SetFocus { node: Some(parent) })).unwrap();
+
+    let observer = if fail_descendant {
+        None
+    } else {
+        let device = world.device(b"observer");
+        let (mut observer, events, mut observer_tasks) = boot(&world, &blocks, &device, 43);
+        block_on(observer.command(Command::SetFocus { node: Some(parent) })).unwrap();
+        tick(&world, &observer, &mut observer_tasks);
+        Some((observer, events, observer_tasks))
+    };
+
+    let target = if fail_descendant { leaf } else { doomed };
+    blocks.refuse_upload(Box::new(move |block| {
+        decode_envelope(block)
+            .ok()
+            .filter(|envelope| envelope.id == target.0)
+            .map(|_| unreachable_upload())
+    }));
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    let held = binned_held_key(&world, &alice, &blocks, doomed);
+    let deleted_at = binned_deleted_at(&world, &alice, &blocks, doomed);
+    assert!(opens_under(&world, &blocks, leaf, &read_key_of(leaf)));
+
+    let body = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 1,
+        children: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    plant_record(
+        &world.record_store,
+        &blocks,
+        parent,
+        Planted {
+            node_id: parent.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(parent),
+            body: &body,
+        },
+    );
+    if matches!(recovery, BinRecovery::UnreachableEpoch) {
+        blocks.refuse_upload(Box::new(|_| None));
+        let head = author_child_envelope(EnvelopeAuthoring {
+            node_id: leaf.0,
+            scope_id: SCOPE,
+            epoch: EPOCH - 1,
+            read_key: &read_key_of(leaf),
+            nonce: &[0x5A; 24],
+            body: &ReadBody::File {
+                created_at: 0,
+                modified_at: 1,
+                versions: Vec::new(),
+                unknown: PreservedFields::new(),
+            },
+            carried_unknown: PreservedFields::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
+        })
+        .unwrap();
+        publish_next_record(&world.record_store, &blocks, leaf, &head);
+        block_on(
+            alice
+                .snapshot_cache
+                .remove(write_name(leaf).as_str().as_bytes()),
+        )
+        .unwrap();
+    }
+    if matches!(recovery, BinRecovery::Refused) {
+        blocks.refuse_upload(Box::new(move |block| {
+            decode_envelope(block)
+                .ok()
+                .filter(|envelope| envelope.id == leaf.0)
+                .map(|_| pin_store_unavailable())
+        }));
+    }
+    if matches!(
+        recovery,
+        BinRecovery::Refused | BinRecovery::UnreachableEpoch
+    ) {
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: "later".into(),
+            kind: NodeKind::Folder,
+        }))
+        .unwrap();
+        for _ in 0..6 {
+            tick(&world, &engine, &mut tasks);
+        }
+        let snapshot = block_on(engine.snapshot(ROOT)).unwrap();
+        assert_eq!(
+            snapshot.dead_letters.len(),
+            1,
+            "the refused recovery spends the same budget as the original delete"
+        );
+        assert_eq!(
+            snapshot.dead_letters[0].reason,
+            DeadLetterReason::AttemptsExhausted
+        );
+        assert!(
+            block_on(alice.staging_store.queued_ops())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(published_names(&world.record_store, &blocks, ROOT).contains(&"later".to_owned()));
+        assert!(bin_entries(&world, &alice, &blocks).contains(&doomed.0));
+        return;
+    }
+    if fail_descendant {
+        tick(&world, &engine, &mut tasks);
+        assert!(
+            !block_on(alice.staging_store.queued_ops())
+                .unwrap()
+                .is_empty(),
+            "an unfinished re-key keeps the authored delete durable"
+        );
+        drop(engine);
+        tasks.clear();
+        let (restarted, _restarted_events, restarted_tasks) = boot(&world, &blocks, &alice, 43);
+        engine = restarted;
+        tasks = restarted_tasks;
+    }
+    if let Some((observer, _observer_events, observer_tasks)) = observer {
+        drop(engine);
+        tasks.clear();
+        engine = observer;
+        tasks = observer_tasks;
+        // An observed capture has no authored op to retry its failed re-key.
+        tick(&world, &engine, &mut tasks);
+    }
+    blocks.refuse_upload(Box::new(|_| None));
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        binned_deleted_at(&world, &alice, &blocks, doomed),
+        deleted_at
+    );
+    for node in [doomed, leaf] {
+        assert!(
+            opens_under(&world, &blocks, node, &read_key_under(&held, node)),
+            "the standing entry opens every node after the interrupted delete"
+        );
+        assert!(
+            !opens_under(&world, &blocks, node, &read_key_of(node)),
+            "the access cut reaches every descendant"
+        );
+    }
+    block_on(engine.command(Command::Restore {
+        node: doomed,
+        into: None,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert!(bin_entries(&world, &alice, &blocks).is_empty());
+    assert_eq!(
+        published_names(&world.record_store, &blocks, parent),
+        vec!["box"]
+    );
+    assert!(opens_under(&world, &blocks, leaf, &read_key_of(leaf)));
+}
+
 /// The owner's capture of a grantee's unlink (ADR 0010 item 5). The poll leg
 /// sees a folder stop naming a child this device did not unlink; the owner's
 /// engine binds it and re-keys it, so the grantee that removed it stops reading

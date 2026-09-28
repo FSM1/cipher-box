@@ -107,7 +107,7 @@ use crate::sync::project::{
     UnlinkedChild, project_child_version, project_folder, project_folder_partial,
 };
 use crate::sync::rebase::{
-    AppliedOp, DeadLetterReason, decode_queue, enclosing_scope_root, replay,
+    AppliedOp, DeadLetterReason, DropReason, decode_queue, enclosing_scope_root, replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::render::BaseSnapshot;
@@ -393,6 +393,8 @@ enum Halt {
     /// (CONTEXT.md "Epoch lag"). Charged nothing, and re-driven at the pass that
     /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
+    /// The bin entry belongs to another scope; only the identity-owning pass charges its wait.
+    OtherBinScope,
     /// The op's record reached the record plane and did not confirm. Charged
     /// against the attempt budget, because a jammed name would otherwise retry
     /// forever. The PUT was
@@ -1998,7 +2000,17 @@ where
         // A drop is not an abandonment: `AlreadySatisfied` on a create is the
         // create having *landed*, so retiring its name would cut a live record
         // its parent already references.
-        for (op_id, _) in &rebased.dropped {
+        for (op_id, reason) in &rebased.dropped {
+            if *reason == DropReason::AlreadySatisfied
+                && let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id)
+                && matches!(op.kind, OpKind::Delete { to_bin: true, .. })
+            {
+                if let Err(halt) = self.finish_binned_delete(scope, &pass, op.target).await {
+                    self.apply_valve(scope, *op_id, op, halt, attempts, report)
+                        .await;
+                    return Err(halt);
+                }
+            }
             self.dequeue_op(*op_id).await?;
             report.dropped.push(*op_id);
         }
@@ -2088,10 +2100,11 @@ where
         }
         match halt {
             Halt::EpochLagged => {}
+            Halt::OtherBinScope if !scope.charges_the_identity => {}
             // Its own budget, its own count: an outage must not spend the
             // attempt budget, and a spent attempt is what tells
             // [`Self::create_replays_a_publish`] this device already published.
-            Halt::Unclassified | Halt::LostRace => {
+            Halt::Unclassified | Halt::LostRace | Halt::OtherBinScope => {
                 if attempts.charge_unattributed(op_id) < UNATTRIBUTED_BUDGET {
                     return;
                 }
@@ -3010,8 +3023,11 @@ where
             named.get_or_insert(child);
             unlink_from.push(parent);
         }
-        // Removing an absent ref is the op already satisfied, never a publish.
         let (Some(&origin), Some(child)) = (unlink_from.first(), named) else {
+            // A peer can unlink while the authored delete's re-key is unfinished.
+            if to_bin {
+                self.finish_binned_delete(scope, pass, target).await?;
+            }
             return Ok(());
         };
 
@@ -3107,6 +3123,30 @@ where
             (false, None) => {}
         }
         Ok(())
+    }
+
+    /// A vanished parent link does not discharge the bin entry's access cut.
+    async fn finish_binned_delete(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &Pass,
+        target: NodeId,
+    ) -> Result<(), Halt> {
+        if scope.is_grafted() {
+            return Err(Halt::OtherBinScope);
+        }
+        let Some((entry, plane)) = self.bin_entry(scope, pass, target).await? else {
+            return Ok(());
+        };
+        self.rekey_into_bin(
+            scope,
+            &plane,
+            pass.anchor_for(&plane)?,
+            target,
+            entry.deleted_at,
+        )
+        .await
+        .map_err(charge_bin_read)
     }
 
     /// Restore: re-key the subtree out of the bin, relink it, then drop the
@@ -3326,10 +3366,8 @@ where
     /// may be published over, and both bin op plans publish one before they end.
     ///
     /// The bin is vault-level, so an entry may name a scope this pass does not
-    /// hold, and its `ipnsName` is whatever the writer that binned the node put
-    /// there. Both are refused: re-keying under the wrong scope's seed would
-    /// seal a node to a key its readers never derive, and a name this write seed
-    /// does not derive belongs to a scope root, which no bin path re-keys.
+    /// hold; that entry waits for its owning pass. A mismatched `ipnsName` is
+    /// refused: no bin path may re-key a name this scope's write seed cannot derive.
     async fn bin_entry<'s>(
         &self,
         scope: &DrainScope<'s>,
@@ -3342,12 +3380,17 @@ where
         };
         // The entry names the scope its delete resolved onto
         // ([`Self::record_bin_entry`]), so the restore and the purge read that
-        // end rather than the one this pass anchors on. An entry naming neither
-        // end, or a name that end's write seed does not derive, is one no pass
-        // may act on.
+        // end rather than the one this pass anchors on.
+        let entry_root = NodeId(entry.scope_id);
         let plane = scope
-            .plane_rooted_at(pass.epoch, NodeId(entry.scope_id))?
-            .ok_or(Halt::Permanent(DeadLetterReason::TargetGone))?;
+            .plane_rooted_at(pass.epoch, entry_root)?
+            .ok_or_else(|| {
+                if scope.charges_the_identity && scope.keyless_roots.contains(&entry_root) {
+                    Halt::UnwritableScope
+                } else {
+                    Halt::OtherBinScope
+                }
+            })?;
         if plane.end.write_name(&node.0).as_str().as_bytes() != entry.ipns_name {
             return Err(Halt::Permanent(DeadLetterReason::TargetGone));
         }
@@ -3657,8 +3700,7 @@ where
     /// already published, so nothing waits on the entry, and an entry ahead of
     /// the re-key would claim a cut that may never run. A capture whose re-key
     /// or whose index publish does not land stays in the set and is retried,
-    /// under the `deletedAt` it was stamped with, so the retry reaches the same
-    /// key.
+    /// under the standing entry's timestamp, or its capture stamp if absent.
     ///
     /// The set is empty for a vault at retention `0`: the owner turned the bin
     /// off, and an adoption carries no owner command that could overrule that.
@@ -3693,24 +3735,27 @@ where
             let standing = index
                 .entries
                 .iter()
-                .any(|entry| entry.node_id == unlinked.node.0);
+                .find(|entry| entry.node_id == unlinked.node.0);
+            if standing.is_some_and(|entry| entry.scope_id != unlinked.scope_id) {
+                unfinished.push(unlinked);
+                continue;
+            }
+            let deleted_at = standing.map_or(unlinked.deleted_at, |entry| entry.deleted_at);
             if self
                 .rekey_into_bin(
                     scope,
                     &scope.source.at(root.epoch),
                     root.anchor(),
                     unlinked.node,
-                    unlinked.deleted_at,
+                    deleted_at,
                 )
                 .await
                 .is_err()
             {
-                if !standing {
-                    unfinished.push(unlinked);
-                }
+                unfinished.push(unlinked);
                 continue;
             }
-            if standing {
+            if standing.is_some() {
                 continue;
             }
             index.entries.push(BinEntry::new(
@@ -7091,7 +7136,8 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         Halt::Blocked { .. }
         | Halt::HeldBySettings(_)
         | Halt::HeldByBinIndex(_)
-        | Halt::Cancelled => None,
+        | Halt::Cancelled
+        | Halt::OtherBinScope => None,
         Halt::Unclassified => Some("the upload did not complete"),
         Halt::EpochLagged => Some("this folder is still being re-keyed after a key change"),
         Halt::Attempt | Halt::UploadAttempt | Halt::LostRace => {
@@ -9103,6 +9149,87 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bin_recovery_without_an_owning_pass_exhausts_one_budget_per_tick() {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let target = NodeId([0x45; 16]);
+        let op = Op::delete(target, 1, UnixMillis(0), 1, true);
+        let op_id = harness.queue_an_op(&op);
+        let mut index = BinIndex::new(1);
+        index.entries.push(BinEntry::new(
+            target.0,
+            derive_write_name(&harness.write_scope_seed, &target.0)
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+            NodeKind::File,
+            HARNESS_ROOT.0,
+            "stranded.txt".to_owned(),
+            0,
+            [0x99; 16],
+            None,
+        ));
+        let block = cipherbox_core::seal::seal_bin_index(
+            kdf::bin_index_seal_key(&HARNESS_SECRET).as_bytes(),
+            &[0x55; 24],
+            &index,
+        )
+        .unwrap();
+        let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+        let record = IpnsRecord::create_v2(
+            &kdf::bin_index_ipns_keypair(&HARNESS_SECRET),
+            format!("/ipfs/{cid}").as_bytes(),
+            1,
+            HARNESS_TTL_NANOS,
+            HARNESS_EOL,
+        )
+        .marshal();
+        for endpoint in harness.seams.transport.endpoints() {
+            harness.seams.transport.seed_record(
+                &endpoint,
+                harness.bin_keys.name().as_str(),
+                record.clone(),
+            );
+        }
+        harness.seams.http = ScriptedHttp::default();
+        for _ in 0..UNATTRIBUTED_BUDGET * 3 {
+            harness
+                .seams
+                .http
+                .enqueue_response(crate::seams::HttpResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: block.clone(),
+                });
+        }
+        let drain = harness.drain();
+        let first = DrainScope {
+            charges_the_identity: true,
+            ..harness.scope()
+        };
+        let later = harness.scope();
+        let mut attempts = Attempts::default();
+        let mut report = DrainReport::default();
+        for _ in 0..UNATTRIBUTED_BUDGET - 1 {
+            for scope in [&first, &later, &later] {
+                let halt = block_on(drain.finish_binned_delete(scope, &harness_pass(), target))
+                    .unwrap_err();
+                assert_eq!(halt, Halt::OtherBinScope);
+                block_on(drain.apply_valve(scope, op_id, &op, halt, &mut attempts, &mut report));
+            }
+        }
+        assert_eq!(harness.queued_op_ids(), vec![op_id]);
+        assert!(report.dead_letters.is_empty());
+        let halt =
+            block_on(drain.finish_binned_delete(&first, &harness_pass(), target)).unwrap_err();
+        block_on(drain.apply_valve(&first, op_id, &op, halt, &mut attempts, &mut report));
+        assert!(harness.queued_op_ids().is_empty());
+        assert_eq!(
+            report.dead_letters,
+            vec![(op_id, target, DeadLetterReason::AttemptsExhausted)]
+        );
+    }
+
     /// An outage must not abandon an op, so a halt the valve cannot attribute
     /// keeps its place at the head of the queue for a whole outage's worth of
     /// passes — and then leaves, because strict FIFO means a halt that never
@@ -9284,6 +9411,68 @@ mod tests {
                 .as_bytes()
                 .to_vec(),
             deleted_at: 9,
+        }
+    }
+
+    #[test]
+    fn a_capture_with_a_standing_entry_in_another_scope_waits_before_rekeying() {
+        for entry_scope in [HARNESS_ROOT.0, [0x99; 16]] {
+            let mut harness = drain_harness(Some(harness_root_envelope()));
+            let unlinked = capture(&harness.write_scope_seed);
+            let target_name = derive_write_name(&harness.write_scope_seed, &unlinked.node.0);
+            let mut index = BinIndex::new(1);
+            index.entries.push(BinEntry::new(
+                unlinked.node.0,
+                unlinked.ipns_name.clone(),
+                unlinked.kind,
+                unlinked.parent.0,
+                unlinked.name.clone(),
+                1,
+                entry_scope,
+                None,
+            ));
+            let block = cipherbox_core::seal::seal_bin_index(
+                kdf::bin_index_seal_key(&HARNESS_SECRET).as_bytes(),
+                &[0x55; 24],
+                &index,
+            )
+            .unwrap();
+            let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+            let record = IpnsRecord::create_v2(
+                &kdf::bin_index_ipns_keypair(&HARNESS_SECRET),
+                format!("/ipfs/{cid}").as_bytes(),
+                1,
+                HARNESS_TTL_NANOS,
+                HARNESS_EOL,
+            )
+            .marshal();
+            for endpoint in harness.seams.transport.endpoints() {
+                harness.seams.transport.seed_record(
+                    &endpoint,
+                    harness.bin_keys.name().as_str(),
+                    record.clone(),
+                );
+            }
+            let root = encode_envelope(&harness_root_envelope()).unwrap();
+            let root_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &root));
+            harness.seams.http = serve(&BTreeMap::from([(cid, block), (root_cid, root)]));
+            *harness.state.observed_unlinks.borrow_mut() = vec![unlinked.clone()];
+            block_on(harness.drain().adopt_observed_unlinks(&harness.scope()));
+            let retained = harness.state.observed_unlinks.borrow();
+            assert_eq!(retained.len(), 1);
+            assert_eq!(
+                (
+                    retained[0].node,
+                    retained[0].scope_id,
+                    retained[0].deleted_at
+                ),
+                (unlinked.node, unlinked.scope_id, unlinked.deleted_at)
+            );
+            assert_eq!(
+                harness.seams.transport.get_count(target_name.as_str()) > 0,
+                entry_scope == HARNESS_ROOT.0,
+                "only a same-scope capture may begin resolving the subtree for re-keying",
+            );
         }
     }
 
