@@ -3250,6 +3250,146 @@ fn a_delete_inside_the_second_end_files_its_bin_entry_under_that_scope() {
     );
 }
 
+#[test]
+fn an_interrupted_bin_delete_waits_for_its_interior_scope_pass() {
+    interrupted_bin_delete_across_passes(true);
+}
+
+#[test]
+fn an_interrupted_vault_bin_delete_is_not_abandoned_by_an_interior_pass() {
+    interrupted_bin_delete_across_passes(false);
+}
+
+fn interrupted_bin_delete_across_passes(interior: bool) {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let source = if interior { fx.folder } else { ROOT };
+    let parent =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, source, "parent");
+    let doomed =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, parent, "doomed");
+    let leaf = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, doomed, "leaf");
+    block_on(fx.engine.command(Command::SetFocus { node: Some(parent) })).unwrap();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (seed, _) = if interior {
+        scope_material_of(&fx.world, &fx.blocks, fx.folder)
+    } else {
+        (Zeroizing::new(READ_SCOPE_SEED), EPOCH)
+    };
+    let scope_id = if interior { fx.folder.0 } else { SCOPE };
+    fx.blocks.refuse_upload(Box::new(move |block| {
+        decode_envelope(block)
+            .ok()
+            .filter(|envelope| envelope.id == leaf.0)
+            .map(|_| {
+                Err(cipherbox_engine::seams::SeamError::new(
+                    "interrupted re-key",
+                ))
+            })
+    }));
+    block_on(fx.engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let entries = published_bin_entries(&fx);
+    let entry = entries
+        .iter()
+        .find(|entry| entry.node_id == doomed.0)
+        .unwrap();
+    assert_eq!(entry.scope_id, scope_id);
+    let held = BinIndexKeys::derive(&SECRET).held_key(&doomed.0, entry.deleted_at);
+    let head = published_head(&fx.world, &fx.blocks, &write_name(parent)).unwrap();
+    let envelope = decode_envelope(&head).unwrap();
+    let authored = author_child_envelope(EnvelopeAuthoring {
+        node_id: parent.0,
+        scope_id,
+        epoch: envelope.epoch,
+        read_key: &node_read_key(&seed, parent),
+        nonce: &[0x77; 24],
+        body: &ReadBody::Folder {
+            created_at: 0,
+            modified_at: 1,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        },
+        carried_unknown: envelope.unknown,
+        carried_epoch_tag_unknown: envelope.epoch_tag_unknown,
+    })
+    .unwrap();
+    fx.blocks.put(authored.block);
+    publish_value_at(
+        &fx.world,
+        parent,
+        format!("/ipfs/{}", authored.cid).as_bytes(),
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .is_empty()
+    );
+    assert!(
+        !block_on(fx.owner_device.staging_store.queued_ops())
+            .unwrap()
+            .is_empty()
+    );
+    fx.blocks.refuse_upload(Box::new(|_| None));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .is_empty()
+    );
+    assert!(
+        block_on(fx.owner_device.staging_store.queued_ops())
+            .unwrap()
+            .is_empty()
+    );
+    for node in [doomed, leaf] {
+        assert!(
+            published_seal(
+                &fx.world,
+                &fx.blocks,
+                &write_name(node),
+                &node_read_key(&held, node)
+            )
+            .2
+            .is_some()
+        );
+        assert!(
+            published_seal(
+                &fx.world,
+                &fx.blocks,
+                &write_name(node),
+                &node_read_key(&seed, node)
+            )
+            .2
+            .is_none()
+        );
+    }
+    block_on(fx.engine.command(Command::Restore {
+        node: doomed,
+        into: Some(parent),
+    }))
+    .unwrap();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != doomed.0)
+    );
+    assert!(
+        published_seal(
+            &fx.world,
+            &fx.blocks,
+            &write_name(leaf),
+            &node_read_key(&seed, leaf)
+        )
+        .2
+        .is_some()
+    );
+}
+
 /// The same per-node plane resolution on the authoring side: a create under a
 /// parent that resolves onto the second end seals its new record into that
 /// scope, at that scope's epoch. Under the source end it would seal a record the

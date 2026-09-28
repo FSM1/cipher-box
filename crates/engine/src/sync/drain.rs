@@ -393,6 +393,8 @@ enum Halt {
     /// (CONTEXT.md "Epoch lag"). Charged nothing, and re-driven at the pass that
     /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
+    /// The bin entry belongs to another scope pass; leave its op queued without charge.
+    OtherBinScope,
     /// The op's record reached the record plane and did not confirm. Charged
     /// against the attempt budget, because a jammed name would otherwise retry
     /// forever. The PUT was
@@ -2097,7 +2099,7 @@ where
             self.release_hold();
         }
         match halt {
-            Halt::EpochLagged => {}
+            Halt::EpochLagged | Halt::OtherBinScope => {}
             // Its own budget, its own count: an outage must not spend the
             // attempt budget, and a spent attempt is what tells
             // [`Self::create_replays_a_publish`] this device already published.
@@ -3129,19 +3131,21 @@ where
         pass: &Pass,
         target: NodeId,
     ) -> Result<(), Halt> {
-        scope.refuse_vault_surface()?;
-        if let Some((entry, plane)) = self.bin_entry(scope, pass, target).await? {
-            self.rekey_into_bin(
-                scope,
-                &plane,
-                pass.anchor_for(&plane)?,
-                target,
-                entry.deleted_at,
-            )
-            .await
-            .map_err(charge_bin_read)?;
+        if scope.is_grafted() {
+            return Err(Halt::OtherBinScope);
         }
-        Ok(())
+        let Some((entry, plane)) = self.bin_entry(scope, pass, target).await? else {
+            return Ok(());
+        };
+        self.rekey_into_bin(
+            scope,
+            &plane,
+            pass.anchor_for(&plane)?,
+            target,
+            entry.deleted_at,
+        )
+        .await
+        .map_err(charge_bin_read)
     }
 
     /// Restore: re-key the subtree out of the bin, relink it, then drop the
@@ -3361,10 +3365,8 @@ where
     /// may be published over, and both bin op plans publish one before they end.
     ///
     /// The bin is vault-level, so an entry may name a scope this pass does not
-    /// hold, and its `ipnsName` is whatever the writer that binned the node put
-    /// there. Both are refused: re-keying under the wrong scope's seed would
-    /// seal a node to a key its readers never derive, and a name this write seed
-    /// does not derive belongs to a scope root, which no bin path re-keys.
+    /// hold; that entry waits for its owning pass. A mismatched `ipnsName` is
+    /// refused: no bin path may re-key a name this scope's write seed cannot derive.
     async fn bin_entry<'s>(
         &self,
         scope: &DrainScope<'s>,
@@ -3377,12 +3379,17 @@ where
         };
         // The entry names the scope its delete resolved onto
         // ([`Self::record_bin_entry`]), so the restore and the purge read that
-        // end rather than the one this pass anchors on. An entry naming neither
-        // end, or a name that end's write seed does not derive, is one no pass
-        // may act on.
+        // end rather than the one this pass anchors on.
+        let entry_root = NodeId(entry.scope_id);
         let plane = scope
-            .plane_rooted_at(pass.epoch, NodeId(entry.scope_id))?
-            .ok_or(Halt::Permanent(DeadLetterReason::TargetGone))?;
+            .plane_rooted_at(pass.epoch, entry_root)?
+            .ok_or_else(|| {
+                if scope.charges_the_identity && scope.keyless_roots.contains(&entry_root) {
+                    Halt::UnwritableScope
+                } else {
+                    Halt::OtherBinScope
+                }
+            })?;
         if plane.end.write_name(&node.0).as_str().as_bytes() != entry.ipns_name {
             return Err(Halt::Permanent(DeadLetterReason::TargetGone));
         }
@@ -3692,8 +3699,7 @@ where
     /// already published, so nothing waits on the entry, and an entry ahead of
     /// the re-key would claim a cut that may never run. A capture whose re-key
     /// or whose index publish does not land stays in the set and is retried,
-    /// under the `deletedAt` it was stamped with, so the retry reaches the same
-    /// key.
+    /// under the standing entry's timestamp, or its capture stamp if absent.
     ///
     /// The set is empty for a vault at retention `0`: the owner turned the bin
     /// off, and an adoption carries no owner command that could overrule that.
@@ -7125,7 +7131,8 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         Halt::Blocked { .. }
         | Halt::HeldBySettings(_)
         | Halt::HeldByBinIndex(_)
-        | Halt::Cancelled => None,
+        | Halt::Cancelled
+        | Halt::OtherBinScope => None,
         Halt::Unclassified => Some("the upload did not complete"),
         Halt::EpochLagged => Some("this folder is still being re-keyed after a key change"),
         Halt::Attempt | Halt::UploadAttempt | Halt::LostRace => {
