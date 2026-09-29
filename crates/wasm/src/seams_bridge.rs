@@ -236,6 +236,8 @@ extern "C" {
 
     #[wasm_bindgen(method, catch, js_name = enqueueOp)]
     async fn enqueue_op(this: &JsStagingStoreSeam, op: &[u8]) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(method, catch, js_name = enqueueOps)]
+    async fn enqueue_ops(this: &JsStagingStoreSeam, ops: Array) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(method, catch, js_name = queuedOps)]
     async fn queued_ops(this: &JsStagingStoreSeam) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(method, catch, js_name = removeOp)]
@@ -272,6 +274,21 @@ pub(crate) struct StagingStoreAdapter {
 impl StagingStore for StagingStoreAdapter {
     async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId> {
         required_u64(self.js.enqueue_op(op).await.map_err(seam_error)?).map(OpId)
+    }
+
+    async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>> {
+        let entries: Array = ops
+            .iter()
+            .map(|op| Uint8Array::from(op.as_slice()))
+            .collect();
+        let value = self.js.enqueue_ops(entries).await.map_err(seam_error)?;
+        let ids: Array = value
+            .dyn_into()
+            .map_err(|_| SeamError::new("enqueueOps must return an array"))?;
+        if ids.length() as usize != ops.len() {
+            return Err(SeamError::new("enqueueOps must return one id per op"));
+        }
+        ids.iter().map(|id| required_u64(id).map(OpId)).collect()
     }
 
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {

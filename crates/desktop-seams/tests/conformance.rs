@@ -58,7 +58,10 @@ fn file_staging_store_passes_the_staging_store_kit() {
     block_on(conformance::staging_store::check(
         async |backing: Backing| FileStagingStore::open(root.join(backing.label())).unwrap(),
         async |backing: Backing| match backing {
-            Backing::Ordering | Backing::FailedReplacement | Backing::Cleared => denial.arm(),
+            Backing::Ordering
+            | Backing::FailedReplacement
+            | Backing::Cleared
+            | Backing::Batched => denial.arm(),
             Backing::FailedFirstPut => {
                 std::fs::remove_dir(root.join(backing.label()).join("staged"))
                     .expect("the kit's lever must be armed, or it proves nothing");
@@ -375,6 +378,77 @@ fn staging_store_op_ids_never_reuse_across_a_full_drain() {
         assert!(
             next > last,
             "an id after a full drain + reopen must still exceed every prior id"
+        );
+    });
+}
+
+/// A multi-entry enqueue whose second entry will not land queues neither, now
+/// or after a reopen, and burns the ids it reserved.
+#[test]
+fn staging_store_a_set_that_fails_part_way_queues_none_of_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    block_on(async {
+        let store = FileStagingStore::open(&path).unwrap();
+        let single = store.enqueue_op(b"single").await.unwrap();
+        // A directory at the second entry's path refuses its atomic rename.
+        let blocked = path.join("ops").join(format!("{:020}.op", single.0 + 2));
+        std::fs::create_dir(&blocked).unwrap();
+
+        store
+            .enqueue_ops(&[b"park".to_vec(), b"arrive".to_vec()])
+            .await
+            .expect_err("the second entry cannot land");
+        let queued = vec![(single, b"single".to_vec())];
+        assert_eq!(
+            store.queued_ops().await.unwrap(),
+            queued,
+            "nor may the first"
+        );
+
+        std::fs::remove_dir(&blocked).unwrap();
+        let reopened = FileStagingStore::open(&path).unwrap();
+        assert_eq!(
+            reopened.queued_ops().await.unwrap(),
+            queued,
+            "not after a reopen either"
+        );
+        let next = reopened.enqueue_op(b"next").await.unwrap();
+        assert!(
+            next.0 > single.0 + 2,
+            "the set's ids are burnt, never reused"
+        );
+    });
+}
+
+/// A crash between a set's entries leaves its marker standing: the entries it
+/// covers are not queued, and the next open removes them.
+#[test]
+fn staging_store_a_set_a_crash_interrupted_is_rolled_back_at_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    let ops = path.join("ops");
+    block_on(async {
+        let store = FileStagingStore::open(&path).unwrap();
+        let single = store.enqueue_op(b"single").await.unwrap();
+        let (first, last) = (single.0 + 1, single.0 + 2);
+        let marker = ops.join(format!("{first:020}-{last:020}.batch"));
+        let parked = ops.join(format!("{first:020}.op"));
+        std::fs::write(&marker, b"").unwrap();
+        std::fs::write(&parked, b"park").unwrap();
+
+        let queued = vec![(single, b"single".to_vec())];
+        assert_eq!(
+            store.queued_ops().await.unwrap(),
+            queued,
+            "an uncommitted set is not queued"
+        );
+
+        let reopened = FileStagingStore::open(&path).unwrap();
+        assert_eq!(reopened.queued_ops().await.unwrap(), queued);
+        assert!(
+            !marker.exists() && !parked.exists(),
+            "the open removed the set and its marker"
         );
     });
 }

@@ -15,6 +15,10 @@ use crate::fs_util::{
 /// journal, generalized: it holds the engine's opaque encoded intent op
 /// verbatim — the store never parses it.
 const OP_SUFFIX: &str = ".op";
+/// Suffix for a multi-entry enqueue's marker (`ops/<first-id>-<last-id>.batch`,
+/// empty). While it stands, the op files in its range are not queued, and
+/// a reopen removes them: the marker's removal is the set's commit point.
+const BATCH_SUFFIX: &str = ".batch";
 /// Suffix for staged-ciphertext sidecar files (`staged/<hexkey>.bin`).
 const SIDECAR_SUFFIX: &str = ".bin";
 /// Filename of the durable monotonic op-id counter.
@@ -29,6 +33,8 @@ const COUNTER_FILE: &str = "next_op_id";
 /// - `ops/<20-digit-id>.op` — one durable record per queued op, id in the
 ///   filename; enqueue order is id order (FIFO). Each op is opaque engine
 ///   bytes stored verbatim.
+/// - `ops/<first>-<last>.batch` — the marker of a multi-entry enqueue that has
+///   not committed ([`BATCH_SUFFIX`]).
 /// - `staged/<hexkey>.bin` — one sidecar per staged-ciphertext key.
 /// - `next_op_id` — the monotonic id counter, so ids are strictly
 ///   increasing and never reused, even after every op drains and the store
@@ -83,12 +89,71 @@ impl FileStagingStore {
             .map_or(0, |id| id.saturating_add(1));
         let next = persisted.max(highest_op).max(1);
 
-        Ok(Self {
+        let store = Self {
             ops_dir,
             staged_dir,
             counter_path,
             next_op_id: Arc::new(Mutex::new(next)),
-        })
+        };
+        let names = list_file_names(&store.ops_dir)
+            .map_err(|err| seam_err("staging_store open batches", &err))?;
+        for (first, last) in open_batches(&names) {
+            // Only the ids on disk: a marker's range is not bounded by its set.
+            let written = names
+                .iter()
+                .filter_map(|name| parse_op_id(name))
+                .filter(|id| (first..=last).contains(id));
+            store
+                .roll_back_batch(first, last, written)
+                .map_err(|err| seam_err("staging_store open rollback", &err))?;
+        }
+        Ok(store)
+    }
+
+    fn batch_path(&self, first: u64, last: u64) -> PathBuf {
+        self.ops_dir
+            .join(format!("{first:020}-{last:020}{BATCH_SUFFIX}"))
+    }
+
+    /// Removes the op files of an uncommitted set, then its marker, so a
+    /// failure part-way leaves the marker hiding what is left.
+    fn roll_back_batch(
+        &self,
+        first: u64,
+        last: u64,
+        written: impl Iterator<Item = u64>,
+    ) -> std::io::Result<()> {
+        for id in written {
+            remove_file_durable(&self.op_path(id))?;
+        }
+        remove_file_durable(&self.batch_path(first, last))
+    }
+
+    /// Reserves `count` consecutive ids and durably advances the counter past
+    /// them before any op file is written: a crash after the bump burns ids,
+    /// never reuses one.
+    fn reserve_ids(&self, count: u64) -> SeamResult<u64> {
+        let mut next = self.next_op_id.lock().expect("lock");
+        let first = *next;
+        let advanced = first + count;
+        atomic_write(&self.counter_path, &advanced.to_le_bytes())
+            .map_err(|err| seam_err("staging_store enqueue_op counter", &err))?;
+        *next = advanced;
+        Ok(first)
+    }
+
+    fn write_batch(&self, first: u64, ops: &[Vec<u8>]) -> std::io::Result<()> {
+        let last = first + ops.len() as u64 - 1;
+        atomic_write(&self.batch_path(first, last), &[])?;
+        for (id, op) in (first..).zip(ops) {
+            if let Err(err) = atomic_write(&self.op_path(id), op) {
+                // A marker left by a failed rollback still hides the set, and
+                // the next open removes it.
+                let _ = self.roll_back_batch(first, last, first..id);
+                return Err(err);
+            }
+        }
+        remove_file_durable(&self.batch_path(first, last))
     }
 
     fn op_path(&self, id: u64) -> PathBuf {
@@ -103,27 +168,26 @@ impl FileStagingStore {
 
 impl StagingStore for FileStagingStore {
     async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId> {
-        // Reserve an id and durably advance the counter *before* writing the
-        // op file: a crash after the counter bump merely burns an id (ids
-        // need only be strictly increasing, not contiguous), never reuses
-        // one.
-        let id = {
-            let mut next = self.next_op_id.lock().expect("lock");
-            let id = *next;
-            let advanced = id + 1;
-            atomic_write(&self.counter_path, &advanced.to_le_bytes())
-                .map_err(|err| seam_err("staging_store enqueue_op counter", &err))?;
-            *next = advanced;
-            id
-        };
+        let id = self.reserve_ids(1)?;
         atomic_write(&self.op_path(id), op)
             .map_err(|err| seam_err("staging_store enqueue_op", &err))?;
         Ok(OpId(id))
     }
 
+    async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>> {
+        if ops.is_empty() {
+            return Ok(Vec::new());
+        }
+        let first = self.reserve_ids(ops.len() as u64)?;
+        self.write_batch(first, ops)
+            .map_err(|err| seam_err("staging_store enqueue_ops", &err))?;
+        Ok((first..).take(ops.len()).map(OpId).collect())
+    }
+
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
         let names = list_file_names(&self.ops_dir)
             .map_err(|err| seam_err("staging_store queued_ops", &err))?;
+        let uncommitted = open_batches(&names);
         // Keyed by parsed id, not by listed name: `op_path` zero-pads and
         // `parse_op_id` does not, so `ops/1.op` and `ops/00…01.op` both name op 1.
         // Reading the re-derived canonical path keeps every returned entry one
@@ -134,7 +198,11 @@ impl StagingStore for FileStagingStore {
             let Some(id) = parse_op_id(&name) else {
                 continue;
             };
-            if ops.contains_key(&id) {
+            if ops.contains_key(&id)
+                || uncommitted
+                    .iter()
+                    .any(|(first, last)| (*first..=*last).contains(&id))
+            {
                 continue;
             }
             if let Some(bytes) = read_file_opt(&self.op_path(id))
@@ -219,6 +287,18 @@ fn sidecar_key(name: &str) -> Option<Vec<u8>> {
 /// is not an op record (temp debris, foreign files).
 fn parse_op_id(name: &str) -> Option<u64> {
     name.strip_suffix(OP_SUFFIX)?.parse::<u64>().ok()
+}
+
+/// The `(first, last)` id range of every multi-entry enqueue whose marker still
+/// stands in `names`.
+fn open_batches(names: &[String]) -> Vec<(u64, u64)> {
+    names
+        .iter()
+        .filter_map(|name| {
+            let (first, last) = name.strip_suffix(BATCH_SUFFIX)?.split_once('-')?;
+            Some((first.parse().ok()?, last.parse().ok()?))
+        })
+        .collect()
 }
 
 /// The largest op id currently on disk in `ops_dir`, if any.

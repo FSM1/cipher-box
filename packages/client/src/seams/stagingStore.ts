@@ -153,6 +153,28 @@ export class OpfsStagingStore implements StagingStoreSeam {
     return Number(key);
   }
 
+  async enqueueOps(ops: Uint8Array[]): Promise<number[]> {
+    // Copy before the first await, as `enqueueOp` does.
+    const staged = ops.map((op) => op.slice());
+    const db = await this.open();
+    // One transaction is the atomic write: a refused add aborts every add.
+    const tx = db.transaction(STAGING_OPS_STORE, 'readwrite');
+    const done = transactionDone(tx);
+    const store = tx.objectStore(STAGING_OPS_STORE);
+    const requests: Array<Promise<IDBValidKey>> = [];
+    try {
+      for (const op of staged) requests.push(requestResult<IDBValidKey>(store.add(op)));
+    } catch (error) {
+      // An add that throws, rather than failing its request, would otherwise
+      // let the transaction commit the adds issued before it.
+      tx.abort();
+      await Promise.allSettled([...requests, done]);
+      throw error;
+    }
+    const [keys] = await Promise.all([Promise.all(requests), done]);
+    return keys.map(Number);
+  }
+
   async queuedOps(): Promise<Array<[number, Uint8Array]>> {
     const db = await this.open();
     const tx = db.transaction(STAGING_OPS_STORE, 'readonly');
