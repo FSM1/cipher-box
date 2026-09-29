@@ -348,6 +348,7 @@ rate limiting must be verified effective in e2e); staging test hooks
 
 `users`, `auth_methods`, `identity_subjects`, `refresh_tokens`,
 `accelerator_tokens`, `account_devices`, `device_approvals`,
+`spent_identity_tokens (token_id, expires_at)`,
 `name_inventory (account, ipnsName)`,
 `pinned_cids (account, cid, size, advisory)`,
 `pin_references (account, ipnsName, cid)`, `mailbox_messages`,

@@ -1,6 +1,6 @@
 # ADR 0058 — The identity subject binds to the account at login, and a device registration reads the bind
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-29
 - **Date:** 2026-09-29
 - **Relates to:**
   [ADR 0039](./0039-a-device-key-registers-to-one-account-and-desktop-only-requests-approval.md)
