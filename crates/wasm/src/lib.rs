@@ -2773,6 +2773,8 @@ mod tests {
     use super::*;
     use cipherbox_engine::seams::OpId;
 
+    const IPNS_NAME: &str = "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4";
+
     // The wrong-length rejection builds a `JsError` (wasm-only) — see
     // `tests/boundary.rs`.
     #[test]
@@ -2964,9 +2966,7 @@ mod tests {
                     content_version: Some(2),
                     content_cid: Some(vec![0xC1, 0xD0]),
                     pending_invite_claims: 0,
-                    ipns_name: Some(
-                        "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4".into(),
-                    ),
+                    ipns_name: Some(IPNS_NAME.into()),
                 },
                 facade::SnapshotChild {
                     id: facade::NodeId([4u8; 16]),
@@ -3048,10 +3048,7 @@ mod tests {
         assert!(children[1].dead_letter());
         assert_eq!(children[0].pending_invite_claims(), 0);
         assert_eq!(children[1].pending_invite_claims(), 2);
-        assert_eq!(
-            children[0].ipns_name().as_deref(),
-            Some("k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4")
-        );
+        assert_eq!(children[0].ipns_name().as_deref(), Some(IPNS_NAME));
         assert!(children[1].ipns_name().is_none());
 
         let ancestors = view.ancestors();

@@ -26,7 +26,7 @@ interface WasmIpnsRecordReading {
 
 /** The slice of the wasm-bindgen glue module this reader drives. */
 interface IpnsRecordGlue {
-  initSync(options: { module: BufferSource }): unknown;
+  default(options: { module_or_path: BufferSource }): Promise<unknown>;
   readIpnsRecord(ipnsName: string, record: Uint8Array): WasmIpnsRecordReading;
 }
 
@@ -39,7 +39,7 @@ export async function openIpnsRecordReader(
   wasmBinary: BufferSource
 ): Promise<IpnsRecordReader> {
   const glue = (await import(/* @vite-ignore */ glueUrl.toString())) as IpnsRecordGlue;
-  glue.initSync({ module: wasmBinary });
+  await glue.default({ module_or_path: wasmBinary });
   return (ipnsName, record) => {
     const reading = glue.readIpnsRecord(ipnsName, record);
     try {

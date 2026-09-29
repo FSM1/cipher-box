@@ -288,13 +288,18 @@ mod tests {
 
     /// A validly signed record of exactly `len` bytes. Each value byte adds two
     /// bytes, and a TTL of 24 adds one CBOR byte, so a search over both lands
-    /// on any length.
+    /// on any length. Length prefixes grow with the value, so the padding sits
+    /// a few bytes under half the gap to the empty-value record.
     fn signed_record_of_len(
         signer: &cipherbox_core::suite::ed25519::Ed25519Signer,
         len: usize,
     ) -> Vec<u8> {
         let eol = eol_from(UnixMillis(1_700_000_000_000));
-        (0..len)
+        let base = IpnsRecord::create_v2(signer, b"/ipfs/", 1, 1, &eol)
+            .marshal()
+            .len();
+        let top = len.saturating_sub(base) / 2;
+        (top.saturating_sub(8)..=top)
             .flat_map(|pad| [1u64, 24].map(move |ttl| (pad, ttl)))
             .map(|(pad, ttl)| {
                 let value = [b"/ipfs/".as_slice(), &vec![b'a'; pad]].concat();

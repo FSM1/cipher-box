@@ -1037,6 +1037,8 @@ function readInviteLink(
  */
 export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDescriptor {
   const state = view.state;
+  const readEpoch = state?.readEpoch;
+  const writeEpoch = state?.writeEpoch;
   return {
     scope: view.scope,
     contacts: view.contacts.map((contact) => ({
@@ -1058,9 +1060,9 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
             inviteLinkRefusal: state.inviteLinkRefusal ?? null,
             inviteLinks: state.inviteLinks.map((link) => readInviteLink(wasm, link)),
             epochs:
-              state.readEpoch === undefined || state.writeEpoch === undefined
+              readEpoch === undefined || writeEpoch === undefined
                 ? null
-                : { readEpoch: state.readEpoch, writeEpoch: state.writeEpoch },
+                : { readEpoch, writeEpoch },
           },
   };
 }

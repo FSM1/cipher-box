@@ -2,8 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 /**
  * The Node suite runs the client against the real WASM module that
- * `build:wasm-conformance` writes to `test/browser/pkg`, so it runs after that
- * build, in the Client Browser Suite job.
+ * `test:node` builds into `test/browser/pkg`.
  */
 export default defineConfig({
   test: {

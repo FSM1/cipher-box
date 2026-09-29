@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { openIpnsRecordReader, type IpnsRecordReader } from '../../src/index.js';
+import { fromHex, openIpnsRecordReader, type IpnsRecordReader } from '../../src/index.js';
 
 const here = import.meta.dirname;
 const pkg = resolve(here, '../browser/pkg');
@@ -28,10 +28,6 @@ function kat<T>(file: string): T[] {
   return JSON.parse(readFileSync(resolve(vectors, file), 'utf8')) as T[];
 }
 
-function bytes(hex: string): Uint8Array {
-  return Uint8Array.from(Buffer.from(hex, 'hex'));
-}
-
 let read: IpnsRecordReader;
 
 beforeAll(async () => {
@@ -45,7 +41,7 @@ describe('the IPNS record read under Node', () => {
   it.each(kat<AcceptVector>('record_accept.json'))(
     'reads the sequence and validity of KAT $name',
     (vector) => {
-      const reading = read(vector.ipnsName, bytes(vector.record));
+      const reading = read(vector.ipnsName, fromHex(vector.record));
 
       expect(reading.sequence).toBe(BigInt(vector.sequence));
       expect(reading.validity).toBe(vector.validity);
@@ -54,18 +50,18 @@ describe('the IPNS record read under Node', () => {
   );
 
   it.each(kat<RejectVector>('record_reject.json'))('refuses KAT $name as $check', (vector) => {
-    expect(() => read(vector.ipnsName, bytes(vector.record))).toThrow(vector.check);
+    expect(() => read(vector.ipnsName, fromHex(vector.record))).toThrow(vector.check);
   });
 
   it('refuses a record read under a name whose key did not sign it', () => {
     const [signed, other] = kat<AcceptVector>('record_accept.json');
 
-    expect(() => read(other.ipnsName, bytes(signed.record))).toThrow('ipns-signature-invalid');
+    expect(() => read(other.ipnsName, fromHex(signed.record))).toThrow('ipns-signature-invalid');
   });
 
   it('refuses a name that does not parse', () => {
     const [signed] = kat<AcceptVector>('record_accept.json');
 
-    expect(() => read('bxyz', bytes(signed.record))).toThrow('ipns-name-malformed');
+    expect(() => read('bxyz', fromHex(signed.record))).toThrow('ipns-name-malformed');
   });
 });

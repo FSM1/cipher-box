@@ -22,7 +22,7 @@
     "test": "vitest run",
     "build:wasm-conformance": "node test/browser/build-wasm.mjs",
     "test:browser": "node test/browser/build-wasm.mjs && pnpm typecheck:browser-test && playwright test",
-    "test:node": "tsc --noEmit -p tsconfig.node-test.json && vitest run --config test/node/vitest.config.ts"
+    "test:node": "node test/browser/build-wasm.mjs && tsc --noEmit -p tsconfig.node-test.json && vitest run --config test/node/vitest.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.0",

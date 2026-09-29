@@ -155,6 +155,7 @@ jobs:
       - name: Typecheck harness + browser seam conformance suite
         run: pnpm --filter @cipherbox/client test:browser
 
-      # The Node suite loads the WASM module the step above built.
+      # Runs after a red browser suite too, so one run reports both.
       - name: Client Node suite
+        if: ${{ !cancelled() }}
         run: pnpm --filter @cipherbox/client test:node
