@@ -59,16 +59,23 @@ key valid.
 The `Staging Soak` workflow is not landed yet. The steps below that dispatch it
 apply when it lands.
 
-### The four secrets
+### The five secrets
 
-The four secrets live in the `staging` environment scope:
+The five secrets live in the `staging` environment scope. The first four are
+the account secrets:
 
-| Secret                      | Holds                                   |
-| --------------------------- | --------------------------------------- |
-| `SOAK_OWNER_WALLET_KEY`     | the soak owner's wallet private key     |
-| `SOAK_OWNER_LOGIN_SECRET`   | the soak owner's login secret, 64 hex   |
-| `SOAK_GRANTEE_WALLET_KEY`   | the soak grantee's wallet private key   |
-| `SOAK_GRANTEE_LOGIN_SECRET` | the soak grantee's login secret, 64 hex |
+| Secret                       | Holds                                                          |
+| ---------------------------- | -------------------------------------------------------------- |
+| `SOAK_OWNER_WALLET_KEY`      | the soak owner's wallet private key                            |
+| `SOAK_OWNER_LOGIN_SECRET`    | the soak owner's login secret, 64 hex                          |
+| `SOAK_GRANTEE_WALLET_KEY`    | the soak grantee's wallet private key                          |
+| `SOAK_GRANTEE_LOGIN_SECRET`  | the soak grantee's login secret, 64 hex                        |
+| `STAGING_GRAFANA_READ_TOKEN` | a Grafana Cloud access-policy token, `metrics:read` scope only |
+
+The soak sends the read token with HTTP basic authentication to the Grafana
+Cloud Mimir query endpoint, to read the republisher counters. The token cannot
+write metrics, and it cannot read logs or traces. 1Password is its source of
+truth too (ADR 0053 D2).
 
 ### The 1Password rule
 
@@ -167,6 +174,9 @@ A DB wipe or a verifier change gives each wallet a new subject id, and so a new
 login secret. The wallet keys stay. Nothing is removed, because the wipe removed
 the accounts.
 
+A staging reset does not change `STAGING_GRAFANA_READ_TOKEN`: the token belongs
+to Grafana Cloud, not to the staging database.
+
 1. Run the export tool once for each account, with the stored wallet key.
 2. Put each new value in the `loginSecret` field of its 1Password item.
 3. Set `SOAK_OWNER_LOGIN_SECRET` and `SOAK_GRANTEE_LOGIN_SECRET` from
@@ -186,6 +196,6 @@ carries a factor policy.
 1. If an operator holds the phrase, recover with it and remove the factor. The
    stored values stay valid.
 2. If nobody holds the phrase, run the export tool with no key twice, once for
-   each account. Put all four new values in 1Password, set all four secrets, and
-   dispatch the soak with `bootstrap`. The old account stays on staging, because
-   nobody can open it.
+   each account. Put all four new values in 1Password, set the four account
+   secrets, and dispatch the soak with `bootstrap`. The old account stays on
+   staging, because nobody can open it.
