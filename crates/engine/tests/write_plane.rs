@@ -4562,7 +4562,7 @@ fn a_genesis_bin_index_that_did_not_land_is_published_by_a_later_start() {
 /// an empty index over what another device may hold. The account recovers
 /// through the device that holds no mark, above.
 #[test]
-fn the_device_whose_genesis_publish_minted_a_revision_retries_nothing() {
+fn the_device_whose_genesis_put_left_the_engine_retries_nothing() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let alice = world.device(b"alice");
@@ -4575,6 +4575,47 @@ fn the_device_whose_genesis_publish_minted_a_revision_retries_nothing() {
     assert!(
         standing_bin_record(&world).is_none(),
         "the marked device published nothing on its own retry",
+    );
+}
+
+/// A first run with no API to reach sends no PUT, so it leaves no bin index
+/// mark, and the next start with the API back publishes the record.
+#[test]
+fn a_fully_offline_genesis_leaves_no_bin_index_mark_and_the_next_start_publishes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    blocks.refuse_register(br#"{"statusCode":503}"#.to_vec());
+    let (first, _tasks) = provision_first_run(&world, &blocks, &alice);
+    assert!(
+        standing_bin_record(&world).is_none(),
+        "the offline start published nothing",
+    );
+    let name = bin_name();
+    let floors = alice.floors(&SECRET);
+    for prefix in [
+        &b"bin-index-revision-mint/"[..],
+        b"bin-index-revision/",
+        b"",
+    ] {
+        let mut key = prefix.to_vec();
+        key.extend_from_slice(name.as_str().as_bytes());
+        assert_eq!(
+            block_on(floors.sequence_floor(&key)).expect("the floor reads"),
+            None,
+            "the offline start left no bin index mark",
+        );
+    }
+    drop(first);
+    blocks.accept_uploads();
+    blocks.accept_registrations();
+
+    let (_engine, _tasks) = start_on_api(&world, &blocks, &alice, 43);
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        1,
+        "the next start published the record",
     );
 }
 

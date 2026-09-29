@@ -210,14 +210,14 @@ impl BinIndexKeys {
 }
 
 /// The reader's body-revision bar, kept apart from the writer's counter at
-/// [`revision_mint_key`] ([`floor::mint_revision`]).
+/// [`revision_seal_key`] ([`floor::mint_revision`]).
 fn revision_adopted_key(name: &IpnsName) -> Vec<u8> {
     prefixed_key(b"bin-index-revision/", name)
 }
 
 /// The mark of a PUT that can have landed: raised to the body revision just
-/// before the PUT leaves the engine, and never by an attempt that failed ahead
-/// of it (blueprint/engine.md "Bin index record").
+/// before the PUT leaves the engine, so an attempt that fails ahead of it
+/// leaves no mark.
 fn revision_mint_key(name: &IpnsName) -> Vec<u8> {
     prefixed_key(b"bin-index-revision-mint/", name)
 }

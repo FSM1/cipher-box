@@ -10,6 +10,8 @@
 
 use core::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cipherbox_core::codec::decode;
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
@@ -28,7 +30,8 @@ use cipherbox_engine::net::{PublishError, RecordPublishError, keyless_re_put};
 use cipherbox_engine::seams::{EndpointId, FloorStore, RecordTransport, SeamError, SeamResult};
 use cipherbox_engine::testkit::account::{Blocks, sequence_floor_label, serve_http};
 use cipherbox_engine::testkit::fakes::{
-    InMemoryCredentialStore, InMemoryRecordStore, ScriptedHttp, SlotFillingRecordStore,
+    InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, ScriptedHttp,
+    SlotFillingRecordStore,
 };
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
@@ -107,11 +110,23 @@ fn publish_with(
     index: &BinIndex,
     entropy: &mut dyn Entropy,
 ) -> Result<(), BinIndexPublishError> {
+    publish_through(world, device, blocks, &device.floor_store, index, entropy)
+}
+
+/// [`publish_with`] over `floors` in place of the device's own store.
+fn publish_through<F: FloorStore>(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+    floors: &F,
+    index: &BinIndex,
+    entropy: &mut dyn Entropy,
+) -> Result<(), BinIndexPublishError> {
     serve_http(device, blocks, 4);
     block_on(publish_bin_index(
         &device.record_store,
         &api(device),
-        &device.floor_store,
+        floors,
         &device.snapshot_cache,
         &world.scheduler,
         &SyncTimingProfile::CI,
@@ -793,6 +808,7 @@ fn a_bin_past_the_top_rung_is_refused_as_a_full_bin_and_not_as_a_codec_fault() {
         &mut SeededEntropy::new(5),
     );
     assert_eq!(outcome, Err(BinIndexPublishError::Full));
+    assert_eq!(marks(&device), [None; 3], "a size refusal leaves no mark");
     assert!(
         device
             .record_store
@@ -806,8 +822,8 @@ fn a_bin_past_the_top_rung_is_refused_as_a_full_bin_and_not_as_a_codec_fault() {
 // The stranded mint, and the enrolment's own bar
 // ---------------------------------------------------------------------------
 
-/// A publish that fails after the mint leaves the counter as the device's only
-/// mark. The load names that state under its own reason and still refuses the
+/// A publish whose PUT left the engine leaves the mint counter as the device's
+/// only mark. The load names that state under its own reason and still refuses the
 /// rewrite, because the same attempt may have confirmed and lost only its floor
 /// write. The queue head's exit from it is a dead letter, which the drain's own
 /// split pins.
@@ -902,10 +918,69 @@ fn marks(device: &FakeDevice) -> [Option<u64>; 3] {
     .map(|key| block_on(device.floor_store.sequence_floor(&key)).expect("read"))
 }
 
+/// A floor store that injects one fault at one key of the device's store: a
+/// read that fails, a raise that fails, or a raise the store answers one below
+/// the value asked for without storing it.
+#[derive(Clone)]
+struct KeyFault {
+    inner: InMemoryFloorStore,
+    key: Vec<u8>,
+    fault: Fault,
+}
+
+#[derive(Clone, Copy)]
+enum Fault {
+    Unreadable,
+    Unraisable,
+    UnderReported,
+}
+
+impl FloorStore for KeyFault {
+    async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
+        self.inner.epoch_floor(scope_id).await
+    }
+
+    async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
+        self.inner.raise_epoch_floor(scope_id, epoch).await
+    }
+
+    async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+        if ipns_name == self.key.as_slice() && matches!(self.fault, Fault::Unreadable) {
+            return Err(SeamError::new("floor read injected to fail"));
+        }
+        self.inner.sequence_floor(ipns_name).await
+    }
+
+    async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+        if ipns_name == self.key.as_slice() {
+            match self.fault {
+                Fault::Unraisable => return Err(SeamError::new("floor raise injected to fail")),
+                Fault::UnderReported => return Ok(sequence - 1),
+                Fault::Unreadable => {}
+            }
+        }
+        self.inner.raise_sequence_floor(ipns_name, sequence).await
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        self.inner.clear().await
+    }
+}
+
+/// Where an attempt fails ahead of its PUT.
+#[derive(Clone, Copy, Debug)]
+enum BeforePut {
+    Entropy,
+    SealCounterRaise,
+    Upload,
+    Register,
+    SequenceFloorRead,
+}
+
 /// The mint counter marks only a PUT that can have landed. An attempt that
 /// fails before its PUT leaves the engine leaves no mark, so the same device
-/// still reads a first run and publishes. A sealed body that never went out
-/// still spends its revision: the retry seals the next one.
+/// still reads a first run and publishes. A body that was sealed and never went
+/// out still spends its revision: the retry seals the next one.
 #[test]
 fn a_publish_that_fails_before_its_put_leaves_no_mark() {
     struct NoEntropy;
@@ -915,39 +990,60 @@ fn a_publish_that_fails_before_its_put_leaves_no_mark() {
         }
     }
 
-    for (case, retry_revision) in [("entropy", 1), ("upload", 2), ("register", 2)] {
+    for (case, uploads, retry_revision) in [
+        (BeforePut::Entropy, 0, 1),
+        (BeforePut::SealCounterRaise, 0, 1),
+        (BeforePut::Upload, 1, 2),
+        (BeforePut::Register, 1, 2),
+        (BeforePut::SequenceFloorRead, 1, 2),
+    ] {
         let world = FakeWorld::new();
         let blocks = Blocks::default();
         let device = world.device(b"only-device");
-        let outcome = match case {
-            "entropy" => publish_with(&world, &device, &blocks, &binned(&[1]), &mut NoEntropy),
-            "upload" => {
-                blocks.refuse_upload(Box::new(|_| Some(Err(SeamError::new("upload refused")))));
-                publish_with(
-                    &world,
-                    &device,
-                    &blocks,
-                    &binned(&[1]),
-                    &mut SeededEntropy::new(1),
-                )
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&seen);
+        let refuse = matches!(case, BeforePut::Upload);
+        blocks.refuse_upload(Box::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            refuse.then(|| Err(SeamError::new("upload refused")))
+        }));
+        if matches!(case, BeforePut::Register) {
+            blocks.refuse_register(b"{\"statusCode\":400}".to_vec());
+        }
+        let (key, fault) = match case {
+            BeforePut::SealCounterRaise => (
+                mark(b"bin-index-revision-seal/", &name()),
+                Fault::Unraisable,
+            ),
+            BeforePut::SequenceFloorRead => {
+                (name().as_str().as_bytes().to_vec(), Fault::Unreadable)
             }
-            _ => {
-                blocks.refuse_register(b"{\"statusCode\":400}".to_vec());
-                publish_with(
-                    &world,
-                    &device,
-                    &blocks,
-                    &binned(&[1]),
-                    &mut SeededEntropy::new(1),
-                )
+            BeforePut::Entropy | BeforePut::Upload | BeforePut::Register => {
+                (Vec::new(), Fault::Unreadable)
             }
         };
-        assert!(outcome.is_err(), "{case}: the attempt fails");
-        assert_eq!(marks(&device), [None; 3], "{case}: and leaves no mark");
+        let floors = KeyFault {
+            inner: device.floor_store.clone(),
+            key,
+            fault,
+        };
+        let mut seeded = SeededEntropy::new(1);
+        let entropy: &mut dyn Entropy = match case {
+            BeforePut::Entropy => &mut NoEntropy,
+            BeforePut::SealCounterRaise
+            | BeforePut::Upload
+            | BeforePut::Register
+            | BeforePut::SequenceFloorRead => &mut seeded,
+        };
+
+        let outcome = publish_through(&world, &device, &blocks, &floors, &binned(&[1]), entropy);
+        assert!(outcome.is_err(), "{case:?}: the attempt fails");
+        assert_eq!(seen.load(Ordering::SeqCst), uploads, "{case:?}: uploads");
+        assert_eq!(marks(&device), [None; 3], "{case:?}: and leaves no mark");
         assert_eq!(
             load(&world, &device, &blocks, &keys()),
             BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun),
-            "{case}: so the device still reads a first run",
+            "{case:?}: so the device still reads a first run",
         );
 
         blocks.accept_uploads();
@@ -956,9 +1052,45 @@ fn a_publish_that_fails_before_its_put_leaves_no_mark() {
         assert_eq!(
             published_revision(&device, &blocks, &name()),
             retry_revision,
-            "{case}: the retry publishes, above any revision a body was sealed at",
+            "{case:?}: the retry publishes, above any revision a body was sealed at",
         );
     }
+}
+
+/// A store that answers the mark write below the value asked for did not take
+/// the mark, so the PUT must not go out.
+#[test]
+fn a_mark_the_store_reports_below_its_value_sends_no_put() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"only-device");
+    let floors = KeyFault {
+        inner: device.floor_store.clone(),
+        key: mark(b"bin-index-revision-mint/", &name()),
+        fault: Fault::UnderReported,
+    };
+
+    let outcome = publish_through(
+        &world,
+        &device,
+        &blocks,
+        &floors,
+        &binned(&[1]),
+        &mut SeededEntropy::new(1),
+    );
+    assert!(matches!(
+        outcome,
+        Err(BinIndexPublishError::Publish(RecordPublishError::Publish(
+            PublishError::MarkUnrecorded(_)
+        )))
+    ));
+    assert!(
+        device
+            .record_store
+            .record_at(&device.record_store.endpoints()[0], name().as_str())
+            .is_none(),
+        "the PUT never left the engine",
+    );
 }
 
 /// The previous release raised the mint counter before the seal, so a counter

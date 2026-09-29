@@ -48,9 +48,11 @@ pub enum DefaultsReason {
     /// one: the record is being withheld or its head block is unreachable.
     Suppressed,
     /// No usable record, and the publish mint counter is this device's only
-    /// mark: a publish minted a revision and then failed, or landed and lost
-    /// its floor write before the store could record it. Refused like
-    /// [`Self::Suppressed`], because the second case is a record this device
+    /// mark. The settings plane raises the counter before the seal, so it marks
+    /// any attempt that minted a revision; the bin index plane raises it just
+    /// before the PUT, so it marks only a PUT that can have landed. On either
+    /// plane the attempt may have landed and lost its floor write. Refused like
+    /// [`Self::Suppressed`], because a landed attempt is a record this device
     /// must not publish over — and reported apart from it, because no other
     /// device is needed to reach it and none may be needed to leave it
     /// (blueprint/engine.md "Bin index record").
@@ -124,9 +126,8 @@ impl DefaultsReason {
 /// it and the drain must not learn a rule of its own.
 ///
 /// The two adoption marks answer first: either one proves a record this device
-/// already took, so an absent one is withheld. The mint counter alone is an
-/// attempt this device made, and the residual case where it is also a landed
-/// publish whose floor write was lost is why it refuses too.
+/// already took, so an absent one is withheld. The mint counter alone is the
+/// [`DefaultsReason::StrandedMint`] state.
 pub(crate) fn unresolved_reason(
     durable: Option<u64>,
     minted: Option<u64>,
@@ -315,10 +316,10 @@ where
     let Some((verified, record_bytes)) = fanout_get_verify(transport, name).await else {
         // The other two marks join the sequence floor only here, because only
         // here does their absence still authorise a write, and each is raised
-        // where the sequence floor is not. The mint counter is raised ahead of
-        // everything a publish can fail at, so it outlives any save that got as
-        // far as minting a revision. The adopted revision is raised by a
-        // separate, non-atomic store write, so it can outlive a lost one.
+        // where the sequence floor is not. The mint counter outlives the
+        // attempt it marks ([`DefaultsReason::StrandedMint`]). The adopted
+        // revision is raised by a separate, non-atomic store write, so it can
+        // outlive a lost one.
         let (Ok(minted), Ok(adopted)) = (
             floor::sequence_floor(floors, &plane.mint_key).await,
             floor::sequence_floor(floors, &plane.adopted_key).await,

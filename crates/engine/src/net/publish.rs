@@ -408,10 +408,15 @@ where
     }
 
     if let Some(mark) = mark {
-        floors
+        let stored = floors
             .raise_sequence_floor(mark.key, mark.value)
             .await
             .map_err(PublishError::MarkUnrecorded)?;
+        if stored < mark.value {
+            return Err(PublishError::MarkUnrecorded(SeamError::new(
+                "the floor store did not take the mark",
+            )));
+        }
     }
 
     // Parallel PUT: success is the first ack; the rest retry in the background.
