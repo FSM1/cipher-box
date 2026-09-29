@@ -1,6 +1,6 @@
 # ADR 0057 — An observer outside a session reads a verified record, and the read adopts nothing
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-29
 - **Date:** 2026-09-29
 - **Relates to:** AGENTS.md Critical Security Rules 4 (all crypto lives in `crates/core`) and 6
   (every resolved record passes the adoption gate), the `CONTEXT.md` term "Adoption gate",
