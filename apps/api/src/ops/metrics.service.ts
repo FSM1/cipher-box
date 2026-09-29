@@ -19,6 +19,7 @@ export class MetricsService {
   private readonly republisherLastWalkNames: Gauge;
   private readonly republisherLastWalkRepublished: Gauge;
   private readonly republisherWalksSkippedTotal: Counter;
+  private readonly republisherWalksTotal: Counter;
   private readonly mailboxPendingMessages: Gauge;
   private readonly mailboxPendingCapRejectionsTotal: Counter;
   private readonly authAttemptsTotal: Counter<'route' | 'outcome'>;
@@ -68,6 +69,11 @@ export class MetricsService {
     this.republisherWalksSkippedTotal = new Counter({
       name: 'republisher_walks_skipped_total',
       help: 'Republisher sweeps that skipped the walk because no routing endpoint is configured',
+      registers: [this.registry],
+    });
+    this.republisherWalksTotal = new Counter({
+      name: 'republisher_walks_total',
+      help: 'Republisher inventory walks that ran to completion',
       registers: [this.registry],
     });
     this.mailboxPendingMessages = new Gauge({
@@ -130,6 +136,7 @@ export class MetricsService {
   observeRepublisherWalk(namesWalked: number, republished: number): void {
     this.republisherLastWalkNames.set(namesWalked);
     this.republisherLastWalkRepublished.set(republished);
+    this.republisherWalksTotal.inc();
   }
 
   observeRepublisherWalkSkipped(): void {

@@ -20,10 +20,14 @@ describe('LoggingRepublisherAlerter walk signals', () => {
     const alerter = new LoggingRepublisherAlerter(metrics);
 
     alerter.walkComplete(4, 4);
-    expect(sampleMetric(await metrics.metricsText(), 'republisher_walks_skipped_total')).toBe(0);
+    let text = await metrics.metricsText();
+    expect(sampleMetric(text, 'republisher_walks_skipped_total')).toBe(0);
+    expect(sampleMetric(text, 'republisher_walks_total')).toBe(1);
 
     alerter.walkSkipped();
-    expect(sampleMetric(await metrics.metricsText(), 'republisher_walks_skipped_total')).toBe(1);
+    text = await metrics.metricsText();
+    expect(sampleMetric(text, 'republisher_walks_skipped_total')).toBe(1);
+    expect(sampleMetric(text, 'republisher_walks_total')).toBe(1);
   });
 
   // One warning per sweep, never one per name: that is what keeps a BYO-only
