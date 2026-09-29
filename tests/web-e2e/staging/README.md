@@ -59,6 +59,31 @@ key valid.
 The `Staging Soak` workflow is not landed yet. The steps below that dispatch it
 apply when it lands.
 
+### The soak suite
+
+The suite is in `soak/`. Only `E2E_SUITE=soak` selects it, and it needs
+`E2E_BASE_URL`. The `staging` project ignores the folder.
+
+```sh
+E2E_SUITE=soak E2E_BASE_URL=https://app-staging.cipherbox.cc \
+  pnpm --filter @cipherbox/web-e2e test:e2e
+```
+
+The fixtures sign in with `SOAK_OWNER_WALLET_KEY` and
+`SOAK_GRANTEE_WALLET_KEY`. A missing key stops the run; the fixtures never mint
+a wallet. The owner ledger is `soak/ledger.txt`, and the grantee ledger is
+`soak/desktop/ledger.txt`. The first line is `cipherbox-soak-ledger 1`, and each
+marker line is `<date> <marker CID> <record sequence>`. `SOAK_BOOTSTRAP=true`
+archives an existing `soak/` folder and builds both ledgers.
+
+Each check names a reason code from `soak/reasons.ts` and appends its outcome to
+`test-results/soak-results.jsonl`. The summary writer prints that file as
+markdown:
+
+```sh
+pnpm --filter @cipherbox/web-e2e exec tsx staging/soak/writeSummary.ts >> "$GITHUB_STEP_SUMMARY"
+```
+
 ### The five secrets
 
 The five secrets live in the `staging` environment scope. The first four are
@@ -98,8 +123,8 @@ file on standard output.
   account, and never removes either account (ADR 0053 D4). No code guard
   enforces this. The nightly sign-in from an empty profile is the proof: an
   account with a factor stops at the required-share step, and the run fails.
-- A scheduled run that finds no `soak/` folder or no manifest fails with the
-  reason "unbootstrapped or wiped" and writes nothing.
+- A run that is not a bootstrap and finds no ledger fails with the reason
+  `unbootstrapped-or-wiped` and writes nothing.
 - The bootstrap runs only when the soak is dispatched with the input
   `bootstrap`. If a `soak/` folder exists, the bootstrap renames it to
   `soak-archived-<date>` and starts a new ledger.
@@ -111,7 +136,7 @@ A wedge is a state where the account itself can no longer serve the soak:
 - The sign-in stops. A recovery phrase was enrolled, or the staging DB was wiped
   or the verifier changed, so the stored login secret no longer opens the vault.
 - The vault does not carry the ledger. The sign-in works, but the vault is empty
-  or the manifest cannot be parsed after a bad write.
+  or the ledger cannot be parsed after a bad write.
 
 A failed soak assertion is not a wedge. It is a defect in the product or in
 staging, and it gets a diagnosis.
@@ -183,7 +208,7 @@ to Grafana Cloud, not to the staging database.
    1Password.
 4. Dispatch the soak with `bootstrap`.
 
-### After a bad manifest with an intact vault
+### After a bad ledger with an intact vault
 
 Dispatch the soak with `bootstrap`. The bootstrap archives the old folder in the
 vault.

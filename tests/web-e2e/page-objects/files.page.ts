@@ -208,6 +208,25 @@ export class FilesPage {
     await expect(this.previewDialog).toHaveCount(0);
   }
 
+  /** Raises the text editor on a row and waits for the file text to load into it. */
+  async openEditor(name: string): Promise<Locator> {
+    await this.act(name, 'edit');
+    const field = this.page.getByTestId('text-editor-field');
+    await expect(field).toBeVisible({ timeout: 60_000 });
+    return field;
+  }
+
+  /** Saves the open editor and waits for the write to leave the dialog. */
+  async saveEditor(): Promise<void> {
+    await this.page.getByTestId('text-editor-save').click();
+    await expect(this.page.getByTestId('text-editor-dialog')).toHaveCount(0, { timeout: 60_000 });
+  }
+
+  async cancelEditor(): Promise<void> {
+    await this.page.getByTestId('text-editor-cancel').click();
+    await expect(this.page.getByTestId('text-editor-dialog')).toHaveCount(0);
+  }
+
   async save(name: string): Promise<Download> {
     const [download] = await Promise.all([
       this.page.waitForEvent('download'),
