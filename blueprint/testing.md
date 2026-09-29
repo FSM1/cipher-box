@@ -175,6 +175,11 @@ is not the contract gate.
   the record read outside a session (ADR 0057), in a WASM module built with
   the `observer` feature, under Node. It is the step `Client Node suite` in the job `Client Browser Suite`,
   reported through `Web Result`.
+- **`packages/client` — the production module suite.** The module that
+  `apps/web` `build:wasm` makes has no `readIpnsRecord` export, and
+  `openIpnsRecordReader` refuses it (ADR 0057 D1). It is the step
+  `Production engine module carries no record read` in the job `Web Bundle`,
+  reported through `Web Result`.
 - **Seam conformance kits.** The engine ships a reusable conformance suite
   per seam trait — FloorStore monotonicity and durability semantics,
   StagingStore ordering and orphan GC, SnapshotCache ciphertext-only-at-rest

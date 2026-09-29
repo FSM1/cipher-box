@@ -46,8 +46,8 @@ module has no `readIpnsRecord`. The limits that make it safe:
    adoption gate decides.
 6. The export exists only in a module built with the `observer` cargo feature of `crates/wasm`.
    The production module is built with no such feature, so it carries no export that reads a
-   record with no adoption gate. The builds that enable the feature are the build that the client
-   Node suite loads and the build that the staging soak makes for itself.
+   record with no adoption gate. The build that the client suites load enables the feature. The
+   staging soak builds its own module with the feature; that build is not landed.
 
 ## Alternatives considered
 
@@ -66,7 +66,8 @@ module has no `readIpnsRecord`. The limits that make it safe:
 
 1. `blueprint/web-client.md` "WASM packaging and the type boundary" names the export and cites D1.
 2. `blueprint/testing.md` "Host suites" names the `packages/client` Node suite, which runs the IPNS
-   record KATs through the export.
+   record KATs through the export, and the production module suite, which proves that the
+   production module has no such export.
 
 ## Residuals
 
