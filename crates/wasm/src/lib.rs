@@ -2568,7 +2568,7 @@ impl IpnsRecordReading {
 /// malformed or that the name's key did not sign.
 #[wasm_bindgen(js_name = readIpnsRecord)]
 pub fn read_ipns_record(ipns_name: &str, record: &[u8]) -> Result<IpnsRecordReading, JsError> {
-    cipherbox_engine::net::eol::read_record(ipns_name, record)
+    cipherbox_engine::net::eol::verify_record_outside_session(ipns_name, record)
         .map(|inner| IpnsRecordReading { inner })
         .map_err(|error| JsError::new(error.check()))
 }

@@ -4884,17 +4884,29 @@ fn listed_link(link: &GrantRow, expires_at: UnixMillis, expired: bool) -> Vec<Sh
 /// its parent's child reference carries, which is the node's write name.
 #[test]
 fn a_snapshot_row_carries_the_ipns_name_of_a_published_child() {
-    let fx = GrantScenario::new();
-    let row = block_on(fx.engine.snapshot(ROOT))
+    let mut fx = GrantScenario::new();
+    block_on(fx.engine.command(Command::Create {
+        parent: ROOT,
+        name: "notes.txt".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a metadata create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let children = block_on(fx.engine.snapshot(ROOT))
         .expect("the root lists")
-        .children
-        .into_iter()
+        .children;
+    let file = children
+        .iter()
+        .find(|child| child.kind == NodeKind::File)
+        .expect("the file is listed");
+    let folder = children
+        .iter()
         .find(|child| child.id == fx.folder)
         .expect("the folder is listed");
-    assert_eq!(
-        row.ipns_name.as_deref(),
-        Some(write_name(fx.folder).as_str())
-    );
+    for row in [file, folder] {
+        assert_eq!(row.ipns_name.as_deref(), Some(write_name(row.id).as_str()));
+    }
 }
 
 /// The share dialog's epoch row reads the scope root's published record, so a

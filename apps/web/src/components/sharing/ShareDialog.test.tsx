@@ -343,6 +343,21 @@ describe('the people table', () => {
     expect(screen.getByTestId('share-epochs').textContent).toBe('// read epoch 3 · write epoch 1');
   });
 
+  it('shows an epoch past 2^53 exactly', async () => {
+    await share(
+      sharingEngine(
+        {},
+        held([1], [{ seed: 1, permission: 'read' }], {
+          epochs: { readEpoch: 9_007_199_254_740_993n, writeEpoch: 2n },
+        })
+      )
+    );
+
+    expect(screen.getByTestId('share-epochs').textContent).toBe(
+      '// read epoch 9007199254740993 · write epoch 2'
+    );
+  });
+
   it('shows no epoch row for a folder that is no scope root', async () => {
     await share();
 

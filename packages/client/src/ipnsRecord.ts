@@ -32,8 +32,7 @@ interface IpnsRecordGlue {
 
 /**
  * Instantiates the wasm-bindgen glue at `glueUrl` over the `wasmBinary` bytes
- * and returns a record reader. The bytes come from the caller, so a Node host
- * reads them from disk and no fetch of a `file:` URL is needed.
+ * and returns a record reader.
  */
 export async function openIpnsRecordReader(
   glueUrl: string | URL,

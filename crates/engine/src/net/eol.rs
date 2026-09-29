@@ -13,13 +13,15 @@
 //!
 //! [`is_expired`] carries one verdict outside liveness — the vault settings
 //! resolve's authority check (blueprint/engine.md "Vault settings load").
-//! [`read_record`] serves a host that watches a name with no session open.
+//! [`verify_record_outside_session`] serves a host that watches a name with no
+//! session open.
 
 use core::time::Duration;
 
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::{DEFAULT_VALIDITY_DAYS, IpnsName, IpnsRecord};
 
+use crate::net::MAX_RECORD_BYTES;
 use crate::seams::UnixMillis;
 
 /// What a signed IPNS record says about its own liveness, verified against the
@@ -36,7 +38,14 @@ pub struct RecordReading {
 
 /// Verify `record` under `ipns_name` and read its sequence and EOL. The name's
 /// key is the only trust anchor, so a record signed for another name fails.
-pub fn read_record(ipns_name: &str, record: &[u8]) -> Result<RecordReading, CodecError> {
+/// Not a gated read: it adopts nothing, checks no floor, and does not compare the EOL with the time.
+pub fn verify_record_outside_session(
+    ipns_name: &str,
+    record: &[u8],
+) -> Result<RecordReading, CodecError> {
+    if record.len() > MAX_RECORD_BYTES {
+        return Err(Malformed::IpnsRecordMalformed.into());
+    }
     let name = IpnsName::parse(ipns_name)?;
     let verified = IpnsRecord::unmarshal(record)?.verify(&name)?;
     let valid_until = parse_rfc3339(&verified.validity);
@@ -255,7 +264,7 @@ mod tests {
         let record = IpnsRecord::create_v2(&signer, b"/ipfs/bafyreading", 7, 1, &eol).marshal();
 
         assert_eq!(
-            read_record(name.as_str(), &record),
+            verify_record_outside_session(name.as_str(), &record),
             Ok(RecordReading {
                 sequence: 7,
                 validity: eol.clone(),
@@ -266,13 +275,52 @@ mod tests {
         let other =
             IpnsName::from_public_key(&Ed25519Signer::from_seed([0x32; 32]).verifying_key());
         assert_eq!(
-            read_record(other.as_str(), &record).map_err(|error| error.class()),
+            verify_record_outside_session(other.as_str(), &record).map_err(|error| error.class()),
             Err("trust"),
             "a record signed for another name is a trust violation"
         );
         assert_eq!(
-            read_record(name.as_str(), &record[..record.len() - 1]).map_err(|error| error.class()),
+            verify_record_outside_session(name.as_str(), &record[..record.len() - 1])
+                .map_err(|error| error.class()),
             Err("malformed")
+        );
+    }
+
+    /// A validly signed record of exactly `len` bytes. Each value byte adds two
+    /// bytes, and a TTL of 24 adds one CBOR byte, so a search over both lands
+    /// on any length.
+    fn signed_record_of_len(
+        signer: &cipherbox_core::suite::ed25519::Ed25519Signer,
+        len: usize,
+    ) -> Vec<u8> {
+        let eol = eol_from(UnixMillis(1_700_000_000_000));
+        (0..len)
+            .flat_map(|pad| [1u64, 24].map(move |ttl| (pad, ttl)))
+            .map(|(pad, ttl)| {
+                let value = [b"/ipfs/".as_slice(), &vec![b'a'; pad]].concat();
+                IpnsRecord::create_v2(signer, &value, 1, ttl, &eol).marshal()
+            })
+            .find(|record| record.len() == len)
+            .expect("some padding reaches the length")
+    }
+
+    #[test]
+    fn a_record_past_the_fetch_cap_is_refused_before_the_decoder() {
+        use cipherbox_core::suite::ed25519::Ed25519Signer;
+
+        let signer = Ed25519Signer::from_seed([0x33; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+
+        let at_cap = signed_record_of_len(&signer, MAX_RECORD_BYTES);
+        assert_eq!(
+            verify_record_outside_session(name.as_str(), &at_cap).map(|reading| reading.sequence),
+            Ok(1),
+            "a record at the cap reaches the decoder"
+        );
+        let over_cap = signed_record_of_len(&signer, MAX_RECORD_BYTES + 1);
+        assert_eq!(
+            verify_record_outside_session(name.as_str(), &over_cap),
+            Err(Malformed::IpnsRecordMalformed.into())
         );
     }
 
