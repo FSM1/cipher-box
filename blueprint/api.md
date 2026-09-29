@@ -84,7 +84,9 @@ What left the API relative to v1 — with the design that removed it:
   `device_approvals`, `identity_subjects`.
 - **`identity_subjects`** maps a verified provider identity — hashed, never
   stored in the clear — to the stable subject id the identity token's `sub`
-  carries and `loginWithJWT` takes as its `verifierId`. It holds no `user_id`:
+  carries and `loginWithJWT` takes as its `verifierId`. A row holds the
+  provider kind, the SHA-256 hash of the provider identifier, and the first and
+  last use times, and no display form of the identifier. It holds no `user_id`:
   the account still materializes at `POST /auth/login` against the derived key,
   so this table cannot fork the account model, and linking a second method later
   is pointing another provider identity at an existing subject (ADR 0039).

@@ -1,7 +1,7 @@
 import * as jose from 'jose';
 import { generateKeyPairSync } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeClock, fakeConfig } from '../../testing/fakes';
+import { FakeClock, fakeConfig, FakeEntropy } from '../../testing/fakes';
 import {
   IDENTITY_TOKEN_AUDIENCE,
   IDENTITY_TOKEN_ISSUER,
@@ -19,7 +19,7 @@ function encodedSigningKey(): string {
 }
 
 async function bootedService(values: Record<string, string | undefined>, clock = new FakeClock()) {
-  const service = new IdentityTokenService(fakeConfig(values).service, clock);
+  const service = new IdentityTokenService(fakeConfig(values).service, clock, new FakeEntropy());
   await service.onModuleInit();
   return service;
 }
@@ -109,13 +109,44 @@ describe('IdentityTokenService', () => {
     );
     const { token } = await service.sign({ subject: 'subject-id', method: 'google' });
 
-    await expect(service.verify(token)).resolves.toEqual({
+    await expect(service.verify(token)).resolves.toMatchObject({
       subject: 'subject-id',
       method: 'google',
+      expiresAt: new Date(clock.now().getTime() + 300_000),
     });
 
     clock.advanceMs(300_001);
     await expect(service.verify(token)).rejects.toThrow(jose.errors.JWTExpired);
+  });
+
+  it('gives every minted token its own token id', async () => {
+    const service = await bootedService({ NODE_ENV: 'test' });
+    const claims = { subject: 'subject-id', method: 'google' } as const;
+
+    const first = await service.verify((await service.sign(claims)).token);
+    const second = await service.verify((await service.sign(claims)).token);
+
+    expect(first.tokenId).not.toBe(second.tokenId);
+  });
+
+  it('refuses a token that carries no token id, since no spend could record it', async () => {
+    const clock = new FakeClock();
+    const service = await bootedService(
+      { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+      clock
+    );
+    const privateKey = Buffer.from(encodedPem, 'base64').toString('utf8');
+    const issuedAt = Math.floor(clock.now().getTime() / 1000);
+    const untracked = await new jose.SignJWT({ method: 'google' })
+      .setProtectedHeader({ alg: 'RS256', kid: service.jwks().keys[0].kid })
+      .setSubject('subject-id')
+      .setIssuer(IDENTITY_TOKEN_ISSUER)
+      .setAudience(IDENTITY_TOKEN_AUDIENCE)
+      .setIssuedAt(issuedAt)
+      .setExpirationTime(issuedAt + 300)
+      .sign(await jose.importPKCS8(privateKey, 'RS256'));
+
+    await expect(service.verify(untracked)).rejects.toThrow(jose.errors.JWTClaimValidationFailed);
   });
 
   it('expires the token on the injected clock, not the wall clock', async () => {

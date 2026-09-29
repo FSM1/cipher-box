@@ -23,14 +23,15 @@ describe('AccountDeviceService', () => {
   let clock: FakeClock;
   let service: AccountDeviceService;
   let subjects: Map<string, string>;
+  let spent: Set<string>;
   let account: string;
   let token: string;
   let device: TestDeviceKey;
 
-  /** Mints an identity token the stubbed verifier resolves to a fresh subject. */
-  function mintIdentityToken(): string {
+  /** Mints an identity token the stubbed verifier resolves to `subject`. */
+  function mintIdentityToken(subject: string = randomUUID()): string {
     const value = `token-${randomUUID()}`;
-    subjects.set(value, randomUUID());
+    subjects.set(value, subject);
     return value;
   }
 
@@ -38,7 +39,10 @@ describe('AccountDeviceService', () => {
     return subjects.get(identityToken) as string;
   }
 
-  /** A registration signed by `key` over `signedAccount` (defaults to honest). */
+  /**
+   * A registration signed by `key` over `signedAccount` (defaults to honest),
+   * presenting a fresh token for the identity `token` names: a token is spent.
+   */
   function registration(
     key: TestDeviceKey,
     signedAccount: string,
@@ -47,7 +51,7 @@ describe('AccountDeviceService', () => {
     return {
       publicKey: key.publicKey,
       signature: key.sign(deviceRegistrationPayload(signedAccount, key.publicKey)),
-      identityToken: token,
+      identityToken: mintIdentityToken(subjectOf(token)),
       ...overrides,
     };
   }
@@ -56,13 +60,20 @@ describe('AccountDeviceService', () => {
     devices = new FakeRepository<AccountDevice>();
     clock = new FakeClock();
     subjects = new Map();
+    spent = new Set();
     const identityTokens = {
       verify: async (value: string) => {
         const subject = subjects.get(value);
         if (!subject) {
           throw new Error('identity token does not verify');
         }
-        return { subject, method: 'google' as const };
+        return { subject, method: 'google' as const, tokenId: value, expiresAt: clock.now() };
+      },
+      spend: async (_manager: unknown, verified: { tokenId: string }) => {
+        if (spent.has(verified.tokenId)) {
+          throw new UnauthorizedException('Identity token already used');
+        }
+        spent.add(verified.tokenId);
       },
     } as unknown as IdentityTokenService;
     service = new AccountDeviceService(
@@ -145,6 +156,30 @@ describe('AccountDeviceService', () => {
         service.register(account, registration(device, account, { identityToken: 'forged' }))
       ).rejects.toBeInstanceOf(UnauthorizedException);
       expect(devices.rows).toHaveLength(0);
+    });
+
+    it('refuses a replayed identity token, and writes nothing', async () => {
+      await service.register(account, registration(device, account, { identityToken: token }));
+
+      await expect(
+        service.register(
+          account,
+          registration(createTestDeviceKey(), account, { identityToken: token })
+        )
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(devices.rows).toHaveLength(1);
+    });
+
+    it('refuses a replayed token before the identity check, so a refusal names the replay', async () => {
+      await service.register(account, registration(device, account, { identityToken: token }));
+
+      const otherAccount = randomUUID();
+      await expect(
+        service.register(
+          otherAccount,
+          registration(createTestDeviceKey(), otherAccount, { identityToken: token })
+        )
+      ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
     it('is idempotent per key: a re-registration updates rather than duplicates', async () => {

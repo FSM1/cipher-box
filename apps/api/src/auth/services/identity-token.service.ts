@@ -1,12 +1,16 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as jose from 'jose';
 import { createPublicKey } from 'node:crypto';
+import { EntityManager } from 'typeorm';
 import { Clock } from '../../common/clock';
+import { Entropy } from '../../common/entropy';
+import { UUID_RE } from '../../common/patterns';
 import {
   IDENTITY_SUBJECT_KINDS,
   type IdentitySubjectKind,
 } from '../entities/identity-subject.entity';
+import { SpentIdentityToken } from '../entities/spent-identity-token.entity';
 
 const KID = 'cipherbox-identity-1';
 const ALGORITHM = 'RS256';
@@ -18,10 +22,25 @@ export const IDENTITY_TOKEN_AUDIENCE = 'web3auth';
 /** Long enough for the Core Kit handshake, short enough that a leak is stale. */
 const TOKEN_TTL_SECONDS = 300;
 
+/** Expired rows one spend reclaims; each spend adds one row, so the table tracks its live set. */
+const SPENT_SWEEP_BATCH = 100;
+
+/**
+ * How long past its token's expiry a spent row survives, so an instance whose
+ * clock runs behind still finds the row for as long as it accepts the token.
+ */
+const SPENT_ROW_GRACE_MS = 60_000;
+
 export interface IdentityTokenClaims {
   /** The `identity_subjects` row id — the Core Kit `verifierId`. */
   subject: string;
   method: IdentitySubjectKind;
+}
+
+export interface VerifiedIdentityToken extends IdentityTokenClaims {
+  /** The token's `jti`, the key a spend records. */
+  tokenId: string;
+  expiresAt: Date;
 }
 
 /**
@@ -35,7 +54,8 @@ export class IdentityTokenService implements OnModuleInit {
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly clock: Clock
+    private readonly clock: Clock,
+    private readonly entropy: Entropy
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -84,6 +104,7 @@ export class IdentityTokenService implements OnModuleInit {
     const token = await new jose.SignJWT({ method: claims.method })
       .setProtectedHeader({ alg: ALGORITHM, kid: KID })
       .setSubject(claims.subject)
+      .setJti(this.entropy.randomUuid())
       .setIssuer(IDENTITY_TOKEN_ISSUER)
       .setAudience(IDENTITY_TOKEN_AUDIENCE)
       .setIssuedAt(issuedAt)
@@ -98,7 +119,7 @@ export class IdentityTokenService implements OnModuleInit {
    * it holds. Issuer and audience are pinned, so a token minted for some other
    * relying party cannot be replayed here.
    */
-  async verify(token: string): Promise<IdentityTokenClaims> {
+  async verify(token: string): Promise<VerifiedIdentityToken> {
     const { payload } = await jose.jwtVerify(
       token,
       await jose.importJWK(this.publicJwk, ALGORITHM),
@@ -106,16 +127,46 @@ export class IdentityTokenService implements OnModuleInit {
         issuer: IDENTITY_TOKEN_ISSUER,
         audience: IDENTITY_TOKEN_AUDIENCE,
         algorithms: [ALGORITHM],
+        requiredClaims: ['exp', 'jti'],
         // Expiry reads the injected clock, the same seam `sign` stamps from.
         currentDate: this.clock.now(),
       }
     );
-    const subject = payload.sub;
-    const method = payload.method;
+    const { sub: subject, method, jti: tokenId, exp } = payload;
     if (typeof subject !== 'string' || !isIdentitySubjectKind(method)) {
       throw new Error('identity token is missing its subject or method claim');
     }
-    return { subject, method };
+    if (typeof tokenId !== 'string' || !UUID_RE.test(tokenId) || exp === undefined) {
+      throw new Error('identity token is missing its token id or expiry');
+    }
+    return { subject, method, tokenId, expiresAt: new Date(exp * 1000) };
+  }
+
+  /**
+   * Spend a verified token on the caller's transaction, so a registration the
+   * caller then refuses rolls the spend back with it. The primary key makes a
+   * concurrent spend of the same token wait for this one and then refuse.
+   */
+  async spend(manager: EntityManager, token: VerifiedIdentityToken): Promise<void> {
+    // `SKIP LOCKED` yields rows a concurrent spend is already reclaiming, so two
+    // sweeps never wait on each other's row locks.
+    await manager.query(
+      `DELETE FROM spent_identity_tokens WHERE ctid IN (
+         SELECT ctid FROM spent_identity_tokens WHERE expires_at <= $1
+         ORDER BY expires_at LIMIT $2 FOR UPDATE SKIP LOCKED)`,
+      [new Date(this.clock.now().getTime() - SPENT_ROW_GRACE_MS), SPENT_SWEEP_BATCH]
+    );
+    const inserted = await manager
+      .createQueryBuilder()
+      .insert()
+      .into(SpentIdentityToken)
+      .values({ tokenId: token.tokenId, expiresAt: token.expiresAt })
+      .orIgnore()
+      .returning('token_id')
+      .execute();
+    if ((inserted.raw as unknown[]).length === 0) {
+      throw new UnauthorizedException('Identity token already used');
+    }
   }
 
   /**

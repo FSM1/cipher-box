@@ -393,6 +393,21 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
       expect(await userCount()).toBe(0);
     });
 
+    it('keeps no display form of the identifier and no account on the subject row', async () => {
+      const columns: { column_name: string }[] = await db.dataSource.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'identity_subjects'`
+      );
+
+      expect(columns.map((row) => row.column_name).sort()).toEqual([
+        'created_at',
+        'id',
+        'identifier_hash',
+        'kind',
+        'last_used_at',
+      ]);
+    });
+
     it('does not cross-link methods that share an email', async () => {
       const shared = freshEmail();
       const viaEmail = await emailGrant(shared);

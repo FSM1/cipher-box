@@ -10,6 +10,7 @@ import { AuthMethod } from './entities/auth-method.entity';
 import { AcceleratorToken } from './entities/accelerator-token.entity';
 import { IdentitySubject } from './entities/identity-subject.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
+import { SpentIdentityToken } from './entities/spent-identity-token.entity';
 import { User } from './entities/user.entity';
 import { IdentityController } from './identity.controller';
 import { EmailOtpService } from './services/email-otp.service';
@@ -81,7 +82,14 @@ describe('AuthModule dependency graph', () => {
         AuthModule,
       ],
     });
-    for (const entity of [User, AuthMethod, RefreshToken, AcceleratorToken, IdentitySubject]) {
+    for (const entity of [
+      User,
+      AuthMethod,
+      RefreshToken,
+      AcceleratorToken,
+      IdentitySubject,
+      SpentIdentityToken,
+    ]) {
       builder.overrideProvider(getRepositoryToken(entity)).useValue({});
     }
 

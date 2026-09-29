@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
+import { SpentIdentityToken } from '../auth/entities/spent-identity-token.entity';
 import { User } from '../auth/entities/user.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IdentityTokenService } from '../auth/services/identity-token.service';
@@ -121,7 +122,7 @@ describe('device-approval HTTP surface (real Postgres)', () => {
 
   beforeEach(async () => {
     await db.dataSource.query(
-      'TRUNCATE TABLE users, identity_subjects, account_devices, device_approvals, refresh_tokens CASCADE'
+      'TRUNCATE TABLE users, identity_subjects, spent_identity_tokens, account_devices, device_approvals, refresh_tokens CASCADE'
     );
   });
 
@@ -499,6 +500,81 @@ describe('device-approval HTTP surface (real Postgres)', () => {
         .expect(200);
       expect(collected.body.sealedFactor).toBe(sealed[collected.body.responderDevicePublicKey]);
       expect(await approvalRowCount()).toBe(0);
+    });
+  });
+
+  describe('the identity token a registration spends', () => {
+    function registration(account: { userId: string }, device: TestDeviceKey, token: string) {
+      return {
+        publicKey: device.publicKey,
+        signature: device.sign(deviceRegistrationPayload(account.userId, device.publicKey)),
+        identityToken: token,
+      };
+    }
+
+    function post(account: { token: string }, body: object) {
+      return request(http())
+        .post('/devices')
+        .set('Authorization', `Bearer ${account.token}`)
+        .send(body);
+    }
+
+    it('401s a second registration that replays a spent token, and writes nothing', async () => {
+      const account = await seedAccount(db, jwt);
+      const token = await identityToken(randomUUID());
+      await post(account, registration(account, createTestDeviceKey(), token)).expect(201);
+
+      await post(account, registration(account, createTestDeviceKey(), token)).expect(401);
+      expect(await db.dataSource.getRepository(AccountDevice).count()).toBe(1);
+    });
+
+    it('401s a replay from another account before any identity check', async () => {
+      const member = await seedAccount(db, jwt);
+      const token = await identityToken(randomUUID());
+      await post(member, registration(member, createTestDeviceKey(), token)).expect(201);
+
+      const other = await seedAccount(db, jwt);
+      await post(other, registration(other, createTestDeviceKey(), token)).expect(401);
+    });
+
+    it('leaves the token unspent when the registration is refused', async () => {
+      const member = await enroll('member');
+      const token = await identityToken(member.identitySubject);
+      const other = await seedAccount(db, jwt);
+      await post(other, registration(other, createTestDeviceKey(), token)).expect(409);
+
+      await post(member, registration(member, createTestDeviceKey(), token)).expect(201);
+    });
+
+    it('lets exactly one of two simultaneous registrations spend one token', async () => {
+      const account = await seedAccount(db, jwt);
+      const token = await identityToken(randomUUID());
+      const results = await Promise.all([
+        post(account, registration(account, createTestDeviceKey(), token)),
+        post(account, registration(account, createTestDeviceKey(), token)),
+      ]);
+
+      expect(results.map((res) => res.status).sort()).toEqual([201, 401]);
+      expect(await db.dataSource.getRepository(AccountDevice).count()).toBe(1);
+    });
+
+    it('reclaims a spent row past its grace, and keeps one its token could still pass', async () => {
+      const spent = db.dataSource.getRepository(SpentIdentityToken);
+      const stale = randomUUID();
+      const recent = randomUUID();
+      await spent.insert([
+        { tokenId: stale, expiresAt: new Date(clock.now().getTime() - 120_000) },
+        { tokenId: recent, expiresAt: new Date(clock.now().getTime() - 1_000) },
+      ]);
+
+      const account = await seedAccount(db, jwt);
+      const token = await identityToken(randomUUID());
+      await post(account, registration(account, createTestDeviceKey(), token)).expect(201);
+
+      const kept = (await spent.find()).map((row) => row.tokenId);
+      expect(kept).not.toContain(stale);
+      expect(kept).toContain(recent);
+      expect(kept).toHaveLength(2);
     });
   });
 

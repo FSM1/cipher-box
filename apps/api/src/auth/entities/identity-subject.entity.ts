@@ -35,10 +35,6 @@ export class IdentitySubject {
   @Column({ name: 'identifier_hash', type: 'varchar', length: 64 })
   identifierHash: string;
 
-  /** Truncated human-readable identifier for account-settings display. */
-  @Column({ name: 'identifier_display', type: 'varchar', length: 255, nullable: true })
-  identifierDisplay: string | null;
-
   @Column({ name: 'last_used_at', type: 'timestamptz', nullable: true })
   lastUsedAt: Date | null;
 
