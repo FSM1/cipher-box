@@ -33,7 +33,10 @@ the PUT (`PutMark` in `net::publish`). If the store does not take the mark, or r
 below it, the publish stops with `PublishError::MarkUnrecorded` and no PUT goes out. A failure
 before the mark leaves no mark, so the next session start publishes the genesis record again. A
 PUT that went out keeps its mark whatever its outcome (consequence 7). Mark before PUT is the fail-closed order: a PUT never lands without a
-mark, so a withheld record never reads as a first run on the device that sent it.
+mark, so a withheld record never reads as a first run on the device that sent it. Amended by
+[ADR 0060](./0060-a-stated-refusal-from-every-endpoint-supersedes-the-bin-index-mint-mark.md)
+D3 on 2026-09-30: a PUT that every endpoint refused by a stated answer leaves no mark, because
+a refusal counter at its revision supersedes the mint counter.
 
 **D2 — A separate owner-local seal counter gives the body revision.** The seal counter
 (`bin-index-revision-seal/<name>`) is raised before each seal. The next revision is one above the

@@ -194,6 +194,8 @@ same verdict. The rule landed with FSM1/cipher-box#1742; this ADR records it. Am
 [ADR 0056](./0056-the-bin-index-mint-mark-is-raised-just-before-the-put-and-a-seal-counter-gives-the-revision.md)
 D1 on 2026-09-29: on the bin index plane the mint counter alone proves a PUT that left the
 engine, which can have landed; it no longer marks an attempt that failed before the PUT.
+Amended by [ADR 0060](./0060-a-stated-refusal-from-every-endpoint-supersedes-the-bin-index-mint-mark.md)
+D3 on 2026-09-30: the mint counter is a mark only while it is above the refusal counter.
 
 **D11 — Three disclosures stay open, and v2.0.0 accepts them.** The bin rungs coarsen the entry
 count to one of six bands; they do not hide it. The published block length names the band and
