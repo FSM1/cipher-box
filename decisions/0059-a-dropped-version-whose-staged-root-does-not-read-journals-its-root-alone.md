@@ -1,6 +1,6 @@
 # ADR 0059 — A dropped version whose staged root does not read journals its root alone
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-29
 - **Date:** 2026-09-29
 - **Relates to:**
   [ADR 0054](./0054-a-dropped-versions-debt-carries-its-target-set-and-settles-above-the-acknowledged-sequence.md)
