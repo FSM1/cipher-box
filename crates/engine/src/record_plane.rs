@@ -48,10 +48,8 @@ pub enum DefaultsReason {
     /// one: the record is being withheld or its head block is unreachable.
     Suppressed,
     /// No usable record, and the publish mint counter is this device's only
-    /// mark. The settings plane raises the counter before the seal, so it marks
-    /// any attempt that minted a revision; the bin index plane raises it just
-    /// before the PUT, so it marks only a PUT that can have landed. On either
-    /// plane the attempt may have landed and lost its floor write. Refused like
+    /// mark: the attempt it marks may have landed and lost its floor write
+    /// before the store could record it. Refused like
     /// [`Self::Suppressed`], because a landed attempt is a record this device
     /// must not publish over — and reported apart from it, because no other
     /// device is needed to reach it and none may be needed to leave it

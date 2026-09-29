@@ -5334,8 +5334,7 @@ where {
     /// record nor a durable mark mints one. A device that holds a mark reaches
     /// that verdict from its own store and spends no network at all
     /// ([`holds_a_bin_index_mark`]) — including a device whose own PUT left the
-    /// engine and can have landed, which the mark keeps fail-closed. An attempt
-    /// that failed ahead of its PUT leaves no mark, so the next start retries.
+    /// engine and can have landed, which the mark keeps fail-closed.
     async fn publish_genesis_bin_index(&self, api: &ApiClient<T::Http, T::CredentialStore>) {
         let Some(session) = self.session.as_ref() else {
             return;

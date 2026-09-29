@@ -33,7 +33,7 @@ use cipherbox_engine::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, ScriptedHttp,
     SlotFillingRecordStore,
 };
-use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
+use cipherbox_engine::testkit::{FailingEntropy, FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinIndexRead, DefaultsReason, Gateway,
     GatewayConfig, HeldRecord, HeldValue, OrphanHeads, SessionBearer, SyncTimingProfile,
@@ -983,13 +983,6 @@ enum BeforePut {
 /// out still spends its revision: the retry seals the next one.
 #[test]
 fn a_publish_that_fails_before_its_put_leaves_no_mark() {
-    struct NoEntropy;
-    impl Entropy for NoEntropy {
-        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-            Err(EntropyError::new("no entropy"))
-        }
-    }
-
     for (case, uploads, retry_revision) in [
         (BeforePut::Entropy, 0, 1),
         (BeforePut::SealCounterRaise, 0, 1),
@@ -1029,7 +1022,7 @@ fn a_publish_that_fails_before_its_put_leaves_no_mark() {
         };
         let mut seeded = SeededEntropy::new(1);
         let entropy: &mut dyn Entropy = match case {
-            BeforePut::Entropy => &mut NoEntropy,
+            BeforePut::Entropy => &mut FailingEntropy,
             BeforePut::SealCounterRaise
             | BeforePut::Upload
             | BeforePut::Register
@@ -1126,19 +1119,14 @@ fn a_mark_the_store_refuses_sends_no_put() {
             &name(),
         )));
 
-    serve_http(&device, &blocks, 4);
-    let outcome = block_on(publish_bin_index(
-        &device.record_store,
-        &api(&device),
+    let outcome = publish_through(
+        &world,
+        &device,
+        &blocks,
         &device.floors(&SECRET),
-        &device.snapshot_cache,
-        &world.scheduler,
-        &SyncTimingProfile::CI,
-        &mut SeededEntropy::new(1),
-        &OrphanHeads::default(),
-        &keys(),
         &binned(&[1]),
-    ));
+        &mut SeededEntropy::new(1),
+    );
     assert!(matches!(
         outcome,
         Err(BinIndexPublishError::Publish(RecordPublishError::Publish(
