@@ -90,6 +90,10 @@ What left the API relative to v1 — with the design that removed it:
   the account still materializes at `POST /auth/login` against the derived key,
   so this table cannot fork the account model, and linking a second method later
   is pointing another provider identity at an existing subject (ADR 0039).
+- **`spent_identity_tokens`**: a device registration spends the identity token
+  it presents, and records the token's `jti` and expiry here, and nothing else.
+  A replay of a spent token answers 401. `POST /auth/login` and
+  `POST /device-approval/session` do not spend the token.
 
 ## Pin/name registry
 

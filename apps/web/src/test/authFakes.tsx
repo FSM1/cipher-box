@@ -558,7 +558,7 @@ export function fakeCoreKitSession(
     forgetDevice: () => Promise.resolve(),
     deviceIdentity: () => (options.noDeviceIdentity === true ? null : device),
     identityToken: () => identityToken,
-    spendIdentityToken() {
+    dropIdentityToken() {
       identityToken = null;
     },
     mintApprovalFactor() {

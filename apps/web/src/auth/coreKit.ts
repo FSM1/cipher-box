@@ -63,7 +63,7 @@ export interface WebCoreKitSession extends CoreKitSession {
   /** The identity token this sign-in used, which the device surface presents. */
   identityToken(): string | null;
   /** Drops the identity token once a device registration has spent it. */
-  spendIdentityToken(): void;
+  dropIdentityToken(): void;
   /**
    * A fresh factor for a device this session approves, and never this session's
    * own (ADR 0009 D5). The bytes are the caller's to seal and then to erase.
@@ -383,7 +383,7 @@ class Web3AuthSession implements WebCoreKitSession {
     return this.signedInToken;
   }
 
-  spendIdentityToken(): void {
+  dropIdentityToken(): void {
     this.signedInToken = null;
   }
 

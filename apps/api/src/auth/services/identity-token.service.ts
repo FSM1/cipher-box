@@ -12,7 +12,7 @@ import {
 } from '../entities/identity-subject.entity';
 import { SpentIdentityToken } from '../entities/spent-identity-token.entity';
 
-const KID = 'cipherbox-identity-1';
+export const IDENTITY_TOKEN_KID = 'cipherbox-identity-1';
 const ALGORITHM = 'RS256';
 
 /** Who mints the token, and who is entitled to verify it. */
@@ -102,7 +102,7 @@ export class IdentityTokenService implements OnModuleInit {
     const issuedAt = Math.floor(this.clock.now().getTime() / 1000);
     const expiresAt = issuedAt + TOKEN_TTL_SECONDS;
     const token = await new jose.SignJWT({ method: claims.method })
-      .setProtectedHeader({ alg: ALGORITHM, kid: KID })
+      .setProtectedHeader({ alg: ALGORITHM, kid: IDENTITY_TOKEN_KID })
       .setSubject(claims.subject)
       .setJti(this.entropy.randomUuid())
       .setIssuer(IDENTITY_TOKEN_ISSUER)
@@ -180,7 +180,12 @@ export class IdentityTokenService implements OnModuleInit {
    * private JWK, so no private field can reach the JWKS by omission.
    */
   private async exportPublicJwk(publicKey: jose.CryptoKey | jose.KeyObject): Promise<jose.JWK> {
-    return { ...(await jose.exportJWK(publicKey)), kid: KID, alg: ALGORITHM, use: 'sig' };
+    return {
+      ...(await jose.exportJWK(publicKey)),
+      kid: IDENTITY_TOKEN_KID,
+      alg: ALGORITHM,
+      use: 'sig',
+    };
   }
 }
 
