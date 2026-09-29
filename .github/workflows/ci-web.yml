@@ -154,3 +154,7 @@ jobs:
       # because that glue only exists after the Rust build.
       - name: Typecheck harness + browser seam conformance suite
         run: pnpm --filter @cipherbox/client test:browser
+
+      # The Node suite loads the WASM module the step above built.
+      - name: Client Node suite
+        run: pnpm --filter @cipherbox/client test:node

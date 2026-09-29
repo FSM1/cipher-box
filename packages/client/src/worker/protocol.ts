@@ -177,6 +177,8 @@ export interface SnapshotChildDescriptor {
    * on a device that holds no record of the link they claim.
    */
   pendingInviteClaims: number;
+  /** The node's `ipnsName`; `null` until a read projects one. */
+  ipnsName: string | null;
 }
 
 /**
@@ -277,6 +279,14 @@ export interface ScopeSharingDescriptor {
   inviteLinkRefusal: string | null;
   /** Every invite link this owner's commitment carries here, expired ones included. */
   inviteLinks: SharingInviteLinkDescriptor[];
+  /** The epochs the scope root's published record sits at; `null` where the node is no scope root. */
+  epochs: ScopeEpochsDescriptor | null;
+}
+
+/** The read and write epoch of one scope root's published record (mirrors `ScopeEpochs`). */
+export interface ScopeEpochsDescriptor {
+  readEpoch: bigint;
+  writeEpoch: bigint;
 }
 
 /**

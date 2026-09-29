@@ -687,6 +687,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
       contentVersion: child.contentVersion ?? null,
       contentCid: child.contentCid ?? null,
       pendingInviteClaims: child.pendingInviteClaims,
+      ipnsName: child.ipnsName ?? null,
     })),
     ancestors: view.ancestors.map((ancestor) => ({ id: ancestor.id, name: ancestor.name })),
     deadLetters: view.deadLetters.map((dead) => ({
@@ -1056,6 +1057,10 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
             grantRefusal: state.grantRefusal ?? null,
             inviteLinkRefusal: state.inviteLinkRefusal ?? null,
             inviteLinks: state.inviteLinks.map((link) => readInviteLink(wasm, link)),
+            epochs:
+              state.readEpoch === undefined || state.writeEpoch === undefined
+                ? null
+                : { readEpoch: state.readEpoch, writeEpoch: state.writeEpoch },
           },
   };
 }

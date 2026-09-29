@@ -1374,6 +1374,7 @@ describe('readSnapshot', () => {
           pendingInviteClaims: 0,
           contentVersion: 2n,
           contentCid: new Uint8Array([0xc1, 0xd0]),
+          ipnsName: 'k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4',
         },
         {
           id: new Uint8Array(16).fill(4),
@@ -1425,6 +1426,7 @@ describe('readSnapshot', () => {
           pendingInviteClaims: 0,
           contentVersion: 2n,
           contentCid: new Uint8Array([0xc1, 0xd0]),
+          ipnsName: 'k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4',
         },
         {
           id: new Uint8Array(16).fill(4),
@@ -1437,6 +1439,7 @@ describe('readSnapshot', () => {
           pendingInviteClaims: 3,
           contentVersion: null,
           contentCid: null,
+          ipnsName: null,
         },
         {
           id: new Uint8Array(16).fill(5),
@@ -1449,6 +1452,7 @@ describe('readSnapshot', () => {
           pendingInviteClaims: 0,
           contentVersion: null,
           contentCid: null,
+          ipnsName: null,
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
@@ -1612,6 +1616,8 @@ describe('readSharing', () => {
       grantRefusal: 'grant-parent-envelope-version-unsupported',
       inviteLinkRefusal: 'invite-parent-envelope-version-unsupported',
       inviteLinks: [link],
+      readEpoch: 9_007_199_254_740_993n,
+      writeEpoch: 1n,
     },
   };
 
@@ -1643,8 +1649,18 @@ describe('readSharing', () => {
             refusedClaims: 2,
           },
         ],
+        epochs: { readEpoch: 9_007_199_254_740_993n, writeEpoch: 1n },
       },
     });
+  });
+
+  it('reads a node that is no scope root as carrying no epochs', () => {
+    const plain = {
+      ...view,
+      state: { ...view.state, readEpoch: undefined, writeEpoch: undefined },
+    };
+
+    expect(readSharing(fakeWasm, plain).state?.epochs).toBeNull();
   });
 
   it('reads an unnamed direct row and an uncached contact as null', () => {

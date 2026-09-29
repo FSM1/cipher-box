@@ -4,6 +4,7 @@ import type {
   EngineClient,
   EventDescriptor,
   Permission,
+  ScopeEpochsDescriptor,
   SharingDescriptor,
   SharingInviteLinkDescriptor,
 } from '@cipherbox/client';
@@ -63,6 +64,7 @@ const folder: ListingRow = {
   pending: 'none',
   deadLetter: false,
   pendingInviteClaims: 0,
+  ipnsName: null,
 };
 
 function identity(seed: number): Uint8Array {
@@ -94,6 +96,8 @@ interface EngineState {
   links: SharingInviteLinkDescriptor[];
   /** The ground `share_scope` would refuse this target on, as the engine names it. */
   standing: ShareStanding;
+  /** The epochs of the scope root's record; `null` where the node is no scope root. */
+  epochs: ScopeEpochsDescriptor | null;
 }
 
 /** The engine's `ShareChecks` rules, and the pair of names each carries. */
@@ -122,6 +126,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
     grants: held.grants ?? new Map(),
     links: held.links ?? NO_LINKS,
     standing: held.standing ?? 'accepted',
+    epochs: held.epochs ?? null,
   };
   const answer = <T,>(name: string, value: T) =>
     refusals[name] === undefined ? Promise.resolve(value) : Promise.reject(refusals[name]);
@@ -163,6 +168,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
                   grantRefusal: SHARE_STANDINGS[state.standing].grant,
                   inviteLinkRefusal: SHARE_STANDINGS[state.standing].inviteLink,
                   inviteLinks: state.links.map((link) => ({ ...link })),
+                  epochs: state.epochs,
                 },
         })
     ),
@@ -285,7 +291,7 @@ async function change(field: HTMLElement, value: string) {
 function held(
   contacts: number[],
   rows: HeldGrant[] | null = [],
-  rest: Partial<Pick<EngineState, 'links' | 'standing'>> = {}
+  rest: Partial<Pick<EngineState, 'links' | 'standing' | 'epochs'>> = {}
 ) {
   return { contacts, grants: new Map([[toHex(DOCS), rows]]), ...rest };
 }
@@ -322,6 +328,25 @@ describe('the people table', () => {
     expect(waiting.map((line) => line.textContent)).toEqual([
       expect.stringMatching(/^\/\/ 2 claims waiting on the view link, expires/),
     ]);
+  });
+
+  it("shows the read and write epoch of the scope root's record", async () => {
+    await share(
+      sharingEngine(
+        {},
+        held([1], [{ seed: 1, permission: 'read' }], {
+          epochs: { readEpoch: 3n, writeEpoch: 1n },
+        })
+      )
+    );
+
+    expect(screen.getByTestId('share-epochs').textContent).toBe('// read epoch 3 · write epoch 1');
+  });
+
+  it('shows no epoch row for a folder that is no scope root', async () => {
+    await share();
+
+    expect(screen.queryByTestId('share-epochs')).toBeNull();
   });
 
   it('does not draw a scope the engine could not reach as one shared with nobody', async () => {

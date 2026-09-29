@@ -13,12 +13,41 @@
 //!
 //! [`is_expired`] carries one verdict outside liveness — the vault settings
 //! resolve's authority check (blueprint/engine.md "Vault settings load").
+//! [`read_record`] serves a host that watches a name with no session open.
 
 use core::time::Duration;
 
-use cipherbox_core::ipns::DEFAULT_VALIDITY_DAYS;
+use cipherbox_core::error::{CodecError, Malformed};
+use cipherbox_core::ipns::{DEFAULT_VALIDITY_DAYS, IpnsName, IpnsRecord};
 
 use crate::seams::UnixMillis;
+
+/// What a signed IPNS record says about its own liveness, verified against the
+/// name it was fetched under — the read an observer outside any session makes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordReading {
+    /// The record sequence number.
+    pub sequence: u64,
+    /// The signed RFC3339 EOL text.
+    pub validity: String,
+    /// The EOL as Unix millis; `None` where the text does not parse.
+    pub valid_until: Option<u64>,
+}
+
+/// Verify `record` under `ipns_name` and read its sequence and EOL. The name's
+/// key is the only trust anchor, so a record signed for another name fails.
+pub fn read_record(ipns_name: &str, record: &[u8]) -> Result<RecordReading, CodecError> {
+    let name = IpnsName::parse(ipns_name)?;
+    let verified = IpnsRecord::unmarshal(record)?.verify(&name)?;
+    let valid_until = parse_rfc3339(&verified.validity);
+    let validity =
+        String::from_utf8(verified.validity).map_err(|_| Malformed::IpnsRecordMalformed)?;
+    Ok(RecordReading {
+        sequence: verified.sequence,
+        validity,
+        valid_until,
+    })
+}
 
 /// Seconds in one day.
 const SECS_PER_DAY: u64 = 24 * 60 * 60;
@@ -214,6 +243,37 @@ mod tests {
                 "round-trip at second precision: {s}"
             );
         }
+    }
+
+    #[test]
+    fn a_record_reads_its_sequence_and_eol_under_its_own_name_only() {
+        use cipherbox_core::suite::ed25519::Ed25519Signer;
+
+        let signer = Ed25519Signer::from_seed([0x31; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let eol = eol_from(UnixMillis(1_700_000_000_000));
+        let record = IpnsRecord::create_v2(&signer, b"/ipfs/bafyreading", 7, 1, &eol).marshal();
+
+        assert_eq!(
+            read_record(name.as_str(), &record),
+            Ok(RecordReading {
+                sequence: 7,
+                validity: eol.clone(),
+                valid_until: parse_rfc3339(eol.as_bytes()),
+            })
+        );
+
+        let other =
+            IpnsName::from_public_key(&Ed25519Signer::from_seed([0x32; 32]).verifying_key());
+        assert_eq!(
+            read_record(other.as_str(), &record).map_err(|error| error.class()),
+            Err("trust"),
+            "a record signed for another name is a trust violation"
+        );
+        assert_eq!(
+            read_record(name.as_str(), &record[..record.len() - 1]).map_err(|error| error.class()),
+            Err("malformed")
+        );
     }
 
     #[test]

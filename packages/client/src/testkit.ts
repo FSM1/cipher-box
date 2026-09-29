@@ -139,6 +139,7 @@ export function emptySharing(scope: Uint8Array = new Uint8Array(16)): SharingDes
       grantRefusal: null,
       inviteLinkRefusal: null,
       inviteLinks: [],
+      epochs: null,
     },
   };
 }

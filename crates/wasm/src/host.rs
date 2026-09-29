@@ -926,12 +926,13 @@ mod tests {
                 state,
             }))
         };
-        let shared = |grant_refusal, invite_link_refusal, invite_links| {
+        let shared = |grant_refusal, invite_link_refusal, invite_links, epochs| {
             view(Some(facade::ScopeSharing {
                 grants: Vec::new(),
                 grant_refusal,
                 invite_link_refusal,
                 invite_links,
+                epochs,
             }))
         };
 
@@ -949,6 +950,10 @@ mod tests {
                     contact_budget_full: true,
                     refused_claims: 1,
                 }],
+                Some(facade::ScopeEpochs {
+                    read_epoch: u64::MAX,
+                    write_epoch: 3,
+                }),
             ),
             "state",
         );
@@ -985,13 +990,33 @@ mod tests {
             ),
             u64::MAX.to_string(),
         );
+        let read_epoch = field(&live, "readEpoch");
+        assert_eq!(read_epoch.js_typeof(), JsValue::from_str("bigint"));
+        assert_eq!(
+            String::from(
+                read_epoch
+                    .unchecked_into::<BigInt>()
+                    .to_string(10)
+                    .expect("bigint renders in base 10")
+            ),
+            u64::MAX.to_string(),
+        );
+        assert_eq!(
+            field(&live, "writeEpoch"),
+            JsValue::from(BigInt::from(3u64))
+        );
 
-        let mintable = field(&shared(None, None, Vec::new()), "state");
+        let mintable = field(&shared(None, None, Vec::new(), None), "state");
         assert!(
             field(&mintable, "grantRefusal").is_undefined(),
             "an accepted grant carries no refusal, never an empty string"
         );
         assert!(field(&mintable, "inviteLinkRefusal").is_undefined());
+        assert!(
+            field(&mintable, "readEpoch").is_undefined()
+                && field(&mintable, "writeEpoch").is_undefined(),
+            "a node that is not a scope root carries no epochs"
+        );
         assert_eq!(
             field(&mintable, "inviteLinks")
                 .unchecked_into::<Array>()
@@ -1002,7 +1027,12 @@ mod tests {
         // A link the engine refuses on its own ground, at a scope a grant is
         // still accepted at: the two verdicts are read apart.
         let link_only = field(
-            &shared(None, Some("invite-target-is-the-vault-root"), Vec::new()),
+            &shared(
+                None,
+                Some("invite-target-is-the-vault-root"),
+                Vec::new(),
+                None,
+            ),
             "state",
         );
         assert!(field(&link_only, "grantRefusal").is_undefined());

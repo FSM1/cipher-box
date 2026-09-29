@@ -81,6 +81,11 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
           <p className="dialog-label" data-testid="share-people-count">
             {scope === null ? 'people with access' : `people with access · ${peopleCount(scope)}`}
           </p>
+          {scope?.epochs && (
+            <p className="sharing-note" data-testid="share-epochs">
+              {`// read epoch ${scope.epochs.readEpoch} · write epoch ${scope.epochs.writeEpoch}`}
+            </p>
+          )}
           <PeopleTable
             grants={scope?.grants ?? null}
             links={scope?.inviteLinks ?? []}

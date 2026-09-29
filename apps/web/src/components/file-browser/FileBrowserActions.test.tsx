@@ -42,6 +42,7 @@ function file(id: Uint8Array, name: string, overrides: Partial<Child> = {}): Chi
     pending: 'none',
     deadLetter: false,
     pendingInviteClaims: 0,
+    ipnsName: null,
     contentVersion: 1n,
     contentCid: null,
     ...overrides,

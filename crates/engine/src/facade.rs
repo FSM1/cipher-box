@@ -382,6 +382,9 @@ pub struct SnapshotChild {
     /// Invite claims this owner device acked at this scope root and has not
     /// converted yet (ADR 0023 D5).
     pub pending_invite_claims: u32,
+    /// The node's `ipnsName` as its parent's child reference carries it; `None`
+    /// until a gate-passing read projects one.
+    pub ipns_name: Option<String>,
 }
 
 /// The refusal a version command earns when the file's history does not name
@@ -427,6 +430,10 @@ impl fmt::Debug for SnapshotChild {
             .field("content_version", &self.content_version)
             .field("content_cid", &self.content_cid)
             .field("pending_invite_claims", &self.pending_invite_claims)
+            .field(
+                "ipns_name",
+                &self.ipns_name.as_deref().map(RedactedText::of),
+            )
             .finish()
     }
 }
@@ -604,6 +611,18 @@ pub struct ScopeSharing {
     /// Every invite link this owner's commitment carries there, in commitment
     /// order and expired ones included, read off the scope's own record.
     pub invite_links: Vec<SharingInviteLink>,
+    /// The epochs the scope root's published record sits at; `None` for a node
+    /// that is not a scope root.
+    pub epochs: Option<ScopeEpochs>,
+}
+
+/// The read and write epoch one scope root's published record carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScopeEpochs {
+    /// Steps at every read-plane rotation of the scope.
+    pub read_epoch: u64,
+    /// Steps at every write-plane rotation of the scope.
+    pub write_epoch: u64,
 }
 
 /// A key-free read of the sharing state a host renders for one scope: this
@@ -9097,6 +9116,12 @@ where {
                 content_version: child.meta.content_version,
                 content_cid: child.meta.head_content_cid.clone(),
                 pending_invite_claims: claims.pending(child.meta.id),
+                ipns_name: child
+                    .meta
+                    .ipns_name
+                    .as_deref()
+                    .and_then(|name| std::str::from_utf8(name).ok())
+                    .map(str::to_owned),
             })
             .collect();
         let ancestors = rendered
@@ -9530,6 +9555,7 @@ where {
                 grant_refusal,
                 invite_link_refusal,
                 invite_links: Vec::new(),
+                epochs: None,
             });
         };
         let current = self
@@ -9594,6 +9620,10 @@ where {
             grant_refusal,
             invite_link_refusal,
             invite_links,
+            epochs: Some(ScopeEpochs {
+                read_epoch: current.current_read_epoch,
+                write_epoch: current.write_epoch,
+            }),
         })
     }
 
@@ -11220,6 +11250,7 @@ mod tests {
     fn a_host_facing_projection_debug_withholds_the_plaintext_name() {
         const NAME: &str = "quarterly-results.txt";
         const FOLDER: &str = "board-papers";
+        const IPNS_NAME: &str = "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4";
 
         let attrs = NodeAttrs {
             id: NodeId([1; 16]),
@@ -11246,6 +11277,7 @@ mod tests {
                 content_version: None,
                 content_cid: None,
                 pending_invite_claims: 0,
+                ipns_name: Some(IPNS_NAME.to_string()),
             }],
             ancestors: vec![Breadcrumb {
                 id: NodeId([4; 16]),
@@ -11269,7 +11301,9 @@ mod tests {
             ("SnapshotView", format!("{view:?}")),
         ] {
             assert!(
-                !rendered.contains(NAME) && !rendered.contains(FOLDER),
+                !rendered.contains(NAME)
+                    && !rendered.contains(FOLDER)
+                    && !rendered.contains(IPNS_NAME),
                 "a name never renders: {rendered}"
             );
             assert!(rendered.contains(shape), "the shape survives: {rendered}");

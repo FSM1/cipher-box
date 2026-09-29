@@ -735,6 +735,12 @@ impl SnapshotChild {
     pub fn pending_invite_claims(&self) -> u32 {
         self.inner.pending_invite_claims
     }
+
+    /// The node's `ipnsName`, or `undefined` until a read projects one.
+    #[wasm_bindgen(getter, js_name = ipnsName)]
+    pub fn ipns_name(&self) -> Option<String> {
+        self.inner.ipns_name.clone()
+    }
 }
 
 impl SnapshotChild {
@@ -1193,6 +1199,20 @@ impl ScopeSharing {
             .cloned()
             .map(SharingInviteLink::from_facade)
             .collect()
+    }
+
+    /// The read epoch of the scope root's published record, or `undefined` for
+    /// a node that is not a scope root.
+    #[wasm_bindgen(getter, js_name = readEpoch)]
+    pub fn read_epoch(&self) -> Option<u64> {
+        self.inner.epochs.map(|epochs| epochs.read_epoch)
+    }
+
+    /// The write epoch of the scope root's published record, or `undefined`
+    /// for a node that is not a scope root.
+    #[wasm_bindgen(getter, js_name = writeEpoch)]
+    pub fn write_epoch(&self) -> Option<u64> {
+        self.inner.epochs.map(|epochs| epochs.write_epoch)
     }
 }
 
@@ -2515,6 +2535,44 @@ pub fn identity_fingerprint(identity_public_key: &[u8]) -> Result<String, JsErro
         .ok_or_else(|| JsError::new("invalid identity public key"))
 }
 
+/// A signed IPNS record's sequence and EOL, verified under the name it was
+/// fetched for.
+#[wasm_bindgen]
+pub struct IpnsRecordReading {
+    inner: cipherbox_engine::net::eol::RecordReading,
+}
+
+#[wasm_bindgen]
+impl IpnsRecordReading {
+    /// The record sequence number.
+    #[wasm_bindgen(getter)]
+    pub fn sequence(&self) -> u64 {
+        self.inner.sequence
+    }
+
+    /// The signed RFC3339 EOL text.
+    #[wasm_bindgen(getter)]
+    pub fn validity(&self) -> String {
+        self.inner.validity.clone()
+    }
+
+    /// The EOL as Unix millis, or `undefined` where the text does not parse.
+    #[wasm_bindgen(getter, js_name = validUntil)]
+    pub fn valid_until(&self) -> Option<u64> {
+        self.inner.valid_until
+    }
+}
+
+/// Reads the sequence and EOL of the signed `record` a routing endpoint
+/// returned for `ipnsName`. Throws the check name of a record that is
+/// malformed or that the name's key did not sign.
+#[wasm_bindgen(js_name = readIpnsRecord)]
+pub fn read_ipns_record(ipns_name: &str, record: &[u8]) -> Result<IpnsRecordReading, JsError> {
+    cipherbox_engine::net::eol::read_record(ipns_name, record)
+        .map(|inner| IpnsRecordReading { inner })
+        .map_err(|error| JsError::new(error.check()))
+}
+
 // ---------------------------------------------------------------------------
 // The device-approval rendezvous (ADR 0009). Pure functions of the exchange
 // transcript, exported free rather than as engine commands: a device that asks
@@ -2906,6 +2964,9 @@ mod tests {
                     content_version: Some(2),
                     content_cid: Some(vec![0xC1, 0xD0]),
                     pending_invite_claims: 0,
+                    ipns_name: Some(
+                        "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4".into(),
+                    ),
                 },
                 facade::SnapshotChild {
                     id: facade::NodeId([4u8; 16]),
@@ -2918,6 +2979,7 @@ mod tests {
                     content_version: None,
                     content_cid: None,
                     pending_invite_claims: 2,
+                    ipns_name: None,
                 },
             ],
             ancestors: vec![facade::Breadcrumb {
@@ -2986,6 +3048,11 @@ mod tests {
         assert!(children[1].dead_letter());
         assert_eq!(children[0].pending_invite_claims(), 0);
         assert_eq!(children[1].pending_invite_claims(), 2);
+        assert_eq!(
+            children[0].ipns_name().as_deref(),
+            Some("k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4")
+        );
+        assert!(children[1].ipns_name().is_none());
 
         let ancestors = view.ancestors();
         assert_eq!(ancestors.len(), 1);

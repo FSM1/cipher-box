@@ -1,0 +1,11 @@
+{
+  // The Node suite reads the WASM module and the core KAT vectors from disk.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "types": ["node"]
+  },
+  // `opfs.d.ts` is ambient, and the barrel the suite imports reaches the seams.
+  "include": ["test/node", "src/seams/opfs.d.ts"]
+}

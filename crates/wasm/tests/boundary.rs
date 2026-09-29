@@ -403,6 +403,9 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 content_version: Some(2),
                 content_cid: Some(vec![0xC1, 0xD0]),
                 pending_invite_claims: 0,
+                ipns_name: Some(
+                    "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4".into(),
+                ),
             },
             facade::SnapshotChild {
                 id: facade::NodeId([4u8; 16]),
@@ -415,6 +418,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 content_version: None,
                 content_cid: None,
                 pending_invite_claims: 2,
+                ipns_name: None,
             },
         ],
         ancestors: vec![facade::Breadcrumb {
@@ -595,6 +599,12 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         get(&folder_child, "pendingInviteClaims").as_f64(),
         Some(2.0)
     );
+    assert_eq!(
+        get(&file, "ipnsName").as_string().as_deref(),
+        Some("k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4"),
+        "ipnsName must cross as a string under that JS name"
+    );
+    assert!(get(&folder_child, "ipnsName").is_undefined());
 
     let ancestors = get(&view, "ancestors").unchecked_into::<Array>();
     assert_eq!(ancestors.length(), 1);
