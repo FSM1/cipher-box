@@ -9,7 +9,7 @@ use core::cell::RefCell;
 use core::num::NonZeroU64;
 use core::task::{Context, Poll, Waker};
 use core::time::Duration;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -16141,27 +16141,27 @@ fn a_write_over_a_history_retention_cannot_shorten_still_publishes() {
     );
 }
 
-/// The rendered `mtime` of every node in the view's tree, in walk order.
-fn rendered_mtimes(engine: &Engine<FakeSeamTypes>) -> Vec<(NodeId, Option<u64>)> {
+/// The rendered `mtime` of every node in the view's tree.
+fn rendered_mtimes(engine: &Engine<FakeSeamTypes>) -> BTreeMap<NodeId, Option<u64>> {
     let view = block_on(engine.view()).expect("a rendered view");
     let mut walk = vec![ROOT];
-    let mut mtimes = Vec::new();
+    let mut mtimes = BTreeMap::new();
     while let Some(node) = walk.pop() {
-        mtimes.push((node, view.attrs(node).and_then(|attrs| attrs.mtime)));
+        mtimes.insert(node, view.attrs(node).and_then(|attrs| attrs.mtime));
         walk.extend(view.children(node).into_iter().map(|child| child.id));
     }
     mtimes
 }
 
-/// Runs `act` and returns the nodes its overlay stamped, sorted: the ones now
-/// rendered at its authored time. Every other node keeps its time, and the
+/// Runs `act` and returns the nodes its overlay stamped: the ones now rendered
+/// at its authored time. Every other node keeps its time, and the
 /// publish moves no rendered time.
 fn stamped_by(
     world: &FakeWorld,
     engine: &mut Engine<FakeSeamTypes>,
     tasks: &mut [BoxedTask],
     act: impl FnOnce(&mut Engine<FakeSeamTypes>),
-) -> Vec<NodeId> {
+) -> BTreeSet<NodeId> {
     use cipherbox_engine::seams::Scheduler as _;
 
     tick(world, engine, tasks);
@@ -16170,7 +16170,7 @@ fn stamped_by(
     act(engine);
     let rendered = rendered_mtimes(engine);
     for (node, mtime) in &rendered {
-        if let Some((_, prior)) = before.iter().find(|(seen, _)| seen == node) {
+        if let Some(prior) = before.get(node) {
             assert!(
                 *mtime == authored_at || mtime == prior,
                 "a node the op does not stamp keeps its time"
@@ -16183,13 +16183,11 @@ fn stamped_by(
         rendered,
         "the publish writes the times the overlay rendered"
     );
-    let mut stamped: Vec<NodeId> = rendered
+    rendered
         .into_iter()
         .filter(|(_, mtime)| *mtime == authored_at)
         .map(|(node, _)| node)
-        .collect();
-    stamped.sort();
-    stamped
+        .collect()
 }
 
 /// `stamped_by` for one command.
@@ -16198,7 +16196,7 @@ fn stamped_by_command(
     engine: &mut Engine<FakeSeamTypes>,
     tasks: &mut [BoxedTask],
     command: Command,
-) -> Vec<NodeId> {
+) -> BTreeSet<NodeId> {
     stamped_by(world, engine, tasks, |engine| {
         block_on(engine.command(command)).expect("the command journals");
     })
@@ -16224,11 +16222,6 @@ fn an_op_renders_the_times_its_publish_writes() {
     }
     tick(&world, &engine, &mut tasks);
     let (a, b) = (child_id(&engine, ROOT, "a"), child_id(&engine, ROOT, "b"));
-    let sorted = |mut nodes: Vec<NodeId>| {
-        nodes.sort();
-        nodes
-    };
-
     let created = stamped_by_command(
         &world,
         &mut engine,
@@ -16242,7 +16235,7 @@ fn an_op_renders_the_times_its_publish_writes() {
     let x = child_id(&engine, a, "x");
     assert_eq!(
         created,
-        sorted(vec![a, x]),
+        BTreeSet::from([a, x]),
         "a create stamps the node and its parent"
     );
 
@@ -16265,17 +16258,25 @@ fn an_op_renders_the_times_its_publish_writes() {
         into: None,
     };
     for (command, expected, why) in [
-        (rename, vec![a], "a rename stamps the parent"),
-        (relink, sorted(vec![a, b]), "a relink stamps both parents"),
-        (relocate, sorted(vec![a, b]), "a move stamps both parents"),
+        (rename, BTreeSet::from([a]), "a rename stamps the parent"),
+        (
+            relink,
+            BTreeSet::from([a, b]),
+            "a relink stamps both parents",
+        ),
+        (
+            relocate,
+            BTreeSet::from([a, b]),
+            "a move stamps both parents",
+        ),
         (
             Command::Delete { node: x },
-            vec![a],
+            BTreeSet::from([a]),
             "a delete into the bin stamps the parent",
         ),
         (
             restore,
-            vec![a],
+            BTreeSet::from([a]),
             "a restore stamps the folder it restores into",
         ),
     ] {
@@ -16301,7 +16302,7 @@ fn an_op_renders_the_times_its_publish_writes() {
         stamped_by(&world, &mut engine, &mut tasks, |engine| {
             write_file(engine, version(file), b"second").expect("the edit commits");
         }),
-        vec![file],
+        BTreeSet::from([file]),
         "a content op stamps the node alone"
     );
 }

@@ -655,17 +655,20 @@ impl Op {
     /// The nodes whose next records this op's publish authors at
     /// `authored_at`, sorted: the set the pending-op overlay stamps and the
     /// drain's publish plan writes, so a rendered node and the record that
-    /// will publish it agree (ADR 0045 D5). `parents` are the folders that name
-    /// the target before the op applies.
-    pub fn authored_nodes(&self, parents: &[NodeId]) -> Vec<NodeId> {
+    /// will publish it agree (ADR 0045 D5). `parents` yields the folders that
+    /// name the target before the op applies; only a kind that stamps them
+    /// calls it.
+    pub fn authored_nodes(&self, parents: impl FnOnce() -> Vec<NodeId>) -> Vec<NodeId> {
         let mut nodes = match &self.kind {
             OpKind::Create { parent, .. } => vec![self.target, *parent],
             OpKind::UpdateContent { .. } => vec![self.target],
             // The name lives in the parent's child ref, so the child's own
             // record does not change.
-            OpKind::Rename { .. } | OpKind::Delete { .. } => parents.to_vec(),
+            OpKind::Rename { .. } | OpKind::Delete { .. } => parents(),
             OpKind::Relink { new_parent, .. } | OpKind::Move { new_parent, .. } => {
-                parents.iter().copied().chain([*new_parent]).collect()
+                let mut nodes = parents();
+                nodes.push(*new_parent);
+                nodes
             }
             OpKind::Restore { into, .. } => vec![*into],
             OpKind::Purge { .. }
@@ -1002,9 +1005,7 @@ mod tests {
         assert_eq!((parent.mtime, parent.size), (Some(5), None));
     }
 
-    /// The stamped set per op kind (ADR 0045 D5): a create stamps the new node
-    /// and its parent, a rename and a delete the parent, a relink and a move
-    /// both parents, a content op the node alone.
+    /// ADR 0045 D5.
     #[test]
     fn each_op_kind_authors_its_own_set_of_nodes() {
         let (node, from, to) = (id(1), id(2), id(3));
@@ -1038,10 +1039,10 @@ mod tests {
                 "restore",
             ),
         ] {
-            assert_eq!(op.authored_nodes(&parents), expected, "{why}");
+            assert_eq!(op.authored_nodes(|| parents.to_vec()), expected, "{why}");
         }
         assert_eq!(
-            Op::rename(node, "b", 1, at(1)).authored_nodes(&[]),
+            Op::rename(node, "b", 1, at(1)).authored_nodes(Vec::new),
             Vec::new(),
             "a node no folder names has no parent to stamp"
         );

@@ -1,6 +1,7 @@
 //! Desktop [`StagingStore`]: the v1 write journal generalized to every op.
 
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -84,8 +85,12 @@ impl FileStagingStore {
             .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok())
             .map(u64::from_le_bytes)
             .unwrap_or(0);
-        let highest_op = highest_op_id(&ops_dir)
-            .map_err(|err| seam_err("staging_store open scan", &err))?
+        let names =
+            list_file_names(&ops_dir).map_err(|err| seam_err("staging_store open scan", &err))?;
+        let highest_op = names
+            .iter()
+            .filter_map(|name| parse_op_id(name))
+            .max()
             .map_or(0, |id| id.saturating_add(1));
         let next = persisted.max(highest_op).max(1);
 
@@ -95,22 +100,21 @@ impl FileStagingStore {
             counter_path,
             next_op_id: Arc::new(Mutex::new(next)),
         };
-        let names = list_file_names(&store.ops_dir)
-            .map_err(|err| seam_err("staging_store open batches", &err))?;
-        for (first, last) in open_batches(&names) {
+        for batch in open_batches(&names) {
             // Only the ids on disk: a marker's range is not bounded by its set.
             let written = names
                 .iter()
                 .filter_map(|name| parse_op_id(name))
-                .filter(|id| (first..=last).contains(id));
+                .filter(|id| batch.contains(id));
             store
-                .roll_back_batch(first, last, written)
+                .roll_back_batch(&batch, written)
                 .map_err(|err| seam_err("staging_store open rollback", &err))?;
         }
         Ok(store)
     }
 
-    fn batch_path(&self, first: u64, last: u64) -> PathBuf {
+    fn batch_path(&self, batch: &RangeInclusive<u64>) -> PathBuf {
+        let (first, last) = (batch.start(), batch.end());
         self.ops_dir
             .join(format!("{first:020}-{last:020}{BATCH_SUFFIX}"))
     }
@@ -119,14 +123,13 @@ impl FileStagingStore {
     /// failure part-way leaves the marker hiding what is left.
     fn roll_back_batch(
         &self,
-        first: u64,
-        last: u64,
+        batch: &RangeInclusive<u64>,
         written: impl Iterator<Item = u64>,
     ) -> std::io::Result<()> {
         for id in written {
             remove_file_durable(&self.op_path(id))?;
         }
-        remove_file_durable(&self.batch_path(first, last))
+        remove_file_durable(&self.batch_path(batch))
     }
 
     /// Reserves `count` consecutive ids and durably advances the counter past
@@ -137,24 +140,24 @@ impl FileStagingStore {
         let first = *next;
         let advanced = first + count;
         atomic_write(&self.counter_path, &advanced.to_le_bytes())
-            .map_err(|err| seam_err("staging_store enqueue_op counter", &err))?;
+            .map_err(|err| seam_err("staging_store reserve ids", &err))?;
         *next = advanced;
         Ok(first)
     }
 
     fn write_batch(&self, first: u64, ops: &[Vec<u8>]) -> std::io::Result<()> {
-        let last = first + ops.len() as u64 - 1;
-        atomic_write(&self.batch_path(first, last), &[])?;
+        let batch = first..=first + ops.len() as u64 - 1;
+        atomic_write(&self.batch_path(&batch), &[])?;
         for (id, op) in (first..).zip(ops) {
             if let Err(err) = atomic_write(&self.op_path(id), op) {
                 // The failed write may have landed its file before a barrier
                 // refused. A marker left by a failed rollback still hides the
                 // set, and the next open removes it.
-                let _ = self.roll_back_batch(first, last, first..=id);
+                let _ = self.roll_back_batch(&batch, first..=id);
                 return Err(err);
             }
         }
-        remove_file_durable(&self.batch_path(first, last))
+        remove_file_durable(&self.batch_path(&batch))
     }
 
     fn op_path(&self, id: u64) -> PathBuf {
@@ -199,11 +202,7 @@ impl StagingStore for FileStagingStore {
             let Some(id) = parse_op_id(&name) else {
                 continue;
             };
-            if ops.contains_key(&id)
-                || uncommitted
-                    .iter()
-                    .any(|(first, last)| (*first..=*last).contains(&id))
-            {
+            if ops.contains_key(&id) || uncommitted.iter().any(|batch| batch.contains(&id)) {
                 continue;
             }
             if let Some(bytes) = read_file_opt(&self.op_path(id))
@@ -290,22 +289,14 @@ fn parse_op_id(name: &str) -> Option<u64> {
     name.strip_suffix(OP_SUFFIX)?.parse::<u64>().ok()
 }
 
-/// The `(first, last)` id range of every multi-entry enqueue whose marker still
-/// stands in `names`.
-fn open_batches(names: &[String]) -> Vec<(u64, u64)> {
+/// The id range of every multi-entry enqueue whose marker still stands in
+/// `names`.
+fn open_batches(names: &[String]) -> Vec<RangeInclusive<u64>> {
     names
         .iter()
         .filter_map(|name| {
             let (first, last) = name.strip_suffix(BATCH_SUFFIX)?.split_once('-')?;
-            Some((first.parse().ok()?, last.parse().ok()?))
+            Some(first.parse().ok()?..=last.parse().ok()?)
         })
         .collect()
-}
-
-/// The largest op id currently on disk in `ops_dir`, if any.
-fn highest_op_id(ops_dir: &Path) -> std::io::Result<Option<u64>> {
-    Ok(list_file_names(ops_dir)?
-        .iter()
-        .filter_map(|name| parse_op_id(name))
-        .max())
 }

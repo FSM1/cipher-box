@@ -1293,9 +1293,10 @@ struct FolderState {
 /// nodes](Op::authored_nodes) would publish a time the overlay never showed,
 /// so it halts.
 fn stamped_modified_at(op: &Op, parents: &[NodeId], folder: NodeId) -> Result<u64, Halt> {
-    match op.authored_nodes(parents).contains(&folder) {
-        true => Ok(op.authored_at.0),
-        false => Err(Halt::Unclassified),
+    if op.authored_nodes(|| parents.to_vec()).contains(&folder) {
+        Ok(op.authored_at.0)
+    } else {
+        Err(Halt::Unclassified)
     }
 }
 

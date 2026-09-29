@@ -338,9 +338,9 @@ Its gain is that the subtree publishes once, not twice.
    law" gains the citation (ADR 0045) on the rename sentence. `CONTEXT.md` gains the citation
    (ADR 0045) on the "Cross-scope move" and "Retained record" entries.
 
-8. **The code must follow the reworded blueprint.** FSM1/cipher-box#2013 tracks moving the
-   overlay and the drain onto the one authored-node set of D5 (E3). FSM1/cipher-box#2014 tracks
-   journaling the two legs of D6 in one atomic write (E2).
+8. **The code follows the reworded blueprint.** FSM1/cipher-box#2103 moved the overlay and the
+   drain onto the one authored-node set of D5 (E3), and journals the two legs of D6 in one
+   atomic write (E2).
 
 9. **No wire format, no KDF edge and no op record format changes.**
 

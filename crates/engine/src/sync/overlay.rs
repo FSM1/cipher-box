@@ -27,13 +27,14 @@ pub fn apply_overlay(base: &Snapshot, ops: &[Op]) -> Snapshot {
 /// Apply one op to the working view optimistically (intent, not rebase), then
 /// stamp its [authored nodes](Op::authored_nodes).
 fn apply_one(view: &mut Snapshot, op: &Op) {
-    let parents: Vec<_> = view
-        .links_to(op.target)
-        .iter()
-        .map(|link| link.parent)
-        .collect();
+    let authored = op.authored_nodes(|| {
+        view.links_to(op.target)
+            .iter()
+            .map(|link| link.parent)
+            .collect()
+    });
     apply_intent(view, op);
-    for node in op.authored_nodes(&parents) {
+    for node in authored {
         if let Some(meta) = view.node_mut(node) {
             op.stamp_authored(meta);
         }
