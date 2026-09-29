@@ -15,7 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cipherbox_core::codec::Value;
 use cipherbox_core::content::{
-    CONTENT_CID_CODEC, compute_cid, encode_content_cid_str, is_wellformed_content_cid,
+    CONTENT_CID_CODEC, compute_cid, decode_content_cid_str, encode_content_cid_str,
+    is_wellformed_content_cid,
 };
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
@@ -9337,6 +9338,43 @@ fn a_refused_version_that_kept_its_rows_still_retires_them() {
         version.iter().all(|cid| retired.contains(cid)),
         "every block the version charged is retired: {retired:?}"
     );
+}
+
+/// A parked version whose staged root the store has lost gives no local
+/// manifest, so its discard journals the root alone. The settle fetches the
+/// root the upload left on the gateway and retires the whole version under the
+/// node's record (ADR 0059 D1).
+#[test]
+fn a_discarded_version_whose_staged_root_is_gone_still_retires_its_rows() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let RefusedFile {
+        alice,
+        mut engine,
+        mut tasks,
+        target,
+        version,
+    } = refused_new_file(&world, &blocks, false);
+    let (parked, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    let root_cid = decode_content_cid_str(version.last().expect("a root")).expect("a CID");
+    block_on(alice.staging_store.remove_staged_bytes(&root_cid)).expect("the root goes");
+
+    block_on(engine.command(Command::DiscardDeadLetter {
+        op_id: parked[0].op_id,
+    }))
+    .expect("the discard lands");
+    tick(&world, &engine, &mut tasks);
+
+    let named: BTreeSet<String> = retire_entries(&alice)
+        .into_iter()
+        .filter(|(name, _)| name.as_deref() == Some(write_name(target).as_str()))
+        .flat_map(|(_, targets)| targets)
+        .collect();
+    assert!(
+        version.iter().all(|cid| named.contains(cid)),
+        "every block the version charged is retired under the node's record: {named:?}"
+    );
+    assert_eq!(engine.pending_reclaim_bytes(), 0, "the debt settles");
 }
 
 /// A name this device once adopted a record at is never read as empty on the
