@@ -1,8 +1,7 @@
 /**
- * Exports the Web3Auth login secret of a soak wallet account (ADR 0053 D2):
- * the SIWE identity token, then Core Kit in Node through `loginWithJWT` and
- * `_UNSAFE_exportTssKey`. It prints once to stdout and writes nothing to disk.
- * Diagnostics go to stderr. The runbook is `staging/README.md`.
+ * Exports the Web3Auth login secret of a soak wallet account (ADR 0053 D2).
+ * It prints once to stdout and writes nothing to disk; diagnostics go to
+ * stderr. The runbook is `staging/README.md`.
  */
 
 import { fstatSync } from 'node:fs';

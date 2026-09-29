@@ -76,8 +76,6 @@ jobs:
       - name: Run the type checker
         run: pnpm --filter @cipherbox/web --filter @cipherbox/web-e2e run typecheck
 
-      # The web-e2e unit suite covers the offline half of the operator tools in
-      # `tests/web-e2e/tools`; it needs no live stack.
       - name: Run the host and harness-tool unit suites
         run: pnpm --filter @cipherbox/web --filter @cipherbox/web-e2e run test
 

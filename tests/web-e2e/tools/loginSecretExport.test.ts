@@ -177,8 +177,6 @@ describe('reserveStdout', () => {
     const out = sink();
     const err = sink();
     const logger = new Console({ stdout: out.stream, stderr: err.stream });
-    // A logging library binds the console method when it loads, before any
-    // redirect of the method itself could run.
     const boundAtLoad = logger.info.bind(logger);
 
     const writeSecret = reserveStdout(out.stream, err.stream);

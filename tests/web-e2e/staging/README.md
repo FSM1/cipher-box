@@ -10,9 +10,8 @@ Normative sources: [`blueprint/testing.md`](../../../blueprint/testing.md) and
 ## The staging profiles
 
 `E2E_BASE_URL` switches the whole run onto a deployed front: no local server,
-the `staging` project only, and one worker. The specs live in `staging/` and
-never run in a merge gate — the `e2e` and `release` projects keep their gates,
-and a red staging run is the verdict on a deploy.
+the `staging` project only, and one worker. The `e2e` and `release` projects
+keep their gates, and a red staging run is the verdict on a deploy.
 
 ```sh
 E2E_BASE_URL=https://app-staging.cipherbox.cc pnpm --filter @cipherbox/web-e2e test:e2e
@@ -83,9 +82,8 @@ op read "op://<vault>/CipherBox Soak Owner/loginSecret" \
   | gh secret set SOAK_OWNER_LOGIN_SECRET --env staging
 ```
 
-The export tool prints a value once to the terminal, for the copy into
-1Password. Never redirect its output to a file; the tool refuses a file on
-standard output.
+Never redirect the output of the export tool to a file; the tool refuses a
+file on standard output.
 
 ### The account rules
 
