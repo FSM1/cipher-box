@@ -1,6 +1,6 @@
 # ADR 0060 — A stated refusal from every endpoint supersedes the bin index mint mark
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-29
 - **Date:** 2026-09-30
 - **Relates to:**
   [ADR 0056](./0056-the-bin-index-mint-mark-is-raised-just-before-the-put-and-a-seal-counter-gives-the-revision.md)
