@@ -7,7 +7,9 @@
   D2 (a fresh nonce from the entropy seam for each seal), D3 (a failed draw fails the publish
   closed), D7 (the genesis publish and the durable marks), D8 (only an established index feeds a
   rewrite), D10 (`StrandedMint`) and E4 (a failed first publish strands a device),
-  [ADR 0007](./0007-derived-idempotent-first-run-mint.md) (the derived first-run terms), the
+  [ADR 0007](./0007-derived-idempotent-first-run-mint.md) (the derived first-run terms),
+  [ADR 0034](./0034-a-degraded-settings-load-falls-back-to-the-last-verified-copy-and-never-widens-placement.md)
+  D5 (the three settings marks that refuse the first-run defaults), the
   `blueprint/engine.md` sections "Vault settings load" (the per-attempt body revision) and "Bin
   index record", and the `CONTEXT.md` term "Bin index"
 - **Implemented by:** FSM1/cipher-box#2090 (closes FSM1/cipher-box#2035)
@@ -30,8 +32,7 @@ after register-first, the sequence floor read, the signature and the size check,
 the PUT (`PutMark` in `net::publish`). If the store does not take the mark, or reports a value
 below it, the publish stops with `PublishError::MarkUnrecorded` and no PUT goes out. A failure
 before the mark leaves no mark, so the next session start publishes the genesis record again. A
-PUT that went out keeps its mark whatever its outcome, because the transport cannot tell a
-refusal from a lost answer. Mark before PUT is the fail-closed order: a PUT never lands without a
+PUT that went out keeps its mark whatever its outcome (consequence 7). Mark before PUT is the fail-closed order: a PUT never lands without a
 mark, so a withheld record never reads as a first run on the device that sent it.
 
 **D2 — A separate owner-local seal counter gives the body revision.** The seal counter
@@ -62,22 +63,25 @@ previous release wrote still bars the next revision.
    its opening paragraph names the mint counter and the revision as differences.
 2. `blueprint/engine.md` "Bin index record", the `StrandedMint` bullet, says that the mint
    counter alone proves a PUT that left the engine.
-3. ADR 0031 Context, D7 and D10 carry an "Amended by" sentence, and ADR 0031 E4 narrows to the
-   two residuals below.
-4. The vault settings plane keeps its order: its mint counter is raised before the seal and
-   still gives the revision.
+3. ADR 0031 Context, D7 and D10 carry an "Amended by" sentence, and ADR 0031 E4 narrows to
+   consequence 7 and E1 below.
+4. The decision is for the bin index plane only. The vault settings plane keeps its mint counter
+   raised before the seal: its first-run defaults name `PinMode::Hosted`, so a placement choice
+   that never landed must still refuse them (ADR 0034 D5), and a mark raised after the head
+   upload and the register, which the API answers, would let a hostile API erase that choice.
 5. The value format and the key of the mint counter do not change. A counter that the previous
    release wrote still reads as a mark.
 6. One new key prefix in the sequence namespace of the floor store, `bin-index-revision-seal/`.
-7. The nonce is drawn before the revision, so an entropy failure (ADR 0031 D3) uses no revision.
-8. `CONTEXT.md` does not change. No wire format, KDF edge or KAT vector changes.
+7. A PUT that each routing endpoint refused or did not answer keeps its mark, so the device is
+   in the stranded state. The owner decided on 2026-09-29 that a stated refusal from each
+   endpoint must not strand the device; that change is not landed, and it needs its own ADR,
+   because it changes the durable shape of the mark.
+8. The nonce is drawn before the revision, so an entropy failure (ADR 0031 D3) uses no revision.
+9. `CONTEXT.md` does not change. No wire format, KDF edge or KAT vector changes.
 
 ## Residuals
 
-**E1 — A PUT that each routing endpoint refused, or that no endpoint answered, still strands the
-device.** The mark stays (D1), and a load that finds no record gives `StrandedMint`. The member
-can hard-delete or sign in on a second device. The owner has not decided whether this state is
-accepted.
-
-**E2 — A device that the previous release stranded stays stranded.** Its mint counter is a mark,
-and the counter cannot show whether its PUT went out. The same two exits apply.
+**E1 — A device that the previous release stranded stays stranded.** Its mint counter is a mark,
+and the counter cannot show whether its PUT went out. The member can hard-delete or sign in on a
+second device. The owner has not decided whether this state is accepted or needs a recovery
+path.

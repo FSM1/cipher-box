@@ -374,7 +374,7 @@ draw would need its own decision.
   the device. An entropy failure at `:323` is one such reason, so D3 can also strand the device.
 - `holds_a_bin_index_mark` (`:253`-`:264`) then reads the mark, and every later genesis attempt
   on that device stops before it sends a request
-  (`the_device_whose_genesis_publish_minted_a_revision_retries_nothing`).
+  (`the_device_whose_genesis_put_left_the_engine_retries_nothing`).
 - `unresolved_reason` (`crates/engine/src/record_plane.rs`) gives `StrandedMint` (D10), and
   `halt_for_bin_load` (`crates/engine/src/sync/drain.rs:210`) dead-letters every soft delete on
   that device under `BinIndexStrandedMint`. Nothing on the device clears the mint mark.
@@ -398,7 +398,8 @@ lost its floor write.
 
 The owner ruled on 2026-09-26: the mint counter must mark only a PUT that can have landed.
 FSM1/cipher-box#2035 tracks the fix. Narrowed by ADR 0056 on 2026-09-29 to a PUT that left the
-engine and did not land, and to a device that the previous release stranded (ADR 0056 E1, E2).
+engine and did not land (ADR 0056 consequence 7), and to a device that the previous release
+stranded (ADR 0056 E1).
 
 **E5 — The two blueprint files list different disclosure triples.** `blueprint/core.md` lists
 the IPNS sequence, the coincidence with the re-key republishes, and the existence of the record,
@@ -459,8 +460,10 @@ simulation tests` job, both inside the **Rust** area of the PR gate.
   `the_first_soft_delete_revises_the_genesis_bin_index_rather_than_minting_one`,
   `a_repeated_first_run_leaves_the_bin_index_the_last_run_published`,
   `a_genesis_bin_index_that_did_not_land_is_published_by_a_later_start`,
-  `the_device_whose_genesis_publish_minted_a_revision_retries_nothing` and
-  `a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve`
+  `the_device_whose_genesis_put_left_the_engine_retries_nothing`,
+  `a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve`,
+  `a_genesis_publish_that_failed_before_its_put_is_retried_by_the_same_device` and
+  `a_fully_offline_genesis_leaves_no_bin_index_mark_and_the_next_start_publishes`
   (`crates/engine/tests/write_plane.rs`), and
   `a_cold_start_with_no_published_record_loads_an_empty_bin`
   (`crates/engine/tests/bin_index.rs`).
@@ -473,8 +476,13 @@ simulation tests` job, both inside the **Rust** area of the PR gate.
   (`crates/engine/tests/bin_index.rs`) and
   `the_bin_read_refuses_a_replayed_index_rather_than_reading_it_as_stale`
   (`crates/engine/tests/write_plane.rs`).
-- **D10:** `a_publish_that_fails_behind_its_mint_reads_as_a_stranded_mint` and
-  `a_second_device_publishes_the_record_a_stranded_mint_could_not`
+- **D10:** `a_publish_that_fails_behind_its_mint_reads_as_a_stranded_mint`,
+  `a_second_device_publishes_the_record_a_stranded_mint_could_not`,
+  `a_publish_that_fails_before_its_put_leaves_no_mark`,
+  `a_put_whose_outcome_is_unknown_keeps_its_mark_and_its_revision`,
+  `a_mark_the_store_refuses_sends_no_put`,
+  `a_mark_the_store_reports_below_its_value_sends_no_put` and
+  `a_mint_counter_the_previous_release_left_still_bars_the_next_revision`
   (`crates/engine/tests/bin_index.rs`), and the `StrandedMint` arm of
   `only_a_refusal_of_bytes_the_plane_served_is_charged_against_the_bin_index`. The dead letter
   is proven at the halt mapping; no integration test drives a queued soft delete to the

@@ -415,7 +415,7 @@ and that includes when the mint counter moves and where the revision comes from.
   size check, directly before the PUT. A mark the store does not take stops the
   publish, and no PUT goes out. So a failure before the PUT leaves no mark, and
   the next start publishes the genesis record again; a PUT that went out keeps
-  its mark, because the transport cannot tell a refusal from a lost answer. The
+  its mark whatever its outcome. The
   body revision comes from a separate owner-local seal counter, raised before
   each seal: one above the seal counter, the mint counter and the adopted
   revision, so no two sealed bodies share a revision. The seal counter is not a
