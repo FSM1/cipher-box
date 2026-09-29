@@ -1,6 +1,6 @@
 # ADR 0056 — The bin index mint mark is raised just before the PUT, and a seal counter gives the revision
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-29
 - **Date:** 2026-09-29
 - **Relates to:**
   [ADR 0031](./0031-the-bin-index-seals-symmetrically-under-a-login-secret-key-and-exists-from-genesis.md)
