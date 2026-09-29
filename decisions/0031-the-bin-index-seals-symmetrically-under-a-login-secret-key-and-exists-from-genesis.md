@@ -77,7 +77,10 @@ FSM1/cipher-box#1675 found that a publish that failed behind that mint left the 
 only durable mark on the device. The load read the mark as a withheld record and refused the
 rewrite. The queue head then took a hold whose only exit was the record resolving, and a
 single-device account had no device left to publish it. That account could never soft-delete
-again, and nothing told the member why.
+again, and nothing told the member why. Amended by
+[ADR 0056](./0056-the-bin-index-mint-mark-is-raised-just-before-the-put-and-a-seal-counter-gives-the-revision.md)
+D1 and D2 on 2026-09-29: the mint counter is raised just before the PUT, and a separate seal
+counter gives the body revision.
 
 The rules below are what the four PRs landed. `blueprint/core.md` "Bin index" and "KDF edge
 catalog" and `blueprint/engine.md` "Bin index record" carry them today.
@@ -153,7 +156,10 @@ account's only one: a device that holds no mark publishes the record at its next
 whose own attempt minted a revision holds a mark and does not try again (E4). A repeated first
 run leaves the standing record alone. The first soft delete then
 revises the genesis record and does not mint one. The rule landed with FSM1/cipher-box#1560 and
-FSM1/cipher-box#1658; this ADR records it.
+FSM1/cipher-box#1658; this ADR records it. Amended by
+[ADR 0056](./0056-the-bin-index-mint-mark-is-raised-just-before-the-put-and-a-seal-counter-gives-the-revision.md)
+D1 on 2026-09-29: a device holds the mint mark only when its own genesis PUT left the engine, and
+an attempt that failed before the PUT leaves no mark, so the next start publishes again.
 
 **D8 — The index is rewritten whole, so only an established index feeds a rewrite.** Two load
 outcomes establish the index: a resolved record, and the unproven-first-run outcome, where no
@@ -184,7 +190,10 @@ dead-letters under `BinIndexStrandedMint`, so the member reads the state and may
 instead. The state is local to the device: another device of the account holds no mark, so it
 publishes the record and clears the state. The verdict is stated once in
 `crates/engine/src/record_plane.rs` (`unresolved_reason`), and the vault settings load reads the
-same verdict. The rule landed with FSM1/cipher-box#1742; this ADR records it.
+same verdict. The rule landed with FSM1/cipher-box#1742; this ADR records it. Amended by
+[ADR 0056](./0056-the-bin-index-mint-mark-is-raised-just-before-the-put-and-a-seal-counter-gives-the-revision.md)
+D1 on 2026-09-29: on the bin index plane the mint counter alone proves a PUT that left the
+engine, which can have landed; it no longer marks an attempt that failed before the PUT.
 
 **D11 — Three disclosures stay open, and v2.0.0 accepts them.** The bin rungs coarsen the entry
 count to one of six bands; they do not hide it. The published block length names the band and
@@ -388,7 +397,8 @@ Neither change removes the residual case that D10 exists for, a publish that con
 lost its floor write.
 
 The owner ruled on 2026-09-26: the mint counter must mark only a PUT that can have landed.
-FSM1/cipher-box#2035 tracks the fix.
+FSM1/cipher-box#2035 tracks the fix. Narrowed by ADR 0056 on 2026-09-29 to a PUT that left the
+engine and did not land, and to a device that the previous release stranded (ADR 0056 E1, E2).
 
 **E5 — The two blueprint files list different disclosure triples.** `blueprint/core.md` lists
 the IPNS sequence, the coincidence with the re-key republishes, and the existence of the record,
