@@ -43,9 +43,9 @@
 //!
 //! The body-revision mint counters squat in the sequence namespace
 //! ([`mint_revision`]) — one per record family whose sealed body carries a
-//! revision, each under its own `*-revision-mint/` prefix. Each is a local
-//! write clock, never an adoption bar, so it raises the store directly; the bar
-//! it feeds (`*-revision/`) moves only through [`advance_sequence_on_unseal`].
+//! revision, each under its own prefix. Each is a local write clock, never an
+//! adoption bar, so it raises the store directly; the bar it feeds
+//! (`*-revision/`) moves only through [`advance_sequence_on_unseal`].
 
 use core::cell::RefCell;
 use core::marker::PhantomData;
@@ -399,12 +399,13 @@ pub enum RevisionMintError {
 }
 
 /// Mint the next body revision for a record family whose sealed body carries
-/// one, advancing the writer's durable counter at `mint_key` **before** the PUT.
+/// one: one above `counter_key` and every key in `bars`, advancing the writer's
+/// durable counter at `counter_key` **before** the seal.
 ///
 /// Attempt-scoped, which is the whole point: a revision derived from the
 /// confirm-gated sequence floor re-mints the same value on a retry and so cannot
 /// tell two same-sequence forks apart. The writer's counter and the reader's
-/// high-water at `adopted_key` stay separate durable values, so an attempt that
+/// high-water (one of `bars`) stay separate durable values, so an attempt that
 /// never landed advances only the former and never makes this device refuse the
 /// live record it failed to replace.
 ///
@@ -413,8 +414,8 @@ pub enum RevisionMintError {
 /// sealing bytes the reader would reject.
 pub async fn mint_revision<F: FloorStore>(
     floors: &F,
-    mint_key: &[u8],
-    adopted_key: &[u8],
+    counter_key: &[u8],
+    bars: &[&[u8]],
 ) -> Result<u64, RevisionMintError> {
     let read = |key| async move {
         sequence_floor(floors, key)
@@ -422,16 +423,16 @@ pub async fn mint_revision<F: FloorStore>(
             .map(|floor| floor.unwrap_or(0))
             .map_err(RevisionMintError::Store)
     };
-    let next = read(mint_key)
-        .await?
-        .max(read(adopted_key).await?)
-        .checked_add(1)
-        .ok_or(RevisionMintError::Stalled)?;
+    let mut highest = read(counter_key).await?;
+    for bar in bars {
+        highest = highest.max(read(bar).await?);
+    }
+    let next = highest.checked_add(1).ok_or(RevisionMintError::Stalled)?;
     // A local write clock, not a record-plane advance, so it raises the store
     // directly. Rule 8's guard is the compare: a store that reports a floor
     // other than the one we asked for did not take our value.
     let stored = floors
-        .raise_sequence_floor(mint_key, next)
+        .raise_sequence_floor(counter_key, next)
         .await
         .map_err(RevisionMintError::Store)?;
     if stored != next {

@@ -3759,6 +3759,9 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Err(PublishError::SequenceExhausted) => {
                 "no sequence above the durable floor (never published)".to_owned()
             }
+            Err(PublishError::MarkUnrecorded(_)) => {
+                "durable mark write failed (never published)".to_owned()
+            }
             // A no-renewal (comfortably ahead) or a clean republish is not a
             // failure — nothing to surface.
             Ok(Some(PublishOutcome::Published { .. })) | Ok(None) => continue,
@@ -5330,8 +5333,9 @@ where {
     /// comes from the login secret alone, and only a load that finds neither a
     /// record nor a durable mark mints one. A device that holds a mark reaches
     /// that verdict from its own store and spends no network at all
-    /// ([`holds_a_bin_index_mark`]) — including a device whose own attempt
-    /// failed behind the revision it minted, which the mark keeps fail-closed.
+    /// ([`holds_a_bin_index_mark`]) — including a device whose own PUT left the
+    /// engine and can have landed, which the mark keeps fail-closed. An attempt
+    /// that failed ahead of its PUT leaves no mark, so the next start retries.
     async fn publish_genesis_bin_index(&self, api: &ApiClient<T::Http, T::CredentialStore>) {
         let Some(session) = self.session.as_ref() else {
             return;

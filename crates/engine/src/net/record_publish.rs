@@ -16,7 +16,9 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use super::author::AuthoredHead;
-use super::publish::{EpochBar, PublishError, PublishReceipt, PublishRequest, publish};
+use super::publish::{
+    EpochBar, PublishError, PublishReceipt, PublishRequest, PutMark, publish_marked,
+};
 use crate::api::{ApiClient, ApiError};
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::root_block_cid;
@@ -230,6 +232,26 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
+    publish_record_marked(transport, api, floors, scheduler, profile, request, None).await
+}
+
+/// [`publish_record`], raising `mark` just before the PUT ([`PutMark`]).
+pub(crate) async fn publish_record_marked<T, H, C, F, Sch>(
+    transport: &T,
+    api: &ApiClient<H, C>,
+    floors: &F,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    request: &RecordPublishRequest<'_>,
+    mark: Option<PutMark<'_>>,
+) -> Result<PublishReceipt, RecordPublishError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
     let uploaded = api
         .upload(&request.head.cid, &request.head.block)
         .await
@@ -241,7 +263,7 @@ where
         });
     }
 
-    publish(
+    publish_marked(
         transport,
         api,
         floors,
@@ -255,6 +277,7 @@ where
             min_current_sequence: request.min_current_sequence,
             epoch_bar: request.head.epoch_bar,
         },
+        mark,
     )
     .await
     .map_err(RecordPublishError::Publish)

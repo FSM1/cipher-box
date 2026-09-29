@@ -190,6 +190,20 @@ pub enum PublishError {
     },
     /// The durable floor sits at `u64::MAX`, so no sequence above it exists.
     SequenceExhausted,
+    /// The durable mark the caller asked to raise ahead of the PUT could not
+    /// be written, so nothing was PUT.
+    MarkUnrecorded(SeamError),
+}
+
+/// A durable mark raised just before the record PUT leaves the engine, so it
+/// marks exactly the attempts whose PUT can have landed. A monotonic-max raise
+/// in the sequence namespace, like every floor.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PutMark<'a> {
+    /// The floor-store key the mark lives at.
+    pub(crate) key: &'a [u8],
+    /// The value it is raised to.
+    pub(crate) value: u64,
 }
 
 /// One record the pipeline is about to sign: the name it publishes under, its
@@ -261,6 +275,7 @@ where
             // The pointer plane binds no scope read epoch.
             epoch_bar: None,
         },
+        None,
     )
     .await
 }
@@ -274,6 +289,26 @@ pub async fn publish<T, H, C, F, Sch>(
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     request: &PublishRequest<'_>,
+) -> Result<PublishReceipt, PublishError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    publish_marked(transport, api, floors, scheduler, profile, request, None).await
+}
+
+/// [`publish`], raising `mark` just before the PUT.
+pub(crate) async fn publish_marked<T, H, C, F, Sch>(
+    transport: &T,
+    api: &ApiClient<H, C>,
+    floors: &F,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    request: &PublishRequest<'_>,
+    mark: Option<PutMark<'_>>,
 ) -> Result<PublishReceipt, PublishError>
 where
     T: RecordTransport + Clone + 'static,
@@ -302,6 +337,7 @@ where
             min_current_sequence: request.min_current_sequence,
             epoch_bar: request.epoch_bar,
         },
+        mark,
     )
     .await
 }
@@ -313,6 +349,7 @@ async fn run<T, H, C, F, Sch>(
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     request: Publishable<'_>,
+    mark: Option<PutMark<'_>>,
 ) -> Result<PublishReceipt, PublishError>
 where
     T: RecordTransport + Clone + 'static,
@@ -368,6 +405,13 @@ where
             size: record_bytes.len(),
             limit: MAX_RECORD_BYTES,
         });
+    }
+
+    if let Some(mark) = mark {
+        floors
+            .raise_sequence_floor(mark.key, mark.value)
+            .await
+            .map_err(PublishError::MarkUnrecorded)?;
     }
 
     // Parallel PUT: success is the first ack; the rest retry in the background.

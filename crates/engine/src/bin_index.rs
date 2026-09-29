@@ -29,9 +29,10 @@ use crate::entropy::{Entropy, EntropyError, fresh_nonce};
 use crate::gate::floor;
 use crate::gate::floor::RevisionMintError;
 use crate::net::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue, hold_if_unchanged};
-use crate::net::publish::PublishOutcome;
+use crate::net::publish::{PublishOutcome, PutMark};
 use crate::net::record_publish::{
-    PreflightError, RecordPublishError, RecordPublishRequest, preflight_bin_index, publish_record,
+    PreflightError, RecordPublishError, RecordPublishRequest, preflight_bin_index,
+    publish_record_marked,
 };
 use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
@@ -214,8 +215,17 @@ fn revision_adopted_key(name: &IpnsName) -> Vec<u8> {
     prefixed_key(b"bin-index-revision/", name)
 }
 
+/// The mark of a PUT that can have landed: raised to the body revision just
+/// before the PUT leaves the engine, and never by an attempt that failed ahead
+/// of it (blueprint/engine.md "Bin index record").
 fn revision_mint_key(name: &IpnsName) -> Vec<u8> {
     prefixed_key(b"bin-index-revision-mint/", name)
+}
+
+/// The writer's clock each seal takes its body revision from, so no two sealed
+/// bodies share one. Not a mark: it moves before anything leaves the engine.
+fn revision_seal_key(name: &IpnsName) -> Vec<u8> {
+    prefixed_key(b"bin-index-revision-seal/", name)
 }
 
 /// The bin index head block's own snapshot-cache key, kept apart from the
@@ -269,8 +279,8 @@ async fn next_revision<F: FloorStore>(
 ) -> Result<u64, BinIndexPublishError> {
     floor::mint_revision(
         floors,
-        &revision_mint_key(name),
-        &revision_adopted_key(name),
+        &revision_seal_key(name),
+        &[&revision_mint_key(name), &revision_adopted_key(name)],
     )
     .await
     .map_err(|error| match error {
@@ -290,9 +300,9 @@ async fn next_revision<F: FloorStore>(
 /// one CAS guard. Nonce reuse under one XChaCha20-Poly1305 key discloses every
 /// `heldKey` the two bodies carry.
 ///
-/// The body revision is minted here, from the durable counter; `index.revision`
-/// is not read. The entries and the preserved unknown fields are the caller's,
-/// so a rewrite re-emits a field a later build added.
+/// The body revision is minted here, from the seal counter; `index.revision` is
+/// not read. The entries and the preserved unknown fields are the caller's, so a
+/// rewrite re-emits a field a later build added.
 ///
 /// Returns the confirmed record as a [`HeldRecord`] for the session's renewal
 /// set: the record carries a client-signed 90-day EOL and the API republisher is
@@ -319,8 +329,8 @@ where
     Sch: Scheduler + Clone + 'static,
 {
     let name = &keys.name;
-    let revision = next_revision(floors, name).await?;
     let nonce = fresh_nonce(entropy).map_err(BinIndexPublishError::Entropy)?;
+    let revision = next_revision(floors, name).await?;
     let seal_key = &keys.seal_key;
     let minted = BinIndex {
         revision,
@@ -331,7 +341,8 @@ where
     let head = preflight_bin_index(seal_key.as_bytes(), block.clone())
         .map_err(BinIndexPublishError::Preflight)?;
 
-    let receipt = match publish_record(
+    let mint_key = revision_mint_key(name);
+    let receipt = match publish_record_marked(
         transport,
         api,
         floors,
@@ -344,6 +355,10 @@ where
             content_cids: Vec::new(),
             min_current_sequence: None,
         },
+        Some(PutMark {
+            key: &mint_key,
+            value: revision,
+        }),
     )
     .await
     {
@@ -545,6 +560,7 @@ mod tests {
             name.as_str().as_bytes().to_vec(),
             revision_adopted_key(&name),
             revision_mint_key(&name),
+            revision_seal_key(&name),
             bin_index_cache_key(&name),
         ];
         for (i, key) in keys.iter().enumerate() {

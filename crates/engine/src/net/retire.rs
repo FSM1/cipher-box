@@ -99,7 +99,8 @@ pub fn orphaned_head(error: &RecordPublishError) -> bool {
             | PublishError::FloorRead(_)
             | PublishError::EpochBelowFloor { .. }
             | PublishError::RecordTooLarge { .. }
-            | PublishError::SequenceExhausted => true,
+            | PublishError::SequenceExhausted
+            | PublishError::MarkUnrecorded(_) => true,
             // Nothing was ever addressed, so there is no CID to retire.
             PublishError::EmptyHeadCid | PublishError::EmptyInlineValue => false,
             // No ack is not proof nothing stored: unpinning a head a live
