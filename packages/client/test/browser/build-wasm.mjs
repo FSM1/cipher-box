@@ -2,7 +2,8 @@
 // browser suite. Runs before Playwright (see the `test:browser` script). The
 // `conformance` feature pulls in the engine test kit and the seam conformance
 // bridge (crates/wasm/src/conformance.rs); the production WASM artifact is built
-// without it and never includes these bindings.
+// without it and never includes these bindings. The `observer` feature adds the
+// session-free record read that the Node suite (`test:node`) drives.
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
@@ -18,7 +19,7 @@ run('cargo', [
   '-p',
   'cipherbox-wasm',
   '--features',
-  'conformance',
+  'conformance,observer',
   '--target',
   'wasm32-unknown-unknown',
 ]);

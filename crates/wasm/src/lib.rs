@@ -2537,11 +2537,13 @@ pub fn identity_fingerprint(identity_public_key: &[u8]) -> Result<String, JsErro
 
 /// A signed IPNS record's sequence and EOL, verified under the name it was
 /// fetched for.
+#[cfg(feature = "observer")]
 #[wasm_bindgen]
 pub struct IpnsRecordReading {
     inner: cipherbox_engine::net::eol::RecordReading,
 }
 
+#[cfg(feature = "observer")]
 #[wasm_bindgen]
 impl IpnsRecordReading {
     /// The record sequence number.
@@ -2566,6 +2568,7 @@ impl IpnsRecordReading {
 /// Reads the sequence and EOL of the signed `record` a routing endpoint
 /// returned for `ipnsName`. Throws the check name of a record that is
 /// malformed or that the name's key did not sign.
+#[cfg(feature = "observer")]
 #[wasm_bindgen(js_name = readIpnsRecord)]
 pub fn read_ipns_record(ipns_name: &str, record: &[u8]) -> Result<IpnsRecordReading, JsError> {
     cipherbox_engine::net::eol::verify_record_outside_session(ipns_name, record)

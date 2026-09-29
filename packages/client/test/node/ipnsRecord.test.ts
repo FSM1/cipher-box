@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { fromHex, openIpnsRecordReader, type IpnsRecordReader } from '../../src/index.js';
+import { recordReaderOver } from '../../src/ipnsRecord.js';
 
 const here = import.meta.dirname;
 const pkg = resolve(here, '../browser/pkg');
@@ -28,13 +29,35 @@ function kat<T>(file: string): T[] {
   return JSON.parse(readFileSync(resolve(vectors, file), 'utf8')) as T[];
 }
 
+const glueUrl = pathToFileURL(resolve(pkg, 'cipherbox_wasm.js'));
+
 let read: IpnsRecordReader;
 
 beforeAll(async () => {
-  read = await openIpnsRecordReader(
-    pathToFileURL(resolve(pkg, 'cipherbox_wasm.js')),
-    readFileSync(resolve(pkg, 'cipherbox_wasm_bg.wasm'))
-  );
+  read = await openIpnsRecordReader(glueUrl, readFileSync(resolve(pkg, 'cipherbox_wasm_bg.wasm')));
+});
+
+describe('the observer feature', () => {
+  it('puts the record read in the module built with it', async () => {
+    const glue = (await import(glueUrl.href)) as Record<string, unknown>;
+
+    expect(typeof glue.readIpnsRecord).toBe('function');
+  });
+
+  it('refuses a module with no record read by naming the feature', async () => {
+    let instantiated = false;
+    const production = {
+      default: () => {
+        instantiated = true;
+        return Promise.resolve();
+      },
+    };
+
+    await expect(recordReaderOver(production, new Uint8Array())).rejects.toThrow(
+      'the WASM module exports no readIpnsRecord: it was built with no `observer` feature'
+    );
+    expect(instantiated).toBe(false);
+  });
 });
 
 describe('the IPNS record read under Node', () => {

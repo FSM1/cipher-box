@@ -24,10 +24,13 @@ interface WasmIpnsRecordReading {
   free(): void;
 }
 
-/** The slice of the wasm-bindgen glue module this reader drives. */
-interface IpnsRecordGlue {
+/**
+ * The slice of the wasm-bindgen glue module this reader drives. Only a module
+ * built with the `observer` feature of `crates/wasm` carries `readIpnsRecord`.
+ */
+export interface IpnsRecordGlue {
   default(options: { module_or_path: BufferSource }): Promise<unknown>;
-  readIpnsRecord(ipnsName: string, record: Uint8Array): WasmIpnsRecordReading;
+  readIpnsRecord?(ipnsName: string, record: Uint8Array): WasmIpnsRecordReading;
 }
 
 /**
@@ -39,9 +42,23 @@ export async function openIpnsRecordReader(
   wasmBinary: BufferSource
 ): Promise<IpnsRecordReader> {
   const glue = (await import(/* @vite-ignore */ glueUrl.toString())) as IpnsRecordGlue;
+  return recordReaderOver(glue, wasmBinary);
+}
+
+/** The reader over a loaded glue module; refuses a module with no record read. */
+export async function recordReaderOver(
+  glue: IpnsRecordGlue,
+  wasmBinary: BufferSource
+): Promise<IpnsRecordReader> {
+  const readRecord = glue.readIpnsRecord;
+  if (typeof readRecord !== 'function') {
+    throw new Error(
+      'the WASM module exports no readIpnsRecord: it was built with no `observer` feature'
+    );
+  }
   await glue.default({ module_or_path: wasmBinary });
   return (ipnsName, record) => {
-    const reading = glue.readIpnsRecord(ipnsName, record);
+    const reading = readRecord(ipnsName, record);
     try {
       return {
         sequence: reading.sequence,

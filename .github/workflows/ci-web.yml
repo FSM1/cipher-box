@@ -112,6 +112,11 @@ jobs:
       - name: Bundle carries the fingerprinted engine artifact
         run: ls apps/web/dist/assets/cipherbox_wasm-*.js apps/web/dist/assets/cipherbox_wasm_bg-*.wasm
 
+      # The shipped module is built with no `observer` feature, so it carries
+      # no session-free record read (ADR 0057 D1).
+      - name: Production engine module carries no record read
+        run: pnpm --filter @cipherbox/client test:production-wasm
+
   # The packages/client browser suite (blueprint/testing.md law 1, "Host
   # suites"): the engine's per-seam conformance kits run against the real
   # browser seam implementations — IndexedDB, OPFS, fetch — in a real browser
