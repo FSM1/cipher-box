@@ -53,7 +53,7 @@ export function parseLedger(text: string): Ledger {
 
 export function formatLedger(ledger: Ledger): string {
   const body = ledger.lines.map((line) => {
-    if (line.kind === 'marker') return formatMarker(line.marker);
+    if (line.kind === 'marker') return markerText(line.marker);
     if (/^\d/.test(line.text) || line.text.includes('\n')) {
       throw new SoakFailure('ledger-unparsable', 'a kept line would read back as another line');
     }
@@ -63,30 +63,17 @@ export function formatLedger(ledger: Ledger): string {
 }
 
 export function appendMarker(ledger: Ledger, marker: Marker): Ledger {
-  assertWritable(marker);
+  markerText(marker);
   return { lines: [...ledger.lines, { kind: 'marker', marker }] };
 }
 
-function formatMarker(marker: Marker): string {
-  assertWritable(marker);
-  return markerLine(marker);
-}
-
-function markerLine(marker: Marker): string {
-  return `${marker.date} ${marker.cid} ${marker.sequence}`;
-}
-
-/** Refuses a marker that {@link parseLedger} would reject, before it reaches the vault. */
-function assertWritable(marker: Marker): void {
-  const parsed = parseMarkerLine(markerLine(marker));
-  if (
-    parsed === null ||
-    parsed.date !== marker.date ||
-    parsed.cid !== marker.cid ||
-    parsed.sequence !== marker.sequence
-  ) {
+/** The marker line. Refuses a marker that {@link parseLedger} would reject. */
+function markerText(marker: Marker): string {
+  const line = `${marker.date} ${marker.cid} ${marker.sequence}`;
+  if (parseMarkerLine(line) === null) {
     throw new SoakFailure('ledger-unparsable', `the marker of ${marker.date} is not writable`);
   }
+  return line;
 }
 
 function parseMarkerLine(line: string): Marker | null {

@@ -6,17 +6,13 @@
  */
 
 import { appendFile, mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isSoakReason, reasonKind, SOAK_REASONS, type FailureReason } from './reasons';
 
 /** Inside Playwright's output folder, which a run clears when it starts. */
-export const RESULTS_FILE = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  'test-results',
-  'soak-results.jsonl'
+export const RESULTS_FILE = fileURLToPath(
+  new URL('../../test-results/soak-results.jsonl', import.meta.url)
 );
 
 const DETAIL_CHARS = 300;

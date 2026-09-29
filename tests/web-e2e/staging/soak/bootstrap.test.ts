@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { archiveName, bootstrapRequested, planRun, soakFolderListed } from './bootstrap';
-import { SoakFailure } from './reasons';
 
 describe('the bootstrap decision', () => {
   it('reads SOAK_BOOTSTRAP as the workflow boolean, unset as false', () => {
@@ -52,12 +51,6 @@ describe('the bootstrap decision', () => {
   it('trusts the row wait unless the settled listing contradicts it', () => {
     expect(soakFolderListed(true, new Set(['soak']))).toBe(true);
     expect(soakFolderListed(false, new Set(['soak-archived-2026-09-29']))).toBe(false);
-    let reason = '';
-    try {
-      soakFolderListed(false, new Set(['soak']));
-    } catch (error) {
-      if (error instanceof SoakFailure) reason = error.reason;
-    }
-    expect(reason).toBe('listing-unsettled');
+    expect(() => soakFolderListed(false, new Set(['soak']))).toThrow('[listing-unsettled]');
   });
 });

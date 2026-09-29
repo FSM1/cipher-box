@@ -33,18 +33,14 @@ export async function inspectVault(files: FilesPage, role: SoakRole): Promise<Fo
   await synced(files);
   const rootNames = await files.names();
   const soakFolder = soakFolderListed(rowShown, rootNames);
+  if (!soakFolder) return { soakFolder, ledger: false, rootNames };
 
-  let ledgerFound = soakFolder;
   for (const folder of LEDGER_FOLDERS[role]) {
-    if (!ledgerFound || !(await listed(files, folder))) {
-      ledgerFound = false;
-      break;
-    }
+    if (!(await listed(files, folder))) return { soakFolder, ledger: false, rootNames };
     await files.open(folder);
     await synced(files);
   }
-  ledgerFound = ledgerFound && (await listed(files, LEDGER_FILE));
-  return { soakFolder, ledger: ledgerFound, rootNames };
+  return { soakFolder, ledger: await listed(files, LEDGER_FILE), rootNames };
 }
 
 /** Archives an existing `soak/`, then builds the folders and an empty ledger. */
