@@ -667,7 +667,7 @@ async fn next_revision<F: FloorStore>(
     floor::mint_revision(
         floors,
         &revision_mint_key(name),
-        &revision_adopted_key(name),
+        &[&revision_adopted_key(name)],
     )
     .await
     .map_err(|error| match error {
