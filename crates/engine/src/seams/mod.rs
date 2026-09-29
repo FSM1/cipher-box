@@ -62,6 +62,7 @@ use core::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeamError {
     message: String,
+    status: Option<u16>,
 }
 
 impl SeamError {
@@ -69,7 +70,23 @@ impl SeamError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            status: None,
         }
+    }
+
+    /// A seam error for an HTTP answer: the endpoint, or a hop in front of it,
+    /// answered with `status`. The engine alone classifies it
+    /// ([`crate::net::fanout`]).
+    pub fn http_status(message: impl Into<String>, status: u16) -> Self {
+        Self {
+            message: message.into(),
+            status: Some(status),
+        }
+    }
+
+    /// The HTTP status the answer carried, when the seam got an answer.
+    pub fn status(&self) -> Option<u16> {
+        self.status
     }
 
     /// The diagnostic message.

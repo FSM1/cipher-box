@@ -46,6 +46,22 @@ pub(crate) fn seam_error(value: JsValue) -> SeamError {
     SeamError::new(message.unwrap_or_else(|| "browser seam rejected".to_string()))
 }
 
+/// [`seam_error`], keeping the HTTP status a PUT rejection carries. A status
+/// that is not an integer in the HTTP range is dropped, so the engine reads an
+/// unknown outcome.
+fn put_seam_error(value: JsValue) -> SeamError {
+    let status = Reflect::get(&value, &JsValue::from_str("status"))
+        .ok()
+        .and_then(|status| status.as_f64())
+        .filter(|status| status.fract() == 0.0 && (100.0..=599.0).contains(status));
+    let error = seam_error(value);
+    match status {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some(status) => SeamError::http_status(error.message(), status as u16),
+        None => error,
+    }
+}
+
 /// `Number.MAX_SAFE_INTEGER`: the largest integer a JS number holds exactly.
 const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 
@@ -520,7 +536,7 @@ impl RecordTransport for RecordTransportAdapter {
         self.js
             .put_record(&endpoint.0, routing_key, record)
             .await
-            .map_err(seam_error)?;
+            .map_err(put_seam_error)?;
         Ok(())
     }
 }
@@ -950,6 +966,39 @@ mod tests {
             calls.get(),
             0,
             "a value JS cannot hold exactly never crosses"
+        );
+    }
+
+    /// A thrown `Error` with `status` set, as the browser record seam rejects a
+    /// PUT.
+    fn put_rejection(status: JsValue) -> JsValue {
+        let error = js_sys::Error::new("RecordTransport PUT");
+        let _ = Reflect::set(&error, &JsValue::from_str("status"), &status);
+        error.into()
+    }
+
+    /// ADR 0060 D1: the engine classifies a PUT answer by its status, so the
+    /// bridge keeps an HTTP status and drops anything else as no answer.
+    #[wasm_bindgen_test]
+    fn a_put_rejection_keeps_an_http_status_and_nothing_else() {
+        for status in [400.0, 429.0, 503.0] {
+            assert_eq!(
+                put_seam_error(put_rejection(JsValue::from_f64(status))).status(),
+                Some(status as u16),
+            );
+        }
+        for status in [
+            JsValue::from_f64(400.5),
+            JsValue::from_f64(0.0),
+            JsValue::from_f64(1000.0),
+            JsValue::from_str("400"),
+            JsValue::UNDEFINED,
+        ] {
+            assert_eq!(put_seam_error(put_rejection(status)).status(), None);
+        }
+        assert_eq!(
+            put_seam_error(js_sys::Error::new("offline").into()).status(),
+            None
         );
     }
 }

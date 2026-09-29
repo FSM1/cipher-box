@@ -152,6 +152,10 @@ pub enum PublishError {
     /// No endpoint acknowledged the record PUT (the whole endpoint set is
     /// unreachable). Nothing durable happened; the caller retries later.
     AllEndpointsFailed,
+    /// Every endpoint stated a refusal of the PUT
+    /// ([`PutOutcome::Refused`](super::fanout::PutOutcome::Refused)), so the
+    /// record did not leave through any of them.
+    AllEndpointsRefused,
     /// The durable sequence floor could not be read. A floor-read failure is a
     /// fail-closed trust event, never "no floor": publish stops rather than mint
     /// a sequence from assumed-empty state (blueprint/engine.md floor law).
@@ -422,6 +426,9 @@ where
     // Parallel PUT: success is the first ack; the rest retry in the background.
     let key = request.name.as_str();
     let fanout = fanout_put(transport, key, &record_bytes).await;
+    if fanout.all_refused {
+        return Err(PublishError::AllEndpointsRefused);
+    }
     if !fanout.any_acked() {
         return Err(PublishError::AllEndpointsFailed);
     }

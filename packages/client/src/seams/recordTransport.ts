@@ -129,7 +129,10 @@ export class FetchRecordTransport implements RecordTransportSeam {
       ...endpointPolicy(),
     });
     if (!response.ok) {
-      throw new Error(`RecordTransport PUT ${response.status} at ${endpoint}`);
+      // The engine classifies the status; the seam only reports it.
+      throw Object.assign(new Error(`RecordTransport PUT ${response.status} at ${endpoint}`), {
+        status: response.status,
+      });
     }
   }
 

@@ -9,6 +9,8 @@
 //! - `GET /vacant/routing/v1/ipns/<key>` — the answer someguy and the Kubo
 //!   gateway give for a missing name: 200 `text/plain` with a
 //!   `delegate error: routing: not found` body.
+//! - `PUT /status-<n>/routing/v1/ipns/<key>` — answers the PUT with status
+//!   `n` and stores nothing.
 //! - `GET /mixed-type/routing/v1/ipns/<key>` — a record answer whose media type
 //!   is spelled in mixed case, with a `charset` parameter.
 //! - `POST /echo` — echoes the request body and adds an `x-echo: yes`
@@ -181,6 +183,14 @@ fn handle_conn(
             )],
             b"opaque-signed-record-bytes",
         );
+    }
+
+    if let Some(status) = path
+        .strip_prefix("/status-")
+        .and_then(|rest| rest.split_once("/routing/v1/ipns/"))
+        .and_then(|(status, _)| status.parse::<u16>().ok())
+    {
+        return write_response(&mut stream, status, "Answer", &[], b"");
     }
 
     if path.starts_with("/vacant/routing/v1/ipns/") {

@@ -568,6 +568,28 @@ fn authorization(server: &MockServer) -> Option<String> {
         .map(|(_, value)| value)
 }
 
+/// The engine classifies a PUT answer by its status (ADR 0060 D1), so a
+/// rejected PUT reports the status it got, a redirect included.
+#[tokio::test]
+async fn reqwest_record_transport_reports_the_status_of_a_rejected_put() {
+    let server = MockServer::start();
+    for status in [400_u16, 429, 503, 302] {
+        let transport = ReqwestRecordTransport::new(
+            vec![format!("{}/status-{status}", server.base_url())],
+            None,
+        )
+        .expect("client builds");
+        let endpoint = transport.endpoints().remove(0);
+
+        let error = transport
+            .put_record(&endpoint, "k51-refused-name", b"opaque-record")
+            .await
+            .expect_err("a non-2xx answer is no ack");
+
+        assert_eq!(error.status(), Some(status));
+    }
+}
+
 #[tokio::test]
 async fn reqwest_record_transport_reads_a_200_text_answer_as_no_record() {
     let server = MockServer::start();

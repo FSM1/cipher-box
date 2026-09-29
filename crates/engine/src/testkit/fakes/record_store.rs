@@ -47,6 +47,9 @@ pub struct InMemoryRecordStore {
     /// Routing keys whose PUT is refused at every endpoint, so one record of a
     /// multi-record plan can fail while the rest of the plan publishes.
     put_failing_keys: Arc<Mutex<HashSet<String>>>,
+    /// Routing keys whose PUT an endpoint answers with an HTTP status and does
+    /// not store, keyed by routing key and endpoint.
+    put_refusals: Arc<Mutex<HashMap<(String, EndpointId), u16>>>,
     /// Routing keys whose GET is refused at every endpoint, so one node of a
     /// tree can be unresolvable while the rest of it reads normally.
     get_failing_keys: Arc<Mutex<HashSet<String>>>,
@@ -85,6 +88,7 @@ impl InMemoryRecordStore {
             failing: Arc::new(Mutex::new(HashSet::new())),
             put_failing: Arc::new(Mutex::new(HashSet::new())),
             put_failing_keys: Arc::new(Mutex::new(HashSet::new())),
+            put_refusals: Arc::default(),
             get_failing_keys: Arc::new(Mutex::new(HashSet::new())),
             gets: Arc::new(Mutex::new(HashMap::new())),
             deferred: Arc::new(Mutex::new(HashMap::new())),
@@ -221,8 +225,21 @@ impl InMemoryRecordStore {
             .insert(routing_key.to_owned());
     }
 
+    /// Answer every PUT under `routing_key` at `endpoint` with `status`, and
+    /// store nothing, until [`heal_put_for`](Self::heal_put_for) clears it.
+    pub fn answer_put_for_at(&self, endpoint: &EndpointId, routing_key: &str, status: u16) {
+        self.put_refusals
+            .lock()
+            .expect("lock")
+            .insert((routing_key.to_owned(), endpoint.clone()), status);
+    }
+
     /// Restore `routing_key`'s PUT path.
     pub fn heal_put_for(&self, routing_key: &str) {
+        self.put_refusals
+            .lock()
+            .expect("lock")
+            .retain(|(key, _), _| key != routing_key);
         self.put_failing_keys
             .lock()
             .expect("lock")
@@ -407,6 +424,18 @@ impl RecordTransport for InMemoryRecordStore {
         }
         if self.put_failing_key(routing_key) {
             return Err(SeamError::new(format!("put refused for {routing_key}")));
+        }
+        let answer = self
+            .put_refusals
+            .lock()
+            .expect("lock")
+            .get(&(routing_key.to_owned(), endpoint.clone()))
+            .copied();
+        if let Some(status) = answer {
+            return Err(SeamError::http_status(
+                format!("put answered {status} for {routing_key}"),
+                status,
+            ));
         }
         if self.dropping_puts.load(Ordering::SeqCst) {
             return Ok(());

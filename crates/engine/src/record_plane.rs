@@ -138,6 +138,21 @@ pub(crate) fn unresolved_reason(
     }
 }
 
+/// The mint counter as a mark: `None` once a stated refusal of every endpoint
+/// covers the revision it names. A refusal key the host cannot read is never
+/// read as an absent one.
+pub(crate) async fn live_mint<F: FloorStore>(
+    floors: &F,
+    minted: Option<u64>,
+    refused_key: Option<&[u8]>,
+) -> Result<Option<u64>, crate::seams::SeamError> {
+    let (Some(mint), Some(refused_key)) = (minted, refused_key) else {
+        return Ok(minted);
+    };
+    let refused = floor::sequence_floor(floors, refused_key).await?;
+    Ok(minted.filter(|_| refused.is_none_or(|refused| refused < mint)))
+}
+
 /// A durable-store key under `prefix`. Every prefix ends in `/`, so none can
 /// collide with the bare `ipnsName` the per-name sequence floor is keyed by —
 /// a name carries no `/`.
@@ -188,6 +203,10 @@ pub(crate) struct RecordPlane<'a> {
     pub adopted_key: Vec<u8>,
     /// The writer's body-revision counter, read only when nothing resolved.
     pub mint_key: Vec<u8>,
+    /// The highest revision whose PUT every endpoint refused by a stated
+    /// answer, on a plane whose mint marks the PUT (ADR 0056 D1). A mint at or
+    /// below it marks no PUT that can have landed.
+    pub refused_key: Option<Vec<u8>>,
     pub eol: EolRule,
 }
 
@@ -322,6 +341,9 @@ where
             floor::sequence_floor(floors, &plane.mint_key).await,
             floor::sequence_floor(floors, &plane.adopted_key).await,
         ) else {
+            return Err(DefaultsReason::FloorUnreadable);
+        };
+        let Ok(minted) = live_mint(floors, minted, plane.refused_key.as_deref()).await else {
             return Err(DefaultsReason::FloorUnreadable);
         };
         return Err(unresolved_reason(durable, minted, adopted));

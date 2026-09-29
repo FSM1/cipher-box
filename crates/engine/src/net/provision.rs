@@ -50,6 +50,7 @@ fn publish_verdict(error: PublishError) -> WritePublishError {
         | PublishError::RecordTooLarge { .. }
         | PublishError::SequenceExhausted => WritePublishError::Rejected,
         PublishError::AllEndpointsFailed
+        | PublishError::AllEndpointsRefused
         | PublishError::FloorRead(_)
         | PublishError::MarkUnrecorded(_) => WritePublishError::NotLanded,
     }

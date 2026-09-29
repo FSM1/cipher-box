@@ -190,10 +190,11 @@ impl RecordTransport for ReqwestRecordTransport {
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(SeamError::new(format!(
-                "record_transport put: status {}",
-                response.status().as_u16()
-            )))
+            let status = response.status().as_u16();
+            Err(SeamError::http_status(
+                format!("record_transport put: status {status}"),
+                status,
+            ))
         }
     }
 }

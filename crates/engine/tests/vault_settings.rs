@@ -463,6 +463,50 @@ fn a_settings_publish_that_never_confirmed_is_still_a_mark_of_a_choice() {
     );
 }
 
+/// ADR 0034 D5 holds beside ADR 0060: the settings mint is raised before the
+/// seal, so a PUT that every endpoint refused by a stated answer still leaves
+/// the mark of a placement choice.
+#[test]
+fn a_settings_put_every_endpoint_refused_is_still_a_mark_of_a_choice() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let name = settings_name(&SECRET);
+    for endpoint in device.record_store.endpoints() {
+        device
+            .record_store
+            .answer_put_for_at(&endpoint, name.as_str(), 400);
+    }
+    serve_http(&device, &blocks, 4);
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    assert!(
+        block_on(publish_settings(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &device.snapshot_cache,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &mut SeededEntropy::new(6),
+            &OrphanHeads::default(),
+            &SECRET,
+            &external_only(),
+        ))
+        .is_err(),
+        "every endpoint refused the record",
+    );
+
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Defaults(DefaultsReason::StrandedMint),
+        "the refusal does not clear a settings mark",
+    );
+}
+
 /// A transport whose GET never settles — the shape of an unresolvable name.
 fn never_answers() -> InMemoryRecordStore {
     let store = InMemoryRecordStore::new(vec![EndpointId::new("fake:hangs")]);

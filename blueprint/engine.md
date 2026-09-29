@@ -71,15 +71,15 @@ The constructor takes the seam set whole; the six load-bearing seams are fixed
 by the decomposition (FSM1/cipher-box-next#28 D3) and the rotation design's mandatory-seam rule
 (FSM1/cipher-box-next#26 D8). Traits move opaque bytes and events — no seam holds logic.
 
-| Seam                | Contract                                                                                                  | Web (`packages/client`)                      | Desktop       |
-| ------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------- |
-| **FloorStore**      | Durable monotonic-max per-scope epoch floors and per-name sequence floors; regression rejects fail-closed | IndexedDB                                    | Local journal |
-| **RecordTransport** | Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes against a configured endpoint set    | `fetch`                                      | `reqwest`     |
-| **Http**            | Plain HTTP for the API client, trustless gateway, and BYO providers                                       | `fetch`                                      | `reqwest`     |
-| **Scheduler**       | Timers, background task execution, wall clock (ADR 0044)                                                  | Worker timers                                | Tokio         |
-| **StagingStore**    | Durable op queue + staged upload bytes (storage-policy budget)                                            | IndexedDB + OPFS                             | Local journal |
-| **SnapshotCache**   | Durable last-known-good record/metadata cache backing cache-first reads                                   | IndexedDB                                    | Local store   |
-| **CredentialStore** | Refresh-token persistence                                                                                 | No-op (HTTP-only cookie rides the Http seam) | OS keychain   |
+| Seam                | Contract                                                                                                                                       | Web (`packages/client`)                      | Desktop       |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------- |
+| **FloorStore**      | Durable monotonic-max per-scope epoch floors and per-name sequence floors; regression rejects fail-closed                                      | IndexedDB                                    | Local journal |
+| **RecordTransport** | Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes against a configured endpoint set; a rejected PUT reports its HTTP status | `fetch`                                      | `reqwest`     |
+| **Http**            | Plain HTTP for the API client, trustless gateway, and BYO providers                                                                            | `fetch`                                      | `reqwest`     |
+| **Scheduler**       | Timers, background task execution, wall clock (ADR 0044)                                                                                       | Worker timers                                | Tokio         |
+| **StagingStore**    | Durable op queue + staged upload bytes (storage-policy budget)                                                                                 | IndexedDB + OPFS                             | Local journal |
+| **SnapshotCache**   | Durable last-known-good record/metadata cache backing cache-first reads                                                                        | IndexedDB                                    | Local store   |
+| **CredentialStore** | Refresh-token persistence                                                                                                                      | No-op (HTTP-only cookie rides the Http seam) | OS keychain   |
 
 Notes:
 
@@ -118,7 +118,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   signs (first publish embeds sequence 1; CAS publishes embed the exact
   expected sequence), then parallel PUT to all endpoints; success = any ack,
   remaining PUTs retry in the background; confirm by re-resolve; a lost race
-  re-resolves and rebases (FSM1/cipher-box-next#23 D3/D4).
+  re-resolves and rebases (FSM1/cipher-box-next#23 D3/D4). A 4xx answer to a PUT
+  is a stated refusal, and any other answer that is not 2xx, or no answer, is an
+  unknown outcome; the engine classifies the status the transport reports
+  (ADR 0060 D1). A publish that every endpoint refused fails as refused, apart
+  from one that no endpoint acked (ADR 0060 D2).
 - **TTL/EOL**: every record sets TTL explicitly from the sync timing profile
   (production 1 minute; dev/CI 1–5 s; never a library default) and a 90-day
   client-signed EOL; TTL and EOL are independent (FSM1/cipher-box-next#33 D3, FSM1/cipher-box-next#24 D1).
@@ -414,8 +418,10 @@ and that includes when the mint counter moves and where the revision comes from.
   the body revision after register-first, the floor read, the signature and the
   size check, directly before the PUT. A mark the store does not take stops the
   publish, and no PUT goes out. So a failure before the PUT leaves no mark, and
-  the next start publishes the genesis record again; a PUT that went out keeps
-  its mark whatever its outcome. The
+  the next start publishes the genesis record again. A PUT that every endpoint
+  refused raises a refusal counter to its revision, and the mint counter is a
+  mark only while it is above the refusal counter (ADR 0060 D3); a PUT with any
+  other outcome keeps its mark. The
   body revision comes from a separate owner-local seal counter, raised before
   each seal: one above the seal counter, the mint counter and the adopted
   revision, so no two sealed bodies share a revision. The seal counter is not a
@@ -470,7 +476,8 @@ and that includes when the mint counter moves and where the revision comes from.
 - **A mint counter with no adoption beside it is its own verdict.** The two
   adoption marks — the per-name sequence floor and the adopted body revision —
   prove a record this device took, so an absent record is withheld and the
-  rewrite refuses. The mint counter alone proves a PUT this device sent. That
+  rewrite refuses. The mint counter alone, above the refusal counter, proves a
+  PUT this device sent that no endpoint refused by a stated answer. That
   PUT can have landed and then been withheld, or confirmed and then lost its
   floor write, which is why the load still refuses. It can also have never
   landed, which is why it refuses under its own reason, `StrandedMint`. The
