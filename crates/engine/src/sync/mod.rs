@@ -46,7 +46,7 @@ pub use doomed::{
 };
 pub use drain::{
     DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, QueueHold, QueueHoldReason,
-    owner_scoped_key, owner_tag,
+    UNATTRIBUTED_BUDGET, owner_scoped_key, owner_tag,
 };
 pub use model::{Link, NodeMeta, Snapshot, case_fold, collation_key, suffix_name};
 pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, ScopeCrossing, StagedContent};

@@ -645,7 +645,7 @@ const ATTEMPT_BUDGET: u32 = 5;
 /// two and a half minutes. It is finite because strict FIFO means the op that
 /// keeps halting holds every op behind it, and a queue with no exit is the
 /// silent permanent stall the valve exists to remove.
-const UNATTRIBUTED_BUDGET: u32 = 120;
+pub const UNATTRIBUTED_BUDGET: u32 = 120;
 
 /// The staging key holding per-op drain charges: a one-byte format tag followed
 /// by `(op_id, attempts, unattributed)` triples, big-endian and fixed-width,

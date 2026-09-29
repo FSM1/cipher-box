@@ -13337,7 +13337,8 @@ fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
 // ---------------------------------------------------------------------------
 
 /// More passes than the drain's unattributed budget.
-const PASSES_PAST_THE_OUTAGE_BUDGET: usize = 130;
+const PASSES_PAST_THE_OUTAGE_BUDGET: usize =
+    cipherbox_engine::sync::UNATTRIBUTED_BUDGET as usize + 10;
 
 /// The `External` settings the stranded save names, and the retry that lands.
 fn external_settings() -> VaultSettings {
