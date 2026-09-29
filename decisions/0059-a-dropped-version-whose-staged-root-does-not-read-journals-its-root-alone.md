@@ -11,7 +11,7 @@
   it charged), [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md) (durable
   staging state reads the previous release), the `blueprint/engine.md` "Resolve/publish pipeline"
   section ("Retirement" bullet) and "Content plane" section ("Referenced equals kept" bullet)
-- **Implemented by:** not landed
+- **Implemented by:** FSM1/cipher-box#2105
 - **Amends:** ADR 0054 D1
 
 ## Context

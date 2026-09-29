@@ -874,13 +874,13 @@ pub enum ReclaimStallReason {
     TargetStillLive,
     /// The doomed root itself could not be expanded — no source served the block,
     /// or the manifest is not this version's — so what the retire would name is
-    /// unknown. The figure falls back to the ceiling the prune quoted.
+    /// unknown. The figure falls back to the figure the entry quoted.
     TargetUnexpandable,
 }
 
 /// One owed entry's whole expansion: the target set it carries, or else its
 /// own fetched root block. `None` leaves the entry owed for the figure the
-/// prune quoted: a root no source served, or a manifest that is not this
+/// entry quoted: a root no source served, or a manifest that is not this
 /// version's.
 async fn expand_owed<H: Http>(entry: &OwedRetire, source: &RootSource<'_, H>) -> Option<Expansion> {
     if let DebtOrigin::DroppedVersion(targets) = &entry.origin {

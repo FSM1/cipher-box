@@ -365,31 +365,28 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
             .filter(|block| verify_cid(root, block).is_ok())
             .and_then(|block| decode_root(block).ok());
         let target = encode_content_cid_str(root);
-        let debt =
-            match (block, &manifest) {
-                (Some(block), Some(_)) => expand_staged_root(&target, block, self.profile)
-                    .ok()
-                    .map(|expansion| OwedRetire {
-                        origin: DebtOrigin::DroppedVersion(expansion.targets),
-                        ..OwedRetire::whole(op.target.0, target, expansion.pinned_bytes)
-                    }),
-                _ => {
-                    let size = op
-                        .staged_content()
-                        .map_or(0, |content| content.plaintext_size);
-                    Some(OwedRetire {
-                        origin: DebtOrigin::DroppedRoot,
-                        ..OwedRetire::whole(op.target.0, target, size)
-                    })
+        let expansion = block
+            .filter(|_| manifest.is_some())
+            .and_then(|block| expand_staged_root(&target, block, self.profile).ok());
+        let debt = match expansion {
+            Some(expansion) => OwedRetire {
+                origin: DebtOrigin::DroppedVersion(expansion.targets),
+                ..OwedRetire::whole(op.target.0, target, expansion.pinned_bytes)
+            },
+            None => {
+                let size = op
+                    .staged_content()
+                    .map_or(0, |content| content.plaintext_size);
+                OwedRetire {
+                    origin: DebtOrigin::DroppedRoot,
+                    ..OwedRetire::whole(op.target.0, target, size)
                 }
-            };
-        let journaled = match debt {
-            Some(debt) => StagingRetireLedger::new(self.store, self.seal)
-                .owe(&self.reader.owner_tag(), &[debt])
-                .await
-                .is_ok(),
-            None => false,
+            }
         };
+        let journaled = StagingRetireLedger::new(self.store, self.seal)
+            .owe(&self.reader.owner_tag(), &[debt])
+            .await
+            .is_ok();
         if !journaled {
             let _ = self.events.unbounded_send(Event::RegistryDebtUnjournaled);
         }
@@ -2068,10 +2065,10 @@ mod tests {
         });
     }
 
-    /// A trimmed version whose staged root is gone journals the root alone, at
-    /// the op record's size (ADR 0059 D1).
+    /// A preserved version whose staged root is gone journals the root alone,
+    /// at the op record's size (ADR 0059 D1).
     #[test]
-    fn a_trimmed_version_whose_root_is_gone_owes_its_root_alone() {
+    fn a_preserved_version_whose_root_is_gone_owes_its_root_alone() {
         let store = InMemoryStagingStore::default();
         block_on(async {
             let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
@@ -2080,11 +2077,7 @@ mod tests {
             let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
             park(&store, &record).await;
             store.remove_staged_bytes(&root_cid).await.unwrap();
-            let expired = PreservedBounds {
-                ttl: Duration::ZERO,
-                ..bounds(ROOMY)
-            };
-            let events = reconcile(&store, expired).await;
+            let events = reconcile(&store, bounds(ROOMY)).await;
 
             assert!(events.is_empty());
             assert_eq!(
