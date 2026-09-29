@@ -87,19 +87,10 @@ bodies. A later PUT raises the mint above the refusal and is a mark again.
 6. The vault settings plane keeps its mint counter and its mark rule (ADR 0034 D5), so no PUT
    outcome clears a settings mark.
 7. `CONTEXT.md` does not change. No wire format, KDF edge or KAT vector changes.
-
-## Residuals
-
-**E1 — An endpoint can state a refusal and keep the record.** The device then publishes again
-at the same sequence and the next revision. It has no adopted record, so the kept body and the
-retry are built from the same base (the empty index, and on a drain retry the same op), and the
-retry carries each entry that the kept body carries. If the endpoint later serves the kept
-body, the confirm reads a tie at the sequence as a lost race, the mark of the retry stays, and
-the device is back in the `StrandedMint` state of today; the revision bar refuses the older
-body as a trust verdict. Does the owner accept this residual?
-
-**E2 — A process stop between the mark write and the PUT leaves a mark with no PUT.** D3 does
-not cover it. The refusal counter names a revision, so a later change can keep the signed
-bytes of the marked PUT on the device, send the same bytes again at the next start, and raise
-the refusal counter when every endpoint refuses them. The same path cannot recover the ADR
-0056 E1 device, which holds no such bytes. Does the owner want that change?
+8. A hostile or broken endpoint can state a refusal and keep the record. The device has no
+   adopted record, so the retry is built from the same base and carries every entry of the
+   kept body. If the endpoint later serves the kept body, the confirm reads a tie as a lost
+   race, and the device is in the `StrandedMint` state of today. No entry is lost. The owner
+   accepted it on 2026-09-29.
+9. A process stop between the mark write and the PUT leaves a mark with no PUT. D3 does not
+   cover it, and no change follows now. The owner accepted it on 2026-09-29.
