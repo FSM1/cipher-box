@@ -179,7 +179,9 @@ is not the contract gate.
   `apps/web` `build:wasm` makes has no `readIpnsRecord` export, and
   `openIpnsRecordReader` refuses it (ADR 0057 D1). It is the step
   `Production engine module carries no record read` in the job `Web Bundle`,
-  reported through `Web Result`.
+  reported through `Web Result`. The staging deploy runs the same suite on the
+  module that it builds, as the step
+  `Engine WASM artifact carries no record read` in the job `build-web`.
 - **Seam conformance kits.** The engine ships a reusable conformance suite
   per seam trait — FloorStore monotonicity and durability semantics,
   StagingStore ordering and orphan GC, SnapshotCache ciphertext-only-at-rest
