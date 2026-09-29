@@ -132,23 +132,34 @@ export VITE_WEB3AUTH_VERIFIER="$(gh variable get VITE_WEB3AUTH_VERIFIER)"
 `CORS_ALLOWED_ORIGINS`.
 
 Export the login secret of a stored wallet. The tool reads the key from standard
-input and prints the secret alone:
+input and prints the secret alone. Standard input is the preferred input:
 
 ```sh
 op read "op://<vault>/CipherBox Soak Owner/walletKey" \
   | pnpm --filter @cipherbox/web-e2e exec tsx tools/exportLoginSecret.ts --stdin
 ```
 
-The tool also reads the key from `SOAK_WALLET_KEY`. With neither, it mints a
-fresh wallet and prints both values once, as `walletKey=<key>` and
-`loginSecret=<secret>`:
+The tool also reads the key from `SOAK_WALLET_KEY`. Every child process of the
+shell can read that variable, so `unset SOAK_WALLET_KEY` after the run.
+
+With neither input, the tool mints a fresh wallet and prints both values once,
+as `walletKey=<key>` and `loginSecret=<secret>`. A mint prints to a terminal
+only:
 
 ```sh
 pnpm --filter @cipherbox/web-e2e exec tsx tools/exportLoginSecret.ts
 ```
 
+After a mint, put the two values in 1Password and clear the terminal
+scrollback.
+
 Use `pnpm exec`, not a package script: a script run prints a banner to
 standard output. A second export of the same wallet prints the same secret.
+
+Before the first bootstrap, check once that the web and the desktop open one
+vault (ADR 0053 residual E1). Sign in on the staging web app with the owner
+wallet and make a folder. Then start a desktop leg with the exported login
+secret and look for that folder. No tool does this comparison.
 
 ## The reset runbook
 

@@ -18,11 +18,13 @@ import type { Hex } from 'viem';
 import { generatePrivateKey } from 'viem/accounts';
 import { walletIdentity } from '../identity';
 import {
+  checkStdout,
   formatLoginSecret,
   parseInvocation,
   parseWalletKey,
   readConfig,
   renderOutput,
+  reserveStdout,
   USAGE,
   UsageError,
   WALLET_KEY_ENV,
@@ -68,15 +70,16 @@ async function exportLoginSecret(walletKey: Hex, config: ExportConfig): Promise<
   return formatLoginSecret(await coreKit._UNSAFE_exportTssKey());
 }
 
-async function main(): Promise<string | null> {
+async function main(writeSecret: (text: string) => Promise<void>): Promise<void> {
   const invocation = parseInvocation(process.argv.slice(2), process.env);
   if (invocation.kind === 'help') {
     process.stderr.write(USAGE);
-    return null;
+    return;
   }
-  if (fstatSync(process.stdout.fd).isFile()) {
-    throw new UsageError('stdout is a file; the secret goes to a terminal or a pipe only');
-  }
+  checkStdout(invocation.source, {
+    isTTY: process.stdout.isTTY === true,
+    isFile: fstatSync(process.stdout.fd).isFile(),
+  });
   const config = readConfig(process.env);
 
   let walletKey: Hex;
@@ -94,16 +97,15 @@ async function main(): Promise<string | null> {
   }
 
   const loginSecret = await exportLoginSecret(walletKey, config);
-  return renderOutput(loginSecret, invocation.source === 'mint' ? walletKey : undefined);
+  await writeSecret(
+    renderOutput(loginSecret, invocation.source === 'mint' ? walletKey : undefined)
+  );
 }
 
 // Core Kit's HTTP clients hold the event loop open, so the process exits
 // explicitly, and only after stdout has taken the write.
-main().then(
-  (output) => {
-    if (output === null) process.exit(0);
-    process.stdout.write(output, () => process.exit(0));
-  },
+main(reserveStdout(process.stdout, process.stderr)).then(
+  () => process.exit(0),
   (failure: unknown) => {
     const reason = failure instanceof Error ? failure.message : 'unknown failure';
     process.stderr.write(`export-login-secret: ${reason}\n`);

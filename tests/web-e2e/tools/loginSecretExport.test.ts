@@ -1,13 +1,29 @@
+import { Console } from 'node:console';
+import { Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
+  checkStdout,
   formatLoginSecret,
   parseInvocation,
   parseWalletKey,
   readConfig,
   renderOutput,
+  reserveStdout,
   UsageError,
   WALLET_KEY_ENV,
 } from './loginSecretExport';
+
+/** A stream that keeps what it was given. */
+function sink(): { stream: Writable; text: () => string } {
+  const chunks: string[] = [];
+  const stream = new Writable({
+    write(chunk: Buffer | string, _encoding, callback) {
+      chunks.push(chunk.toString());
+      callback();
+    },
+  });
+  return { stream, text: () => chunks.join('') };
+}
 
 // Synthetic values only: none of these is, or derives, a real account.
 const KEY = '11'.repeat(32);
@@ -135,6 +151,44 @@ describe('formatLoginSecret', () => {
   ])('refuses a %s export without repeating it', (_, exported) => {
     const failure = thrown(() => formatLoginSecret(exported));
     expect(failure.message.includes(exported), 'the refusal repeats the export').toBe(false);
+  });
+});
+
+describe('checkStdout', () => {
+  it('lets an export reach a pipe or a terminal', () => {
+    expect(() => checkStdout('stdin', { isTTY: false, isFile: false })).not.toThrow();
+    expect(() => checkStdout('env', { isTTY: true, isFile: false })).not.toThrow();
+  });
+
+  it('refuses a file for every key source', () => {
+    for (const source of ['stdin', 'env', 'mint'] as const) {
+      expect(() => checkStdout(source, { isTTY: false, isFile: true })).toThrow(UsageError);
+    }
+  });
+
+  it('lets a mint reach a terminal only, because its two labelled lines fit no pipe', () => {
+    expect(() => checkStdout('mint', { isTTY: true, isFile: false })).not.toThrow();
+    expect(() => checkStdout('mint', { isTTY: false, isFile: false })).toThrow(UsageError);
+  });
+});
+
+describe('reserveStdout', () => {
+  it('sends every later stdout write to stderr, a logger bound before it included', async () => {
+    const out = sink();
+    const err = sink();
+    const logger = new Console({ stdout: out.stream, stderr: err.stream });
+    // A logging library binds the console method when it loads, before any
+    // redirect of the method itself could run.
+    const boundAtLoad = logger.info.bind(logger);
+
+    const writeSecret = reserveStdout(out.stream, err.stream);
+    boundAtLoad('Response: 502 Bad Gateway');
+    logger.log('a late line');
+    logger.debug('a debug line');
+    await writeSecret(`${SECRET}\n`);
+
+    expect(out.text()).toBe(`${SECRET}\n`);
+    expect(err.text()).toBe('Response: 502 Bad Gateway\na late line\na debug line\n');
   });
 });
 

@@ -1,9 +1,10 @@
 /**
  * The offline half of the soak login-secret export (ADR 0053 D2): argument and
- * environment parsing, the wallet-key check, and the output shape. No refusal
- * here repeats its input, because the input is key material.
+ * environment parsing, the wallet-key check, and the output. No refusal here
+ * repeats its input, because the input is key material.
  */
 
+import type { Writable } from 'node:stream';
 import type { Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
@@ -64,13 +65,40 @@ export function readConfig(env: Env): ExportConfig {
   };
 }
 
+/**
+ * Refuses a file on stdout, and a mint anywhere but a terminal: its two
+ * labelled lines are for the copy into 1Password, and fit no pipe.
+ */
+export function checkStdout(source: KeySource, stdout: { isTTY: boolean; isFile: boolean }) {
+  if (stdout.isFile) {
+    throw new UsageError('stdout is a file; the secret goes to a terminal or a pipe only');
+  }
+  if (source === 'mint' && !stdout.isTTY) {
+    throw new UsageError('a mint prints two values for 1Password, so stdout must be a terminal');
+  }
+}
+
+/**
+ * Routes every later write to `stdout` onto `stderr`, and returns the one writer
+ * that still reaches `stdout`. The swap is on the stream, not on `console`,
+ * because a logging library binds the console methods when it loads, and
+ * `@toruslabs/http-helpers` logs each failed request at INFO, which Node prints
+ * to stdout. A pipe into `gh secret set` would store those lines.
+ */
+export function reserveStdout(stdout: Writable, stderr: Writable): (text: string) => Promise<void> {
+  const write = stdout.write.bind(stdout);
+  stdout.write = stderr.write.bind(stderr);
+  return (text) =>
+    new Promise((resolve, reject) => {
+      write(text, (error) => (error ? reject(error) : resolve()));
+    });
+}
+
 /** A secp256k1 private key as `0x` and 64 lowercase hex characters. */
 export function parseWalletKey(raw: string): Hex {
-  const trimmed = raw.trim();
-  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(trimmed)) {
-    throw new UsageError('the wallet key is not 32 bytes of hex');
-  }
-  const key = `0x${trimmed.replace(/^0x/, '').toLowerCase()}` as Hex;
+  const hex = hex32(raw.trim());
+  if (hex === null) throw new UsageError('the wallet key is not 32 bytes of hex');
+  const key = `0x${hex}` as Hex;
   try {
     privateKeyToAccount(key);
   } catch {
@@ -82,10 +110,14 @@ export function parseWalletKey(raw: string): Hex {
 
 /** Core Kit's export as the 64 lowercase hex characters the soak stores. */
 export function formatLoginSecret(exported: string): string {
-  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(exported)) {
-    throw new Error('the Core Kit export is not a 32-byte hex scalar');
-  }
-  return exported.replace(/^0x/, '').toLowerCase();
+  const hex = hex32(exported);
+  if (hex === null) throw new Error('the Core Kit export is not a 32-byte hex scalar');
+  return hex;
+}
+
+/** 32 bytes of hex, `0x` optional, as 64 lowercase characters; `null` if not. */
+function hex32(value: string): string | null {
+  return /^(0x)?[0-9a-fA-F]{64}$/.test(value) ? value.replace(/^0x/, '').toLowerCase() : null;
 }
 
 /**
