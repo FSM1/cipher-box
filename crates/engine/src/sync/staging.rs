@@ -1169,7 +1169,7 @@ mod tests {
     use crate::sync::op::{NewNode, StagedContent};
     use crate::sync::record::{RecordClass, RecordReader};
     use crate::testkit::fakes::InMemoryStagingStore;
-    use crate::testkit::{SeededEntropy, block_on, frame_version};
+    use crate::testkit::{SeededEntropy, block_on, frame_version, frame_version_with};
     use cipherbox_core::content::{compute_cid, decode_content_cid_str};
     use cipherbox_core::suite::aead::KEY_LEN;
     use cipherbox_core::suite::x25519::X25519Secret;
@@ -2079,6 +2079,72 @@ mod tests {
             let events = reconcile(&store, bounds(ROOMY)).await;
 
             assert!(events.is_empty());
+            assert_eq!(
+                owed_by_owner(&store).await,
+                vec![OwedRetire {
+                    origin: DebtOrigin::DroppedRoot,
+                    ..OwedRetire::whole(id(1).0, encode_content_cid_str(&root_cid), size)
+                }]
+            );
+        });
+    }
+
+    /// The same debt when the trim's age bound is what drops the entry.
+    #[test]
+    fn an_expired_preserved_version_whose_root_is_gone_owes_its_root_alone() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let (root_cid, size) = (staged.root_cid.clone(), staged.plaintext_size);
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            park(&store, &record).await;
+            store.remove_staged_bytes(&root_cid).await.unwrap();
+            let expired = PreservedBounds {
+                ttl: Duration::ZERO,
+                ..bounds(ROOMY)
+            };
+            let events = reconcile(&store, expired).await;
+
+            assert!(events.is_empty());
+            assert_eq!(
+                owed_by_owner(&store).await,
+                vec![OwedRetire {
+                    origin: DebtOrigin::DroppedRoot,
+                    ..OwedRetire::whole(id(1).0, encode_content_cid_str(&root_cid), size)
+                }]
+            );
+        });
+    }
+
+    /// A root that verifies and decodes but does not expand under this build's
+    /// profile gives no target set, so the drop journals the root alone.
+    #[test]
+    fn a_trimmed_version_whose_root_does_not_expand_owes_its_root_alone() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let plaintext = b"forty bytes of content ------------------";
+            let (blocks, root_block, content) =
+                frame_version_with(plaintext, [9; KEY_LEN], 1, ContentProfile::PRODUCTION);
+            let staged = StagedContent {
+                root_cid: content.content_cid().to_vec(),
+                plaintext_size: content.size(),
+                sealed_content_key: b"sealed-key-blob".to_vec(),
+                scope: NodeId([0; 16]),
+                epoch: 1,
+            };
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let (root_cid, size) = (staged.root_cid.clone(), staged.plaintext_size);
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            park(&store, &record).await;
+            let expired = PreservedBounds {
+                ttl: Duration::ZERO,
+                ..bounds(ROOMY)
+            };
+            let events = reconcile(&store, expired).await;
+
+            assert!(kept_records(&store).await.is_empty());
+            assert!(events.is_empty(), "the debt journals: {events:?}");
             assert_eq!(
                 owed_by_owner(&store).await,
                 vec![OwedRetire {

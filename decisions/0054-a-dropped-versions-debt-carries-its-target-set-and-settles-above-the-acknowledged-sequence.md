@@ -90,5 +90,5 @@ and no mark exists for the node; any other read waits.
 **E1 — Should a version's rows be journaled when they are charged?**
 `Preservation::ContentGone` has no manifest to read, so its rows stay charged. FSM1/cipher-box#2065
 names the charge-time journal, at one ledger write per version upload, as the candidate. The
-owner decides whether it lands. Amended by ADR 0059 on 2026-09-29: closed, the charge-time journal is
+owner decides whether it lands. Amended by ADR 0059 D1 on 2026-09-29: closed, the charge-time journal is
 not adopted.
