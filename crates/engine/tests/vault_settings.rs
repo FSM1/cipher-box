@@ -2450,9 +2450,9 @@ fn open_and_drop_a_write(engine: &mut Engine<FakeSeamTypes>) -> Result<(), Engin
     Ok(())
 }
 
-/// The mint counter rises before the head upload because the API answers that
-/// upload: a refusal it gives leaves the counter as this device's only mark,
-/// and the next start refuses the write rather than assume the hosted default.
+/// A head upload the API refuses leaves the mint counter as this device's only
+/// mark, and the next start refuses the write rather than assume the hosted
+/// default.
 #[test]
 fn a_head_upload_the_api_refuses_leaves_the_mint_and_the_next_start_refuses_the_write() {
     let world = FakeWorld::new();

@@ -13283,9 +13283,9 @@ fn a_deterministic_placement_refusal_holds_the_queued_write_rather_than_charging
 }
 
 /// The other half of the same fork: a settings load that degraded has no member
-/// action as its exit — a later tick may resolve the record — so the pass
-/// retries the head uncharged and takes no hold, which a host would render as
-/// "edit your settings" over a condition editing them does not clear.
+/// action as its exit — a later tick may resolve the record — so within these
+/// passes the head stays queued with no hold and no dead letter. A hold would
+/// render as "edit your settings" over a condition editing them does not clear.
 #[test]
 fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
     let world = FakeWorld::new();
@@ -13310,7 +13310,7 @@ fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
     assert!(
         view.dead_letters.is_empty(),
-        "an outage this pass could not resolve never spends the budget"
+        "within these passes the outage sends nothing to a dead letter"
     );
     assert_eq!(
         settings_hold(&view),

@@ -31,7 +31,7 @@ describe('the queue hold notice', () => {
     expect(notice.textContent).toContain('your settings send bytes to your own storage provider');
   });
 
-  it('tells the member that a stranded settings save is left by saving again', () => {
+  it('tells the member to enter the settings again after a stranded save', () => {
     render(
       <QueueHoldNotice
         view={listing({
@@ -42,7 +42,9 @@ describe('the queue hold notice', () => {
 
     const notice = screen.getByTestId('queue-hold-notice');
     expect(notice.textContent).toContain('"child-0" waits on your settings');
-    expect(notice.textContent).toContain('save your settings again');
+    expect(notice.textContent).toContain(
+      'enter your settings again, with your storage provider and its access token, and save them'
+    );
   });
 
   it('names why the bin index did not resolve, and clears when the hold clears', () => {

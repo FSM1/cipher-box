@@ -13,7 +13,7 @@ const SETTINGS_CAUSES: Record<SettingsHoldCheck, string> = {
   'byo-provider-missing': 'your settings send bytes to your own storage provider and name none',
   'byo-no-external-ingress': 'the storage provider your settings name cannot take uploads',
   'settings-unavailable':
-    'the last settings save on this device did not finish, so save your settings again',
+    'the last settings save on this device did not finish. enter your settings again, with your storage provider and its access token, and save them',
 };
 
 /** Why the bin index did not resolve. Every one of these can clear on its own. */

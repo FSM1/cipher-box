@@ -432,9 +432,10 @@ impl PlacementRefusal {
 }
 
 /// What a settings-refused hold is waiting on the member to change: their BYO
-/// provider config, or the placement their settings name. Both are reached
-/// before any request is built and both repeat verbatim until the settings
-/// themselves change, which is what makes one hold rather than an attempt.
+/// provider config, the placement their settings name, or a save this device
+/// minted that did not land. Each is reached before any request is built and
+/// repeats verbatim until the settings change or a settings record resolves,
+/// which is what makes one hold rather than an attempt.
 /// Built through [`PlacementRefusal::holds`] and
 /// [`ProviderError::is_deterministic`], never by hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -442,7 +443,8 @@ pub enum SettingsRefusal {
     /// [`validate_byo_config`](crate::content::validate_byo_config) refused the
     /// member's own provider config.
     Byo(ProviderError),
-    /// The settings name a mode no byte destination follows from.
+    /// No byte destination follows from the settings, or from a save this
+    /// device minted that did not land.
     Placement(PlacementRefusal),
 }
 
@@ -1685,8 +1687,7 @@ mod tests {
             assert!(names.insert(refusal.check()), "{}", refusal.check());
             assert_eq!(SettingsRefusal::Placement(refusal).check(), refusal.check());
         }
-        // Every other degraded load can clear on a later tick, so holding on it
-        // would park the queue head on a cause no member action reaches.
+        // Every other degraded load takes no hold.
         for reason in [
             DefaultsReason::UnprovenFirstRun,
             DefaultsReason::Suppressed,
