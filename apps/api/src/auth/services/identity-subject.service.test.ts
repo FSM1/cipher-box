@@ -10,7 +10,6 @@ interface Row {
   id: string;
   kind: IdentitySubjectKind;
   identifierHash: string;
-  identifierDisplay: string | null;
   lastUsedAt: Date | null;
 }
 
@@ -85,7 +84,7 @@ describe('IdentitySubjectService', () => {
   it('mints a subject on first sight and returns the inserted id', async () => {
     const repository = new FakeSubjectRepository();
 
-    const id = await subjectService(repository).resolve('google', 'google-subject', 'me***@x.com');
+    const id = await subjectService(repository).resolve('google', 'google-subject');
 
     expect(repository.rows).toHaveLength(1);
     expect(id).toBe(repository.rows[0].id);
@@ -94,7 +93,7 @@ describe('IdentitySubjectService', () => {
   it('stores the identifier only as its hash, never in plaintext', async () => {
     const repository = new FakeSubjectRepository();
 
-    await subjectService(repository).resolve('email', 'member@example.com', 'me***@example.com');
+    await subjectService(repository).resolve('email', 'member@example.com');
 
     expect(repository.rows[0].identifierHash).toBe(
       new IdentityService().hashIdentifier('member@example.com')
@@ -102,12 +101,28 @@ describe('IdentitySubjectService', () => {
     expect(JSON.stringify(repository.rows)).not.toContain('member@example.com');
   });
 
+  it('keeps no display form of the identifier beside its hash', async () => {
+    const repository = new FakeSubjectRepository();
+
+    await subjectService(repository).resolve(
+      'wallet',
+      '0x52908400098527886E0F7030069857D2E4169EE7'
+    );
+
+    expect(Object.keys(repository.rows[0]).sort()).toEqual([
+      'id',
+      'identifierHash',
+      'kind',
+      'lastUsedAt',
+    ]);
+  });
+
   it('returns the standing subject for an identity already seen', async () => {
     const repository = new FakeSubjectRepository();
     const service = subjectService(repository);
 
-    const first = await service.resolve('wallet', '0xabc', '0xab***');
-    const second = await service.resolve('wallet', '0xabc', '0xab***');
+    const first = await service.resolve('wallet', '0xabc');
+    const second = await service.resolve('wallet', '0xabc');
 
     expect(second).toBe(first);
     expect(repository.rows).toHaveLength(1);
@@ -117,8 +132,8 @@ describe('IdentitySubjectService', () => {
     const repository = new FakeSubjectRepository();
     const service = subjectService(repository);
 
-    const viaEmail = await service.resolve('email', 'member@example.com', 'me***@example.com');
-    const viaGoogle = await service.resolve('google', 'member@example.com', 'me***@example.com');
+    const viaEmail = await service.resolve('email', 'member@example.com');
+    const viaGoogle = await service.resolve('google', 'member@example.com');
 
     expect(viaGoogle).not.toBe(viaEmail);
     expect(repository.rows).toHaveLength(2);
@@ -131,7 +146,7 @@ describe('IdentitySubjectService', () => {
     const service = subjectService(repository);
 
     const resolved = await Promise.all(
-      Array.from({ length: 8 }, () => service.resolve('google', 'google-subject', 'me***@x.com'))
+      Array.from({ length: 8 }, () => service.resolve('google', 'google-subject'))
     );
 
     expect(new Set(resolved).size).toBe(1);
@@ -153,8 +168,8 @@ describe('IdentitySubjectService', () => {
     };
     repository.createQueryBuilder = () => builder;
 
-    await expect(
-      subjectService(repository).resolve('google', 'google-subject', 'me***@x.com')
-    ).rejects.toThrow(InternalServerErrorException);
+    await expect(subjectService(repository).resolve('google', 'google-subject')).rejects.toThrow(
+      InternalServerErrorException
+    );
   });
 });

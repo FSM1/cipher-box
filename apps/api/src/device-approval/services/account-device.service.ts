@@ -2,7 +2,10 @@ import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/co
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
-import { IdentityTokenService } from '../../auth/services/identity-token.service';
+import {
+  IdentityTokenService,
+  type VerifiedIdentityToken,
+} from '../../auth/services/identity-token.service';
 import {
   advisoryLockKey,
   boundedAcquire,
@@ -81,15 +84,15 @@ export class AccountDeviceService {
       throw new UnauthorizedException('Device signature does not verify');
     }
 
-    let identitySubjectId: string;
+    let identity: VerifiedIdentityToken;
     try {
-      identitySubjectId = (await this.identityTokens.verify(input.identityToken)).subject;
+      identity = await this.identityTokens.verify(input.identityToken);
     } catch {
       throw new UnauthorizedException('Invalid identity token');
     }
 
     try {
-      return await this.claim(userId, identitySubjectId, input);
+      return await this.claim(userId, identity, input);
     } catch (error) {
       // The unique public-key index is the durable backstop under a concurrent
       // double-register: the loser's transaction aborts, so re-read the committed
@@ -117,15 +120,17 @@ export class AccountDeviceService {
    */
   private async claim(
     userId: string,
-    identitySubjectId: string,
+    identity: VerifiedIdentityToken,
     input: RegisterDeviceInput
   ): Promise<RegisteredDevice> {
+    const identitySubjectId = identity.subject;
     return runLockGuardedTransaction(this.dataSource, async (manager) => {
       await boundedAcquire(
         manager,
         [subjectLockKey(identitySubjectId), registryLockKey(userId)],
         this.lockTimeoutMs
       );
+      await this.identityTokens.spend(manager, identity);
       const repo = manager.getRepository(AccountDevice);
       const now = this.clock.now();
 

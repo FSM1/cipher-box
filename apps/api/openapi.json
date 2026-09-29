@@ -1071,7 +1071,7 @@
             "description": "Malformed publicKey, signature, or label"
           },
           "401": {
-            "description": "Missing token, an invalid identity token, or a signature that does not verify"
+            "description": "Missing token, an invalid or already-spent identity token, or a signature that does not verify"
           },
           "409": {
             "description": "Key or identity already claimed elsewhere, or the device limit is reached"
@@ -2305,7 +2305,7 @@
           },
           "identityToken": {
             "type": "string",
-            "description": "CipherBox identity token this device signed in with; binds the account to the identity a pre-reconstruction device can present"
+            "description": "CipherBox identity token this device signed in with; binds the account to the identity a pre-reconstruction device can present. A successful registration spends it"
           },
           "label": {
             "type": "string",

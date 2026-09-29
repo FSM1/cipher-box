@@ -1,28 +1,18 @@
 import * as jose from 'jose';
-import { generateKeyPairSync } from 'node:crypto';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeClock, fakeConfig } from '../../testing/fakes';
+import { randomUUID } from 'node:crypto';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { FakeClock } from '../../testing/fakes';
+import {
+  bootedIdentityTokenService as bootedService,
+  encodedIdentitySigningKey,
+  identityTokenWithJti,
+  identityTokenWithRawExp,
+} from '../../testing/identity-tokens';
 import {
   IDENTITY_TOKEN_AUDIENCE,
   IDENTITY_TOKEN_ISSUER,
   IdentityTokenService,
 } from './identity-token.service';
-
-/** A base64-encoded PKCS8 PEM, exactly as the env var carries it. */
-function encodedSigningKey(): string {
-  const { privateKey } = generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-  });
-  return Buffer.from(privateKey).toString('base64');
-}
-
-async function bootedService(values: Record<string, string | undefined>, clock = new FakeClock()) {
-  const service = new IdentityTokenService(fakeConfig(values).service, clock);
-  await service.onModuleInit();
-  return service;
-}
 
 /** The verification key a Web3Auth custom verifier would build from the JWKS. */
 async function verificationKeyFrom(service: IdentityTokenService) {
@@ -33,8 +23,8 @@ async function verificationKeyFrom(service: IdentityTokenService) {
 describe('IdentityTokenService', () => {
   let encodedPem: string;
 
-  beforeEach(() => {
-    encodedPem = encodedSigningKey();
+  beforeAll(() => {
+    encodedPem = encodedIdentitySigningKey();
   });
 
   it('refuses to boot without a signing key in any deployed environment', async () => {
@@ -91,7 +81,7 @@ describe('IdentityTokenService', () => {
     });
     const impostor = await bootedService({
       NODE_ENV: 'production',
-      IDENTITY_JWT_PRIVATE_KEY: encodedSigningKey(),
+      IDENTITY_JWT_PRIVATE_KEY: encodedIdentitySigningKey(),
     });
 
     const { token } = await impostor.sign({ subject: 'subject-id', method: 'google' });
@@ -109,13 +99,94 @@ describe('IdentityTokenService', () => {
     );
     const { token } = await service.sign({ subject: 'subject-id', method: 'google' });
 
-    await expect(service.verify(token)).resolves.toEqual({
+    await expect(service.verify(token)).resolves.toMatchObject({
       subject: 'subject-id',
       method: 'google',
+      expiresAt: new Date(clock.now().getTime() + 300_000),
     });
 
     clock.advanceMs(300_001);
     await expect(service.verify(token)).rejects.toThrow(jose.errors.JWTExpired);
+  });
+
+  it('gives every minted token its own token id', async () => {
+    const service = await bootedService({ NODE_ENV: 'test' });
+    const claims = { subject: 'subject-id', method: 'google' } as const;
+
+    const first = await service.verify((await service.sign(claims)).token);
+    const second = await service.verify((await service.sign(claims)).token);
+
+    expect(first.tokenId).not.toBe(second.tokenId);
+  });
+
+  it.each([
+    {
+      name: 'that carries no token id, since no spend could record it',
+      jti: undefined,
+      refusal: jose.errors.JWTClaimValidationFailed,
+    },
+    {
+      name: 'whose token id is not a UUID, before any spend reads it',
+      jti: 'not-a-uuid',
+      refusal: /token id/,
+    },
+  ])('refuses a token $name', async ({ jti, refusal }) => {
+    const clock = new FakeClock();
+    const service = await bootedService(
+      { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+      clock
+    );
+
+    const token = await identityTokenWithJti(encodedPem, clock, jti);
+    await expect(service.verify(token)).rejects.toThrow(refusal);
+  });
+
+  it('refuses a token that carries no expiry', async () => {
+    const clock = new FakeClock();
+    const service = await bootedService(
+      { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+      clock
+    );
+
+    const unbounded = await identityTokenWithJti(encodedPem, clock, randomUUID(), 'omitted');
+    await expect(service.verify(unbounded)).rejects.toThrow(jose.errors.JWTClaimValidationFailed);
+  });
+
+  it('accepts a hand-signed token whose expiry is an ordinary instant', async () => {
+    const clock = new FakeClock();
+    const service = await bootedService(
+      { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+      clock
+    );
+    const exp = Math.floor(clock.now().getTime() / 1000) + 300;
+
+    const verified = await service.verify(await identityTokenWithRawExp(encodedPem, String(exp)));
+    expect(verified.expiresAt).toEqual(new Date(exp * 1000));
+  });
+
+  it.each(['1e999', '1e300'])(
+    'refuses a token whose expiry %s is no valid instant',
+    async (exp) => {
+      const service = await bootedService({
+        NODE_ENV: 'production',
+        IDENTITY_JWT_PRIVATE_KEY: encodedPem,
+      });
+
+      await expect(service.verify(await identityTokenWithRawExp(encodedPem, exp))).rejects.toThrow(
+        'valid expiry'
+      );
+    }
+  );
+
+  it('refuses a token whose expiry is past, even when it is not finite', async () => {
+    const service = await bootedService({
+      NODE_ENV: 'production',
+      IDENTITY_JWT_PRIVATE_KEY: encodedPem,
+    });
+
+    await expect(
+      service.verify(await identityTokenWithRawExp(encodedPem, '-1e999'))
+    ).rejects.toThrow(jose.errors.JWTExpired);
   });
 
   it('expires the token on the injected clock, not the wall clock', async () => {

@@ -12,6 +12,7 @@ import { AuthMethod } from './entities/auth-method.entity';
 import { AcceleratorToken } from './entities/accelerator-token.entity';
 import { IdentitySubject } from './entities/identity-subject.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
+import { SpentIdentityToken } from './entities/spent-identity-token.entity';
 import { User } from './entities/user.entity';
 import { GatewayController } from './gateway.controller';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -51,7 +52,14 @@ export function buildJwtOptions(configService: ConfigService) {
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, AuthMethod, RefreshToken, AcceleratorToken, IdentitySubject]),
+    TypeOrmModule.forFeature([
+      User,
+      AuthMethod,
+      RefreshToken,
+      AcceleratorToken,
+      IdentitySubject,
+      SpentIdentityToken,
+    ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

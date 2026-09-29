@@ -81,13 +81,19 @@ What left the API relative to v1 — with the design that removed it:
   it already holds is un-shared (D5).
 - Tables: `users` (keyed by `publicKey`; carries quota-limit override and BYO flag),
   `auth_methods`, `refresh_tokens`, `accelerator_tokens`, `account_devices`,
-  `device_approvals`, `identity_subjects`.
+  `device_approvals`, `identity_subjects`, `spent_identity_tokens`.
 - **`identity_subjects`** maps a verified provider identity — hashed, never
   stored in the clear — to the stable subject id the identity token's `sub`
-  carries and `loginWithJWT` takes as its `verifierId`. It holds no `user_id`:
+  carries and `loginWithJWT` takes as its `verifierId`. A row holds the
+  provider kind, the SHA-256 hash of the provider identifier, and the first and
+  last use times, and no display form of the identifier. It holds no `user_id`:
   the account still materializes at `POST /auth/login` against the derived key,
   so this table cannot fork the account model, and linking a second method later
   is pointing another provider identity at an existing subject (ADR 0039).
+- **`spent_identity_tokens`**: a device registration spends the identity token
+  it presents, and records the token's `jti` and expiry here, and nothing else.
+  A replay of a spent token answers 401. `POST /auth/login` and
+  `POST /device-approval/session` do not spend the token.
 
 ## Pin/name registry
 
@@ -342,8 +348,8 @@ rate limiting must be verified effective in e2e); staging test hooks
 
 ## Data model (complete)
 
-`users`, `auth_methods`, `identity_subjects`, `refresh_tokens`,
-`accelerator_tokens`, `account_devices`, `device_approvals`,
+`users`, `auth_methods`, `identity_subjects`, `spent_identity_tokens`,
+`refresh_tokens`, `accelerator_tokens`, `account_devices`, `device_approvals`,
 `name_inventory (account, ipnsName)`,
 `pinned_cids (account, cid, size, advisory)`,
 `pin_references (account, ipnsName, cid)`, `mailbox_messages`,

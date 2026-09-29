@@ -28,11 +28,7 @@ export class IdentitySubjectService {
    * the loser, and the follow-up read returns the single winning row — so one
    * provider identity can never end up with two vaults.
    */
-  async resolve(
-    kind: IdentitySubjectKind,
-    identifier: string,
-    identifierDisplay: string | null
-  ): Promise<string> {
+  async resolve(kind: IdentitySubjectKind, identifier: string): Promise<string> {
     const identifierHash = this.identityService.hashIdentifier(identifier);
     const now = this.clock.now();
 
@@ -46,7 +42,7 @@ export class IdentitySubjectService {
       .createQueryBuilder()
       .insert()
       .into(IdentitySubject)
-      .values({ kind, identifierHash, identifierDisplay, lastUsedAt: now })
+      .values({ kind, identifierHash, lastUsedAt: now })
       .orIgnore()
       .returning('id')
       .execute();
