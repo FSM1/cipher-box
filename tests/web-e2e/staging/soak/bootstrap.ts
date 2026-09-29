@@ -4,6 +4,7 @@
  */
 
 import type { Env } from '../../tools/loginSecretExport';
+import { SoakFailure } from './reasons';
 
 export const BOOTSTRAP_ENV = 'SOAK_BOOTSTRAP';
 
@@ -32,6 +33,18 @@ export function bootstrapRequested(env: Env): boolean {
 export function planRun(bootstrap: boolean, found: VaultState): RunPlan {
   if (bootstrap) return { kind: 'bootstrap', archive: found.soakFolder };
   return found.ledger ? { kind: 'resume' } : { kind: 'refuse', reason: 'unbootstrapped-or-wiped' };
+}
+
+/**
+ * Whether the vault root holds `soak/`. A row that its wait missed but the
+ * settled listing names is a slow listing, not an absent folder: counted as
+ * absent, a bootstrap would skip the archive and create a second `soak/`.
+ */
+export function soakFolderListed(rowShown: boolean, rootNames: ReadonlySet<string>): boolean {
+  if (!rowShown && rootNames.has(SOAK_FOLDER)) {
+    throw new SoakFailure('listing-unsettled', `the root listing showed ${SOAK_FOLDER}/ late`);
+  }
+  return rowShown;
 }
 
 /**

@@ -63,14 +63,22 @@ export function formatLedger(ledger: Ledger): string {
 }
 
 export function appendMarker(ledger: Ledger, marker: Marker): Ledger {
-  formatMarker(marker);
+  assertWritable(marker);
   return { lines: [...ledger.lines, { kind: 'marker', marker }] };
 }
 
-/** Refuses a marker that {@link parseLedger} would reject, before it reaches the vault. */
 function formatMarker(marker: Marker): string {
-  const line = `${marker.date} ${marker.cid} ${marker.sequence}`;
-  const parsed = parseMarkerLine(line);
+  assertWritable(marker);
+  return markerLine(marker);
+}
+
+function markerLine(marker: Marker): string {
+  return `${marker.date} ${marker.cid} ${marker.sequence}`;
+}
+
+/** Refuses a marker that {@link parseLedger} would reject, before it reaches the vault. */
+function assertWritable(marker: Marker): void {
+  const parsed = parseMarkerLine(markerLine(marker));
   if (
     parsed === null ||
     parsed.date !== marker.date ||
@@ -79,7 +87,6 @@ function formatMarker(marker: Marker): string {
   ) {
     throw new SoakFailure('ledger-unparsable', `the marker of ${marker.date} is not writable`);
   }
-  return line;
 }
 
 function parseMarkerLine(line: string): Marker | null {

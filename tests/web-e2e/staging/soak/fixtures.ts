@@ -8,7 +8,7 @@ import { test as base, type BrowserContext, type Page } from '@playwright/test';
 import { signIn } from '../fixtures';
 import { installTestWallet } from '../wallet';
 import { soakWalletKey, type SoakRole } from './accounts';
-import { SoakFailure, type FailureReason, type SkipReason } from './reasons';
+import { SoakFailure, type FailureReason } from './reasons';
 import { record, shortDetail } from './summary';
 
 export { expect } from '@playwright/test';
@@ -49,16 +49,18 @@ async function signInAs(page: Page, role: SoakRole): Promise<void> {
 }
 
 /**
- * Runs one soak check and records its outcome. A failure carries `reason`
- * unless the body threw a {@link SoakFailure} that names its own.
+ * Runs one soak check, records its outcome, and returns what the body returned.
+ * A failure carries `reason` unless the body threw a {@link SoakFailure} that
+ * names its own.
  */
-export async function check(
+export async function check<T>(
   name: string,
   reason: FailureReason,
-  body: () => Promise<void>
-): Promise<void> {
+  body: () => Promise<T>
+): Promise<T> {
+  let value: T;
   try {
-    await body();
+    value = await body();
   } catch (error) {
     const failure =
       error instanceof SoakFailure
@@ -76,18 +78,7 @@ export async function check(
     throw failure;
   }
   await record({ kind: 'check', check: name, outcome: 'passed' });
-}
-
-/** Records a skipped check and skips the test that holds it. */
-export async function skipCheck(name: string, reason: SkipReason, detail: string): Promise<void> {
-  await record({
-    kind: 'check',
-    check: name,
-    outcome: 'skipped',
-    reason,
-    detail: shortDetail(detail),
-  });
-  test.skip(true, `[${reason}] ${detail}`);
+  return value;
 }
 
 export function fact(label: string, value: string): Promise<void> {

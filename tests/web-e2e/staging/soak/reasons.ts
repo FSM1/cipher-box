@@ -14,6 +14,14 @@ export const SOAK_REASONS = {
   },
   'ledger-unparsable': { kind: 'failure', meaning: 'the soak ledger does not parse' },
   'ledger-unreadable': { kind: 'failure', meaning: 'the soak ledger did not open or save' },
+  'listing-unsettled': {
+    kind: 'failure',
+    meaning: 'the vault listing named a row that did not show in time',
+  },
+  'bootstrap-failed': {
+    kind: 'failure',
+    meaning: 'the bootstrap did not archive the soak folder or write a ledger',
+  },
   'sign-in-failed': { kind: 'failure', meaning: 'a soak account did not sign in' },
   'marker-unreadable': { kind: 'failure', meaning: 'a ledger marker did not open byte for byte' },
   'sequence-regressed': {
@@ -45,12 +53,9 @@ export const SOAK_REASONS = {
 
 export type SoakReason = keyof typeof SOAK_REASONS;
 
-type ReasonsOf<K extends ReasonKind> = {
-  [R in SoakReason]: (typeof SOAK_REASONS)[R]['kind'] extends K ? R : never;
+export type FailureReason = {
+  [R in SoakReason]: (typeof SOAK_REASONS)[R]['kind'] extends 'failure' ? R : never;
 }[SoakReason];
-
-export type FailureReason = ReasonsOf<'failure'>;
-export type SkipReason = ReasonsOf<'skip'>;
 
 export function isSoakReason(value: unknown): value is SoakReason {
   return typeof value === 'string' && Object.hasOwn(SOAK_REASONS, value);

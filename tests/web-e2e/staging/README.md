@@ -199,6 +199,10 @@ A DB wipe or a verifier change gives each wallet a new subject id, and so a new
 login secret. The wallet keys stay. Nothing is removed, because the wipe removed
 the accounts.
 
+After a DB wipe, the first sign-in runs the first-run provisioning, an
+idempotent genesis publish. It makes no `soak/` folder and no ledger, so each
+run fails as `unbootstrapped-or-wiped` until a bootstrap.
+
 A staging reset does not change `STAGING_GRAFANA_READ_TOKEN`: the token belongs
 to Grafana Cloud, not to the staging database.
 

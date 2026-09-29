@@ -4,12 +4,11 @@
  * builds the folders it lives in.
  */
 
-import { expect, type Page } from '@playwright/test';
-import { FilesPage } from '../../page-objects/files.page';
+import { expect } from '@playwright/test';
+import type { FilesPage } from '../../page-objects/files.page';
 import type { SoakRole } from './accounts';
-import { archiveName, planRun, SOAK_FOLDER } from './bootstrap';
+import { archiveName, SOAK_FOLDER, soakFolderListed, type VaultState } from './bootstrap';
 import { emptyLedger, formatLedger, parseLedger, type Ledger } from './ledger';
-import { SoakFailure } from './reasons';
 
 export const LEDGER_FILE = 'ledger.txt';
 
@@ -22,58 +21,52 @@ export const LEDGER_FOLDERS: Readonly<Record<SoakRole, readonly string[]>> = {
 /** How long a listing gets to show a row before the row counts as absent. */
 const LISTED_WITHIN_MS = 60_000;
 
-/**
- * Leaves `page` in the ledger folder and returns the ledger. With `bootstrap`,
- * it first archives an existing `soak/` folder and builds a new one around an
- * empty ledger; without it, a vault with no ledger fails as
- * `unbootstrapped-or-wiped` before any write.
- */
-export async function openLedger(
-  page: Page,
-  role: SoakRole,
-  bootstrap: boolean,
-  day: string
-): Promise<Ledger> {
-  const files = new FilesPage(page);
-  const folders = LEDGER_FOLDERS[role];
-  await synced(files);
+export interface FoundVault extends VaultState {
+  /** The root names, which the archive name must not take. */
+  readonly rootNames: ReadonlySet<string>;
+}
 
-  const soakFolder = await listed(files, SOAK_FOLDER);
-  const rootNames = await listedNames(files);
-  let ledger = soakFolder;
-  for (const folder of folders) {
-    if (!ledger || !(await listed(files, folder))) {
-      ledger = false;
+/** Walks from the root towards the ledger, writes nothing, and reports what it found. */
+export async function inspectVault(files: FilesPage, role: SoakRole): Promise<FoundVault> {
+  await synced(files);
+  const rowShown = await listed(files, SOAK_FOLDER);
+  await synced(files);
+  const rootNames = await files.names();
+  const soakFolder = soakFolderListed(rowShown, rootNames);
+
+  let ledgerFound = soakFolder;
+  for (const folder of LEDGER_FOLDERS[role]) {
+    if (!ledgerFound || !(await listed(files, folder))) {
+      ledgerFound = false;
       break;
     }
     await files.open(folder);
     await synced(files);
   }
-  ledger = ledger && (await listed(files, LEDGER_FILE));
+  ledgerFound = ledgerFound && (await listed(files, LEDGER_FILE));
+  return { soakFolder, ledger: ledgerFound, rootNames };
+}
 
-  const plan = planRun(bootstrap, { soakFolder, ledger });
-  if (plan.kind === 'refuse') {
-    throw new SoakFailure(
-      plan.reason,
-      `the ${role} vault has no ${folders.join('/')}/${LEDGER_FILE}`
-    );
-  }
-  if (plan.kind === 'bootstrap') {
-    await toRoot(files);
-    if (plan.archive) {
-      await files.rename(SOAK_FOLDER, archiveName(day, rootNames));
-      await files.published();
-    }
-    for (const folder of folders) {
-      await files.createFolder(folder);
-      await files.published();
-      await files.open(folder);
-    }
-    await files.upload(LEDGER_FILE, new TextEncoder().encode(formatLedger(emptyLedger())));
-    await expect(files.row(LEDGER_FILE)).toBeVisible({ timeout: 180_000 });
+/** Archives an existing `soak/`, then builds the folders and an empty ledger. */
+export async function bootstrapVault(
+  files: FilesPage,
+  role: SoakRole,
+  found: FoundVault,
+  day: string
+): Promise<void> {
+  await files.toRoot();
+  if (found.soakFolder) {
+    await files.rename(SOAK_FOLDER, archiveName(day, found.rootNames));
     await files.published();
   }
-  return readLedger(files);
+  for (const folder of LEDGER_FOLDERS[role]) {
+    await files.createFolder(folder);
+    await files.published();
+    await files.open(folder);
+  }
+  await files.upload(LEDGER_FILE, new TextEncoder().encode(formatLedger(emptyLedger())));
+  await expect(files.row(LEDGER_FILE)).toBeVisible({ timeout: 180_000 });
+  await files.published();
 }
 
 /** Reads the ledger in the folder on screen, through the editor, and closes it unchanged. */
@@ -93,6 +86,10 @@ export async function writeLedger(files: FilesPage, ledger: Ledger): Promise<voi
   await files.published();
 }
 
+export function ledgerPath(role: SoakRole): string {
+  return [...LEDGER_FOLDERS[role], LEDGER_FILE].join('/');
+}
+
 async function synced(files: FilesPage): Promise<void> {
   await expect(files.status).toHaveAttribute('data-staleness', 'fresh', { timeout: 180_000 });
 }
@@ -105,17 +102,4 @@ async function listed(files: FilesPage, name: string): Promise<boolean> {
       () => true,
       () => false
     );
-}
-
-async function listedNames(files: FilesPage): Promise<Set<string>> {
-  const labels = await files.browser
-    .getByTestId('file-list-item')
-    .getByRole('checkbox')
-    .evaluateAll((boxes) => boxes.map((box) => box.getAttribute('aria-label') ?? ''));
-  return new Set(labels.map((label) => label.replace(/^select /, '')));
-}
-
-async function toRoot(files: FilesPage): Promise<void> {
-  await files.page.getByRole('button', { name: 'root', exact: true }).click();
-  await expect(files.breadcrumbs.locator('[aria-current="page"]')).toHaveText('root');
 }

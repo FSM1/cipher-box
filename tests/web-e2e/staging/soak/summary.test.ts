@@ -42,13 +42,6 @@ describe('the soak records', () => {
       reason: 'unbootstrapped-or-wiped',
       detail: 'the owner vault has no soak/ledger.txt',
     },
-    {
-      kind: 'check',
-      check: 'counters',
-      outcome: 'skipped',
-      reason: 'post-deploy-window',
-      detail: 'up 3 h',
-    },
     { kind: 'fact', label: 'owner ledger markers', value: '0' },
   ];
 
@@ -67,8 +60,8 @@ describe('the soak records', () => {
       { kind: 'check', check: 'a', outcome: 'failed', reason: 'post-deploy-window', detail: '' },
     ],
     [
-      'a skipped check with a failure reason',
-      { kind: 'check', check: 'a', outcome: 'skipped', reason: 'purge-missed', detail: '' },
+      'a skipped check',
+      { kind: 'check', check: 'a', outcome: 'skipped', reason: 'post-deploy-window', detail: '' },
     ],
     [
       'an unknown reason',
@@ -130,13 +123,13 @@ describe('the job summary', () => {
     expect(summary).toContain('| owner ledger markers | 0 |');
   });
 
-  it('passes a night whose checks passed or skipped', () => {
+  it('passes a night whose checks all passed', () => {
     expect(
       renderSummary([
         { kind: 'check', check: 'a', outcome: 'passed' },
-        { kind: 'check', check: 'b', outcome: 'skipped', reason: 'post-deploy-window', detail: '' },
+        { kind: 'check', check: 'b', outcome: 'passed' },
       ])
-    ).toContain('All 2 soak checks passed or skipped.');
+    ).toContain('All 2 soak checks passed.');
   });
 
   it('cuts a detail to its first line and the budget', () => {

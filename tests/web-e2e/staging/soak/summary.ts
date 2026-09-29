@@ -8,13 +8,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  isSoakReason,
-  reasonKind,
-  SOAK_REASONS,
-  type FailureReason,
-  type SkipReason,
-} from './reasons';
+import { isSoakReason, reasonKind, SOAK_REASONS, type FailureReason } from './reasons';
 
 /** Inside Playwright's output folder, which a run clears when it starts. */
 export const RESULTS_FILE = join(
@@ -34,13 +28,6 @@ export type SoakRecord =
       readonly check: string;
       readonly outcome: 'failed';
       readonly reason: FailureReason;
-      readonly detail: string;
-    }
-  | {
-      readonly kind: 'check';
-      readonly check: string;
-      readonly outcome: 'skipped';
-      readonly reason: SkipReason;
       readonly detail: string;
     }
   | { readonly kind: 'fact'; readonly label: string; readonly value: string };
@@ -91,7 +78,7 @@ export function renderSummary(records: readonly SoakRecord[]): string {
       ? 'No soak check recorded a result.'
       : failed > 0
         ? `${failed} of ${checks.length} soak checks failed.`
-        : `All ${checks.length} soak checks passed or skipped.`;
+        : `All ${checks.length} soak checks passed.`;
 
   const out = ['## Staging soak', '', verdict];
   if (checks.length > 0) {
@@ -127,12 +114,9 @@ function invalid(value: unknown): string | null {
   if (entry.outcome === 'passed') {
     return entry.reason === undefined ? null : 'a passed check names no reason';
   }
-  if (entry.outcome !== 'failed' && entry.outcome !== 'skipped') return 'an unknown outcome';
+  if (entry.outcome !== 'failed') return 'an unknown outcome';
   if (!isSoakReason(entry.reason)) return 'an unknown reason code';
-  const wanted = entry.outcome === 'failed' ? 'failure' : 'skip';
-  if (reasonKind(entry.reason) !== wanted) {
-    return `a ${entry.outcome} check needs a ${wanted} reason`;
-  }
+  if (reasonKind(entry.reason) !== 'failure') return 'a failed check needs a failure reason';
   return typeof entry.detail === 'string' ? null : 'a detail must be text';
 }
 
