@@ -172,8 +172,8 @@ is not the contract gate.
   against real IndexedDB, OPFS, Web Locks, and BroadcastChannel, driven by
   Playwright. This suite blocks every PR.
 - **`packages/client` — the Node suite.** The IPNS record KATs run through
-  the record read outside a session (ADR 0057), in the WASM module under
-  Node. It is the step `Client Node suite` in the job `Client Browser Suite`,
+  the record read outside a session (ADR 0057), in a WASM module built with
+  the `observer` feature, under Node. It is the step `Client Node suite` in the job `Client Browser Suite`,
   reported through `Web Result`.
 - **Seam conformance kits.** The engine ships a reusable conformance suite
   per seam trait — FloorStore monotonicity and durability semantics,

@@ -27,10 +27,11 @@ session, so a read with no session cannot run it.
 
 ## Decision
 
-**D1 — The WASM module exports one verified record read that has no session and runs no adoption
-gate, and the read is an observation only.** `readIpnsRecord` in `crates/wasm` binds the engine
-function `verify_record_outside_session`, and `openIpnsRecordReader` in `packages/client` loads it
-under Node. The limits that make it safe:
+**D1 — A WASM module built for an observer exports one verified record read that has no session
+and runs no adoption gate, and the read is an observation only.** `readIpnsRecord` in
+`crates/wasm` binds the engine function `verify_record_outside_session`. `openIpnsRecordReader` in
+`packages/client` is Node glue that opens such a module, and it fails with a clear error when the
+module has no `readIpnsRecord`. The limits that make it safe:
 
 1. The public key comes from the IPNS name. The core decoder verifies the record signature under
    that key, so a record signed for another name fails as a trust violation.
@@ -43,6 +44,10 @@ under Node. The limits that make it safe:
 5. A result is an observation for a person or a test outside the vault. It is never a trust
    decision for a vault. A caller that must trust a record resolves it through a session, and the
    adoption gate decides.
+6. The export exists only in a module built with the `observer` cargo feature of `crates/wasm`.
+   The production module is built with no such feature, so it carries no export that reads a
+   record with no adoption gate. The builds that enable the feature are the build that the client
+   Node suite loads and the build that the staging soak makes for itself.
 
 ## Alternatives considered
 
@@ -54,10 +59,8 @@ under Node. The limits that make it safe:
   seams in Node. The soak would carry the login secret into a second runtime for a check that
   needs no key.
 - **A hook in the staging bundle.** ADR 0049 D3 refuses the hook in a staging or production build.
-- **An observer-only build behind a cargo feature.** The `conformance` feature shows the
-  mechanism. The read holds no key and verifies public bytes only, so the production module
-  exposes nothing by the export. A second artifact shape adds a build that the soak and CI must
-  keep in step.
+- **The production module carries the export.** No product path calls it, and an export that
+  skips the gate in the production module is a surface with no user.
 
 ## Consequences
 
@@ -67,6 +70,4 @@ under Node. The limits that make it safe:
 
 ## Residuals
 
-**E1 — Should the production module carry the export?** The Node suite already loads the
-`conformance`-featured module, and the soak builds its own module to disk. So nothing forces the
-production artifact to carry the export. The owner decides whether it moves behind a feature.
+None.
