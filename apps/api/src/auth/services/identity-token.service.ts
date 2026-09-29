@@ -148,14 +148,6 @@ export class IdentityTokenService implements OnModuleInit {
    * concurrent spend of the same token wait for this one and then refuse.
    */
   async spend(manager: EntityManager, token: VerifiedIdentityToken): Promise<void> {
-    // `SKIP LOCKED` yields rows a concurrent spend is already reclaiming, so two
-    // sweeps never wait on each other's row locks.
-    await manager.query(
-      `DELETE FROM spent_identity_tokens WHERE ctid IN (
-         SELECT ctid FROM spent_identity_tokens WHERE expires_at <= $1
-         ORDER BY expires_at LIMIT $2 FOR UPDATE SKIP LOCKED)`,
-      [new Date(this.clock.now().getTime() - SPENT_ROW_GRACE_MS), SPENT_SWEEP_BATCH]
-    );
     const inserted = await manager
       .createQueryBuilder()
       .insert()
@@ -167,6 +159,14 @@ export class IdentityTokenService implements OnModuleInit {
     if ((inserted.raw as unknown[]).length === 0) {
       throw new UnauthorizedException('Identity token already used');
     }
+    // Swept after the insert, so a replay never pays for a sweep. `SKIP LOCKED`
+    // yields rows a concurrent spend is already reclaiming.
+    await manager.query(
+      `DELETE FROM spent_identity_tokens WHERE ctid IN (
+         SELECT ctid FROM spent_identity_tokens WHERE expires_at <= $1
+         ORDER BY expires_at LIMIT $2 FOR UPDATE SKIP LOCKED)`,
+      [new Date(this.clock.now().getTime() - SPENT_ROW_GRACE_MS), SPENT_SWEEP_BATCH]
+    );
   }
 
   /**

@@ -6,8 +6,12 @@ import { IdentityTokenService } from '../../auth/services/identity-token.service
 import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
 import { createTestDeviceKey, TestDeviceKey } from '../../testing/device-keys';
-import { FakeClock, fakeConfig, FakeEntropy } from '../../testing/fakes';
-import { encodedIdentitySigningKey, identityTokenWithJti } from '../../testing/identity-tokens';
+import { FakeClock, fakeConfig } from '../../testing/fakes';
+import {
+  bootedIdentityTokenService,
+  encodedIdentitySigningKey,
+  identityTokenWithJti,
+} from '../../testing/identity-tokens';
 import { deviceRegistrationPayload } from '../device-signature';
 import { AccountDevice } from '../entities/account-device.entity';
 import { AccountDeviceService, RegisterDeviceInput } from './account-device.service';
@@ -77,7 +81,14 @@ describe('AccountDeviceService', () => {
         spent.add(verified.tokenId);
       },
     } as unknown as IdentityTokenService;
-    service = new AccountDeviceService(
+    service = serviceOver(identityTokens, config);
+  }
+
+  function serviceOver(
+    identityTokens: IdentityTokenService,
+    config: Record<string, string | undefined> = {}
+  ) {
+    return new AccountDeviceService(
       devices as never,
       new FakeDataSource(devices as never) as never,
       identityTokens,
@@ -185,20 +196,12 @@ describe('AccountDeviceService', () => {
 
     it('refuses a token whose token id is not a UUID with 401, before the uuid column sees it', async () => {
       const encodedPem = encodedIdentitySigningKey();
-      const realTokens = new IdentityTokenService(
-        fakeConfig({ NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem }).service,
-        clock,
-        new FakeEntropy()
+      const realTokens = await bootedIdentityTokenService(
+        { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+        clock
       );
-      await realTokens.onModuleInit();
       const spend = vi.spyOn(realTokens, 'spend');
-      service = new AccountDeviceService(
-        devices as never,
-        new FakeDataSource(devices as never) as never,
-        realTokens,
-        clock,
-        fakeConfig({}).service
-      );
+      service = serviceOver(realTokens);
 
       const malformed = await identityTokenWithJti(encodedPem, clock, 'not-a-uuid');
       await expect(
