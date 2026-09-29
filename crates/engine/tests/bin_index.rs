@@ -28,10 +28,9 @@ use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::entropy::{Entropy, EntropyError};
 use cipherbox_engine::net::{PublishError, RecordPublishError, keyless_re_put};
 use cipherbox_engine::seams::{EndpointId, FloorStore, RecordTransport, SeamError, SeamResult};
-use cipherbox_engine::testkit::account::{Blocks, sequence_floor_label, serve_http};
+use cipherbox_engine::testkit::account::{Blocks, bin_index_mark_keys, serve_http};
 use cipherbox_engine::testkit::fakes::{
-    InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, ScriptedHttp,
-    SlotFillingRecordStore,
+    InMemoryCredentialStore, InMemoryRecordStore, ScriptedHttp, SlotFillingRecordStore,
 };
 use cipherbox_engine::testkit::{FailingEntropy, FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
@@ -110,23 +109,11 @@ fn publish_with(
     index: &BinIndex,
     entropy: &mut dyn Entropy,
 ) -> Result<(), BinIndexPublishError> {
-    publish_through(world, device, blocks, &device.floor_store, index, entropy)
-}
-
-/// [`publish_with`] over `floors` in place of the device's own store.
-fn publish_through<F: FloorStore>(
-    world: &FakeWorld,
-    device: &FakeDevice,
-    blocks: &Blocks,
-    floors: &F,
-    index: &BinIndex,
-    entropy: &mut dyn Entropy,
-) -> Result<(), BinIndexPublishError> {
     serve_http(device, blocks, 4);
     block_on(publish_bin_index(
         &device.record_store,
         &api(device),
-        floors,
+        &device.floor_store,
         &device.snapshot_cache,
         &world.scheduler,
         &SyncTimingProfile::CI,
@@ -907,64 +894,10 @@ fn published_revision(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> 
 }
 
 /// Every durable mark the bin record leaves on `device`, in the order
-/// sequence floor, adopted revision, mint counter.
+/// [`bin_index_mark_keys`] gives.
 fn marks(device: &FakeDevice) -> [Option<u64>; 3] {
-    let name = name();
-    [
-        name.as_str().as_bytes().to_vec(),
-        mark(b"bin-index-revision/", &name),
-        mark(b"bin-index-revision-mint/", &name),
-    ]
-    .map(|key| block_on(device.floor_store.sequence_floor(&key)).expect("read"))
-}
-
-/// A floor store that injects one fault at one key of the device's store: a
-/// read that fails, a raise that fails, or a raise the store answers one below
-/// the value asked for without storing it.
-#[derive(Clone)]
-struct KeyFault {
-    inner: InMemoryFloorStore,
-    key: Vec<u8>,
-    fault: Fault,
-}
-
-#[derive(Clone, Copy)]
-enum Fault {
-    Unreadable,
-    Unraisable,
-    UnderReported,
-}
-
-impl FloorStore for KeyFault {
-    async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
-        self.inner.epoch_floor(scope_id).await
-    }
-
-    async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
-        self.inner.raise_epoch_floor(scope_id, epoch).await
-    }
-
-    async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
-        if ipns_name == self.key.as_slice() && matches!(self.fault, Fault::Unreadable) {
-            return Err(SeamError::new("floor read injected to fail"));
-        }
-        self.inner.sequence_floor(ipns_name).await
-    }
-
-    async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
-        if ipns_name == self.key.as_slice() {
-            match self.fault {
-                Fault::Unraisable => return Err(SeamError::new("floor raise injected to fail")),
-                Fault::UnderReported => return Ok(sequence - 1),
-                Fault::Unreadable => {}
-            }
-        }
-        self.inner.raise_sequence_floor(ipns_name, sequence).await
-    }
-
-    async fn clear(&self) -> SeamResult<()> {
-        self.inner.clear().await
-    }
+    bin_index_mark_keys(&name())
+        .map(|key| block_on(device.floor_store.sequence_floor(&key)).expect("read"))
 }
 
 /// Where an attempt fails ahead of its PUT.
@@ -1003,23 +936,15 @@ fn a_publish_that_fails_before_its_put_leaves_no_mark() {
         if matches!(case, BeforePut::Register) {
             blocks.refuse_register(b"{\"statusCode\":400}".to_vec());
         }
-        let (key, fault) = match case {
-            BeforePut::SealCounterRaise => (
-                mark(b"bin-index-revision-seal/", &name()),
-                Fault::Unraisable,
-            ),
-            BeforePut::SequenceFloorRead => {
-                (name().as_str().as_bytes().to_vec(), Fault::Unreadable)
-            }
-            BeforePut::Entropy | BeforePut::Upload | BeforePut::Register => {
-                (Vec::new(), Fault::Unreadable)
-            }
-        };
-        let floors = KeyFault {
-            inner: device.floor_store.clone(),
-            key,
-            fault,
-        };
+        match case {
+            BeforePut::SealCounterRaise => device
+                .floor_store
+                .fail_floor_raises_for(&mark(b"bin-index-revision-seal/", &name())),
+            BeforePut::SequenceFloorRead => device
+                .floor_store
+                .fail_sequence_floor_reads_for(name().as_str().as_bytes()),
+            BeforePut::Entropy | BeforePut::Upload | BeforePut::Register => {}
+        }
         let mut seeded = SeededEntropy::new(1);
         let entropy: &mut dyn Entropy = match case {
             BeforePut::Entropy => &mut FailingEntropy,
@@ -1029,9 +954,10 @@ fn a_publish_that_fails_before_its_put_leaves_no_mark() {
             | BeforePut::SequenceFloorRead => &mut seeded,
         };
 
-        let outcome = publish_through(&world, &device, &blocks, &floors, &binned(&[1]), entropy);
+        let outcome = publish_with(&world, &device, &blocks, &binned(&[1]), entropy);
         assert!(outcome.is_err(), "{case:?}: the attempt fails");
         assert_eq!(seen.load(Ordering::SeqCst), uploads, "{case:?}: uploads");
+        device.floor_store.heal_floors();
         assert_eq!(marks(&device), [None; 3], "{case:?}: and leaves no mark");
         assert_eq!(
             load(&world, &device, &blocks, &keys()),
@@ -1057,17 +983,14 @@ fn a_mark_the_store_reports_below_its_value_sends_no_put() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let device = world.device(b"only-device");
-    let floors = KeyFault {
-        inner: device.floor_store.clone(),
-        key: mark(b"bin-index-revision-mint/", &name()),
-        fault: Fault::UnderReported,
-    };
+    device
+        .floor_store
+        .under_report_sequence_raises_for(&mark(b"bin-index-revision-mint/", &name()));
 
-    let outcome = publish_through(
+    let outcome = publish_with(
         &world,
         &device,
         &blocks,
-        &floors,
         &binned(&[1]),
         &mut SeededEntropy::new(1),
     );
@@ -1114,16 +1037,12 @@ fn a_mark_the_store_refuses_sends_no_put() {
     let device = world.device(b"only-device");
     device
         .floor_store
-        .fail_floor_raises_for(&sequence_floor_label(&mark(
-            b"bin-index-revision-mint/",
-            &name(),
-        )));
+        .fail_floor_raises_for(&mark(b"bin-index-revision-mint/", &name()));
 
-    let outcome = publish_through(
+    let outcome = publish_with(
         &world,
         &device,
         &blocks,
-        &device.floors(&SECRET),
         &binned(&[1]),
         &mut SeededEntropy::new(1),
     );

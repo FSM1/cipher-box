@@ -66,6 +66,23 @@ pub fn sequence_floor_label(name: &[u8]) -> [u8; 32] {
     kdf::name_label(kdf::contact_label_seed(&SECRET).as_bytes(), name)
 }
 
+/// The three durable marks a bin index record leaves on a device, as the
+/// engine keys them: the per-name sequence floor, the adopted body revision,
+/// and the mint counter.
+#[must_use]
+pub fn bin_index_mark_keys(name: &IpnsName) -> [Vec<u8>; 3] {
+    [
+        &b""[..],
+        b"bin-index-revision/",
+        b"bin-index-revision-mint/",
+    ]
+    .map(|prefix| {
+        let mut key = prefix.to_vec();
+        key.extend_from_slice(name.as_str().as_bytes());
+        key
+    })
+}
+
 /// The account owner's identity signer.
 pub fn owner_identity() -> EcdsaSigner {
     EcdsaSigner::from_scalar(&SECRET).expect("valid scalar")

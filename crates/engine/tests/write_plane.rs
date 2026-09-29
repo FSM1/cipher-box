@@ -66,8 +66,9 @@ use cipherbox_engine::sync::{
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
-    owner_identity, owner_pointer_read_key, owner_pseudonym, registry_batch_refused, seed_account,
-    seed_account_published_after_put, sequence_floor_label, serve_http,
+    bin_index_mark_keys, owner_identity, owner_pointer_read_key, owner_pseudonym,
+    registry_batch_refused, seed_account, seed_account_published_after_put, sequence_floor_label,
+    serve_http,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{
@@ -4592,15 +4593,8 @@ fn a_fully_offline_genesis_leaves_no_bin_index_mark_and_the_next_start_publishes
         standing_bin_record(&world).is_none(),
         "the offline start published nothing",
     );
-    let name = bin_name();
     let floors = alice.floors(&SECRET);
-    for prefix in [
-        &b"bin-index-revision-mint/"[..],
-        b"bin-index-revision/",
-        b"",
-    ] {
-        let mut key = prefix.to_vec();
-        key.extend_from_slice(name.as_str().as_bytes());
+    for key in bin_index_mark_keys(&bin_name()) {
         assert_eq!(
             block_on(floors.sequence_floor(&key)).expect("the floor reads"),
             None,
