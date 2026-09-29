@@ -1423,7 +1423,7 @@
       "title": "Republisher walks skipped",
       "gridPos": {
         "h": 4,
-        "w": 12,
+        "w": 6,
         "x": 0,
         "y": 45
       },
@@ -1480,6 +1480,61 @@
           "refId": "A",
           "expr": "rate(republisher_walks_skipped_total[15m])",
           "legendFormat": "Walks skipped",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "type": "stat",
+      "title": "Walks completed (24h)",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 45
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(republisher_walks_total[24h])",
+          "legendFormat": "Walks",
           "editorMode": "code",
           "range": true,
           "interval": ""

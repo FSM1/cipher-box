@@ -1,9 +1,12 @@
+import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MetricsService } from '../ops/metrics.service';
 import { FakeClock, fakeConfig } from '../testing/fakes';
 import { minimalIpnsRecord } from '../testing/ipns-record';
+import { sampleMetric } from '../testing/prometheus';
 import { MinimalIpnsSequenceReader } from './record-sequence-reader';
 import { RecordTransport } from './record-transport';
-import { RepublisherAlerter } from './republisher.alerter';
+import { LoggingRepublisherAlerter, RepublisherAlerter } from './republisher.alerter';
 import { RepublisherTask } from './republisher.task';
 import type { CacheUpsertResult } from './services/record-cache.service';
 
@@ -28,6 +31,8 @@ class FakeRecordCache {
   readonly rows = new Map<string, CacheRow>();
   /** Names whose `upsert` rejects — models a transient per-name DB failure. */
   readonly upsertThrows = new Set<string>();
+  /** Makes the end-of-walk staleness query reject, so the walk fails. */
+  staleNamesThrows = false;
 
   seed(name: string, row: CacheRow): void {
     this.rows.set(name, row);
@@ -54,6 +59,7 @@ class FakeRecordCache {
   }
 
   async staleNames(cutoff: Date): Promise<{ ipnsName: string; baseline: Date }[]> {
+    if (this.staleNamesThrows) throw new Error('stale query failed');
     const out: { ipnsName: string; baseline: Date }[] = [];
     for (const [ipnsName, row] of this.rows) {
       const baseline = row.lastRepublishedAt ?? row.createdAt;
@@ -150,7 +156,7 @@ function buildTask(opts: {
   names: string[];
   cache: FakeRecordCache;
   transport: RecordTransport;
-  alerter: RecordingAlerter;
+  alerter: RepublisherAlerter;
   clock: FakeClock;
   staleAlertMs?: number;
   concurrency?: number;
@@ -170,6 +176,8 @@ function buildTask(opts: {
 }
 
 describe('RepublisherTask walk', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('resolves, caches, and re-PUTs every distinct name', async () => {
     const cache = new FakeRecordCache();
     const transport = new FakeTransport();
@@ -397,6 +405,41 @@ describe('RepublisherTask walk', () => {
     expect(alerter.walks).toEqual([]);
     expect(transport.republished).toEqual([]);
     expect(cache.rows.size).toBe(0);
+  });
+
+  it('steps republisher_walks_total once per completed walk and never for a failed one', async () => {
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const metrics = new MetricsService();
+    const cache = new FakeRecordCache();
+    const transport = new FakeTransport();
+    transport.resolveAnswers.set('name-a', minimalIpnsRecord(1n));
+    const task = buildTask({
+      names: ['name-a'],
+      cache,
+      transport,
+      alerter: new LoggingRepublisherAlerter(metrics),
+      clock: new FakeClock(),
+    });
+    const walks = async (): Promise<number | null> =>
+      sampleMetric(await metrics.metricsText(), 'republisher_walks_total');
+
+    expect(await walks()).toBe(0);
+
+    await task.runOnce();
+    expect(await walks()).toBe(1);
+
+    cache.staleNamesThrows = true;
+    await expect(task.runOnce()).rejects.toThrow('stale query failed');
+    expect(await walks()).toBe(1);
+
+    transport.isConfigured = false;
+    await task.runOnce();
+    expect(await walks()).toBe(1);
+
+    cache.staleNamesThrows = false;
+    transport.isConfigured = true;
+    await task.runOnce();
+    expect(await walks()).toBe(2);
   });
 
   // G5: names walk through a bounded pool so one slow name can't serialize the

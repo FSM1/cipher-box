@@ -82,6 +82,7 @@ The API serves `GET /metrics`. The endpoint needs no authentication and stays ou
 | `republisher_last_walk_names`          | gauge     | none                                         |
 | `republisher_last_walk_republished`    | gauge     | none                                         |
 | `republisher_walks_skipped_total`      | counter   | none                                         |
+| `republisher_walks_total`              | counter   | none                                         |
 | `mailbox_pending_messages`             | gauge     | none                                         |
 | `mailbox_pending_cap_rejections_total` | counter   | none                                         |
 | `auth_attempts_total`                  | counter   | `route`, `outcome`                           |
@@ -322,6 +323,10 @@ rate(republisher_resolve_failures_total[1h])
 republisher_last_walk_republished / clamp_min(republisher_last_walk_names, 1)
 ```
 
+```promql
+increase(republisher_walks_total[24h])
+```
+
 ### Mailbox backlog
 
 ```promql
@@ -397,7 +402,7 @@ The pre-built dashboard (`docker/grafana/dashboards/cipherbox-staging.json`) inc
 
 ### Republisher Row
 
-- Names seen and names republished in the last walk, resolve failures, stale names, skipped walks
+- Names seen and names republished in the last walk, completed walks in the last 24 hours, resolve failures, stale names, skipped walks
 
 ### Mailbox Row
 
