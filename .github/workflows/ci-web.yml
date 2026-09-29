@@ -160,7 +160,8 @@ jobs:
       - name: Typecheck harness + browser seam conformance suite
         run: pnpm --filter @cipherbox/client test:browser
 
-      # Runs after a red browser suite too, so one run reports both.
+      # Reads the module the step above built, and runs after a red browser
+      # suite too, so one run reports both.
       - name: Client Node suite
         if: ${{ !cancelled() }}
         run: pnpm --filter @cipherbox/client test:node
