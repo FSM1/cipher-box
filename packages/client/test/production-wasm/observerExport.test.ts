@@ -15,6 +15,7 @@ describe('the production engine module', () => {
 
     expect(typeof glue.identityFingerprint).toBe('function');
     expect(glue).not.toHaveProperty('readIpnsRecord');
+    expect(glue).not.toHaveProperty('IpnsRecordReading');
   });
 
   it('gives the client reader a clear refusal', async () => {
