@@ -1,7 +1,7 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { QueryFailedError } from 'typeorm';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdentityTokenService } from '../../auth/services/identity-token.service';
 import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
@@ -106,6 +106,22 @@ describe('AccountDeviceService', () => {
   });
 
   describe('register', () => {
+    let encodedPem: string;
+
+    beforeAll(() => {
+      encodedPem = encodedIdentitySigningKey();
+    });
+
+    /** Puts `service` over a real token service, and returns the spy on its `spend`. */
+    async function overRealTokens() {
+      const realTokens = await bootedIdentityTokenService(
+        { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+        clock
+      );
+      service = serviceOver(realTokens);
+      return vi.spyOn(realTokens, 'spend');
+    }
+
     it('creates the row from the proven account, the identity subject and the key', async () => {
       const created = await service.register(
         account,
@@ -196,13 +212,7 @@ describe('AccountDeviceService', () => {
     });
 
     it('refuses a token whose token id is not a UUID with 401, before the uuid column sees it', async () => {
-      const encodedPem = encodedIdentitySigningKey();
-      const realTokens = await bootedIdentityTokenService(
-        { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
-        clock
-      );
-      const spend = vi.spyOn(realTokens, 'spend');
-      service = serviceOver(realTokens);
+      const spend = await overRealTokens();
 
       const malformed = await identityTokenWithJti(encodedPem, clock, 'not-a-uuid');
       await expect(
@@ -213,15 +223,9 @@ describe('AccountDeviceService', () => {
     });
 
     it('refuses a token whose expiry is not finite with 401, before any spend', async () => {
-      const encodedPem = encodedIdentitySigningKey();
-      const realTokens = await bootedIdentityTokenService(
-        { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
-        clock
-      );
-      const spend = vi.spyOn(realTokens, 'spend');
-      service = serviceOver(realTokens);
+      const spend = await overRealTokens();
 
-      const unbounded = identityTokenWithRawExp(encodedPem, '1e999');
+      const unbounded = await identityTokenWithRawExp(encodedPem, '1e999');
       await expect(
         service.register(account, registration(device, account, { identityToken: unbounded }))
       ).rejects.toBeInstanceOf(UnauthorizedException);

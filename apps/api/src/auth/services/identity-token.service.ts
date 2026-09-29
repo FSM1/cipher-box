@@ -136,8 +136,7 @@ export class IdentityTokenService implements OnModuleInit {
     if (typeof subject !== 'string' || !isIdentitySubjectKind(method)) {
       throw new Error('identity token is missing its subject or method claim');
     }
-    // `jose` accepts an `exp` such as `1e999` (Infinity) or `1e300`, which is no
-    // valid instant for the spend row.
+    // `jose` accepts any JSON number as `exp`; `1e999` and `1e300` give no valid Date.
     const expiresAt = new Date((exp ?? NaN) * 1000);
     if (
       typeof tokenId !== 'string' ||

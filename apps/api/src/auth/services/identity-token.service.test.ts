@@ -160,23 +160,25 @@ describe('IdentityTokenService', () => {
     );
     const exp = Math.floor(clock.now().getTime() / 1000) + 300;
 
-    const verified = await service.verify(identityTokenWithRawExp(encodedPem, String(exp)));
+    const verified = await service.verify(await identityTokenWithRawExp(encodedPem, String(exp)));
     expect(verified.expiresAt).toEqual(new Date(exp * 1000));
   });
 
-  // `1e999` parses to Infinity, and `1e300` is finite but past the Date range:
-  // either would put an invalid date on the spend row.
-  it.each(['1e999', '-1e999', '1e300'])(
-    'refuses a token whose expiry %s is no valid instant',
-    async (exp) => {
-      const service = await bootedService({
-        NODE_ENV: 'production',
-        IDENTITY_JWT_PRIVATE_KEY: encodedPem,
-      });
+  // `jose` refuses `-1e999` as expired; the other two reach the date check.
+  it.each([
+    ['1e999', 'valid expiry'],
+    ['-1e999', jose.errors.JWTExpired],
+    ['1e300', 'valid expiry'],
+  ])('refuses a token whose expiry %s is no valid instant', async (exp, refusal) => {
+    const service = await bootedService({
+      NODE_ENV: 'production',
+      IDENTITY_JWT_PRIVATE_KEY: encodedPem,
+    });
 
-      await expect(service.verify(identityTokenWithRawExp(encodedPem, exp))).rejects.toThrow();
-    }
-  );
+    await expect(service.verify(await identityTokenWithRawExp(encodedPem, exp))).rejects.toThrow(
+      refusal
+    );
+  });
 
   it('expires the token on the injected clock, not the wall clock', async () => {
     const clock = new FakeClock();
