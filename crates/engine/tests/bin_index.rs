@@ -10,26 +10,29 @@
 
 use core::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cipherbox_core::codec::decode;
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    BinEntry, BinIndex, MAX_BIN_INDEX_BODY_BYTES, NodeKind, encode_bin_index, seal_bin_index,
+    BinEntry, BinIndex, MAX_BIN_INDEX_BODY_BYTES, NodeKind, encode_bin_index, open_bin_index,
+    seal_bin_index,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::secret::SECRET_LEN;
 
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::entropy::{Entropy, EntropyError};
-use cipherbox_engine::net::keyless_re_put;
-use cipherbox_engine::seams::{EndpointId, FloorStore, RecordTransport};
-use cipherbox_engine::testkit::account::{Blocks, serve_http};
+use cipherbox_engine::net::{PublishError, RecordPublishError, keyless_re_put};
+use cipherbox_engine::seams::{EndpointId, FloorStore, RecordTransport, SeamError, SeamResult};
+use cipherbox_engine::testkit::account::{Blocks, bin_index_mark_keys, serve_http};
 use cipherbox_engine::testkit::fakes::{
     InMemoryCredentialStore, InMemoryRecordStore, ScriptedHttp, SlotFillingRecordStore,
 };
-use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
+use cipherbox_engine::testkit::{FailingEntropy, FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinIndexRead, DefaultsReason, Gateway,
     GatewayConfig, HeldRecord, HeldValue, OrphanHeads, SessionBearer, SyncTimingProfile,
@@ -792,6 +795,7 @@ fn a_bin_past_the_top_rung_is_refused_as_a_full_bin_and_not_as_a_codec_fault() {
         &mut SeededEntropy::new(5),
     );
     assert_eq!(outcome, Err(BinIndexPublishError::Full));
+    assert_eq!(marks(&device), [None; 3], "a size refusal leaves no mark");
     assert!(
         device
             .record_store
@@ -805,8 +809,8 @@ fn a_bin_past_the_top_rung_is_refused_as_a_full_bin_and_not_as_a_codec_fault() {
 // The stranded mint, and the enrolment's own bar
 // ---------------------------------------------------------------------------
 
-/// A publish that fails after the mint leaves the counter as the device's only
-/// mark. The load names that state under its own reason and still refuses the
+/// A publish whose PUT left the engine leaves the mint counter as the device's
+/// only mark. The load names that state under its own reason and still refuses the
 /// rewrite, because the same attempt may have confirmed and lost only its floor
 /// write. The queue head's exit from it is a dead letter, which the drain's own
 /// split pins.
@@ -879,6 +883,263 @@ fn a_second_device_publishes_the_record_a_stranded_mint_could_not() {
             BinIndexLoad::Resolved(_),
         ),
         "and the record it published clears the stranded device",
+    );
+}
+
+/// The body revision the record currently published at `name` carries.
+fn published_revision(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> u64 {
+    open_bin_index(&seal_key(&SECRET), &published_block(device, blocks, name))
+        .expect("the published body opens")
+        .revision
+}
+
+/// Every durable mark the bin record leaves on `device`, in the order
+/// [`bin_index_mark_keys`] gives.
+fn marks(device: &FakeDevice) -> [Option<u64>; 3] {
+    bin_index_mark_keys(&name())
+        .map(|key| block_on(device.floor_store.sequence_floor(&key)).expect("read"))
+}
+
+/// Where an attempt fails ahead of its PUT.
+#[derive(Clone, Copy, Debug)]
+enum BeforePut {
+    Entropy,
+    SealCounterRaise,
+    Upload,
+    Register,
+    SequenceFloorRead,
+}
+
+/// The mint counter marks only a PUT that can have landed. An attempt that
+/// fails before its PUT leaves the engine leaves no mark, so the same device
+/// still reads a first run and publishes. A body that was sealed and never went
+/// out still spends its revision: the retry seals the next one.
+#[test]
+fn a_publish_that_fails_before_its_put_leaves_no_mark() {
+    for (case, uploads, retry_revision) in [
+        (BeforePut::Entropy, 0, 1),
+        (BeforePut::SealCounterRaise, 0, 1),
+        (BeforePut::Upload, 1, 2),
+        (BeforePut::Register, 1, 2),
+        (BeforePut::SequenceFloorRead, 1, 2),
+    ] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        let device = world.device(b"only-device");
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&seen);
+        let refuse = matches!(case, BeforePut::Upload);
+        blocks.refuse_upload(Box::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            refuse.then(|| Err(SeamError::new("upload refused")))
+        }));
+        if matches!(case, BeforePut::Register) {
+            blocks.refuse_register(b"{\"statusCode\":400}".to_vec());
+        }
+        match case {
+            BeforePut::SealCounterRaise => device
+                .floor_store
+                .fail_floor_raises_for(&mark(b"bin-index-revision-seal/", &name())),
+            BeforePut::SequenceFloorRead => device
+                .floor_store
+                .fail_sequence_floor_reads_for(name().as_str().as_bytes()),
+            BeforePut::Entropy | BeforePut::Upload | BeforePut::Register => {}
+        }
+        let mut seeded = SeededEntropy::new(1);
+        let entropy: &mut dyn Entropy = match case {
+            BeforePut::Entropy => &mut FailingEntropy,
+            BeforePut::SealCounterRaise
+            | BeforePut::Upload
+            | BeforePut::Register
+            | BeforePut::SequenceFloorRead => &mut seeded,
+        };
+
+        let outcome = publish_with(&world, &device, &blocks, &binned(&[1]), entropy);
+        assert!(outcome.is_err(), "{case:?}: the attempt fails");
+        assert_eq!(seen.load(Ordering::SeqCst), uploads, "{case:?}: uploads");
+        device.floor_store.heal_floors();
+        assert_eq!(marks(&device), [None; 3], "{case:?}: and leaves no mark");
+        assert_eq!(
+            load(&world, &device, &blocks, &keys()),
+            BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun),
+            "{case:?}: so the device still reads a first run",
+        );
+
+        blocks.accept_uploads();
+        blocks.accept_registrations();
+        publish(&world, &device, &blocks, &binned(&[1, 2]), 2);
+        assert_eq!(
+            published_revision(&device, &blocks, &name()),
+            retry_revision,
+            "{case:?}: the retry publishes, above any revision a body was sealed at",
+        );
+    }
+}
+
+/// A store that answers the mark write below the value asked for did not take
+/// the mark, so the PUT must not go out.
+#[test]
+fn a_mark_the_store_reports_below_its_value_sends_no_put() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"only-device");
+    device
+        .floor_store
+        .under_report_sequence_raises_for(&mark(b"bin-index-revision-mint/", &name()));
+
+    let outcome = publish_with(
+        &world,
+        &device,
+        &blocks,
+        &binned(&[1]),
+        &mut SeededEntropy::new(1),
+    );
+    assert!(matches!(
+        outcome,
+        Err(BinIndexPublishError::Publish(RecordPublishError::Publish(
+            PublishError::MarkUnrecorded(_)
+        )))
+    ));
+    assert!(
+        device
+            .record_store
+            .record_at(&device.record_store.endpoints()[0], name().as_str())
+            .is_none(),
+        "the PUT never left the engine",
+    );
+}
+
+/// The previous release raised the mint counter before the seal, so a counter
+/// it left may name a body that went out. The next seal still takes a revision
+/// above it.
+#[test]
+fn a_mint_counter_the_previous_release_left_still_bars_the_next_revision() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"only-device");
+    block_on(
+        device
+            .floor_store
+            .raise_sequence_floor(&mark(b"bin-index-revision-mint/", &name()), 3),
+    )
+    .expect("the mint counter raises");
+
+    publish(&world, &device, &blocks, &binned(&[1]), 1);
+    assert_eq!(published_revision(&device, &blocks, &name()), 4);
+}
+
+/// A PUT that its mark cannot precede must not go out, or it could land with
+/// nothing on the device to say so.
+#[test]
+fn a_mark_the_store_refuses_sends_no_put() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"only-device");
+    device
+        .floor_store
+        .fail_floor_raises_for(&mark(b"bin-index-revision-mint/", &name()));
+
+    let outcome = publish_with(
+        &world,
+        &device,
+        &blocks,
+        &binned(&[1]),
+        &mut SeededEntropy::new(1),
+    );
+    assert!(matches!(
+        outcome,
+        Err(BinIndexPublishError::Publish(RecordPublishError::Publish(
+            PublishError::MarkUnrecorded(_)
+        )))
+    ));
+    assert!(
+        device
+            .record_store
+            .record_at(&device.record_store.endpoints()[0], name().as_str())
+            .is_none(),
+        "the PUT never left the engine",
+    );
+}
+
+/// A transport whose PUT lands but whose answer is lost, so the publish cannot
+/// tell whether it landed.
+#[derive(Clone)]
+struct AckLost(InMemoryRecordStore);
+
+impl RecordTransport for AckLost {
+    fn endpoints(&self) -> Vec<EndpointId> {
+        self.0.endpoints()
+    }
+
+    async fn get_record(
+        &self,
+        endpoint: &EndpointId,
+        routing_key: &str,
+        max_bytes: usize,
+        bearer: Option<&str>,
+    ) -> SeamResult<Option<Vec<u8>>> {
+        self.0
+            .get_record(endpoint, routing_key, max_bytes, bearer)
+            .await
+    }
+
+    async fn put_record(
+        &self,
+        endpoint: &EndpointId,
+        routing_key: &str,
+        record: &[u8],
+    ) -> SeamResult<()> {
+        self.0.put_record(endpoint, routing_key, record).await?;
+        Err(SeamError::new("the answer was lost"))
+    }
+}
+
+/// A PUT with an unknown outcome can have landed, so it keeps its mark. While
+/// the record is withheld the rewrite refuses, and no later seal on the device
+/// reuses the revision the landed body carries.
+#[test]
+fn a_put_whose_outcome_is_unknown_keeps_its_mark_and_its_revision() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"only-device");
+    serve_http(&device, &blocks, 4);
+    let outcome = block_on(publish_bin_index(
+        &AckLost(device.record_store.clone()),
+        &api(&device),
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(1),
+        &OrphanHeads::default(),
+        &keys(),
+        &binned(&[1]),
+    ));
+    assert!(outcome.is_err(), "no endpoint answered the PUT");
+    assert_eq!(
+        marks(&device),
+        [None, None, Some(1)],
+        "the PUT left the engine, so the mint counter marks it",
+    );
+    assert_eq!(
+        published_revision(&device, &blocks, &name()),
+        1,
+        "and the PUT did land",
+    );
+
+    device.record_store.fail_get_for(name().as_str());
+    assert_eq!(
+        load(&world, &device, &blocks, &keys()).writable(),
+        Err(DefaultsReason::StrandedMint),
+        "a withheld record behind the mark is never published over",
+    );
+    device.record_store.heal_get_for(name().as_str());
+
+    publish(&world, &device, &blocks, &binned(&[1, 2]), 2);
+    assert_eq!(
+        published_revision(&device, &blocks, &name()),
+        2,
+        "the next seal takes the revision above the one that landed",
     );
 }
 
