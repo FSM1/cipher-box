@@ -1,5 +1,5 @@
 import * as jose from 'jose';
-import { generateKeyPairSync } from 'node:crypto';
+import { createSign, generateKeyPairSync, randomUUID } from 'node:crypto';
 import {
   IDENTITY_TOKEN_AUDIENCE,
   IDENTITY_TOKEN_ISSUER,
@@ -49,4 +49,24 @@ export async function identityTokenWithJti(
   if (expiry === 'stamped') builder.setExpirationTime(issuedAt + 300);
   if (jti !== undefined) builder.setJti(jti);
   return builder.sign(await jose.importPKCS8(privateKey, 'RS256'));
+}
+
+/**
+ * An identity token under the configured key whose `exp` is the raw JSON number
+ * `expJson`, such as `1e999`. Signed by hand, since `SignJWT` refuses such values.
+ */
+export function identityTokenWithRawExp(encodedPem: string, expJson: string): string {
+  const privateKey = Buffer.from(encodedPem, 'base64').toString('utf8');
+  const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'cipherbox-identity-1' }));
+  const claims = JSON.stringify({
+    iss: IDENTITY_TOKEN_ISSUER,
+    aud: IDENTITY_TOKEN_AUDIENCE,
+    sub: 'subject-id',
+    method: 'google',
+    jti: randomUUID(),
+  });
+  const payload = Buffer.from(`${claims.slice(0, -1)},"exp":${expJson}}`);
+  const signingInput = `${header.toString('base64url')}.${payload.toString('base64url')}`;
+  const signature = createSign('RSA-SHA256').update(signingInput).sign(privateKey);
+  return `${signingInput}.${signature.toString('base64url')}`;
 }

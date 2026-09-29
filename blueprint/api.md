@@ -81,7 +81,7 @@ What left the API relative to v1 — with the design that removed it:
   it already holds is un-shared (D5).
 - Tables: `users` (keyed by `publicKey`; carries quota-limit override and BYO flag),
   `auth_methods`, `refresh_tokens`, `accelerator_tokens`, `account_devices`,
-  `device_approvals`, `identity_subjects`.
+  `device_approvals`, `identity_subjects`, `spent_identity_tokens`.
 - **`identity_subjects`** maps a verified provider identity — hashed, never
   stored in the clear — to the stable subject id the identity token's `sub`
   carries and `loginWithJWT` takes as its `verifierId`. A row holds the

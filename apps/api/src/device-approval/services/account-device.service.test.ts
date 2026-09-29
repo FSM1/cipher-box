@@ -11,6 +11,7 @@ import {
   bootedIdentityTokenService,
   encodedIdentitySigningKey,
   identityTokenWithJti,
+  identityTokenWithRawExp,
 } from '../../testing/identity-tokens';
 import { deviceRegistrationPayload } from '../device-signature';
 import { AccountDevice } from '../entities/account-device.entity';
@@ -206,6 +207,23 @@ describe('AccountDeviceService', () => {
       const malformed = await identityTokenWithJti(encodedPem, clock, 'not-a-uuid');
       await expect(
         service.register(account, registration(device, account, { identityToken: malformed }))
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(spend).not.toHaveBeenCalled();
+      expect(devices.rows).toHaveLength(0);
+    });
+
+    it('refuses a token whose expiry is not finite with 401, before any spend', async () => {
+      const encodedPem = encodedIdentitySigningKey();
+      const realTokens = await bootedIdentityTokenService(
+        { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+        clock
+      );
+      const spend = vi.spyOn(realTokens, 'spend');
+      service = serviceOver(realTokens);
+
+      const unbounded = identityTokenWithRawExp(encodedPem, '1e999');
+      await expect(
+        service.register(account, registration(device, account, { identityToken: unbounded }))
       ).rejects.toBeInstanceOf(UnauthorizedException);
       expect(spend).not.toHaveBeenCalled();
       expect(devices.rows).toHaveLength(0);

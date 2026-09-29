@@ -136,10 +136,17 @@ export class IdentityTokenService implements OnModuleInit {
     if (typeof subject !== 'string' || !isIdentitySubjectKind(method)) {
       throw new Error('identity token is missing its subject or method claim');
     }
-    if (typeof tokenId !== 'string' || !UUID_RE.test(tokenId) || exp === undefined) {
-      throw new Error('identity token is missing its token id or expiry');
+    // `jose` accepts an `exp` such as `1e999` (Infinity) or `1e300`, which is no
+    // valid instant for the spend row.
+    const expiresAt = new Date((exp ?? NaN) * 1000);
+    if (
+      typeof tokenId !== 'string' ||
+      !UUID_RE.test(tokenId) ||
+      Number.isNaN(expiresAt.getTime())
+    ) {
+      throw new Error('identity token is missing its token id or a valid expiry');
     }
-    return { subject, method, tokenId, expiresAt: new Date(exp * 1000) };
+    return { subject, method, tokenId, expiresAt };
   }
 
   /**
