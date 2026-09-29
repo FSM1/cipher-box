@@ -119,16 +119,20 @@ impl FileStagingStore {
             .join(format!("{first:020}-{last:020}{BATCH_SUFFIX}"))
     }
 
-    /// Removes the op files of an uncommitted set, then its marker, so a
-    /// failure part-way leaves the marker hiding what is left.
+    /// Removes every op file of an uncommitted set, past a refused removal,
+    /// then its marker only if all of them went, so a marker that stands hides
+    /// what is left. An unlink whose barrier refused still takes the file out
+    /// of the directory, so with no marker the set is gone from this process.
     fn roll_back_batch(
         &self,
         batch: &RangeInclusive<u64>,
         written: impl Iterator<Item = u64>,
     ) -> std::io::Result<()> {
+        let mut removed = Ok(());
         for id in written {
-            remove_file_durable(&self.op_path(id))?;
+            removed = keep_first(removed, remove_file_durable(&self.op_path(id)));
         }
+        removed?;
         remove_file_durable(&self.batch_path(batch))
     }
 

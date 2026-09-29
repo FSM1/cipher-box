@@ -1047,6 +1047,33 @@ mod tests {
             Vec::new(),
             "a node no folder names has no parent to stamp"
         );
+
+        // Two links, winner first: the winner sorts after the other parent.
+        let (winner, other) = (id(4), id(2));
+        for (op, expected, why) in [
+            (
+                Op::rename(node, "b", 1, at(1)),
+                vec![winner],
+                "a rename keeps the winning parent alone",
+            ),
+            (
+                Op::move_node(node, winner, to, "b", None, 1, at(1), ScopeCrossing::Intra),
+                vec![to, winner],
+                "a move keeps the winning parent and the destination",
+            ),
+            (
+                Op::relink(node, winner, to, 1, at(1), ScopeCrossing::Intra),
+                vec![to, winner],
+                "a relink keeps the winning parent and the destination",
+            ),
+            (
+                Op::delete(node, 1, at(1), 1, false),
+                vec![other, winner],
+                "a delete keeps every parent",
+            ),
+        ] {
+            assert_eq!(op.authored_nodes(|| vec![winner, other]), expected, "{why}");
+        }
     }
 
     #[test]

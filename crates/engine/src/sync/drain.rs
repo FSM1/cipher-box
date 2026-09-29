@@ -1297,9 +1297,10 @@ fn stamped_modified_at(
     authored: &[NodeId],
     folder: NodeId,
 ) -> Result<u64, Halt> {
-    match authored.contains(&folder) {
-        true => Ok(op.authored_at.0),
-        false => Ok(pass.folder(folder)?.modified_at),
+    if authored.contains(&folder) {
+        Ok(op.authored_at.0)
+    } else {
+        Ok(pass.folder(folder)?.modified_at)
     }
 }
 
@@ -4591,15 +4592,9 @@ where
         // Only when one folder collapses the plan is the dest-add also its last
         // record; otherwise the source-remove below is.
         let single_record = source == dest;
-        let authored = applied.op.authored_nodes(|| {
-            self.cells
-                .base
-                .borrow()
-                .links_ranked(target)
-                .iter()
-                .map(|link| link.parent)
-                .collect()
-        });
+        // `source` is the base's winning parent, the one parent a rename or a
+        // relocation stamps.
+        let authored = applied.op.authored_nodes(|| vec![source]);
         let modified_at = stamped_modified_at(pass, &applied.op, &authored, dest)?;
         let cas_base = self
             .publish_folder(

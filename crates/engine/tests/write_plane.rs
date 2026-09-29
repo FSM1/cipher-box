@@ -16326,7 +16326,18 @@ fn a_dual_linked_node_stamps_only_the_parent_its_publish_writes() {
     .unwrap();
     tick(&world, &engine, &mut tasks);
     let albums = child_id(&engine, ROOT, "albums");
-    let linked = BTreeSet::from([ROOT, photos]);
+    // The winning link: the higher counter, then the lower parent id.
+    let counter_under = |parent: NodeId| {
+        published_children(&world.record_store, &blocks, parent)
+            .iter()
+            .find(|child| child.id == deep.0)
+            .map(|child| child.link_counter)
+            .expect("both folders name the node")
+    };
+    let winner = [ROOT, photos]
+        .into_iter()
+        .min_by_key(|parent| (core::cmp::Reverse(counter_under(*parent)), *parent))
+        .expect("two links");
 
     let renamed = stamped_by_command(
         &world,
@@ -16337,8 +16348,9 @@ fn a_dual_linked_node_stamps_only_the_parent_its_publish_writes() {
             new_name: "renamed.bin".into(),
         },
     );
-    assert!(
-        renamed.len() == 1 && renamed.is_subset(&linked),
+    assert_eq!(
+        renamed,
+        BTreeSet::from([winner]),
         "a rename stamps the winning parent alone"
     );
 
@@ -16353,8 +16365,9 @@ fn a_dual_linked_node_stamps_only_the_parent_its_publish_writes() {
             replacing: None,
         },
     );
-    assert!(
-        moved.len() == 2 && moved.contains(&albums) && moved.iter().any(|n| linked.contains(n)),
+    assert_eq!(
+        moved,
+        BTreeSet::from([winner, albums]),
         "a move stamps the winning parent and the destination"
     );
 }
