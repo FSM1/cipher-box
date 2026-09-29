@@ -22,7 +22,8 @@ use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::content::{ByoBearer, ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode};
 use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{
-    BoxedTask, EndpointId, FloorStore, RecordTransport, Scheduler, SnapshotCache, UnixMillis,
+    BoxedTask, EndpointId, FloorStore, HttpResponse, RecordTransport, Scheduler, SnapshotCache,
+    UnixMillis,
 };
 use cipherbox_engine::testkit::account::{Blocks, serve_http};
 use cipherbox_engine::testkit::fakes::{
@@ -2447,6 +2448,45 @@ fn open_and_drop_a_write(engine: &mut Engine<FakeSeamTypes>) -> Result<(), Engin
     ))?;
     block_on(engine.abort_write(handle));
     Ok(())
+}
+
+/// The mint counter rises before the head upload because the API answers that
+/// upload: a refusal it gives leaves the counter as this device's only mark,
+/// and the next start refuses the write rather than assume the hosted default.
+#[test]
+fn a_head_upload_the_api_refuses_leaves_the_mint_and_the_next_start_refuses_the_write() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+    blocks.refuse_upload(Box::new(|_| {
+        Some(Ok(HttpResponse {
+            status: 503,
+            headers: Vec::new(),
+            body: br#"{"statusCode":503,"message":"pin store unavailable"}"#.to_vec(),
+        }))
+    }));
+    let refused_save = block_on(engine.command(Command::SaveVaultSettings {
+        settings: external_only(),
+    }));
+    assert!(
+        matches!(refused_save, Err(EngineError::Seam { .. })),
+        "the publish is what failed, got {refused_save:?}"
+    );
+    blocks.accept_uploads();
+    drop(engine);
+
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+    let refused = open_and_drop_a_write(&mut engine);
+    assert!(
+        matches!(
+            refused,
+            Err(EngineError::NoPlacement {
+                refusal: PlacementRefusal::SettingsUnavailable(DefaultsReason::StrandedMint),
+            })
+        ),
+        "got {refused:?}",
+    );
 }
 
 /// The API answering about a block other than the one uploaded is a fail-closed

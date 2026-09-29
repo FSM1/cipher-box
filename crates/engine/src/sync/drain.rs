@@ -5722,8 +5722,7 @@ where
         // Resolved before any byte moves: a session with no authenticated
         // destination publishes no version. What the refusal costs is
         // [`PlacementRefusal::holds`]'s to say — an outage this pass could not
-        // resolve is retried uncharged rather than spending a budget that ends
-        // by releasing the version's staged blocks.
+        // resolve spends the unattributed budget, never the attempt budget.
         let placement = self.inputs.placement.as_ref().map_err(|refusal| {
             refusal
                 .holds()

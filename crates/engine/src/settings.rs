@@ -401,8 +401,8 @@ impl PlacementRefusal {
         }
     }
 
-    /// The class label used in reject vectors. A degraded load clears itself on
-    /// a later tick; the other two stand until the member edits the settings.
+    /// The class label used in reject vectors, one per check: every degraded
+    /// load is `availability`, whether or not it takes a hold ([`Self::holds`]).
     pub fn class(&self) -> &'static str {
         match self {
             Self::SettingsUnavailable(_) => "availability",
@@ -411,15 +411,21 @@ impl PlacementRefusal {
     }
 
     /// The hold this refusal takes, if a member action is its exit at all.
-    /// Editing the settings clears a deterministic refusal, where a degraded
-    /// load repairs itself on a later tick and no edit reaches it — so the
-    /// second holds nothing, and the queue head keeps retrying instead.
+    /// Editing the settings clears a deterministic refusal. A stranded mint
+    /// clears only on a save that lands or a record that resolves, never on a
+    /// later tick alone. Every other degraded load can clear on a later tick,
+    /// so it holds nothing and the queue head retries on the unattributed
+    /// budget.
     ///
     /// The one place the split is decided, so a hold cannot be taken on terms
     /// its release check does not recognise.
     pub fn holds(self) -> Option<SettingsRefusal> {
         match self {
-            Self::NoProvider | Self::NoExternalIngress(_) => Some(SettingsRefusal::Placement(self)),
+            Self::NoProvider
+            | Self::NoExternalIngress(_)
+            | Self::SettingsUnavailable(DefaultsReason::StrandedMint) => {
+                Some(SettingsRefusal::Placement(self))
+            }
             Self::SettingsUnavailable(_) => None,
         }
     }
@@ -1664,9 +1670,11 @@ mod tests {
     #[test]
     fn only_a_settings_fixable_refusal_takes_a_hold() {
         let mut names = BTreeSet::new();
+        let stranded = PlacementRefusal::SettingsUnavailable(DefaultsReason::StrandedMint);
         for refusal in [
             PlacementRefusal::NoProvider,
             PlacementRefusal::NoExternalIngress(ByoKind::Pinata),
+            stranded,
         ] {
             assert_eq!(
                 refusal.holds(),
@@ -1677,11 +1685,30 @@ mod tests {
             assert!(names.insert(refusal.check()), "{}", refusal.check());
             assert_eq!(SettingsRefusal::Placement(refusal).check(), refusal.check());
         }
-        // A degraded load repairs itself on a later tick, so no settings edit
-        // is its exit and holding on it would park the queue head for good.
-        let degraded = PlacementRefusal::SettingsUnavailable(DefaultsReason::TimedOut);
-        assert_eq!(degraded.holds(), None);
-        assert!(names.insert(degraded.check()));
+        // Every other degraded load can clear on a later tick, so holding on it
+        // would park the queue head on a cause no member action reaches.
+        for reason in [
+            DefaultsReason::UnprovenFirstRun,
+            DefaultsReason::Suppressed,
+            DefaultsReason::RolledBack {
+                floor: 4,
+                sequence: 2,
+            },
+            DefaultsReason::RevisionRolledBack {
+                floor: 4,
+                revision: 2,
+            },
+            DefaultsReason::Expired,
+            DefaultsReason::TimedOut,
+            DefaultsReason::Unreadable,
+            DefaultsReason::FloorUnreadable,
+        ] {
+            assert_eq!(
+                PlacementRefusal::SettingsUnavailable(reason).holds(),
+                None,
+                "{reason:?}"
+            );
+        }
 
         assert_eq!(
             SettingsRefusal::Byo(ProviderError::InsecureTransport).check(),

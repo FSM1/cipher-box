@@ -31,6 +31,20 @@ describe('the queue hold notice', () => {
     expect(notice.textContent).toContain('your settings send bytes to your own storage provider');
   });
 
+  it('tells the member that a stranded settings save is left by saving again', () => {
+    render(
+      <QueueHoldNotice
+        view={listing({
+          queueHold: { reason: 'settings', opId: 8n, node: NODE, check: 'settings-unavailable' },
+        })}
+      />
+    );
+
+    const notice = screen.getByTestId('queue-hold-notice');
+    expect(notice.textContent).toContain('"child-0" waits on your settings');
+    expect(notice.textContent).toContain('save your settings again');
+  });
+
   it('names why the bin index did not resolve, and clears when the hold clears', () => {
     const { rerender } = render(
       <QueueHoldNotice

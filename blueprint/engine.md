@@ -327,7 +327,10 @@ its degraded outcome applies a different policy rather than showing stale data.
   raised before the PUT, so it outlives any save that got as far as minting a
   revision — a member who expressed a placement choice this device could not
   authenticate is never talked back onto the default, which is precisely when
-  that reversal is cheapest. The adopted revision is raised by a store write
+  that reversal is cheapest. The settings save reads no mark, so a save on the
+  same device is the exit from a stranded mint, and the mint counter rises
+  before the head upload and the register because the API answers both
+  (ADR 0034 D5). The adopted revision is raised by a store write
   separate from the sequence floor's and not atomic with it, so it outlives a
   lost one. Absence is a verdict about _this device_ only, so an assumed
   placement must never latch account-scoped state, and the account's advisory

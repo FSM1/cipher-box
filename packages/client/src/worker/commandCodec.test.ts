@@ -1489,6 +1489,24 @@ describe('readSnapshot', () => {
     });
   });
 
+  it('reads a stranded settings mint as a settings hold', () => {
+    const view = {
+      ...baseView(),
+      queueHold: {
+        opId: 14n,
+        node: new Uint8Array(16).fill(7),
+        reason: 'settings',
+        check: 'settings-unavailable',
+      },
+    };
+    expect(readSnapshot(fakeWasm, view).queueHold).toEqual({
+      opId: 14n,
+      node: new Uint8Array(16).fill(7),
+      reason: 'settings',
+      check: 'settings-unavailable',
+    });
+  });
+
   it('fails closed on a hold reason this build cannot name', () => {
     const view = {
       ...baseView(),
