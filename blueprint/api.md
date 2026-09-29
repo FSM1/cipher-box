@@ -79,6 +79,10 @@ What left the API relative to v1 — with the design that removed it:
   the recovery phrase (ADR 0009 D2). Revocation is a hard delete, and it is
   honest about what it does — the device stops approving from now on; nothing
   it already holds is un-shared (D5).
+- **The identity token is single-use at device registration**: a registration
+  spends it by its `jti` in `spent_identity_tokens`, which holds the `jti` and
+  the expiry only, and a spent token is refused. `POST /device-approval/session`
+  accepts it more than once (ADR 0058).
 - Tables: `users` (keyed by `publicKey`; carries quota-limit override and BYO flag),
   `auth_methods`, `refresh_tokens`, `accelerator_tokens`, `account_devices`,
   `device_approvals`, `identity_subjects`.
