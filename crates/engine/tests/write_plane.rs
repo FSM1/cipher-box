@@ -16140,3 +16140,128 @@ fn a_write_over_a_history_retention_cannot_shorten_still_publishes() {
         "a co-writer's history never parks the member's own write",
     );
 }
+
+/// The rendered `mtime` of every node in the view's tree, in walk order.
+fn rendered_mtimes(engine: &Engine<FakeSeamTypes>) -> Vec<(NodeId, Option<u64>)> {
+    let view = block_on(engine.view()).expect("a rendered view");
+    let mut walk = vec![ROOT];
+    let mut mtimes = Vec::new();
+    while let Some(node) = walk.pop() {
+        mtimes.push((node, view.attrs(node).and_then(|attrs| attrs.mtime)));
+        walk.extend(view.children(node).into_iter().map(|child| child.id));
+    }
+    mtimes
+}
+
+/// Runs `command` and returns the nodes its overlay stamped, sorted: the ones
+/// now rendered at its authored time. Every other node keeps its time, and the
+/// publish moves no rendered time.
+fn stamped_by(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    command: Command,
+) -> Vec<NodeId> {
+    use cipherbox_engine::seams::Scheduler as _;
+
+    tick(world, engine, tasks);
+    let before = rendered_mtimes(engine);
+    let authored_at = Some(world.scheduler.now().0);
+    block_on(engine.command(command)).expect("the command journals");
+    let rendered = rendered_mtimes(engine);
+    for (node, mtime) in &rendered {
+        if let Some((_, prior)) = before.iter().find(|(seen, _)| seen == node) {
+            assert!(
+                *mtime == authored_at || mtime == prior,
+                "a node the op does not stamp keeps its time"
+            );
+        }
+    }
+    tick(world, engine, tasks);
+    assert_eq!(
+        rendered_mtimes(engine),
+        rendered,
+        "the publish writes the times the overlay rendered"
+    );
+    let mut stamped: Vec<NodeId> = rendered
+        .into_iter()
+        .filter(|(_, mtime)| *mtime == authored_at)
+        .map(|(node, _)| node)
+        .collect();
+    stamped.sort();
+    stamped
+}
+
+/// The overlay stamps exactly the nodes whose records the drain republishes at
+/// the op's authored time (ADR 0045 D5): a rename or a relocation stamps the
+/// folders, not the node.
+#[test]
+fn an_op_renders_the_times_its_publish_writes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    for name in ["a", "b"] {
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: name.into(),
+            kind: NodeKind::Folder,
+        }))
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+    let (a, b) = (child_id(&engine, ROOT, "a"), child_id(&engine, ROOT, "b"));
+    let sorted = |mut nodes: Vec<NodeId>| {
+        nodes.sort();
+        nodes
+    };
+
+    let created = stamped_by(
+        &world,
+        &mut engine,
+        &mut tasks,
+        Command::Create {
+            parent: a,
+            name: "x".into(),
+            kind: NodeKind::Folder,
+        },
+    );
+    let x = child_id(&engine, a, "x");
+    assert_eq!(
+        created,
+        sorted(vec![a, x]),
+        "a create stamps the node and its parent"
+    );
+
+    let rename = Command::Rename {
+        node: x,
+        new_name: "y".into(),
+    };
+    let relink = Command::Relink {
+        node: x,
+        new_parent: b,
+    };
+    let relocate = Command::Move {
+        node: x,
+        new_parent: a,
+        new_name: "z".into(),
+        replacing: None,
+    };
+    for (command, expected, why) in [
+        (rename, vec![a], "a rename stamps the parent"),
+        (relink, sorted(vec![a, b]), "a relink stamps both parents"),
+        (relocate, sorted(vec![a, b]), "a move stamps both parents"),
+        (
+            Command::Delete { node: x },
+            vec![a],
+            "a delete stamps the parent",
+        ),
+    ] {
+        assert_eq!(
+            stamped_by(&world, &mut engine, &mut tasks, command),
+            expected,
+            "{why}"
+        );
+    }
+}

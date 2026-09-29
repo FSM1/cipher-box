@@ -652,14 +652,38 @@ impl Op {
         self.staged_content().map(|c| &c.root_cid[..])
     }
 
-    /// Stamp this op's authored facts onto the node it targets — `mtime`
-    /// **overwriting** the projected time, and a content op's plaintext size.
-    /// The one function the pending-op overlay and the drain's publish plan
-    /// share, so a rendered node and the record that will publish it agree
-    /// (blueprint/engine.md "State law").
+    /// The nodes whose next records this op's publish authors at
+    /// `authored_at`, sorted: the set the pending-op overlay stamps and the
+    /// drain's publish plan writes, so a rendered node and the record that
+    /// will publish it agree (ADR 0045 D5). `parents` are the folders that name
+    /// the target before the op applies.
+    pub fn authored_nodes(&self, parents: &[NodeId]) -> Vec<NodeId> {
+        let mut nodes = match &self.kind {
+            OpKind::Create { parent, .. } => vec![self.target, *parent],
+            OpKind::UpdateContent { .. } => vec![self.target],
+            // The name lives in the parent's child ref, so the child's own
+            // record does not change.
+            OpKind::Rename { .. } | OpKind::Delete { .. } => parents.to_vec(),
+            OpKind::Relink { new_parent, .. } | OpKind::Move { new_parent, .. } => {
+                parents.iter().copied().chain([*new_parent]).collect()
+            }
+            OpKind::Restore { into, .. } => vec![*into],
+            OpKind::Purge { .. }
+            | OpKind::Prune { .. }
+            | OpKind::RestoreVersion { .. }
+            | OpKind::DeleteVersion { .. } => Vec::new(),
+        };
+        nodes.sort();
+        nodes.dedup();
+        nodes
+    }
+
+    /// Stamp this op's authored facts onto one of its [authored
+    /// nodes](Self::authored_nodes): `mtime` **overwriting** the projected
+    /// time, and, on the target of a content op, its plaintext size.
     pub fn stamp_authored(&self, meta: &mut NodeMeta) {
         meta.mtime = Some(self.authored_at.0);
-        if let Some(content) = self.staged_content() {
+        if let Some(content) = self.staged_content().filter(|_| meta.id == self.target) {
             meta.size = Some(content.plaintext_size);
         }
     }
@@ -959,13 +983,63 @@ mod tests {
         let mut node = NodeMeta::new(id(1), "f.txt", NodeKind::File);
         node.mtime = Some(999);
         node.size = Some(42);
-        Op::rename(id(1), "g.txt", 1, at(1)).stamp_authored(&mut node);
+        Op::delete_version(id(1), b"cid".to_vec(), 1, at(1)).stamp_authored(&mut node);
         assert_eq!(
             node.mtime,
             Some(1),
-            "the op authors the node's next record, so the projected time is stale"
+            "a stamped node's next record carries the op's time, so the projected time is stale"
         );
         assert_eq!(node.size, Some(42), "a metadata op carries no size");
+    }
+
+    #[test]
+    fn a_content_op_stamps_its_size_on_its_target_alone() {
+        let mut parent = NodeMeta::new(id(0), "docs", NodeKind::Folder);
+        let create = NewNode::File {
+            content: Some(staged(b"root", 9)),
+        };
+        Op::create(id(1), id(0), "f.txt", create, 1, at(5)).stamp_authored(&mut parent);
+        assert_eq!((parent.mtime, parent.size), (Some(5), None));
+    }
+
+    /// The stamped set per op kind (ADR 0045 D5): a create stamps the new node
+    /// and its parent, a rename and a delete the parent, a relink and a move
+    /// both parents, a content op the node alone.
+    #[test]
+    fn each_op_kind_authors_its_own_set_of_nodes() {
+        let (node, from, to) = (id(1), id(2), id(3));
+        let parents = [from];
+        for (op, expected, why) in [
+            (
+                Op::create(node, from, "a", NewNode::Folder, 1, at(1)),
+                vec![node, from],
+                "create",
+            ),
+            (Op::rename(node, "b", 1, at(1)), vec![from], "rename"),
+            (Op::delete(node, 1, at(1), 1, false), vec![from], "delete"),
+            (
+                Op::relink(node, from, to, 1, at(1), ScopeCrossing::Intra),
+                vec![from, to],
+                "relink",
+            ),
+            (
+                Op::move_node(node, from, to, "b", None, 1, at(1), ScopeCrossing::Intra),
+                vec![from, to],
+                "move",
+            ),
+            (
+                Op::update_content(node, staged(b"k", 1), None, 1, at(1)),
+                vec![node],
+                "update content",
+            ),
+        ] {
+            assert_eq!(op.authored_nodes(&parents), expected, "{why}");
+        }
+        assert_eq!(
+            Op::rename(node, "b", 1, at(1)).authored_nodes(&[]),
+            Vec::new(),
+            "a node no folder names has no parent to stamp"
+        );
     }
 
     #[test]
