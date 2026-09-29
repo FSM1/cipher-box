@@ -44,6 +44,8 @@ describe('the soak records', () => {
       detail: 'the owner vault has no soak/ledger.txt',
     },
     { kind: 'fact', label: 'owner ledger markers', value: '0' },
+    { kind: 'test', test: 'the owner vault', phase: 'started' },
+    { kind: 'test', test: 'the owner vault', phase: 'ended' },
   ];
 
   it('round-trip through the results lines', () => {
@@ -75,6 +77,8 @@ describe('the soak records', () => {
     ['an unnamed check', { kind: 'check', check: ' ', outcome: 'passed' }],
     ['an unknown outcome', { kind: 'check', check: 'a', outcome: 'flaky' }],
     ['a fact with no label', { kind: 'fact', label: '', value: '1' }],
+    ['a test line with no phase', { kind: 'test', test: 't' }],
+    ['a test line with no title', { kind: 'test', test: '', phase: 'started' }],
   ])('refuse %s on both sides', (_label, value) => {
     expect(() => encodeRecord(value as unknown as SoakRecord)).toThrow(/not writable/);
     expect(() => parseRecords(JSON.stringify(value))).toThrow(/results line 1/);
@@ -145,7 +149,10 @@ describe('the job summary', () => {
 
 describe('an unrecorded failure', () => {
   it('records a test that failed outside every check', () => {
-    const missed = unrecordedFailure('the owner vault', 'timedOut', 'passed', 0);
+    const missed = unrecordedFailure(
+      { title: 'the owner vault', status: 'timedOut', expectedStatus: 'passed' },
+      0
+    );
     expect(missed).toEqual({
       kind: 'check',
       check: 'the owner vault',
@@ -157,7 +164,38 @@ describe('an unrecorded failure', () => {
   });
 
   it('adds nothing when the test ended as expected or a check recorded the failure', () => {
-    expect(unrecordedFailure('t', 'passed', 'passed', 0)).toBeNull();
-    expect(unrecordedFailure('t', 'failed', 'passed', 1)).toBeNull();
+    expect(
+      unrecordedFailure({ title: 't', status: 'passed', expectedStatus: 'passed' }, 0)
+    ).toBeNull();
+    expect(
+      unrecordedFailure({ title: 't', status: 'failed', expectedStatus: 'passed' }, 1)
+    ).toBeNull();
+  });
+});
+
+describe('an unfinished test', () => {
+  const passed: SoakRecord = { kind: 'check', check: 'owner ledger', outcome: 'passed' };
+
+  it('fails a test that started and wrote no end line', () => {
+    const summary = renderSummary([
+      { kind: 'test', test: 'the owner vault', phase: 'started' },
+      passed,
+      { kind: 'test', test: 'the owner vault', phase: 'ended' },
+      { kind: 'test', test: 'the grantee vault', phase: 'started' },
+      passed,
+    ]);
+    expect(summary).toContain('1 of 3 soak checks failed.');
+    expect(summary).toContain('| the grantee vault | failed | `test-unfinished`');
+    expect(summary).not.toContain('| the owner vault | failed');
+  });
+
+  it('passes a night whose every test ended', () => {
+    expect(
+      renderSummary([
+        { kind: 'test', test: 'a', phase: 'started' },
+        passed,
+        { kind: 'test', test: 'a', phase: 'ended' },
+      ])
+    ).toContain('All 1 soak checks passed.');
   });
 });

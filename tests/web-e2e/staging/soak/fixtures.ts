@@ -28,19 +28,17 @@ let recordedFailures = 0;
 
 export const test = base.extend<SoakFixtures>({
   // Automatic, and torn down last: a failure outside every check still reaches
-  // the summary.
+  // the summary, and a test that never reaches this teardown leaves no `ended`
+  // line.
   failClosed: [
     // eslint-disable-next-line no-empty-pattern -- Playwright reads the fixture list from this pattern.
     async ({}, use, testInfo) => {
       const before = recordedFailures;
+      await record({ kind: 'test', test: testInfo.title, phase: 'started' });
       await use();
-      const missed = unrecordedFailure(
-        testInfo.title,
-        testInfo.status,
-        testInfo.expectedStatus,
-        recordedFailures - before
-      );
+      const missed = unrecordedFailure(testInfo, recordedFailures - before);
       if (missed !== null) await record(missed);
+      await record({ kind: 'test', test: testInfo.title, phase: 'ended' });
     },
     { auto: true },
   ],

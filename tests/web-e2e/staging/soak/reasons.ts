@@ -26,6 +26,10 @@ export const SOAK_REASONS = {
     kind: 'failure',
     meaning: 'a test failed outside every recorded check',
   },
+  'test-unfinished': {
+    kind: 'failure',
+    meaning: 'a test started and never reached its teardown',
+  },
   'sign-in-failed': { kind: 'failure', meaning: 'a soak account did not sign in' },
   'marker-unreadable': { kind: 'failure', meaning: 'a ledger marker did not open byte for byte' },
   'sequence-regressed': {

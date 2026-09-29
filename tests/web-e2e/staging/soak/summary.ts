@@ -8,6 +8,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { TestInfo } from '@playwright/test';
 import { isSoakReason, reasonKind, SOAK_REASONS, type FailureReason } from './reasons';
 
 /** Inside Playwright's output folder, which a run clears when it starts. */
@@ -26,7 +27,8 @@ export type SoakRecord =
       readonly reason: FailureReason;
       readonly detail: string;
     }
-  | { readonly kind: 'fact'; readonly label: string; readonly value: string };
+  | { readonly kind: 'fact'; readonly label: string; readonly value: string }
+  | { readonly kind: 'test'; readonly test: string; readonly phase: 'started' | 'ended' };
 
 /** One results line. Refuses a record that {@link parseRecords} would reject. */
 export function encodeRecord(record: SoakRecord): string {
@@ -63,19 +65,38 @@ export async function record(entry: SoakRecord, file = RESULTS_FILE): Promise<vo
  * check recorded, such as a fixture error or a timeout; `null` otherwise.
  */
 export function unrecordedFailure(
-  title: string,
-  status: string | undefined,
-  expectedStatus: string,
+  test: Pick<TestInfo, 'title' | 'status' | 'expectedStatus'>,
   recordedFailures: number
 ): SoakRecord | null {
-  if (status === expectedStatus || recordedFailures > 0) return null;
+  if (test.status === test.expectedStatus || recordedFailures > 0) return null;
   return {
     kind: 'check',
-    check: title,
+    check: test.title,
     outcome: 'failed',
     reason: 'unrecorded-failure',
-    detail: `the test ended ${status ?? 'without a status'}`,
+    detail: `the test ended ${test.status ?? 'without a status'}`,
   };
+}
+
+/** A failed check for each `started` test with no `ended` line: a worker crash or a hung teardown. */
+function unfinishedTests(records: readonly SoakRecord[]): SoakRecord[] {
+  const open = new Map<string, number>();
+  for (const entry of records) {
+    if (entry.kind !== 'test') continue;
+    open.set(entry.test, (open.get(entry.test) ?? 0) + (entry.phase === 'started' ? 1 : -1));
+  }
+  return [...open].flatMap(([test, count]) =>
+    Array.from(
+      { length: Math.max(count, 0) },
+      (): SoakRecord => ({
+        kind: 'check',
+        check: test,
+        outcome: 'failed',
+        reason: 'test-unfinished',
+        detail: 'the test started and wrote no end line',
+      })
+    )
+  );
 }
 
 /** The first line of `text`, cut to the summary's budget. */
@@ -85,7 +106,9 @@ export function shortDetail(text: string): string {
 }
 
 export function renderSummary(records: readonly SoakRecord[]): string {
-  const checks = records.filter((entry) => entry.kind === 'check');
+  const checks = [...records, ...unfinishedTests(records)].filter(
+    (entry) => entry.kind === 'check'
+  );
   const facts = records.filter((entry) => entry.kind === 'fact');
   const failed = checks.filter((entry) => entry.outcome === 'failed').length;
 
@@ -121,6 +144,11 @@ function cell(text: string): string {
 function invalid(value: unknown): string | null {
   if (typeof value !== 'object' || value === null) return 'not an object';
   const entry = value as Record<string, unknown>;
+  if (entry.kind === 'test') {
+    return nonEmpty(entry.test) && (entry.phase === 'started' || entry.phase === 'ended')
+      ? null
+      : 'a test line needs a title and a phase';
+  }
   if (entry.kind === 'fact') {
     return nonEmpty(entry.label) && typeof entry.value === 'string'
       ? null
