@@ -339,10 +339,39 @@ One `nightly.yml` (cron) owns the scheduled slots testing.md defined
 - **Cloudflare Range Watch** (ADR 0035 D9): the trusted-proxy snapshot
   diffed against Cloudflare's published list, so the mirror above cannot go
   stale unseen.
+- **Staging Soak** (ADR 0053): a nightly slot calls `staging-soak.yml`
+  with the newest `staging-*` tag as the suite source, so tests and deploy
+  are one revision. It signs in as the two durable soak accounts, the
+  owner and the grantee, which never enroll a factor and are never removed
+  (ADR 0053 D1, D4). The web leg signs in with the wallet key; a desktop
+  leg gives the login secret to an `e2e-hook` host built from the staging
+  tag, and the shipped bundle never carries the hook (D3). Ledger: a text
+  file in the owner vault's `soak/`, each day marker with its date, CID
+  and record sequence, at most 90, oldest binned nightly. Checks (product
+  surfaces, never a hook, ADR 0049 D3): every marker opens byte for byte
+  from an empty profile; no soak name's sequence goes below the ledger;
+  today's marker publishes and re-resolves from a second fresh context
+  through the public routing path at seq+1; a read link on `soak/shared`
+  reads each night as a holder, its epoch flat; a mint, claim, convert and
+  revoke cycle on `soak/cycle` steps the read epoch by one, and a fresh
+  context sees the link revoked; a marker over 60 days old republishes at
+  seq+1, validity fresh; the bin purge lands on the due night. Republisher
+  counters from the staging metrics: stale and skipped as a 24-hour
+  increase, resolve failures flat, last-walk gauges after 12 h of API
+  uptime, walks from `republisher_walks_total`. Desktop legs on macOS,
+  Linux and Windows run one at a time with production timings; each signs
+  in as the grantee, writes an OS marker into the grantee vault, and reads
+  the other legs' markers through the mount; no desktop sharing. Jobs run
+  in the `staging` environment, which holds the four soak secrets (D2),
+  and the job-level `staging-environment` concurrency group. A cancelled
+  night reports skipped, an outage failed; each assertion names a reason
+  code; failures go to the `ci: the staging soak failed` issue. Only
+  dispatch bootstraps; a scheduled run with no ledger fails as
+  unbootstrapped or wiped.
 
 Every slot reports through one job: a failure opens, or comments on, a
-single `comp:ci` tracking issue, so a scheduled red is never a square
-nobody reads. GitHub reads `schedule` and `workflow_dispatch` from the
+single `comp:ci` tracking issue, and the Staging Soak reports into its own
+issue, so a scheduled red is never a square nobody reads. GitHub reads `schedule` and `workflow_dispatch` from the
 default branch alone, so the file is inert until it lands on `main`.
 
 Dispatch-only (unscheduled): the load harness against local or staging

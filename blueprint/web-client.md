@@ -309,6 +309,11 @@ all living in `packages/client` and running inside the engine worker realm:
   access; a link revoke carries the checkbox "also remove the N people who
   joined through this link". A grant to an existing grantee with the same
   permission says "already has access".
+- **Details and share dialog rows**: the details dialog shows the IPNS name
+  of the item in one row, and the share dialog shows the read and write epoch
+  of the scope in one row. The staging soak reads the name and the epochs
+  from these rows, never from a hook (ADR 0049 D3, ADR 0053), and reads the
+  record sequence by resolving the name through the public routing path.
 
 Cross-cutting chrome renders event-stream state only: sync/staleness
 indicator, quota (advisory-aware for BYO), dead-letter and escalation

@@ -1,6 +1,6 @@
 # ADR 0053 — The staging soak signs in as durable accounts whose login secrets live in the staging scope
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-29
 - **Date:** 2026-09-27
 - **Relates to:**
   [ADR 0008](./0008-cipherbox-issues-the-identity-token.md) (CipherBox issues the identity token;
