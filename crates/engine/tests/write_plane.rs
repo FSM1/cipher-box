@@ -16153,21 +16153,21 @@ fn rendered_mtimes(engine: &Engine<FakeSeamTypes>) -> Vec<(NodeId, Option<u64>)>
     mtimes
 }
 
-/// Runs `command` and returns the nodes its overlay stamped, sorted: the ones
-/// now rendered at its authored time. Every other node keeps its time, and the
+/// Runs `act` and returns the nodes its overlay stamped, sorted: the ones now
+/// rendered at its authored time. Every other node keeps its time, and the
 /// publish moves no rendered time.
 fn stamped_by(
     world: &FakeWorld,
     engine: &mut Engine<FakeSeamTypes>,
     tasks: &mut [BoxedTask],
-    command: Command,
+    act: impl FnOnce(&mut Engine<FakeSeamTypes>),
 ) -> Vec<NodeId> {
     use cipherbox_engine::seams::Scheduler as _;
 
     tick(world, engine, tasks);
     let before = rendered_mtimes(engine);
     let authored_at = Some(world.scheduler.now().0);
-    block_on(engine.command(command)).expect("the command journals");
+    act(engine);
     let rendered = rendered_mtimes(engine);
     for (node, mtime) in &rendered {
         if let Some((_, prior)) = before.iter().find(|(seen, _)| seen == node) {
@@ -16192,6 +16192,18 @@ fn stamped_by(
     stamped
 }
 
+/// `stamped_by` for one command.
+fn stamped_by_command(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    command: Command,
+) -> Vec<NodeId> {
+    stamped_by(world, engine, tasks, |engine| {
+        block_on(engine.command(command)).expect("the command journals");
+    })
+}
+
 /// The overlay stamps exactly the nodes whose records the drain republishes at
 /// the op's authored time (ADR 0045 D5): a rename or a relocation stamps the
 /// folders, not the node.
@@ -16201,7 +16213,7 @@ fn an_op_renders_the_times_its_publish_writes() {
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
     for name in ["a", "b"] {
         block_on(engine.command(Command::Create {
             parent: ROOT,
@@ -16217,7 +16229,7 @@ fn an_op_renders_the_times_its_publish_writes() {
         nodes
     };
 
-    let created = stamped_by(
+    let created = stamped_by_command(
         &world,
         &mut engine,
         &mut tasks,
@@ -16248,6 +16260,10 @@ fn an_op_renders_the_times_its_publish_writes() {
         new_name: "z".into(),
         replacing: None,
     };
+    let restore = Command::Restore {
+        node: x,
+        into: None,
+    };
     for (command, expected, why) in [
         (rename, vec![a], "a rename stamps the parent"),
         (relink, sorted(vec![a, b]), "a relink stamps both parents"),
@@ -16255,13 +16271,37 @@ fn an_op_renders_the_times_its_publish_writes() {
         (
             Command::Delete { node: x },
             vec![a],
-            "a delete stamps the parent",
+            "a delete into the bin stamps the parent",
+        ),
+        (
+            restore,
+            vec![a],
+            "a restore stamps the folder it restores into",
         ),
     ] {
         assert_eq!(
-            stamped_by(&world, &mut engine, &mut tasks, command),
+            stamped_by_command(&world, &mut engine, &mut tasks, command),
             expected,
             "{why}"
         );
     }
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: b,
+            name: "f.bin".into(),
+        },
+        b"first",
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, b, "f.bin");
+    assert_eq!(
+        stamped_by(&world, &mut engine, &mut tasks, |engine| {
+            write_file(engine, version(file), b"second").expect("the edit commits");
+        }),
+        vec![file],
+        "a content op stamps the node alone"
+    );
 }

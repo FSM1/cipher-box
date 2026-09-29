@@ -147,9 +147,10 @@ impl FileStagingStore {
         atomic_write(&self.batch_path(first, last), &[])?;
         for (id, op) in (first..).zip(ops) {
             if let Err(err) = atomic_write(&self.op_path(id), op) {
-                // A marker left by a failed rollback still hides the set, and
-                // the next open removes it.
-                let _ = self.roll_back_batch(first, last, first..id);
+                // The failed write may have landed its file before a barrier
+                // refused. A marker left by a failed rollback still hides the
+                // set, and the next open removes it.
+                let _ = self.roll_back_batch(first, last, first..=id);
                 return Err(err);
             }
         }

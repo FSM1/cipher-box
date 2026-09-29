@@ -980,16 +980,16 @@ mod tests {
 
     #[test]
     fn a_metadata_op_stamps_time_over_a_projection_and_leaves_size_alone() {
-        let mut node = NodeMeta::new(id(1), "f.txt", NodeKind::File);
-        node.mtime = Some(999);
-        node.size = Some(42);
-        Op::delete_version(id(1), b"cid".to_vec(), 1, at(1)).stamp_authored(&mut node);
+        let mut parent = NodeMeta::new(id(0), "docs", NodeKind::Folder);
+        parent.mtime = Some(999);
+        parent.size = Some(42);
+        Op::rename(id(1), "g.txt", 1, at(1)).stamp_authored(&mut parent);
         assert_eq!(
-            node.mtime,
+            parent.mtime,
             Some(1),
-            "a stamped node's next record carries the op's time, so the projected time is stale"
+            "the op authors the parent's next record, so the projected time is stale"
         );
-        assert_eq!(node.size, Some(42), "a metadata op carries no size");
+        assert_eq!(parent.size, Some(42), "a metadata op carries no size");
     }
 
     #[test]
@@ -1031,6 +1031,11 @@ mod tests {
                 Op::update_content(node, staged(b"k", 1), None, 1, at(1)),
                 vec![node],
                 "update content",
+            ),
+            (
+                Op::restore(node, to, "a", NodeKind::Folder, 1, at(1)),
+                vec![to],
+                "restore",
             ),
         ] {
             assert_eq!(op.authored_nodes(&parents), expected, "{why}");

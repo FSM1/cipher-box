@@ -1289,18 +1289,14 @@ struct FolderState {
 }
 
 /// The `modified_at` an op's plan republishes `folder` with: the op's authored
-/// time on one of its [authored nodes](Op::authored_nodes), the folder's own
-/// otherwise.
-fn stamped_modified_at(
-    pass: &Pass,
-    op: &Op,
-    parents: &[NodeId],
-    folder: NodeId,
-) -> Result<u64, Halt> {
-    if op.authored_nodes(parents).contains(&folder) {
-        return Ok(op.authored_at.0);
+/// time. A plan that republishes a folder outside the op's [authored
+/// nodes](Op::authored_nodes) would publish a time the overlay never showed,
+/// so it halts.
+fn stamped_modified_at(op: &Op, parents: &[NodeId], folder: NodeId) -> Result<u64, Halt> {
+    match op.authored_nodes(parents).contains(&folder) {
+        true => Ok(op.authored_at.0),
+        false => Err(Halt::Unclassified),
     }
-    Ok(pass.folder(folder)?.modified_at)
 }
 
 /// Where one child ref is going, under what name, and what it displaces —
@@ -2947,7 +2943,7 @@ where
 
         // Referent published: only now does the parent gain the ref to it.
         pass.folder_mut(parent)?.children.push(child.child_ref);
-        let modified_at = stamped_modified_at(pass, &applied.op, &[], parent)?;
+        let modified_at = stamped_modified_at(&applied.op, &[], parent)?;
         self.publish_folder(scope, pass, parent, modified_at, Some(applied.op_id))
             .await
             .map_err(Halt::from)?;
@@ -3090,7 +3086,7 @@ where
         // entry-before-unlink order already settles on the retry.
         let count = unlink_from.len();
         for (at, &parent) in unlink_from.iter().enumerate() {
-            let modified_at = stamped_modified_at(pass, &applied.op, &unlink_from, parent)?;
+            let modified_at = stamped_modified_at(&applied.op, &unlink_from, parent)?;
             pass.folder_mut(parent)?
                 .children
                 .retain(|entry| entry.id != target.0);
@@ -3235,7 +3231,7 @@ where
             Some(existing) => *existing = child,
             None => into_children.push(child),
         }
-        let modified_at = stamped_modified_at(pass, &applied.op, &[], into)?;
+        let modified_at = stamped_modified_at(&applied.op, &[], into)?;
         self.publish_folder(
             scope,
             pass,
@@ -4588,7 +4584,7 @@ where
         // Only when one folder collapses the plan is the dest-add also its last
         // record; otherwise the source-remove below is.
         let single_record = source == dest;
-        let modified_at = stamped_modified_at(pass, &applied.op, &[source], dest)?;
+        let modified_at = stamped_modified_at(&applied.op, &[source], dest)?;
         let cas_base = self
             .publish_folder(
                 scope,
@@ -4612,7 +4608,7 @@ where
         // forever, so a quota refusal, a permanent one, or a spent attempt must
         // not be flattened into it. Only the undo's own failure is genuinely
         // unclassified.
-        let source_modified_at = stamped_modified_at(pass, &applied.op, &[source], source)?;
+        let source_modified_at = stamped_modified_at(&applied.op, &[source], source)?;
         if let Err(failure) = self
             .publish_folder(scope, pass, source, source_modified_at, Some(applied.op_id))
             .await
