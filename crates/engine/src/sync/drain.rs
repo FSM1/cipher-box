@@ -687,11 +687,10 @@ pub enum QueueHoldReason {
         /// The byte count the resume probe must find room for.
         needed_bytes: u64,
     },
-    /// The member's own settings, or a save this device minted that did not
-    /// land, were refused before any request was built, so every retry reaches
-    /// the same verdict and charging one would spend the version's budget and
-    /// then release its staged blocks. The exit is a placement this rule no
-    /// longer refuses ([`SettingsRefusal`]).
+    /// The member's own settings were refused before any request was built, so
+    /// every retry reaches the same verdict and charging one would spend the
+    /// version's budget and then release its staged blocks. The exit is the
+    /// one its [`SettingsRefusal`] names.
     ///
     /// Render it through [`SettingsRefusal::check`], which names the rule and
     /// never the endpoint or the bearer the settings carry.

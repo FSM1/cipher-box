@@ -401,8 +401,7 @@ impl PlacementRefusal {
         }
     }
 
-    /// The class label used in reject vectors, one per check: every degraded
-    /// load is `availability`, whether or not it takes a hold ([`Self::holds`]).
+    /// The class label used in reject vectors.
     pub fn class(&self) -> &'static str {
         match self {
             Self::SettingsUnavailable(_) => "availability",
@@ -414,8 +413,7 @@ impl PlacementRefusal {
     /// Editing the settings clears a deterministic refusal. A stranded mint
     /// clears only on a save that lands or a record that resolves, never on a
     /// later tick alone. Every other degraded load can clear on a later tick,
-    /// so it holds nothing and the queue head retries on the unattributed
-    /// budget.
+    /// so it holds nothing.
     ///
     /// The one place the split is decided, so a hold cannot be taken on terms
     /// its release check does not recognise.
@@ -431,11 +429,10 @@ impl PlacementRefusal {
     }
 }
 
-/// What a settings-refused hold is waiting on the member to change: their BYO
-/// provider config, the placement their settings name, or a save this device
-/// minted that did not land. Each is reached before any request is built and
-/// repeats verbatim until the settings change or a settings record resolves,
-/// which is what makes one hold rather than an attempt.
+/// What a settings-refused hold waits on. Each refusal is reached before any
+/// request is built and repeats verbatim until its exit
+/// ([`PlacementRefusal::holds`]), which is what makes one hold rather than an
+/// attempt.
 /// Built through [`PlacementRefusal::holds`] and
 /// [`ProviderError::is_deterministic`], never by hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -443,8 +440,7 @@ pub enum SettingsRefusal {
     /// [`validate_byo_config`](crate::content::validate_byo_config) refused the
     /// member's own provider config.
     Byo(ProviderError),
-    /// No byte destination follows from the settings, or from a save this
-    /// device minted that did not land.
+    /// No byte destination follows from the settings load.
     Placement(PlacementRefusal),
 }
 

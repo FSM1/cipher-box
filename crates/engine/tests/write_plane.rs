@@ -13336,7 +13336,7 @@ fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
 // A stranded settings mint: a save that minted a revision and never landed.
 // ---------------------------------------------------------------------------
 
-/// More passes than the drain's unattributed budget, which is 120.
+/// More passes than the drain's unattributed budget.
 const PASSES_PAST_THE_OUTAGE_BUDGET: usize = 130;
 
 /// The `External` settings the stranded save names, and the retry that lands.
@@ -13358,15 +13358,7 @@ fn queue_a_write_and_strand_a_settings_save(
     alice: &FakeDevice,
 ) -> (OpId, NodeId, Vec<u8>) {
     let (mut engine, _events, _tasks) = boot(world, blocks, alice, 42);
-    let op_id = write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "photo.bin".into(),
-        },
-        &(0..200u8).collect::<Vec<u8>>(),
-    )
-    .expect("the write commits");
+    let op_id = write_photo(&mut engine, "photo.bin");
     let photo = child_id(&engine, ROOT, "photo.bin");
     blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
     assert!(
