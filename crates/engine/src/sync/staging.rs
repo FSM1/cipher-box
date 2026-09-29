@@ -365,9 +365,8 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
             .filter(|block| verify_cid(root, block).is_ok())
             .and_then(|block| decode_root(block).ok());
         let target = encode_content_cid_str(root);
-        let expansion = block
-            .filter(|_| manifest.is_some())
-            .and_then(|block| expand_staged_root(&target, block, self.profile).ok());
+        let expansion =
+            block.and_then(|block| expand_staged_root(&target, block, self.profile).ok());
         let debt = match expansion {
             Some(expansion) => OwedRetire {
                 origin: DebtOrigin::DroppedVersion(expansion.targets),

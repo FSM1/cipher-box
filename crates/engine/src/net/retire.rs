@@ -905,7 +905,7 @@ async fn expand_owed<H: Http>(entry: &OwedRetire, source: &RootSource<'_, H>) ->
         DebtOrigin::DroppedRoot => {
             expand_staged_root(&entry.target, &root_block, source.profile).ok()
         }
-        _ => expand_retire_targets(
+        DebtOrigin::Prune | DebtOrigin::DroppedVersion(_) => expand_retire_targets(
             &entry.target,
             &root_block,
             source.profile,
