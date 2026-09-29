@@ -22,6 +22,10 @@ export const SOAK_REASONS = {
     kind: 'failure',
     meaning: 'the bootstrap did not archive the soak folder or write a ledger',
   },
+  'unrecorded-failure': {
+    kind: 'failure',
+    meaning: 'a test failed outside every recorded check',
+  },
   'sign-in-failed': { kind: 'failure', meaning: 'a soak account did not sign in' },
   'marker-unreadable': { kind: 'failure', meaning: 'a ledger marker did not open byte for byte' },
   'sequence-regressed': {

@@ -1,7 +1,7 @@
 /**
  * Prints the soak job summary to stdout, for the workflow to append:
  * `pnpm exec tsx staging/soak/writeSummary.ts >> "$GITHUB_STEP_SUMMARY"`.
- * A run that recorded nothing still prints a summary that says so.
+ * A run that recorded nothing prints a failed summary.
  */
 
 import { readFile } from 'node:fs/promises';

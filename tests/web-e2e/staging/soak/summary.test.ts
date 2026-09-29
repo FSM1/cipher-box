@@ -9,6 +9,7 @@ import {
   record,
   renderSummary,
   shortDetail,
+  unrecordedFailure,
   type SoakRecord,
 } from './summary';
 
@@ -100,7 +101,9 @@ describe('the soak records', () => {
 
 describe('the job summary', () => {
   it('says so when no check recorded a result', () => {
-    expect(renderSummary([])).toBe('## Staging soak\n\nNo soak check recorded a result.\n');
+    expect(renderSummary([])).toBe(
+      '## Staging soak\n\nThe soak failed: no check recorded a result.\n'
+    );
   });
 
   it('counts the failed checks and names each reason with its meaning', () => {
@@ -137,5 +140,24 @@ describe('the job summary', () => {
     const long = shortDetail('x'.repeat(500));
     expect(long).toHaveLength(300);
     expect(long.endsWith('...')).toBe(true);
+  });
+});
+
+describe('an unrecorded failure', () => {
+  it('records a test that failed outside every check', () => {
+    const missed = unrecordedFailure('the owner vault', 'timedOut', 'passed', 0);
+    expect(missed).toEqual({
+      kind: 'check',
+      check: 'the owner vault',
+      outcome: 'failed',
+      reason: 'unrecorded-failure',
+      detail: 'the test ended timedOut',
+    });
+    expect(renderSummary([missed!])).toContain('1 of 1 soak checks failed.');
+  });
+
+  it('adds nothing when the test ended as expected or a check recorded the failure', () => {
+    expect(unrecordedFailure('t', 'passed', 'passed', 0)).toBeNull();
+    expect(unrecordedFailure('t', 'failed', 'passed', 1)).toBeNull();
   });
 });

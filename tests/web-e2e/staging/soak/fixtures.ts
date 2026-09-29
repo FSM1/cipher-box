@@ -9,7 +9,7 @@ import { signIn } from '../fixtures';
 import { installTestWallet } from '../wallet';
 import { soakWalletKey, type SoakRole } from './accounts';
 import { SoakFailure, type FailureReason } from './reasons';
-import { record, shortDetail } from './summary';
+import { record, shortDetail, unrecordedFailure } from './summary';
 
 export { expect } from '@playwright/test';
 
@@ -20,9 +20,31 @@ interface SoakFixtures {
   /** The default page, signed in as the soak owner. */
   owner: Page;
   grantee: OpenGrantee;
+  failClosed: void;
 }
 
+/** The failures that {@link check} recorded in this worker. */
+let recordedFailures = 0;
+
 export const test = base.extend<SoakFixtures>({
+  // Automatic, and torn down last: a failure outside every check still reaches
+  // the summary.
+  failClosed: [
+    // eslint-disable-next-line no-empty-pattern -- Playwright reads the fixture list from this pattern.
+    async ({}, use, testInfo) => {
+      const before = recordedFailures;
+      await use();
+      const missed = unrecordedFailure(
+        testInfo.title,
+        testInfo.status,
+        testInfo.expectedStatus,
+        recordedFailures - before
+      );
+      if (missed !== null) await record(missed);
+    },
+    { auto: true },
+  ],
+
   owner: async ({ page }, use) => {
     await signInAs(page, 'owner');
     await use(page);
@@ -68,6 +90,7 @@ export async function check<T>(
         : new SoakFailure(reason, error instanceof Error ? error.message : String(error), {
             cause: error,
           });
+    recordedFailures += 1;
     await record({
       kind: 'check',
       check: name,

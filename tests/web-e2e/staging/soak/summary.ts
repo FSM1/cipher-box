@@ -58,6 +58,26 @@ export async function record(entry: SoakRecord, file = RESULTS_FILE): Promise<vo
   await appendFile(file, `${line}\n`);
 }
 
+/**
+ * The failed line for a test that did not end as expected and whose failure no
+ * check recorded, such as a fixture error or a timeout; `null` otherwise.
+ */
+export function unrecordedFailure(
+  title: string,
+  status: string | undefined,
+  expectedStatus: string,
+  recordedFailures: number
+): SoakRecord | null {
+  if (status === expectedStatus || recordedFailures > 0) return null;
+  return {
+    kind: 'check',
+    check: title,
+    outcome: 'failed',
+    reason: 'unrecorded-failure',
+    detail: `the test ended ${status ?? 'without a status'}`,
+  };
+}
+
 /** The first line of `text`, cut to the summary's budget. */
 export function shortDetail(text: string): string {
   const first = text.split('\n', 1)[0]!.trim();
@@ -71,7 +91,7 @@ export function renderSummary(records: readonly SoakRecord[]): string {
 
   const verdict =
     checks.length === 0
-      ? 'No soak check recorded a result.'
+      ? 'The soak failed: no check recorded a result.'
       : failed > 0
         ? `${failed} of ${checks.length} soak checks failed.`
         : `All ${checks.length} soak checks passed.`;
