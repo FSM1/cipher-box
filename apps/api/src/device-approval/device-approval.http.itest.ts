@@ -537,6 +537,17 @@ describe('device-approval HTTP surface (real Postgres)', () => {
       await post(other, registration(other, createTestDeviceKey(), token)).expect(401);
     });
 
+    it('still opens a rendezvous session with a token a registration spent', async () => {
+      const account = await seedAccount(db, jwt);
+      const token = await identityToken(randomUUID());
+      await post(account, registration(account, createTestDeviceKey(), token)).expect(201);
+
+      await request(http())
+        .post('/device-approval/session')
+        .send({ identityToken: token })
+        .expect(200);
+    });
+
     it('leaves the token unspent when the registration is refused', async () => {
       const member = await enroll('member');
       const token = await identityToken(member.identitySubject);

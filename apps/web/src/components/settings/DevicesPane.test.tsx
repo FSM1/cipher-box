@@ -167,6 +167,32 @@ describe('the authorized devices pane', () => {
     expect(engine.calls.registered).toEqual([]);
   });
 
+  // A registration spends the token of this sign-in, so after a revoke the
+  // control asks for a fresh sign-in rather than fail against the API.
+  it('closes the register control once a registration has spent the token', async () => {
+    const calls = await pane([], [OWN], []);
+    await waitFor(() => expect(screen.getByTestId('settings-device-register')).toBeTruthy());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('settings-device-register'));
+    });
+    await waitFor(() => expect(rows()).toHaveLength(1));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('settings-device-revoke'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('settings-device-revoke-confirm'));
+    });
+
+    const register = await waitFor(() => screen.getByTestId('settings-device-register'));
+    expect(register.getAttribute('disabled')).not.toBeNull();
+    expect(register.getAttribute('aria-label')).toContain('sign in again');
+    await act(async () => {
+      fireEvent.click(register);
+    });
+    expect(calls.registered).toHaveLength(1);
+  });
+
   // `forgetDevice` leaves the session holding no key. Keeping the last answer
   // would mark a listed row as this device and hide the way back in.
   it('offers registration again once this browser holds no identity key', async () => {

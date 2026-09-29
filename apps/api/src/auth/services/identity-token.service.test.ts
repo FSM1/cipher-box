@@ -1,22 +1,12 @@
 import * as jose from 'jose';
-import { generateKeyPairSync } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeClock, fakeConfig, FakeEntropy } from '../../testing/fakes';
+import { encodedIdentitySigningKey, identityTokenWithJti } from '../../testing/identity-tokens';
 import {
   IDENTITY_TOKEN_AUDIENCE,
   IDENTITY_TOKEN_ISSUER,
   IdentityTokenService,
 } from './identity-token.service';
-
-/** A base64-encoded PKCS8 PEM, exactly as the env var carries it. */
-function encodedSigningKey(): string {
-  const { privateKey } = generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-  });
-  return Buffer.from(privateKey).toString('base64');
-}
 
 async function bootedService(values: Record<string, string | undefined>, clock = new FakeClock()) {
   const service = new IdentityTokenService(fakeConfig(values).service, clock, new FakeEntropy());
@@ -34,7 +24,7 @@ describe('IdentityTokenService', () => {
   let encodedPem: string;
 
   beforeEach(() => {
-    encodedPem = encodedSigningKey();
+    encodedPem = encodedIdentitySigningKey();
   });
 
   it('refuses to boot without a signing key in any deployed environment', async () => {
@@ -91,7 +81,7 @@ describe('IdentityTokenService', () => {
     });
     const impostor = await bootedService({
       NODE_ENV: 'production',
-      IDENTITY_JWT_PRIVATE_KEY: encodedSigningKey(),
+      IDENTITY_JWT_PRIVATE_KEY: encodedIdentitySigningKey(),
     });
 
     const { token } = await impostor.sign({ subject: 'subject-id', method: 'google' });
@@ -135,18 +125,20 @@ describe('IdentityTokenService', () => {
       { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
       clock
     );
-    const privateKey = Buffer.from(encodedPem, 'base64').toString('utf8');
-    const issuedAt = Math.floor(clock.now().getTime() / 1000);
-    const untracked = await new jose.SignJWT({ method: 'google' })
-      .setProtectedHeader({ alg: 'RS256', kid: service.jwks().keys[0].kid })
-      .setSubject('subject-id')
-      .setIssuer(IDENTITY_TOKEN_ISSUER)
-      .setAudience(IDENTITY_TOKEN_AUDIENCE)
-      .setIssuedAt(issuedAt)
-      .setExpirationTime(issuedAt + 300)
-      .sign(await jose.importPKCS8(privateKey, 'RS256'));
 
+    const untracked = await identityTokenWithJti(encodedPem, clock, undefined);
     await expect(service.verify(untracked)).rejects.toThrow(jose.errors.JWTClaimValidationFailed);
+  });
+
+  it('refuses a token whose token id is not a UUID, before any spend reads it', async () => {
+    const clock = new FakeClock();
+    const service = await bootedService(
+      { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+      clock
+    );
+
+    const malformed = await identityTokenWithJti(encodedPem, clock, 'not-a-uuid');
+    await expect(service.verify(malformed)).rejects.toThrow(/token id/);
   });
 
   it('expires the token on the injected clock, not the wall clock', async () => {
