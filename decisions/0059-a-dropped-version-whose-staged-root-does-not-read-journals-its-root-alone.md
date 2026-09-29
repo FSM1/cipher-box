@@ -65,22 +65,14 @@ this release. Its orphan GC keeps the entry, because the entry is under the ledg
    does not read journals its root alone, and the settle fetches the root.
 2. `blueprint/engine.md` "Retirement" says that the drop journals a debt also when the staged root
    is gone, and cites this ADR next to ADR 0054.
-3. ADR 0054 D1 reads with D1 here as its fallback. ADR 0054 E1 closes: the charge-time journal is
-   not adopted.
+3. ADR 0054 D1 reads with D1 here as its fallback. ADR 0054 E1 closes on item 6.
 4. ADR 0047 E4 narrows to a version whose root no source serves.
 5. The retire-ledger entry gains the origin byte for "dropped root" under the existing version
    byte. No key prefix is new.
-
-## Residuals
-
-**E1 — A root lost before its own upload leaks the leaves that uploaded before it.** No endpoint
-serves such a root, so the entry stalls for good and shows in the figure, and the rows stay
-charged. The same leaves leak when a permanent `ContentUnrecoverable` halt abandons an op whose
-root is gone, because the abandonment retires only the root and the name. The owner decides
-whether this bounded leak justifies the charge-time journal.
-
-**E2 — A per-version record of an acknowledged PUT.** The acknowledged sequence (ADR 0054 D2) is
-held per node, so a dropped version whose own PUT never reached the transport still waits behind
-an earlier mark at that node. A per-version record would let such a debt settle at once. D1 writes
-nothing at upload, so it cannot carry that record. The owner decides whether the delay justifies
-one more write per publish.
+6. Accepted residual: a root that the store loses before its own upload leaks the leaves that
+   uploaded before it, and so does a `ContentUnrecoverable` abandon whose root is gone. The leak
+   is bounded to one version and shows in the pending-reclaim figure. The owner accepted it on
+   2026-09-29, so the charge-time journal is not adopted.
+7. Accepted residual: a dropped version whose PUT never reached the transport waits behind the
+   per-node acknowledged mark (ADR 0054 D2) until the node moves past that mark. This is a delay,
+   not a loss. The owner accepted it on 2026-09-29, with no per-version record.
