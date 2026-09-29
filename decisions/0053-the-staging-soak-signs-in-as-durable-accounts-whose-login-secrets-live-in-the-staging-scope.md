@@ -40,7 +40,10 @@ challenge, the identity JWT from the API, `loginWithJWT`, `commitChanges`, and
 `_UNSAFE_exportTssKey`. The login secret is held as a secret in the `staging` environment scope,
 beside the wallet key. There are four secrets: `SOAK_OWNER_WALLET_KEY`, `SOAK_OWNER_LOGIN_SECRET`,
 `SOAK_GRANTEE_WALLET_KEY` and `SOAK_GRANTEE_LOGIN_SECRET`. 1Password is the source of truth. The
-tool prints a value once and never writes it to disk.
+tool prints a value once and never writes it to disk. Amended by
+[ADR 0056](./0056-the-staging-soak-reads-the-republisher-counters-from-the-metrics-query-endpoint-with-a-read-only-token.md)
+D1 on 2026-09-29: the `staging` scope also holds `STAGING_GRAFANA_READ_TOKEN`, a `metrics:read`
+token with which the soak reads the republisher counters.
 
 **D3 — The web leg signs in with the wallet key, and the desktop legs with the login secret.**
 A desktop leg gives the login secret to the `e2e-hook` host on standard input. That host is built

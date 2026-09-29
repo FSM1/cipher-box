@@ -356,9 +356,11 @@ One `nightly.yml` (cron) owns the scheduled slots testing.md defined
   revoke cycle on `soak/cycle` steps the read epoch by one, and a fresh
   context sees the link revoked; a marker over 60 days old republishes at
   seq+1, validity fresh; the bin purge lands on the due night. Republisher
-  counters from the staging metrics: stale and skipped as a 24-hour
-  increase, resolve failures flat, last-walk gauges after 12 h of API
-  uptime, walks from `republisher_walks_total`. Desktop legs on macOS,
+  counters from the Grafana Cloud Mimir query endpoint, read by HTTP basic
+  authentication with `STAGING_GRAFANA_READ_TOKEN`, a `metrics:read`
+  access-policy token in the `staging` scope (ADR 0056 D1): stale and
+  skipped as a 24-hour increase, resolve failures flat, last-walk gauges
+  after 12 h of API uptime, walks from `republisher_walks_total`. Desktop legs on macOS,
   Linux and Windows run one at a time with production timings; each signs
   in as the grantee, writes an OS marker into the grantee vault, and reads
   the other legs' markers through the mount; no desktop sharing. Jobs run
