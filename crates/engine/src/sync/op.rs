@@ -656,19 +656,20 @@ impl Op {
     /// `authored_at`, sorted: the set the pending-op overlay stamps and the
     /// drain's publish plan writes, so a rendered node and the record that
     /// will publish it agree (ADR 0045 D5). `parents` yields the folders that
-    /// name the target before the op applies; only a kind that stamps them
-    /// calls it.
+    /// name the target before the op applies, winner first
+    /// ([`Snapshot::links_ranked`](crate::sync::model::Snapshot::links_ranked));
+    /// only a kind that stamps them calls it.
     pub fn authored_nodes(&self, parents: impl FnOnce() -> Vec<NodeId>) -> Vec<NodeId> {
         let mut nodes = match &self.kind {
             OpKind::Create { parent, .. } => vec![self.target, *parent],
             OpKind::UpdateContent { .. } => vec![self.target],
             // The name lives in the parent's child ref, so the child's own
-            // record does not change.
-            OpKind::Rename { .. } | OpKind::Delete { .. } => parents(),
+            // record does not change. A rename and a relocation republish the
+            // winning parent alone, and a delete unlinks from every parent.
+            OpKind::Rename { .. } => parents().into_iter().take(1).collect(),
+            OpKind::Delete { .. } => parents(),
             OpKind::Relink { new_parent, .. } | OpKind::Move { new_parent, .. } => {
-                let mut nodes = parents();
-                nodes.push(*new_parent);
-                nodes
+                parents().into_iter().take(1).chain([*new_parent]).collect()
             }
             OpKind::Restore { into, .. } => vec![*into],
             OpKind::Purge { .. }

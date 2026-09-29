@@ -1288,18 +1288,6 @@ struct FolderState {
     sequence: u64,
 }
 
-/// The `modified_at` an op's plan republishes `folder` with: the op's authored
-/// time. A plan that republishes a folder outside the op's [authored
-/// nodes](Op::authored_nodes) would publish a time the overlay never showed,
-/// so it halts.
-fn stamped_modified_at(op: &Op, parents: &[NodeId], folder: NodeId) -> Result<u64, Halt> {
-    if op.authored_nodes(|| parents.to_vec()).contains(&folder) {
-        Ok(op.authored_at.0)
-    } else {
-        Err(Halt::Unclassified)
-    }
-}
-
 /// Where one child ref is going, under what name, and what it displaces —
 /// rename, relink, and move all reduce to this.
 struct MovePlan {
@@ -2944,10 +2932,15 @@ where
 
         // Referent published: only now does the parent gain the ref to it.
         pass.folder_mut(parent)?.children.push(child.child_ref);
-        let modified_at = stamped_modified_at(&applied.op, &[], parent)?;
-        self.publish_folder(scope, pass, parent, modified_at, Some(applied.op_id))
-            .await
-            .map_err(Halt::from)?;
+        self.publish_folder(
+            scope,
+            pass,
+            parent,
+            applied.op.authored_at.0,
+            Some(applied.op_id),
+        )
+        .await
+        .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
         self.emit_mirror_shortfall(applied, shortfall);
         // The parent's repaint lifts the child in without what its own record
@@ -3086,8 +3079,7 @@ where
         // leaves the node binned and still linked, which is the residue the
         // entry-before-unlink order already settles on the retry.
         let count = unlink_from.len();
-        for (at, &parent) in unlink_from.iter().enumerate() {
-            let modified_at = stamped_modified_at(&applied.op, &unlink_from, parent)?;
+        for (at, parent) in unlink_from.into_iter().enumerate() {
             pass.folder_mut(parent)?
                 .children
                 .retain(|entry| entry.id != target.0);
@@ -3095,7 +3087,7 @@ where
                 scope,
                 pass,
                 parent,
-                modified_at,
+                applied.op.authored_at.0,
                 (at + 1 == count).then_some(applied.op_id),
             )
             .await
@@ -3232,12 +3224,11 @@ where
             Some(existing) => *existing = child,
             None => into_children.push(child),
         }
-        let modified_at = stamped_modified_at(&applied.op, &[], into)?;
         self.publish_folder(
             scope,
             pass,
             into,
-            modified_at,
+            applied.op.authored_at.0,
             // The entry drop below is this plan's last act, not the relink: a
             // mark raised here would drop the op on the next pass and leave the
             // entry standing for a node the vault links again.
@@ -4501,6 +4492,8 @@ where
         if dest == target || self.cells.base.borrow().ancestors(dest).contains(&target) {
             return Err(Halt::Unclassified);
         }
+        let modified_at = applied.op.authored_at.0;
+
         // A crossing this pass carries no second end for is one it cannot
         // author, and the chain walk below would stall uncharged on the scope
         // root it cannot load. Charged by the pass holding the tick's
@@ -4585,7 +4578,6 @@ where
         // Only when one folder collapses the plan is the dest-add also its last
         // record; otherwise the source-remove below is.
         let single_record = source == dest;
-        let modified_at = stamped_modified_at(&applied.op, &[source], dest)?;
         let cas_base = self
             .publish_folder(
                 scope,
@@ -4609,9 +4601,8 @@ where
         // forever, so a quota refusal, a permanent one, or a spent attempt must
         // not be flattened into it. Only the undo's own failure is genuinely
         // unclassified.
-        let source_modified_at = stamped_modified_at(&applied.op, &[source], source)?;
         if let Err(failure) = self
-            .publish_folder(scope, pass, source, source_modified_at, Some(applied.op_id))
+            .publish_folder(scope, pass, source, modified_at, Some(applied.op_id))
             .await
         {
             // A confirmed source-remove is the move complete on the network, so

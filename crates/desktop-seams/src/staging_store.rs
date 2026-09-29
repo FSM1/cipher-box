@@ -157,7 +157,14 @@ impl FileStagingStore {
                 return Err(err);
             }
         }
-        remove_file_durable(&self.batch_path(&batch))
+        if let Err(err) = remove_file_durable(&self.batch_path(&batch)) {
+            // The unlink may have landed before its barrier refused, which
+            // would commit a set the caller hears failed: hide it again first.
+            let _ = atomic_write(&self.batch_path(&batch), &[]);
+            let _ = self.roll_back_batch(&batch, batch.clone());
+            return Err(err);
+        }
+        Ok(())
     }
 
     fn op_path(&self, id: u64) -> PathBuf {

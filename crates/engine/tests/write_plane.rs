@@ -16306,3 +16306,55 @@ fn an_op_renders_the_times_its_publish_writes() {
         "a content op stamps the node alone"
     );
 }
+
+/// A dual-linked node's rename or move republishes only the winning parent,
+/// which the drain resolves, so the overlay stamps that parent and not the
+/// folder of the other link.
+#[test]
+fn a_dual_linked_node_stamps_only_the_parent_its_publish_writes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, deep) = seed_dual_linked_file(&world, &blocks, &mut engine, &mut tasks);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "albums".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let albums = child_id(&engine, ROOT, "albums");
+    let linked = BTreeSet::from([ROOT, photos]);
+
+    let renamed = stamped_by_command(
+        &world,
+        &mut engine,
+        &mut tasks,
+        Command::Rename {
+            node: deep,
+            new_name: "renamed.bin".into(),
+        },
+    );
+    assert!(
+        renamed.len() == 1 && renamed.is_subset(&linked),
+        "a rename stamps the winning parent alone"
+    );
+
+    let moved = stamped_by_command(
+        &world,
+        &mut engine,
+        &mut tasks,
+        Command::Move {
+            node: deep,
+            new_parent: albums,
+            new_name: "moved.bin".into(),
+            replacing: None,
+        },
+    );
+    assert!(
+        moved.len() == 2 && moved.contains(&albums) && moved.iter().any(|n| linked.contains(n)),
+        "a move stamps the winning parent and the destination"
+    );
+}

@@ -28,7 +28,7 @@ pub fn apply_overlay(base: &Snapshot, ops: &[Op]) -> Snapshot {
 /// stamp its [authored nodes](Op::authored_nodes).
 fn apply_one(view: &mut Snapshot, op: &Op) {
     let authored = op.authored_nodes(|| {
-        view.links_to(op.target)
+        view.links_ranked(op.target)
             .iter()
             .map(|link| link.parent)
             .collect()
