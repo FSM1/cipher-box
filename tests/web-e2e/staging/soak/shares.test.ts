@@ -8,6 +8,7 @@ import {
   parseEpochs,
   sharedEpochHeld,
   sharedLink,
+  sharedOverCap,
   withSharedLink,
 } from './shares';
 
@@ -81,6 +82,15 @@ describe('the epoch assertions', () => {
     expect(() => cycleEpochStepped(4n, 5n)).not.toThrow();
     expect(reasonOf(() => cycleEpochStepped(4n, 4n))).toBe('cycle-epoch-flat');
     expect(reasonOf(() => cycleEpochStepped(4n, 6n))).toBe('cycle-epoch-flat');
+  });
+});
+
+describe('the shared folder cap', () => {
+  it('moves the oldest days past the cap, and nothing under it', () => {
+    const days = ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01'];
+    expect(sharedOverCap(days, 2)).toEqual(['2026-09-28', '2026-09-29']);
+    expect(sharedOverCap(days, 4)).toEqual([]);
+    expect(sharedOverCap(days, Infinity)).toEqual([]);
   });
 });
 

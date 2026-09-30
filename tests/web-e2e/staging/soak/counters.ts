@@ -13,14 +13,15 @@ export const GRAFANA_URL_ENV = 'GRAFANA_PROMETHEUS_URL';
 export const GRAFANA_USER_ENV = 'GRAFANA_PROMETHEUS_USERNAME';
 export const GRAFANA_TOKEN_ENV = 'STAGING_GRAFANA_READ_TOKEN';
 
-/** Under this API uptime the gauges still read their boot value and the counters skip. */
-export const POST_DEPLOY_S = 12 * 3600;
+const HOUR_S = 3600;
 
 /**
- * `increase` extrapolates to the window edges, so two walks at a 12-hour
- * cadence can read a little below 2.
+ * The republisher walks first 12 hours after the API starts, then every 12
+ * hours, so a counter is due only once its window holds the walks it counts.
  */
-export const WALK_TOLERANCE = 0.1;
+export const POST_DEPLOY_S = 12 * HOUR_S;
+/** Two walks, at 12 and 24 hours of uptime, with an hour for the second to end. */
+export const TWO_WALKS_S = 25 * HOUR_S;
 
 export const UPTIME_QUERY = 'time() - process_start_time_seconds{job="api"}';
 
@@ -123,10 +124,6 @@ export function uptimeSeconds(values: readonly number[]): number {
   return Math.min(...values);
 }
 
-export function inPostDeployWindow(uptimeS: number): boolean {
-  return uptimeS <= POST_DEPLOY_S;
-}
-
 export function uptimeLine(uptimeS: number): string {
   return `the API is up ${(uptimeS / 3600).toFixed(1)} hours`;
 }
@@ -134,6 +131,8 @@ export function uptimeLine(uptimeS: number): string {
 export interface CounterCheck {
   readonly check: string;
   readonly reason: FailureReason;
+  /** The API uptime past which the check is due. */
+  readonly dueAfterS: number;
   /** The failed detail, or `null` for a pass. */
   readonly verdict: (readings: CounterReadings, staleBaseline: number) => string | null;
 }
@@ -152,30 +151,60 @@ export const COUNTER_CHECKS: readonly CounterCheck[] = [
   {
     check: 'stale names in 24 hours',
     reason: 'stale-names-grew',
+    dueAfterS: POST_DEPLOY_S,
     verdict: (r, baseline) => grew(r.staleNames, baseline, 'stale names'),
   },
   {
     check: 'skipped walks in 24 hours',
     reason: 'walks-skipped-grew',
+    dueAfterS: POST_DEPLOY_S,
     verdict: (r) => grew(r.walksSkipped, 0, 'skipped walks'),
   },
   {
     check: 'resolve failures in 24 hours',
     reason: 'resolve-failures-grew',
+    dueAfterS: POST_DEPLOY_S,
     verdict: (r) => grew(r.resolveFailures, 0, 'resolve failures'),
   },
   {
     check: 'walks in 24 hours',
     reason: 'no-walk-in-window',
-    verdict: (r) =>
-      r.walks < 2 - WALK_TOLERANCE ? `${r.walks.toFixed(2)} walks in 24 hours, want 2` : null,
+    dueAfterS: TWO_WALKS_S,
+    verdict: (r) => (r.walks < 2 ? `${r.walks.toFixed(2)} walks in 24 hours, want 2` : null),
   },
   {
     check: 'names in the last walk',
     reason: 'last-walk-empty',
+    dueAfterS: 13 * HOUR_S,
     verdict: (r) => (r.lastWalkNames > 0 ? null : 'the last walk found 0 names'),
   },
 ];
+
+export type CounterPlan =
+  | { readonly kind: 'check'; readonly entry: CounterCheck; readonly baseline: number }
+  | { readonly kind: 'skip'; readonly entry: CounterCheck; readonly detail: string };
+
+/**
+ * Which counter checks run at `uptimeS`. The stale-names check also needs a
+ * baseline, which only a reading past {@link TWO_WALKS_S} records.
+ */
+export function counterPlan(uptimeS: number, baseline: number | null): CounterPlan[] {
+  return COUNTER_CHECKS.map((entry): CounterPlan => {
+    if (uptimeS <= entry.dueAfterS) {
+      const hours = entry.dueAfterS / HOUR_S;
+      return { kind: 'skip', entry, detail: `${uptimeLine(uptimeS)}; due after ${hours}` };
+    }
+    if (entry.reason === 'stale-names-grew' && baseline === null) {
+      return { kind: 'skip', entry, detail: `${uptimeLine(uptimeS)}; no baseline yet` };
+    }
+    return { kind: 'check', entry, baseline: baseline ?? 0 };
+  });
+}
+
+/** Whether a stale-names reading at `uptimeS` spans two walks and can stand as the baseline. */
+export function baselineDue(uptimeS: number): boolean {
+  return uptimeS > TWO_WALKS_S;
+}
 
 const COUNTERS = Object.keys(COUNTER_QUERIES) as (keyof CounterReadings)[];
 

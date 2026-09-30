@@ -6,6 +6,7 @@ import {
   markerDate,
   markerPath,
   markersToRead,
+  READ_WINDOW,
   readLine,
   recordMarker,
 } from './grantee';
@@ -99,6 +100,23 @@ describe('the markers a leg reads', () => {
       { leg: 'linux', date: '2026-09-28' },
       { leg: 'windows', date: '2026-09-29' },
     ]);
+  });
+
+  it('reads only the newest markers of each leg', () => {
+    const days = Array.from({ length: READ_WINDOW + 3 }, (_, index) =>
+      new Date(Date.UTC(2026, 8, 1 + index)).toISOString().slice(0, 10)
+    );
+    const listed = days.map((day) => `marker-${day}.txt`);
+    const read = markersToRead(
+      ledgerOf('marker web 2026-09-01'),
+      { linux: listed, windows: listed.slice(0, 2) },
+      'macos'
+    );
+    expect(read.filter((marker) => marker.leg === 'linux').map((m) => m.date)).toEqual(
+      days.slice(-READ_WINDOW)
+    );
+    expect(read.filter((marker) => marker.leg === 'windows')).toHaveLength(2);
+    expect(read.filter((marker) => marker.leg === 'web')).toHaveLength(1);
   });
 
   it('is none on the first night', () => {

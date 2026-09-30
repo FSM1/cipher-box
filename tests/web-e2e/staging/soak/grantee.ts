@@ -73,9 +73,15 @@ export function markerDate(fileName: string): string | null {
 }
 
 /**
- * What a leg must read: every marker of the other legs, from the ledger and
- * from the folder listings both, so a marker that lost its line and a line that
- * lost its marker each count.
+ * The newest markers of each other leg that a leg reads. Three legs of 14 are
+ * 42 downloads, which fit the 20-minute read budget of the web leg with room.
+ */
+export const READ_WINDOW = 14;
+
+/**
+ * What a leg must read: the newest {@link READ_WINDOW} markers of each other
+ * leg, from the ledger and from the folder listings both, so a marker that lost
+ * its line and a line that lost its marker each count.
  */
 export function markersToRead(
   ledger: Ledger,
@@ -93,9 +99,12 @@ export function markersToRead(
       if (date !== null) add({ leg, date });
     }
   }
-  return [...found.values()].sort(
-    (a, b) =>
-      MARKER_LEGS.indexOf(a.leg) - MARKER_LEGS.indexOf(b.leg) || a.date.localeCompare(b.date)
+  const all = [...found.values()];
+  return MARKER_LEGS.flatMap((leg) =>
+    all
+      .filter((marker) => marker.leg === leg)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-READ_WINDOW)
   );
 }
 

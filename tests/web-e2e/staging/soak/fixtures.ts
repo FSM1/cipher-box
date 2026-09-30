@@ -22,8 +22,6 @@ interface SoakFixtures {
   /** A second owner client, from an empty profile. */
   freshOwner: OpenContext;
   grantee: OpenContext;
-  /** A fresh context with the grantee wallet and no session, as a link holder opens a link. */
-  holder: OpenContext;
   failClosed: void;
 }
 
@@ -59,25 +57,19 @@ export const test = base.extend<SoakFixtures>({
   grantee: async ({ browser }, use) => {
     await openContexts(browser, 'grantee', use);
   },
-
-  holder: async ({ browser }, use) => {
-    await openContexts(browser, 'grantee', use, false);
-  },
 });
 
 async function openContexts(
   browser: Browser,
   role: SoakRole,
-  use: (open: OpenContext) => Promise<void>,
-  signedIn = true
+  use: (open: OpenContext) => Promise<void>
 ): Promise<void> {
   const opened: BrowserContext[] = [];
   await use(async () => {
     const context = await browser.newContext();
     opened.push(context);
     const page = await context.newPage();
-    if (signedIn) await signInAs(page, role);
-    else await installTestWallet(page, soakWalletKey(process.env, role));
+    await signInAs(page, role);
     return page;
   });
   for (const context of opened) await context.close();

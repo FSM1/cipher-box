@@ -93,7 +93,7 @@ export const SOAK_REASONS = {
   },
   'post-deploy-window': {
     kind: 'skip',
-    meaning: 'the API is up for less than 12 hours, so the counter checks skip',
+    meaning: 'the API started too recently for the republisher walks this counter needs',
   },
 } as const satisfies Record<string, { kind: ReasonKind; meaning: string }>;
 

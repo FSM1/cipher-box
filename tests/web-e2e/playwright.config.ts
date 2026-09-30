@@ -52,11 +52,14 @@ if (suite === 'soak' && !stagingBaseUrl) {
 // No trace: a staging run holds a real session, and its report is an artifact
 // of a public repository. A trace records every request header, which there
 // carries the session bearer and the accelerator pseudonym — a gateway
-// credential (blueprint/api.md Egress).
+// credential (blueprint/api.md Egress). No screenshot or video either: a soak
+// page can show a bearer link URL, in the share dialog or in the ledger editor.
 const stagingUse = {
   ...devices['Desktop Chrome'],
   baseURL: stagingBaseUrl,
   trace: 'off' as const,
+  screenshot: 'off' as const,
+  video: 'off' as const,
 };
 
 /**

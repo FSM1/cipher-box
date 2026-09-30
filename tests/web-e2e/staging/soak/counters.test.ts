@@ -6,7 +6,8 @@ import {
   GRAFANA_TOKEN_ENV,
   GRAFANA_URL_ENV,
   GRAFANA_USER_ENV,
-  inPostDeployWindow,
+  baselineDue,
+  counterPlan,
   instantValues,
   oneSeries,
   query,
@@ -143,11 +144,35 @@ describe('the post-deploy window', () => {
     expect(failureOf(() => uptimeSeconds([])).reason).toBe('counters-unread');
   });
 
-  it('skips the counters up to 12 hours of uptime', () => {
-    expect(inPostDeployWindow(3 * 3600)).toBe(true);
-    expect(inPostDeployWindow(12 * 3600)).toBe(true);
-    expect(inPostDeployWindow(12 * 3600 + 1)).toBe(false);
+  const due = (hours: number, baseline: number | null = 2) =>
+    counterPlan(hours * 3600, baseline)
+      .filter((plan) => plan.kind === 'check')
+      .map((plan) => plan.entry.reason);
+
+  it('gives each counter the uptime its walks need', () => {
+    expect(due(12)).toEqual([]);
+    expect(due(12.5)).toEqual(['stale-names-grew', 'walks-skipped-grew', 'resolve-failures-grew']);
+    expect(due(13.5)).toEqual([
+      'stale-names-grew',
+      'walks-skipped-grew',
+      'resolve-failures-grew',
+      'last-walk-empty',
+    ]);
+    expect(due(25.5)).toHaveLength(5);
     expect(uptimeLine(3 * 3600)).toBe('the API is up 3.0 hours');
+  });
+
+  it('skips the stale-names check until a baseline exists, and records one only past two walks', () => {
+    expect(due(13.5, null)).not.toContain('stale-names-grew');
+    const skip = counterPlan(13.5 * 3600, null).find(
+      (plan) => plan.entry.reason === 'stale-names-grew'
+    );
+    expect(skip).toMatchObject({
+      kind: 'skip',
+      detail: 'the API is up 13.5 hours; no baseline yet',
+    });
+    expect(baselineDue(25 * 3600)).toBe(false);
+    expect(baselineDue(25 * 3600 + 1)).toBe(true);
   });
 });
 
@@ -161,9 +186,9 @@ describe('the counter checks', () => {
     expect(failed(HEALTHY)).toEqual([]);
   });
 
-  it('let two walks read a little below 2', () => {
-    expect(failed({ ...HEALTHY, walks: 1.95 })).toEqual([]);
-    expect(failed({ ...HEALTHY, walks: 1.5 })).toEqual(['no-walk-in-window']);
+  it('want at least two walks in 24 hours', () => {
+    expect(failed({ ...HEALTHY, walks: 2.4 })).toEqual([]);
+    expect(failed({ ...HEALTHY, walks: 1 })).toEqual(['no-walk-in-window']);
   });
 
   it('fail each counter that grew, with its own reason', () => {

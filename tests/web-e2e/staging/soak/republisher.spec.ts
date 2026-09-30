@@ -1,15 +1,17 @@
 /**
- * The republisher counters on staging, from Grafana Cloud. Within 12 hours of
- * an API start every counter check skips as `post-deploy-window`, and only
- * past it does the owner ledger open, for the stale-names baseline.
+ * The republisher counters on staging, from Grafana Cloud. A counter check
+ * that the API uptime does not yet cover skips as `post-deploy-window`, and
+ * only a night with a due check opens the owner ledger, for the stale-names
+ * baseline.
  */
 
 import { FilesPage } from '../../page-objects/files.page';
 import {
-  COUNTER_CHECKS,
+  baselineDue,
+  counterPlan,
   countersLine,
   grafanaAccess,
-  inPostDeployWindow,
+  POST_DEPLOY_S,
   query,
   readCounters,
   staleBaseline,
@@ -35,9 +37,9 @@ test('the republisher counters hold over 24 hours', async ({ freshOwner }) => {
     uptimeSeconds(await query(access, UPTIME_QUERY, QUERY_MS))
   );
   await fact('API uptime', uptimeLine(uptime));
-  if (inPostDeployWindow(uptime)) {
-    for (const entry of COUNTER_CHECKS) {
-      await skipped(entry.check, 'post-deploy-window', uptimeLine(uptime));
+  if (uptime <= POST_DEPLOY_S) {
+    for (const plan of counterPlan(uptime, null)) {
+      if (plan.kind === 'skip') await skipped(plan.entry.check, 'post-deploy-window', plan.detail);
     }
     return;
   }
@@ -51,7 +53,7 @@ test('the republisher counters hold over 24 hours', async ({ freshOwner }) => {
   const baseline = await check('stale-names baseline', 'ledger-unreadable', async () => {
     const ledger = await openLedger(files, 'owner');
     const held = staleBaseline(ledger);
-    if (held !== null) return held;
+    if (held !== null || !baselineDue(uptime)) return held;
     const next = withStaleBaseline(ledger, readings.staleNames);
     await writeLedger(files, next);
     const recorded = staleBaseline(next)!;
@@ -60,9 +62,14 @@ test('the republisher counters hold over 24 hours', async ({ freshOwner }) => {
   });
 
   let first: unknown = null;
-  for (const entry of COUNTER_CHECKS) {
+  for (const plan of counterPlan(uptime, baseline)) {
+    const { entry } = plan;
+    if (plan.kind === 'skip') {
+      await skipped(entry.check, 'post-deploy-window', plan.detail);
+      continue;
+    }
     await check(entry.check, entry.reason, async () => {
-      const failure = entry.verdict(readings, baseline);
+      const failure = entry.verdict(readings, plan.baseline);
       if (failure !== null) throw new SoakFailure(entry.reason, failure);
     }).catch((error: unknown) => {
       first ??= error;

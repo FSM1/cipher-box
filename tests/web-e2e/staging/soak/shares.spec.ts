@@ -7,12 +7,12 @@
  * standing.
  */
 
-import type { Locator, Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { FilesPage } from '../../page-objects/files.page';
 import { InvitePage } from '../../page-objects/invite.page';
 import { SharePage } from '../../page-objects/share.page';
 import { SharedPage, type RowStanding } from '../../page-objects/shared.page';
-import { nudgedUntil, signInWithWallet } from '../fixtures';
+import { nudgedUntil } from '../fixtures';
 import { check, expect, fact, test } from './fixtures';
 import { utcDay } from './ledger';
 import { markerBytes, markerFile, unreadLine } from './markers';
@@ -25,16 +25,18 @@ import {
   markerDates,
   parseEpochs,
   SHARED_FOLDER,
+  SHARED_MARKER_CAP,
   sharedEpochHeld,
+  sharedOverCap,
   sharedLink,
   withSharedLink,
   type Epochs,
 } from './shares';
 import { download, listed, openLedger, synced, toLedgerFolder, writeLedger } from './vault';
 
-/** Owner sign-in 18, folder 10, mint 5, holder sign-in 18, join 6, reads 10, epoch 3. */
+/** Owner sign-in 18, folder 12, mint 5, grantee sign-in 18, join 6, reads 10, epoch 3. */
 const SHARED_TEST_MS = 4_200_000;
-/** The above, plus conversion 6, standing 10, revoke 6 and a second holder sign-in 18. */
+/** The above, plus leftover grants 6, conversion 6, standing 10, revoke 6, sign-in 18. */
 const CYCLE_TEST_MS = 6_600_000;
 const PAGE_MS = 180_000;
 const LISTING_MS = 300_000;
@@ -50,8 +52,16 @@ const FOLDER_PATH = /^\/files\/([0-9a-f]{32})$/;
 const granted = (row: RowStanding) =>
   row !== 'gone' && row.resolution === 'granted' && !row.viaLink;
 
-/** Makes `folder` in `soak/` with today's marker in it, then goes back to `soak/`. */
-async function readyFolder(files: FilesPage, folder: string, today: string): Promise<void> {
+/**
+ * Makes `folder` in `soak/` with today's marker in it, moves the markers past
+ * `cap` to the bin, then goes back to `soak/`.
+ */
+async function readyFolder(
+  files: FilesPage,
+  folder: string,
+  today: string,
+  cap = Infinity
+): Promise<void> {
   await toLedgerFolder(files, 'owner');
   await synced(files);
   if (!(await listed(files, folder))) {
@@ -66,6 +76,12 @@ async function readyFolder(files: FilesPage, folder: string, today: string): Pro
     await expect(files.row(file)).toBeVisible({ timeout: PAGE_MS });
     await files.published();
   }
+  const leaving = sharedOverCap(markerDates(await files.names()), cap);
+  for (const date of leaving) {
+    await files.remove(markerFile(date));
+    await expect(files.row(markerFile(date))).toHaveCount(0);
+  }
+  if (leaving.length > 0) await files.published();
   await toLedgerFolder(files, 'owner');
 }
 
@@ -86,22 +102,16 @@ async function openLink(page: Page, link: URL): Promise<InvitePage> {
   return invite;
 }
 
-async function holderSignIn(page: Page, signedIn: Locator): Promise<void> {
-  try {
-    await signInWithWallet(page, signedIn);
-  } catch (error) {
-    throw new SoakFailure('sign-in-failed', `grantee on the link: ${(error as Error).message}`, {
-      cause: error,
-    });
-  }
-}
-
-/** Signs in on the claim route of `link` and joins. Answers the scope root the join opened. */
-async function join(page: Page, link: URL): Promise<string> {
+/**
+ * Opens `link` in a signed-in grantee page and joins. The preview must list
+ * today's marker first: it reads through the link's own grant blob, which a
+ * person grant from an earlier night does not stand in for. Answers the scope
+ * root the join opened.
+ */
+async function join(page: Page, link: URL, today: string): Promise<string> {
   const invite = await openLink(page, link);
-  await invite.expectState('waiting', PAGE_MS);
-  await holderSignIn(page, invite.joinButton);
   await invite.expectState('joinable', PAGE_MS);
+  await expect(invite.entries.filter({ hasText: markerFile(today) })).toHaveCount(1);
   await invite.name.fill(HOLDER_NAME);
   await invite.join();
   let scope: string | undefined;
@@ -132,7 +142,7 @@ async function readMarkers(files: FilesPage, dates: readonly string[], ms: numbe
 
 test('the long-running link reads every marker with its read epoch flat', async ({
   owner,
-  holder,
+  grantee,
 }) => {
   test.setTimeout(SHARED_TEST_MS);
   const files = new FilesPage(owner);
@@ -145,7 +155,7 @@ test('the long-running link reads every marker with its read epoch flat', async 
   let ledger = opened.read;
   let link = opened.link;
   await check('shared folder marker', 'share-folder-unready', () =>
-    readyFolder(files, SHARED_FOLDER, today)
+    readyFolder(files, SHARED_FOLDER, today, SHARED_MARKER_CAP)
   );
 
   if (link === null) {
@@ -163,8 +173,8 @@ test('the long-running link reads every marker with its read epoch flat', async 
 
   const url = link.url;
   const dates = await check('shared holder read', 'holder-read-failed', async () => {
-    const page = await holder();
-    await join(page, url);
+    const page = await grantee();
+    await join(page, url, today);
     const held = new FilesPage(page);
     await nudgedUntil(held, held.row(markerFile(today)), 1, LISTING_MS);
     const shown = markerDates(await held.names());
@@ -185,7 +195,7 @@ test('the long-running link reads every marker with its read epoch flat', async 
 
 test('the cycle folder mints, converts and revokes a read link in one night', async ({
   owner,
-  holder,
+  grantee,
 }) => {
   test.setTimeout(CYCLE_TEST_MS);
   const files = new FilesPage(owner);
@@ -194,6 +204,21 @@ test('the cycle folder mints, converts and revokes a read link in one night', as
   await check('cycle folder marker', 'share-folder-unready', () =>
     readyFolder(files, CYCLE_FOLDER, today)
   );
+
+  // A failed night can leave the grantee granted, which would hold the next join off a claim.
+  await check('cycle leftover grants', 'cycle-epoch-flat', async () => {
+    await share.open(CYCLE_FOLDER);
+    const people = share.page.getByTestId('share-people');
+    await expect(people.or(share.page.getByTestId('share-grants-unavailable'))).toBeVisible({
+      timeout: PAGE_MS,
+    });
+    for (let left = await share.grantRows.count(); left > 0; left -= 1) {
+      await share.grantRows.first().getByTestId('share-revoke').click();
+      await share.page.getByTestId('share-revoke-confirm').click();
+      await expect(share.grantRows).toHaveCount(left - 1, { timeout: PAGE_MS });
+    }
+    await share.close();
+  });
 
   const { url, before } = await check('cycle link mint', 'link-unminted', async () => {
     await share.open(CYCLE_FOLDER);
@@ -205,8 +230,8 @@ test('the cycle folder mints, converts and revokes a read link in one night', as
   await fact('cycle link', `minted ${linkPrefix(url)} at read epoch ${before}`);
 
   const { page, scope } = await check('cycle holder read', 'holder-read-failed', async () => {
-    const opened = await holder();
-    const root = await join(opened, url);
+    const opened = await grantee();
+    const root = await join(opened, url, today);
     const held = new FilesPage(opened);
     await nudgedUntil(held, held.row(markerFile(today)), 1, LISTING_MS);
     await readMarkers(held, [today], READS_MS);
@@ -240,15 +265,7 @@ test('the cycle folder mints, converts and revokes a read link in one night', as
   await fact('cycle read epoch', `${before} to ${after}`);
 
   await check('cycle link revoked', 'link-not-revoked', async () => {
-    const cold = await holder();
-    const invite = await openLink(cold, url);
-    await invite.expectState('waiting', PAGE_MS);
-    await holderSignIn(
-      cold,
-      cold.locator(
-        '[data-testid="invite-claim"]:not([data-state="waiting"]):not([data-state="checking"])'
-      )
-    );
+    const invite = await openLink(await grantee(), url);
     await invite.expectState('revoked', PAGE_MS);
     await expect(invite.entries).toHaveCount(0);
   });

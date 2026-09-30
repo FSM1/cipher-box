@@ -92,6 +92,14 @@ export function cycleEpochStepped(before: bigint, after: bigint): void {
   }
 }
 
+/** The newest markers `soak/shared` keeps, so a holder reads them all inside its budget. */
+export const SHARED_MARKER_CAP = 30;
+
+/** The days past `cap`, oldest first: what the owner moves to the bin. */
+export function sharedOverCap(dates: readonly string[], cap: number): string[] {
+  return dates.slice(0, Math.max(dates.length - cap, 0));
+}
+
 /** The days of the marker files among `names`, oldest first. */
 export function markerDates(names: Iterable<string>): string[] {
   return [...names].flatMap((name) => markerDate(name) ?? []).sort();
