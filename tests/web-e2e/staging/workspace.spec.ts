@@ -29,7 +29,7 @@ test('a six-folder tree survives a reload', async ({ page }) => {
   await page.getByLabel('Choose files to upload').setInputFiles(mediaPath(image));
   await expect(files.row(image.name)).toBeVisible({ timeout: 180_000 });
   await published(page);
-  await page.getByRole('button', { name: 'root', exact: true }).click();
+  await files.toRoot();
 
   await files.rename('bravo', 'bravo-renamed');
   await expect(files.row('bravo-renamed')).toBeVisible();
@@ -54,7 +54,7 @@ test('a six-folder tree survives a reload', async ({ page }) => {
 
   await files.open('delta');
   await expect(files.row('charlie')).toBeVisible();
-  await page.getByRole('button', { name: 'root', exact: true }).click();
+  await files.toRoot();
 
   await files.open('alpha');
   await expect(files.row(image.name)).toBeVisible();
