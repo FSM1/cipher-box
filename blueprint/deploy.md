@@ -77,7 +77,7 @@ The freeze is one commit boundary, executed in this order:
    lands (testing.md law 1), and a suite of the non-blocking class is not a
    required check (ADR 0050).
 
-Staging redeployability during the build: `deploy-staging.yml` is
+Staging redeployability during the build: v1's `deploy-staging.yml` is
 tag-triggered, and workflow runs execute the workflow file **at the tag** —
 so every existing `staging-*` tag remains a self-contained, reproducible v1
 deploy with no dependency on `main` or the freeze branch. An emergency v1
@@ -104,7 +104,9 @@ release-please stays — in its boring, single-component mode:
   `vX.Y.Z`, starting at `v2.0.0`. One release PR, one CHANGELOG at the
   root, the same changelog-sections config. The GitHub App token mechanism
   (`RELEASE_BOT_APP_ID` / `RELEASE_BOT_PRIVATE_KEY`) ports so release-PR
-  pushes still trigger CI.
+  pushes still trigger CI. The key is an environment secret: in
+  `release-bot` (deployment branch `main` only) for release-please, and in
+  `staging-approval` for the staging tag push.
 - **Version surfaces are exactly two files**: the root `package.json` (the
   manifest source) and `apps/desktop/src-tauri/tauri.conf.json` (via
   `extra-files` — the surface the Tauri updater and the About dialog read).
@@ -150,7 +152,7 @@ Settings > Privacy & Security > Open Anyway on first launch.
 `tag-staging.yml` ports with its chain intact — it was the part of v1
 release management that worked:
 
-1. `workflow_dispatch` → assert `main` HEAD carries a `v*` tag (one regex,
+1. `workflow_dispatch` → assert `main` HEAD carries a `vX.Y.Z` tag (one regex,
    replacing v1's three-pattern component zoo). Untagged HEAD fails with
    "wait for release-please".
 2. Re-run the e2e gates at that SHA via the reusable workflows — web,
@@ -164,8 +166,11 @@ release management that worked:
    health gate of its own, so this run is both the release verdict and the
    first signal that the containers came up (ADR 0050).
 
-The release bot pushes the staging tag, and a ruleset lets only the bot and
-the admin create `staging-*` tags.
+The release bot pushes the staging tag. v2's `deploy-staging.yml` runs only
+by `workflow_call` from `tag-staging.yml` or by `workflow_dispatch`; a
+hand-made deploy is a dispatch, which asserts a `main` revision. A creation
+ruleset on `staging-*`, `v*` and `cipherbox-desktop-v*` tags lets only the
+release bot and the admin create them.
 
 ### The staging stack
 
@@ -395,7 +400,7 @@ Workflows (all edited in place, per FSM1/cipher-box-next#28 D7):
 | `web-e2e.yml`, `desktop-e2e.yml`                                                       | **Port** — reusable shape and per-OS provisioning intact; suites rewired per testing.md; desktop legs gain the cross-client run                                                                                                                                                                                                           |
 | `release-please.yml`                                                                   | **Ports simplified** — single component, app-token mechanism kept; un-latest loop and lock-sync fallback deleted                                                                                                                                                                                                                          |
 | `pr-release-preview.yml` (+ script), `release-gate.yml`, `cargo-lock-release-sync.yml` | **Die** (doctrine table)                                                                                                                                                                                                                                                                                                                  |
-| `tag-staging.yml`                                                                      | **Ports** — single `v*` assertion, adds cross-client to the gate, same `staging-approval` + tag mint                                                                                                                                                                                                                                      |
+| `tag-staging.yml`                                                                      | **Ports** — single `vX.Y.Z` assertion, adds cross-client to the gate, same `staging-approval` + tag mint                                                                                                                                                                                                                                  |
 | `deploy-staging.yml`                                                                   | **Edited** — `build-tee` and redis plumbing out, gateway `forward_auth` wiring and volume-wipe cutover support in; VPS mechanics unchanged                                                                                                                                                                                                |
 | `desktop-staging-release.yml`                                                          | **Becomes `desktop-release.yml`** — triggers on `v*`, attaches to the release-please release, `mark-latest` dies                                                                                                                                                                                                                          |
 | `deploy-landing.yml`                                                                   | **Ports** — env-name mismatch fixed                                                                                                                                                                                                                                                                                                       |

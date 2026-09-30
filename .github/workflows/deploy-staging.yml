@@ -3,9 +3,6 @@
 name: Deploy Staging
 
 on:
-  push:
-    tags:
-      - 'staging-*'
   workflow_call:
     inputs:
       staging_tag:
@@ -25,18 +22,13 @@ env:
   REGISTRY: ghcr.io
   # A dispatch has no tag, so it ships the dispatched commit. Every value this
   # can take is also a valid checkout ref.
-  DEPLOY_TAG: ${{ inputs.staging_tag || (github.event_name == 'workflow_dispatch' && github.sha) || github.ref_name }}
+  DEPLOY_TAG: ${{ inputs.staging_tag || github.sha }}
 
 # The shared staging environment group. A tag run already holds it for the whole
 # chain, so the call it makes takes a group of its own rather than waiting on its
 # own caller; `staging_tag` is required on the call path and set on no other.
-# The release bot's tag push is the chain's own tag, deployed by that call, so
-# its push run skips and takes a group of its own: a workflow-level group
-# applies before any job `if:`, and in the shared group the run would queue
-# behind the chain. The bot-push test is the exact negation of the
-# `assert-main-revision` job `if:`.
 concurrency:
-  group: ${{ inputs.staging_tag && format('staging-deploy-{0}', github.run_id) || (github.event_name == 'push' && github.actor == 'cipherbox-release-bot[bot]') && format('staging-bot-tag-{0}', github.run_id) || 'staging-environment' }}
+  group: ${{ inputs.staging_tag && format('staging-deploy-{0}', github.run_id) || 'staging-environment' }}
   cancel-in-progress: false
 
 permissions: {}
@@ -47,15 +39,12 @@ jobs:
   # trigger that carries the destructive wipe.
   assert-main-revision:
     name: Assert the dispatched revision is on main
-    # Every other job needs this one, so a skip here skips the whole run.
-    # The exact negation of the bot-push test in the workflow `concurrency` group.
-    if: github.event_name != 'push' || github.actor != 'cipherbox-release-bot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - name: Assert the dispatched commit is an ancestor of main
-        if: ${{ !inputs.staging_tag && github.event_name == 'workflow_dispatch' }}
+        if: ${{ !inputs.staging_tag }}
         env:
           GH_TOKEN: ${{ github.token }}
           DISPATCHED_SHA: ${{ github.sha }}
