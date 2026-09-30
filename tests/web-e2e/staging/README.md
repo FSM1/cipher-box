@@ -73,8 +73,28 @@ The fixtures sign in with `SOAK_OWNER_WALLET_KEY` and
 `SOAK_GRANTEE_WALLET_KEY`. A missing key stops the run; the fixtures never mint
 a wallet. The owner ledger is `soak/ledger.txt`, and the grantee ledger is
 `soak/desktop/ledger.txt`. The first line is `cipherbox-soak-ledger 1`, and each
-marker line is `<date> <marker CID> <record sequence>`. `SOAK_BOOTSTRAP=true`
-archives an existing `soak/` folder and builds both ledgers.
+marker line is `<date> <marker IPNS name> <record sequence>`. A marker that the
+cap moved to the bin stays as `binned <marker date> <bin date>` until its purge
+is proven. `SOAK_BOOTSTRAP=true` archives an existing `soak/` folder and builds
+both ledgers.
+
+The vault checks read each name through `https://delegated-ipfs.dev` and the
+engine's record read (ADR 0057). They load a WASM module built with the
+`observer` feature from `SOAK_OBSERVER_WASM_DIR`. With no value, they load the
+module that `pnpm --filter @cipherbox/client build:wasm-conformance` writes.
+
+The purge check needs a saved bin retention, because bin expiry runs only on a
+saved retention. The bootstrap saves the Settings form once when the vault reads
+the default settings. A scheduled night writes no settings: when it reads the
+defaults, it fails as `settings-unread`.
+
+The republish check treats a validity as fresh when the EOL is more than 30
+days ahead. That value copies the engine renewal threshold,
+`EOL_RENEW_THRESHOLD` in `crates/engine/src/net/eol.rs`.
+
+Each marker test has a 90-minute timeout, so that a slow night fails with its
+own reason code. The two ledger tests keep the 10-minute project timeout. Give
+the web leg of the soak workflow a job timeout of at least 210 minutes.
 
 Each check names a reason code from `soak/reasons.ts` and appends its outcome to
 `test-results/soak-results.jsonl`. The summary writer prints that file as

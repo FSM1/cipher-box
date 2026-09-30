@@ -226,6 +226,21 @@ export class FilesPage {
     await expect(this.previewDialog).toHaveCount(0);
   }
 
+  /** The IPNS name the details dialog shows for a row, read once the snapshot projects one. */
+  async ipnsName(name: string): Promise<string> {
+    await this.act(name, 'details');
+    const dialog = this.page.getByTestId('details-dialog');
+    const value = dialog
+      .locator('.details-row')
+      .filter({ has: this.page.locator('dt', { hasText: /^ipns name$/ }) })
+      .locator('.details-copyable-text');
+    await expect(value).toBeVisible({ timeout: 60_000 });
+    const shown = (await value.textContent())?.trim() ?? '';
+    await this.page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    return shown;
+  }
+
   /** Raises the text editor on a row and waits for the file text to load into it. */
   async openEditor(name: string): Promise<Locator> {
     await this.act(name, 'edit');

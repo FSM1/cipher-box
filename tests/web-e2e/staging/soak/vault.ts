@@ -4,8 +4,11 @@
  * builds the folders it lives in.
  */
 
-import { expect } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import type { SettingsOrigin } from '@cipherbox/client';
+import { BinPage } from '../../page-objects/bin.page';
 import type { FilesPage } from '../../page-objects/files.page';
+import { SettingsPage } from '../../page-objects/settings.page';
 import type { SoakRole } from './accounts';
 import { archiveName, SOAK_FOLDER, soakFolderListed, type VaultState } from './bootstrap';
 import { emptyLedger, formatLedger, parseLedger, type Ledger } from './ledger';
@@ -20,6 +23,9 @@ export const LEDGER_FOLDERS: Readonly<Record<SoakRole, readonly string[]>> = {
 
 /** How long a listing gets to show a row before the row counts as absent. */
 const LISTED_WITHIN_MS = 60_000;
+
+/** How long the settings read and save get. */
+const SETTINGS_MS = 60_000;
 
 export interface FoundVault extends VaultState {
   /** The root names, which the archive name must not take. */
@@ -50,6 +56,10 @@ export async function bootstrapVault(
   found: FoundVault,
   day: string
 ): Promise<void> {
+  if (role === 'owner') {
+    await saveDefaultSettings(files.page);
+    await files.openFromSidebar();
+  }
   await files.toRoot();
   if (found.soakFolder) {
     await files.rename(SOAK_FOLDER, archiveName(day, found.rootNames));
@@ -63,6 +73,32 @@ export async function bootstrapVault(
   await files.upload(LEDGER_FILE, new TextEncoder().encode(formatLedger(emptyLedger())));
   await expect(files.row(LEDGER_FILE)).toBeVisible({ timeout: 180_000 });
   await files.published();
+}
+
+/**
+ * Saves the Settings form once when the vault reads the default settings: bin
+ * expiry runs only on a saved retention, and only a dispatch writes settings.
+ */
+async function saveDefaultSettings(page: Page): Promise<void> {
+  if ((await binRetention(page)).origin !== 'defaults') return;
+  const settings = new SettingsPage(page);
+  await settings.open();
+  await expect(settings.binRetention).not.toHaveValue('', { timeout: SETTINGS_MS });
+  await settings.save();
+  await expect(settings.savedMark).toBeVisible({ timeout: SETTINGS_MS });
+}
+
+const SETTINGS_ORIGINS: readonly SettingsOrigin[] = ['resolved', 'stale', 'defaults'];
+
+/** The bin retention as the bin page shows it, once the settings read lands. */
+export async function binRetention(page: Page): Promise<{ origin: SettingsOrigin; days: number }> {
+  const bin = new BinPage(page);
+  await bin.open();
+  await expect(bin.retention).toHaveAttribute('data-origin', /.+/, { timeout: SETTINGS_MS });
+  const shown = await bin.retention.getAttribute('data-origin');
+  const origin = SETTINGS_ORIGINS.find((known) => known === shown);
+  if (origin === undefined) throw new Error(`the bin page shows the settings origin "${shown}"`);
+  return { origin, days: Number(await bin.retention.getAttribute('data-days')) };
 }
 
 /** Reads the ledger in the folder on screen, through the editor, and closes it unchanged. */

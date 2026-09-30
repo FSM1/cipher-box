@@ -32,6 +32,10 @@ export const SOAK_REASONS = {
   },
   'sign-in-failed': { kind: 'failure', meaning: 'a soak account did not sign in' },
   'marker-unreadable': { kind: 'failure', meaning: 'a ledger marker did not open byte for byte' },
+  'name-unread': {
+    kind: 'failure',
+    meaning: 'the details dialog did not show a marker name in time',
+  },
   'sequence-regressed': {
     kind: 'failure',
     meaning: 'a soak name resolved below the ledger sequence',
@@ -44,7 +48,19 @@ export const SOAK_REASONS = {
     kind: 'failure',
     meaning: 'a name past 60 days was not republished at the next sequence',
   },
-  'purge-missed': { kind: 'failure', meaning: 'a binned marker was not purged when due' },
+  'purge-missed': {
+    kind: 'failure',
+    meaning: 'a binned marker was purged too early, or was not purged when due',
+  },
+  'cap-missed': { kind: 'failure', meaning: 'a marker past the cap did not move to the bin' },
+  'settings-unread': {
+    kind: 'failure',
+    meaning: 'the vault settings did not read as a saved record that keeps a bin',
+  },
+  'routing-unavailable': {
+    kind: 'failure',
+    meaning: 'the public routing endpoint served no record for a soak name',
+  },
   'shared-epoch-stepped': { kind: 'failure', meaning: 'the long-running link epoch moved' },
   'cycle-epoch-flat': { kind: 'failure', meaning: 'the revoke did not step the read epoch' },
   'link-not-revoked': { kind: 'failure', meaning: 'a revoked link still opened' },
