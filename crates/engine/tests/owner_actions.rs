@@ -18,8 +18,9 @@ use cipherbox_core::seal::{
     AadContext, AscentLink, BinEntry, ChildRef, GrantLedgerEntry, GrantSection, GrantSetEntryKind,
     GranteeName, NameSource, NodeKind as CoreNodeKind, Permission as CorePermission,
     PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
-    STRUCT_TAG_WRITE_BODY, WriteBody, decode_envelope, decode_grant_section, decode_write_body,
-    grant_section_bytes, open_ascent_link, open_grant_blob, open_read_body, unseal,
+    STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, WriteBody, decode_envelope,
+    decode_grant_section, decode_write_body, grant_section_bytes, open_ascent_link,
+    open_grant_blob, open_owner_history_link, open_read_body, unseal,
 };
 use cipherbox_core::seal::{
     ChildScopeRef, SignedSealed, StructureSigInput, encode_envelope, encode_grant_section,
@@ -45,6 +46,7 @@ use cipherbox_engine::grants::{
     post_invite_claim, recipient_blinded_tag, row_is_owner_attested,
 };
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
+use cipherbox_engine::net::eol::eol_from;
 use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
@@ -10109,4 +10111,308 @@ fn a_write_grantees_delete_reaches_the_owners_bin_by_owner_capture() {
         .expect("the owner's capture binned the grantee's unlink");
     assert_eq!(entry.scope_id, fx.folder.0);
     assert_eq!(entry.origin_parent, fx.folder.0);
+}
+
+/// ADR 0061 D1: a folder a grant cut into a scope root of its own is a walk
+/// root of its own. The walk waits for the boundary walk that names it, so a
+/// folder inside it renews at the next start, and the walk reports nothing for
+/// the scope root it meets as a child of the vault root.
+#[test]
+fn a_folder_inside_a_granted_scope_renews_at_the_next_start() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        abuse_events(&mut fx._events),
+        0,
+        "the session that minted the scope reports nothing either"
+    );
+    let GrantScenario {
+        world,
+        blocks,
+        engine,
+        _tasks,
+        ..
+    } = fx;
+    drop((engine, _tasks));
+    drop(world.scheduler.take_spawned_tasks());
+    let before = sequence_at(&world, &write_name(inner));
+
+    world
+        .scheduler
+        .advance(Duration::from_secs(65 * 24 * 60 * 60));
+    let device = world.device(b"the owner's later device");
+    let (engine, mut events, mut tasks) = boot_owner(&world, &blocks, &device);
+    for _ in 0..3 {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    assert_eq!(
+        sequence_at(&world, &write_name(inner)),
+        before + 1,
+        "the walk reached the folder through the granted scope's own root"
+    );
+    assert_eq!(
+        abuse_events(&mut events),
+        0,
+        "a known scope root is no violation"
+    );
+}
+
+/// A folder that predates the grant stays sealed under the scope it left until
+/// the lazy wave reaches it. The walk still renews it, and reports nothing.
+#[test]
+fn a_folder_that_predates_a_grant_renews_at_the_next_start() {
+    let mut fx = GrantScenario::new();
+    let older = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "older",
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let GrantScenario {
+        world,
+        blocks,
+        engine,
+        _tasks,
+        ..
+    } = fx;
+    drop((engine, _tasks));
+    drop(world.scheduler.take_spawned_tasks());
+    let before = sequence_at(&world, &write_name(older));
+
+    world
+        .scheduler
+        .advance(Duration::from_secs(65 * 24 * 60 * 60));
+    let device = world.device(b"the owner's later device");
+    let (engine, mut events, mut tasks) = boot_owner(&world, &blocks, &device);
+    for _ in 0..3 {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    assert_eq!(
+        sequence_at(&world, &write_name(older)),
+        before + 1,
+        "the walk renewed the folder the lazy wave has not re-sealed"
+    );
+    assert_eq!(
+        abuse_events(&mut events),
+        0,
+        "a lagging node is no violation"
+    );
+}
+
+/// Stand in for a name wave that stopped before it reached `child`: publish
+/// `parent` at its current name, under `write_seed`, naming `child` at
+/// `child_name` instead.
+fn name_child_at(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    write_seed: &[u8; 32],
+    read_seed: &[u8; 32],
+    parent: NodeId,
+    child: NodeId,
+    child_name: &IpnsName,
+) {
+    let parent_name = derive_write_name(write_seed, &parent.0);
+    let head = published_head(world, blocks, &parent_name).expect("the parent is published");
+    let envelope = decode_envelope(&head).expect("the head block decodes");
+    let read_key = node_read_key(read_seed, parent);
+    let ReadBody::Folder {
+        created_at,
+        modified_at,
+        mut children,
+        unknown,
+    } = open_read_body(&envelope, &read_key).expect("the parent opens under the scope's seed")
+    else {
+        panic!("expected a folder body");
+    };
+    for entry in &mut children {
+        if entry.id == child.0 {
+            entry.ipns_name = child_name.as_str().as_bytes().to_vec();
+        }
+    }
+    let authored = author_child_envelope(EnvelopeAuthoring {
+        node_id: parent.0,
+        scope_id: envelope.scope,
+        epoch: envelope.epoch,
+        read_key: &read_key,
+        nonce: &[0x4D; 24],
+        body: &ReadBody::Folder {
+            created_at,
+            modified_at,
+            children,
+            unknown,
+        },
+        carried_unknown: envelope.unknown.clone(),
+        carried_epoch_tag_unknown: envelope.epoch_tag_unknown.clone(),
+    })
+    .expect("a well-formed parent record");
+    blocks.put(authored.block.clone());
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(write_seed, &parent.0).as_bytes()),
+        format!("/ipfs/{}", authored.cid).as_bytes(),
+        sequence_at(world, &parent_name) + 1,
+        TTL_NANOS,
+        &eol_from(world.scheduler.now()),
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, parent_name.as_str(), record.clone());
+    }
+}
+
+/// Publish the head `from` points at under `node`'s name for `signer_seed`,
+/// one sequence above what that name holds, as a writer who holds that seed
+/// would. Returns the name and the sequence.
+fn publish_at_seed_name(
+    world: &FakeWorld,
+    signer_seed: &[u8; 32],
+    node: NodeId,
+    from: &IpnsName,
+) -> (IpnsName, u64) {
+    let name = derive_write_name(signer_seed, &node.0);
+    let sequence = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], name.as_str())
+        .map_or(1, |_| sequence_at(world, &name) + 1);
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(signer_seed, &node.0).as_bytes()),
+        &published_value(world, from),
+        sequence,
+        TTL_NANOS,
+        &eol_from(world.scheduler.now()),
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+    (name, sequence)
+}
+
+/// The write seed the owner's history link at the scope root `repoint` names
+/// supersedes.
+fn superseded_write_seed(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    scope: NodeId,
+    repoint: &RepointObject,
+    current: &[u8; 32],
+) -> [u8; 32] {
+    let section = published_grant_section_at(world, blocks, &repoint.current_root)
+        .expect("the scope root answers");
+    let write_key = kdf::write_key(kdf::write_seed(current, &scope.0).as_bytes());
+    let ctx = |struct_tag| AadContext {
+        v: ENVELOPE_V,
+        id: scope.0,
+        scope: scope.0,
+        epoch: repoint.write_epoch,
+        struct_tag,
+    };
+    let body = decode_write_body(
+        &unseal(
+            write_key.as_bytes(),
+            &ctx(STRUCT_TAG_WRITE_BODY),
+            &section.write_body.sealed,
+        )
+        .expect("the current write key opens the write body"),
+    )
+    .expect("the write body decodes");
+    *open_owner_history_link(
+        &kdf::enc_subkey(&SECRET),
+        &ctx(STRUCT_TAG_WRITE_HISTORY_LINK),
+        &body.write_history_link,
+    )
+    .expect("the owner opens its own history link")
+    .prev_seed()
+}
+
+/// ADR 0061 D4, end to end. A write grant moves the granted scope onto a fresh
+/// write seed, and the owner's history link names the seed it superseded. When
+/// the name wave stops before a node, the node's parent still names the node's
+/// old name, which only the superseded seed derives. The walk renews the node
+/// there, under that seed. A write under the superseded seed at an old name no
+/// parent names is not renewed.
+#[test]
+fn a_node_a_stopped_wave_did_not_reach_renews_at_its_old_name() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let mid = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "mid");
+    let leaf = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, mid, "leaf");
+    let material = block_on(fx.engine.walked_scope_material(fx.folder))
+        .expect("the walk resolved the granted scope");
+    let current_leaf = derive_write_name(&material.write_scope_seed, &leaf.0);
+    let current_mid = derive_write_name(&material.write_scope_seed, &mid.0);
+    let superseded = superseded_write_seed(
+        &fx.world,
+        &fx.blocks,
+        fx.folder,
+        &fx.granted_scope_repoint(),
+        &material.write_scope_seed,
+    );
+
+    // The stopped wave: the leaf's record sits at the name the superseded seed
+    // derives, and the parent names it there.
+    let (old_leaf, _) = publish_at_seed_name(&fx.world, &superseded, leaf, &current_leaf);
+    name_child_at(
+        &fx.world,
+        &fx.blocks,
+        &material.write_scope_seed,
+        &material.read_scope_seed,
+        mid,
+        leaf,
+        &old_leaf,
+    );
+    // A later write under the superseded seed, at a name no parent names.
+    let (old_mid, stray) = publish_at_seed_name(&fx.world, &superseded, mid, &current_mid);
+    let GrantScenario {
+        world,
+        blocks,
+        engine,
+        _tasks,
+        ..
+    } = fx;
+    drop((engine, _tasks));
+    drop(world.scheduler.take_spawned_tasks());
+    let before = sequence_at(&world, &old_leaf);
+
+    world
+        .scheduler
+        .advance(Duration::from_secs(65 * 24 * 60 * 60));
+    let device = world.device(b"the owner's later device");
+    let (engine, mut events, mut tasks) = boot_owner(&world, &blocks, &device);
+    for _ in 0..3 {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    assert_eq!(
+        sequence_at(&world, &old_leaf),
+        before + 1,
+        "the node renews at the old name its parent names"
+    );
+    assert_eq!(
+        sequence_at(&world, &old_mid),
+        stray,
+        "a write at an old name no parent names is not renewed"
+    );
+    assert_eq!(abuse_events(&mut events), 0);
 }

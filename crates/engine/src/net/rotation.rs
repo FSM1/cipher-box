@@ -1782,10 +1782,14 @@ where
     let gated = gated_root_cached(&adopter, snapshot_cache, name, &record_bytes, None)
         .await
         .map_err(|verdict| match verdict {
-            RootGateVerdict::Unavailable => ScopeRootAdmission::Unavailable,
-            RootGateVerdict::Rejected
-            | RootGateVerdict::Superseded
-            | RootGateVerdict::NotResealable => ScopeRootAdmission::Rejected,
+            // A rotation publishes before it raises the floor, so a root below
+            // its own floor is a stale name, as for `walk_verdict`.
+            RootGateVerdict::Unavailable | RootGateVerdict::Superseded => {
+                ScopeRootAdmission::Unavailable
+            }
+            RootGateVerdict::Rejected | RootGateVerdict::NotResealable => {
+                ScopeRootAdmission::Rejected
+            }
         })?;
     let superseded_write_seed = match write_plane_of_gated(floors, &gated, scope_id).await {
         Ok(plane) => {
@@ -13511,6 +13515,32 @@ mod tests {
             Err(SweepResolveFailure::Superseded),
             "a rotation publishes before it raises the floor, so this is a stale name",
         );
+    }
+
+    /// After a rotation the walk can still hold the old scope name. Its root
+    /// sits below the scope's own floor, which is a stale name, not a trust
+    /// violation.
+    #[test]
+    fn the_walk_reads_a_scope_root_below_its_own_floor_as_unavailable() {
+        let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        block_on(harness.floors.raise_epoch_floor(&SCOPE, SWEPT_EPOCH + 3))
+            .expect("raise the floor past the record");
+        let owner = owner_identity();
+        let name = scope_name(&scope.ipns_name).expect("a scope name");
+
+        let admitted = block_on(admit_owned_scope_root(
+            &harness.transport,
+            &harness.gateway,
+            &harness.http,
+            &harness.floors,
+            &harness.cache,
+            &owner_enc(),
+            &owner.verifying_key(),
+            SCOPE,
+            None,
+            &name,
+        ));
+        assert!(matches!(admitted, Err(ScopeRootAdmission::Unavailable)));
     }
 
     #[test]

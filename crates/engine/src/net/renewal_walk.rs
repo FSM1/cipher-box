@@ -54,6 +54,12 @@ pub const WALK_WINDOW: Duration = Duration::from_secs(60 * DAY);
 /// A new cycle begins no sooner than this after the previous one began.
 pub const CYCLE_HOLD: Duration = Duration::from_secs(7 * DAY);
 
+/// The most poll cadences the liveness loop waits for the session's first
+/// boundary walk before it skips the renewal walk for that pass. A walk that
+/// starts before the boundary walk names every owned scope root would close its
+/// cycle without them, and [`CYCLE_HOLD`] would then hold for 7 days.
+pub const SCOPE_ROOTS_WAIT_POLLS: u32 = 10;
+
 /// One owned scope the walk roots at.
 pub(crate) struct WalkScope {
     pub(crate) scope_id: [u8; 16],
@@ -196,6 +202,9 @@ struct Pass<'s> {
     cursor: RenewalCursor,
     report: WalkReport,
     materials: BTreeMap<[u8; 16], Option<ScopeMaterial>>,
+    /// Every scope root the session knows, owned or not: the walk reaches
+    /// each owned one as a root of its own.
+    scope_roots: &'s BTreeSet<[u8; 16]>,
     due: Vec<Due>,
     /// The names a delete doomed, or `None` when the journal did not read.
     doomed: Option<BTreeSet<String>>,
@@ -258,11 +267,13 @@ where
     Sch: Scheduler + Clone + 'static,
 {
     /// Run one pass over `scopes` and `bins`, from where the stored cursor
-    /// stopped, and store where this pass stopped.
+    /// stopped, and store where this pass stopped. `scope_roots` holds every
+    /// scope root the session knows.
     pub(crate) async fn pass(
         &self,
         scopes: &[WalkScope],
         bins: &[BinRoot],
+        scope_roots: &BTreeSet<[u8; 16]>,
         still_running: &dyn Fn() -> bool,
     ) -> WalkReport {
         let store = CursorStore::new(self.staging, self.seal, self.enc_secret);
@@ -274,6 +285,7 @@ where
                 .unwrap_or_else(|| RenewalCursor::starting(now)),
             report: WalkReport::default(),
             materials: BTreeMap::new(),
+            scope_roots,
             due: Vec::new(),
             doomed: None,
             owner_tag: owner_tag(self.enc_secret),
@@ -395,7 +407,12 @@ where
         let Some((plane, root_node, body)) = self.open_root(pass, root).await else {
             return RootEnd::Finished;
         };
-        let owned: BTreeSet<[u8; 16]> = pass.scopes.iter().map(|scope| scope.scope_id).collect();
+        let scope_roots: BTreeSet<[u8; 16]> = pass
+            .scopes
+            .iter()
+            .map(|scope| scope.scope_id)
+            .chain(pass.scope_roots.iter().copied())
+            .collect();
         let in_bin = matches!(root, WalkRoot::Bin(_));
         let mut frames = vec![Frame::of(root_node, &body)];
         if pass.cursor.path.first() != Some(&root_node) {
@@ -409,8 +426,8 @@ where
                 break;
             };
             let reopened = match top.children.iter().find(|child| child.id == id) {
-                Some(child) if child.kind == NodeKind::Folder && !owned.contains(&id) => {
-                    self.visit(pass, &plane, child).await
+                Some(child) if child.kind == NodeKind::Folder && !scope_roots.contains(&id) => {
+                    self.visit(pass, &plane, child, in_bin).await
                 }
                 _ => None,
             };
@@ -445,10 +462,10 @@ where
                 continue;
             };
             top.next += 1;
-            if owned.contains(&child.id) {
+            if scope_roots.contains(&child.id) {
                 continue;
             }
-            let Some(body) = self.visit(pass, &plane, &child).await else {
+            let Some(body) = self.visit(pass, &plane, &child, in_bin).await else {
                 continue;
             };
             if child.kind != NodeKind::Folder || !matches!(body, ReadBody::Folder { .. }) {
@@ -498,7 +515,7 @@ where
                     scope_id,
                     read_seed: keys.held_key(&node_id, bin.deleted_at),
                 };
-                let body = self.admit(pass, &plane, node_id, &name).await?;
+                let body = self.admit(pass, &plane, node_id, &name, true).await?;
                 Some((plane, node_id, body))
             }
             WalkRoot::Deferred { scope_id, node_id } => {
@@ -519,7 +536,7 @@ where
                     scope_id,
                     read_seed,
                 };
-                let body = self.admit(pass, &plane, node_id, &name).await?;
+                let body = self.admit(pass, &plane, node_id, &name, false).await?;
                 Some((plane, node_id, body))
             }
         }
@@ -531,19 +548,23 @@ where
         pass: &mut Pass<'_>,
         plane: &Plane,
         child: &ChildRef,
+        in_bin: bool,
     ) -> Option<ReadBody> {
         let name = child_name(child).ok()?;
-        self.admit(pass, plane, child.id, &name).await
+        self.admit(pass, plane, child.id, &name, in_bin).await
     }
 
     /// The gated child resolve of `node_id` at `name` (ADR 0061 D3 step 1),
-    /// then the renewal decision on the record it admitted.
+    /// then the renewal decision on the record it admitted. A binned subtree
+    /// can hold a scope root the boundary walk no longer names, which carries
+    /// a grant section; anywhere else a grant section is a trust violation.
     async fn admit(
         &self,
         pass: &mut Pass<'_>,
         plane: &Plane,
         node_id: [u8; 16],
         name: &IpnsName,
+        in_bin: bool,
     ) -> Option<ReadBody> {
         let scope_root = self
             .material(pass, plane.scope_id)
@@ -580,9 +601,8 @@ where
                 .await;
                 Some(adopted.read_body)
             }
-            // A scope root the walk reaches as a root of its own.
             Err(ChildResolveError::Gate(GateError::Rejected(rejection)))
-                if rejection.stage == GateStage::GrantSection =>
+                if in_bin && rejection.stage == GateStage::GrantSection =>
             {
                 None
             }

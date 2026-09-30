@@ -10,7 +10,7 @@
   [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md),
   [ADR 0033](./0033-every-attacker-sized-field-has-one-canonical-form-and-a-symmetric-fail-closed-bound.md),
   and ADR 0062 (the revival of a lapsed name)
-- **Implemented by:** not landed; FSM1/cipher-box#2108 tracks the change
+- **Implemented by:** FSM1/cipher-box#2112 (D1 to D4)
 - **Amends:** [ADR 0057](./0057-an-observer-outside-a-session-reads-a-verified-record-and-adopts-nothing.md) Context
 
 ## Context

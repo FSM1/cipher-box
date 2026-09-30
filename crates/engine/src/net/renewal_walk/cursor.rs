@@ -336,6 +336,53 @@ mod tests {
         assert_eq!(decode_cursor(&body).unwrap(), cursor);
     }
 
+    /// The v1 body as a release wrote it, spelled out field by field rather
+    /// than through the encoder, so a codec change that moves or resizes a
+    /// field cannot drop the previous release's cursor unnoticed.
+    fn committed_v1_body() -> Vec<u8> {
+        let mut body = vec![1];
+        body.extend_from_slice(&[0, 0, 0, 0, 0, 0x12, 0xd6, 0x87]);
+        body.push(3);
+        body.extend_from_slice(&[3; 16]);
+        body.extend_from_slice(&[4; 16]);
+        body.push(2);
+        body.extend_from_slice(&[0x11; 16]);
+        body.extend_from_slice(&[0x22; 16]);
+        body.resize(body.len() + 62 * 16, 0);
+        body.push(1);
+        body.extend_from_slice(&[9; 16]);
+        body.extend_from_slice(&[0, 1]);
+        body.extend_from_slice(&[5; 16]);
+        body.extend_from_slice(&[6; 16]);
+        body.extend_from_slice(&name(1).public_key().to_bytes());
+        body.resize(17_470, 0);
+        body
+    }
+
+    #[test]
+    fn a_body_the_previous_release_wrote_still_decodes() {
+        let body = committed_v1_body();
+        let cursor = decode_cursor(&body).expect("the committed body decodes");
+        assert_eq!(
+            cursor,
+            RenewalCursor {
+                cycle_start: UnixMillis(1_234_567),
+                root: Some(WalkRoot::Deferred {
+                    scope_id: [3; 16],
+                    node_id: [4; 16],
+                }),
+                path: vec![[0x11; 16], [0x22; 16]],
+                last_child: Some([9; 16]),
+                deferred: vec![DeferredRoot {
+                    scope_id: [5; 16],
+                    node_id: [6; 16],
+                    name: name(1),
+                }],
+            }
+        );
+        assert_eq!(encode_cursor(&cursor).unwrap(), body);
+    }
+
     #[test]
     fn every_cursor_encodes_to_one_length() {
         let empty = encode_cursor(&RenewalCursor::starting(UnixMillis(0))).unwrap();

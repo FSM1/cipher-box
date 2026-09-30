@@ -115,8 +115,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   At one sequence, the fan-out resolve (`fanout::scan`) and the last-known-good
   keeper (`keep_newest_last_known_good`) take the record with the later EOL,
   so a real write wins over a renewal walk's re-signature (ADR 0061 D3 step 7).
-  The drain keeps the winner of a lost race in session memory and rebases onto
-  it, because the keeper can then hold the drain's own losing record.
+  The keeper can then hold the drain's own losing record, so at a split at the
+  floor the drain rebases onto a gated record on which its head op does not
+  read as applied.
 - **Publish**: register-first, fail-closed — the API registration call
   precedes a name's first publish and publish blocks on it; ordinary writes
   send single-item batches, name waves and sweeps send bulk (FSM1/cipher-box-next#34 D2). Core
@@ -158,7 +159,15 @@ bytes (FSM1/cipher-box-next#28 D2).
   when T is at most 19 days; for N = 10 000, that is 20 passes in each 19 days.
   The cursor (`renewal-cursor`) holds the path of folder ids from the root, at
   most 64, and at most 256 deferred roots; a folder at depth 64 becomes a
-  deferred root.
+  deferred root. A deferred root cannot carry a bin key, so a binned subtree
+  below depth 64 is walked in the same pass with no budget.
+  A pass starts or closes a cycle only after the session's boundary walk has
+  named every scope root; until then it retries at the poll cadence, up to 10
+  times. A scope root the walk meets as a child is walked as a root of its own;
+  a grant section on any other child outside the bin is a `TrustViolation`.
+  The walk also skips a name whose acknowledged sequence is above the admitted
+  one, because the drain owes a publish there. An acknowledged mark that never
+  clears stops the renewal of that name.
 - **Revival**: after a >EOL lapse, a key-holding session fetches cached bytes
   from the authenticated recovery endpoint and extracts the last-known CID —
   or recovers it from the pin set's name→CID mapping — then mints a fresh

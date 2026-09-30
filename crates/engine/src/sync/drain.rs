@@ -107,7 +107,8 @@ use crate::sync::project::{
     UnlinkedChild, project_child_version, project_folder, project_folder_partial,
 };
 use crate::sync::rebase::{
-    AppliedOp, DeadLetterReason, DropReason, decode_queue, enclosing_scope_root, replay,
+    AppliedOp, DeadLetterReason, DropReason, ReplayReport, decode_queue, enclosing_scope_root,
+    replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::render::BaseSnapshot;
@@ -1199,10 +1200,6 @@ pub(crate) struct DrainCells<'a> {
     /// The names this drain is publishing right now, which the renewal walk
     /// stays clear of (ADR 0061 D3 step 2).
     pub(crate) publishing: &'a RefCell<BTreeSet<String>>,
-    /// The winner of each name's lost race, which the retry rebases onto. The
-    /// last-known-good copy cannot hold it: at one sequence the keeper takes
-    /// the later EOL, which can be our own losing record (ADR 0061 D3 step 7).
-    pub(crate) lost_races: &'a RefCell<BTreeMap<String, Vec<u8>>>,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -2018,13 +2015,7 @@ where
             return Ok(());
         }
 
-        let mut pass = self.open_pass(scope).await?;
-        let rebased = {
-            let base = self.cells.base.borrow();
-            let ops: Vec<Op> = queued.iter().map(|(_, op)| op.clone()).collect();
-            let local = apply_overlay(&base, &ops);
-            replay(&base, &local, queued, scope.scope_roots)
-        };
+        let (mut pass, rebased) = self.open_rebased_pass(scope, queued).await?;
         for (op_id, reason) in &rebased.dead_letters {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
@@ -2371,12 +2362,76 @@ where
     // Loading the folders a pass authors onto.
     // -----------------------------------------------------------------------
 
-    /// Open a pass anchored on the scope root, whose epoch every record this
-    /// pass seals is bound to.
-    async fn open_pass(&self, scope: &DrainScope<'_>) -> Result<Pass, Halt> {
-        let root = self
-            .resolve_and_open_scope_root(scope, &scope.source)
+    /// Open the pass and rebase the queue onto it.
+    ///
+    /// An endpoint split leaves two records at the floor, and a read can take
+    /// our own losing record, which already carries the head op (ADR 0061 D3
+    /// step 7). The pass then builds on a gated record the head op does not
+    /// read as applied on, or on the resolved one when there is none.
+    async fn open_rebased_pass(
+        &self,
+        scope: &DrainScope<'_>,
+        queued: &[(OpId, Op)],
+    ) -> Result<(Pass, ReplayReport), Halt> {
+        let (resolved, others) = self.scope_root_candidates(scope).await?;
+        let pass = self.open_pass(scope, &resolved).await?;
+        let rebased = self.rebase_queue(scope, queued);
+        if others.is_empty() || !head_reads_applied(&rebased, queued) {
+            return Ok((pass, rebased));
+        }
+        for other in &others {
+            let Ok(pass) = self.open_pass(scope, other).await else {
+                continue;
+            };
+            let rebased = self.rebase_queue(scope, queued);
+            if !head_reads_applied(&rebased, queued) {
+                return Ok((pass, rebased));
+            }
+        }
+        let pass = self.open_pass(scope, &resolved).await?;
+        Ok((pass, self.rebase_queue(scope, queued)))
+    }
+
+    /// The queue replayed onto the base snapshot.
+    fn rebase_queue(&self, scope: &DrainScope<'_>, queued: &[(OpId, Op)]) -> ReplayReport {
+        let base = self.cells.base.borrow();
+        let ops: Vec<Op> = queued.iter().map(|(_, op)| op.clone()).collect();
+        let local = apply_overlay(&base, &ops);
+        replay(&base, &local, queued, scope.scope_roots)
+    }
+
+    /// The source scope root [`resolved_bytes`] picks, and every other record
+    /// the endpoints serve at the floor beside it that the gate admits.
+    async fn scope_root_candidates(
+        &self,
+        scope: &DrainScope<'_>,
+    ) -> Result<(Vec<u8>, Vec<Vec<u8>>), Halt> {
+        let end = &scope.source;
+        let gated = self
+            .gated_scope_root(scope, end, ResolveMode::CacheFirst)
             .await?;
+        let served: Vec<Vec<u8>> = match &gated.resolved.outcome {
+            ResolveOutcome::Current { record_bytes } => {
+                gated.tied.iter().chain([record_bytes]).cloned().collect()
+            }
+            _ => Vec::new(),
+        };
+        let resolved = resolved_bytes(gated, end.root_name, &self.seams.events)?;
+        let floors = end.floors(&self.seams.floors);
+        let adopter = self.root_adopter(scope, &floors, end);
+        let mut others = Vec::new();
+        for bytes in served {
+            if bytes != resolved && gates_at_floor(&adopter, end.root_name, &bytes).await {
+                others.push(bytes);
+            }
+        }
+        Ok((resolved, others))
+    }
+
+    /// Open a pass anchored on the scope root `record_bytes`, whose epoch every
+    /// record this pass seals is bound to.
+    async fn open_pass(&self, scope: &DrainScope<'_>, record_bytes: &[u8]) -> Result<Pass, Halt> {
+        let root = self.open_root_record(&scope.source, record_bytes).await?;
         let mut pass = Pass {
             root: scope.source.root,
             epoch: root.epoch,
@@ -2544,17 +2599,7 @@ where
         let resolved = self
             .gated_scope_root(scope, end, ResolveMode::CacheFirst)
             .await?;
-        resolved_bytes(
-            resolved,
-            end.root_name,
-            self.lost_race_winner(end.root_name),
-            &self.seams.events,
-        )
-    }
-
-    /// The record that won this name's last lost race, if any.
-    fn lost_race_winner(&self, name: &IpnsName) -> Option<Vec<u8>> {
-        self.cells.lost_races.borrow().get(name.as_str()).cloned()
+        resolved_bytes(resolved, end.root_name, &self.seams.events)
     }
 
     /// One end's scope root through its own gate, under `mode`.
@@ -2621,15 +2666,7 @@ where
                 ),
                 _ => return Err(refuse_record(&self.seams.events, &name, rejection)),
             },
-            _ => (
-                resolved_bytes(
-                    resolved,
-                    &name,
-                    self.lost_race_winner(&name),
-                    &self.seams.events,
-                )?,
-                None,
-            ),
+            _ => (resolved_bytes(resolved, &name, &self.seams.events)?, None),
         };
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, &adopter, &name, &record_bytes, lagging)
@@ -6374,7 +6411,6 @@ where
                 if acked != Acknowledged::Nothing {
                     let _ = ledger.forget_acknowledged(&owner, node.0).await;
                 }
-                self.cells.lost_races.borrow_mut().remove(name.as_str());
                 record_bytes
             }
             // Its bytes may still surface at `sequence`, so the next publish
@@ -6394,10 +6430,6 @@ where
                 // can keep serving our own record, which already holds this op.
                 // Our PUT was acked either way, so the halt stays an attempt.
                 if let Some(winner) = winner {
-                    self.cells
-                        .lost_races
-                        .borrow_mut()
-                        .insert(name.as_str().to_owned(), winner.clone());
                     let adopted = self
                         .adopt_node_record(scope, plane, node, name, is_scope_root, &winner, None)
                         .await;
@@ -7286,6 +7318,33 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
         .ok_or(Halt::Permanent(DeadLetterReason::PayloadRefused))
 }
 
+/// Whether the gate admits `record_bytes` at exactly the durable floor, as
+/// [`resolve_gated`] does for an equal-floor `Current`.
+async fn gates_at_floor<A: Adopter>(adopter: &A, name: &IpnsName, record_bytes: &[u8]) -> bool {
+    match adopter.adopt(name, record_bytes).await {
+        Err(GateError::Rejected(rejection)) => {
+            matches!(
+                rejection.reason,
+                RejectionReason::SequenceNotNewer { floor, sequence } if floor == sequence
+            ) && matches!(
+                adopter.recover_own_scope_material(name, record_bytes).await,
+                Ok(Some(_))
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Whether the replay drops the queue's head op as already landed.
+fn head_reads_applied(rebased: &ReplayReport, queued: &[(OpId, Op)]) -> bool {
+    queued.first().is_some_and(|(head, _)| {
+        rebased
+            .dropped
+            .iter()
+            .any(|(op_id, reason)| op_id == head && *reason == DropReason::AlreadySatisfied)
+    })
+}
+
 /// The gate-passing bytes one resolve of `name` established.
 ///
 /// A gate failure is a trust violation, never staleness: re-authoring on top
@@ -7293,13 +7352,12 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
 /// exactly the fail-open rule 6 forbids. An adopt carries the bytes this pass
 /// gated, never the cache, which keeps a newer copy this pass did not gate.
 ///
-/// At the floor, a lost race's `winner` wins while the endpoints still serve
-/// it, then the cached copy: the freshest pick can be our own losing record,
-/// which already carries the op being rebased.
+/// At the floor, the cached copy wins while the endpoints still serve it: after
+/// a lost tie it holds the winner, and the first endpoint can keep serving our
+/// own losing record, which already carries the op being rebased.
 fn resolved_bytes(
     gated: GatedResolve,
     name: &IpnsName,
-    winner: Option<Vec<u8>>,
     events: &mpsc::UnboundedSender<Event>,
 ) -> Result<Vec<u8>, Halt> {
     match gated.resolved.outcome {
@@ -7307,14 +7365,10 @@ fn resolved_bytes(
             .held_record
             .map(|(_, bytes)| bytes)
             .ok_or(Halt::Unclassified),
-        ResolveOutcome::Current { record_bytes } => Ok(winner
-            .filter(|winner| *winner == record_bytes || gated.tied.contains(winner))
-            .or_else(|| {
-                gated
-                    .resolved
-                    .last_known_good
-                    .filter(|cached| gated.tied.contains(cached))
-            })
+        ResolveOutcome::Current { record_bytes } => Ok(gated
+            .resolved
+            .last_known_good
+            .filter(|cached| gated.tied.contains(cached))
             .unwrap_or(record_bytes)),
         ResolveOutcome::NoUpdate => gated.resolved.last_known_good.ok_or(Halt::Unclassified),
         ResolveOutcome::TrustViolation(rejection) => Err(refuse_record(events, name, &rejection)),
@@ -7495,7 +7549,7 @@ mod tests {
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
-            resolved_bytes(resolved, &refused_name(), None, &events),
+            resolved_bytes(resolved, &refused_name(), &events),
             Ok(gated)
         );
     }
@@ -7521,51 +7575,12 @@ mod tests {
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
-            resolved_bytes(
-                at_floor(vec![cached.clone()]),
-                &refused_name(),
-                None,
-                &events
-            ),
+            resolved_bytes(at_floor(vec![cached.clone()]), &refused_name(), &events),
             Ok(cached.clone())
         );
         assert_eq!(
-            resolved_bytes(at_floor(Vec::new()), &refused_name(), None, &events),
+            resolved_bytes(at_floor(Vec::new()), &refused_name(), &events),
             Ok(first.clone())
-        );
-    }
-
-    /// A lost race's winner is the base while an endpoint serves it, even when
-    /// the cached copy has moved to our own record at the same sequence.
-    #[test]
-    fn at_the_floor_a_lost_race_winner_is_the_base_while_it_is_still_served() {
-        let (ours, winner) = (b"ours".to_vec(), b"winner".to_vec());
-        let at_floor = |tied: Vec<Vec<u8>>| GatedResolve {
-            resolved: crate::net::Resolved {
-                last_known_good: Some(ours.clone()),
-                outcome: ResolveOutcome::Current {
-                    record_bytes: ours.clone(),
-                },
-                current_at_floor: None,
-            },
-            hold: None,
-            held_record: None,
-            read_scope_seed: None,
-            tied,
-        };
-        let (events, _rx) = mpsc::unbounded();
-        assert_eq!(
-            resolved_bytes(
-                at_floor(vec![winner.clone()]),
-                &refused_name(),
-                Some(winner.clone()),
-                &events
-            ),
-            Ok(winner.clone())
-        );
-        assert_eq!(
-            resolved_bytes(at_floor(Vec::new()), &refused_name(), Some(winner), &events),
-            Ok(ours)
         );
     }
 
@@ -7590,7 +7605,6 @@ mod tests {
                 tied: Vec::new(),
             },
             &refused_name(),
-            None,
             &events,
         );
         drop(events);

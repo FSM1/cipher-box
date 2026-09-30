@@ -338,6 +338,8 @@ pub async fn keyless_re_put<T: RecordTransport>(
 pub enum LivenessControl {
     /// Run the next pass after the interval.
     Continue,
+    /// Run the next pass after this delay instead of the interval.
+    ContinueAfter(Duration),
     /// Stop the loop (session end / logout).
     Stop,
 }
@@ -354,10 +356,12 @@ where
     Fut: Future<Output = LivenessControl>,
 {
     loop {
-        if pass().await == LivenessControl::Stop {
-            break;
-        }
-        scheduler.sleep(interval).await;
+        let delay = match pass().await {
+            LivenessControl::Stop => break,
+            LivenessControl::Continue => interval,
+            LivenessControl::ContinueAfter(delay) => delay,
+        };
+        scheduler.sleep(delay).await;
     }
 }
 

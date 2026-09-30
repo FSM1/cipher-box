@@ -45,6 +45,7 @@ use cipherbox_engine::net::author::{
     AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
     author_scope_root_with_section,
 };
+use cipherbox_engine::net::eol::renewal_eol_from;
 use cipherbox_engine::net::renewal_walk::cursor::RENEWAL_CURSOR_PREFIX;
 use cipherbox_engine::net::{
     ChildAdopter, RE_PUT_INTERVAL, REGISTRY_BATCH_MAX, ReclaimStall, ReclaimStallReason,
@@ -52,7 +53,7 @@ use cipherbox_engine::net::{
 };
 use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
+    BoxedTask, FloorStore, HttpResponse, OpId, RecordTransport, Scheduler, SeamError, SeamResult,
     SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
@@ -272,6 +273,18 @@ fn sequence_at(world: &FakeWorld, name: &IpnsName) -> u64 {
 fn tick(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTask]) {
     world.scheduler.advance(engine.profile().poll_cadence);
     poll_tasks_until_parked(tasks);
+}
+
+/// Tick past a new session's first renewal walk, which waits a poll cadence at
+/// a time for the first boundary walk, so a test that counts reads or events
+/// counts none of the walk's.
+fn tick_past_the_first_walk(
+    world: &FakeWorld,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) {
+    tick(world, engine, tasks);
+    tick(world, engine, tasks);
 }
 
 /// Drive one command to completion with the spawned loops running beside it —
@@ -1445,8 +1458,8 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
     // Every staged block left with its upload: the drain releases the version's
     // blocks once its record has published, leaving only the queue bookkeeping.
     assert_eq!(
-        block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![cursor_key(), drained_key(), mark_key()],
+        staged_keys_but_the_cursor(&alice),
+        vec![drained_key(), mark_key()],
         "no staged block survives a published version, only queue bookkeeping"
     );
     assert!(
@@ -2825,8 +2838,8 @@ fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_block
         "the host learns the version is unrecoverable"
     );
     assert_eq!(
-        block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![cursor_key(), drained_key(), mark_key()],
+        staged_keys_but_the_cursor(&alice),
+        vec![drained_key(), mark_key()],
         "blocks no key opens are released, never held against the budget"
     );
     assert_eq!(
@@ -3179,8 +3192,8 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
             "a marked, still-staged leaf is re-uploaded, never read as loss"
         );
         assert_eq!(
-            block_on(alice.staging_store.staged_keys()).unwrap(),
-            vec![cursor_key(), drained_key(), mark_key()],
+            staged_keys_but_the_cursor(&alice),
+            vec![drained_key(), mark_key()],
             "the retry re-removes it, so the residue holds no staging budget"
         );
         assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
@@ -4086,6 +4099,59 @@ fn a_split_where_our_root_holds_the_first_endpoint_heals_above_both_records() {
         "both devices' creates survive"
     );
     assert_eq!(queued(&second), 0);
+}
+
+/// A lost race, then a restart before the retry. The restarted session holds
+/// no memory of the race, and a read can leave our own losing record as its
+/// cached copy. The retry still rebases onto the record our op does not read as
+/// applied on, so the other device's write survives, on either endpoint order.
+#[test]
+fn a_split_healed_after_a_restart_keeps_the_other_devices_write() {
+    for ours_first in [true, false] {
+        let SiblingRoot {
+            world,
+            blocks,
+            second,
+            engine,
+            mut tasks,
+            base,
+            sibling,
+            ..
+        } = sibling_root();
+        let endpoints = world.record_store.endpoints();
+        let theirs = usize::from(ours_first);
+        world.record_store.seed_record_after_put_at(
+            &endpoints[theirs],
+            write_name(ROOT).as_str(),
+            write_name(ROOT).as_str(),
+            sibling.clone(),
+        );
+        world.record_store.fail_put_endpoint(&endpoints[theirs]);
+
+        tick(&world, &engine, &mut tasks);
+        assert_eq!(root_record(&world, theirs), sibling);
+        assert_ne!(root_record(&world, 1 - theirs), sibling);
+        assert_eq!(queued(&second), 1, "the create stays queued");
+
+        drop(engine);
+        drop(tasks);
+        // The first session's background re-PUT goes with it.
+        drop(world.scheduler.take_spawned_tasks());
+        world.record_store.heal_put_endpoint(&endpoints[theirs]);
+        let (engine, _events, mut tasks) = boot(&world, &blocks, &second, 8);
+        tick(&world, &engine, &mut tasks);
+        tick(&world, &engine, &mut tasks);
+
+        for endpoint in 0..endpoints.len() {
+            assert_eq!(root_sequence(&world, endpoint), base + 2);
+        }
+        assert_eq!(
+            published_names(&world.record_store, &blocks, ROOT),
+            ["notes", "photos"],
+            "the other device's write survives the restart (ours first: {ours_first})"
+        );
+        assert_eq!(queued(&second), 0);
+    }
 }
 
 /// The plane comes to serve another record at the very sequence this pass
@@ -7977,6 +8043,7 @@ fn a_planted_focus_record_never_renders() {
         deep,
         ..
     } = deep_create_seen_by_a_second_device();
+    tick_past_the_first_walk(&world, &engine_b, &mut tasks_b);
     block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
     assert_eq!(listed_names(&engine_b, photos), ["2026"]);
 
@@ -9947,6 +10014,14 @@ fn drained_key() -> Vec<u8> {
 /// This account's renewal cursor key, which the liveness pass writes.
 fn cursor_key() -> Vec<u8> {
     owner_scoped_key(RENEWAL_CURSOR_PREFIX, &kdf::enc_subkey(&SECRET))
+}
+
+/// Every staged key but the renewal cursor, which the walk writes on its own
+/// clock.
+fn staged_keys_but_the_cursor(device: &FakeDevice) -> Vec<Vec<u8>> {
+    let mut keys = block_on(device.staging_store.staged_keys()).unwrap();
+    keys.retain(|key| *key != cursor_key());
+    keys
 }
 
 /// Plant a published-op mark over `op_id` under `enc_secret`'s identity,
@@ -13801,6 +13876,7 @@ fn the_on_access_file_queue_stops_admitting_past_its_ceiling() {
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    tick_past_the_first_walk(&world, &engine, &mut tasks);
     for i in 0..MAX_FOCUS_FILES + 8 {
         block_on(engine.command(Command::Create {
             parent: ROOT,
@@ -13870,7 +13946,7 @@ fn a_folder_open_paints_the_rows_it_lists_and_refuses_a_bent_one() {
 
     let bob = world.device(b"alice-second-device");
     let (engine_b, mut events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
-    tick(&world, &engine_b, &mut tasks_b);
+    tick_past_the_first_walk(&world, &engine_b, &mut tasks_b);
     for node in [good, bent] {
         assert_eq!(
             block_on(engine_b.view()).unwrap().attrs(node).unwrap().size,
@@ -14030,7 +14106,7 @@ fn a_tick_paints_a_file_another_device_added_to_the_open_folder() {
 
     let bob = world.device(b"alice-second-device");
     let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
-    tick(&world, &engine_b, &mut tasks_b);
+    tick_past_the_first_walk(&world, &engine_b, &mut tasks_b);
     block_on(engine_b.command(Command::SetFocus { node: Some(docs) })).expect("the window opens");
 
     let served: Vec<u8> = (0..96u8).collect();
@@ -14130,7 +14206,7 @@ fn a_tick_resolves_an_unwritten_row_once_per_staleness_window() {
 
     let bob = world.device(b"alice-second-device");
     let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
-    tick(&world, &engine_b, &mut tasks_b);
+    tick_past_the_first_walk(&world, &engine_b, &mut tasks_b);
     block_on(engine_b.command(Command::SetFocus { node: Some(docs) })).expect("the window opens");
     let after_navigation = record_resolves(&bob, node);
     assert!(
@@ -14264,6 +14340,7 @@ fn a_drain_tick_enumerates_the_staged_key_set_once() {
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    tick_past_the_first_walk(&world, &engine, &mut tasks);
 
     write_file(
         &mut engine,
@@ -16671,4 +16748,69 @@ fn a_dual_linked_node_stamps_only_the_parent_its_publish_writes() {
         BTreeSet::from([winner, albums]),
         "a move stamps the winning parent and the destination"
     );
+}
+
+/// ADR 0061 D3 steps 5 to 7 on one device. The walk signs its renewal at
+/// `S + 1` after the drain resolved `S` and before the drain holds the name, so
+/// the drain's own publish at `S + 1` splits the endpoints with the renewal.
+/// The drain's write carries the later EOL, so every reader takes it, and the
+/// drain heals the split above both records with its version applied.
+#[test]
+fn a_renewal_signed_inside_the_drains_window_never_hides_the_write() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    tick_past_the_first_walk(&world, &engine, &mut tasks);
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|salt| (0..45u8).map(|byte| byte ^ (salt + 3)).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies[..1]);
+    let (sequence, head) = published(&world.record_store, file);
+    let renewal = IpnsRecord::create_v2(
+        &write_signer(file),
+        format!("/ipfs/{head}").as_bytes(),
+        sequence + 1,
+        TTL_NANOS,
+        &renewal_eol_from(Scheduler::now(&world.scheduler)),
+    )
+    .marshal();
+    let endpoints = world.record_store.endpoints();
+    world.record_store.seed_record_after_put_at(
+        &endpoints[1],
+        write_name(file).as_str(),
+        write_name(file).as_str(),
+        renewal.clone(),
+    );
+    world.record_store.fail_put_endpoint(&endpoints[1]);
+
+    write_file(&mut engine, version(file), &bodies[1]).expect("the update commits");
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        world
+            .record_store
+            .record_at(&endpoints[1], write_name(file).as_str()),
+        Some(renewal),
+        "the renewal splits the endpoints at S + 1"
+    );
+    world.record_store.heal_put_endpoint(&endpoints[1]);
+    tick(&world, &engine, &mut tasks);
+
+    for endpoint in &endpoints {
+        let bytes = world
+            .record_store
+            .record_at(endpoint, write_name(file).as_str())
+            .expect("a record");
+        let verified = IpnsRecord::unmarshal(&bytes)
+            .and_then(|record| record.verify(&write_name(file)))
+            .expect("the record verifies");
+        assert_eq!(verified.sequence, sequence + 2, "the heal signs above both");
+    }
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file).len(),
+        2,
+        "the write survives the renewal"
+    );
+    assert_eq!(queued(&alice), 0);
 }

@@ -12,7 +12,7 @@ use cipherbox_core::kdf;
 
 use cipherbox_engine::net::eol::{eol_from, renewal_eol_from};
 use cipherbox_engine::net::renewal_walk::cursor::{CursorStore, MAX_CURSOR_PATH};
-use cipherbox_engine::seams::{BoxedTask, HttpMethod, RecordTransport, Scheduler};
+use cipherbox_engine::seams::{BoxedTask, HttpMethod, RecordTransport, Scheduler, UnixMillis};
 use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::testkit::account::{Blocks, SECRET, seed_account};
 use cipherbox_engine::testkit::{
@@ -166,25 +166,52 @@ fn written_then_left(
     let nodes = write(&mut engine, &mut tasks);
     drop(tasks);
     drop(engine);
+    drop(world.scheduler.take_spawned_tasks());
     nodes
 }
 
+/// Run a session until its first renewal walk: the walk waits a poll cadence
+/// at a time for the session's first boundary walk, which the first tick runs.
+fn until_the_first_walk(
+    world: &FakeWorld,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) {
+    tick(world, engine, tasks);
+    tick(world, engine, tasks);
+}
+
+/// A later session on a new device, run until its first renewal walk.
+fn start_later(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    label: &[u8],
+) -> (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>) {
+    let device = world.device(label);
+    let (engine, _events, mut tasks) = boot(world, blocks, &device, 2);
+    until_the_first_walk(world, &engine, &mut tasks);
+    (device, engine, tasks)
+}
+
+/// `after` renews `before` at `S + 1` with a validity one day short of a real
+/// write signed between `started` and now.
 fn assert_renewed_at_start(
     world: &FakeWorld,
     name: &IpnsName,
     before: &VerifiedRecord,
+    started: UnixMillis,
     what: &str,
 ) {
-    let now = world.scheduler.now();
     let after = record_at(world, name);
     assert_eq!(
         after.sequence,
         before.sequence + 1,
         "{what} renews at S + 1"
     );
-    assert_eq!(
-        after.validity,
-        renewal_eol_from(now).into_bytes(),
+    let signed = after.validity.as_slice();
+    assert!(
+        renewal_eol_from(started).as_bytes() <= signed
+            && signed <= renewal_eol_from(world.scheduler.now()).as_bytes(),
         "{what} carries a fresh validity, one day short",
     );
     assert_eq!(
@@ -212,11 +239,17 @@ fn a_file_no_session_opens_for_65_days_renews_at_the_next_start() {
     let root_before = record_at(&world, &write_name(ROOT));
 
     world.scheduler.advance(DAY * 65);
-    let device = world.device(b"a later session");
-    let (_engine, _events, _tasks) = boot(&world, &blocks, &device, 2);
+    let started = world.scheduler.now();
+    let (_device, _engine, _tasks) = start_later(&world, &blocks, b"a later session");
 
-    assert_renewed_at_start(&world, &name, &before, "the file");
-    assert_renewed_at_start(&world, &write_name(ROOT), &root_before, "the vault root");
+    assert_renewed_at_start(&world, &name, &before, started, "the file");
+    assert_renewed_at_start(
+        &world,
+        &write_name(ROOT),
+        &root_before,
+        started,
+        "the vault root",
+    );
 }
 
 /// A name with more EOL left than the walk window is not renewed.
@@ -231,8 +264,7 @@ fn a_name_outside_the_walk_window_is_left_alone() {
     let before = record_at(&world, &name);
 
     world.scheduler.advance(DAY * 25);
-    let device = world.device(b"a later session");
-    let (_engine, _events, _tasks) = boot(&world, &blocks, &device, 2);
+    let (_device, _engine, _tasks) = start_later(&world, &blocks, b"a later session");
 
     assert_eq!(record_at(&world, &name), before, "65 days left: no renewal");
 }
@@ -252,10 +284,10 @@ fn a_binned_file_renews_through_its_bin_entry() {
     let before = record_at(&world, &name);
 
     world.scheduler.advance(DAY * 65);
-    let device = world.device(b"a later session");
-    let (_engine, _events, _tasks) = boot(&world, &blocks, &device, 2);
+    let started = world.scheduler.now();
+    let (_device, _engine, _tasks) = start_later(&world, &blocks, b"a later session");
 
-    assert_renewed_at_start(&world, &name, &before, "the binned file");
+    assert_renewed_at_start(&world, &name, &before, started, "the binned file");
 }
 
 /// A folder at depth 64 is deferred and walked later as a root of its own, so
@@ -280,11 +312,17 @@ fn a_folder_below_the_path_cap_is_deferred_and_still_renews() {
         .collect();
 
     world.scheduler.advance(DAY * 65);
-    let device = world.device(b"a later session");
-    let (_engine, _events, _tasks) = boot(&world, &blocks, &device, 2);
+    let started = world.scheduler.now();
+    let (device, _engine, _tasks) = start_later(&world, &blocks, b"a later session");
 
     for (node, before) in nodes.iter().zip(&before) {
-        assert_renewed_at_start(&world, &write_name(*node), before, "a node of the chain");
+        assert_renewed_at_start(
+            &world,
+            &write_name(*node),
+            before,
+            started,
+            "a node of the chain",
+        );
     }
     let enc = kdf::enc_subkey(&SECRET);
     let entropy = RefCell::new(SeededEntropy::new(9));
@@ -356,7 +394,8 @@ fn a_publish_during_the_registration_wait_makes_the_walk_refuse() {
             }
         }
     });
-    let (_engine, _events, _tasks) = boot_served(&world, &device, 2);
+    let (engine, _events, mut tasks) = boot_served(&world, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
 
     assert!(fired.load(Ordering::SeqCst), "the walk registered the file");
     let after = record_at(&world, &name);
@@ -366,4 +405,36 @@ fn a_publish_during_the_registration_wait_makes_the_walk_refuse() {
         eol_from(now).into_bytes(),
         "the publish that raced the walk stands, and nothing signed over it",
     );
+}
+
+/// A cut raises the read-epoch floor at once, and the lazy wave re-seals a
+/// node only on its next write. The walk still renews a node that lags the
+/// floor, and reports nothing for it.
+#[test]
+fn a_node_the_lazy_wave_has_not_reached_renews_and_reports_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        let file = write_file(&world, engine, tasks, ROOT, "lagging.txt");
+        block_on(engine.command(Command::RotateNow { node: ROOT })).expect("the cut lands");
+        tick(&world, engine, tasks);
+        vec![file]
+    });
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+
+    world.scheduler.advance(DAY * 65);
+    let started = world.scheduler.now();
+    let device = world.device(b"a later session");
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+
+    assert_renewed_at_start(&world, &name, &before, started, "the lagging file");
+    let mut abuse = 0;
+    while let Some(event) = events.try_next() {
+        if matches!(event, cipherbox_engine::Event::AttributableAbuse { .. }) {
+            abuse += 1;
+        }
+    }
+    assert_eq!(abuse, 0, "a lagging node is no violation");
 }

@@ -124,9 +124,13 @@ scenario fails the meta-test):
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
   S + 1 with a fresh validity after the passes that ADR 0061 consequence 2
-  names; a bin entry and a deferred depth-64 folder renew; a publish during
-  the registration wait makes the walk refuse; at one sequence the later EOL
-  wins in the resolve and in the last-known-good keeper.
+  names; a bin entry, a deferred depth-64 folder and a node that lags a cut
+  renew; a publish during the registration wait makes the walk refuse; at one
+  sequence the later EOL wins in the resolve and in the last-known-good
+  keeper. `tests/owner_actions.rs` covers a nested owned scope and D4 (a node a
+  stopped wave left at its old name renews there); `tests/write_plane.rs`
+  covers a renewal inside the drain's window and a lost race healed after a
+  restart.
 
 Adversarial cases are first-class: the harness can replay, transplant, and
 re-sign records with any key it holds; every crypto-review finding (FSM1/cipher-box-next#35)

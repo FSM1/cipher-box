@@ -101,7 +101,9 @@ use crate::net::VaultPointerVoucher;
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
-use crate::net::renewal_walk::{BinRoot, RenewalWalk, WalkGuards, WalkScope};
+use crate::net::renewal_walk::{
+    BinRoot, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards, WalkScope,
+};
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, MovedScopeSeed, RotationAncestry, SweptScopeState};
@@ -5635,61 +5637,81 @@ where {
         let bin_keys = self.secrets.tick_bin_keys.clone();
         let publishing = self.state.publishing.clone();
         let orphan_heads = self.state.orphan_heads.clone();
+        let roots_walked = self.state.scope_roots_walked.clone();
+        let descendant_scope_roots = self.state.descendant_scope_roots.clone();
         self.seams.scheduler.spawn(Box::pin(async move {
             // One latch per session: the loop is spawned once per start.
             let scope_tree_walked = Cell::new(false);
+            let next_maintenance = Cell::new(Some(scheduler.now()));
+            let walk_waits = Cell::new(0u32);
             run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
                 if !alive.get() {
                     return LivenessControl::Stop;
                 }
-                drop_superseded(&transport, &held).await;
-                // The flip is the only other producer of a held scope pointer,
-                // so a session that runs no rotation must re-enrol what it owns
-                // or the pointer lapses at its EOL.
-                let session_keys = pointer_keys.borrow().clone();
-                if let Some(keys) = session_keys {
-                    let consulted = enrol_owned_scope_pointers(ScopePointerEnrolment {
-                        api: &api,
-                        transport: &transport,
-                        gateway: &gateway,
-                        http: &http,
-                        floors: &floors,
-                        snapshot_cache: &snapshot_cache,
-                        events: &events,
-                        scheduler: &scheduler,
-                        profile: &profile,
-                        entropy: &entropy,
-                        enc_secret: &keys.enc_secret,
-                        identity: &keys.owner_identity,
-                        keys: &keys.scope_keys,
-                        held: &held,
-                        root_id,
-                        payload_version: POINTER_PAYLOAD_VERSION,
-                        walked: &scope_tree_walked,
-                        on_access_misses: &on_access_misses,
-                    })
-                    .await;
-                    // The consult advances a sighted scope's write-epoch floor,
-                    // so the seed cells it retires are evicted here, exactly as
-                    // the focus tick evicts them around its own consult.
-                    for scope_id in consulted {
-                        refresh_seed_floors(
-                            &floors,
-                            &scope_id,
-                            &scope_read_seeds,
-                            &scope_write_seeds,
-                        )
+                // The walk retries at the poll cadence until the boundary walk
+                // has run, so the hourly maintenance keeps its own clock.
+                let now = scheduler.now();
+                if now.reached(next_maintenance.get()) {
+                    next_maintenance.set(Some(now.saturating_add(RE_PUT_INTERVAL)));
+                    drop_superseded(&transport, &held).await;
+                    // The flip is the only other producer of a held scope pointer,
+                    // so a session that runs no rotation must re-enrol what it owns
+                    // or the pointer lapses at its EOL.
+                    let session_keys = pointer_keys.borrow().clone();
+                    if let Some(keys) = session_keys {
+                        let consulted = enrol_owned_scope_pointers(ScopePointerEnrolment {
+                            api: &api,
+                            transport: &transport,
+                            gateway: &gateway,
+                            http: &http,
+                            floors: &floors,
+                            snapshot_cache: &snapshot_cache,
+                            events: &events,
+                            scheduler: &scheduler,
+                            profile: &profile,
+                            entropy: &entropy,
+                            enc_secret: &keys.enc_secret,
+                            identity: &keys.owner_identity,
+                            keys: &keys.scope_keys,
+                            held: &held,
+                            root_id,
+                            payload_version: POINTER_PAYLOAD_VERSION,
+                            walked: &scope_tree_walked,
+                            on_access_misses: &on_access_misses,
+                        })
                         .await;
+                        // The consult advances a sighted scope's write-epoch floor,
+                        // so the seed cells it retires are evicted here, exactly as
+                        // the focus tick evicts them around its own consult.
+                        for scope_id in consulted {
+                            refresh_seed_floors(
+                                &floors,
+                                &scope_id,
+                                &scope_read_seeds,
+                                &scope_write_seeds,
+                            )
+                            .await;
+                        }
                     }
+                    let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
+                    keyless_re_put(&transport, &records).await;
+                    // Surface every renewal that did not land (LostRace/PublishError)
+                    // as an Event — never a silent failure (blueprint/engine.md).
+                    let renewals =
+                        eol_renew_pass(&transport, &api, &floors, &scheduler, &profile, &records)
+                            .await;
+                    emit_renewal_failures(&events, &renewals);
                 }
-                let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
-                keyless_re_put(&transport, &records).await;
-                // Surface every renewal that did not land (LostRace/PublishError)
-                // as an Event — never a silent failure (blueprint/engine.md).
-                let renewals =
-                    eol_renew_pass(&transport, &api, &floors, &scheduler, &profile, &records).await;
-                emit_renewal_failures(&events, &renewals);
                 let session_keys = pointer_keys.borrow().clone();
+                if session_keys.is_some() && !roots_walked.get() {
+                    if walk_waits.get() < SCOPE_ROOTS_WAIT_POLLS {
+                        walk_waits.set(walk_waits.get() + 1);
+                        return LivenessControl::ContinueAfter(profile.poll_cadence);
+                    }
+                    walk_waits.set(0);
+                    return LivenessControl::Continue;
+                }
+                walk_waits.set(0);
                 if let Some(keys) = session_keys {
                     let scopes: Vec<WalkScope> = owned_sweep_targets(
                         &base.borrow(),
@@ -5734,7 +5756,18 @@ where {
                             held: &held,
                         },
                     };
-                    let report = walk.pass(&scopes, &bins, &|| alive.get()).await;
+                    // A scope this session minted holds seeds before the next
+                    // boundary walk names it.
+                    let scope_roots: BTreeSet<[u8; 16]> = descendant_scope_roots
+                        .borrow()
+                        .iter()
+                        .map(|root| root.0)
+                        .chain(scope_read_seeds.borrow().keys().copied())
+                        .chain(scope_write_seeds.borrow().keys().copied())
+                        .collect();
+                    let report = walk
+                        .pass(&scopes, &bins, &scope_roots, &|| alive.get())
+                        .await;
                     emit_renewal_failures(&events, &report.renewals);
                     for routing_key in &report.rejected {
                         emit_trust_violation(
