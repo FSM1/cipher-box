@@ -9,6 +9,7 @@ use cipherbox_engine::facade::{Command, NodeId, NodeKind, Permission};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_engine::seams::{OpId, UnixMillis};
 use cipherbox_engine::settings::MAX_BIN_RETENTION_DAYS;
+use cipherbox_engine::wire::BIGINT_TAG;
 use cipherbox_engine::{PinMode, RetentionPolicy};
 use cipherbox_wasm::boundary::decode_command;
 use js_sys::{BigInt, Object, Reflect, Uint8Array};
@@ -175,6 +176,50 @@ fn a_u64_takes_a_bigint_in_range_alone() {
     let with_retention = |keep: JsValue| hosted_settings(&[("keepLatestVersions", keep)]);
     assert!(decode_command(&with_retention(BigInt::from(3u64).into())).is_err());
     assert!(decode_command(&with_retention(JsValue::from(3))).is_ok());
+}
+
+/// A host object cannot pose as a tagged `bigint`: the boundary refuses one
+/// that has the tag key, and the tag takes ASCII digits alone.
+#[wasm_bindgen_test]
+fn a_host_object_cannot_pose_as_a_bigint() {
+    let posed = |decimal: &str| {
+        object(&[
+            ("kind", text("cancelUpload")),
+            ("opId", object(&[(BIGINT_TAG, text(decimal))])),
+        ])
+    };
+    assert!(decode_command(&posed("5")).is_err());
+    assert!(serde_wasm_bindgen::from_value::<Command>(posed("5")).is_ok());
+    for decimal in ["+5", "", " 5", "5 ", "-0", "0x5"] {
+        assert!(
+            serde_wasm_bindgen::from_value::<Command>(posed(decimal)).is_err(),
+            "{decimal:?}"
+        );
+    }
+}
+
+/// A command past the depth bound is refused with a stated error, a cycle too,
+/// rather than walked until the stack overflows.
+#[wasm_bindgen_test]
+fn a_command_past_the_depth_bound_is_refused() {
+    let message = |command: &JsValue| {
+        let error = JsValue::from(decode_command(command).unwrap_err());
+        Reflect::get(&error, &text("message"))
+            .unwrap()
+            .as_string()
+            .unwrap()
+    };
+    let cyclic = hosted_settings(&[]);
+    let settings = Reflect::get(&cyclic, &text("settings")).unwrap();
+    Reflect::set(&settings, &text("loop"), &cyclic).unwrap();
+    assert_eq!(message(&cyclic), "the command nests too deep");
+
+    let mut deep = object(&[]);
+    for _ in 0..8 {
+        deep = object(&[("inner", deep)]);
+    }
+    let nested = object(&[("kind", text("manualRefresh")), ("extra", deep)]);
+    assert_eq!(message(&nested), "the command nests too deep");
 }
 
 /// A deadline at the epoch decodes, as a `u64` in range, and the engine refuses

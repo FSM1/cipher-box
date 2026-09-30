@@ -75,13 +75,19 @@ pub fn encode_outcome(outcome: &CommandOutcome) -> Result<Ts<CommandOutcome>, Js
 }
 
 fn decode(command: &JsValue) -> Result<Command, JsError> {
-    serde_wasm_bindgen::from_value(tag_bigints(command)?).map_err(|_| refused())
+    serde_wasm_bindgen::from_value(tag_bigints(command, 0)?).map_err(|_| refused())
 }
+
+/// How deep [`tag_bigints`] walks. The deepest command field,
+/// `settings.byo.accessToken`, is at depth 3; a structured clone keeps cycles,
+/// so the walk needs a bound.
+const MAX_COMMAND_DEPTH: usize = 8;
 
 /// A copy of `value` with each `bigint` in its plain objects replaced by a
 /// [`BIGINT_TAG`] object, so the decode tells a `bigint` from a `number`.
-/// Bytes and every other value pass as they are.
-fn tag_bigints(value: &JsValue) -> Result<JsValue, JsError> {
+/// Bytes and every other value pass as they are. A host object that already
+/// has the tag key is refused, so no tag reaches the decode but this one.
+fn tag_bigints(value: &JsValue, depth: usize) -> Result<JsValue, JsError> {
     if value.is_bigint() {
         let decimal = value
             .unchecked_ref::<BigInt>()
@@ -98,9 +104,19 @@ fn tag_bigints(value: &JsValue) -> Result<JsValue, JsError> {
     {
         return Ok(value.clone());
     }
+    if depth >= MAX_COMMAND_DEPTH {
+        return Err(JsError::new("the command nests too deep"));
+    }
+    let object = value.unchecked_ref::<Object>();
+    if Object::has_own(object, &BIGINT_TAG.into()) {
+        return Err(refused());
+    }
     let copy = Object::new();
-    for key in Object::keys(value.unchecked_ref::<Object>()).iter() {
-        let inner = tag_bigints(&Reflect::get(value, &key).map_err(|_| refused())?)?;
+    for key in Object::keys(object).iter() {
+        let inner = tag_bigints(
+            &Reflect::get(value, &key).map_err(|_| refused())?,
+            depth + 1,
+        )?;
         Reflect::set(&copy, &key, &inner).map_err(|_| refused())?;
     }
     Ok(copy.into())

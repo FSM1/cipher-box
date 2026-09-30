@@ -178,16 +178,20 @@ pub mod big_u64 {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Tagged {
+        // Serde takes a literal here: this is `BIGINT_TAG`.
         #[serde(rename = "$bigint")]
         decimal: String,
     }
 
-    /// Refuses a `number`, a negative value, and one past `u64::MAX`.
+    /// Refuses a `number`, a negative value, one past `u64::MAX`, and any text
+    /// but ASCII digits, which is all `BigInt.prototype.toString` writes.
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
         let Tagged { decimal } = Tagged::deserialize(deserializer)?;
-        decimal
-            .parse()
-            .map_err(|_| de::Error::custom("a u64 is a bigint in 0..=2^64-1"))
+        let refused = || de::Error::custom("a u64 is a bigint in 0..=2^64-1");
+        if decimal.is_empty() || !decimal.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(refused());
+        }
+        decimal.parse().map_err(|_| refused())
     }
 }
 

@@ -1213,8 +1213,8 @@ pub struct BinRow {
 
 #[wasm_bindgen]
 impl BinRow {
-    /// The 16 raw bytes of the soft-deleted node. `Command.restore` and
-    /// `Command.purge` both name it.
+    /// The 16 raw bytes of the soft-deleted node, which a `restore` or a
+    /// `purge` command names.
     #[wasm_bindgen(getter)]
     pub fn node(&self) -> Vec<u8> {
         self.inner.node.0.to_vec()
@@ -1542,7 +1542,7 @@ pub struct AuthMethod {
 
 #[wasm_bindgen]
 impl AuthMethod {
-    /// The row id `Command.unlinkAuthMethod` names.
+    /// The row id an `unlinkAuthMethod` command names.
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> String {
         self.inner.id.clone()
@@ -1589,7 +1589,7 @@ pub struct RegisteredDevice {
 
 #[wasm_bindgen]
 impl RegisteredDevice {
-    /// The row id `Command.revokeDevice` names.
+    /// The row id a `revokeDevice` command names.
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> String {
         self.inner.id.clone()

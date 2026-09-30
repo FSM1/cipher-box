@@ -7049,9 +7049,8 @@ where {
         owner_name: &str,
         admission_cap: Option<u64>,
     ) -> Result<CommandOutcome, EngineError> {
-        // The epoch itself is no deadline a host means: it mints a link that
-        // is expired before anyone reads it.
-        if expires_at == Some(UnixMillis(0)) {
+        // A deadline not after now mints a link expired before anyone reads it.
+        if self.seams.scheduler.now().reached(expires_at) {
             return Err(EngineError::MalformedInput {
                 check: "invite-deadline-out-of-range",
             });
