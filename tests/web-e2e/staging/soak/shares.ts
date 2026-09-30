@@ -6,6 +6,7 @@
  * summary or a log shows only {@link linkPrefix}.
  */
 
+import { markerDate } from './desktop';
 import { keyedLine, withKeyedLine, type Ledger } from './ledger';
 import { DAY_MS } from './markers';
 import { SoakFailure } from './reasons';
@@ -30,7 +31,6 @@ export interface SharedLink {
 
 const EPOCHS = /read epoch (\d+) · write epoch (\d+)/;
 const EPOCH = /^(0|[1-9]\d*)$/;
-const MARKER_NAME = /^marker-(\d{4}-\d{2}-\d{2})\.txt$/;
 
 /** The epochs the share dialog row shows, as `// read epoch 3 · write epoch 1`. */
 export function parseEpochs(text: string): Epochs {
@@ -94,5 +94,5 @@ export function cycleEpochStepped(before: bigint, after: bigint): void {
 
 /** The days of the marker files among `names`, oldest first. */
 export function markerDates(names: Iterable<string>): string[] {
-  return [...names].flatMap((name) => MARKER_NAME.exec(name)?.[1] ?? []).sort();
+  return [...names].flatMap((name) => markerDate(name) ?? []).sort();
 }

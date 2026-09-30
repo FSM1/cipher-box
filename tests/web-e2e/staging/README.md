@@ -105,13 +105,13 @@ URL is a bearer capability. It lives only in the owner ledger. A fact shows the
 URL up to its fragment, and the ledger text reaches the editor without a `fill`
 step, so the report does not show it.
 
-The OS markers live in the grantee vault. A desktop leg writes
-`soak/desktop/<os>/marker-<date>.txt`, where `<os>` is `macos`, `linux` or
-`windows`, with the text `cipherbox soak marker <os> <date>` and a line feed. It
-then adds the line `marker <os> <date>` to the grantee ledger. The web leg opens
-each OS marker in the ledger byte for byte and writes
-`soak/desktop/web/marker-<date>.txt` in the same shape, with its line
-`marker web <date>`.
+The leg markers live in the grantee vault. Each leg (`macos`, `linux`,
+`windows` or `web`) writes `soak/desktop/<leg>/marker-<date>.txt` with the
+bytes of an owner marker of the same day, and adds the line
+`marker <leg> <date>` to the grantee ledger. A mount shows no IPNS name or
+sequence, so the line carries neither. The web leg opens every OS marker that
+the ledger or an OS folder listing names, byte for byte, and then writes its own
+marker and line.
 
 The counter checks read Grafana Cloud through the Mimir query endpoint. The
 base URL is `GRAFANA_PROMETHEUS_URL` without its `/push` suffix, and the basic

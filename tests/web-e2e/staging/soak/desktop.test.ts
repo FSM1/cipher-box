@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  appendDesktopMarker,
-  desktopMarkerBytes,
-  desktopMarkers,
-  osMarkersLine,
-  type DesktopMarker,
-} from './desktop';
+import { legMarkers, markerDate, markersToRead, readLine, recordMarker } from './desktop';
 import {
   appendMarker,
   emptyLedger,
@@ -28,62 +22,67 @@ function reasonOf(act: () => unknown): string {
   throw new Error('expected a SoakFailure');
 }
 
-describe('the desktop marker lines', () => {
+describe('the leg marker lines', () => {
   it('read back beside an owner marker line', () => {
     let ledger = appendMarker(emptyLedger(), { date: '2026-09-29', ipnsName: NAME, sequence: 1 });
-    ledger = appendDesktopMarker(ledger, { origin: 'linux', date: '2026-09-30' });
-    ledger = appendDesktopMarker(ledger, { origin: 'web', date: '2026-09-30' });
+    ledger = recordMarker(ledger, { leg: 'linux', date: '2026-09-30' });
+    ledger = recordMarker(ledger, { leg: 'web', date: '2026-09-30' });
     const read = parseLedger(formatLedger(ledger));
-    expect(desktopMarkers(read)).toEqual([
-      { origin: 'linux', date: '2026-09-30' },
-      { origin: 'web', date: '2026-09-30' },
+    expect(legMarkers(read)).toEqual([
+      { leg: 'linux', date: '2026-09-30' },
+      { leg: 'web', date: '2026-09-30' },
     ]);
     expect(markers(read)).toHaveLength(1);
-    expect(formatLedger(read)).toContain('\nmarker linux 2026-09-30\n');
+    expect(formatLedger(read)).toContain('\nmarker web 2026-09-30\n');
   });
 
-  it('are appended once per origin and day', () => {
-    const once = appendDesktopMarker(emptyLedger(), { origin: 'web', date: '2026-09-30' });
-    expect(appendDesktopMarker(once, { origin: 'web', date: '2026-09-30' })).toBe(once);
+  it('are recorded once per leg and day', () => {
+    const once = recordMarker(emptyLedger(), { leg: 'web', date: '2026-09-30' });
+    expect(recordMarker(once, { leg: 'web', date: '2026-09-30' })).toBe(once);
   });
 
   it.each([
-    ['an unknown origin', 'marker android 2026-09-30'],
+    ['an unknown leg', 'marker android 2026-09-30'],
     ['a bad day', 'marker macos 2026-02-30'],
     ['an extra field', 'marker macos 2026-09-30 x'],
     ['no day', 'marker macos'],
   ])('refuse %s as ledger-unparsable', (_label, line) => {
     const ledger = parseLedger(`${LEDGER_HEADER}\n${line}\n`);
-    expect(reasonOf(() => desktopMarkers(ledger))).toBe('ledger-unparsable');
+    expect(reasonOf(() => legMarkers(ledger))).toBe('ledger-unparsable');
   });
 
-  it('refuse to append a marker they would misread', () => {
-    const marker = { origin: 'web', date: '2026-9-30' } as DesktopMarker;
-    expect(reasonOf(() => appendDesktopMarker(emptyLedger(), marker))).toBe('ledger-unparsable');
-  });
-});
-
-describe('the desktop marker bytes', () => {
-  it('differ by origin and by day', () => {
-    const text = (marker: DesktopMarker) => new TextDecoder().decode(desktopMarkerBytes(marker));
-    expect(text({ origin: 'macos', date: '2026-09-30' })).toBe(
-      'cipherbox soak marker macos 2026-09-30\n'
-    );
-    expect(text({ origin: 'web', date: '2026-09-30' })).not.toBe(
-      text({ origin: 'windows', date: '2026-09-30' })
+  it('refuse to record a marker they would misread', () => {
+    expect(reasonOf(() => recordMarker(emptyLedger(), { leg: 'web', date: '2026-9-30' }))).toBe(
+      'ledger-unparsable'
     );
   });
 });
 
-describe('the OS summary line', () => {
-  it('names each OS leg, with a leg that wrote nothing as none', () => {
-    expect(
-      osMarkersLine([
-        { origin: 'macos', date: '2026-09-29' },
-        { origin: 'macos', date: '2026-09-30' },
-        { origin: 'windows', date: '2026-09-28' },
-        { origin: 'web', date: '2026-09-30' },
-      ])
-    ).toBe('macos 2, newest 2026-09-30; linux none; windows 1, newest 2026-09-28');
+describe('the markers the browser leg reads', () => {
+  it('take the OS markers from the ledger and the listings, and skip its own', () => {
+    let ledger = recordMarker(emptyLedger(), { leg: 'macos', date: '2026-09-29' });
+    ledger = recordMarker(ledger, { leg: 'web', date: '2026-09-29' });
+    const read = markersToRead(
+      ledger,
+      {
+        macos: ['marker-2026-09-29.txt', 'marker-2026-09-30.txt'],
+        windows: ['marker-2026-09-30.txt', 'notes.txt'],
+        web: ['marker-2026-09-30.txt'],
+      },
+      'web'
+    );
+    expect(read).toEqual([
+      { leg: 'macos', date: '2026-09-29' },
+      { leg: 'macos', date: '2026-09-30' },
+      { leg: 'windows', date: '2026-09-30' },
+    ]);
+    expect(readLine(read)).toBe('macos 2, windows 1');
+    expect(readLine([])).toBe('no marker of another leg yet');
+  });
+
+  it('name a marker file by its day only', () => {
+    expect(markerDate('marker-2026-09-30.txt')).toBe('2026-09-30');
+    expect(markerDate('marker-2026-02-30.txt')).toBeNull();
+    expect(markerDate('marker-2026-09-30 (1).txt')).toBeNull();
   });
 });

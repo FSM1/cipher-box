@@ -6,31 +6,31 @@
 
 import { FilesPage } from '../../page-objects/files.page';
 import {
-  appendDesktopMarker,
-  DESKTOP_FOLDER,
-  desktopMarkerBytes,
-  desktopMarkers,
-  osMarkersLine,
-  type DesktopMarker,
+  DESKTOP_LEGS,
+  markersToRead,
+  readLine,
+  recordMarker,
+  type LegMarker,
+  type MarkerLeg,
 } from './desktop';
 import { check, expect, fact, test } from './fixtures';
 import { utcDay } from './ledger';
-import { markerFile, unreadLine } from './markers';
+import { markerBytes, markerFile, unreadLine } from './markers';
 import { SoakFailure } from './reasons';
 import { download, listed, openLedger, synced, toLedgerFolder, writeLedger } from './vault';
 
-/** Sign-in 18, ledger 8, opens 20, write 10. */
+/** Sign-in 18, ledger 8, listings 5, opens 20, write 9. */
 const TEST_MS = 3_600_000;
 const OPENS_MS = 1_200_000;
 const DOWNLOAD_MS = 60_000;
 const PAGE_MS = 180_000;
 
-/** Opens `soak/desktop/<origin>/`; `false` when the listing never shows it. */
-async function openOrigin(files: FilesPage, origin: string): Promise<boolean> {
+/** Opens `soak/desktop/<leg>/`; `false` when the listing never shows it. */
+async function openLeg(files: FilesPage, leg: MarkerLeg): Promise<boolean> {
   await toLedgerFolder(files, 'grantee');
   await synced(files);
-  if (!(await listed(files, origin))) return false;
-  await files.open(origin);
+  if (!(await listed(files, leg))) return false;
+  await files.open(leg);
   await synced(files);
   return true;
 }
@@ -41,65 +41,62 @@ test('the grantee web leg opens the OS markers and writes a browser marker', asy
   test.setTimeout(TEST_MS);
   const files = new FilesPage(await grantee());
   const today = utcDay(new Date());
-  let ledger = await check('grantee desktop ledger', 'ledger-unreadable', () =>
+  const ledger = await check('grantee desktop ledger', 'ledger-unreadable', () =>
     openLedger(files, 'grantee')
   );
-  const all = await check('grantee desktop markers', 'ledger-unparsable', async () =>
-    desktopMarkers(ledger)
-  );
-  const os = all.filter((marker) => marker.origin !== 'web');
 
-  const opened: DesktopMarker[] = [];
+  const read: LegMarker[] = [];
   await check('OS markers open in the browser', 'desktop-marker-missing', async () => {
+    const listings: Partial<Record<MarkerLeg, string[]>> = {};
+    for (const leg of DESKTOP_LEGS) {
+      if (await openLeg(files, leg)) listings[leg] = [...(await files.names())];
+    }
+    const due = markersToRead(ledger, listings, 'web');
     const deadline = Date.now() + OPENS_MS;
-    for (const origin of new Set(os.map((marker) => marker.origin))) {
-      if (!(await openOrigin(files, origin))) {
-        throw new SoakFailure(
-          'desktop-marker-missing',
-          `${DESKTOP_FOLDER}/${origin}/ is not listed`
-        );
+    for (const leg of DESKTOP_LEGS) {
+      const ofLeg = due.filter((marker) => marker.leg === leg);
+      if (ofLeg.length === 0) continue;
+      if (!(await openLeg(files, leg))) {
+        throw new SoakFailure('desktop-marker-missing', `soak/desktop/${leg}/ is not listed`);
       }
-      for (const marker of os.filter((known) => known.origin === origin)) {
+      for (const marker of ofLeg) {
         if (Date.now() >= deadline) {
-          const left = os.filter((known) => !opened.includes(known));
+          const left = due.filter((known) => !read.includes(known));
           throw new SoakFailure(
             'desktop-marker-missing',
-            `no time to open ${unreadLine(left.map((m) => `${m.origin} ${m.date}`))}`
+            `no time to open ${unreadLine(left.map((m) => `${m.leg} ${m.date}`))}`
           );
         }
         const bytes = await download(files, markerFile(marker.date), DOWNLOAD_MS);
-        if (!Buffer.from(bytes).equals(Buffer.from(desktopMarkerBytes(marker)))) {
+        if (!Buffer.from(bytes).equals(Buffer.from(markerBytes(marker.date)))) {
           throw new SoakFailure(
             'desktop-marker-missing',
-            `the ${origin} marker of ${marker.date} opened other bytes`
+            `the ${leg} marker of ${marker.date} opened other bytes`
           );
         }
-        opened.push(marker);
+        read.push(marker);
       }
     }
   });
-  await fact('OS markers opened in the browser', osMarkersLine(opened));
+  await fact('OS markers opened in the browser', readLine(read));
 
-  const browser: DesktopMarker = { origin: 'web', date: today };
-  if (all.some((marker) => marker.origin === 'web' && marker.date === today)) {
-    await fact('browser marker', `${today} is in the ledger already`);
-    return;
-  }
   await check('browser marker', 'browser-marker-unwritten', async () => {
     const file = markerFile(today);
-    if (!(await openOrigin(files, 'web'))) {
+    if (!(await openLeg(files, 'web'))) {
       await files.createFolder('web');
       await files.published();
       await files.open('web');
     }
     if (!(await listed(files, file))) {
-      await files.upload(file, desktopMarkerBytes(browser));
+      await files.upload(file, markerBytes(today));
       await expect(files.row(file)).toBeVisible({ timeout: PAGE_MS });
       await files.published();
     }
-    await toLedgerFolder(files, 'grantee');
-    ledger = appendDesktopMarker(ledger, browser);
-    await writeLedger(files, ledger);
+    const next = recordMarker(ledger, { leg: 'web', date: today });
+    if (next !== ledger) {
+      await toLedgerFolder(files, 'grantee');
+      await writeLedger(files, next);
+    }
   });
-  await fact('browser marker', `${today} written under ${DESKTOP_FOLDER}/web/`);
+  await fact('browser marker', `${today} under soak/desktop/web/`);
 });
