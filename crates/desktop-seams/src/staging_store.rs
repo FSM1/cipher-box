@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use cipherbox_engine::seams::{OpId, SeamResult, StagingStore};
 
 use crate::fs_util::{
-    atomic_write, empty_dir, ensure_dir, from_hex, keep_first, list_file_names, read_file_opt,
-    remove_file_durable, seam_err, to_hex,
+    atomic_write, empty_dir, ensure_dir, from_hex, fsync_dir, keep_first, list_file_names,
+    read_file_opt, remove_file_durable, seam_err, to_hex,
 };
 
 /// Suffix for op-record files (`ops/<id>.op`). The "json record" of the v1
@@ -161,13 +161,14 @@ impl FileStagingStore {
                 return Err(err);
             }
         }
-        if let Err(err) = remove_file_durable(&self.batch_path(&batch)) {
-            // The unlink may have landed before its barrier refused, which
-            // would commit a set the caller hears failed: hide it again first.
-            let _ = atomic_write(&self.batch_path(&batch), &[]);
+        if let Err(err) = std::fs::remove_file(self.batch_path(&batch)) {
             let _ = self.roll_back_batch(&batch, batch.clone());
             return Err(err);
         }
+        // The unlink commits the whole set. A crash before this barrier lands
+        // can only bring the marker back, and the next open then rolls the
+        // whole set back.
+        let _ = fsync_dir(&self.ops_dir);
         Ok(())
     }
 

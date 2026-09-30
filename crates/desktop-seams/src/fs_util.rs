@@ -167,12 +167,12 @@ pub(crate) fn keep_first<E>(kept: Result<(), E>, next: Result<(), E>) -> Result<
 /// Barriers a directory so a create/rename/unlink inside it is durable
 /// before the next one is issued.
 #[cfg(unix)]
-fn fsync_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all()
 }
 
 #[cfg(not(unix))]
-fn fsync_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     metadata_log_barrier(dir)
 }
 
