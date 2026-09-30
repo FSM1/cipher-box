@@ -15,7 +15,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::engine::EngineHost;
 
-pub use cli::Headless;
+pub use cli::{Headless, data_dir_override};
 pub use credentials::MemoryCredentialStore;
 
 /// The headless start this command line and this standard input ask for, if
@@ -79,10 +79,7 @@ pub fn arm(app: &AppHandle, headless: Headless) -> Result<(), String> {
 /// a path the suite asked for cannot show that the shell used another one.
 fn announce_paths(app: &AppHandle) {
     let home = crate::session::home_dir().map(|dir| dir.display().to_string());
-    let data = app
-        .path()
-        .local_data_dir()
-        .map(|dir| dir.display().to_string());
+    let data = crate::session::local_data_dir(app).map(|dir| dir.display().to_string());
     eprintln!(
         "e2e: home={} data_local={}",
         home.as_deref().unwrap_or("<none>"),

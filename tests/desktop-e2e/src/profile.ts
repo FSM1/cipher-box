@@ -19,7 +19,7 @@ export const CI_PROFILE: SyncTimingProfile = {
   staleAfterMs: 3_000,
 };
 
-/** Mirrors `SyncTimingProfile::PRODUCTION`. The suite never runs against it. */
+/** Mirrors `SyncTimingProfile::PRODUCTION`. Only the soak leg runs under it. */
 export const PRODUCTION_PROFILE: SyncTimingProfile = {
   recordTtlMs: 60_000,
   pollCadenceMs: 30_000,

@@ -87,6 +87,11 @@ export const SOAK_REASONS = {
   'no-walk-in-window': { kind: 'failure', meaning: 'fewer than two walks in 24 hours' },
   'last-walk-empty': { kind: 'failure', meaning: 'the last republisher walk found no name' },
   'desktop-marker-missing': { kind: 'failure', meaning: 'an OS or browser marker did not open' },
+  'desktop-marker-unpublished': {
+    kind: 'failure',
+    meaning:
+      "the OS marker of today did not save on the writer's mount, or it or its ledger line did not reach a cold mount",
+  },
   'browser-marker-unwritten': {
     kind: 'failure',
     meaning: 'the browser marker did not publish with its ledger line',

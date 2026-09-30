@@ -6,6 +6,7 @@
   "scripts": {
     "test": "vitest run",
     "test:e2e": "tsx src/runAll.ts",
+    "test:soak": "tsx src/soak/runSoak.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
