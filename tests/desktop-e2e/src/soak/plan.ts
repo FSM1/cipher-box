@@ -8,8 +8,8 @@ import type { DesktopLeg } from '../../../web-e2e/staging/soak/grantee';
 import { PRODUCTION_PROFILE, deadlines, type Deadlines, type SyncTimingProfile } from '../profile';
 
 export const LOGIN_SECRET_ENV = 'SOAK_GRANTEE_LOGIN_SECRET';
-export const API_URL_ENV = 'VITE_API_URL';
-export const ROUTING_ENDPOINTS_ENV = 'VITE_ROUTING_ENDPOINTS';
+const API_URL_ENV = 'VITE_API_URL';
+const ROUTING_ENDPOINTS_ENV = 'VITE_ROUTING_ENDPOINTS';
 
 export function legOf(platform: NodeJS.Platform): DesktopLeg {
   if (platform === 'darwin') return 'macos';

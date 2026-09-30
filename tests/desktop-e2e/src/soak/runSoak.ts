@@ -378,9 +378,12 @@ async function markerReads(
           if (rounds++ > 0) await instance.refresh();
           const seen: Record<string, string> = {};
           for (const [line, marker] of unread) {
-            const read = await readOrErrno(join(instance.mountRoot, ...markerPath(marker)));
-            if (Buffer.isBuffer(read) && read.equals(markerBytes(marker.date))) unread.delete(line);
-            else seen[line] = Buffer.isBuffer(read) ? 'other bytes' : read;
+            const state = await markerState(
+              join(instance.mountRoot, ...markerPath(marker)),
+              marker.date
+            );
+            if (state === 'served') unread.delete(line);
+            else seen[line] = state;
           }
           return seen;
         },
@@ -416,9 +419,9 @@ async function listLegFolders(instance: Instance): Promise<Partial<Record<Marker
 async function writeMarker(instance: Instance, ledger: Ledger, today: LegMarker): Promise<void> {
   await mkdir(join(instance.mountRoot, ...DESKTOP_FOLDER, today.leg), { recursive: true });
   const path = join(instance.mountRoot, ...markerPath(today));
-  const bytes = markerBytes(today.date);
-  const present = await readOrErrno(path);
-  if (!Buffer.isBuffer(present) || !present.equals(bytes)) await writeFile(path, bytes);
+  if ((await markerState(path, today.date)) !== 'served') {
+    await writeFile(path, markerBytes(today.date));
+  }
 
   const next = recordMarker(ledger, today);
   if (next === ledger) return;
@@ -441,17 +444,14 @@ async function servesMarker(
   const markerAt = join(reader.mountRoot, ...markerPath(today));
   const ledgerAt = join(reader.mountRoot, ...ledgerPath());
   const line = ledgerLine(today);
+  let rounds = 0;
   await poll(
     async () => {
-      await reader.refresh();
-      const marker = await readOrErrno(markerAt);
+      if (rounds++ > 0) await reader.refresh();
+      const marker = await markerState(markerAt, today.date);
       const ledger = await readOrErrno(ledgerAt);
       return {
-        marker: Buffer.isBuffer(marker)
-          ? marker.equals(markerBytes(today.date))
-            ? 'served'
-            : 'other bytes'
-          : marker,
+        marker,
         line: Buffer.isBuffer(ledger)
           ? ledger.toString('utf8').split(/\r?\n/).includes(line)
             ? 'served'
@@ -467,6 +467,13 @@ async function servesMarker(
       release: () => reader.abandon(),
     }
   );
+}
+
+/** `served` when the marker holds the bytes of its date, else what the read saw. */
+async function markerState(path: string, date: string): Promise<string> {
+  const read = await readOrErrno(path);
+  if (!Buffer.isBuffer(read)) return read;
+  return read.equals(markerBytes(date)) ? 'served' : 'other bytes';
 }
 
 /** The file's bytes, or the errno the mount refused the read with. */
