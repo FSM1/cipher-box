@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { byoSettings, fakeWasmEnums, TEST_ACCOUNT_ID } from '../testkit.js';
 import { EngineHost } from './engineHost.js';
-import type { EngineWasm, WasmCommandOutcome } from './engineWasm.js';
+import type { EngineWasm } from './engineWasm.js';
 import { MAX_FRAGMENT_CHARS } from './protocol.js';
-import type { DeviceRendezvousStep, WriteTarget } from './protocol.js';
+import type {
+  CommandDescriptor,
+  CommandOutcomeDescriptor,
+  DeviceRendezvousStep,
+  WriteTarget,
+} from './protocol.js';
 
 /** A second account on the same device — the lockout this namespacing prevents. */
 const OTHER_ACCOUNT_ID = 'acct02';
@@ -53,7 +58,7 @@ const emptyView = {
   root: new Uint8Array(16),
   folder: new Uint8Array(16),
   folderName: '',
-  permission: fakeWasmEnums.Permission.Write,
+  permission: fakeWasmEnums.ViewPermission.Write,
   receivedShare: false,
   children: [],
   ancestors: [],
@@ -157,13 +162,12 @@ describe('EngineHost', () => {
     });
   });
 
-  it('scrubs a BYO bearer on a command it refuses before the codec is reached', async () => {
+  it('scrubs a BYO bearer on a command it refuses before the engine is reached', async () => {
     const { wasm } = recordingWasm();
     const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
     const bearer = new TextEncoder().encode('s3cret');
 
-    // The bearer arrived transferred, so this realm holds the only copy — and
-    // the codec that would scrub it never runs on a pre-start refusal.
+    // The bearer arrived transferred, so this realm holds the only copy.
     await expect(
       host.command({
         kind: 'saveVaultSettings',
@@ -402,23 +406,10 @@ describe('EngineHost request fields', () => {
   );
 });
 
-/** A wasm `CommandOutcome` that records whether the host released it. */
-function outcomeHandle(fields: Record<string, unknown>): {
-  outcome: WasmCommandOutcome;
-  freed: () => number;
-} {
-  let frees = 0;
-  const outcome = {
-    ...fields,
-    free: () => {
-      frees += 1;
-    },
-  } as unknown as WasmCommandOutcome;
-  return { outcome, freed: () => frees };
-}
-
-/** A host whose WASM `command` answers with `outcome`. */
-function commandingHost(outcome: WasmCommandOutcome): Promise<EngineHost> {
+/** A host whose WASM `command` records what it was handed and answers with `answer`. */
+function commandingHost(
+  answer: (command: CommandDescriptor) => Promise<CommandOutcomeDescriptor>
+): Promise<EngineHost> {
   const wasm = {
     ...fakeWasmEnums,
     EngineHandle: class {
@@ -426,117 +417,72 @@ function commandingHost(outcome: WasmCommandOutcome): Promise<EngineHost> {
         return Promise.resolve();
       }
 
-      command(): Promise<WasmCommandOutcome> {
-        return Promise.resolve(outcome);
+      command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
+        return answer(command);
       }
     },
-    Command: { manualRefresh: () => ({}), importContact: (code: Uint8Array) => ({ code }) },
-    NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
   } as unknown as EngineWasm;
   return started(wasm);
 }
 
-describe('EngineHost command outcomes', () => {
-  it('carries the imported contact keys back and releases the boundary object', async () => {
-    const identityPublicKey = new Uint8Array(33).fill(2);
-    const encPublicKey = new Uint8Array(32).fill(3);
-    const { outcome, freed } = outcomeHandle({
-      kind: 'contactImported',
-      identityPublicKey,
-      encPublicKey,
+describe('EngineHost commands', () => {
+  it('hands the engine the command as it arrived and answers with its outcome', async () => {
+    const handed: CommandDescriptor[] = [];
+    const host = await commandingHost((command) => {
+      handed.push(command);
+      return Promise.resolve({ kind: 'queued', opId: 9007199254740993n });
     });
+    const command: CommandDescriptor = { kind: 'cancelUpload', opId: 9007199254740993n };
 
-    await expect(
-      (await commandingHost(outcome)).command({
-        kind: 'importContact',
-        contactCode: new Uint8Array([1]),
-      })
-    ).resolves.toEqual({ kind: 'contactImported', identityPublicKey, encPublicKey });
-    expect(freed()).toBe(1);
-  });
-
-  it('keeps the queued op id flowing', async () => {
-    const { outcome, freed } = outcomeHandle({ kind: 'queued', opId: 9007199254740993n });
-
-    await expect(
-      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
-    ).resolves.toEqual({
+    await expect(host.command(command)).resolves.toEqual({
       kind: 'queued',
       opId: 9007199254740993n,
     });
-    expect(freed()).toBe(1);
+    expect(handed).toEqual([command]);
   });
 
-  it('refuses an outcome missing the field its own kind names, still releasing it', async () => {
-    const { outcome, freed } = outcomeHandle({ kind: 'queued' });
-
-    await expect(
-      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
-    ).rejects.toThrow('command outcome queued carries no opId');
-    expect(freed()).toBe(1);
-  });
-
-  it('carries the minted link fragment back and releases the boundary object', async () => {
-    // A stand-in for the real fragment, which is the whole bearer capability.
-    const fragment = 'placeholder-invite-fragment';
-    const { outcome, freed } = outcomeHandle({ kind: 'inviteLinkMinted', fragment });
-
-    await expect(
-      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
-    ).resolves.toEqual({ kind: 'inviteLinkMinted', fragment });
-    expect(freed()).toBe(1);
-  });
-
-  it('refuses a minted link outcome carrying no fragment, still releasing it', async () => {
-    const { outcome, freed } = outcomeHandle({ kind: 'inviteLinkMinted' });
-
-    await expect(
-      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
-    ).rejects.toThrow('command outcome inviteLinkMinted carries no fragment');
-    expect(freed()).toBe(1);
-  });
-
-  it('carries the forget residual back, and reads an unread ledger as null', async () => {
-    const paid = outcomeHandle({
-      kind: 'forgotten',
-      unsettledBytes: 4096n,
-      unsettledIsPartial: true,
-      unsettledStalls: 2,
+  it('scrubs the transferred BYO bearer once the engine has taken it', async () => {
+    const bearer = new TextEncoder().encode('s3cret');
+    const seen: number[][] = [];
+    const host = await commandingHost((command) => {
+      const token = command.kind === 'saveVaultSettings' ? command.settings.byo?.accessToken : null;
+      seen.push(token instanceof ArrayBuffer ? [...new Uint8Array(token)] : []);
+      return Promise.resolve({ kind: 'done' });
     });
 
-    await expect(
-      (await commandingHost(paid.outcome)).command({ kind: 'manualRefresh' })
-    ).resolves.toEqual({
-      kind: 'forgotten',
-      unsettledBytes: 4096,
-      unsettledIsPartial: true,
-      stalls: 2,
-    });
-    expect(paid.freed()).toBe(1);
-
-    const unread = outcomeHandle({
-      kind: 'forgotten',
-      unsettledIsPartial: false,
-      unsettledStalls: 0,
+    await host.command({
+      kind: 'saveVaultSettings',
+      settings: byoSettings(bearer.buffer as ArrayBuffer),
     });
 
-    await expect(
-      (await commandingHost(unread.outcome)).command({ kind: 'manualRefresh' })
-    ).resolves.toEqual({
-      kind: 'forgotten',
-      unsettledBytes: null,
-      unsettledIsPartial: false,
-      stalls: 0,
-    });
+    expect(seen).toEqual([[...new TextEncoder().encode('s3cret')]]);
+    expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
   });
 
-  it('refuses an outcome kind this build does not know, still releasing it', async () => {
-    const { outcome, freed } = outcomeHandle({ kind: 'teleported' });
+  it('scrubs the transferred BYO bearer before the command settles', async () => {
+    const bearer = new TextEncoder().encode('s3cret');
+    const host = await commandingHost(() => new Promise<CommandOutcomeDescriptor>(() => undefined));
+
+    void host.command({
+      kind: 'saveVaultSettings',
+      settings: byoSettings(bearer.buffer as ArrayBuffer),
+    });
+
+    expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+  });
+
+  it('scrubs the transferred BYO bearer when the engine refuses the command', async () => {
+    const bearer = new TextEncoder().encode('s3cret');
+    const host = await commandingHost(() => Promise.reject(new Error('refused')));
 
     await expect(
-      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
-    ).rejects.toThrow('unknown command outcome teleported');
-    expect(freed()).toBe(1);
+      host.command({
+        kind: 'saveVaultSettings',
+        settings: byoSettings(bearer.buffer as ArrayBuffer),
+      })
+    ).rejects.toThrow('refused');
+
+    expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
   });
 });
 

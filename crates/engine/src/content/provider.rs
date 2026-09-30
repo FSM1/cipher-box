@@ -44,6 +44,8 @@ const METADATA: [IpAddr; 3] = [
 /// Where a version's bytes are pinned (#34 D1). Every mode still registers with
 /// the API for union-liveness accounting; only the byte destination differs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum PinMode {
     /// CipherBox's hosted pin store (the default). Quota is authoritative.
     Hosted,
@@ -57,6 +59,8 @@ pub enum PinMode {
 /// The kind of member-supplied IPFS provider, which fixes the reachability
 /// probe (their APIs differ).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum ByoKind {
     /// A Kubo RPC endpoint (`/api/v0`).
     Kubo,
@@ -108,13 +112,21 @@ impl fmt::Debug for ByoBearer {
 /// access token is a credential: held in a zeroizing buffer and redacted from
 /// `Debug` (security rule 2).
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase", deny_unknown_fields),
+    tsify(missing_as_null)
+)]
 pub struct ByoIpfsConfig {
     /// The provider API base URL.
     pub endpoint: String,
     /// The provider kind, selecting the reachability probe.
     pub kind: ByoKind,
     /// Bearer credential, when the provider requires one (PSA/Pinata always;
-    /// Kubo when fronted by an auth proxy).
+    /// Kubo when fronted by an auth proxy). Crosses the WASM boundary as a
+    /// transferred buffer, `"keep"` for the stored one, or `null` for none.
+    #[cfg_attr(feature = "wasm", tsify(type = "ArrayBuffer | \"keep\" | null"))]
     pub access_token: ByoBearer,
 }
 

@@ -47,7 +47,14 @@ getrandom = "0.3"
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
 serde_json = "1"
+serde-wasm-bindgen = "0.6"
+# The facade's TS types across the WASM seam, emitted into the wasm-bindgen
+# `.d.ts` (blueprint/web-client.md "WASM packaging and the type boundary").
+# `tsify-next` merged back into this crate at 0.5; `js` is the serde-wasm-bindgen
+# shape the boundary decodes with.
+tsify = { version = "0.5.8", default-features = false, features = ["js"] }
 # The engine's strict comparator normalizes to NFC before folding case
 # (blueprint/engine.md rebase table). Pinned to a minor: a normalization table
 # change moves which names collide, which is a merge-visible law.

@@ -5575,6 +5575,42 @@ fn an_admission_cap_out_of_range_is_refused_and_publishes_nothing() {
     assert!(published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none());
 }
 
+/// A deadline not after now mints a link expired before anyone reads it, so it
+/// is refused before anything publishes. One past now mints.
+#[test]
+fn an_invite_deadline_not_after_now_is_refused_and_publishes_nothing() {
+    let mut fx = GrantScenario::new();
+    // The fixture clock starts at the epoch; `now - 1` needs it past zero.
+    fx.world.scheduler.advance(Duration::from_secs(60));
+    let now = fx.world.scheduler.now().0;
+    for at in [0, now - 1, now] {
+        assert_eq!(
+            block_on(fx.engine.command(Command::CreateInviteLink {
+                node: fx.folder,
+                permission: Permission::Read,
+                expires_at: Some(UnixMillis(at)),
+                owner_name: String::new(),
+                admission_cap: None,
+            })),
+            Err(EngineError::MalformedInput {
+                check: "invite-deadline-out-of-range"
+            }),
+            "{at}"
+        );
+    }
+    assert!(published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none());
+    assert!(matches!(
+        block_on(fx.engine.command(Command::CreateInviteLink {
+            node: fx.folder,
+            permission: Permission::Read,
+            expires_at: Some(UnixMillis(now + 1)),
+            owner_name: String::new(),
+            admission_cap: None,
+        })),
+        Ok(CommandOutcome::InviteLinkMinted(_))
+    ));
+}
+
 /// With two links and no tag, a revoke has no defined cut, so it refuses and
 /// publishes nothing.
 #[test]

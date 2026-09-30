@@ -1054,6 +1054,8 @@ impl fmt::Debug for SnapshotView {
 
 /// Grant permission level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum Permission {
     /// Read grant: read seed only.
     Read,
@@ -1248,21 +1250,47 @@ pub const MAX_FOLDER_CHILDREN: usize = MAX_READ_SEALED_BYTES / MAX_AUTHORED_CHIL
 /// carry private user data (plaintext content, names, contact bundles),
 /// and a derived `{:?}` at any diagnostic site would leak it into logs.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(
+        tag = "kind",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase",
+        deny_unknown_fields
+    ),
+    tsify(large_number_types_as_bigints, missing_as_null)
+)]
 pub enum Command {
     // --- intent ops (#33 D6: every mutation rides the durable op queue) ---
     /// Create an empty node under a parent. A file created **with** content is
     /// a write handle, not a command ([`Engine::begin_write`]).
     Create {
         /// Parent folder.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         parent: NodeId,
         /// Name as entered (uniqueness uses the strict comparator).
         name: String,
         /// File or folder.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(rename = "nodeKind", with = "crate::wire::node_kind"),
+            tsify(type = "\"file\" | \"folder\"")
+        )]
         kind: NodeKind,
     },
     /// Delete a node (conditional delete semantics on rebase).
     Delete {
         /// Target node.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
     },
     /// Put a soft-deleted node back into the tree (ADR 0010 item 4). The
@@ -1271,21 +1299,41 @@ pub enum Command {
     /// again by scope membership.
     Restore {
         /// The binned node, as the bin index names it.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// Where to put it back, or `None` for the folder its bin entry names.
         /// A destination the vault no longer holds is
         /// [`EngineError::RestoreTargetGone`], so a host can offer another.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::opt_node_id"),
+            tsify(type = "Uint8Array | null")
+        )]
         into: Option<NodeId>,
     },
     /// Destroy a soft-deleted node: reclaim what its subtree owes and drop its
     /// bin entry (ADR 0010 item 7). Irreversible.
     Purge {
         /// The binned node, as the bin index names it.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
     },
     /// Rename a node in place.
     Rename {
         /// Target node.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// New name as entered.
         new_name: String,
@@ -1295,8 +1343,18 @@ pub enum Command {
     /// rotation for the source (#26 D1/D7).
     Relink {
         /// Node being moved.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// Destination parent.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         new_parent: NodeId,
     },
     /// Relink and rename a node in one intent op, conditionally replacing the
@@ -1304,12 +1362,27 @@ pub enum Command {
     /// auto-suffixes instead ([`OpKind::Move`](crate::OpKind::Move)).
     Move {
         /// Node being moved.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// Destination parent (the current parent for a pure rename).
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         new_parent: NodeId,
         /// Name at the destination, as entered.
         new_name: String,
         /// The node the destination name currently holds, if any.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::opt_node_id"),
+            tsify(type = "Uint8Array | null")
+        )]
         replacing: Option<NodeId>,
     },
     /// Put one prior version of a file back at the head of its history.
@@ -1320,8 +1393,18 @@ pub enum Command {
     /// blocks stay registered under the file's own name throughout.
     RestoreVersion {
         /// The file.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// The `contentCid` of the version to make current.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::bytes"),
+            tsify(type = "Uint8Array")
+        )]
         content_cid: Vec<u8>,
     },
     /// Drop one prior version of a file and reclaim its bytes.
@@ -1329,8 +1412,18 @@ pub enum Command {
     /// The file's current content is never a target: it leaves with the file.
     DeleteVersion {
         /// The file.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// The `contentCid` of the version to drop.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::bytes"),
+            tsify(type = "Uint8Array")
+        )]
         content_cid: Vec<u8>,
     },
     /// Cancel a queued upload, releasing its staged blocks and retiring
@@ -1344,6 +1437,7 @@ pub enum Command {
     /// published state.
     CancelUpload {
         /// The queue id [`Engine::commit_write`] returned.
+        #[cfg_attr(feature = "wasm", serde(with = "crate::wire::op_id"))]
         op_id: OpId,
     },
     /// Drop one parked write: the preserved entry goes, and its staged version
@@ -1351,6 +1445,7 @@ pub enum Command {
     DiscardDeadLetter {
         /// The op id the dead letter was announced under, and the identity the
         /// preserved entry carries.
+        #[cfg_attr(feature = "wasm", serde(with = "crate::wire::op_id"))]
         op_id: OpId,
     },
     /// Re-queue one parked write's staged version as a **fresh** op, anchored on
@@ -1363,6 +1458,7 @@ pub enum Command {
     /// for them.
     RecoverDeadLetter {
         /// The op id the dead letter was announced under.
+        #[cfg_attr(feature = "wasm", serde(with = "crate::wire::op_id"))]
         op_id: OpId,
     },
 
@@ -1371,9 +1467,15 @@ pub enum Command {
     /// is open.
     SetFocus {
         /// The open folder, if any.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::opt_node_id"),
+            tsify(type = "Uint8Array | null")
+        )]
         node: Option<NodeId>,
     },
     /// Manual refresh with nocache semantics everywhere (#33 D4).
+    #[cfg_attr(feature = "wasm", serde(deserialize_with = "crate::wire::no_fields"))]
     ManualRefresh,
 
     // --- grants, shares, rotation (owner/grant actions per engine.md) ---
@@ -1381,13 +1483,28 @@ pub enum Command {
     /// and fail-closed (#34 D6).
     ImportContact {
         /// The self-authenticating contact bundle bytes.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::bytes"),
+            tsify(type = "Uint8Array")
+        )]
         contact_code: Vec<u8>,
     },
     /// Grant a node to an imported contact (owner-only).
     Grant {
         /// Node to grant (folder or file — files are first-class targets).
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// Recipient's identity public key, as imported.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::bytes"),
+            tsify(type = "Uint8Array")
+        )]
         recipient_identity_public_key: Vec<u8>,
         /// Read or write.
         permission: Permission,
@@ -1399,8 +1516,18 @@ pub enum Command {
     /// Revoke a grant (owner-only; read revoke = immediate cut).
     Revoke {
         /// Granted node.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// Recipient's identity public key.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::bytes"),
+            tsify(type = "Uint8Array")
+        )]
         recipient_identity_public_key: Vec<u8>,
     },
     /// Change a grantee's permission (owner-only, ADR 0025 D6). The grantee is
@@ -1410,8 +1537,18 @@ pub enum Command {
     /// row. A link's permission is fixed, and a change to it is refused.
     ChangePermission {
         /// Granted node.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// Recipient's identity public key.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::bytes"),
+            tsify(type = "Uint8Array")
+        )]
         recipient_identity_public_key: Vec<u8>,
         /// The permission to change to.
         permission: Permission,
@@ -1421,8 +1558,18 @@ pub enum Command {
     /// publishes once.
     RenameGrantee {
         /// Granted node.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// Recipient's identity public key.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::bytes"),
+            tsify(type = "Uint8Array")
+        )]
         recipient_identity_public_key: Vec<u8>,
         /// The grantee name: not empty, at most 255 bytes, no control
         /// characters.
@@ -1437,12 +1584,18 @@ pub enum Command {
     /// (ADR 0024 D4).
     CreateInviteLink {
         /// Node to invite to.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// The permission conversion grants a claimant.
         permission: Permission,
         /// The link's owner-signed deadline, or `None` for
         /// [`DEFAULT_LINK_LIFETIME`] from now. A claim past it converts
         /// nothing.
+        #[cfg_attr(feature = "wasm", serde(with = "crate::wire::opt_unix_millis"))]
         expires_at: Option<UnixMillis>,
         /// The owner's name, which the fragment carries under the owner
         /// signature (ADR 0027 D5). May be empty.
@@ -1450,6 +1603,7 @@ pub enum Command {
         /// How many people the link may admit, or `None` for
         /// [`DEFAULT_ADMISSION_CAP`]. Zero and a value above
         /// [`MAX_ADMISSION_CAP`] are refused.
+        #[cfg_attr(feature = "wasm", serde(with = "crate::wire::opt_big_u64"))]
         admission_cap: Option<u64>,
     },
     /// Revoke an invite link the owner minted at `node` (owner-only). Every
@@ -1458,9 +1612,19 @@ pub enum Command {
     /// D1). Either way it is one cut and one rotation.
     RevokeInviteLink {
         /// The node the link was minted at.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// The tag of the link to cut ([`SharingInviteLink::tag`]). `None` cuts
         /// the only link at `node`, and is refused where it carries more.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::opt_bytes"),
+            tsify(type = "Uint8Array | null")
+        )]
         link_tag: Option<Vec<u8>>,
         /// Also remove every person who joined through the link, found by
         /// the via-link reference of the owner-attested row.
@@ -1471,6 +1635,11 @@ pub enum Command {
     /// already reads as a grantee, posts nothing and changes nothing.
     ClaimInviteLink {
         /// The link's URL fragment, verbatim.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::fragment_placeholder"),
+            tsify(type = "string")
+        )]
         fragment: Zeroizing<String>,
         /// The grantee name the claimant suggests (ADR 0027 D1): the sign-in
         /// display name, or empty, and never the email. The host supplies it.
@@ -1481,6 +1650,11 @@ pub enum Command {
     /// dialog opens (ADR 0023 D4).
     ConvertInviteClaims {
         /// The node the link was minted at.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
     },
     /// Drop the claims refused at a cap for the folder at `node` from this
@@ -1488,12 +1662,22 @@ pub enum Command {
     /// posts its claim again.
     DismissRefusedClaims {
         /// The node the link was minted at.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
     },
     /// Manual hygiene rotate-now for a scope (same primitives as every
     /// rotation trigger).
     RotateNow {
         /// The scope root to rotate.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
     },
 
@@ -1512,6 +1696,11 @@ pub enum Command {
         /// The signed SIWE message.
         message: String,
         /// The wallet signature bytes.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::bytes"),
+            tsify(type = "Uint8Array")
+        )]
         signature: Vec<u8>,
     },
     /// Unlink one login method. Re-proves the account identity key server-side.
@@ -1556,6 +1745,7 @@ pub enum Command {
         sealed_factor: Option<String>,
     },
     /// Log out: zeroize engine state; durable seams survive by design.
+    #[cfg_attr(feature = "wasm", serde(deserialize_with = "crate::wire::no_fields"))]
     Logout,
     /// Forget this device: end the session and erase every durable seam —
     /// floors, the op queue, staged bytes, the snapshot cache, and any
@@ -1563,6 +1753,7 @@ pub enum Command {
     ///
     /// Device-scoped, never account-scoped: the seams never interpret their
     /// contents, so no filter could make a per-account erase complete.
+    #[cfg_attr(feature = "wasm", serde(deserialize_with = "crate::wire::no_fields"))]
     ForgetDevice,
 }
 
@@ -1619,6 +1810,16 @@ impl fmt::Debug for Command {
 /// stable cross-service identifier for a third party, and a derived `{:?}`
 /// would put it in host logs.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(
+        tag = "kind",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    ),
+    tsify(large_number_types_as_bigints, missing_as_null)
+)]
 pub enum CommandOutcome {
     /// The command completed and queued nothing; any further effect arrives on
     /// the event stream.
@@ -1632,12 +1833,26 @@ pub enum CommandOutcome {
     },
     /// [`Command::ImportContact`] verified a contact code. Holding the
     /// [`Contact`] is itself the proof its binding signature verified.
-    ContactImported(Contact),
+    ContactImported(
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::contact"),
+            tsify(type = "{ identityPublicKey: Uint8Array; encPublicKey: Uint8Array }")
+        )]
+        Contact,
+    ),
     /// [`Command::CreateInviteLink`] minted a link: published, and only then
     /// handed out. The payload is the bearer capability itself
     /// ([`MintedInviteLink`]) — a host puts it in a URL fragment and nowhere
     /// durable.
-    InviteLinkMinted(MintedInviteLink),
+    InviteLinkMinted(
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::minted_link"),
+            tsify(type = "{ fragment: string }")
+        )]
+        MintedInviteLink,
+    ),
     /// [`Command::ForgetDevice`] swept the seams, and this is what its settling
     /// pass could not pay before the erase took the ledger with it.
     Forgotten {
@@ -6837,6 +7052,12 @@ where {
         owner_name: &str,
         admission_cap: Option<u64>,
     ) -> Result<CommandOutcome, EngineError> {
+        // A deadline not after now mints a link expired before anyone reads it.
+        if self.seams.scheduler.now().reached(expires_at) {
+            return Err(EngineError::MalformedInput {
+                check: "invite-deadline-out-of-range",
+            });
+        }
         let admission_cap = admission_cap.unwrap_or(DEFAULT_ADMISSION_CAP);
         if !(1..=MAX_ADMISSION_CAP).contains(&admission_cap) {
             return Err(EngineError::MalformedInput {

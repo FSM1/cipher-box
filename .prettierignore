@@ -29,8 +29,8 @@ crates/engine/kat/
 # (CI openapi-freshness diffs a regeneration against the committed file)
 apps/api/openapi.json
 
-# Generated wasm-bindgen glue for the web app's engine worker
-apps/web/src/wasm/
+# Generated wasm-bindgen glue and types for the engine worker
+packages/client/wasm/
 
 # Generated wasm-bindgen glue + Playwright output for the browser suite
 packages/client/test/browser/pkg/

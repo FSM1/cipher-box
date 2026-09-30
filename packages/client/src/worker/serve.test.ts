@@ -493,7 +493,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
     ];
     const handle: WasmEngineHandle = {
       start: () => Promise.resolve(undefined),
-      command: () => Promise.resolve({ kind: 'done', free: () => undefined }),
+      command: () => Promise.resolve({ kind: 'done' }),
       beginWrite: () => Promise.resolve(1n),
       pushChunk: () => Promise.resolve(undefined),
       commitWrite: () => Promise.resolve(1n),
@@ -525,7 +525,6 @@ describe('serveEngine event pump over the real EngineHost', () => {
         return handle;
       },
       NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
-      Command: { manualRefresh: () => ({}) },
       ...fakeWasmEnums,
     } as unknown as EngineWasm;
 

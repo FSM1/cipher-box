@@ -58,15 +58,37 @@ use crate::seams::{
 
 /// The owner's client configuration, sealed into the vault settings record.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase", deny_unknown_fields),
+    tsify(missing_as_null)
+)]
 pub struct VaultSettings {
     /// Where a version's bytes are pinned.
     pub pin_mode: PinMode,
     /// The member's own IPFS provider, when they run one.
     pub byo: Option<ByoIpfsConfig>,
     /// The content-version retention policy.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(
+            rename = "keepLatestVersions",
+            with = "crate::wire::keep_latest_versions"
+        ),
+        tsify(type = "number | null")
+    )]
     pub retention: RetentionPolicy,
     /// How long a soft-deleted node stays in the bin index. `0` keeps the hard
     /// delete (CONTEXT.md "Soft delete").
+    #[cfg_attr(
+        feature = "wasm",
+        serde(
+            default = "crate::wire::bin_retention_days::absent",
+            with = "crate::wire::bin_retention_days"
+        ),
+        tsify(type = "number | null", optional)
+    )]
     pub bin_retention_days: u32,
 }
 

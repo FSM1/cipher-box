@@ -2,28 +2,17 @@
  * The minimal structural type of the wasm-bindgen engine module, as the worker
  * uses it.
  *
- * The wasm-bindgen `.d.ts` is the real boundary contract, but it is a build
- * artifact (generated into the worker's `pkg` dir), not importable from `src`.
- * This interface names only the constructor/handle/builder surface the worker
- * drives, so the worker plumbing typechecks without the artifact; the concrete
- * generated module satisfies it structurally at wiring time. It is not a mirror
- * of engine *view* structures (those never cross to this layer) — only the
- * stable command/handle surface frozen in `crates/wasm`.
+ * The wasm-bindgen `.d.ts` is the real boundary contract; a command and its
+ * outcome are typed from it. The rest of this interface names the handle and
+ * view surface the worker drives, which the generated module satisfies
+ * structurally at wiring time.
  */
 
+import type { Command, CommandOutcome, NodeId } from '../../wasm/cipherbox_wasm.js';
 import type { SiweIntent } from './protocol.js';
 
-/** Opaque wasm-bindgen `NodeId` handle. */
-export type WasmNodeId = object;
-
-/** Opaque wasm-bindgen `Command` handle. */
-export type WasmCommand = object;
-
-/** Opaque wasm-bindgen `ByoIpfsConfig` handle. */
-export type WasmByoIpfsConfig = object;
-
-/** Opaque wasm-bindgen `VaultSettings` handle. */
-export type WasmVaultSettings = object;
+/** wasm-bindgen `NodeId` handle. */
+export type WasmNodeId = NodeId;
 
 /** wasm-bindgen `Event` — key-free view state; a getter is `undefined` off-variant. */
 export interface WasmEvent {
@@ -44,27 +33,6 @@ export interface WasmEvent {
   readonly scopeRoot?: Uint8Array;
   readonly name?: string;
   readonly fingerprint?: string;
-}
-
-/**
- * wasm-bindgen `CommandOutcome` — what one command produced. Unlike the plain
- * views above it is an exported class holding a pointer into WASM memory, so
- * the caller owns it: read the getters, then `free()`.
- */
-export interface WasmCommandOutcome {
-  readonly kind: string;
-  readonly opId?: bigint;
-  readonly identityPublicKey?: Uint8Array;
-  readonly encPublicKey?: Uint8Array;
-  readonly fragment?: string;
-  readonly scopeId?: Uint8Array;
-  readonly sequence?: bigint;
-  readonly permission?: number;
-  readonly newlyAdded?: boolean;
-  readonly unsettledBytes?: bigint;
-  readonly unsettledIsPartial?: boolean;
-  readonly unsettledStalls?: number;
-  free(): void;
 }
 
 /** wasm-bindgen `Breadcrumb` — one ancestor step in a snapshot view. */
@@ -117,8 +85,8 @@ export interface WasmQueueHold {
 
 /**
  * wasm-bindgen `OpenedStream` — a read stream and the size of its pinned
- * version. Like `WasmCommandOutcome` it is an exported class holding a pointer
- * into WASM memory, so the caller owns it: read the getters, then `free()`.
+ * version. It is an exported class holding a pointer into WASM memory, so the
+ * caller owns it: read the getters, then `free()`.
  */
 export interface WasmOpenedStream {
   readonly handle: bigint;
@@ -320,7 +288,7 @@ export interface WasmDeviceApprovalResponse {
 /** wasm-bindgen `EngineHandle` — the one engine instance. */
 export interface WasmEngineHandle {
   start(secret: Uint8Array): Promise<unknown>;
-  command(command: WasmCommand): Promise<WasmCommandOutcome>;
+  command(command: Command): Promise<CommandOutcome>;
   /**
    * Either `(parent, name)` or `(node)` — never both, never neither.
    * `expectedVersion` belongs to `node` alone.
@@ -367,75 +335,6 @@ export interface EngineWasm {
     storageHeadroomBytes?: number
   ) => WasmEngineHandle;
   NodeId: { fromBytes(bytes: Uint8Array): WasmNodeId };
-  Command: {
-    create(parent: WasmNodeId, name: string, kind: number): WasmCommand;
-    delete(node: WasmNodeId): WasmCommand;
-    restore(node: WasmNodeId, into?: WasmNodeId): WasmCommand;
-    purge(node: WasmNodeId): WasmCommand;
-    rename(node: WasmNodeId, newName: string): WasmCommand;
-    restoreVersion(node: WasmNodeId, contentCid: Uint8Array): WasmCommand;
-    deleteVersion(node: WasmNodeId, contentCid: Uint8Array): WasmCommand;
-    relink(node: WasmNodeId, newParent: WasmNodeId): WasmCommand;
-    cancelUpload(opId: bigint): WasmCommand;
-    discardDeadLetter(opId: bigint): WasmCommand;
-    recoverDeadLetter(opId: bigint): WasmCommand;
-    setFocus(node?: WasmNodeId): WasmCommand;
-    manualRefresh(): WasmCommand;
-    importContact(contactCode: Uint8Array): WasmCommand;
-    grant(
-      node: WasmNodeId,
-      recipientIdentityPublicKey: Uint8Array,
-      permission: number,
-      granteeName: string | undefined
-    ): WasmCommand;
-    revoke(node: WasmNodeId, recipientIdentityPublicKey: Uint8Array): WasmCommand;
-    changePermission(
-      node: WasmNodeId,
-      recipientIdentityPublicKey: Uint8Array,
-      permission: number
-    ): WasmCommand;
-    renameGrantee(
-      node: WasmNodeId,
-      recipientIdentityPublicKey: Uint8Array,
-      name: string
-    ): WasmCommand;
-    createInviteLink(
-      node: WasmNodeId,
-      permission: number,
-      expiresAt: bigint | undefined,
-      ownerName: string,
-      admissionCap: bigint | undefined
-    ): WasmCommand;
-    revokeInviteLink(
-      node: WasmNodeId,
-      linkTag: Uint8Array | undefined,
-      removeGrantees: boolean
-    ): WasmCommand;
-    claimInviteLink(fragment: string, name: string): WasmCommand;
-    convertInviteClaims(node: WasmNodeId): WasmCommand;
-    dismissRefusedClaims(node: WasmNodeId): WasmCommand;
-    rotateNow(node: WasmNodeId): WasmCommand;
-    saveVaultSettings(settings: WasmVaultSettings): WasmCommand;
-    siweLink(message: string, signature: Uint8Array): WasmCommand;
-    unlinkAuthMethod(methodId: string): WasmCommand;
-    registerDevice(
-      publicKey: string,
-      signature: string,
-      identityToken: string,
-      label?: string
-    ): WasmCommand;
-    revokeDevice(deviceId: string): WasmCommand;
-    respondToApproval(
-      requestId: string,
-      decision: number,
-      devicePublicKey: string,
-      ephemeralPublicKey: string,
-      signature: string,
-      sealedFactor?: string
-    ): WasmCommand;
-    logout(): WasmCommand;
-    forgetDevice(): WasmCommand;
-  };
   /**
    * The rendezvous free functions (ADR 0009). They are pure and hold no engine
    * state, so they hang off the module rather than the handle.
@@ -464,27 +363,15 @@ export interface EngineWasm {
   ): Uint8Array;
   /** Throws on bytes that are not a compressed secp256k1 identity key. */
   identityFingerprint(identityPublicKey: Uint8Array): string;
-  ByoIpfsConfig: new (
-    endpoint: string,
-    kind: number,
-    accessToken: Uint8Array | undefined,
-    keepAccessToken: boolean
-  ) => WasmByoIpfsConfig;
-  VaultSettings: new (
-    pinMode: number,
-    byo?: WasmByoIpfsConfig,
-    keepLatestVersions?: number,
-    binRetentionDays?: number
-  ) => WasmVaultSettings;
   NodeKind: { readonly File: number; readonly Folder: number };
   PendingClass: {
     readonly None: number;
     readonly Metadata: number;
     readonly Content: number;
   };
-  Permission: { readonly Read: number; readonly Write: number };
-  PinMode: { readonly Hosted: number; readonly External: number; readonly Dual: number };
-  ByoKind: { readonly Kubo: number; readonly Psa: number; readonly Pinata: number };
+  ViewPermission: { readonly Read: number; readonly Write: number };
+  ViewPinMode: { readonly Hosted: number; readonly External: number; readonly Dual: number };
+  ViewByoKind: { readonly Kubo: number; readonly Psa: number; readonly Pinata: number };
   SettingsOrigin: {
     readonly Resolved: number;
     readonly Stale: number;
@@ -506,7 +393,6 @@ export interface EngineWasm {
     readonly Test: number;
     readonly Unknown: number;
   };
-  ApprovalDecision: { readonly Approve: number; readonly Deny: number };
   OpPhase: {
     readonly DownloadStarted: number;
     readonly DownloadCompleted: number;

@@ -187,15 +187,18 @@ jobs:
           fi
 
   # The engine's browser artifact (blueprint/web-client.md "WASM packaging"),
-  # built once per run and consumed by both the Web area's bundle and the smoke
-  # slice, so the two are the same bytes by construction. It stays in the caller
-  # for that reason: nesting it in the Web area would make the smoke slice wait
-  # for the whole area. `Web Result` covers it.
+  # built once per run and consumed by the Web area's bundle and the smoke slice,
+  # so the two are the same bytes by construction. Its `.d.ts` types the facade
+  # commands, so every job that typechecks `packages/client` or a consumer of it
+  # consumes it too. It stays in the caller for that reason: nesting it in the
+  # Web area would make the smoke slice wait for the whole area. `Web Result`
+  # covers it.
   wasm-engine:
     name: Web Engine WASM
     needs: changes
     if: |
-      needs.changes.outputs.web == 'true' || needs.changes.outputs.e2e == 'true'
+      needs.changes.outputs.ts == 'true' || needs.changes.outputs.web == 'true' ||
+      needs.changes.outputs.rust == 'true' || needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -223,7 +226,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: web-engine-wasm
-          path: apps/web/src/wasm
+          path: packages/client/wasm
           if-no-files-found: error
           retention-days: 1
 
@@ -270,9 +273,10 @@ jobs:
 
   desktop:
     name: Desktop
-    needs: changes
+    needs: [changes, wasm-engine]
     if: |
-      needs.changes.outputs.ts == 'true' || needs.changes.outputs.desktop == 'true'
+      !cancelled() &&
+      (needs.changes.outputs.ts == 'true' || needs.changes.outputs.desktop == 'true')
     permissions:
       contents: read
     uses: ./.github/workflows/ci-desktop.yml

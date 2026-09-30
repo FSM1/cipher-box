@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "pnpm build:wasm && tsc -b && vite",
     "build": "pnpm build:wasm && pnpm build:bundle",
-    "build:wasm": "node scripts/build-wasm.mjs",
+    "build:wasm": "pnpm --filter @cipherbox/client build:wasm",
     "csp:caddy": "tsx scripts/write-csp-caddy.ts",
     "build:bundle": "tsc -b && vite build",
     "preview": "vite preview",

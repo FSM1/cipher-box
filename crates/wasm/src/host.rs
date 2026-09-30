@@ -18,17 +18,19 @@
 use std::rc::Rc;
 
 use async_lock::{Mutex, RwLock};
-use cipherbox_engine::facade::{ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
+use cipherbox_engine::facade::{self, ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::{
     ContentProfile, GatewayConfig, OsEntropy, OverBudgetCause, OwnerScopedFloorStore,
     QueueGenerationStore, SeamSet, SeamTypes, SiweIntent, StoragePlatform, StoragePolicy,
     StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
 };
 use js_sys::{Promise, Reflect, Uint8Array};
+use tsify::Ts;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 use zeroize::Zeroizing;
 
+use crate::boundary::{decode_command, encode_outcome};
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
     JsFloorStoreSeam, JsHttpSeam, JsRecordTransportSeam, JsSchedulerSeam, JsSnapshotCacheSeam,
@@ -36,9 +38,8 @@ use crate::seams_bridge::{
     StagingStoreAdapter,
 };
 use crate::{
-    AuthMethod, BinView, Command, CommandOutcome, Event, InvitePreview, NodeId, OpenedStream,
-    PendingApproval, ReceivedShareRow, RegisteredDevice, SharingView, SnapshotView,
-    VaultStorageView, VersionEntry,
+    AuthMethod, BinView, Event, InvitePreview, NodeId, OpenedStream, PendingApproval,
+    ReceivedShareRow, RegisteredDevice, SharingView, SnapshotView, VaultStorageView, VersionEntry,
 };
 
 /// The largest integer a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
@@ -199,13 +200,17 @@ impl EngineHandle {
         })
     }
 
-    /// Executes one engine command — the single write entry point. Consumes the
-    /// command value. Resolves with the [`CommandOutcome`] the arm produced —
-    /// the staged op's durable queue id, a verified contact — or rejects with
+    /// Executes one engine command — the single write entry point. Resolves
+    /// with the `CommandOutcome` the arm produced — the staged op's durable
+    /// queue id, a verified contact — or rejects with the decode refusal or
     /// the engine error.
-    pub fn command(&self, command: Command) -> Promise {
+    #[wasm_bindgen(unchecked_return_type = "Promise<CommandOutcome>")]
+    pub fn command(&self, command: Ts<facade::Command>) -> Promise {
+        let facade_command = match decode_command(&command.js_value()) {
+            Ok(decoded) => decoded,
+            Err(refusal) => return Promise::reject(&refusal.into()),
+        };
         let engine = self.engine.clone();
-        let facade_command = command.into_facade();
         future_to_promise(async move {
             let outcome = engine
                 .write()
@@ -213,7 +218,7 @@ impl EngineHandle {
                 .command(facade_command)
                 .await
                 .map_err(engine_error)?;
-            Ok(CommandOutcome::from_facade(outcome).into())
+            Ok(encode_outcome(&outcome)?.into())
         })
     }
 
@@ -745,7 +750,9 @@ mod tests {
     const FRAGMENT: &str = "ZnJhZ21lbnQtdGV4dA";
 
     fn crossed(outcome: Outcome) -> JsValue {
-        CommandOutcome::from_facade(outcome).into()
+        encode_outcome(&outcome)
+            .expect("every outcome encodes")
+            .into()
     }
 
     fn field(outcome: &JsValue, name: &str) -> JsValue {
@@ -885,6 +892,31 @@ mod tests {
         ] {
             assert_eq!(field(&crossed(outcome), "kind"), JsValue::from_str(name));
         }
+    }
+
+    /// A forget whose engine never read the ledger reports no figure at all,
+    /// rather than a zero it never measured.
+    #[wasm_bindgen_test]
+    fn a_forget_crosses_its_residual_as_bigints_or_null() {
+        let unread = crossed(Outcome::Forgotten {
+            unsettled_bytes: None,
+            unsettled_is_partial: false,
+            stalls: 0,
+        });
+        assert!(field(&unread, "unsettledBytes").is_null());
+
+        let read = crossed(Outcome::Forgotten {
+            unsettled_bytes: Some(u64::MAX),
+            unsettled_is_partial: true,
+            stalls: 2,
+        });
+        assert_eq!(field(&read, "kind"), JsValue::from_str("forgotten"));
+        assert_eq!(
+            field(&read, "unsettledBytes"),
+            JsValue::from(BigInt::from(u64::MAX))
+        );
+        assert_eq!(field(&read, "unsettledIsPartial"), JsValue::TRUE);
+        assert_eq!(field(&read, "stalls"), JsValue::from(BigInt::from(2u64)));
     }
 
     /// The wire codes `packages/client` and `apps/web` branch on.

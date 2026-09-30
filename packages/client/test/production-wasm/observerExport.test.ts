@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import { openIpnsRecordReader } from '../../src/index.js';
 
-/** Where `apps/web`'s `build:wasm` writes the module the bundle ships. */
-const shipped = resolve(import.meta.dirname, '../../../../apps/web/src/wasm');
+/** Where `build:wasm` writes the module the bundle ships. */
+const shipped = resolve(import.meta.dirname, '../../wasm');
 const glueUrl = pathToFileURL(resolve(shipped, 'cipherbox_wasm.js'));
 
 describe('the production engine module', () => {

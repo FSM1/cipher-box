@@ -2,7 +2,8 @@
 //! wasm-bindgen-test-runner → Node.js). They exercise the two boundary risks
 //! the WASM leg exists to cover (blueprint/web-client.md "Boundary hygiene"):
 //! `u64`→`bigint` marshalling and the getrandom → `crypto.getRandomValues`
-//! worker-scope wiring, plus the command/event surface shapes.
+//! worker-scope wiring, plus the event and view surface shapes. The command
+//! decode has its own file (`commands.rs`).
 //!
 //! The whole file is gated to the browser target; native `cargo test` for this
 //! crate runs the host conversion tests in `src/lib.rs` instead.
@@ -10,11 +11,9 @@
 
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
-use cipherbox_engine::settings::MAX_BIN_RETENTION_DAYS;
 use cipherbox_wasm::{
-    BinOriginKind, BinView, ByoIpfsConfig, ByoKind, Command, DeadLetterReason, Event,
-    InvitePreview, NodeId, NodeKind, OpPhase, PendingClass, Permission, PinMode, SnapshotView,
-    Staleness, VaultSettings,
+    BinOriginKind, BinView, DeadLetterReason, Event, InvitePreview, NodeId, NodeKind, OpPhase,
+    PendingClass, Permission, SnapshotView, Staleness,
 };
 use js_sys::{Array, BigInt, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -86,21 +85,6 @@ fn node_id_bytes_cross_as_uint8array_and_reject_bad_length() {
         NodeId::from_bytes(&[0u8; 20]).is_err(),
         "a wrong-length node id must throw at the boundary"
     );
-}
-
-/// The command builders wrap engine intent and expose only the stable name.
-#[wasm_bindgen_test]
-fn command_builders_expose_stable_names() {
-    let node = NodeId::from_bytes(&[0u8; 16]).expect("valid node id");
-    assert_eq!(
-        Command::create(&node, "photo.jpg".into(), NodeKind::File).name(),
-        "create"
-    );
-    assert_eq!(
-        Command::grant(&node, vec![0xAB; 32], Permission::Write, None).name(),
-        "grant"
-    );
-    assert_eq!(Command::manual_refresh().name(), "manualRefresh");
 }
 
 /// Event getters return key-free view state, keyed off `kind`.
@@ -656,111 +640,6 @@ fn a_settings_queue_hold_crosses_with_its_check_and_no_byte_figure() {
     assert_eq!(
         get("node").unchecked_into::<Uint8Array>().to_vec(),
         vec![7u8; 16]
-    );
-}
-
-/// The refusal builds a `JsError`, so it is only reachable on this target.
-#[wasm_bindgen_test]
-fn a_zero_retention_cap_is_refused_rather_than_defaulted() {
-    assert!(
-        VaultSettings::new(PinMode::Hosted, None, Some(0), None).is_err(),
-        "0 must not be read as a retention policy"
-    );
-    assert!(VaultSettings::new(PinMode::Hosted, None, Some(1), None).is_ok());
-    assert!(
-        VaultSettings::new(PinMode::Hosted, None, None, None).is_ok(),
-        "no cap keeps every version"
-    );
-}
-
-/// The boundary refuses a bin retention the engine would refuse to publish, so
-/// the host learns which field it must change rather than a save that cannot
-/// land.
-#[wasm_bindgen_test]
-fn a_bin_retention_past_the_bar_is_refused_at_the_boundary() {
-    assert!(
-        VaultSettings::new(
-            PinMode::Hosted,
-            None,
-            None,
-            Some(MAX_BIN_RETENTION_DAYS + 1)
-        )
-        .is_err(),
-        "a retention past the bar must not build"
-    );
-    assert!(VaultSettings::new(PinMode::Hosted, None, None, Some(MAX_BIN_RETENTION_DAYS)).is_ok());
-    assert!(
-        VaultSettings::new(PinMode::Hosted, None, None, Some(0)).is_ok(),
-        "0 keeps the hard delete"
-    );
-}
-
-/// The builder's name is the settings command's whole readable surface.
-#[wasm_bindgen_test]
-fn a_vault_settings_command_carries_the_stable_builder_name() {
-    let settings = VaultSettings::new(
-        PinMode::Dual,
-        Some(
-            ByoIpfsConfig::new(
-                "https://kubo.example".to_owned(),
-                ByoKind::Kubo,
-                Some(b"s3cret".to_vec()),
-                false,
-            )
-            .expect("UTF-8 token bytes build"),
-        ),
-        Some(3),
-        Some(30),
-    )
-    .expect("a positive cap builds");
-
-    assert_eq!(
-        Command::save_vault_settings(settings).name(),
-        "saveVaultSettings"
-    );
-}
-
-/// A bearer the engine would refuse never reaches a config object: the refusal
-/// would otherwise land after the constructor minted one holding the
-/// credential, stranding that allocation with no owner to free it.
-#[wasm_bindgen_test]
-fn a_bearer_the_engine_would_refuse_never_builds_a_config() {
-    // Not text at all, empty, and text carrying bytes a header cannot splice.
-    for refused in [
-        vec![0xff, 0xfe],
-        vec![],
-        b"has space".to_vec(),
-        "\u{e9}".into(),
-    ] {
-        assert!(
-            ByoIpfsConfig::new(
-                "https://kubo.example".to_owned(),
-                ByoKind::Kubo,
-                Some(refused),
-                false,
-            )
-            .is_err()
-        );
-    }
-}
-
-/// "keep the stored bearer" and "use this bearer" are two different
-/// credentials, and which one the caller meant is not recoverable. Neither is
-/// published.
-#[wasm_bindgen_test]
-fn a_keep_intent_carrying_its_own_bearer_builds_no_config() {
-    assert!(
-        ByoIpfsConfig::new(
-            "https://kubo.example".to_owned(),
-            ByoKind::Kubo,
-            Some(b"s3cret".to_vec()),
-            true,
-        )
-        .is_err()
-    );
-    assert!(
-        ByoIpfsConfig::new("https://kubo.example".to_owned(), ByoKind::Kubo, None, true).is_ok(),
-        "a keep intent on its own builds",
     );
 }
 

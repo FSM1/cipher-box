@@ -1,12 +1,13 @@
-// Emits the engine's wasm-bindgen ES module + binary for the bundler to
-// fingerprint (blueprint/web-client.md "WASM packaging"). Release profile,
+// Emits the engine's wasm-bindgen ES module, binary and `.d.ts`: the bundler
+// fingerprints the first two, and the `.d.ts` types this package (blueprint/
+// web-client.md "WASM packaging and the type boundary"). Release profile,
 // no `conformance` feature.
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
 const here = import.meta.dirname;
 const repoRoot = resolve(here, '../../..');
-const outDir = resolve(here, '../src/wasm');
+const outDir = resolve(here, '../wasm');
 
 const run = (command, args) => execFileSync(command, args, { cwd: repoRoot, stdio: 'inherit' });
 

@@ -122,7 +122,7 @@ jobs:
         if: inputs.wasm-artifact != ''
         with:
           name: ${{ inputs.wasm-artifact }}
-          path: apps/web/src/wasm
+          path: packages/client/wasm
 
       # The same cache `ci.yml`'s `Web Engine WASM` job warms: this step builds
       # the module itself only when no run handed one over.

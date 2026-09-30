@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 /**
- * Reads the production module that `apps/web`'s `build:wasm` writes, so it
+ * Reads the production module that `build:wasm` writes, so it
  * runs in the Web Bundle job, which holds that artifact.
  */
 export default defineConfig({

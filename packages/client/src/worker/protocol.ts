@@ -2,14 +2,10 @@
  * The UI ↔ engine-worker wire protocol (blueprint/web-client.md "Engine hosting
  * and tab leadership").
  *
- * Everything here is plain structured-clone data. A wasm-bindgen `Command` wraps
- * a pointer into the worker's WASM memory and cannot cross a realm boundary, so
- * the UI sends a **command descriptor** — the facade's write intent as data —
- * and the worker rebuilds the real `Command` from it (`commandCodec`). This is a
- * wire format, not the forbidden TS mirror of engine *view* structures
- * (blueprint/web-client.md "Types are generated, not hand-mirrored"): it carries
- * only intent the engine already owns, never snapshot/view state, and never key
- * material — a grant carries the recipient's *public* identity key only.
+ * Everything here is plain structured-clone data. A command and what it answers
+ * are the engine's own types, generated into the wasm-bindgen `.d.ts` and
+ * re-exported here under the names the hosts import; the worker hands a command
+ * to the engine as it arrived, and the engine decodes it.
  *
  * `u64`s cross as `bigint`; binary payloads cross as `Uint8Array`, with file
  * content transferred as an `ArrayBuffer` so no bytes are copied through the
@@ -18,6 +14,18 @@
  */
 
 import { isBuffer } from '../buffers.js';
+import type {
+  ApprovalDecision,
+  ByoIpfsConfig,
+  ByoKind,
+  Command,
+  CommandOutcome,
+  Permission,
+  PinMode,
+  VaultSettings,
+} from '../../wasm/cipherbox_wasm.js';
+
+export type { ApprovalDecision, ByoKind, Permission, PinMode };
 
 /**
  * The most fragment characters any hop carries. A guard, not the contract — the
@@ -27,11 +35,8 @@ import { isBuffer } from '../buffers.js';
  */
 export const MAX_FRAGMENT_CHARS = 4096;
 
-/** Grant permission level (mirrors the facade `Permission`). */
-export type Permission = 'read' | 'write';
-
-/** What a created node is (mirrors the facade `NodeKind`). */
-export type NodeKind = 'file' | 'folder';
+/** What a created node is. */
+export type NodeKind = Extract<Command, { kind: 'create' }>['nodeKind'];
 
 /** The staleness ladder (mirrors the facade `Staleness`). */
 export type Staleness = 'fresh' | 'reconciling' | 'stale' | 'offline';
@@ -401,43 +406,19 @@ export interface BinDescriptor {
   origin: SettingsOrigin;
 }
 
-/** Where a version's bytes are pinned (mirrors the facade `PinMode`). */
-export type PinMode = 'hosted' | 'external' | 'dual';
-
-/** The kind of member-supplied IPFS provider (mirrors the facade `ByoKind`). */
-export type ByoKind = 'kubo' | 'psa' | 'pinata';
-
 /** The `accessToken` value that keeps the bearer the engine already holds. */
-export const KEEP_STORED_BEARER = 'keep';
+export const KEEP_STORED_BEARER = 'keep' satisfies ByoIpfsConfig['accessToken'];
 
-/** A member's own IPFS provider, as data. */
-export interface ByoIpfsConfigDescriptor {
-  endpoint: string;
-  kind: ByoKind;
-  /**
-   * Bearer credential, three-state: a buffer sets a new one, `'keep'` keeps
-   * whatever the engine already holds, and `null` stores none. `'keep'` is the
-   * only way a host that can never read a stored bearer back leaves one alone.
-   *
-   * A transferable buffer rather than a string, which cannot be overwritten:
-   * every hop moves it ([`commandTransfer`]), so the receiving realm is the
-   * only holder left and is the terminal owner that scrubs it.
-   */
-  accessToken: ArrayBuffer | typeof KEEP_STORED_BEARER | null;
-}
+/**
+ * A member's own IPFS provider. The bearer is a transferable buffer rather than
+ * a string, which cannot be overwritten: every hop moves it
+ * ([`commandTransfer`]), so the receiving realm is the only holder left and is
+ * the terminal owner that scrubs it.
+ */
+export type ByoIpfsConfigDescriptor = ByoIpfsConfig;
 
-/** The member's placement, provider and retention choice, as data. */
-export interface VaultSettingsDescriptor {
-  pinMode: PinMode;
-  byo: ByoIpfsConfigDescriptor | null;
-  /** Newest-n retention; `null` keeps every version within quota. */
-  keepLatestVersions: number | null;
-  /**
-   * Days a soft-deleted node stays in the bin; `0` keeps the hard delete.
-   * Absent takes the engine's documented default.
-   */
-  binRetentionDays?: number | null;
-}
+/** The member's placement, provider and retention choice. */
+export type VaultSettingsDescriptor = VaultSettings;
 
 /** Whose choice a settings summary reports (mirrors the facade `SettingsOrigin`). */
 export type SettingsOrigin = 'resolved' | 'stale' | 'defaults';
@@ -535,9 +516,6 @@ export interface PendingApprovalDescriptor {
   expiresAt: string;
 }
 
-/** How an approver answered one rendezvous (mirrors the facade `ApprovalDecision`). */
-export type ApprovalDecision = 'approve' | 'deny';
-
 /**
  * One step of the device-approval rendezvous (ADR 0009). Every step is a pure
  * function of the exchange transcript; the engine holds no state for it.
@@ -577,102 +555,8 @@ export type DeviceRendezvousResult =
   | { kind: 'response'; sealedFactor: string | null; payload: Uint8Array }
   | { kind: 'factor'; factorKey: Uint8Array };
 
-/**
- * One write intent, as data. Each variant's `kind` matches the facade command
- * builder name (`crates/wasm` `Command`), so the worker maps it mechanically.
- */
-export type CommandDescriptor =
-  | { kind: 'create'; parent: Uint8Array; name: string; nodeKind: NodeKind }
-  | { kind: 'delete'; node: Uint8Array }
-  | {
-      kind: 'restore';
-      node: Uint8Array;
-      /** `null` takes the folder the bin entry names. */
-      into: Uint8Array | null;
-    }
-  | { kind: 'purge'; node: Uint8Array }
-  | { kind: 'rename'; node: Uint8Array; newName: string }
-  | { kind: 'relink'; node: Uint8Array; newParent: Uint8Array }
-  | { kind: 'restoreVersion'; node: Uint8Array; contentCid: Uint8Array }
-  | { kind: 'deleteVersion'; node: Uint8Array; contentCid: Uint8Array }
-  | { kind: 'cancelUpload'; opId: bigint }
-  | { kind: 'discardDeadLetter'; opId: bigint }
-  | { kind: 'recoverDeadLetter'; opId: bigint }
-  | { kind: 'setFocus'; node: Uint8Array | null }
-  | { kind: 'manualRefresh' }
-  | { kind: 'importContact'; contactCode: Uint8Array }
-  | {
-      kind: 'grant';
-      node: Uint8Array;
-      recipientIdentityPublicKey: Uint8Array;
-      permission: Permission;
-      /** The name the owner gives the grantee on the row; `null` leaves it unnamed. */
-      granteeName: string | null;
-    }
-  | { kind: 'revoke'; node: Uint8Array; recipientIdentityPublicKey: Uint8Array }
-  | {
-      kind: 'changePermission';
-      node: Uint8Array;
-      recipientIdentityPublicKey: Uint8Array;
-      permission: Permission;
-    }
-  | {
-      kind: 'renameGrantee';
-      node: Uint8Array;
-      recipientIdentityPublicKey: Uint8Array;
-      name: string;
-    }
-  | {
-      kind: 'createInviteLink';
-      node: Uint8Array;
-      permission: Permission;
-      /** Unix-millis deadline; `null` takes the engine's default lifetime. */
-      expiresAt: bigint | null;
-      /** Shown to the holder, signed by the owner; the engine bounds it, empty is allowed. */
-      ownerName: string;
-      /** How many people the link may admit; `null` takes the engine's default. The engine bounds it. */
-      admissionCap: number | null;
-    }
-  /** A `null` tag cuts the scope's only link; the engine refuses it where the scope carries more. */
-  | {
-      kind: 'revokeInviteLink';
-      node: Uint8Array;
-      linkTag: Uint8Array | null;
-      removeGrantees: boolean;
-    }
-  /**
-   * The fragment is the whole bearer capability, opaque above the engine: it
-   * crosses verbatim, is never parsed, and never reaches a log or any durable
-   * store on the way. Length-bounded by [`MAX_FRAGMENT_CHARS`].
-   */
-  | { kind: 'claimInviteLink'; fragment: string; name: string }
-  | { kind: 'convertInviteClaims'; node: Uint8Array }
-  | { kind: 'dismissRefusedClaims'; node: Uint8Array }
-  | { kind: 'rotateNow'; node: Uint8Array }
-  | { kind: 'saveVaultSettings'; settings: VaultSettingsDescriptor }
-  /** Links a host-collected wallet signature to the account already signed in. */
-  | { kind: 'siweLink'; message: string; signature: Uint8Array }
-  | { kind: 'unlinkAuthMethod'; methodId: string }
-  | {
-      kind: 'registerDevice';
-      publicKey: string;
-      signature: string;
-      identityToken: string;
-      label: string | null;
-    }
-  | { kind: 'revokeDevice'; deviceId: string }
-  | {
-      kind: 'respondToApproval';
-      requestId: string;
-      decision: ApprovalDecision;
-      devicePublicKey: string;
-      ephemeralPublicKey: string;
-      signature: string;
-      /** A denial seals nothing, so it carries `null`. */
-      sealedFactor: string | null;
-    }
-  | { kind: 'logout' }
-  | { kind: 'forgetDevice' };
+/** One write intent: the engine `Command`. */
+export type CommandDescriptor = Command;
 
 /**
  * The buffers a command descriptor owns, for the `transfer` list of the send
@@ -719,42 +603,17 @@ export function rendezvousTransfer(value: unknown): Transferable[] {
 }
 
 /**
- * What one command produced, as data (mirrors the facade `CommandOutcome`).
- *
- * `queued` carries the durable queue id a later `opProgress`/`deadLetter`
- * repeats, so a host correlates the call to the events it makes. Holding an
- * imported contact's keys is the proof its binding signature verified — the
- * engine has no other way to hand that evidence out.
+ * What one command produced: the engine `CommandOutcome`. Holding an imported
+ * contact's keys is the proof its binding signature verified.
  */
-export type CommandOutcomeDescriptor =
-  | { kind: 'done' }
-  | { kind: 'queued'; opId: bigint }
-  | { kind: 'contactImported'; identityPublicKey: Uint8Array; encPublicKey: Uint8Array }
-  /** The whole bearer capability: a host puts `fragment` in a URL and hands the
-   * same characters back to `claimInviteLink`, reading none of it. */
-  | { kind: 'inviteLinkMinted'; fragment: string }
-  /**
-   * The device was forgotten. `unsettledBytes` is what the settling pass ahead
-   * of the erase could not pay — pinned bytes that stay charged to the account
-   * with no device left owing them — and `null` when no pass ran at all, so the
-   * ledger was never read.
-   */
-  | ({ kind: 'forgotten' } & ForgottenResidual);
+export type CommandOutcomeDescriptor = CommandOutcome;
 
 /**
  * What a forget's settling pass could not pay before the erase: pinned bytes
- * that stay charged to the account with no device left owing them.
+ * that stay charged to the account with no device left owing them, `null` when
+ * no pass ran.
  */
-export interface ForgottenResidual {
-  /** `null` when no pass ran, so the ledger was never read. */
-  unsettledBytes: number | null;
-  /**
-   * True when that figure is a floor rather than the whole debt: the pass read
-   * a bounded window of the retire ledger and left keys unattempted.
-   */
-  unsettledIsPartial: boolean;
-  stalls: number;
-}
+export type ForgottenResidual = Omit<Extract<CommandOutcome, { kind: 'forgotten' }>, 'kind'>;
 
 /**
  * Where a streaming write lands: a new file named `name` under `parent`, or a

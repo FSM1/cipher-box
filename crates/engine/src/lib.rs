@@ -64,6 +64,8 @@ pub mod storage_policy;
 pub mod sync;
 #[cfg(feature = "test-kit")]
 pub mod testkit;
+#[cfg(feature = "wasm")]
+pub mod wire;
 
 pub use api::{
     ApiClient, ApiError, AuthMethod, AuthMethodKind, ChallengeSigner, IdentityChallengeSigner,

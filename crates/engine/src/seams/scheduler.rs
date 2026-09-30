@@ -20,6 +20,11 @@ use core::time::Duration;
     serde::Deserialize,
     zeroize::Zeroize,
 )]
+#[cfg_attr(
+    feature = "wasm",
+    derive(tsify::Tsify),
+    tsify(large_number_types_as_bigints)
+)]
 pub struct UnixMillis(pub u64);
 
 impl UnixMillis {

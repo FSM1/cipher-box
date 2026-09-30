@@ -26,7 +26,12 @@ conformance = ["cipherbox-engine/test-kit"]
 observer = []
 
 [dependencies]
-cipherbox-engine.workspace = true
+cipherbox-engine = { workspace = true, features = ["wasm"] }
+serde.workspace = true
+# The one decode of a facade command from its JS value, and the one encode of
+# what it answers (`src/boundary.rs`).
+serde-wasm-bindgen.workspace = true
+tsify.workspace = true
 wasm-bindgen = "0.2"
 # Credentials the boundary carries — the accelerator bearer token and a member's
 # BYO provider token — reach the engine in a zeroizing buffer, never a plain
