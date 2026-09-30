@@ -13,10 +13,12 @@
     "./sw": {
       "types": "./dist/sw/serviceWorker.d.ts",
       "import": "./dist/sw/serviceWorker.js"
-    }
+    },
+    "./wasm/*": "./wasm/*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build:wasm": "node scripts/build-wasm.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:browser-test": "tsc --noEmit -p tsconfig.browser-test.json",
     "test": "vitest run",

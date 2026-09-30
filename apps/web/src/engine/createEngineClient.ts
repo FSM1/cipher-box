@@ -2,8 +2,8 @@ import { EngineClient, spawnEngineWorker, type SecretSource } from '@cipherbox/c
 import { engineHostConfig } from './config';
 // Content-hashed by Vite, so the artifact is served immutable
 // (blueprint/web-client.md "WASM packaging").
-import wasmModuleUrl from '../wasm/cipherbox_wasm.js?url';
-import wasmBinaryUrl from '../wasm/cipherbox_wasm_bg.wasm?url';
+import wasmModuleUrl from '@cipherbox/client/wasm/cipherbox_wasm.js?url';
+import wasmBinaryUrl from '@cipherbox/client/wasm/cipherbox_wasm_bg.wasm?url';
 
 /**
  * Wires this tab's engine client to the browser: `navigator.locks` drives the

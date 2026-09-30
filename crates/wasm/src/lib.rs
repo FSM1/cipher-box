@@ -10,40 +10,37 @@
 //!
 //! The wasm-bindgen-generated `.d.ts` is the single boundary contract that
 //! `packages/client` re-exports — there is no hand-maintained TS mirror of
-//! engine structures. Boundary hygiene is structural: `u64`s cross as `bigint`,
-//! binary payloads as `Uint8Array`, and the command surface exposes only
-//! intent while the event and read surfaces carry key-free view state and
-//! decrypted user content.
+//! engine structures. The facade commands and their outcomes cross as the
+//! engine's own types, typed by tsify ([`boundary`]). Boundary hygiene is
+//! structural: `u64`s cross as `bigint`, binary payloads as `Uint8Array`, and
+//! the command surface exposes only intent while the event and read surfaces
+//! carry key-free view state and decrypted user content.
 //!
-//! One secret crosses, and only because handing it over *is* the feature: an
-//! invite link's bearer capability ([`CommandOutcome::fragment`]), which the
-//! host puts in a URL fragment and reads nothing out of. It crosses as the
+//! One secret crosses out, and only because handing it over *is* the feature:
+//! an invite link's bearer capability (the `inviteLinkMinted` outcome), which
+//! the host puts in a URL fragment and reads nothing out of. It crosses as the
 //! fragment text rather than as bytes so the host composes and parses no link
 //! material. Residual: a JS string is immutable, so the host cannot scrub the
-//! copy it holds — inherent to a capability that has to reach a URL — and
-//! wasm-bindgen frees the linear-memory copy unwiped.
+//! copy it holds — inherent to a capability that has to reach a URL.
 
 // wasm-bindgen's macro-generated glue is unsafe by nature and exempt; this
 // forbids only unsafe we would hand-write (there is none).
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use cipherbox_engine::content::{
-    ByoBearer as EngineByoBearer, ByoIpfsConfig as EngineByo, ByoKind as EngineByoKind,
-};
+use cipherbox_engine::content::ByoKind as EngineByoKind;
 use cipherbox_engine::facade;
-use cipherbox_engine::seams::{UnixMillis, check_bearer};
-use cipherbox_engine::settings::{DEFAULT_BIN_RETENTION_DAYS, MAX_BIN_RETENTION_DAYS};
-use cipherbox_engine::{Contact, MintedInviteLink, PinMode as EnginePinMode, RetentionPolicy};
-use core::num::NonZeroU64;
+use cipherbox_engine::{PinMode as EnginePinMode, RetentionPolicy};
 use wasm_bindgen::prelude::*;
-use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 mod seams_bridge;
 
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 mod host;
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub mod boundary;
 
 // Test-only: the production artifact never pulls the engine test kit or these
 // bindings.
@@ -81,6 +78,7 @@ impl NodeId {
     }
 }
 
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 impl NodeId {
     fn facade(&self) -> facade::NodeId {
         self.inner
@@ -96,15 +94,6 @@ pub enum NodeKind {
     File,
     /// A folder node.
     Folder,
-}
-
-impl From<NodeKind> for facade::NodeKind {
-    fn from(kind: NodeKind) -> Self {
-        match kind {
-            NodeKind::File => facade::NodeKind::File,
-            NodeKind::Folder => facade::NodeKind::Folder,
-        }
-    }
 }
 
 impl From<facade::NodeKind> for NodeKind {
@@ -140,22 +129,15 @@ impl From<facade::PendingClass> for PendingClass {
 }
 
 /// Grant permission level.
-#[wasm_bindgen]
+/// A view reads it as this ordinal; a command names it as the string the
+/// engine type `Permission` spells, hence the JS name.
+#[wasm_bindgen(js_name = ViewPermission)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Permission {
     /// Read grant: read seed only.
     Read,
     /// Write grant: read and write seeds.
     Write,
-}
-
-impl From<Permission> for facade::Permission {
-    fn from(permission: Permission) -> Self {
-        match permission {
-            Permission::Read => facade::Permission::Read,
-            Permission::Write => facade::Permission::Write,
-        }
-    }
 }
 
 impl From<facade::Permission> for Permission {
@@ -168,15 +150,16 @@ impl From<facade::Permission> for Permission {
 }
 
 // ---------------------------------------------------------------------------
-// Vault settings — the member's placement, provider and retention choice, as a
-// host builds it for `Command.saveVaultSettings` and reads it back through
-// `EngineHandle.vaultStorage`. The *credential* is write-only across the
-// boundary: [`VaultSettingsSummary`] reports only that one is stored, so the
-// provider bearer never crosses back into JS.
+// Vault settings — the member's placement, provider and retention choice, as
+// `EngineHandle.vaultStorage` reads it back. The *credential* is write-only
+// across the boundary: [`VaultSettingsSummary`] reports only that one is
+// stored, so the provider bearer never crosses back into JS.
 // ---------------------------------------------------------------------------
 
 /// Where a version's bytes are pinned.
-#[wasm_bindgen]
+/// A view reads it as this ordinal; a command names it as the string the
+/// engine type `PinMode` spells, hence the JS name.
+#[wasm_bindgen(js_name = ViewPinMode)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PinMode {
     /// CipherBox's hosted pin store (the cold-start default).
@@ -185,16 +168,6 @@ pub enum PinMode {
     External,
     /// Both legs.
     Dual,
-}
-
-impl From<PinMode> for EnginePinMode {
-    fn from(mode: PinMode) -> Self {
-        match mode {
-            PinMode::Hosted => EnginePinMode::Hosted,
-            PinMode::External => EnginePinMode::External,
-            PinMode::Dual => EnginePinMode::Dual,
-        }
-    }
 }
 
 impl From<EnginePinMode> for PinMode {
@@ -208,8 +181,9 @@ impl From<EnginePinMode> for PinMode {
 }
 
 /// The kind of member-supplied IPFS provider, which fixes the reachability
-/// probe.
-#[wasm_bindgen]
+/// probe. A view reads it as this ordinal; a command names it as the string
+/// the engine type `ByoKind` spells, hence the JS name.
+#[wasm_bindgen(js_name = ViewByoKind)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByoKind {
     /// A Kubo RPC endpoint.
@@ -220,16 +194,6 @@ pub enum ByoKind {
     Pinata,
 }
 
-impl From<ByoKind> for EngineByoKind {
-    fn from(kind: ByoKind) -> Self {
-        match kind {
-            ByoKind::Kubo => EngineByoKind::Kubo,
-            ByoKind::Psa => EngineByoKind::Psa,
-            ByoKind::Pinata => EngineByoKind::Pinata,
-        }
-    }
-}
-
 impl From<EngineByoKind> for ByoKind {
     fn from(kind: EngineByoKind) -> Self {
         match kind {
@@ -237,116 +201,6 @@ impl From<EngineByoKind> for ByoKind {
             EngineByoKind::Psa => ByoKind::Psa,
             EngineByoKind::Pinata => ByoKind::Pinata,
         }
-    }
-}
-
-/// A member's own IPFS provider. The engine validates the endpoint and the
-/// credential before either reaches a request.
-#[wasm_bindgen]
-pub struct ByoIpfsConfig {
-    inner: EngineByo,
-}
-
-/// The bearer a host sent as bytes, as the zeroizing text a request splices.
-/// `String::from_utf8` reuses the incoming allocation, so the credential is
-/// never copied; the rejected bytes are wiped before the refusal returns.
-fn decode_bearer(bytes: Vec<u8>) -> Result<Zeroizing<String>, JsError> {
-    let refused = || JsError::new("accessToken must be a sendable bearer");
-    let token = Zeroizing::new(String::from_utf8(bytes).map_err(|error| {
-        error.into_bytes().zeroize();
-        refused()
-    })?);
-    check_bearer(&token).map_err(|_| refused())?;
-    Ok(token)
-}
-
-#[wasm_bindgen]
-impl ByoIpfsConfig {
-    /// Builds a provider config. The credential is three-state:
-    /// `keepAccessToken` keeps whatever the session already holds,
-    /// `accessToken` bytes set a new one, and neither clears it.
-    ///
-    /// Bytes rather than a `String` so the host holds the credential in
-    /// something it can scrub: a JS string cannot be overwritten.
-    ///
-    /// The bytes are decoded and checked against [`check_bearer`] here rather
-    /// than at save time, so a credential the engine will refuse never reaches
-    /// a wasm object whose JS handle a later refusal could abandon. The
-    /// refusals carry no part of the value.
-    #[wasm_bindgen(constructor)]
-    pub fn new(
-        endpoint: String,
-        kind: ByoKind,
-        access_token: Option<Vec<u8>>,
-        keep_access_token: bool,
-    ) -> Result<ByoIpfsConfig, JsError> {
-        let access_token = match (access_token, keep_access_token) {
-            // "keep this one" and "keep the stored one" are two different
-            // credentials. Which one the member meant is not recoverable here,
-            // so neither is published.
-            (Some(mut bytes), true) => {
-                bytes.zeroize();
-                return Err(JsError::new(
-                    "accessToken and keepAccessToken are contradictory",
-                ));
-            }
-            (Some(bytes), false) => EngineByoBearer::Set(decode_bearer(bytes)?),
-            (None, true) => EngineByoBearer::Keep,
-            (None, false) => EngineByoBearer::None,
-        };
-        Ok(Self {
-            inner: EngineByo {
-                endpoint,
-                kind: kind.into(),
-                access_token,
-            },
-        })
-    }
-}
-
-/// The owner's client configuration, as `Command.saveVaultSettings` seals it
-/// into the vault settings record.
-#[wasm_bindgen]
-pub struct VaultSettings {
-    inner: cipherbox_engine::VaultSettings,
-}
-
-#[wasm_bindgen]
-impl VaultSettings {
-    /// Builds the settings to publish. `byo` is `undefined` when the member
-    /// runs no provider of their own; `keepLatestVersions` is `undefined` to
-    /// keep every version, and `0` is refused rather than read as "keep none",
-    /// which would retire the live version of every file.
-    /// `binRetentionDays` is how long a soft-deleted node stays in the bin —
-    /// `undefined` takes the documented default, and `0` keeps the hard delete.
-    #[wasm_bindgen(constructor)]
-    pub fn new(
-        pin_mode: PinMode,
-        byo: Option<ByoIpfsConfig>,
-        keep_latest_versions: Option<u32>,
-        bin_retention_days: Option<u32>,
-    ) -> Result<VaultSettings, JsError> {
-        let retention = match keep_latest_versions {
-            None => RetentionPolicy::KeepAll,
-            Some(n) => RetentionPolicy::KeepLatest(
-                NonZeroU64::new(u64::from(n))
-                    .ok_or_else(|| JsError::new("keepLatestVersions must be > 0"))?,
-            ),
-        };
-        let bin_retention_days = bin_retention_days.unwrap_or(DEFAULT_BIN_RETENTION_DAYS);
-        if bin_retention_days > MAX_BIN_RETENTION_DAYS {
-            return Err(JsError::new(&format!(
-                "binRetentionDays must be <= {MAX_BIN_RETENTION_DAYS}"
-            )));
-        }
-        Ok(Self {
-            inner: cipherbox_engine::VaultSettings {
-                pin_mode: pin_mode.into(),
-                byo: byo.map(|config| config.inner),
-                retention,
-                bin_retention_days,
-            },
-        })
     }
 }
 
@@ -524,118 +378,6 @@ impl From<facade::OpPhase> for OpPhase {
 // cross as raw 16-byte `Uint8Array`s (the `NodeId.bytes` shape), `u64`s as
 // `bigint`, absent projections as `undefined`.
 // ---------------------------------------------------------------------------
-
-/// The result of one `Engine::command` call. Read `kind`, then the matching
-/// payload getter.
-#[wasm_bindgen]
-pub struct CommandOutcome {
-    inner: facade::CommandOutcome,
-}
-
-#[wasm_bindgen]
-impl CommandOutcome {
-    /// The outcome discriminant, as a stable string literal.
-    #[wasm_bindgen(getter)]
-    pub fn kind(&self) -> String {
-        match self.inner {
-            facade::CommandOutcome::Done => "done",
-            facade::CommandOutcome::Queued { .. } => "queued",
-            facade::CommandOutcome::ContactImported(_) => "contactImported",
-            facade::CommandOutcome::InviteLinkMinted(_) => "inviteLinkMinted",
-            facade::CommandOutcome::Forgotten { .. } => "forgotten",
-        }
-        .to_owned()
-    }
-
-    /// `forgotten`: pinned bytes that stay charged to the account with no
-    /// device left owing them, as a `bigint`. `undefined` on every other
-    /// outcome, and on a forget whose engine never read the ledger.
-    #[wasm_bindgen(getter, js_name = unsettledBytes)]
-    pub fn unsettled_bytes(&self) -> Option<u64> {
-        match self.inner {
-            facade::CommandOutcome::Forgotten {
-                unsettled_bytes, ..
-            } => unsettled_bytes,
-            _ => None,
-        }
-    }
-
-    /// `forgotten`: whether that figure is a floor rather than the whole debt;
-    /// otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = unsettledIsPartial)]
-    pub fn unsettled_is_partial(&self) -> Option<bool> {
-        match self.inner {
-            facade::CommandOutcome::Forgotten {
-                unsettled_is_partial,
-                ..
-            } => Some(unsettled_is_partial),
-            _ => None,
-        }
-    }
-
-    /// `forgotten`: how many of those debts the settling pass could name a
-    /// reason for; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = unsettledStalls)]
-    pub fn unsettled_stalls(&self) -> Option<usize> {
-        match self.inner {
-            facade::CommandOutcome::Forgotten { stalls, .. } => Some(stalls),
-            _ => None,
-        }
-    }
-
-    /// `queued`: the staged op's durable queue id, as the same `bigint` an
-    /// `opProgress`/`deadLetter` event carries, so the two compare equal and
-    /// an id past 2^53 survives; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = opId)]
-    pub fn op_id(&self) -> Option<u64> {
-        self.inner.op_id().map(|op_id| op_id.0)
-    }
-
-    /// `contactImported`: the compressed SEC1 identity public key a grant
-    /// command names as its recipient; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = identityPublicKey)]
-    pub fn identity_public_key(&self) -> Option<Vec<u8>> {
-        self.contact()
-            .map(|contact| contact.identity_pk().to_sec1().to_vec())
-    }
-
-    /// `contactImported`: the X25519 encryption subkey the verified binding
-    /// signature tied to that identity key; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = encPublicKey)]
-    pub fn enc_public_key(&self) -> Option<Vec<u8>> {
-        self.contact()
-            .map(|contact| contact.enc_subkey().to_bytes().to_vec())
-    }
-
-    /// `inviteLinkMinted`: the link's whole URL fragment — the bearer
-    /// capability, handed back verbatim to `claimInviteLink`; otherwise
-    /// `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn fragment(&self) -> Option<String> {
-        self.link().map(|link| link.fragment.to_string())
-    }
-}
-
-impl CommandOutcome {
-    /// Wraps an engine command outcome. Never exported to JS.
-    pub fn from_facade(inner: facade::CommandOutcome) -> Self {
-        Self { inner }
-    }
-
-    fn link(&self) -> Option<&MintedInviteLink> {
-        match &self.inner {
-            facade::CommandOutcome::InviteLinkMinted(link) => Some(link),
-            _ => None,
-        }
-    }
-
-    fn contact(&self) -> Option<&Contact> {
-        match &self.inner {
-            facade::CommandOutcome::ContactImported(contact) => Some(contact),
-            _ => None,
-        }
-    }
-}
 
 /// One ancestor step in a [`SnapshotView`]'s breadcrumb trail.
 #[wasm_bindgen]
@@ -1794,26 +1536,6 @@ impl From<cipherbox_engine::AuthMethodKind> for AuthMethodKind {
         }
     }
 }
-
-/// How an approver answered one rendezvous (ADR 0009).
-#[wasm_bindgen]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApprovalDecision {
-    /// Seal a fresh factor to the requester.
-    Approve,
-    /// Refuse, sealing nothing.
-    Deny,
-}
-
-impl From<ApprovalDecision> for cipherbox_engine::ApprovalDecision {
-    fn from(decision: ApprovalDecision) -> Self {
-        match decision {
-            ApprovalDecision::Approve => cipherbox_engine::ApprovalDecision::Approve,
-            ApprovalDecision::Deny => cipherbox_engine::ApprovalDecision::Deny,
-        }
-    }
-}
-
 /// One login method on the account. Display form only: the identifier hash
 /// never crosses.
 #[wasm_bindgen]
@@ -1958,363 +1680,6 @@ impl PendingApproval {
     /// Wraps an engine pending-approval row. Never exported to JS.
     pub fn from_facade(inner: cipherbox_engine::PendingApprovalView) -> Self {
         Self { inner }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Commands — the write-intent surface. Built by the host, consumed (later) by
-// the engine handle; payload readback is deliberately absent so no user data or
-// key material can be read back out through the boundary. Only the stable
-// variant `name` is exposed.
-// ---------------------------------------------------------------------------
-
-/// One command a host issues to the engine (blueprint/engine.md "Facade").
-/// Opaque to JS: constructed through the static builders, then handed to the
-/// engine — never destructured.
-#[wasm_bindgen]
-pub struct Command {
-    inner: facade::Command,
-}
-
-#[wasm_bindgen]
-impl Command {
-    /// Create an empty node under a parent. A file created **with** content is
-    /// a write handle, not a command (`beginWrite` on the engine handle).
-    pub fn create(parent: &NodeId, name: String, kind: NodeKind) -> Command {
-        Self::wrap(facade::Command::Create {
-            parent: parent.facade(),
-            name,
-            kind: kind.into(),
-        })
-    }
-
-    /// Delete a node (conditional-delete semantics on rebase).
-    pub fn delete(node: &NodeId) -> Command {
-        Self::wrap(facade::Command::Delete {
-            node: node.facade(),
-        })
-    }
-
-    /// Put a soft-deleted node back into the tree. `into` is the destination
-    /// folder; `undefined` takes the folder the bin entry names. A destination
-    /// the vault no longer holds rejects with `restoreTargetGone`, and a node
-    /// the bin holds no entry for rejects with `notBinned`.
-    pub fn restore(node: &NodeId, into: Option<NodeId>) -> Command {
-        Self::wrap(facade::Command::Restore {
-            node: node.facade(),
-            into: into.map(|n| n.facade()),
-        })
-    }
-
-    /// Destroy a soft-deleted node and its bin entry. Irreversible. Rejects
-    /// with `notBinned` when the bin holds no entry for the node.
-    pub fn purge(node: &NodeId) -> Command {
-        Self::wrap(facade::Command::Purge {
-            node: node.facade(),
-        })
-    }
-
-    /// Rename a node in place.
-    pub fn rename(node: &NodeId, new_name: String) -> Command {
-        Self::wrap(facade::Command::Rename {
-            node: node.facade(),
-            new_name,
-        })
-    }
-
-    /// Move a node to a new parent.
-    pub fn relink(node: &NodeId, new_parent: &NodeId) -> Command {
-        Self::wrap(facade::Command::Relink {
-            node: node.facade(),
-            new_parent: new_parent.facade(),
-        })
-    }
-
-    /// Put one prior version of a file back at the head of its history. It
-    /// publishes a new record rather than rewinding history, and moves no byte.
-    #[wasm_bindgen(js_name = restoreVersion)]
-    pub fn restore_version(node: &NodeId, content_cid: Vec<u8>) -> Command {
-        Self::wrap(facade::Command::RestoreVersion {
-            node: node.facade(),
-            content_cid,
-        })
-    }
-
-    /// Drop one prior version of a file and reclaim its bytes. Irreversible.
-    /// The file's current content is never a target.
-    #[wasm_bindgen(js_name = deleteVersion)]
-    pub fn delete_version(node: &NodeId, content_cid: Vec<u8>) -> Command {
-        Self::wrap(facade::Command::DeleteVersion {
-            node: node.facade(),
-            content_cid,
-        })
-    }
-
-    /// Cancel a queued upload by the op id `commitWrite` returned. Rejects with
-    /// `notAnUpload` when the op carries no content, and with
-    /// `tooLateToCancel` once the version's record is publishing.
-    #[wasm_bindgen(js_name = cancelUpload)]
-    pub fn cancel_upload(op_id: u64) -> Command {
-        Self::wrap(facade::Command::CancelUpload {
-            op_id: cipherbox_engine::seams::OpId(op_id),
-        })
-    }
-
-    /// Drop one parked write and release its staged version. Irreversible.
-    #[wasm_bindgen(js_name = discardDeadLetter)]
-    pub fn discard_dead_letter(op_id: u64) -> Command {
-        Self::wrap(facade::Command::DiscardDeadLetter {
-            op_id: cipherbox_engine::seams::OpId(op_id),
-        })
-    }
-
-    /// Re-queue one parked write's staged version as a fresh op anchored on the
-    /// head this device renders now. Resolves `queued` with the new op id.
-    #[wasm_bindgen(js_name = recoverDeadLetter)]
-    pub fn recover_dead_letter(op_id: u64) -> Command {
-        Self::wrap(facade::Command::RecoverDeadLetter {
-            op_id: cipherbox_engine::seams::OpId(op_id),
-        })
-    }
-
-    /// Set the open folder driving the focus window (`undefined` clears it).
-    #[wasm_bindgen(js_name = setFocus)]
-    pub fn set_focus(node: Option<NodeId>) -> Command {
-        Self::wrap(facade::Command::SetFocus {
-            node: node.map(|n| n.facade()),
-        })
-    }
-
-    /// Manual refresh with nocache semantics everywhere.
-    #[wasm_bindgen(js_name = manualRefresh)]
-    pub fn manual_refresh() -> Command {
-        Self::wrap(facade::Command::ManualRefresh)
-    }
-
-    /// Import a self-authenticating contact code (binding-signature verified
-    /// in the engine).
-    #[wasm_bindgen(js_name = importContact)]
-    pub fn import_contact(contact_code: Vec<u8>) -> Command {
-        Self::wrap(facade::Command::ImportContact { contact_code })
-    }
-
-    /// Grant a node to an imported contact (owner-only). `grantee_name` is the
-    /// name the owner gives the grantee on the row.
-    pub fn grant(
-        node: &NodeId,
-        recipient_identity_public_key: Vec<u8>,
-        permission: Permission,
-        grantee_name: Option<String>,
-    ) -> Command {
-        Self::wrap(facade::Command::Grant {
-            node: node.facade(),
-            recipient_identity_public_key,
-            permission: permission.into(),
-            grantee_name,
-        })
-    }
-
-    /// Revoke a grant (owner-only; read revoke = immediate cut).
-    pub fn revoke(node: &NodeId, recipient_identity_public_key: Vec<u8>) -> Command {
-        Self::wrap(facade::Command::Revoke {
-            node: node.facade(),
-            recipient_identity_public_key,
-        })
-    }
-
-    /// Change a grantee's permission (owner-only).
-    #[wasm_bindgen(js_name = changePermission)]
-    pub fn change_permission(
-        node: &NodeId,
-        recipient_identity_public_key: Vec<u8>,
-        permission: Permission,
-    ) -> Command {
-        Self::wrap(facade::Command::ChangePermission {
-            node: node.facade(),
-            recipient_identity_public_key,
-            permission: permission.into(),
-        })
-    }
-
-    /// Set a grantee's name on the owner-signed row (owner-only).
-    #[wasm_bindgen(js_name = renameGrantee)]
-    pub fn rename_grantee(
-        node: &NodeId,
-        recipient_identity_public_key: Vec<u8>,
-        name: String,
-    ) -> Command {
-        Self::wrap(facade::Command::RenameGrantee {
-            node: node.facade(),
-            recipient_identity_public_key,
-            name,
-        })
-    }
-
-    /// Mint an invite link for a node. `expires_at` is the link's deadline in
-    /// Unix milliseconds, or `undefined` for the engine's default lifetime.
-    /// `owner_name` is the name the fragment shows the holder, signed by the
-    /// owner. `admission_cap` is how many people the link may admit, or
-    /// `undefined` for the engine's default.
-    #[wasm_bindgen(js_name = createInviteLink)]
-    pub fn create_invite_link(
-        node: &NodeId,
-        permission: Permission,
-        expires_at: Option<u64>,
-        owner_name: String,
-        admission_cap: Option<u64>,
-    ) -> Command {
-        Self::wrap(facade::Command::CreateInviteLink {
-            node: node.facade(),
-            permission: permission.into(),
-            expires_at: expires_at.map(UnixMillis),
-            owner_name,
-            admission_cap,
-        })
-    }
-
-    /// Revoke the invite link `link_tag` names at a node, or its only link
-    /// where no tag is given (owner-only). With `remove_grantees`, the people
-    /// who joined through it go in the same cut.
-    #[wasm_bindgen(js_name = revokeInviteLink)]
-    pub fn revoke_invite_link(
-        node: &NodeId,
-        link_tag: Option<Vec<u8>>,
-        remove_grantees: bool,
-    ) -> Command {
-        Self::wrap(facade::Command::RevokeInviteLink {
-            node: node.facade(),
-            link_tag,
-            remove_grantees,
-        })
-    }
-
-    /// Claim an invite link from the fragment its URL carries, verbatim.
-    /// `name` is the name the claimant gives the owner; empty sends none.
-    #[wasm_bindgen(js_name = claimInviteLink)]
-    pub fn claim_invite_link(fragment: String, name: String) -> Command {
-        Self::wrap(facade::Command::ClaimInviteLink {
-            fragment: Zeroizing::new(fragment),
-            name,
-        })
-    }
-
-    /// Convert the invite claims waiting for the link minted at a node
-    /// (owner-only).
-    #[wasm_bindgen(js_name = convertInviteClaims)]
-    pub fn convert_invite_claims(node: &NodeId) -> Command {
-        Self::wrap(facade::Command::ConvertInviteClaims {
-            node: node.facade(),
-        })
-    }
-
-    /// Drop the claims refused at a cap for the link minted at a node from
-    /// this device's conversion record (owner-only).
-    #[wasm_bindgen(js_name = dismissRefusedClaims)]
-    pub fn dismiss_refused_claims(node: &NodeId) -> Command {
-        Self::wrap(facade::Command::DismissRefusedClaims {
-            node: node.facade(),
-        })
-    }
-
-    /// Manual hygiene rotate-now for a scope.
-    #[wasm_bindgen(js_name = rotateNow)]
-    pub fn rotate_now(node: &NodeId) -> Command {
-        Self::wrap(facade::Command::RotateNow {
-            node: node.facade(),
-        })
-    }
-
-    /// Publish the account's vault settings record.
-    #[wasm_bindgen(js_name = saveVaultSettings)]
-    pub fn save_vault_settings(settings: VaultSettings) -> Command {
-        Self::wrap(facade::Command::SaveVaultSettings {
-            settings: settings.inner,
-        })
-    }
-
-    /// Link a host-collected SIWE wallet signature to the signed-in account.
-    #[wasm_bindgen(js_name = siweLink)]
-    pub fn siwe_link(message: String, signature: Vec<u8>) -> Command {
-        Self::wrap(facade::Command::SiweLink { message, signature })
-    }
-
-    /// Unlink one login method, re-proving the account identity key.
-    #[wasm_bindgen(js_name = unlinkAuthMethod)]
-    pub fn unlink_auth_method(method_id: String) -> Command {
-        Self::wrap(facade::Command::UnlinkAuthMethod { method_id })
-    }
-
-    /// Register this device's identity key on the account. The signature is
-    /// made by the browser-held key.
-    #[wasm_bindgen(js_name = registerDevice)]
-    pub fn register_device(
-        public_key: String,
-        signature: String,
-        identity_token: String,
-        label: Option<String>,
-    ) -> Command {
-        Self::wrap(facade::Command::RegisterDevice {
-            public_key,
-            signature,
-            identity_token,
-            label,
-        })
-    }
-
-    /// Revoke a registered device key.
-    #[wasm_bindgen(js_name = revokeDevice)]
-    pub fn revoke_device(device_id: String) -> Command {
-        Self::wrap(facade::Command::RevokeDevice { device_id })
-    }
-
-    /// Answer one rendezvous. A denial carries no sealed factor.
-    #[wasm_bindgen(js_name = respondToApproval)]
-    pub fn respond_to_approval(
-        request_id: String,
-        decision: ApprovalDecision,
-        device_public_key: String,
-        ephemeral_public_key: String,
-        signature: String,
-        sealed_factor: Option<String>,
-    ) -> Command {
-        Self::wrap(facade::Command::RespondToApproval {
-            request_id,
-            decision: decision.into(),
-            device_public_key,
-            ephemeral_public_key,
-            signature,
-            sealed_factor,
-        })
-    }
-
-    /// Log out: zeroize engine state; durable seams survive by design.
-    pub fn logout() -> Command {
-        Self::wrap(facade::Command::Logout)
-    }
-
-    /// Forget this device: end the session and erase every durable seam.
-    #[wasm_bindgen(js_name = forgetDevice)]
-    pub fn forget_device() -> Command {
-        Self::wrap(facade::Command::ForgetDevice)
-    }
-
-    /// The stable command name (matches the builder's JS name), for
-    /// diagnostics. Carries no payload.
-    #[wasm_bindgen(getter)]
-    pub fn name(&self) -> String {
-        self.inner.name().to_string()
-    }
-}
-
-impl Command {
-    fn wrap(inner: facade::Command) -> Self {
-        Self { inner }
-    }
-
-    /// Unwraps to the engine command. For the engine-handle slice and the
-    /// boundary tests; never exported to JS.
-    pub fn into_facade(self) -> facade::Command {
-        self.inner
     }
 }
 
@@ -2585,6 +1950,7 @@ pub fn read_ipns_record(ipns_name: &str, record: &[u8]) -> Result<IpnsRecordRead
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 mod rendezvous {
     use super::*;
+    use zeroize::Zeroizing;
 
     /// What a requester needs to open a rendezvous: the key it offers, the bytes it
     /// must sign over that key, and the digits its screen shows.
@@ -2787,46 +2153,6 @@ mod tests {
             NodeId::from_bytes(&[7u8; 16]).unwrap().bytes(),
             vec![7u8; 16]
         );
-    }
-
-    #[test]
-    fn command_builders_carry_the_stable_name() {
-        let node = NodeId::from_bytes(&[0u8; 16]).unwrap();
-        assert_eq!(Command::manual_refresh().name(), "manualRefresh");
-        assert_eq!(Command::logout().name(), "logout");
-        assert_eq!(Command::forget_device().name(), "forgetDevice");
-        assert_eq!(Command::set_focus(None).name(), "setFocus");
-        assert_eq!(
-            Command::create(&node, "f".into(), NodeKind::Folder).name(),
-            "create"
-        );
-        assert_eq!(
-            Command::change_permission(&node, vec![9], Permission::Read).name(),
-            "changePermission"
-        );
-        assert_eq!(
-            Command::rename_grantee(&node, vec![9], "Ada".into()).name(),
-            "renameGrantee"
-        );
-    }
-
-    #[test]
-    fn command_unwraps_to_the_engine_variant() {
-        let node = NodeId::from_bytes(&[1u8; 16]).unwrap();
-        let cmd = Command::grant(&node, vec![9, 9, 9], Permission::Write, Some("Ada".into()));
-        match cmd.into_facade() {
-            facade::Command::Grant {
-                permission,
-                recipient_identity_public_key,
-                grantee_name,
-                ..
-            } => {
-                assert_eq!(permission, facade::Permission::Write);
-                assert_eq!(recipient_identity_public_key, vec![9, 9, 9]);
-                assert_eq!(grantee_name.as_deref(), Some("Ada"));
-            }
-            other => panic!("expected Grant, got {other:?}"),
-        }
     }
 
     #[test]

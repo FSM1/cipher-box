@@ -31,6 +31,8 @@ use zeroize::Zeroizing;
 
 /// How an approver answered. The wire spelling is what the API's DTO fixes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum ApprovalDecision {
     /// Seal a fresh factor to the requester.
     Approve,

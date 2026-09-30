@@ -34,6 +34,12 @@ jobs:
           node-version-file: 'package.json'
           cache: 'pnpm'
 
+      # The engine's `.d.ts` types the facade commands `packages/client` sends.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-engine-wasm
+          path: packages/client/wasm
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 

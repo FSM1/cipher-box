@@ -553,7 +553,7 @@ describe('EngineFacade', () => {
     await facade.createInviteLink(node, 'read', undefined, '', 5);
     await facade.createInviteLink(node, 'read', undefined, '');
 
-    expect(transport.commands[0]).toMatchObject({ kind: 'createInviteLink', admissionCap: 5 });
+    expect(transport.commands[0]).toMatchObject({ kind: 'createInviteLink', admissionCap: 5n });
     expect(transport.commands[1]).toMatchObject({ kind: 'createInviteLink', admissionCap: null });
   });
 

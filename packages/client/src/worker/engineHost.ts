@@ -20,16 +20,10 @@ import type {
   WriteHandle,
   WriteTarget,
 } from './protocol.js';
-import type {
-  EngineWasm,
-  WasmCommandOutcome,
-  WasmDeviceApprovalResponse,
-  WasmEngineHandle,
-} from './engineWasm.js';
+import type { EngineWasm, WasmDeviceApprovalResponse, WasmEngineHandle } from './engineWasm.js';
 import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import {
   buffer,
-  buildCommand,
   bytes,
   count,
   fragment,
@@ -88,40 +82,6 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
     ? (bytes.buffer as ArrayBuffer)
     : (bytes.slice().buffer as ArrayBuffer);
-}
-
-/** A getter the outcome's own `kind` promises, refused when it answers nothing. */
-function present<T>(value: T | undefined, kind: string, field: string): T {
-  if (value === undefined) throw new Error(`command outcome ${kind} carries no ${field}`);
-  return value;
-}
-
-/** Reads a wasm-bindgen `CommandOutcome`'s getters into a descriptor. */
-function readOutcome(outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
-  const kind = outcome.kind;
-  switch (kind) {
-    case 'done':
-      return { kind: 'done' };
-    case 'queued':
-      return { kind: 'queued', opId: present(outcome.opId, kind, 'opId') };
-    case 'contactImported':
-      return {
-        kind: 'contactImported',
-        identityPublicKey: present(outcome.identityPublicKey, kind, 'identityPublicKey'),
-        encPublicKey: present(outcome.encPublicKey, kind, 'encPublicKey'),
-      };
-    case 'inviteLinkMinted':
-      return { kind: 'inviteLinkMinted', fragment: present(outcome.fragment, kind, 'fragment') };
-    case 'forgotten':
-      return {
-        kind: 'forgotten',
-        unsettledBytes:
-          outcome.unsettledBytes === undefined ? null : Number(outcome.unsettledBytes),
-        unsettledIsPartial: present(outcome.unsettledIsPartial, kind, 'unsettledIsPartial'),
-        stalls: present(outcome.unsettledStalls, kind, 'unsettledStalls'),
-      };
-  }
-  throw new Error(`unknown command outcome ${kind}`);
 }
 
 /** Reads an approver's answer into a descriptor, releasing the boundary object. */
@@ -319,15 +279,10 @@ export class EngineHost implements EngineHostLike {
 
   async command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
     // A buffer the descriptor carries arrived transferred, so this realm holds
-    // the only copy — including on the routes that refuse before the codec is
-    // reached, which is where the codec's own scrub cannot run.
+    // the only copy, and the engine copies what it keeps: this frame is the
+    // terminal owner that scrubs it, on every route out.
     try {
-      const outcome = await this.handle.command(buildCommand(this.wasm, command));
-      try {
-        return readOutcome(outcome);
-      } finally {
-        outcome.free();
-      }
+      return await this.handle.command(command);
     } finally {
       wipeTransfer(commandTransfer(command));
     }

@@ -8,6 +8,12 @@ use super::SeamResult;
 /// Store-assigned identifier of one queued op. Strictly increasing per
 /// store, never reused — enqueue order is FIFO order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(
+    feature = "wasm",
+    derive(serde::Serialize, serde::Deserialize, tsify::Tsify),
+    serde(transparent),
+    tsify(large_number_types_as_bigints)
+)]
 pub struct OpId(pub u64);
 
 /// Durable op queue plus staged upload bytes, behind the sync-timing-profile

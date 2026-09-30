@@ -1,25 +1,18 @@
 /**
  * Translates between the plain-data wire protocol and the wasm-bindgen facade
- * types, inside the engine worker realm.
- *
- * `buildCommand` rebuilds a real `Command` from a descriptor via the generated
- * builders; `readEvent` reads a `Event`'s key-free getters into a descriptor.
- * No interpretation, no crypto — the engine below the facade owns all of that.
+ * types, inside the engine worker realm: the checkers for the request fields a
+ * read or a write handle carries, and the readers that turn a view's key-free
+ * getters into a descriptor. No interpretation, no crypto — the engine below
+ * the facade owns all of that.
  */
 
-import {
-  BIN_INDEX_HOLD_CHECKS,
-  KEEP_STORED_BEARER,
-  MAX_FRAGMENT_CHARS,
-  SETTINGS_HOLD_CHECKS,
-} from './protocol.js';
+import { BIN_INDEX_HOLD_CHECKS, MAX_FRAGMENT_CHARS, SETTINGS_HOLD_CHECKS } from './protocol.js';
 import type {
   AuthMethodDescriptor,
   AuthMethodKind,
   BinDescriptor,
   BinOriginDescriptor,
   ByoKind,
-  CommandDescriptor,
   DeadLetterReason,
   EventDescriptor,
   InvitePreviewDescriptor,
@@ -49,9 +42,7 @@ import type {
   WasmAuthMethod,
   WasmBinRow,
   WasmBinView,
-  WasmCommand,
   WasmEvent,
-  WasmByoIpfsConfig,
   WasmInvitePreview,
   WasmNodeId,
   WasmPendingApproval,
@@ -63,17 +54,17 @@ import type {
   WasmSharingGrant,
   WasmSharingView,
   WasmSnapshotView,
-  WasmVaultSettings,
   WasmVaultStorageView,
 } from './engineWasm.js';
 
 /**
  * A request crosses a realm boundary as plain data, so its fields arrive
  * untrusted however they are typed here: a version-skewed peer can carry a
- * wrong-typed one, and wasm-bindgen would coerce it — a `12345` newName
- * marshalled as `"12345"`, a 16-character string set into a `Vec<u8>` as
- * sixteen zero bytes — rather than reject it. Hence the checkers below take
- * `unknown`, and every field the worker reads off a request passes through one.
+ * wrong-typed one, and wasm-bindgen would coerce it — a 16-character string set
+ * into a `Vec<u8>` as sixteen zero bytes — rather than reject it. Hence the
+ * checkers below take `unknown`, and every field the worker reads off a read or
+ * a write-handle request passes through one. A command is checked by the
+ * engine's own decode instead.
  */
 function invalidField(field: string, value: unknown): Error {
   return new Error(`invalid request field ${field}: ${value === null ? 'null' : typeof value}`);
@@ -105,12 +96,6 @@ export function text(value: unknown, field: string): string {
   return value;
 }
 
-/** A boolean the bool ABI would otherwise coerce from any truthy value. */
-function flag(value: unknown, field: string): boolean {
-  if (typeof value !== 'boolean') throw invalidField(field, value);
-  return value;
-}
-
 /**
  * A byte count or offset. The number ABI coerces rather than rejects — a string
  * or a `NaN` arrives as a valid-looking integer — so the range the engine can
@@ -124,26 +109,14 @@ export function count(value: unknown, field: string): number {
 }
 
 /**
- * A value the engine minted and a peer is handing back — an op id, or a write
- * or stream handle. The bigint ABI throws on a non-bigint where the number one
+ * A value the engine minted and a peer is handing back — a write or stream
+ * handle. The bigint ABI throws on a non-bigint where the number one
  * would coerce, so the refusal is spelled here in the same words as its
  * neighbours rather than left to wasm-bindgen.
  */
 export function minted(value: unknown, field: string): bigint {
   if (typeof value !== 'bigint') throw invalidField(field, value);
   return value;
-}
-
-/**
- * An invite link's Unix-millis deadline, bounded to the `u64` the builder takes:
- * an out-of-range value the bigint ABI truncates would arrive as an unrelated
- * near-epoch deadline. Refused before any wasm object is minted, as
- * [`retentionCap`] is.
- */
-function deadline(value: unknown, field: string): bigint {
-  const at = minted(value, field);
-  if (at <= 0n || at > 0xffff_ffff_ffff_ffffn) throw invalidField(field, value);
-  return at;
 }
 
 /**
@@ -159,292 +132,6 @@ export function fragment(value: unknown, field: string): string {
 
 export function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNodeId {
   return wasm.NodeId.fromBytes(bytes(value, field));
-}
-
-function nodeKind(wasm: EngineWasm, value: unknown): number {
-  if (value === 'file') return wasm.NodeKind.File;
-  if (value === 'folder') return wasm.NodeKind.Folder;
-  throw invalidField('nodeKind', value);
-}
-
-function permission(wasm: EngineWasm, value: unknown): number {
-  if (value === 'read') return wasm.Permission.Read;
-  if (value === 'write') return wasm.Permission.Write;
-  throw invalidField('permission', value);
-}
-
-function approvalDecision(wasm: EngineWasm, value: unknown): number {
-  if (value === 'approve') return wasm.ApprovalDecision.Approve;
-  if (value === 'deny') return wasm.ApprovalDecision.Deny;
-  throw invalidField('decision', value);
-}
-
-/** An optional wire string: `null` is the absence the builder takes as `undefined`. */
-function optionalText(value: unknown, field: string): string | undefined {
-  return value === null ? undefined : text(value, field);
-}
-
-function pinMode(wasm: EngineWasm, value: unknown): number {
-  if (value === 'hosted') return wasm.PinMode.Hosted;
-  if (value === 'external') return wasm.PinMode.External;
-  if (value === 'dual') return wasm.PinMode.Dual;
-  throw invalidField('settings.pinMode', value);
-}
-
-function byoKind(wasm: EngineWasm, value: unknown): number {
-  if (value === 'kubo') return wasm.ByoKind.Kubo;
-  if (value === 'psa') return wasm.ByoKind.Psa;
-  if (value === 'pinata') return wasm.ByoKind.Pinata;
-  throw invalidField('settings.byo.kind', value);
-}
-
-/**
- * A retention cap. Distinct from [`count`]: the builder takes a `u32` and the
- * JS→wasm number ABI *wraps* rather than rejects, so an over-range value would
- * arrive as an unrelated small cap — `2**32 + 1` as "keep only the newest".
- *
- * Zero is refused here rather than left to the `NonZeroU64` the builder holds:
- * the refusal would otherwise land after `byoConfig` minted a wasm object
- * holding the access token, stranding that allocation with no owner to free it.
- */
-function retentionCap(value: unknown, field: string): number {
-  const cap = count(value, field);
-  if (cap === 0 || cap > 0xffff_ffff) throw invalidField(field, value);
-  return cap;
-}
-
-/**
- * A bin retention in days, bounded to the `u32` the builder takes for the same
- * reason [`retentionCap`] is: the number ABI wraps rather than rejects. The
- * policy bar itself is the engine's, and the builder names the field when it
- * refuses.
- */
-function binRetentionDays(value: unknown, field: string): number {
-  const days = count(value, field);
-  if (days > 0xffff_ffff) throw invalidField(field, value);
-  return days;
-}
-
-function byoConfig(wasm: EngineWasm, value: unknown, bearer: BearerIntent): WasmByoIpfsConfig {
-  const config = record(value, 'settings.byo');
-  return new wasm.ByoIpfsConfig(
-    text(config.endpoint, 'settings.byo.endpoint'),
-    byoKind(wasm, config.kind),
-    bearer.token,
-    bearer.keep
-  );
-}
-
-/** The bearer intent a settings descriptor carries, checked but not yet spent. */
-interface BearerIntent {
-  token: Uint8Array | undefined;
-  keep: boolean;
-}
-
-function byoBearer(value: unknown): BearerIntent {
-  const byo = record(value, 'settings').byo ?? undefined;
-  if (byo === undefined) return { token: undefined, keep: false };
-  const raw = record(byo, 'settings.byo').accessToken ?? undefined;
-  if (raw === KEEP_STORED_BEARER) return { token: undefined, keep: true };
-  // A view over the transferred buffer, not a copy: scrubbing it scrubs the
-  // only copy that crossed into this realm.
-  const token =
-    raw === undefined ? undefined : new Uint8Array(buffer(raw, 'settings.byo.accessToken'));
-  return { token, keep: false };
-}
-
-/**
- * Every scalar is checked before the first wasm object is built: a `new` that a
- * later refusal abandons strands its allocation — and the credential inside it
- * — in linear memory until the finalization registry runs.
- *
- * The bearer is read first and scrubbed last, so every refusal in between spends
- * it too. It arrives transferred, so this realm holds the only copy and the
- * builder copies what it keeps.
- */
-function vaultSettings(wasm: EngineWasm, value: unknown): WasmVaultSettings {
-  const bearer = byoBearer(value);
-  try {
-    const settings = record(value, 'settings');
-    const mode = pinMode(wasm, settings.pinMode);
-    const rawKeep = settings.keepLatestVersions ?? undefined;
-    const keep =
-      rawKeep === undefined ? undefined : retentionCap(rawKeep, 'settings.keepLatestVersions');
-    const rawBin = settings.binRetentionDays ?? undefined;
-    const bin =
-      rawBin === undefined ? undefined : binRetentionDays(rawBin, 'settings.binRetentionDays');
-    const byo = settings.byo ?? undefined;
-    return new wasm.VaultSettings(
-      mode,
-      byo === undefined ? undefined : byoConfig(wasm, byo, bearer),
-      keep,
-      bin
-    );
-  } finally {
-    bearer.token?.fill(0);
-  }
-}
-
-/**
- * Exhaustiveness bound: adding a command kind without a builder fails the
- * build, and a sender off the union gets a refusal rather than the `undefined`
- * command the wasm glue merely happens to reject.
- */
-function unknownCommand(descriptor: never): Error {
-  return new Error(`unknown command kind: ${String((descriptor as CommandDescriptor).kind)}`);
-}
-
-export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): WasmCommand {
-  // The envelope is a field like any other: read `kind` off a non-object and
-  // the refusal is a TypeError, or an unknown-kind error naming `undefined`,
-  // rather than the invalid-field answer every other malformed input gets.
-  text(record(descriptor, 'command').kind, 'command.kind');
-  switch (descriptor.kind) {
-    case 'create':
-      return wasm.Command.create(
-        nodeId(wasm, descriptor.parent, 'parent'),
-        text(descriptor.name, 'name'),
-        nodeKind(wasm, descriptor.nodeKind)
-      );
-    case 'delete':
-      return wasm.Command.delete(nodeId(wasm, descriptor.node, 'node'));
-    case 'restore':
-      return wasm.Command.restore(
-        nodeId(wasm, descriptor.node, 'node'),
-        descriptor.into === null ? undefined : nodeId(wasm, descriptor.into, 'into')
-      );
-    case 'purge':
-      return wasm.Command.purge(nodeId(wasm, descriptor.node, 'node'));
-    case 'rename':
-      return wasm.Command.rename(
-        nodeId(wasm, descriptor.node, 'node'),
-        text(descriptor.newName, 'newName')
-      );
-    case 'relink':
-      return wasm.Command.relink(
-        nodeId(wasm, descriptor.node, 'node'),
-        nodeId(wasm, descriptor.newParent, 'newParent')
-      );
-    case 'restoreVersion':
-      return wasm.Command.restoreVersion(
-        nodeId(wasm, descriptor.node, 'node'),
-        bytes(descriptor.contentCid, 'contentCid')
-      );
-    case 'deleteVersion':
-      return wasm.Command.deleteVersion(
-        nodeId(wasm, descriptor.node, 'node'),
-        bytes(descriptor.contentCid, 'contentCid')
-      );
-    case 'cancelUpload':
-      return wasm.Command.cancelUpload(minted(descriptor.opId, 'opId'));
-    case 'discardDeadLetter':
-      return wasm.Command.discardDeadLetter(minted(descriptor.opId, 'opId'));
-    case 'recoverDeadLetter':
-      return wasm.Command.recoverDeadLetter(minted(descriptor.opId, 'opId'));
-    case 'setFocus':
-      return wasm.Command.setFocus(
-        descriptor.node === null ? undefined : nodeId(wasm, descriptor.node, 'node')
-      );
-    case 'manualRefresh':
-      return wasm.Command.manualRefresh();
-    case 'importContact':
-      return wasm.Command.importContact(bytes(descriptor.contactCode, 'contactCode'));
-    case 'grant': {
-      // Every scalar first: a refusal after `nodeId` strands the handle it minted.
-      const recipient = bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey');
-      const level = permission(wasm, descriptor.permission);
-      const name =
-        descriptor.granteeName == null ? undefined : text(descriptor.granteeName, 'granteeName');
-      return wasm.Command.grant(nodeId(wasm, descriptor.node, 'node'), recipient, level, name);
-    }
-    case 'revoke':
-      return wasm.Command.revoke(
-        nodeId(wasm, descriptor.node, 'node'),
-        bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey')
-      );
-    case 'changePermission': {
-      // Every scalar first: a refusal after `nodeId` strands the handle it minted.
-      const recipient = bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey');
-      const level = permission(wasm, descriptor.permission);
-      return wasm.Command.changePermission(nodeId(wasm, descriptor.node, 'node'), recipient, level);
-    }
-    case 'renameGrantee': {
-      const recipient = bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey');
-      const name = text(descriptor.name, 'name');
-      return wasm.Command.renameGrantee(nodeId(wasm, descriptor.node, 'node'), recipient, name);
-    }
-    case 'createInviteLink': {
-      // Every scalar first: a refusal after `nodeId` strands the handle it minted.
-      const level = permission(wasm, descriptor.permission);
-      const at =
-        descriptor.expiresAt == null ? undefined : deadline(descriptor.expiresAt, 'expiresAt');
-      const ownerName = text(descriptor.ownerName, 'ownerName');
-      const cap =
-        descriptor.admissionCap == null
-          ? undefined
-          : BigInt(count(descriptor.admissionCap, 'admissionCap'));
-      return wasm.Command.createInviteLink(
-        nodeId(wasm, descriptor.node, 'node'),
-        level,
-        at,
-        ownerName,
-        cap
-      );
-    }
-    case 'revokeInviteLink': {
-      const tag = descriptor.linkTag === null ? undefined : bytes(descriptor.linkTag, 'linkTag');
-      const removeGrantees = flag(descriptor.removeGrantees, 'removeGrantees');
-      return wasm.Command.revokeInviteLink(
-        nodeId(wasm, descriptor.node, 'node'),
-        tag,
-        removeGrantees
-      );
-    }
-    case 'claimInviteLink':
-      return wasm.Command.claimInviteLink(
-        fragment(descriptor.fragment, 'fragment'),
-        text(descriptor.name, 'name')
-      );
-    case 'convertInviteClaims':
-      return wasm.Command.convertInviteClaims(nodeId(wasm, descriptor.node, 'node'));
-    case 'dismissRefusedClaims':
-      return wasm.Command.dismissRefusedClaims(nodeId(wasm, descriptor.node, 'node'));
-    case 'rotateNow':
-      return wasm.Command.rotateNow(nodeId(wasm, descriptor.node, 'node'));
-    case 'saveVaultSettings':
-      return wasm.Command.saveVaultSettings(vaultSettings(wasm, descriptor.settings));
-    case 'siweLink':
-      return wasm.Command.siweLink(
-        text(descriptor.message, 'message'),
-        bytes(descriptor.signature, 'signature')
-      );
-    case 'unlinkAuthMethod':
-      return wasm.Command.unlinkAuthMethod(text(descriptor.methodId, 'methodId'));
-    case 'registerDevice':
-      return wasm.Command.registerDevice(
-        text(descriptor.publicKey, 'publicKey'),
-        text(descriptor.signature, 'signature'),
-        text(descriptor.identityToken, 'identityToken'),
-        optionalText(descriptor.label, 'label')
-      );
-    case 'revokeDevice':
-      return wasm.Command.revokeDevice(text(descriptor.deviceId, 'deviceId'));
-    case 'respondToApproval':
-      return wasm.Command.respondToApproval(
-        text(descriptor.requestId, 'requestId'),
-        approvalDecision(wasm, descriptor.decision),
-        text(descriptor.devicePublicKey, 'devicePublicKey'),
-        text(descriptor.ephemeralPublicKey, 'ephemeralPublicKey'),
-        text(descriptor.signature, 'signature'),
-        optionalText(descriptor.sealedFactor, 'sealedFactor')
-      );
-    case 'logout':
-      return wasm.Command.logout();
-    case 'forgetDevice':
-      return wasm.Command.forgetDevice();
-    default:
-      throw unknownCommand(descriptor);
-  }
 }
 
 function staleness(wasm: EngineWasm, level: number): Staleness {
@@ -702,11 +389,11 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
 
 function pinModeFrom(wasm: EngineWasm, mode: number): PinMode {
   switch (mode) {
-    case wasm.PinMode.Hosted:
+    case wasm.ViewPinMode.Hosted:
       return 'hosted';
-    case wasm.PinMode.External:
+    case wasm.ViewPinMode.External:
       return 'external';
-    case wasm.PinMode.Dual:
+    case wasm.ViewPinMode.Dual:
       return 'dual';
     default:
       // Fail closed: an unmapped value means a JS/WASM version mismatch, and a
@@ -719,11 +406,11 @@ function byoKindFrom(wasm: EngineWasm, kind: number | undefined): ByoKind | null
   switch (kind) {
     case undefined:
       return null;
-    case wasm.ByoKind.Kubo:
+    case wasm.ViewByoKind.Kubo:
       return 'kubo';
-    case wasm.ByoKind.Psa:
+    case wasm.ViewByoKind.Psa:
       return 'psa';
-    case wasm.ByoKind.Pinata:
+    case wasm.ViewByoKind.Pinata:
       return 'pinata';
     default:
       // Fail closed: an unmapped value means a JS/WASM version mismatch.
@@ -913,9 +600,9 @@ export function readPendingApprovals(
 
 export function permissionFrom(wasm: EngineWasm, permission: number): Permission {
   switch (permission) {
-    case wasm.Permission.Read:
+    case wasm.ViewPermission.Read:
       return 'read';
-    case wasm.Permission.Write:
+    case wasm.ViewPermission.Write:
       return 'write';
     default:
       // Fail closed: an unmapped value means a JS/WASM version mismatch, and a

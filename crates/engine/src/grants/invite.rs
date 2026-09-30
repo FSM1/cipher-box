@@ -428,7 +428,7 @@ pub const MAX_INVITE_NAME_BYTES: usize = MAX_NODE_NAME_BYTES;
 
 /// The bound on the fragment *text*, so a hostile one is refused before its
 /// blob is allocated. base64url spends four characters per three bytes.
-const MAX_FRAGMENT_TEXT_LEN: usize = MAX_INVITE_FRAGMENT_BYTES.div_ceil(3) * 4;
+pub const MAX_FRAGMENT_TEXT_LEN: usize = MAX_INVITE_FRAGMENT_BYTES.div_ceil(3) * 4;
 
 /// An invite link's URL fragment — **the whole bearer capability**, as one
 /// opaque blob (ADR 0023 D2, ADR 0027 D5).

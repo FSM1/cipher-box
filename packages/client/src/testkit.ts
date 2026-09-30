@@ -48,14 +48,13 @@ import type {
 export const fakeWasmEnums = {
   NodeKind: { File: 0, Folder: 1 },
   PendingClass: { None: 0, Metadata: 1, Content: 2 },
-  Permission: { Read: 0, Write: 1 },
-  PinMode: { Hosted: 0, External: 1, Dual: 2 },
-  ByoKind: { Kubo: 0, Psa: 1, Pinata: 2 },
+  ViewPermission: { Read: 0, Write: 1 },
+  ViewPinMode: { Hosted: 0, External: 1, Dual: 2 },
+  ViewByoKind: { Kubo: 0, Psa: 1, Pinata: 2 },
   SettingsOrigin: { Resolved: 0, Stale: 1, Defaults: 2 },
   BinOriginKind: { Root: 0, Folder: 1, Gone: 2 },
   ReclaimStallReason: { NodeUnreadable: 0, TargetStillLive: 1, TargetUnexpandable: 2 },
   AuthMethodKind: { Identity: 0, Wallet: 1, Test: 2, Unknown: 3 },
-  ApprovalDecision: { Approve: 0, Deny: 1 },
   Staleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
   OpPhase: {
     DownloadStarted: 0,

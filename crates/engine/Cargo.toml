@@ -13,6 +13,9 @@ publish.workspace = true
 # enable it from dev-dependencies to run the kits against their real seam
 # implementations; production builds never compile it.
 test-kit = []
+# The serde shape and the tsify derive of the facade commands, for the WASM
+# boundary (`crates/wasm`). Native hosts build without it.
+wasm = ["dep:serde_bytes", "dep:tsify", "dep:wasm-bindgen"]
 
 [dependencies]
 base64.workspace = true
@@ -25,7 +28,10 @@ futures-util.workspace = true
 # every host uses it rather than repeating the per-target wiring.
 getrandom.workspace = true
 serde.workspace = true
+serde_bytes = { workspace = true, optional = true }
 serde_json.workspace = true
+tsify = { workspace = true, optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
 unicode-normalization.workspace = true
 zeroize.workspace = true
 

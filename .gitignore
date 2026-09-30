@@ -33,8 +33,8 @@ yarn-error.log*
 # Test coverage
 coverage/
 
-# Generated wasm-bindgen glue for the web app's engine worker
-apps/web/src/wasm/
+# Generated wasm-bindgen glue and types for the engine worker
+packages/client/wasm/
 
 # The web e2e suite's release-bundle comparison build
 apps/web/dist-release/

@@ -19,7 +19,7 @@ export default [
       'target/**',
       'target-*/**',
       // Generated wasm-bindgen glue + Playwright output for the browser suite.
-      'apps/web/src/wasm/**',
+      'packages/client/wasm/**',
       '**/test/browser/pkg/**',
       '**/playwright-report/**',
       '**/test-results/**',

@@ -114,7 +114,7 @@ export class EngineFacade {
           unsettledIsPartial: outcome.unsettledIsPartial,
           stalls: outcome.stalls,
         }
-      : { unsettledBytes: null, unsettledIsPartial: false, stalls: 0 };
+      : { unsettledBytes: null, unsettledIsPartial: false, stalls: 0n };
   }
 
   /**
@@ -419,7 +419,7 @@ export class EngineFacade {
       permission,
       expiresAt: expiresAt ?? null,
       ownerName,
-      admissionCap: admissionCap ?? null,
+      admissionCap: admissionCap === undefined ? null : BigInt(admissionCap),
     });
     if (outcome.kind !== 'inviteLinkMinted') {
       throw new Error(`create invite link answered ${outcome.kind}`);
