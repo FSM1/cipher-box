@@ -1,6 +1,6 @@
 # The Staging Soak (blueprint/deploy.md "Scheduled tier", ADR 0053): the soak
 # suite against the deployed staging front, as the two durable soak accounts.
-# `nightly.yml` calls it with the newest `staging-*` tag as `ref`, so the suite
+# `nightly.yml` calls it with the newest staging release tag as `ref`, so the suite
 # and the deploy are one revision.
 #
 # The legs run one at a time, in the order of the `needs` chain. The web leg is
@@ -20,7 +20,7 @@ on:
         required: false
         type: string
       ref:
-        description: 'The suite sources: a staging-* tag, or a commit SHA on main'
+        description: 'The suite sources: a staging-<date>-release-<n> tag, or a commit SHA on main'
         required: false
         type: string
       bootstrap:
@@ -35,7 +35,7 @@ on:
         required: false
         type: string
       ref:
-        description: 'The suite sources: a staging-* tag, or a commit SHA on main'
+        description: 'The suite sources: a staging-<date>-release-<n> tag, or a commit SHA on main'
         required: false
         type: string
       bootstrap:
@@ -57,61 +57,46 @@ concurrency:
 permissions: {}
 
 jobs:
-  # The suite runs with the soak secrets, so its source must be a revision that
-  # passed review: a staging tag, or a commit on main.
+  # The suite runs with the soak secrets, so its source must be a commit on
+  # main (`tests/web-e2e/staging/soak/guard.ts`). Every later job checks out the
+  # SHA this job outputs, never the ref name.
   guard:
     name: 'Soak: Check The Inputs'
     runs-on: ubuntu-latest
     environment: staging
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
-      ref: ${{ steps.check.outputs.ref }}
+      sha: ${{ steps.check.outputs.sha }}
       base_url: ${{ steps.check.outputs.base_url }}
+      label: ${{ steps.check.outputs.label }}
     steps:
+      # The check comes from the revision of this workflow, not from the ref
+      # it checks.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Check the suite ref and the app URL
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          REF: ${{ inputs.ref || github.sha }}
-          BASE_URL: ${{ inputs.base-url }}
+          SOAK_REF: ${{ inputs.ref || github.sha }}
+          SOAK_BASE_URL: ${{ inputs.base-url }}
           STAGING_APP_URL: ${{ vars.STAGING_APP_URL }}
-        run: |
-          set -euo pipefail
-          if [ -z "${STAGING_APP_URL}" ]; then
-            echo '::error::the staging environment has no STAGING_APP_URL variable'
-            exit 1
-          fi
-          base="${BASE_URL:-${STAGING_APP_URL}}"
-          if [ "${base}" != "${STAGING_APP_URL}" ]; then
-            echo '::error::base-url must be the staging app URL, the STAGING_APP_URL variable'
-            exit 1
-          fi
-          if [[ "${REF}" =~ ^staging-[A-Za-z0-9._-]+$ ]]; then
-            if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${REF}" > /dev/null; then
-              echo '::error::ref names no staging-* tag of this repository'
-              exit 1
-            fi
-          elif [[ "${REF}" =~ ^[0-9a-f]{40}$ ]]; then
-            # Base-to-head: an ancestor of main compares as `behind`, main's own
-            # HEAD as `identical`; anything off main is `ahead` or `diverged`.
-            status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${REF}" --jq '.status')
-            case "${status}" in
-              identical | behind) ;;
-              *)
-                echo "::error::ref is a commit that is not on main (compare status: ${status})"
-                exit 1
-                ;;
-            esac
-          else
-            echo '::error::ref must be a staging-* tag or a full commit SHA on main. A branch or a refs/pull/* ref is refused.'
-            exit 1
-          fi
-          {
-            echo "ref=${REF}"
-            echo "base_url=${base}"
-          } >> "$GITHUB_OUTPUT"
+        run: pnpm --filter @cipherbox/web-e2e exec tsx staging/soak/checkInputs.ts guard
 
   # The ledger checks run first in this job, so a bootstrap lands before any
   # other spec reads a ledger.
@@ -132,7 +117,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.guard.outputs.ref }}
+          ref: ${{ needs.guard.outputs.sha }}
           persist-credentials: false
 
       - uses: ./.github/actions/soak-web-setup
@@ -189,7 +174,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.guard.outputs.ref }}
+          ref: ${{ needs.guard.outputs.sha }}
           persist-credentials: false
 
       - uses: ./.github/actions/soak-web-setup
@@ -231,7 +216,7 @@ jobs:
     with:
       os: macos-latest
       leg: desktop-macos
-      ref: ${{ needs.guard.outputs.ref }}
+      ref: ${{ needs.guard.outputs.sha }}
 
   desktop-linux:
     name: 'Soak: Desktop (linux)'
@@ -243,7 +228,7 @@ jobs:
     with:
       os: ubuntu-latest
       leg: desktop-linux
-      ref: ${{ needs.guard.outputs.ref }}
+      ref: ${{ needs.guard.outputs.sha }}
 
   desktop-windows:
     name: 'Soak: Desktop (windows)'
@@ -255,7 +240,7 @@ jobs:
     with:
       os: windows-latest
       leg: desktop-windows
-      ref: ${{ needs.guard.outputs.ref }}
+      ref: ${{ needs.guard.outputs.sha }}
 
   report:
     name: 'Soak: Report'
@@ -298,6 +283,7 @@ jobs:
       - name: Classify the night
         env:
           SOAK_NEEDS: ${{ toJSON(needs) }}
+          SOAK_SUITE: ${{ needs.guard.outputs.label && format('{0} at {1}', needs.guard.outputs.label, needs.guard.outputs.sha) || '' }}
           SOAK_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail

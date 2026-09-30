@@ -185,6 +185,17 @@ describe('a night', () => {
     expect(body).not.toContain('- desktop-windows:');
   });
 
+  it('names the suite ref in the summary and the issue when the report has it', () => {
+    const night = classifyNight(
+      results({ ...everyLeg('success'), 'web-vault': 'failure' }),
+      everyLeg(lines(failed))
+    );
+    const suite = 'staging-20260928-release-1 at abc';
+    expect(renderNight(night, RUN, suite)).toContain(`Suite: ${suite}`);
+    expect(issueBody(night, RUN, suite)).toContain(`Suite: ${suite}`);
+    expect(renderNight(night, RUN)).not.toContain('Suite:');
+  });
+
   it('fails when the input check failed, and skips when it was cancelled', () => {
     const none = everyLeg<LegResults>({ kind: 'missing' });
     const refused = classifyNight(results(everyLeg('skipped'), 'failure'), none);

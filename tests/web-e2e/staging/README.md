@@ -57,9 +57,11 @@ verifier plus subject id, so a staging reset changes it and leaves the wallet
 key valid.
 
 The workflow is `Staging Soak` (`.github/workflows/staging-soak.yml`). The
-`Staging Soak` slot of `nightly.yml` calls it with the newest `staging-*` tag as
-`ref`. A dispatch takes `base-url`, `ref` and `bootstrap`. The `ref` must be a
-`staging-*` tag or a commit on main. The `base-url` must be the
+`Staging Soak` slot of `nightly.yml` calls it with the newest
+`staging-<date>-release-<n>` tag as `ref`. A dispatch takes `base-url`, `ref`
+and `bootstrap`. The `ref` must be such a tag or a commit SHA, and the commit
+must be on main. Every job checks out that commit, not the name. The
+`base-url` must be the
 `STAGING_APP_URL` variable of the `staging` environment, which is also its
 default. The web leg is two jobs, `web-vault` and `web-shares`. The desktop legs
 follow on macOS, Linux and Windows, one at a time. The report job joins the

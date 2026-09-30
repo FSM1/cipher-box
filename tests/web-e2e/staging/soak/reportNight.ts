@@ -4,7 +4,7 @@
  * - `unbootstrapped <results-file>` prints `unbootstrapped=true|false` for
  *   `GITHUB_OUTPUT`.
  * - `report <results-dir> <out-dir>` reads `SOAK_NEEDS` (`toJSON(needs)`) and
- *   `SOAK_RUN_URL`, writes `summary.md`, and writes `issue.md` only for a
+ *   `SOAK_RUN_URL`, and the optional `SOAK_SUITE`, writes `summary.md`, and writes `issue.md` only for a
  *   failed night.
  */
 
@@ -42,10 +42,11 @@ if (command === 'unbootstrapped' && first !== undefined) {
   process.stdout.write(`unbootstrapped=${found}\n`);
 } else if (command === 'report' && first !== undefined && second !== undefined) {
   const runUrl = required('SOAK_RUN_URL');
+  const suite = process.env.SOAK_SUITE?.trim() ?? '';
   const night = classifyNight(jobResults(required('SOAK_NEEDS')), await readLegResults(first));
   await mkdir(second, { recursive: true });
-  await writeFile(join(second, 'summary.md'), renderNight(night, runUrl));
-  const body = issueBody(night, runUrl);
+  await writeFile(join(second, 'summary.md'), renderNight(night, runUrl, suite));
+  const body = issueBody(night, runUrl, suite);
   if (body !== null) await writeFile(join(second, 'issue.md'), body);
   process.stdout.write(`The soak night: ${night.verdict}.\n`);
 } else {

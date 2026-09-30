@@ -164,6 +164,11 @@ function guardLine(night: Night): string[] {
     : [`The input check ended \`${night.guard}\`, so no leg ran against staging.`, ''];
 }
 
+/** The suite ref the guard accepted, as the tag name or SHA and its commit. */
+function suiteLine(suite: string): string[] {
+  return suite === '' ? [] : [`Suite: ${suite}`, ''];
+}
+
 function legTable(night: Night): string[] {
   return [
     '| Leg | Job | Verdict | Checks | Note |',
@@ -175,19 +180,20 @@ function legTable(night: Night): string[] {
 }
 
 /** The job summary of the report: the legs, then every check that a leg recorded. */
-export function renderNight(night: Night, runUrl: string): string {
+export function renderNight(night: Night, runUrl: string, suite = ''): string {
   const out = ['## Staging soak night', '', VERDICT_LINE[night.verdict], '', `Run: ${runUrl}`, ''];
-  out.push(...guardLine(night), ...legTable(night), '', '');
+  out.push(...suiteLine(suite), ...guardLine(night), ...legTable(night), '', '');
   const joined = night.legs.flatMap((leg) => leg.records);
   return `${out.join('\n')}${renderSummary(joined)}`;
 }
 
 /** The issue text of a failed night; `null` for a night that did not fail. */
-export function issueBody(night: Night, runUrl: string): string | null {
+export function issueBody(night: Night, runUrl: string, suite = ''): string | null {
   if (night.verdict !== 'failed') return null;
   const out = [
     `The staging soak failed. Run: ${runUrl}`,
     '',
+    ...suiteLine(suite),
     ...guardLine(night),
     ...legTable(night),
   ];
