@@ -90,8 +90,9 @@ impl NameError {
 
     /// The class label used in reject vectors. A name no kernel can carry, or
     /// one that renders as another name, is suspect when a peer authored it:
-    /// `trust`. A name only some platform reserves is lawful elsewhere, so this
-    /// client's refusal is a `capability` limit.
+    /// `trust`. A length past the frozen bound is `over-cap`. A name only some
+    /// platform reserves is lawful elsewhere, so this client's refusal is a
+    /// `capability` limit.
     pub fn class(self) -> &'static str {
         match self {
             Self::Empty

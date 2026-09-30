@@ -90,8 +90,6 @@ impl StoragePolicy {
     /// rather than a promised ceiling the host cannot honour.
     pub fn measured(platform: StoragePlatform, headroom_bytes: u64) -> Self {
         Self {
-            // No sealed-block read cache is built, so no reservation comes off
-            // headroom: it would only shrink the maximum file size (ADR 0044 D7).
             staging_budget_bytes: percent_of(headroom_bytes, platform.staging_percent)
                 .min(platform.staging_cap_bytes),
             read_cache_ceiling_bytes: percent_of(headroom_bytes, platform.cache_percent)

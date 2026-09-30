@@ -571,6 +571,26 @@ fn the_device_field_check_surface_matches_the_variants_in_order() {
     ];
     let named: Vec<&str> = variants.map(MalformedDeviceField::check).to_vec();
     assert_eq!(named, MalformedDeviceField::CHECKS);
+    let classes: Vec<&str> = variants.map(MalformedDeviceField::class).to_vec();
+    assert_eq!(
+        classes,
+        [
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+            "over-cap",
+            "over-cap",
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+            "over-cap",
+        ]
+    );
     for field in variants {
         assert_eq!(field.to_string(), field.check());
     }
