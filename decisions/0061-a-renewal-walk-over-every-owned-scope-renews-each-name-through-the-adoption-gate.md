@@ -1,6 +1,6 @@
 # ADR 0061 — A renewal walk over every owned scope renews each name through the adoption gate
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-30
 - **Date:** 2026-09-30
 - **Relates to:** `blueprint/engine.md` "Resolve/publish pipeline" (Liveness) and "sweep",
   `blueprint/api.md` "Republisher module and recovery", the `CONTEXT.md` terms "Write seed",
@@ -111,9 +111,6 @@ stops the walk at each old name that the wave retired.
    65 days is at S + 1 with a fresh validity after the passes that consequence 2 names.
 6. `CONTEXT.md` adds the term "Renewal walk".
 7. ADR 0057 carries an "Amended by" sentence at the false line of its Context.
-
-## Residuals
-
-- A shared folder lapses for its grantees when the owner runs no session for about two months. A
-  write grantee could also walk the scopes that it can write. The recommendation: not in v2.0; a
-  follow-up issue.
+8. Accepted residual: a grantee runs no walk, so a shared folder lapses for its grantees when the
+   owner starts no session for about two months. The owner accepted it on 2026-09-30; the research
+   for a grantee walk is FSM1/cipher-box#2111.
