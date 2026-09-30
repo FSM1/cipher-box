@@ -4559,10 +4559,9 @@ fn a_genesis_bin_index_that_did_not_land_is_published_by_a_later_start() {
     );
 }
 
-/// The mark a PUT that left the engine leaves is a mark like any other: the
-/// device cannot tell a refused PUT from one that landed, so it never publishes
-/// an empty index over what another device may hold. The account recovers
-/// through the device that holds no mark, above.
+/// A PUT with an unknown outcome keeps its mark: the device cannot tell whether
+/// it landed, so it never publishes an empty index over what another device may
+/// hold. The account recovers through the device that holds no mark, above.
 #[test]
 fn the_device_whose_genesis_put_left_the_engine_retries_nothing() {
     let world = FakeWorld::new();
@@ -4577,6 +4576,54 @@ fn the_device_whose_genesis_put_left_the_engine_retries_nothing() {
     assert!(
         standing_bin_record(&world).is_none(),
         "the marked device published nothing on its own retry",
+    );
+}
+
+/// A genesis PUT that every endpoint refused by a stated answer did not leave
+/// through any of them, so it strands nothing: the same device publishes the
+/// record at its next start, and its soft delete bins the node.
+#[test]
+fn a_genesis_put_every_endpoint_refused_is_retried_by_the_same_device() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .answer_put_for_at(&endpoint, bin_name().as_str(), 400);
+    }
+    let (first, _tasks) = provision_first_run(&world, &blocks, &alice);
+    assert!(
+        standing_bin_record(&world).is_none(),
+        "every endpoint refused the genesis PUT",
+    );
+    drop(first);
+    world.record_store.heal_put_for(bin_name().as_str());
+
+    let (mut engine, mut tasks) = start_on_api(&world, &blocks, &alice, 43);
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        1,
+        "the same device published the record at its next start",
+    );
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..40u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        bin_entries(&world, &alice, &blocks),
+        vec![doomed.0],
+        "and the soft delete binned the node, with no dead letter",
     );
 }
 

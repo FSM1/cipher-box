@@ -1210,3 +1210,295 @@ fn held_bin_record(head: &str, sequence: u64) -> HeldRecord {
         content_cids: Vec::new(),
     }
 }
+
+// ---------------------------------------------------------------------------
+// A stated refusal clears the mark
+// ---------------------------------------------------------------------------
+
+/// Answer every PUT at the bin name with `statuses`, one per endpoint in order.
+fn answer_bin_puts(device: &FakeDevice, statuses: &[u16]) {
+    let endpoints = device.record_store.endpoints();
+    assert_eq!(endpoints.len(), statuses.len(), "one answer per endpoint");
+    for (endpoint, status) in endpoints.iter().zip(statuses) {
+        device
+            .record_store
+            .answer_put_for_at(endpoint, name().as_str(), *status);
+    }
+}
+
+fn publish_under(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+    transport: &(impl RecordTransport + Clone + 'static),
+    index: &BinIndex,
+    seed: u64,
+) -> Result<(), BinIndexPublishError> {
+    serve_http(device, blocks, 4);
+    block_on(publish_bin_index(
+        transport,
+        &api(device),
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(seed),
+        &OrphanHeads::default(),
+        &keys(),
+        index,
+    ))
+    .map(|_| ())
+}
+
+/// A 4xx answer states that the hop did not act on the PUT. When every
+/// endpoint states it, the record did not leave, so the device holds no mark
+/// that stops a first run, and the retry seals a revision no body took.
+#[test]
+fn a_put_every_endpoint_refused_by_a_stated_answer_leaves_no_live_mark() {
+    for status in [400, 403, 404, 406, 413, 429] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        let device = world.device(b"only-device");
+        answer_bin_puts(&device, &[status, status]);
+
+        let outcome = publish_with(
+            &world,
+            &device,
+            &blocks,
+            &binned(&[1]),
+            &mut SeededEntropy::new(1),
+        );
+        assert!(
+            matches!(
+                outcome,
+                Err(BinIndexPublishError::Publish(RecordPublishError::Publish(
+                    PublishError::AllEndpointsRefused
+                )))
+            ),
+            "{status}: {outcome:?}",
+        );
+        assert_eq!(
+            load(&world, &device, &blocks, &keys()),
+            BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun),
+            "{status}: a refused PUT is no mark",
+        );
+
+        device.record_store.heal_put_for(name().as_str());
+        publish(&world, &device, &blocks, &binned(&[1, 2]), 2);
+        assert_eq!(
+            published_revision(&device, &blocks, &name()),
+            2,
+            "{status}: the retry seals above the refused body's revision",
+        );
+    }
+}
+
+/// One endpoint that states nothing about the record can have taken it, so a
+/// refusal at the other endpoint does not clear the mark.
+#[test]
+fn a_stated_refusal_beside_an_unknown_outcome_keeps_the_mark() {
+    // `None` is an endpoint that gives no answer.
+    for unknown in [Some(500), Some(502), Some(503), Some(504), Some(301), None] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        let device = world.device(b"only-device");
+        let endpoints = device.record_store.endpoints();
+        device
+            .record_store
+            .answer_put_for_at(&endpoints[0], name().as_str(), 400);
+        match unknown {
+            Some(status) => {
+                device
+                    .record_store
+                    .answer_put_for_at(&endpoints[1], name().as_str(), status);
+            }
+            None => device.record_store.fail_put_endpoint(&endpoints[1]),
+        }
+
+        let outcome = publish_with(
+            &world,
+            &device,
+            &blocks,
+            &binned(&[1]),
+            &mut SeededEntropy::new(1),
+        );
+        assert!(
+            matches!(
+                outcome,
+                Err(BinIndexPublishError::Publish(RecordPublishError::Publish(
+                    PublishError::AllEndpointsFailed
+                )))
+            ),
+            "{unknown:?}: {outcome:?}",
+        );
+        device.record_store.heal_put_endpoint(&endpoints[1]);
+        assert_eq!(
+            load(&world, &device, &blocks, &keys()),
+            BinIndexLoad::Empty(DefaultsReason::StrandedMint),
+            "{unknown:?}: the mark stays",
+        );
+    }
+}
+
+/// A transport whose PUT lands and whose answer is a 5xx: an endpoint that
+/// stored the record and then failed to say so.
+#[derive(Clone)]
+struct LandsThenAnswers(InMemoryRecordStore, u16);
+
+impl RecordTransport for LandsThenAnswers {
+    fn endpoints(&self) -> Vec<EndpointId> {
+        self.0.endpoints()
+    }
+
+    async fn get_record(
+        &self,
+        endpoint: &EndpointId,
+        routing_key: &str,
+        max_bytes: usize,
+        bearer: Option<&str>,
+    ) -> SeamResult<Option<Vec<u8>>> {
+        self.0
+            .get_record(endpoint, routing_key, max_bytes, bearer)
+            .await
+    }
+
+    async fn put_record(
+        &self,
+        endpoint: &EndpointId,
+        routing_key: &str,
+        record: &[u8],
+    ) -> SeamResult<()> {
+        self.0.put_record(endpoint, routing_key, record).await?;
+        Err(SeamError::http_status("delegate error", self.1))
+    }
+}
+
+/// An unknown outcome at every endpoint keeps the mark, and a record that did
+/// land is never published over while it is withheld.
+#[test]
+fn an_unknown_outcome_at_every_endpoint_over_a_landed_record_keeps_the_mark() {
+    for status in [500, 504] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        let device = world.device(b"only-device");
+        let transport = LandsThenAnswers(device.record_store.clone(), status);
+
+        assert!(publish_under(&world, &device, &blocks, &transport, &binned(&[1]), 1).is_err());
+        let landed = device
+            .record_store
+            .record_at(&device.record_store.endpoints()[0], name().as_str())
+            .expect("the record landed");
+
+        device.record_store.fail_get_for(name().as_str());
+        assert_eq!(
+            load(&world, &device, &blocks, &keys()).writable(),
+            Err(DefaultsReason::StrandedMint),
+            "{status}: the withheld record is not published over",
+        );
+        assert_eq!(
+            device
+                .record_store
+                .record_at(&device.record_store.endpoints()[0], name().as_str()),
+            Some(landed),
+            "{status}: and the landed record stands",
+        );
+    }
+}
+
+/// The refusal names one revision. A later PUT that left the engine raises the
+/// mint above it and is a mark again, and a mint counter the previous release
+/// wrote, with no refusal beside it, is a mark.
+#[test]
+fn a_refusal_supersedes_only_the_revision_it_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"only-device");
+    let raise = |prefix: &[u8], value| {
+        block_on(
+            device
+                .floor_store
+                .raise_sequence_floor(&mark(prefix, &name()), value),
+        )
+        .expect("the counter raises");
+    };
+    raise(b"bin-index-revision-mint/", 3);
+    assert_eq!(
+        load(&world, &device, &blocks, &keys()),
+        BinIndexLoad::Empty(DefaultsReason::StrandedMint),
+        "the previous release's counter reads as a mark",
+    );
+
+    raise(b"bin-index-revision-refused/", 2);
+    assert_eq!(
+        load(&world, &device, &blocks, &keys()),
+        BinIndexLoad::Empty(DefaultsReason::StrandedMint),
+        "a refusal below the mint does not reach it",
+    );
+
+    raise(b"bin-index-revision-refused/", 3);
+    assert_eq!(
+        load(&world, &device, &blocks, &keys()),
+        BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun),
+    );
+}
+
+/// An endpoint that states a refusal can keep the record, so the head block of
+/// a refused publish stays charged.
+#[test]
+fn a_bin_publish_every_endpoint_refused_retires_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"only-device");
+    answer_bin_puts(&device, &[400, 400]);
+    serve_http(&device, &blocks, 4);
+    let orphans = OrphanHeads::default();
+
+    let outcome = block_on(publish_bin_index(
+        &device.record_store,
+        &api(&device),
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(1),
+        &orphans,
+        &keys(),
+        &binned(&[1]),
+    ));
+    assert!(matches!(
+        outcome,
+        Err(BinIndexPublishError::Publish(RecordPublishError::Publish(
+            PublishError::AllEndpointsRefused
+        )))
+    ));
+    assert!(blocks.retired().is_empty(), "nothing was retired");
+    assert!(orphans.pending().is_empty(), "nothing is pending either");
+}
+
+/// A refusal the store cannot record leaves the mark, the fail-closed side.
+#[test]
+fn a_refusal_the_store_does_not_take_keeps_the_mark() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"only-device");
+    answer_bin_puts(&device, &[400, 400]);
+    device
+        .floor_store
+        .fail_floor_raises_for(&mark(b"bin-index-revision-refused/", &name()));
+
+    assert!(
+        publish_with(
+            &world,
+            &device,
+            &blocks,
+            &binned(&[1]),
+            &mut SeededEntropy::new(1)
+        )
+        .is_err()
+    );
+    device.floor_store.heal_floors();
+    assert_eq!(
+        load(&world, &device, &blocks, &keys()),
+        BinIndexLoad::Empty(DefaultsReason::StrandedMint),
+    );
+}

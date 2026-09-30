@@ -19,6 +19,31 @@ use crate::seams::{EndpointId, RecordTransport};
 /// hostile or broken endpoint whose bytes are never adoptable.
 pub const MAX_RECORD_BYTES: usize = 10 * 1024;
 
+/// What one endpoint's PUT answer states about the record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutOutcome {
+    /// A 2xx answer.
+    Accepted,
+    /// A 4xx answer: the hop that answered did not act on the request, so the
+    /// record did not leave through this endpoint.
+    Refused,
+    /// No answer, or an answer that states nothing about the record: a 5xx can
+    /// follow a partial routing put, and a 1xx or 3xx settles nothing.
+    Unknown,
+}
+
+impl PutOutcome {
+    fn of(result: &Result<(), crate::seams::SeamError>) -> Self {
+        match result {
+            Ok(()) => Self::Accepted,
+            Err(error) => match error.status() {
+                Some(400..=499) => Self::Refused,
+                _ => Self::Unknown,
+            },
+        }
+    }
+}
+
 /// The outcome of a parallel PUT across the endpoint set.
 pub struct Fanout {
     /// Endpoints that acknowledged the PUT.
@@ -27,6 +52,8 @@ pub struct Fanout {
     /// the set a background retry re-PUTs (blueprint: "remaining PUTs retry in
     /// the background").
     pub not_acked: Vec<EndpointId>,
+    /// Whether every endpoint settled with a stated refusal.
+    pub all_refused: bool,
 }
 
 impl Fanout {
@@ -48,9 +75,7 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
         .iter()
         .map(|endpoint| Box::pin(transport.put_record(endpoint, key, bytes)))
         .collect();
-    // Per-endpoint settle state: `Some(true)` acked, `Some(false)` failed,
-    // `None` still pending.
-    let mut status: Vec<Option<bool>> = vec![None; futs.len()];
+    let mut status: Vec<Option<PutOutcome>> = vec![None; futs.len()];
 
     poll_fn(|cx| {
         let mut all_settled = true;
@@ -59,13 +84,12 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
                 continue;
             }
             match fut.as_mut().poll(cx) {
-                Poll::Ready(Ok(())) => status[index] = Some(true),
-                Poll::Ready(Err(_)) => status[index] = Some(false),
+                Poll::Ready(result) => status[index] = Some(PutOutcome::of(&result)),
                 Poll::Pending => all_settled = false,
             }
         }
         // Return the instant one endpoint acks, or once every endpoint settled.
-        if status.contains(&Some(true)) || all_settled {
+        if status.contains(&Some(PutOutcome::Accepted)) || all_settled {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -76,13 +100,18 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
     let mut acked = Vec::new();
     let mut not_acked = Vec::new();
     for (index, endpoint) in endpoints.iter().enumerate() {
-        if status[index] == Some(true) {
+        if status[index] == Some(PutOutcome::Accepted) {
             acked.push(endpoint.clone());
         } else {
             not_acked.push(endpoint.clone());
         }
     }
-    Fanout { acked, not_acked }
+    let all_refused = !status.is_empty() && status.iter().all(|s| *s == Some(PutOutcome::Refused));
+    Fanout {
+        acked,
+        not_acked,
+        all_refused,
+    }
 }
 
 /// A class, never bytes: the diagnostics that carry it must hold no record.
@@ -514,6 +543,61 @@ mod tests {
             panic!("no endpoint answered usefully");
         };
         assert_eq!(failures.to_string(), "front transport; public malformed");
+    }
+
+    /// ADR 0060 D1: a 4xx is a stated refusal, and every other failure is an
+    /// unknown outcome, a status the engine cannot place included.
+    #[test]
+    fn only_a_4xx_answer_is_a_stated_refusal() {
+        assert_eq!(PutOutcome::of(&Ok(())), PutOutcome::Accepted);
+        for status in [400, 404, 408, 429, 499] {
+            assert_eq!(
+                PutOutcome::of(&Err(SeamError::http_status("answer", status))),
+                PutOutcome::Refused,
+                "{status}",
+            );
+        }
+        for status in [100, 200, 302, 399, 500, 502, 504, 599, 600, 0] {
+            assert_eq!(
+                PutOutcome::of(&Err(SeamError::http_status("answer", status))),
+                PutOutcome::Unknown,
+                "{status}",
+            );
+        }
+        assert_eq!(
+            PutOutcome::of(&Err(SeamError::new("no answer"))),
+            PutOutcome::Unknown,
+        );
+    }
+
+    /// ADR 0060 D2: only a refusal at every endpoint is `all_refused`.
+    #[test]
+    fn a_put_is_all_refused_only_when_every_endpoint_refused_it() {
+        let eps = vec![EndpointId::new("front"), EndpointId::new("public")];
+        let key = "k51-put";
+        let run = |answers: [Option<u16>; 2], down: bool| {
+            let store = InMemoryRecordStore::new(eps.clone());
+            for (endpoint, answer) in eps.iter().zip(answers) {
+                if let Some(status) = answer {
+                    store.answer_put_for_at(endpoint, key, status);
+                }
+            }
+            if down {
+                store.fail_endpoint(&eps[1]);
+            }
+            block_on(fanout_put(&store, key, b"record"))
+        };
+
+        let refused = run([Some(400), Some(403)], false);
+        assert!(refused.all_refused && !refused.any_acked());
+        for (answers, down) in [
+            ([Some(400), Some(503)], false),
+            ([Some(400), None], true),
+            ([Some(400), None], false),
+        ] {
+            let fanout = run(answers, down);
+            assert!(!fanout.all_refused, "{answers:?} down={down}");
+        }
     }
 
     #[test]

@@ -29,7 +29,7 @@ use crate::entropy::{Entropy, EntropyError, fresh_nonce};
 use crate::gate::floor;
 use crate::gate::floor::RevisionMintError;
 use crate::net::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue, hold_if_unchanged};
-use crate::net::publish::{PublishOutcome, PutMark};
+use crate::net::publish::{PublishError, PublishOutcome, PutMark};
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_bin_index,
     publish_record_marked,
@@ -37,7 +37,8 @@ use crate::net::record_publish::{
 use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{
-    DefaultsReason, EolRule, OpenedBody, RecordLoad, RecordPlane, load_record, prefixed_key,
+    DefaultsReason, EolRule, OpenedBody, RecordLoad, RecordPlane, live_mint, load_record,
+    prefixed_key,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SnapshotCache,
@@ -222,6 +223,12 @@ fn revision_mint_key(name: &IpnsName) -> Vec<u8> {
     prefixed_key(b"bin-index-revision-mint/", name)
 }
 
+/// The highest revision whose PUT every endpoint refused by a stated answer.
+/// It supersedes a mint mark at or below it, and nothing else.
+fn revision_refused_key(name: &IpnsName) -> Vec<u8> {
+    prefixed_key(b"bin-index-revision-refused/", name)
+}
+
 /// The writer's clock each seal takes its body revision from, so no two sealed
 /// bodies share one. Not a mark: it moves before anything leaves the engine.
 fn revision_seal_key(name: &IpnsName) -> Vec<u8> {
@@ -262,14 +269,19 @@ pub(crate) async fn cached_bin_index<Sn: SnapshotCache>(
 /// `FloorUnreadable` rung leaves the publish.
 pub(crate) async fn holds_a_bin_index_mark<F: FloorStore>(floors: &F, keys: &BinIndexKeys) -> bool {
     let name = &keys.name;
-    let minted = revision_mint_key(name);
     let adopted = revision_adopted_key(name);
-    for key in [name.as_str().as_bytes(), &minted, &adopted] {
+    for key in [name.as_str().as_bytes(), &adopted] {
         if !matches!(floor::sequence_floor(floors, key).await, Ok(None)) {
             return true;
         }
     }
-    false
+    let Ok(minted) = floor::sequence_floor(floors, &revision_mint_key(name)).await else {
+        return true;
+    };
+    !matches!(
+        live_mint(floors, minted, Some(&revision_refused_key(name))).await,
+        Ok(None)
+    )
 }
 
 /// The next body revision for this account's bin index record.
@@ -364,6 +376,16 @@ where
     {
         Ok(receipt) => receipt,
         Err(error) => {
+            if matches!(
+                error,
+                RecordPublishError::Publish(PublishError::AllEndpointsRefused)
+            ) {
+                // Best effort: a refusal the store does not take leaves the
+                // mark standing, which is the fail-closed side.
+                let _ = floors
+                    .raise_sequence_floor(&revision_refused_key(name), revision)
+                    .await;
+            }
             // This publish runs outside a drain pass, so it clears its own
             // orphan set rather than deferring to a pass boundary.
             if orphaned_head(&error) {
@@ -468,6 +490,7 @@ where
         cache_key: bin_index_cache_key(name),
         adopted_key: revision_adopted_key(name),
         mint_key: revision_mint_key(name),
+        refused_key: Some(revision_refused_key(name)),
         eol: EolRule::LeaveToRenewal,
     };
     let read = load_record(
@@ -561,6 +584,7 @@ mod tests {
             revision_adopted_key(&name),
             revision_mint_key(&name),
             revision_seal_key(&name),
+            revision_refused_key(&name),
             bin_index_cache_key(&name),
         ];
         for (i, key) in keys.iter().enumerate() {
