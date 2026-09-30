@@ -1012,7 +1012,7 @@ publishes to the owner plane **only in owner sessions**.
   the core catalog; its record carries the owner-identity-signed **re-point
   object** `{scopeId, currentRootName, writeEpoch, minReadEpoch,
 prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
-  grant blobs and persisted in each grantee's vault share list) — cold start
+  grant blobs and persisted in each grantee's device-local received-shares list) — cold start
   is non-circular and public observers cannot link old↔new roots; revokee
   readability is accepted (FSM1/cipher-box-next#38 D3, FSM1/cipher-box-next#39 D4). `writeEpoch` moves on owner-only
   write rotation; `minReadEpoch` bumps only on owner-triggered read rotations,
@@ -1100,8 +1100,9 @@ surviving committed grants uniformly in the republish it already does.
   FSM1/cipher-box-next#39 D9) → resolve the name → gate (commitment verified against the
   contact-anchored owner identity) → self-locate the blob by blinded tag →
   unseal seeds → append `{name, sharerPub, displayName, permission}` to the
-  sealed received-shares list in the recipient's own vault, persisting the
-  `pointerReadKey`; the owner keeps a denormalized sent-index in theirs. Both
+  sealed received-shares list, device-local over the host `StagingStore`
+  (ADR 0006), persisting the `pointerReadKey`; the owner keeps a denormalized
+  sent-index in their own vault. Both
   lists are self-healing bookmarks — the metadata is the authority (FSM1/cipher-box-next#25 D3).
 - **Link-held arm**
   ([ADR 0024](../decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)

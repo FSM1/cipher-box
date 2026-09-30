@@ -200,8 +200,8 @@ all living in `packages/client` and running inside the engine worker realm:
 - **Sharing UI is facade commands end to end**: invite links (the URL
   fragment carries the invite secret; the page hands it to the facade
   unread), contact-code import (QR / paste, verified in the engine), grant
-  issue, revoke and permission change, received-shares list from the vault
-  share list in the snapshot, revocation states from the engine's
+  issue, revoke and permission change, the device-local received-shares list
+  (ADR 0006) in the snapshot, revocation states from the engine's
   revocation-signal/unresolvable/epoch-lag classification and its three
   removed-side messages (engine.md "Grants and ledger"). Every grantee
   fingerprint comes from the engine; the UI hashes no key. The UI renders the
