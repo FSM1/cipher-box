@@ -492,9 +492,9 @@ fn the_node_name_check_surface_matches_the_variants_in_order() {
         NameError::ReservedDevice,
         NameError::PlatformJunk,
     ];
-    let named: Vec<&str> = variants.map(NameError::check).to_vec();
+    let named = variants.map(NameError::check);
     assert_eq!(named, NameError::CHECKS);
-    let classes: Vec<&str> = variants.map(NameError::class).to_vec();
+    let classes = variants.map(NameError::class);
     assert_eq!(
         classes,
         [
@@ -512,8 +512,6 @@ fn the_node_name_check_surface_matches_the_variants_in_order() {
     );
 }
 
-/// A replayed or unreadable record is a verdict, so its class is never the
-/// one a caller retries on.
 #[test]
 fn the_defaults_check_surface_matches_the_variants_in_order() {
     let variants = [
@@ -533,7 +531,7 @@ fn the_defaults_check_surface_matches_the_variants_in_order() {
         DefaultsReason::Unreadable,
         DefaultsReason::FloorUnreadable,
     ];
-    let named: Vec<&str> = variants.map(DefaultsReason::check).to_vec();
+    let named = variants.map(DefaultsReason::check);
     assert_eq!(named, DefaultsReason::CHECKS);
     let verdicts: Vec<&str> = variants
         .into_iter()
@@ -569,9 +567,9 @@ fn the_device_field_check_surface_matches_the_variants_in_order() {
         MalformedDeviceField::SealedFactorUnderEnvelopeFloor,
         MalformedDeviceField::SealedFactorOverCeiling,
     ];
-    let named: Vec<&str> = variants.map(MalformedDeviceField::check).to_vec();
+    let named = variants.map(MalformedDeviceField::check);
     assert_eq!(named, MalformedDeviceField::CHECKS);
-    let classes: Vec<&str> = variants.map(MalformedDeviceField::class).to_vec();
+    let classes = variants.map(MalformedDeviceField::class);
     assert_eq!(
         classes,
         [
@@ -596,9 +594,8 @@ fn the_device_field_check_surface_matches_the_variants_in_order() {
     }
 }
 
-/// The conversion record stores these names and decodes them back, so the
-/// whole list — the two delegated to the invite surface included — is a
-/// durable format and never changes.
+/// Pins every name the conversion record decodes, the two delegated to the
+/// invite surface included.
 #[test]
 fn the_conversion_check_surface_matches_the_variants_in_order() {
     let variants = [
@@ -607,7 +604,7 @@ fn the_conversion_check_surface_matches_the_variants_in_order() {
         ConversionRefusal::ContactBookFull,
         ConversionRefusal::RecipientKeyChanged,
     ];
-    let named: Vec<&str> = variants.map(ConversionRefusal::check).to_vec();
+    let named = variants.map(ConversionRefusal::check);
     assert_eq!(
         named,
         [

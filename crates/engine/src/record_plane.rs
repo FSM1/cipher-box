@@ -117,26 +117,30 @@ impl DefaultsReason {
         }
     }
 
-    /// The class label used in reject vectors: `trust` when the load refused
-    /// bytes the plane actually served, `availability` when it failed to reach
-    /// them (blueprint/engine.md "Bin index record").
+    /// The class label used in reject vectors: `trust` for a verdict,
+    /// `availability` otherwise.
     #[must_use]
     pub fn class(self) -> &'static str {
+        if self.is_verdict() {
+            "trust"
+        } else {
+            "availability"
+        }
+    }
+
+    /// Whether the load refused bytes the plane actually served, rather than
+    /// failing to reach it (blueprint/engine.md "Bin index record"). A caller
+    /// that retries on availability must not retry on a verdict.
+    pub(crate) fn is_verdict(self) -> bool {
         match self {
-            Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => "trust",
+            Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => true,
             Self::UnprovenFirstRun
             | Self::Suppressed
             | Self::StrandedMint
             | Self::Expired
             | Self::TimedOut
-            | Self::FloorUnreadable => "availability",
+            | Self::FloorUnreadable => false,
         }
-    }
-
-    /// Whether the load refused served bytes. A caller that retries on
-    /// availability must not retry on a verdict.
-    pub(crate) fn is_verdict(self) -> bool {
-        self.class() == "trust"
     }
 }
 
