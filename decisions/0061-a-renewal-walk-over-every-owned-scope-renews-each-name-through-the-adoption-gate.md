@@ -38,7 +38,9 @@ most, each a scope id, a node id and a name). A resume re-reads each folder on t
 parent's current body, and continues at the deepest folder still on the path. The walk
 does not descend below a folder at depth 64: it adds that folder as a deferred root and walks it
 later with a new path. A deferred name that went stale fails the signer bind, and the next cycle
-finds that folder again. The cursor seals on the owner-local structure under the new kind
+finds that folder again. When the set is full, the walk descends below depth 64 in memory and
+finishes that subtree in the same pass, with no per-pass budget. The cursor stays at the depth-64
+folder, so the encode never fails, and a pass that ends inside the subtree starts it again. The cursor seals on the owner-local structure under the new kind
 `renewal-cursor` (discriminator `0x09`). This is not a KDF edge: the seal is HPKE auth mode to the
 owner's own enc subkey, and the kind is a discriminator in the AAD and the `info`. The body is
 padded to the caps, so the sealed length shows nothing. The decode and the encode enforce both
@@ -61,6 +63,10 @@ cursor that does not open or decode, or a replayed older one, costs only work.
 6. The walk signs at S + 1 with the EOL `eol_from(now)` minus one day, so a write that another
    device signs at S + 1 at the same time has the later EOL, while that device's clock is less
    than one day behind.
+7. Every reader sides with the endpoints: at one sequence, the fan-out resolve (`fanout::scan`)
+   and the last-known-good keeper (`keep_newest_last_known_good`) take the record with the later
+   EOL. Today both keep the first record that they hold, so a device that adopted a renewal can
+   refuse the real write as `SequenceNotNewer`, or start from a cache that does not show it.
 
 A `LostRace` ends the renewal of that name for this cycle, with no retry.
 
@@ -70,11 +76,6 @@ seed through the write-plane history link. It renews the node only if the derive
 that the parent names, and only after D3 step 1 admits the body against the scope's current
 commitment, so a write that a revoked writer made after the revocation is never renewed. D3 step 2
 stops the walk at each old name that the wave retired.
-
-**D5 — At one sequence, the fan-out resolve takes the record with the later EOL, as the endpoints
-do.** Today `fanout::scan` keeps the first record that it reads, so a device can adopt a renewal
-and then refuse the real write at the same sequence as `SequenceNotNewer`. With D3 step 6, the
-real write wins on every endpoint and in every resolve.
 
 ## Alternatives considered
 
@@ -93,7 +94,7 @@ real write wins on every endpoint and in every resolve.
 1. `blueprint/engine.md` "Resolve/publish pipeline": the Liveness bullet replaces "the names it
    holds keys for" with the renewal set plus the walk (D1 to D4). A session renews only a name
    whose signer derives from a write seed that it holds; a read grantee signs nothing; a write
-   grantee renews only its renewal set. The Resolve bullet states D5.
+   grantee renews only its renewal set. The Resolve bullet states D3 step 7.
 2. `blueprint/engine.md` states the numbers: at most 500 visits for each pass, a walk window of
    60 days of EOL left, and a new cycle no sooner than 7 days after the previous one began. A move
    can put a subtree behind the cursor for one cycle, so two visits of one name are at most
