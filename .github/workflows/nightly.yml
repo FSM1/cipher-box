@@ -1,8 +1,9 @@
 # The scheduled tier (blueprint/deploy.md "Scheduled tier"): one cron surface
 # owning every slot that runs off a schedule and never blocks a pull request —
-# long-horizon liveness, full-matrix flake surveillance, and the Cloudflare
-# range watch. A failure in any of them opens or updates one tracking issue, so
-# a scheduled red is never a square nobody reads.
+# long-horizon liveness, full-matrix flake surveillance, the Cloudflare range
+# watch, and the staging soak. A failure in any of them opens or updates one
+# tracking issue, so a scheduled red is never a square nobody reads; the soak
+# reports into its own issue.
 #
 # The liveness slot runs two profiles: the in-process one drives months of
 # virtual time through the republisher walk, and the stack one runs the shipped
@@ -129,10 +130,67 @@ jobs:
       - name: Diff the trusted ranges against Cloudflare
         run: node scripts/check-cloudflare-ranges.mjs
 
+  # The soak suite comes from the tag that staging runs, so the tests and the
+  # deploy are one revision.
+  staging-soak-tag:
+    name: Resolve The Staging Tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Only the `staging-<date>-release-<n>` shape that `tag-staging.yml`
+      # mints: the v1 tags sort above it by name.
+      - name: Pick the newest staging tag
+        id: tag
+        run: |
+          set -euo pipefail
+          git tag -l 'staging-*' > "${RUNNER_TEMP}/staging-tags.txt"
+          pnpm --filter @cipherbox/web-e2e exec tsx staging/soak/checkInputs.ts \
+            newest-tag "${RUNNER_TEMP}/staging-tags.txt"
+
+  # A failed night goes to the soak's own issue. The report below takes only a
+  # soak run whose report job did not finish.
+  staging-soak:
+    name: Staging Soak
+    needs: staging-soak-tag
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/staging-soak.yml
+    with:
+      ref: ${{ needs.staging-soak-tag.outputs.tag }}
+
   report:
     name: Report A Nightly Failure
-    needs: [api-liveness, flake-surveillance, cloudflare-ranges]
-    if: failure()
+    needs: [api-liveness, flake-surveillance, cloudflare-ranges, staging-soak-tag, staging-soak]
+    # Not `failure()`: a failed soak leg fails the soak call, and that night is
+    # already in the soak issue.
+    if: >-
+      ${{ !cancelled() && (
+        needs.api-liveness.result == 'failure' ||
+        needs.flake-surveillance.result == 'failure' ||
+        needs.cloudflare-ranges.result == 'failure' ||
+        needs.staging-soak-tag.result == 'failure' ||
+        (needs.staging-soak.result != 'skipped' && needs.staging-soak.result != 'cancelled' &&
+          needs.staging-soak.outputs.reported != 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -148,6 +206,8 @@ jobs:
           LIVENESS: ${{ needs.api-liveness.result }}
           SURVEILLANCE: ${{ needs.flake-surveillance.result }}
           RANGES: ${{ needs.cloudflare-ranges.result }}
+          SOAK_TAG: ${{ needs.staging-soak-tag.result }}
+          SOAK_REPORTED: ${{ needs.staging-soak.outputs.reported || 'false' }}
           TITLE: 'ci: a nightly run failed'
         run: |
           set -euo pipefail
@@ -159,12 +219,14 @@ jobs:
             echo "| API Long-Horizon Liveness | ${LIVENESS} |"
             echo "| Full-Matrix Flake Surveillance | ${SURVEILLANCE} |"
             echo "| Cloudflare Range Watch | ${RANGES} |"
+            echo "| Staging Soak tag | ${SOAK_TAG} |"
+            echo "| Staging Soak report finished | ${SOAK_REPORTED} |"
           } > "${RUNNER_TEMP}/nightly-report.md"
           number=$(gh issue list --state open --label comp:ci --limit 500 --json number,title \
             --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')
           if [ -n "${number}" ]; then
             gh issue comment "${number}" --body-file "${RUNNER_TEMP}/nightly-report.md"
           else
-            gh issue create --title "${TITLE}" --label v2-build --label comp:ci \
+            gh issue create --title "${TITLE}" --label comp:ci \
               --body-file "${RUNNER_TEMP}/nightly-report.md"
           fi

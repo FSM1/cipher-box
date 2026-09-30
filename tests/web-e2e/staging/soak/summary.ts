@@ -92,7 +92,7 @@ export function unrecordedFailure(
 }
 
 /** A failed check for each `started` test with no `ended` line: a worker crash or a hung teardown. */
-function unfinishedTests(records: readonly SoakRecord[]): SoakRecord[] {
+export function unfinishedTests(records: readonly SoakRecord[]): SoakRecord[] {
   const open = new Map<string, number>();
   for (const entry of records) {
     if (entry.kind !== 'test') continue;
@@ -152,7 +152,8 @@ export function renderSummary(records: readonly SoakRecord[]): string {
   return `${out.join('\n')}\n`;
 }
 
-function cell(text: string): string {
+/** Text safe inside one markdown table cell. */
+export function cell(text: string): string {
   return text.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
 }
 

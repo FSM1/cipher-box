@@ -49,9 +49,11 @@ on:
         default: '0'
 
 # Two runs against the same target would measure each other. Queue rather than
-# cancel, so a staging run already loading the 2-vCPU box finishes cleanly.
+# cancel, so a staging run already loading the 2-vCPU box finishes cleanly. A
+# staging run takes the group a deploy and the soak legs hold, so no load lands
+# under either.
 concurrency:
-  group: load-test-${{ inputs.environment }}
+  group: ${{ inputs.environment == 'staging' && 'staging-environment' || 'load-test-local' }}
   cancel-in-progress: false
 
 permissions: {}

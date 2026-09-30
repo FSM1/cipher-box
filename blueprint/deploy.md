@@ -364,8 +364,11 @@ One `nightly.yml` (cron) owns the scheduled slots testing.md defined
   production timings; each signs in as the grantee, writes an OS marker
   into the grantee vault, and reads the other legs' markers through the
   mount; no desktop sharing. Jobs run in the `staging` environment, which
-  holds the five soak secrets (D2),
-  and the job-level `staging-environment` concurrency group. A cancelled
+  holds the five soak secrets (D2). The soak run holds the
+  `staging-environment` concurrency group for the whole night, so no deploy
+  lands between two legs. Accepted residual: a waiting soak run can cancel
+  one waiting deploy, or a deploy can cancel it, as a tag push and
+  `tag-staging.yml` already can each other. A cancelled
   night reports skipped, an outage failed; each assertion names a reason
   code; failures go to the `ci: the staging soak failed` issue. Only
   dispatch bootstraps; a scheduled run with no ledger fails as

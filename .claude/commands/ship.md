@@ -18,7 +18,7 @@ Scope: the current branch's diff against `origin/main` — one PR-sized slice of
       repos/FSM1/cipher-box/issues/<new>/dependencies/blocked_by -F issue_id="$BLOCKER_ID"
     ```
 
-    Note the API takes the issue's **global `.id`**, not its number. The reverse (`blocking`) edge resolves automatically — re-query it to confirm. Then add a `- [ ] #NNN — <title>` line to the tracker checklist in **#655**, placed in build order, and label the issue `v2-build`.
+    Note the API takes the issue's **global `.id`**, not its number. The reverse (`blocking`) edge resolves automatically — re-query it to confirm. Then add a `- [ ] #NNN — <title>` line to the tracker checklist in **#655**, placed in build order.
 
   - **Do not point a tracking edge at a closed issue.** The wayfinder issues (#813, #819–#832, #841, #844, #845, #852 …) are _design resolutions_ and are closed. Citing one as the parent or blocker looks like tracking but orphans the work, because nothing will ever reopen to surface it. Give the edge to an **open** slice that will consume the work, plus the #655 tracker line. Use `blocked_by` only for genuine hard blockers — a merely _related_ issue stays prose, since a false blocker stalls the issue forever.
   - **Discard** — do nothing and do not file. This is the right call for: style/naming/formatting nits, subjective preferences, speculative "could hypothetically" findings with no demonstrated impact, micro-optimizations, test-only suggestions of marginal value, and low-severity **pre-existing** noise unrelated to the slice. Briefly acknowledge dismissed classes in the PR (e.g. "N nits dismissed") rather than filing them.
