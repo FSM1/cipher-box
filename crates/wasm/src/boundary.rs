@@ -1,6 +1,6 @@
 //! The one decode of a facade command from its JS value, and the one encode of
-//! what it answers. Both types are the engine's own, typed for TS by tsify
-//! (blueprint/web-client.md "WASM packaging and the type boundary").
+//! what it answers and of each event. All are the engine's own types, typed for
+//! TS by tsify (blueprint/web-client.md "WASM packaging and the type boundary").
 //!
 //! Serde buffers an internally tagged value whole before it picks the variant,
 //! and frees that buffer unwiped when a later field refuses. So a command that
@@ -10,7 +10,7 @@
 //! the member typed.
 
 use cipherbox_engine::content::ByoBearer;
-use cipherbox_engine::facade::{Command, CommandOutcome};
+use cipherbox_engine::facade::{Command, CommandOutcome, Event};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_engine::seams::check_bearer;
 use cipherbox_engine::wire::{BIGINT_TAG, KEEP_STORED_BEARER};
@@ -72,6 +72,14 @@ pub fn encode_outcome(outcome: &CommandOutcome) -> Result<Ts<CommandOutcome>, Js
         .serialize(&SERIALIZER)
         .map(Ts::new_unchecked)
         .map_err(|_| JsError::new("the command outcome does not encode"))
+}
+
+/// Encodes one event.
+pub fn encode_event(event: &Event) -> Result<Ts<Event>, JsError> {
+    event
+        .serialize(&SERIALIZER)
+        .map(Ts::new_unchecked)
+        .map_err(|_| JsError::new("the event does not encode"))
 }
 
 fn decode(command: &JsValue) -> Result<Command, JsError> {

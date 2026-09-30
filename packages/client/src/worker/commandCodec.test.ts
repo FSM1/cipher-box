@@ -14,10 +14,10 @@ import {
   readSnapshot,
   readVaultStorage,
 } from './commandCodec.js';
+import type { EventDescriptor } from './protocol.js';
 import type {
   EngineWasm,
   WasmBinView,
-  WasmEvent,
   WasmSnapshotView,
   WasmVaultStorageView,
   WasmVersionEntry,
@@ -131,179 +131,50 @@ describe('readPendingApprovals', () => {
 });
 
 describe('readEvent', () => {
-  it('maps renewalFailed instead of throwing (the transport-bricking bug)', () => {
-    const event: WasmEvent = {
-      kind: 'renewalFailed',
-      routingKey: 'k51qzi5uqu5dr',
-      detail: 'record rejected',
-    };
-    expect(readEvent(fakeWasm, event)).toEqual({
-      kind: 'renewalFailed',
-      routingKey: 'k51qzi5uqu5dr',
-      detail: 'record rejected',
-    });
-  });
+  /** An event as a version-skewed engine could send it: off the typed union. */
+  const skewed = (event: Record<string, unknown>) => event as unknown as EventDescriptor;
 
-  it('maps scopeExitCutOwed so an uncut scope reaches the host', () => {
-    const scopeRoot = new Uint8Array(16).fill(0x9e);
-    const event: WasmEvent = {
-      kind: 'scopeExitCutOwed',
-      scopeRoot,
-      detail: 'publish-failed',
-    };
-    expect(readEvent(fakeWasm, event)).toEqual({
-      kind: 'scopeExitCutOwed',
-      scopeRoot,
-      detail: 'publish-failed',
-    });
-  });
-
-  it('maps the payload-free unjournaled registry debt', () => {
-    expect(readEvent(fakeWasm, { kind: 'registryDebtUnjournaled' })).toEqual({
-      kind: 'registryDebtUnjournaled',
-    });
-  });
-
-  it('maps the payload-free grantee-name cache reset', () => {
-    expect(readEvent(fakeWasm, { kind: 'granteeNamesCleared' })).toEqual({
-      kind: 'granteeNamesCleared',
-    });
-  });
-
-  it('maps granteeJoined so the owner sees who joined which scope', () => {
-    const scopeRoot = new Uint8Array(16).fill(0x5a);
-    const event: WasmEvent = {
-      kind: 'granteeJoined',
-      scopeRoot,
-      name: 'Grace',
-      fingerprint: 'ab12-cd34',
-    };
-    expect(readEvent(fakeWasm, event)).toEqual({
-      kind: 'granteeJoined',
-      scopeRoot,
-      name: 'Grace',
-      fingerprint: 'ab12-cd34',
-    });
-  });
-
-  it.each(['conversionRecordUnreadable', 'refusedClaimDropped'] as const)(
-    'maps the payload-free %s notice',
-    (kind) => {
-      expect(readEvent(fakeWasm, { kind })).toEqual({ kind });
-    }
-  );
-
-  it('maps the payload-free parked-writes refusal', () => {
-    expect(readEvent(fakeWasm, { kind: 'parkedWritesUnreadable' })).toEqual({
-      kind: 'parkedWritesUnreadable',
-    });
-  });
-
-  it('maps the payload-free settings change', () => {
-    expect(readEvent(fakeWasm, { kind: 'vaultSettingsChanged' })).toEqual({
-      kind: 'vaultSettingsChanged',
-    });
-  });
-
-  it('maps a full opProgress payload to string-literal phase', () => {
-    const node = new Uint8Array(16).fill(3);
-    const event: WasmEvent = {
-      kind: 'opProgress',
-      opId: 7n,
-      node,
-      phase: 2,
-      error: 'unavailable',
-    };
-    expect(readEvent(fakeWasm, event)).toEqual({
-      kind: 'opProgress',
-      opId: 7n,
-      node,
-      phase: 'downloadFailed',
-      blocksConfirmed: null,
-      blocksTotal: null,
-      error: 'unavailable',
-    });
-  });
-
-  it('maps an op-less, error-less opProgress to nulls', () => {
-    const event: WasmEvent = { kind: 'opProgress', node: new Uint8Array(16), phase: 0 };
-    expect(readEvent(fakeWasm, event)).toEqual({
-      kind: 'opProgress',
-      opId: null,
-      node: new Uint8Array(16),
-      phase: 'downloadStarted',
-      blocksConfirmed: null,
-      blocksTotal: null,
-      error: null,
-    });
-  });
-
-  it('carries an upload phase and its block counters through to the descriptor', () => {
-    const node = new Uint8Array(16).fill(4);
-    const event: WasmEvent = {
+  it('passes a known event through as the engine sent it', () => {
+    const event: EventDescriptor = {
       kind: 'opProgress',
       opId: 9n,
-      node,
-      phase: fakeWasm.OpPhase.UploadProgress,
-      blocksConfirmed: 3,
-      blocksTotal: 8,
-    };
-    expect(readEvent(fakeWasm, event)).toEqual({
-      kind: 'opProgress',
-      opId: 9n,
-      node,
+      node: new Uint8Array(16).fill(4),
       phase: 'uploadProgress',
-      blocksConfirmed: 3,
-      blocksTotal: 8,
+      progress: { confirmed: 3, total: 8 },
       error: null,
-    });
+    };
+    expect(readEvent(event)).toBe(event);
   });
 
-  it('carries a dead letter reason through to the descriptor', () => {
-    const event: WasmEvent = { kind: 'deadLetter', opId: 7n, deadLetterReason: 2 };
-    expect(readEvent(fakeWasm, event)).toEqual({
-      kind: 'deadLetter',
-      opId: 7n,
-      reason: 'destinationInsideTarget',
-    });
+  it('fails closed on an event kind this build does not know', () => {
+    expect(() => readEvent(skewed({ kind: 'somethingNew' }))).toThrow(
+      'unknown WASM event kind: somethingNew'
+    );
+    expect(() => readEvent(skewed({ kind: 'toString' }))).toThrow('unknown WASM event kind');
   });
 
-  it('maps the unrecoverable-content dead letter reason', () => {
-    const event: WasmEvent = { kind: 'deadLetter', opId: 4n, deadLetterReason: 7 };
-    expect(readEvent(fakeWasm, event)).toEqual({
-      kind: 'deadLetter',
-      opId: 4n,
-      reason: 'contentUnrecoverable',
-    });
-  });
-
-  it('maps the two reasons an abandonment reports about the record plane', () => {
-    expect(readEvent(fakeWasm, { kind: 'deadLetter', opId: 1n, deadLetterReason: 10 })).toEqual({
-      kind: 'deadLetter',
-      opId: 1n,
-      reason: 'preservationRefused',
-    });
-    expect(readEvent(fakeWasm, { kind: 'deadLetter', opId: 2n, deadLetterReason: 11 })).toEqual({
-      kind: 'deadLetter',
-      opId: 2n,
-      reason: 'alreadyPublished',
-    });
+  it('fails closed on a staleness level this build does not know', () => {
+    expect(() => readEvent(skewed({ kind: 'stalenessChanged', staleness: 'frozen' }))).toThrow(
+      'unknown WASM staleness: frozen'
+    );
   });
 
   it('fails closed on an unknown or absent dead letter reason', () => {
-    expect(() =>
-      readEvent(fakeWasm, { kind: 'deadLetter', opId: 7n, deadLetterReason: 42 })
-    ).toThrow('unknown WASM dead letter reason value: 42');
-    expect(() => readEvent(fakeWasm, { kind: 'deadLetter', opId: 7n })).toThrow(
-      'unknown WASM dead letter reason value: undefined'
+    expect(() => readEvent(skewed({ kind: 'deadLetter', opId: 7n, reason: 'lost' }))).toThrow(
+      'unknown WASM dead letter reason: lost'
+    );
+    expect(() => readEvent(skewed({ kind: 'deadLetter', opId: 7n }))).toThrow(
+      'unknown WASM dead letter reason: undefined'
     );
   });
 
   it('fails closed on an unknown opProgress phase', () => {
-    const event: WasmEvent = { kind: 'opProgress', node: new Uint8Array(16), phase: 99 };
-    expect(() => readEvent(fakeWasm, event)).toThrow('unknown WASM op phase value: 99');
-    expect(() => readEvent(fakeWasm, { kind: 'opProgress', node: new Uint8Array(16) })).toThrow(
-      'unknown WASM op phase value'
+    const node = new Uint8Array(16);
+    expect(() => readEvent(skewed({ kind: 'opProgress', node, phase: 'uploadPaused' }))).toThrow(
+      'unknown WASM op phase: uploadPaused'
+    );
+    expect(() => readEvent(skewed({ kind: 'opProgress', node, phase: 2 }))).toThrow(
+      'unknown WASM op phase: 2'
     );
   });
 });

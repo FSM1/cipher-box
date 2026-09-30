@@ -9,7 +9,7 @@ import {
 } from '../testkit.js';
 import { LocalTransport, type EngineWorkerLike } from '../transport.js';
 import { EngineHost } from './engineHost.js';
-import type { EngineWasm, WasmEngineHandle, WasmEvent } from './engineWasm.js';
+import type { EngineWasm, WasmEngineHandle } from './engineWasm.js';
 import type {
   BinDescriptor,
   CommandDescriptor,
@@ -480,17 +480,19 @@ describe('serveEngine event pump over the real EngineHost', () => {
     // The regression this guards: a renewalFailed engine event used to be an
     // unknown kind in `readEvent`, whose throw the pump escalated to `fatal`,
     // bricking the transport.
-    const pumped: WasmEvent[] = [
+    const sent: EventDescriptor[] = [
       { kind: 'renewalFailed', routingKey: 'k51abc', detail: 'republish rejected' },
       {
         kind: 'opProgress',
         opId: 5n,
         node: new Uint8Array(16).fill(7),
-        phase: 1,
-        error: undefined,
+        phase: 'downloadCompleted',
+        progress: null,
+        error: null,
       },
       { kind: 'snapshotUpdated' },
     ];
+    const pumped = [...sent];
     const handle: WasmEngineHandle = {
       start: () => Promise.resolve(undefined),
       command: () => Promise.resolve({ kind: 'done' }),
@@ -518,7 +520,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
       nextEvent: () =>
         pumped.length > 0
           ? Promise.resolve(pumped.shift())
-          : new Promise<WasmEvent | undefined>(() => undefined),
+          : new Promise<EventDescriptor | undefined>(() => undefined),
     };
     const wasm = {
       EngineHandle: function EngineHandle() {
@@ -540,19 +542,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
     // The pump has no engine to read until a start builds one.
     await transport.start(new ArrayBuffer(32), TEST_ACCOUNT_ID);
     await tick();
-    expect(received).toEqual([
-      { kind: 'renewalFailed', routingKey: 'k51abc', detail: 'republish rejected' },
-      {
-        kind: 'opProgress',
-        opId: 5n,
-        node: new Uint8Array(16).fill(7),
-        phase: 'downloadCompleted',
-        blocksConfirmed: null,
-        blocksTotal: null,
-        error: null,
-      },
-      { kind: 'snapshotUpdated' },
-    ]);
+    expect(received).toEqual(sent);
     expect(toUi.some((entry) => entry.message.type === 'fatal')).toBe(false);
     // The transport is alive: a post-event command still round-trips.
     await expect(transport.command({ kind: 'manualRefresh' })).resolves.toEqual({

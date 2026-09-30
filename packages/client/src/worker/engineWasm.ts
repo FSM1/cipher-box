@@ -2,38 +2,17 @@
  * The minimal structural type of the wasm-bindgen engine module, as the worker
  * uses it.
  *
- * The wasm-bindgen `.d.ts` is the real boundary contract; a command and its
- * outcome are typed from it. The rest of this interface names the handle and
+ * The wasm-bindgen `.d.ts` is the real boundary contract; a command, its
+ * outcome and an event are typed from it. The rest of this interface names the handle and
  * view surface the worker drives, which the generated module satisfies
  * structurally at wiring time.
  */
 
-import type { Command, CommandOutcome, NodeId } from '../../wasm/cipherbox_wasm.js';
+import type { Command, CommandOutcome, Event, NodeId } from '../../wasm/cipherbox_wasm.js';
 import type { SiweIntent } from './protocol.js';
 
 /** wasm-bindgen `NodeId` handle. */
 export type WasmNodeId = NodeId;
-
-/** wasm-bindgen `Event` — key-free view state; a getter is `undefined` off-variant. */
-export interface WasmEvent {
-  readonly kind: string;
-  readonly staleness?: number;
-  readonly ipnsName?: Uint8Array;
-  readonly opId?: bigint;
-  readonly description?: string;
-  readonly node?: Uint8Array;
-  readonly phase?: number;
-  readonly blocksConfirmed?: number;
-  readonly blocksTotal?: number;
-  readonly error?: string;
-  readonly routingKey?: string;
-  readonly detail?: string;
-  readonly retryable?: boolean;
-  readonly deadLetterReason?: number;
-  readonly scopeRoot?: Uint8Array;
-  readonly name?: string;
-  readonly fingerprint?: string;
-}
 
 /** wasm-bindgen `Breadcrumb` — one ancestor step in a snapshot view. */
 export interface WasmBreadcrumb {
@@ -321,7 +300,7 @@ export interface WasmEngineHandle {
   /** `offset`/`length` cross as plain JS numbers (the seam's `f64` convention). */
   readStream(handle: bigint, offset: number, length: number): Promise<Uint8Array>;
   closeStream(handle: bigint): Promise<unknown>;
-  nextEvent(): Promise<WasmEvent | undefined>;
+  nextEvent(): Promise<Event | undefined>;
 }
 
 /** The wasm-bindgen module namespace the worker binds against. */
@@ -393,24 +372,13 @@ export interface EngineWasm {
     readonly Test: number;
     readonly Unknown: number;
   };
-  OpPhase: {
-    readonly DownloadStarted: number;
-    readonly DownloadCompleted: number;
-    readonly DownloadFailed: number;
-    readonly UploadStarted: number;
-    readonly UploadProgress: number;
-    readonly UploadCompleted: number;
-    readonly UploadFailed: number;
-    readonly UploadCancelled: number;
-    readonly ExternalPinFailed: number;
-  };
-  Staleness: {
+  ViewStaleness: {
     readonly Fresh: number;
     readonly Reconciling: number;
     readonly Stale: number;
     readonly Offline: number;
   };
-  DeadLetterReason: {
+  ViewDeadLetterReason: {
     readonly TargetGone: number;
     readonly DestinationGone: number;
     readonly DestinationInsideTarget: number;

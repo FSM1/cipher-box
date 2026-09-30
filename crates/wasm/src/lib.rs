@@ -10,8 +10,8 @@
 //!
 //! The wasm-bindgen-generated `.d.ts` is the single boundary contract that
 //! `packages/client` re-exports — there is no hand-maintained TS mirror of
-//! engine structures. The facade commands and their outcomes cross as the
-//! engine's own types, typed by tsify ([`boundary`]). Boundary hygiene is
+//! engine structures. The facade commands, their outcomes and the events cross
+//! as the engine's own types, typed by tsify ([`boundary`]). Boundary hygiene is
 //! structural: `u64`s cross as `bigint`, binary payloads as `Uint8Array`, and
 //! the command surface exposes only intent while the event and read surfaces
 //! carry key-free view state and decrypted user content.
@@ -203,8 +203,8 @@ impl From<EngineByoKind> for ByoKind {
 
 /// The staleness ladder (#33 D4): a view is `Fresh`, quietly `Reconciling`,
 /// `Stale` past the profile threshold, or `Offline`. Availability staleness,
-/// never a trust violation.
-#[wasm_bindgen]
+/// never a trust violation. The JS name is as for [`Permission`].
+#[wasm_bindgen(js_name = ViewStaleness)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Staleness {
     /// View is within the freshness window.
@@ -230,8 +230,8 @@ impl From<facade::Staleness> for Staleness {
 
 /// Why a queued op dead-lettered. Each reason calls for a different message
 /// and a different user action, so the classification crosses with the op
-/// rather than being reduced to a flag.
-#[wasm_bindgen]
+/// rather than being reduced to a flag. The JS name is as for [`Permission`].
+#[wasm_bindgen(js_name = ViewDeadLetterReason)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeadLetterReason {
     /// The op's target or parent is gone from gate-passing state.
@@ -325,47 +325,6 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             facade::DeadLetterReason::GraftedScopeVaultSurface => {
                 DeadLetterReason::GraftedScopeVaultSurface
             }
-        }
-    }
-}
-
-/// The phase an `opProgress` event reports.
-#[wasm_bindgen]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpPhase {
-    /// A content download started.
-    DownloadStarted,
-    /// A content download completed.
-    DownloadCompleted,
-    /// A content download failed.
-    DownloadFailed,
-    /// The drain began uploading a queued op's content version.
-    UploadStarted,
-    /// One more of the version's blocks is confirmed on the network.
-    UploadProgress,
-    /// Every block of the version is on the network.
-    UploadCompleted,
-    /// One upload attempt stopped; the op retries on the next drain tick.
-    UploadFailed,
-    /// The user cancelled the upload.
-    UploadCancelled,
-    /// The version published, but the member's own IPFS provider did not take
-    /// it. No retry is queued.
-    ExternalPinFailed,
-}
-
-impl From<facade::OpPhase> for OpPhase {
-    fn from(phase: facade::OpPhase) -> Self {
-        match phase {
-            facade::OpPhase::DownloadStarted => OpPhase::DownloadStarted,
-            facade::OpPhase::DownloadCompleted => OpPhase::DownloadCompleted,
-            facade::OpPhase::DownloadFailed => OpPhase::DownloadFailed,
-            facade::OpPhase::UploadStarted => OpPhase::UploadStarted,
-            facade::OpPhase::UploadProgress => OpPhase::UploadProgress,
-            facade::OpPhase::UploadCompleted => OpPhase::UploadCompleted,
-            facade::OpPhase::UploadFailed => OpPhase::UploadFailed,
-            facade::OpPhase::UploadCancelled => OpPhase::UploadCancelled,
-            facade::OpPhase::ExternalPinFailed => OpPhase::ExternalPinFailed,
         }
     }
 }
@@ -1680,214 +1639,6 @@ impl PendingApproval {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Events — the read surface of the one-way event stream. Every getter returns
-// key-free view state; a getter is `undefined` for a non-matching variant.
-// ---------------------------------------------------------------------------
-
-/// One event the engine emits on the outbound stream (blueprint/engine.md
-/// "Facade"). Read `kind`, then the matching payload getter.
-#[wasm_bindgen]
-pub struct Event {
-    inner: facade::Event,
-}
-
-#[wasm_bindgen]
-impl Event {
-    /// The event discriminant, as a stable string literal.
-    #[wasm_bindgen(getter)]
-    pub fn kind(&self) -> String {
-        match self.inner {
-            facade::Event::SnapshotUpdated => "snapshotUpdated",
-            facade::Event::StalenessChanged { .. } => "stalenessChanged",
-            facade::Event::WithheldUpdateEscalation { .. } => "withheldUpdateEscalation",
-            facade::Event::DeadLetter { .. } => "deadLetter",
-            facade::Event::ParkedWritesUnreadable => "parkedWritesUnreadable",
-            facade::Event::RegistryDebtUnjournaled => "registryDebtUnjournaled",
-            facade::Event::GranteeNamesCleared => "granteeNamesCleared",
-            facade::Event::ConversionRecordUnreadable => "conversionRecordUnreadable",
-            facade::Event::RefusedClaimDropped => "refusedClaimDropped",
-            facade::Event::AttributableAbuse { .. } => "attributableAbuse",
-            facade::Event::RenewalFailed { .. } => "renewalFailed",
-            facade::Event::VaultUnprovisioned { .. } => "vaultUnprovisioned",
-            facade::Event::VaultSettingsChanged => "vaultSettingsChanged",
-            facade::Event::ScopeExitCutOwed { .. } => "scopeExitCutOwed",
-            facade::Event::OpProgress { .. } => "opProgress",
-            facade::Event::GranteeJoined { .. } => "granteeJoined",
-        }
-        .to_string()
-    }
-
-    /// `stalenessChanged`: the new level; otherwise `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn staleness(&self) -> Option<Staleness> {
-        match self.inner {
-            facade::Event::StalenessChanged { level } => Some(level.into()),
-            _ => None,
-        }
-    }
-
-    /// `withheldUpdateEscalation`: the pinned IPNS name bytes; otherwise
-    /// `undefined`.
-    #[wasm_bindgen(getter, js_name = ipnsName)]
-    pub fn ipns_name(&self) -> Option<Vec<u8>> {
-        match &self.inner {
-            facade::Event::WithheldUpdateEscalation { ipns_name } => Some(ipns_name.clone()),
-            _ => None,
-        }
-    }
-
-    /// `deadLetter` or `opProgress`: the op id (a `u64`, crossing as
-    /// `bigint`); otherwise (or for an op-less transfer) `undefined`.
-    #[wasm_bindgen(getter, js_name = opId)]
-    pub fn op_id(&self) -> Option<u64> {
-        match self.inner {
-            facade::Event::DeadLetter { op_id, .. } => Some(op_id.0),
-            facade::Event::OpProgress { op_id, .. } => op_id.map(|op| op.0),
-            _ => None,
-        }
-    }
-
-    /// `deadLetter`: why the op will never publish; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = deadLetterReason)]
-    pub fn dead_letter_reason(&self) -> Option<DeadLetterReason> {
-        match self.inner {
-            facade::Event::DeadLetter { reason, .. } => Some(reason.into()),
-            _ => None,
-        }
-    }
-
-    /// `opProgress`: the 16 raw bytes of the transferring node's id; otherwise
-    /// `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn node(&self) -> Option<Vec<u8>> {
-        match self.inner {
-            facade::Event::OpProgress { node, .. } => Some(node.0.to_vec()),
-            _ => None,
-        }
-    }
-
-    /// `opProgress`: the phase reached; otherwise `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn phase(&self) -> Option<OpPhase> {
-        match self.inner {
-            facade::Event::OpProgress { phase, .. } => Some(phase.into()),
-            _ => None,
-        }
-    }
-
-    /// `opProgress`: blocks of the version confirmed so far, on the phases that
-    /// count them; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = blocksConfirmed)]
-    pub fn blocks_confirmed(&self) -> Option<u32> {
-        match self.inner {
-            facade::Event::OpProgress { progress, .. } => progress.map(|p| p.confirmed),
-            _ => None,
-        }
-    }
-
-    /// `opProgress`: the version's whole block count, on the phases that count
-    /// them; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = blocksTotal)]
-    pub fn blocks_total(&self) -> Option<u32> {
-        match self.inner {
-            facade::Event::OpProgress { progress, .. } => progress.map(|p| p.total),
-            _ => None,
-        }
-    }
-
-    /// `opProgress`: the key-free failure classification for a failed phase;
-    /// otherwise `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn error(&self) -> Option<String> {
-        match &self.inner {
-            facade::Event::OpProgress { error, .. } => error.clone(),
-            _ => None,
-        }
-    }
-
-    /// `attributableAbuse`: the key-free classification; otherwise `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn description(&self) -> Option<String> {
-        match &self.inner {
-            facade::Event::AttributableAbuse { description } => Some(description.clone()),
-            _ => None,
-        }
-    }
-
-    /// `renewalFailed`: the failed record's routing key (`ipnsName`); otherwise
-    /// `undefined`.
-    #[wasm_bindgen(getter, js_name = routingKey)]
-    pub fn routing_key(&self) -> Option<String> {
-        match &self.inner {
-            facade::Event::RenewalFailed { routing_key, .. } => Some(routing_key.clone()),
-            _ => None,
-        }
-    }
-
-    /// `renewalFailed` / `vaultUnprovisioned` / `scopeExitCutOwed`: the
-    /// key-free failure classification; otherwise `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn detail(&self) -> Option<String> {
-        match &self.inner {
-            facade::Event::RenewalFailed { detail, .. }
-            | facade::Event::VaultUnprovisioned { detail, .. }
-            | facade::Event::ScopeExitCutOwed { detail, .. } => Some(detail.clone()),
-            _ => None,
-        }
-    }
-
-    /// `scopeExitCutOwed`: the 16 raw bytes of the scope root that still owes
-    /// the cut. `granteeJoined`: the scope root the grantee joined. Otherwise
-    /// `undefined`.
-    #[wasm_bindgen(getter, js_name = scopeRoot)]
-    pub fn scope_root(&self) -> Option<Vec<u8>> {
-        match self.inner {
-            facade::Event::ScopeExitCutOwed { scope_root, .. }
-            | facade::Event::GranteeJoined { scope_root, .. } => Some(scope_root.0.to_vec()),
-            _ => None,
-        }
-    }
-
-    /// `granteeJoined`: the name the claimant suggested, or empty; otherwise
-    /// `undefined`. Show it as a suggestion next to the fingerprint.
-    #[wasm_bindgen(getter)]
-    pub fn name(&self) -> Option<String> {
-        match &self.inner {
-            facade::Event::GranteeJoined { name, .. } => Some(name.clone()),
-            _ => None,
-        }
-    }
-
-    /// `granteeJoined`: the claimant's identity-key fingerprint; otherwise
-    /// `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn fingerprint(&self) -> Option<String> {
-        match &self.inner {
-            facade::Event::GranteeJoined { fingerprint, .. } => Some(fingerprint.clone()),
-            _ => None,
-        }
-    }
-
-    /// `vaultUnprovisioned`: whether a fresh `start` could clear it; otherwise
-    /// `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn retryable(&self) -> Option<bool> {
-        match &self.inner {
-            facade::Event::VaultUnprovisioned { retryable, .. } => Some(*retryable),
-            _ => None,
-        }
-    }
-}
-
-impl Event {
-    /// Wraps an engine event for the boundary. For the event-stream reader
-    /// slice and the boundary tests; never exported to JS.
-    pub fn from_facade(inner: facade::Event) -> Self {
-        Self { inner }
-    }
-}
-
 /// The short fingerprint of a 33-byte compressed identity key, the value both
 /// hosts show beside a grantee name (ADR 0027 D7). Throws on bytes that are
 /// not an identity key.
@@ -2179,95 +1930,6 @@ mod tests {
             cached_name: Some("Ada".into()),
         });
         assert_eq!(contact.cached_name().as_deref(), Some("Ada"));
-    }
-
-    #[test]
-    fn event_kind_and_payload_getters_map_variants() {
-        let snapshot = Event::from_facade(facade::Event::SnapshotUpdated);
-        assert_eq!(snapshot.kind(), "snapshotUpdated");
-        assert!(snapshot.op_id().is_none());
-
-        let dead = Event::from_facade(facade::Event::DeadLetter {
-            op_id: OpId(42),
-            reason: facade::DeadLetterReason::TargetGone,
-        });
-        assert_eq!(dead.kind(), "deadLetter");
-        assert_eq!(dead.op_id(), Some(42));
-        assert_eq!(
-            dead.dead_letter_reason(),
-            Some(DeadLetterReason::TargetGone)
-        );
-        assert!(
-            snapshot.dead_letter_reason().is_none(),
-            "the reason is undefined off-variant"
-        );
-
-        let stale = Event::from_facade(facade::Event::StalenessChanged {
-            level: facade::Staleness::Offline,
-        });
-        assert_eq!(stale.kind(), "stalenessChanged");
-        assert_eq!(stale.staleness(), Some(Staleness::Offline));
-
-        let withheld = Event::from_facade(facade::Event::WithheldUpdateEscalation {
-            ipns_name: vec![1, 2, 3],
-        });
-        assert_eq!(withheld.ipns_name(), Some(vec![1, 2, 3]));
-
-        let progress = Event::from_facade(facade::Event::OpProgress {
-            op_id: None,
-            node: facade::NodeId([0u8; 16]),
-            phase: facade::OpPhase::DownloadStarted,
-            progress: None,
-            error: None,
-        });
-        assert_eq!(progress.kind(), "opProgress");
-    }
-
-    #[test]
-    fn op_progress_getters_map_the_payload_and_stay_undefined_off_variant() {
-        let progress = Event::from_facade(facade::Event::OpProgress {
-            op_id: Some(OpId(7)),
-            node: facade::NodeId([3u8; 16]),
-            phase: facade::OpPhase::DownloadFailed,
-            progress: None,
-            error: Some("unavailable".into()),
-        });
-        assert_eq!(progress.op_id(), Some(7));
-        assert_eq!(progress.node(), Some(vec![3u8; 16]));
-        assert_eq!(progress.phase(), Some(OpPhase::DownloadFailed));
-        assert_eq!(progress.error(), Some("unavailable".into()));
-        assert!(progress.blocks_confirmed().is_none());
-
-        let upload = Event::from_facade(facade::Event::OpProgress {
-            op_id: Some(OpId(9)),
-            node: facade::NodeId([4u8; 16]),
-            phase: facade::OpPhase::UploadProgress,
-            progress: Some(facade::BlockProgress {
-                confirmed: 3,
-                total: 8,
-            }),
-            error: None,
-        });
-        assert_eq!(upload.op_id(), Some(9));
-        assert_eq!(upload.phase(), Some(OpPhase::UploadProgress));
-        assert_eq!(upload.blocks_confirmed(), Some(3));
-        assert_eq!(upload.blocks_total(), Some(8));
-
-        let op_less = Event::from_facade(facade::Event::OpProgress {
-            op_id: None,
-            node: facade::NodeId([0u8; 16]),
-            phase: facade::OpPhase::DownloadStarted,
-            progress: None,
-            error: None,
-        });
-        assert!(op_less.op_id().is_none());
-        assert_eq!(op_less.phase(), Some(OpPhase::DownloadStarted));
-        assert!(op_less.error().is_none());
-
-        let other = Event::from_facade(facade::Event::SnapshotUpdated);
-        assert!(other.node().is_none());
-        assert!(other.phase().is_none());
-        assert!(other.error().is_none());
     }
 
     // Constructs the facade structs literally so a new engine field breaks this

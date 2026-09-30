@@ -1,4 +1,4 @@
-//! The serde shape of the facade commands at the WASM boundary: the adapters
+//! The serde shape of the facade commands and events at the WASM boundary: the adapters
 //! for the field types whose durable serde form is not the boundary form
 //! (blueprint/web-client.md "WASM packaging and the type boundary").
 //!
@@ -77,6 +77,11 @@ pub mod node_id {
         <[u8; 16]>::try_from(raw.as_slice())
             .map(NodeId)
             .map_err(|_| de::Error::invalid_length(raw.len(), &"16 node id bytes"))
+    }
+
+    /// Writes the 16 bytes as a `Uint8Array`.
+    pub fn serialize<S: Serializer>(id: &NodeId, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&id.0)
     }
 }
 

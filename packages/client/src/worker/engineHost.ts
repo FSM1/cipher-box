@@ -422,6 +422,6 @@ export class EngineHost implements EngineHostLike {
   async nextEvent(): Promise<EventDescriptor | null> {
     const handle = await this.running;
     const event = await handle.nextEvent();
-    return event ? readEvent(this.wasm, event) : null;
+    return event ? readEvent(event) : null;
   }
 }

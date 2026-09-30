@@ -2,8 +2,10 @@
  * Transfer/boundary-hygiene checks (blueprint/web-client.md "Boundary
  * hygiene"), run in a worker realm (OPFS is worker-only):
  *
- * - `bigint`: the facade's `u64`→`bigint` boundary round-trips a value beyond
- *   `Number.MAX_SAFE_INTEGER` intact, through the real wasm-bindgen `Event`.
+ * - `events`: an engine event reaches JS as the generated `Event` type names
+ *   it — a `u64` beyond `Number.MAX_SAFE_INTEGER` as an exact `bigint`, bytes
+ *   as a `Uint8Array`, an absent field as `null`, a nested struct as numbers,
+ *   an enum as its name.
  * - `stagingDetachment`: a WASM-backed byte *value* handed to a seam is
  *   copied synchronously at entry, so detaching it across the seam's awaits
  *   cannot corrupt or truncate the stored bytes. The test grows a
@@ -19,7 +21,7 @@
  *   (`crates/core/kat/vectors/contact/fingerprint.json`) and refuses a key that
  *   is not 33 bytes.
  */
-import init, { deadLetterEvent, identityFingerprint } from './pkg/cipherbox_wasm.js';
+import init, { identityFingerprint, sampleEvents, type Event } from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
 import fingerprintVectors from '../../../../crates/core/kat/vectors/contact/fingerprint.json?raw';
 
@@ -45,13 +47,47 @@ async function clearOpfsDir(name: string): Promise<void> {
   }
 }
 
-async function runBigint(): Promise<void> {
+function expectBytes(value: unknown, expected: number[], what: string): void {
+  if (!(value instanceof Uint8Array)) throw new Error(`${what} is not a Uint8Array`);
+  if (value.join() !== expected.join()) throw new Error(`${what} ${value.join()}`);
+}
+
+async function runEvents(): Promise<void> {
   await init({ module_or_path: wasmUrl });
   const huge = 9_007_199_254_740_993n; // 2^53 + 1 — not representable as a JS number
-  const event = deadLetterEvent(huge);
-  if (event.kind !== 'deadLetter') throw new Error(`kind ${event.kind}`);
-  if (typeof event.opId !== 'bigint') throw new Error(`opId type ${typeof event.opId}`);
-  if (event.opId !== huge) throw new Error(`opId ${event.opId} !== ${huge}`);
+  const [dead, upload, download, withheld, stale, snapshot]: Event[] = sampleEvents(huge);
+
+  if (dead?.kind !== 'deadLetter') throw new Error(`kind ${dead?.kind}`);
+  if (typeof dead.opId !== 'bigint') throw new Error(`opId type ${typeof dead.opId}`);
+  if (dead.opId !== huge) throw new Error(`opId ${dead.opId} !== ${huge}`);
+  if (dead.reason !== 'undecodable') throw new Error(`reason ${dead.reason}`);
+
+  if (upload?.kind !== 'opProgress') throw new Error(`kind ${upload?.kind}`);
+  if (upload.opId !== huge) throw new Error(`progress opId ${upload.opId}`);
+  expectBytes(upload.node, Array(16).fill(7), 'node');
+  if (upload.phase !== 'uploadProgress') throw new Error(`phase ${upload.phase}`);
+  if (upload.progress?.confirmed !== 2 || upload.progress.total !== 5) {
+    throw new Error(`progress ${JSON.stringify(upload.progress)}`);
+  }
+  if (upload.error !== 'unavailable') throw new Error(`error ${upload.error}`);
+
+  if (download?.kind !== 'opProgress') throw new Error(`kind ${download?.kind}`);
+  for (const [name, value] of Object.entries({
+    opId: download.opId,
+    progress: download.progress,
+    error: download.error,
+  })) {
+    if (value !== null) throw new Error(`absent ${name} is ${String(value)}, not null`);
+  }
+
+  if (withheld?.kind !== 'withheldUpdateEscalation') throw new Error(`kind ${withheld?.kind}`);
+  expectBytes(withheld.ipnsName, [9, 8, 7], 'ipnsName');
+  if (stale?.kind !== 'stalenessChanged' || stale.staleness !== 'offline') {
+    throw new Error(`staleness ${JSON.stringify(stale)}`);
+  }
+  if (snapshot?.kind !== 'snapshotUpdated' || Object.keys(snapshot).length !== 1) {
+    throw new Error(`snapshot ${JSON.stringify(snapshot)}`);
+  }
 }
 
 interface FingerprintVector {
@@ -208,8 +244,8 @@ async function runFloorKeyDetachment(): Promise<void> {
 
 async function run(name: string): Promise<void> {
   switch (name) {
-    case 'bigint':
-      return runBigint();
+    case 'events':
+      return runEvents();
     case 'stagingDetachment':
       return runStagingDetachment();
     case 'stagingKeyDetachment':
