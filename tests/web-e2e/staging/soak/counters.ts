@@ -21,7 +21,7 @@ const HOUR_S = 3600;
  */
 export const POST_DEPLOY_S = 12 * HOUR_S;
 /** Two walks, at 12 and 24 hours of uptime, with an hour for the second to end. */
-export const TWO_WALKS_S = 25 * HOUR_S;
+const TWO_WALKS_S = 25 * HOUR_S;
 
 export const UPTIME_QUERY = 'time() - process_start_time_seconds{job="api"}';
 
@@ -70,7 +70,7 @@ export function instantValues(body: unknown): number[] {
   } | null;
   if (answer?.status !== 'success') throw new Error('the query did not succeed');
   const data = answer.data;
-  if (data?.resultType === 'scalar') return [sampleValue((data as { result?: unknown }).result)];
+  if (data?.resultType === 'scalar') return [sampleValue(data.result)];
   if (data?.resultType !== 'vector' || !Array.isArray(data.result)) {
     throw new Error('the query answered no vector');
   }
@@ -212,13 +212,13 @@ export async function readCounters(
   access: GrafanaAccess,
   timeoutMs: number
 ): Promise<CounterReadings> {
-  const values = await Promise.all(
+  const entries = await Promise.all(
     COUNTERS.map(async (key) => {
       const promql = COUNTER_QUERIES[key];
-      return oneSeries(promql, await query(access, promql, timeoutMs));
+      return [key, oneSeries(promql, await query(access, promql, timeoutMs))] as const;
     })
   );
-  return Object.fromEntries(COUNTERS.map((key, index) => [key, values[index]])) as CounterReadings;
+  return Object.fromEntries(entries) as CounterReadings;
 }
 
 export function countersLine(readings: CounterReadings): string {

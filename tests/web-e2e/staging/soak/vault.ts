@@ -14,7 +14,8 @@ import type { SoakRole } from './accounts';
 import { archiveName, SOAK_FOLDER, soakFolderListed, type VaultState } from './bootstrap';
 import { DESKTOP_FOLDER, LEDGER_FILE } from './grantee';
 import { emptyLedger, formatLedger, parseLedger, type Ledger } from './ledger';
-import { SoakFailure } from './reasons';
+import { markerBytes, markerFile, unreadLine } from './markers';
+import { SoakFailure, type FailureReason } from './reasons';
 
 export { LEDGER_FILE };
 
@@ -26,6 +27,12 @@ export const LEDGER_FOLDERS: Readonly<Record<SoakRole, readonly string[]>> = {
 
 /** How long a listing gets to show a row before the row counts as absent. */
 const LISTED_WITHIN_MS = 60_000;
+
+/** How long one marker download gets. */
+const MARKER_DOWNLOAD_MS = 60_000;
+
+/** How long an uploaded marker gets to show its row. */
+const MARKER_ROW_MS = 180_000;
 
 /** How long the settings read and save get. */
 const SETTINGS_MS = 60_000;
@@ -161,8 +168,36 @@ export async function download(files: FilesPage, name: string, ms: number): Prom
   return new Uint8Array(await readFile(await saved.path()));
 }
 
+/** Opens the marker of each of `dates` in the folder on screen, byte for byte, inside `ms`. */
+export async function readMarkers(
+  files: FilesPage,
+  dates: readonly string[],
+  ms: number,
+  reason: FailureReason
+): Promise<void> {
+  const deadline = Date.now() + ms;
+  for (const [index, date] of dates.entries()) {
+    if (Date.now() >= deadline) {
+      throw new SoakFailure(reason, `no time to open ${unreadLine(dates.slice(index))}`);
+    }
+    const bytes = await download(files, markerFile(date), MARKER_DOWNLOAD_MS);
+    if (!Buffer.from(bytes).equals(Buffer.from(markerBytes(date)))) {
+      throw new SoakFailure(reason, `the marker of ${date} opened other bytes`);
+    }
+  }
+}
+
+/** Uploads the marker of `date` to the folder on screen, unless it is listed already. */
+export async function ensureMarker(files: FilesPage, date: string): Promise<void> {
+  const file = markerFile(date);
+  if (await listed(files, file)) return;
+  await files.upload(file, markerBytes(date));
+  await expect(files.row(file)).toBeVisible({ timeout: MARKER_ROW_MS });
+  await files.published();
+}
+
 /** `work`, or a rejection once `ms` passes: a wait the page does not bound itself. */
-export async function within<T>(work: Promise<T>, ms: number, late: string): Promise<T> {
+async function within<T>(work: Promise<T>, ms: number, late: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(late)), ms);

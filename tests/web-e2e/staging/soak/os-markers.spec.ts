@@ -13,17 +13,24 @@ import {
   type LegMarker,
   type MarkerLeg,
 } from './grantee';
-import { check, expect, fact, test } from './fixtures';
+import { check, fact, test } from './fixtures';
 import { utcDay } from './ledger';
 import { markerBytes, markerFile, unreadLine } from './markers';
 import { SoakFailure } from './reasons';
-import { download, listed, openLedger, synced, toLedgerFolder, writeLedger } from './vault';
+import {
+  download,
+  ensureMarker,
+  listed,
+  openLedger,
+  synced,
+  toLedgerFolder,
+  writeLedger,
+} from './vault';
 
 /** Sign-in 18, ledger 8, listings 5, opens 20, write 9. */
 const TEST_MS = 3_600_000;
 const OPENS_MS = 1_200_000;
 const DOWNLOAD_MS = 60_000;
-const PAGE_MS = 180_000;
 
 const OS_LEGS = MARKER_LEGS.filter((leg) => leg !== 'web');
 
@@ -83,17 +90,12 @@ test('the grantee web leg opens the OS markers and writes a browser marker', asy
   await fact('OS markers opened in the browser', readLine(read));
 
   await check('browser marker', 'browser-marker-unwritten', async () => {
-    const file = markerFile(today);
     if (!(await openLeg(files, 'web'))) {
       await files.createFolder('web');
       await files.published();
       await files.open('web');
     }
-    if (!(await listed(files, file))) {
-      await files.upload(file, markerBytes(today));
-      await expect(files.row(file)).toBeVisible({ timeout: PAGE_MS });
-      await files.published();
-    }
+    await ensureMarker(files, today);
     const next = recordMarker(ledger, { leg: 'web', date: today });
     if (next !== ledger) {
       await toLedgerFolder(files, 'grantee');

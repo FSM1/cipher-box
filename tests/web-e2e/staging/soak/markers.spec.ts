@@ -37,9 +37,9 @@ import { SoakFailure } from './reasons';
 import { resolveUntil } from './recordReader';
 import {
   binRetention,
-  download,
   LEDGER_FILE,
   openLedger,
+  readMarkers,
   toLedgerFolder,
   writeLedger,
 } from './vault';
@@ -52,7 +52,6 @@ const TEST_MS = 5_400_000;
 /** A name the ledger holds was published a night ago or more. */
 const RESOLVE_MS = 120_000;
 const OPENS_MS = 1_200_000;
-const DOWNLOAD_MS = 60_000;
 /** The dialog reads of every ledger name, and then their resolves, 25 in total. */
 const NAMES_MS = 600_000;
 const RESOLVES_MS = 900_000;
@@ -99,22 +98,14 @@ test('the owner markers open byte for byte and hold their sequences', async ({ o
   );
   const list = byDate(markers(ledger));
 
-  await check('owner markers open', 'marker-unreadable', async () => {
-    const deadline = Date.now() + OPENS_MS;
-    for (const [index, marker] of list.entries()) {
-      if (Date.now() >= deadline) {
-        const unread = list.slice(index).map((m) => m.date);
-        throw new SoakFailure('marker-unreadable', `no time to open ${unreadLine(unread)}`);
-      }
-      const bytes = await download(files, markerFile(marker.date), DOWNLOAD_MS);
-      if (!Buffer.from(bytes).equals(Buffer.from(markerBytes(marker.date)))) {
-        throw new SoakFailure(
-          'marker-unreadable',
-          `the marker of ${marker.date} opened other bytes`
-        );
-      }
-    }
-  });
+  await check('owner markers open', 'marker-unreadable', () =>
+    readMarkers(
+      files,
+      list.map((marker) => marker.date),
+      OPENS_MS,
+      'marker-unreadable'
+    )
+  );
   const oldest = list[0];
   await fact('owner oldest marker', oldestMarkerLine(oldest, today));
 

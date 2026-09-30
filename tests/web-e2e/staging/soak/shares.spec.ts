@@ -15,8 +15,7 @@ import { SharedPage, type RowStanding } from '../../page-objects/shared.page';
 import { nudgedUntil } from '../fixtures';
 import { check, expect, fact, test } from './fixtures';
 import { utcDay } from './ledger';
-import { markerBytes, markerFile, unreadLine } from './markers';
-import { SoakFailure } from './reasons';
+import { markerFile } from './markers';
 import {
   CYCLE_FOLDER,
   cycleEpochStepped,
@@ -32,7 +31,15 @@ import {
   withSharedLink,
   type Epochs,
 } from './shares';
-import { download, listed, openLedger, synced, toLedgerFolder, writeLedger } from './vault';
+import {
+  ensureMarker,
+  listed,
+  openLedger,
+  readMarkers,
+  synced,
+  toLedgerFolder,
+  writeLedger,
+} from './vault';
 
 /** Owner sign-in 18, folder 12, mint 5, grantee sign-in 18, join 6, reads 10, epoch 3. */
 const SHARED_TEST_MS = 4_200_000;
@@ -41,7 +48,6 @@ const CYCLE_TEST_MS = 6_600_000;
 const PAGE_MS = 180_000;
 const LISTING_MS = 300_000;
 const READS_MS = 600_000;
-const DOWNLOAD_MS = 60_000;
 const CONVERSION_MS = 360_000;
 const STANDING_MS = 600_000;
 const EPOCH_MS = 180_000;
@@ -70,12 +76,7 @@ async function readyFolder(
   }
   await files.open(folder);
   await synced(files);
-  const file = markerFile(today);
-  if (!(await listed(files, file))) {
-    await files.upload(file, markerBytes(today));
-    await expect(files.row(file)).toBeVisible({ timeout: PAGE_MS });
-    await files.published();
-  }
+  await ensureMarker(files, today);
   const leaving = sharedOverCap(markerDates(await files.names()), cap);
   for (const date of leaving) {
     await files.remove(markerFile(date));
@@ -106,9 +107,13 @@ async function openLink(page: Page, link: URL): Promise<InvitePage> {
  * Opens `link` in a signed-in grantee page and joins. The preview must list
  * today's marker first: it reads through the link's own grant blob, which a
  * person grant from an earlier night does not stand in for. Answers the scope
- * root the join opened.
+ * root the join opened, once its listing shows today's marker.
  */
-async function join(page: Page, link: URL, today: string): Promise<string> {
+async function join(
+  page: Page,
+  link: URL,
+  today: string
+): Promise<{ held: FilesPage; scope: string }> {
   const invite = await openLink(page, link);
   await invite.expectState('joinable', PAGE_MS);
   await expect(invite.entries.filter({ hasText: markerFile(today) })).toHaveCount(1);
@@ -120,24 +125,9 @@ async function join(page: Page, link: URL, today: string): Promise<string> {
       timeout: PAGE_MS,
     })
     .toBeDefined();
-  return scope!;
-}
-
-/** Opens each marker of `dates` in the folder on screen, byte for byte, inside `ms`. */
-async function readMarkers(files: FilesPage, dates: readonly string[], ms: number): Promise<void> {
-  const deadline = Date.now() + ms;
-  for (const [index, date] of dates.entries()) {
-    if (Date.now() >= deadline) {
-      throw new SoakFailure(
-        'holder-read-failed',
-        `no time to open ${unreadLine(dates.slice(index))}`
-      );
-    }
-    const bytes = await download(files, markerFile(date), DOWNLOAD_MS);
-    if (!Buffer.from(bytes).equals(Buffer.from(markerBytes(date)))) {
-      throw new SoakFailure('holder-read-failed', `the marker of ${date} opened other bytes`);
-    }
-  }
+  const held = new FilesPage(page);
+  await nudgedUntil(held, held.row(markerFile(today)), 1, LISTING_MS);
+  return { held, scope: scope! };
 }
 
 test('the long-running link reads every marker with its read epoch flat', async ({
@@ -152,7 +142,6 @@ test('the long-running link reads every marker with its read epoch flat', async 
     const read = await openLedger(files, 'owner');
     return { read, link: sharedLink(read) };
   });
-  let ledger = opened.read;
   let link = opened.link;
   await check('shared folder marker', 'share-folder-unready', () =>
     readyFolder(files, SHARED_FOLDER, today, SHARED_MARKER_CAP)
@@ -164,8 +153,7 @@ test('the long-running link reads every marker with its read epoch flat', async 
       const url = await share.mintExpiringIn(LONG_RUNNING_MS, { permission: 'read' });
       const minted = { readEpoch: (await readEpochs(share)).read, url };
       await share.close();
-      ledger = withSharedLink(ledger, minted);
-      await writeLedger(files, ledger);
+      await writeLedger(files, withSharedLink(opened.read, minted));
       return minted;
     });
     await fact('shared link', `minted ${linkPrefix(link.url)} at read epoch ${link.readEpoch}`);
@@ -173,12 +161,9 @@ test('the long-running link reads every marker with its read epoch flat', async 
 
   const url = link.url;
   const dates = await check('shared holder read', 'holder-read-failed', async () => {
-    const page = await grantee();
-    await join(page, url, today);
-    const held = new FilesPage(page);
-    await nudgedUntil(held, held.row(markerFile(today)), 1, LISTING_MS);
+    const { held } = await join(await grantee(), url, today);
     const shown = markerDates(await held.names());
-    await readMarkers(held, shown, READS_MS);
+    await readMarkers(held, shown, READS_MS, 'holder-read-failed');
     return shown;
   });
   await fact('shared holder markers', `${dates.length} opened, oldest ${dates[0]}`);
@@ -231,10 +216,8 @@ test('the cycle folder mints, converts and revokes a read link in one night', as
 
   const { page, scope } = await check('cycle holder read', 'holder-read-failed', async () => {
     const opened = await grantee();
-    const root = await join(opened, url, today);
-    const held = new FilesPage(opened);
-    await nudgedUntil(held, held.row(markerFile(today)), 1, LISTING_MS);
-    await readMarkers(held, [today], READS_MS);
+    const { held, scope: root } = await join(opened, url, today);
+    await readMarkers(held, [today], READS_MS, 'holder-read-failed');
     return { page: opened, scope: root };
   });
 
