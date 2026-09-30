@@ -157,7 +157,8 @@ jobs:
           fi
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
-  # The soak reports into its own issue, so the report below does not wait on it.
+  # A failed night goes to the soak's own issue. The report below takes only a
+  # soak run whose report job did not finish.
   staging-soak:
     name: Staging Soak
     needs: staging-soak-tag
@@ -170,8 +171,17 @@ jobs:
 
   report:
     name: Report A Nightly Failure
-    needs: [api-liveness, flake-surveillance, cloudflare-ranges, staging-soak-tag]
-    if: failure()
+    needs: [api-liveness, flake-surveillance, cloudflare-ranges, staging-soak-tag, staging-soak]
+    # Not `failure()`: a failed soak leg fails the soak call, and that night is
+    # already in the soak issue.
+    if: >-
+      ${{ !cancelled() && (
+        needs.api-liveness.result == 'failure' ||
+        needs.flake-surveillance.result == 'failure' ||
+        needs.cloudflare-ranges.result == 'failure' ||
+        needs.staging-soak-tag.result == 'failure' ||
+        (needs.staging-soak.result != 'skipped' && needs.staging-soak.result != 'cancelled' &&
+          needs.staging-soak.outputs.reported != 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -188,6 +198,7 @@ jobs:
           SURVEILLANCE: ${{ needs.flake-surveillance.result }}
           RANGES: ${{ needs.cloudflare-ranges.result }}
           SOAK_TAG: ${{ needs.staging-soak-tag.result }}
+          SOAK_REPORTED: ${{ needs.staging-soak.outputs.reported || 'false' }}
           TITLE: 'ci: a nightly run failed'
         run: |
           set -euo pipefail
@@ -200,6 +211,7 @@ jobs:
             echo "| Full-Matrix Flake Surveillance | ${SURVEILLANCE} |"
             echo "| Cloudflare Range Watch | ${RANGES} |"
             echo "| Staging Soak tag | ${SOAK_TAG} |"
+            echo "| Staging Soak report finished | ${SOAK_REPORTED} |"
           } > "${RUNNER_TEMP}/nightly-report.md"
           number=$(gh issue list --state open --label comp:ci --limit 500 --json number,title \
             --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')

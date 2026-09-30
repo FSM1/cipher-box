@@ -1,0 +1,37 @@
+name: Set up a web soak job
+description: >-
+  Install what the web soak suite needs after checkout: the dependencies, the
+  packages it imports, the `observer` WASM module its vault checks read records
+  with, and the pinned Chromium.
+
+runs:
+  using: composite
+  steps:
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        shared-key: client-browser
+        save-if: false
+
+    - uses: ./.github/actions/wasm-bindgen-cli
+
+    - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version-file: 'package.json'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    - name: Build the packages the suite imports and the observer module
+      shell: bash
+      run: |
+        pnpm --filter @cipherbox/client --filter @cipherbox/login --filter @cipherbox/auth-ui run build
+        pnpm --filter @cipherbox/client run build:wasm-conformance
+
+    - uses: ./.github/actions/playwright-chromium
+      with:
+        package: '@cipherbox/web-e2e'
+        working-directory: tests/web-e2e

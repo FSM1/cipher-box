@@ -12,6 +12,7 @@ import {
   resultsArtifact,
   SOAK_LEGS,
   unbootstrapped,
+  type JobResults,
   type LegResults,
   type SoakLeg,
 } from './night';
@@ -43,16 +44,21 @@ function everyLeg<T>(value: T): Record<SoakLeg, T> {
   return Object.fromEntries(SOAK_LEGS.map((leg) => [leg, value])) as Record<SoakLeg, T>;
 }
 
+const results = (legs: Record<SoakLeg, string>, guard = 'success'): JobResults => ({ guard, legs });
+
 describe('the job results', () => {
-  it('read each leg from the needs context and mark an absent leg', () => {
+  it('read the guard and each leg from the needs context, and mark an absent job', () => {
     const needs = JSON.stringify({
+      guard: { result: 'success', outputs: {} },
       'web-vault': { result: 'failure', outputs: { unbootstrapped: 'true' } },
       'web-shares': { result: 'skipped', outputs: {} },
     });
-    const results = jobResults(needs);
-    expect(results['web-vault']).toBe('failure');
-    expect(results['web-shares']).toBe('skipped');
-    expect(results['desktop-windows']).toBe('missing');
+    const found = jobResults(needs);
+    expect(found.guard).toBe('success');
+    expect(found.legs['web-vault']).toBe('failure');
+    expect(found.legs['web-shares']).toBe('skipped');
+    expect(found.legs['desktop-windows']).toBe('missing');
+    expect(jobResults('{}').guard).toBe('missing');
   });
 });
 
@@ -94,11 +100,11 @@ describe('a leg', () => {
     expect(classifyLeg('desktop-linux', 'missing', lines(passed)).verdict).toBe('failed');
   });
 
-  it('is skipped when its job was cancelled or skipped, and gives no line to the join', () => {
+  it('is skipped when its job was cancelled or skipped, and keeps its lines', () => {
     for (const result of ['cancelled', 'skipped']) {
       const leg = classifyLeg('desktop-macos', result, lines(started, failed));
       expect(leg.verdict).toBe('skipped');
-      expect(leg.records).toEqual([]);
+      expect(leg.records).toEqual([started, failed]);
     }
   });
 
@@ -121,14 +127,14 @@ describe('a leg', () => {
 
 describe('a night', () => {
   it('passes when every leg passed, and opens no issue', () => {
-    const night = classifyNight(everyLeg('success'), everyLeg(lines(passed)));
+    const night = classifyNight(results(everyLeg('success')), everyLeg(lines(passed)));
     expect(night.verdict).toBe('passed');
     expect(issueBody(night, RUN)).toBeNull();
   });
 
   it('with a cancelled leg and no failure is skipped, and opens no issue', () => {
     const night = classifyNight(
-      { ...everyLeg('success'), 'desktop-linux': 'cancelled' },
+      results({ ...everyLeg('success'), 'desktop-linux': 'cancelled' }),
       everyLeg(lines(passed))
     );
     expect(night.verdict).toBe('skipped');
@@ -137,13 +143,10 @@ describe('a night', () => {
   });
 
   it('with one failed leg fails, and the issue names the leg and its reason code', () => {
-    const night = classifyNight(
-      {
-        ...everyLeg('skipped'),
-        'web-vault': 'failure',
-      },
-      { ...everyLeg<LegResults>({ kind: 'missing' }), 'web-vault': lines(wiped) }
-    );
+    const night = classifyNight(results({ ...everyLeg('skipped'), 'web-vault': 'failure' }), {
+      ...everyLeg<LegResults>({ kind: 'missing' }),
+      'web-vault': lines(wiped),
+    });
     expect(night.verdict).toBe('failed');
     const body = issueBody(night, RUN);
     expect(body).toContain(RUN);
@@ -152,9 +155,19 @@ describe('a night', () => {
     expect(body).toContain('- web-vault: owner vault: `unbootstrapped-or-wiped`');
   });
 
-  it('joins the checks of the legs that ran into one summary', () => {
+  it('names a test that a stopped leg left unfinished in the issue', () => {
+    const night = classifyNight(results({ ...everyLeg('success'), 'desktop-macos': 'failure' }), {
+      ...everyLeg(lines(passed)),
+      'desktop-macos': lines(started, passed),
+    });
+    expect(issueBody(night, RUN)).toContain(
+      '- desktop-macos: macos desktop leg: `test-unfinished`'
+    );
+  });
+
+  it('joins the checks of every leg into one summary, a skipped leg too', () => {
     const night = classifyNight(
-      { ...everyLeg('success'), 'web-shares': 'failure', 'desktop-windows': 'cancelled' },
+      results({ ...everyLeg('success'), 'web-shares': 'failure', 'desktop-windows': 'cancelled' }),
       {
         ...everyLeg(lines(passed)),
         'web-shares': lines(failed),
@@ -163,8 +176,24 @@ describe('a night', () => {
     );
     const summary = renderNight(night, RUN);
     expect(summary).toContain('The soak night failed.');
-    // Three legs gave a passed check and one a failed check; the cancelled leg gives none.
-    expect(summary).toContain('1 of 4 soak checks failed.');
+    expect(summary).toContain('| desktop-windows | cancelled | skipped | 1 |');
+    // Three legs gave a passed check, and two legs a failed check.
+    expect(summary).toContain('2 of 5 soak checks failed.');
+    // Only the failed leg reaches the issue.
+    const body = issueBody(night, RUN)!;
+    expect(body).toContain('- web-shares: owner markers');
+    expect(body).not.toContain('- desktop-windows:');
+  });
+
+  it('fails when the input check failed, and skips when it was cancelled', () => {
+    const none = everyLeg<LegResults>({ kind: 'missing' });
+    const refused = classifyNight(results(everyLeg('skipped'), 'failure'), none);
+    expect(refused.verdict).toBe('failed');
+    expect(issueBody(refused, RUN)).toContain('The input check ended `failure`');
+
+    const cancelled = classifyNight(results(everyLeg('skipped'), 'cancelled'), none);
+    expect(cancelled.verdict).toBe('skipped');
+    expect(issueBody(cancelled, RUN)).toBeNull();
   });
 });
 
