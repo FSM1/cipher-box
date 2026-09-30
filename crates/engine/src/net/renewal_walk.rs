@@ -202,6 +202,9 @@ struct Pass<'s> {
     /// Every scope root the session knows, owned or not: the walk reaches
     /// each owned one as a root of its own.
     scope_roots: BTreeSet<[u8; 16]>,
+    /// The folders this pass walked into. Child refs are wire data, so a link
+    /// cycle is reachable, and the walk enters each folder once for each pass.
+    descended: BTreeSet<[u8; 16]>,
     due: Vec<Due>,
     /// The names a delete doomed, or `None` when the journal did not read.
     doomed: Option<BTreeSet<String>>,
@@ -294,6 +297,7 @@ where
                 .map(|scope| scope.scope_id)
                 .chain(scope_roots.iter().copied())
                 .collect(),
+            descended: BTreeSet::new(),
             due: Vec::new(),
             doomed: None,
             owner_tag: owner_tag(self.enc_secret),
@@ -412,6 +416,7 @@ where
             return RootEnd::Finished;
         };
         let in_bin = matches!(root, WalkRoot::Bin(_));
+        pass.descended.insert(root_node);
         let mut frames = vec![Frame::of(root_node, body)];
         if pass.cursor.path.first() != Some(&root_node) {
             pass.cursor.path = vec![root_node];
@@ -431,12 +436,14 @@ where
                 }
                 _ => None,
             };
-            // The walk is inside `id`, so its parent resumes after it.
+            // The parent resumes after `id`, whether or not `id` reopens.
             if let Some(parent) = frames.last_mut() {
                 parent.resume_after(Some(id));
             }
             match reopened {
-                Some(body @ ReadBody::Folder { .. }) => frames.push(Frame::of(id, body)),
+                Some(body @ ReadBody::Folder { .. }) if pass.descended.insert(id) => {
+                    frames.push(Frame::of(id, body));
+                }
                 _ => {
                     last = Some(id);
                     break;
@@ -472,7 +479,10 @@ where
             let Some(body) = self.visit(pass, &plane, &child, in_bin).await else {
                 continue;
             };
-            if child.kind != NodeKind::Folder || !matches!(body, ReadBody::Folder { .. }) {
+            if child.kind != NodeKind::Folder
+                || !matches!(body, ReadBody::Folder { .. })
+                || !pass.descended.insert(child.id)
+            {
                 continue;
             }
             let at_cap = frames.len() + 1 == MAX_CURSOR_PATH;

@@ -160,6 +160,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   60 days of EOL left, and a new cycle no sooner than 7 days after the previous
   one began. A visit signs only under the write seed that derives its scope
   root's name, so a node a stopped name wave left at an older name lapses.
+  The walk enters each folder once for each pass, so a link cycle ends.
   A move can put a subtree behind the cursor for one cycle, so two
   visits of one name are at most `2 max(T, 7 days) + T` apart, where T is the
   longest time the owner takes to run `ceil(N / 500)` passes. The window holds

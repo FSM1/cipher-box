@@ -9,16 +9,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::kdf;
+use cipherbox_core::seal::{
+    ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, decode_envelope, open_read_body,
+};
 
+use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::eol::{eol_from, renewal_eol_from};
 use cipherbox_engine::net::renewal_walk::WALK_BUDGET;
 use cipherbox_engine::net::renewal_walk::cursor::{CursorStore, MAX_CURSOR_PATH};
 use cipherbox_engine::seams::{BoxedTask, HttpMethod, RecordTransport, Scheduler, UnixMillis};
 use cipherbox_engine::sync::BookkeepingSeal;
-use cipherbox_engine::testkit::account::{Blocks, SECRET, seed_account};
+use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, seed_account};
 use cipherbox_engine::testkit::{
-    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-    SeededEntropy, block_on, poll_tasks_until_parked,
+    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED,
+    OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED, SeededEntropy, block_on,
+    poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, ContentProfile, Engine, EventStream, GatewayConfig, LoginSecret, NodeId,
@@ -490,4 +495,99 @@ fn a_pass_that_parks_below_an_ancestor_resumes_at_that_ancestors_next_sibling() 
             "a sibling of the ancestor the walk parked below",
         );
     }
+}
+
+/// Another writer publishes `folder`'s next record, which also names `ancestor`
+/// as a child: a link cycle, which the body decode does not refuse.
+fn name_an_ancestor(world: &FakeWorld, blocks: &Blocks, folder: NodeId, ancestor: NodeId) {
+    let name = write_name(folder);
+    let current = record_at(world, &name);
+    let head_cid = core::str::from_utf8(&current.value)
+        .expect("utf8 value")
+        .strip_prefix("/ipfs/")
+        .expect("an /ipfs/ pointer")
+        .to_owned();
+    let envelope =
+        decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
+    let read_key =
+        *kdf::read_key(kdf::node_seed(&READ_SCOPE_SEED, &folder.0).as_bytes()).as_bytes();
+    let ReadBody::Folder {
+        created_at,
+        modified_at,
+        mut children,
+        unknown,
+    } = open_read_body(&envelope, &read_key).expect("opens")
+    else {
+        panic!("expected a folder body");
+    };
+    children.push(ChildRef {
+        id: ancestor.0,
+        name: "loop".into(),
+        ipns_name: write_name(ancestor).as_str().as_bytes().to_vec(),
+        kind: CoreNodeKind::Folder,
+        link_counter: 1,
+        unknown: PreservedFields::new(),
+    });
+    let head = author_child_envelope(EnvelopeAuthoring {
+        node_id: folder.0,
+        scope_id: SCOPE,
+        epoch: envelope.epoch,
+        read_key: &read_key,
+        nonce: &[0x3E; 24],
+        body: &ReadBody::Folder {
+            created_at,
+            modified_at,
+            children,
+            unknown,
+        },
+        carried_unknown: envelope.unknown.clone(),
+        carried_epoch_tag_unknown: envelope.epoch_tag_unknown.clone(),
+    })
+    .expect("the other writer authors a valid record");
+    blocks.put(head.block.clone());
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &folder.0).as_bytes());
+    let record = IpnsRecord::create_v2(
+        &signer,
+        format!("/ipfs/{}", head.cid).as_bytes(),
+        current.sequence + 1,
+        current.ttl,
+        core::str::from_utf8(&current.validity).expect("an RFC 3339 EOL"),
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+}
+
+/// A folder that names its own ancestor closes a link cycle. The walk enters
+/// each folder once for each pass, so the pass that meets the cycle finishes it.
+#[test]
+fn a_link_cycle_ends_in_the_pass_that_meets_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        let outer = create_folder(&world, engine, tasks, ROOT, "outer");
+        vec![outer, create_folder(&world, engine, tasks, outer, "inner")]
+    });
+    name_an_ancestor(&world, &blocks, nodes[1], nodes[0]);
+
+    world.scheduler.advance(DAY * 65);
+    let (device, _engine, _tasks) = start_later(&world, &blocks, b"a later session");
+
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(9));
+    let cursor = block_on(
+        CursorStore::new(
+            &device.staging_store,
+            BookkeepingSeal::new(&enc, &entropy),
+            &enc,
+        )
+        .load(),
+    )
+    .expect("the store reads")
+    .expect("the pass stored its cursor");
+    assert_eq!(cursor.root, None, "the cycle finished in one pass");
+    assert!(cursor.deferred.is_empty(), "the cycle defers no folder");
 }
