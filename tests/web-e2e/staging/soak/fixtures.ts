@@ -14,7 +14,7 @@ import { record, shortDetail, unrecordedFailure } from './summary';
 export { expect } from '@playwright/test';
 
 /** Opens a fresh browser context, signed in as one soak account. */
-export type OpenContext = () => Promise<Page>;
+type OpenContext = () => Promise<Page>;
 
 interface SoakFixtures {
   /** The default page, signed in as the soak owner. */

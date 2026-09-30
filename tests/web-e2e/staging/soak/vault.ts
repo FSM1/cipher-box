@@ -24,7 +24,7 @@ export const LEDGER_FOLDERS: Readonly<Record<SoakRole, readonly string[]>> = {
 const LISTED_WITHIN_MS = 60_000;
 
 /** How long the settings read and save get. */
-export const SETTINGS_MS = 60_000;
+const SETTINGS_MS = 60_000;
 
 export interface FoundVault extends VaultState {
   /** The root names, which the archive name must not take. */
@@ -79,15 +79,23 @@ export async function bootstrapVault(
  * expiry runs only on a saved retention, and only a dispatch writes settings.
  */
 async function saveDefaultSettings(page: Page): Promise<void> {
-  const bin = new BinPage(page);
-  await bin.open();
-  await expect(bin.retention).toHaveAttribute('data-origin', /.+/, { timeout: SETTINGS_MS });
-  if ((await bin.retention.getAttribute('data-origin')) !== 'defaults') return;
+  if ((await binRetention(page)).origin !== 'defaults') return;
   const settings = new SettingsPage(page);
   await settings.open();
   await expect(settings.binRetention).not.toHaveValue('', { timeout: SETTINGS_MS });
   await settings.save();
   await expect(settings.savedMark).toBeVisible({ timeout: SETTINGS_MS });
+}
+
+/** The bin retention as the bin page shows it, once the settings read lands. */
+export async function binRetention(page: Page): Promise<{ origin: string | null; days: number }> {
+  const bin = new BinPage(page);
+  await bin.open();
+  await expect(bin.retention).toHaveAttribute('data-origin', /.+/, { timeout: SETTINGS_MS });
+  return {
+    origin: await bin.retention.getAttribute('data-origin'),
+    days: Number(await bin.retention.getAttribute('data-days')),
+  };
 }
 
 /** Reads the ledger in the folder on screen, through the editor, and closes it unchanged. */

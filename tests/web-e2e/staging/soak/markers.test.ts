@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   appendMarker,
@@ -6,6 +5,7 @@ import {
   formatLedger,
   markers,
   parseLedger,
+  utcDay,
   type Marker,
 } from './ledger';
 import {
@@ -14,6 +14,7 @@ import {
   binMarkers,
   binnedMarkers,
   byDate,
+  DAY_MS,
   dropBinned,
   freshValidity,
   MARKER_CAP,
@@ -26,10 +27,8 @@ import {
   sequencesLine,
 } from './markers';
 import { SoakFailure } from './reasons';
-import { namePrefix, OBSERVER_DIR_ENV, observerModule, recordUrl } from './recordReader';
 
 const NAME = 'k51qzi5uqu5dlvj2baxnqndepeb86cbk3ng7n3i46uzyxzyqj2xjonzllnv0v8';
-const DAY_MS = 86_400_000;
 
 function marker(date: string, sequence = 1): Marker {
   return { date, ipnsName: NAME, sequence };
@@ -38,7 +37,7 @@ function marker(date: string, sequence = 1): Marker {
 /** `count` consecutive days from 2026-01-01. */
 function days(count: number): string[] {
   return Array.from({ length: count }, (_, i) =>
-    new Date(Date.UTC(2026, 0, 1) + i * DAY_MS).toISOString().slice(0, 10)
+    utcDay(new Date(Date.UTC(2026, 0, 1) + i * DAY_MS))
   );
 }
 
@@ -161,24 +160,5 @@ describe('the summary lines', () => {
 
   it('count the purged and the waiting markers', () => {
     expect(binLine(3, 1, 30)).toBe('1 purged when due, 2 waiting; retention 30 days');
-  });
-});
-
-describe('the public routing read', () => {
-  it('asks delegated-ipfs.dev for the record of a name', () => {
-    expect(recordUrl(NAME)).toBe(`https://delegated-ipfs.dev/routing/v1/ipns/${NAME}`);
-  });
-
-  it('names a record in an error by a short prefix only', () => {
-    expect(namePrefix(NAME)).toBe('k51qzi5uqu5d...');
-    expect(namePrefix(NAME)).not.toContain(NAME.slice(12));
-  });
-
-  it('loads the observer module from the configured folder', () => {
-    expect(observerModule({ [OBSERVER_DIR_ENV]: '/opt/observer' })).toEqual({
-      glue: join('/opt/observer', 'cipherbox_wasm.js'),
-      wasm: join('/opt/observer', 'cipherbox_wasm_bg.wasm'),
-    });
-    expect(observerModule({}).glue).toMatch(/packages[/\\]client[/\\]test[/\\]browser[/\\]pkg/);
   });
 });

@@ -7,6 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
@@ -18,7 +19,7 @@ import {
 import type { Env } from '../../tools/loginSecretExport';
 import { SoakFailure } from './reasons';
 
-export const PUBLIC_ROUTING = 'https://delegated-ipfs.dev';
+const PUBLIC_ROUTING = 'https://delegated-ipfs.dev';
 
 const IPNS_RECORD = 'application/vnd.ipfs.ipns-record';
 
@@ -114,6 +115,6 @@ export async function resolveUntil(
         `${PUBLIC_ROUTING} for ${namePrefix(ipnsName)}: ${miss}`
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    await sleep(POLL_MS);
   }
 }

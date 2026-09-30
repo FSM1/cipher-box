@@ -12,9 +12,9 @@ import { SoakFailure } from './reasons';
 export const MARKER_CAP = 90;
 
 /** A marker older than this has passed its renewal point (EOL window 90, renewal at 30 left). */
-export const REPUBLISH_AFTER_DAYS = 60;
+const REPUBLISH_AFTER_DAYS = 60;
 
-const DAY_MS = 86_400_000;
+export const DAY_MS = 86_400_000;
 
 /** `EOL_RENEW_THRESHOLD` in `crates/engine/src/net/eol.rs`. */
 const RENEW_THRESHOLD_MS = 30 * DAY_MS;
@@ -65,15 +65,18 @@ export function overCap(list: readonly Marker[]): Marker[] {
   return byDate(list).slice(0, Math.max(list.length - MARKER_CAP, 0));
 }
 
+/** The binned entry of a line, or `null` for a line of another shape. */
+function binnedEntry(line: LedgerLine): Binned | null {
+  if (line.kind !== 'other' || !line.text.startsWith('binned ')) return null;
+  const match = BINNED.exec(line.text);
+  if (match === null || !isUtcDay(match[1]!) || !isUtcDay(match[2]!)) {
+    throw new SoakFailure('ledger-unparsable', `"${line.text}" is not a binned line`);
+  }
+  return { date: match[1]!, binnedOn: match[2]! };
+}
+
 export function binnedMarkers(ledger: Ledger): Binned[] {
-  return ledger.lines.flatMap((line) => {
-    if (line.kind !== 'other' || !line.text.startsWith('binned ')) return [];
-    const match = BINNED.exec(line.text);
-    if (match === null || !isUtcDay(match[1]!) || !isUtcDay(match[2]!)) {
-      throw new SoakFailure('ledger-unparsable', `"${line.text}" is not a binned line`);
-    }
-    return [{ date: match[1]!, binnedOn: match[2]! }];
-  });
+  return ledger.lines.flatMap((line) => binnedEntry(line) ?? []);
 }
 
 /** Swaps the marker lines of `dates` for binned lines of `today`. */
@@ -92,12 +95,10 @@ export function binMarkers(ledger: Ledger, dates: readonly string[], today: stri
 export function dropBinned(ledger: Ledger, dates: readonly string[]): Ledger {
   const purged = new Set(dates);
   return {
-    lines: ledger.lines.filter(
-      (line) =>
-        line.kind !== 'other' ||
-        !line.text.startsWith('binned ') ||
-        !purged.has(line.text.split(' ')[1]!)
-    ),
+    lines: ledger.lines.filter((line) => {
+      const entry = binnedEntry(line);
+      return entry === null || !purged.has(entry.date);
+    }),
   };
 }
 

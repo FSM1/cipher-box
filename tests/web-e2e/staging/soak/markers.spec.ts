@@ -5,6 +5,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { Page } from '@playwright/test';
 import type { IpnsRecordReading } from '@cipherbox/client';
 import { BinPage } from '../../page-objects/bin.page';
@@ -30,7 +31,7 @@ import {
 } from './markers';
 import { SoakFailure } from './reasons';
 import { resolveUntil } from './recordReader';
-import { inspectVault, ledgerPath, readLedger, SETTINGS_MS, writeLedger } from './vault';
+import { binRetention, inspectVault, ledgerPath, readLedger, writeLedger } from './vault';
 
 /** Each wait below ends inside this, so a slow night fails with its own reason. */
 const TEST_MS = 5_400_000;
@@ -68,11 +69,7 @@ async function opened(files: FilesPage, name: string): Promise<Uint8Array> {
 
 /** The bin retention the owner saved in Settings. A scheduled night writes no settings. */
 async function savedRetention(page: Page): Promise<number> {
-  const bin = new BinPage(page);
-  await bin.open();
-  await expect(bin.retention).toHaveAttribute('data-origin', /.+/, { timeout: SETTINGS_MS });
-  const origin = await bin.retention.getAttribute('data-origin');
-  const days = Number(await bin.retention.getAttribute('data-days'));
+  const { origin, days } = await binRetention(page);
   if (origin === 'defaults' || !Number.isInteger(days) || days <= 0) {
     throw new SoakFailure(
       'settings-unread',
@@ -113,7 +110,8 @@ test('the owner markers open byte for byte and hold their sequences', async ({ o
       }
     }
   });
-  await fact('owner oldest marker', oldestMarkerLine(list[0], today));
+  const oldest = list[0];
+  await fact('owner oldest marker', oldestMarkerLine(oldest, today));
 
   const readings = await check('owner marker sequences', 'sequence-regressed', async () => {
     const out: SequenceReading[] = [];
@@ -139,14 +137,13 @@ test('the owner markers open byte for byte and hold their sequences', async ({ o
   });
   await fact('owner marker sequences', sequencesLine(readings));
 
-  const oldest = list[0];
   if (oldest !== undefined && republishDue(oldest, today)) {
     await check('oldest marker republished', 'republish-missed', async () => {
       const next = BigInt(oldest.sequence) + 1n;
       const renewed = (r: IpnsRecordReading) =>
         r.sequence >= next && freshValidity(r.validUntil, Date.now());
       const reading = await resolveUntil(oldest.ipnsName, renewed, RENEWAL_MS);
-      if (!renewed(reading) || reading.sequence !== next) {
+      if (reading.sequence !== next || !freshValidity(reading.validUntil, Date.now())) {
         throw new SoakFailure(
           'republish-missed',
           `the marker of ${oldest.date} resolved at ${reading.sequence}, valid to ${reading.validity}; expected ${next}`
@@ -183,7 +180,7 @@ test("today's marker advances soak/ by one, and the bin holds the cap", async ({
       await files.toRoot();
       const ipnsName = await files.ipnsName(SOAK_FOLDER);
       const first = await resolveUntil(ipnsName, () => true, RESOLVE_MS);
-      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+      await sleep(SETTLE_MS);
       const second = await resolveUntil(ipnsName, () => true, RESOLVE_MS);
       await files.open(SOAK_FOLDER);
       const before = first.sequence > second.sequence ? first.sequence : second.sequence;
