@@ -118,6 +118,7 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: write
 
       - name: Create and push staging tag
         env:

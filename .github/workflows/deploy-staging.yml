@@ -33,7 +33,8 @@ env:
 # The release bot's tag push is the chain's own tag, deployed by that call, so
 # its push run skips and takes a group of its own: a workflow-level group
 # applies before any job `if:`, and in the shared group the run would queue
-# behind the chain.
+# behind the chain. The bot-push test is the exact negation of the
+# `assert-main-revision` job `if:`.
 concurrency:
   group: ${{ inputs.staging_tag && format('staging-deploy-{0}', github.run_id) || (github.event_name == 'push' && github.actor == 'cipherbox-release-bot[bot]') && format('staging-bot-tag-{0}', github.run_id) || 'staging-environment' }}
   cancel-in-progress: false
@@ -47,6 +48,7 @@ jobs:
   assert-main-revision:
     name: Assert the dispatched revision is on main
     # Every other job needs this one, so a skip here skips the whole run.
+    # The exact negation of the bot-push test in the workflow `concurrency` group.
     if: github.event_name != 'push' || github.actor != 'cipherbox-release-bot[bot]'
     runs-on: ubuntu-latest
     permissions:
