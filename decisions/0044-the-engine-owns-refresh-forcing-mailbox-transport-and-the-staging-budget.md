@@ -30,7 +30,7 @@
   hook" sections, and the `CONTEXT.md` "Manual refresh", "Sync timing profile", "Storage policy",
   "Focus window" and "Mailbox" terms
 - **Implemented by:** FSM1/cipher-box#878 (the storage policy, D6 to D8, with the cache
-  reservation of D7 made unconditional), FSM1/cipher-box#1864 (the conditional form of D7),
+  reservation of D7 made unconditional), FSM1/cipher-box#2137 (the conditional form of D7),
   FSM1/cipher-box#1212 (refresh forcing and the tick without jitter, D1 to D3),
   FSM1/cipher-box#1409 (the desktop headroom measurement, D7 and D8) and FSM1/cipher-box#1501
   (the mailbox transport and the harness, D4 and D5).
@@ -173,7 +173,7 @@ carries the platform cap beside the budget, so a refusal can say whether the pla
 device's headroom refused the write. Decided on 2026-07-27 in FSM1/cipher-box#829 and on
 2026-07-28 in FSM1/cipher-box#844 (section 2 for the conditional reservation).
 FSM1/cipher-box#878, merged six hours later, made the subtraction unconditional and gave no reason.
-`StoragePolicy::measured` carries D7 since FSM1/cipher-box#1864.
+`StoragePolicy::measured` carries D7 since FSM1/cipher-box#2137.
 
 **D8 — A host that cannot measure headroom is unmeasurable, not full.** When the host has no
 headroom figure, the policy is the unmeasured policy: zero budgets, because inventing a figure is
@@ -275,7 +275,7 @@ must not. The tick already refreshes the focus window, and the stale hit adds th
 2. **`blueprint/web-client.md` already carries D1, D2 and D4.** The "Browser seams" table has no
    `Mailbox` and no `RefreshHintSource` row, and its `Scheduler` row says that every wake-relevant
    transition forces a pass. The "UI state law" section states D2. The "Open edges" section routes
-   the push overlay through the command. Consequence 8 names the one row that lags.
+   the push overlay through the command. Consequence 8 records the reword.
 
 3. **`blueprint/desktop.md` already carries D4 and most of D1.** The "Engine wiring" table has no
    `Mailbox` and no `RefreshHintSource` row. The "Freshness — the desktop trigger source" section
@@ -286,7 +286,7 @@ must not. The tick already refreshes the focus window, and the stale hit adds th
 4. **`blueprint/testing.md` already carries D5.** The "crates/engine — seam fakes and the
    simulation harness" section names "a mailbox hub the fake HTTP serves the API's mailbox routes
    from". The "The DX hook" section keeps nocache manual refresh as the forcing path between
-   clients. Consequence 8 names the one bullet that lags.
+   clients. Consequence 8 records the reword.
 
 5. **`CONTEXT.md` already carries D2 and D6 to D8.** The "Manual refresh" term states the forced
    nocache pass, the coalescing and the two failure verdicts. The "Sync timing profile" term
@@ -373,7 +373,7 @@ the testing blueprint's claim that budget exhaustion is reachable in CI holds fo
 tests and the desktop shell, not for a browser e2e run.
 
 **E3 — The code lagged the conditional cache reservation.** Resolved on 2026-10-01 by
-FSM1/cipher-box#1864.
+FSM1/cipher-box#2137.
 
 **E4 — The policy is fixed for the life of the engine.** The host measures once at construction.
 Headroom that other applications consume during the session is not seen, and a staging write can

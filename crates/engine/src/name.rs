@@ -73,6 +73,7 @@ impl NameError {
     ];
 
     /// The stable check label a refusal reports to a host.
+    #[must_use]
     pub fn check(self) -> &'static str {
         match self {
             Self::Empty => "node-name-empty",
@@ -93,6 +94,7 @@ impl NameError {
     /// `trust`. A length past the frozen bound is `over-cap`. A name only some
     /// platform reserves is lawful elsewhere, so this client's refusal is a
     /// `capability` limit.
+    #[must_use]
     pub fn class(self) -> &'static str {
         match self {
             Self::Empty

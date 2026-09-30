@@ -131,6 +131,7 @@ impl DefaultsReason {
     /// Whether the load refused bytes the plane actually served, rather than
     /// failing to reach it (blueprint/engine.md "Bin index record"). A caller
     /// that retries on availability must not retry on a verdict.
+    #[must_use]
     pub(crate) fn is_verdict(self) -> bool {
         match self {
             Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => true,

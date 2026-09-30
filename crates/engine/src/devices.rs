@@ -127,6 +127,8 @@ impl MalformedDeviceField {
     /// The class label used in reject vectors. Each refusal fires before a
     /// payload is signed and repeats on every retry of the same field: a
     /// registry ceiling is `over-cap`, every other shape is `capability`.
+    /// An empty identity token shares the `over-cap` class of
+    /// `identity-token-out-of-bounds`.
     pub fn class(self) -> &'static str {
         match self {
             Self::IdentityTokenOutOfBounds
