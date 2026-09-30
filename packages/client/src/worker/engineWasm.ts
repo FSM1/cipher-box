@@ -3,9 +3,9 @@
  * uses it.
  *
  * The wasm-bindgen `.d.ts` is the real boundary contract; a command, its
- * outcome and an event are typed from it. The rest of this interface names the handle and
- * view surface the worker drives, which the generated module satisfies
- * structurally at wiring time.
+ * outcome and an event are typed from it. The rest of this interface names the
+ * handle and view surface the worker drives, which the generated module
+ * satisfies structurally at wiring time.
  */
 
 import type { Command, CommandOutcome, Event, NodeId } from '../../wasm/cipherbox_wasm.js';

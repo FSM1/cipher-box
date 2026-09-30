@@ -1,6 +1,6 @@
-//! The serde shape of the facade commands and events at the WASM boundary: the adapters
-//! for the field types whose durable serde form is not the boundary form
-//! (blueprint/web-client.md "WASM packaging and the type boundary").
+//! The serde shape of the facade commands and events at the WASM boundary: the
+//! adapters for the field types whose durable serde form is not the boundary
+//! form (blueprint/web-client.md "WASM packaging and the type boundary").
 //!
 //! [`NodeId`] and [`NodeKind`] already derive serde for the op queue, which must
 //! still read what the previous release wrote, so the boundary spells them

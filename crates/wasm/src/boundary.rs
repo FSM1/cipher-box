@@ -39,27 +39,24 @@ fn refused() -> JsError {
 pub fn decode_command(command: &JsValue) -> Result<Command, JsError> {
     let kind = field(command, "kind");
     if kind == "claimInviteLink" {
-        let fragment = field(command, "fragment");
-        let mut decoded = decode(&with_placeholder(command, &["fragment"], &"".into())?)?;
-        let Command::ClaimInviteLink { fragment: slot, .. } = &mut decoded else {
-            return Err(refused());
-        };
-        *slot = take_text(&fragment, MAX_FRAGMENT_TEXT_LEN)?;
-        return Ok(decoded);
+        return decode_secret_text(command, "fragment", MAX_FRAGMENT_TEXT_LEN, |decoded| {
+            match decoded {
+                Command::ClaimInviteLink { fragment, .. } => Some(fragment),
+                _ => None,
+            }
+        });
     }
     if kind == "registerDevice" {
-        let token = field(command, "identityToken");
-        let mut decoded = decode(&with_placeholder(command, &["identityToken"], &"".into())?)?;
-        let Command::RegisterDevice {
-            identity_token: slot,
-            ..
-        } = &mut decoded
-        else {
-            return Err(refused());
-        };
         // A char is at most two UTF-16 units; the engine checks the char count.
-        *slot = take_text(&token, 2 * MAX_IDENTITY_TOKEN_CHARS)?;
-        return Ok(decoded);
+        return decode_secret_text(
+            command,
+            "identityToken",
+            2 * MAX_IDENTITY_TOKEN_CHARS,
+            |decoded| match decoded {
+                Command::RegisterDevice { identity_token, .. } => Some(identity_token),
+                _ => None,
+            },
+        );
     }
     if kind == "saveVaultSettings" {
         let token = BEARER_PATH
@@ -171,6 +168,21 @@ fn with_placeholder(
     let inner = with_placeholder(&field(value, key), rest, placeholder)?;
     Reflect::set(&copy, &(*key).into(), &inner).map_err(|_| refused())?;
     Ok(copy.into())
+}
+
+/// Decodes `command` with the empty placeholder at `key`, then takes the text
+/// at `key` into the zeroizing slot that `slot` names.
+fn decode_secret_text(
+    command: &JsValue,
+    key: &str,
+    max_units: usize,
+    slot: fn(&mut Command) -> Option<&mut Zeroizing<String>>,
+) -> Result<Command, JsError> {
+    let secret = field(command, key);
+    let mut decoded = decode(&with_placeholder(command, &[key], &"".into())?)?;
+    let slot = slot(&mut decoded).ok_or_else(refused)?;
+    *slot = take_text(&secret, max_units)?;
+    Ok(decoded)
 }
 
 /// A secret text field, measured in UTF-16 units before it is copied into

@@ -35,15 +35,6 @@ fn bytes(value: JsValue) -> Vec<u8> {
     value.unchecked_into::<Uint8Array>().to_vec()
 }
 
-fn decimal(value: JsValue) -> String {
-    assert_eq!(value.js_typeof(), JsValue::from_str("bigint"));
-    value
-        .unchecked_into::<BigInt>()
-        .to_string(10)
-        .expect("a bigint renders in base 10")
-        .into()
-}
-
 /// An op id past 2^53 survives as a `bigint`, which a `number` would round.
 #[wasm_bindgen_test]
 fn a_dead_letter_crosses_its_op_id_as_a_bigint_and_its_reason_as_a_name() {
@@ -53,7 +44,7 @@ fn a_dead_letter_crosses_its_op_id_as_a_bigint_and_its_reason_as_a_name() {
     });
 
     assert_eq!(field(&dead, "kind"), JsValue::from_str("deadLetter"));
-    assert_eq!(decimal(field(&dead, "opId")), u64::MAX.to_string());
+    assert_eq!(field(&dead, "opId"), JsValue::from(BigInt::from(u64::MAX)));
     assert_eq!(
         field(&dead, "reason"),
         JsValue::from_str("graftedScopeVaultSurface")
@@ -73,7 +64,7 @@ fn an_upload_progress_crosses_every_field_kind() {
         error: Some("unavailable".into()),
     });
 
-    assert_eq!(decimal(field(&progress, "opId")), "7");
+    assert_eq!(field(&progress, "opId"), JsValue::from(BigInt::from(7u64)));
     assert_eq!(bytes(field(&progress, "node")), vec![3; 16]);
     assert_eq!(
         field(&progress, "phase"),
