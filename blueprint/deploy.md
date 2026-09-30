@@ -164,6 +164,9 @@ release management that worked:
    health gate of its own, so this run is both the release verdict and the
    first signal that the containers came up (ADR 0050).
 
+The release bot pushes the staging tag, and a ruleset lets only the bot and
+the admin create `staging-*` tags.
+
 ### The staging stack
 
 `docker/docker-compose.staging.yml` edited in place. Same single VPS
