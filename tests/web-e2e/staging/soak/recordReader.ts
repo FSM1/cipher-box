@@ -11,7 +11,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
-  drainCapped,
+  FetchRecordTransport,
   openIpnsRecordReader,
   type IpnsRecordReader,
   type IpnsRecordReading,
@@ -20,8 +20,6 @@ import type { Env } from '../../tools/loginSecretExport';
 import { SoakFailure } from './reasons';
 
 const PUBLIC_ROUTING = 'https://delegated-ipfs.dev';
-
-const IPNS_RECORD = 'application/vnd.ipfs.ipns-record';
 
 export const OBSERVER_DIR_ENV = 'SOAK_OBSERVER_WASM_DIR';
 
@@ -40,10 +38,6 @@ export function observerModule(env: Env): { glue: string; wasm: string } {
   return { glue: join(dir, 'cipherbox_wasm.js'), wasm: join(dir, 'cipherbox_wasm_bg.wasm') };
 }
 
-export function recordUrl(ipnsName: string): string {
-  return `${PUBLIC_ROUTING}/routing/v1/ipns/${encodeURIComponent(ipnsName)}`;
-}
-
 /** The module is large, so a worker process instantiates it once. */
 let reader: Promise<IpnsRecordReader> | undefined;
 
@@ -60,27 +54,6 @@ export function namePrefix(ipnsName: string): string {
   return `${ipnsName.slice(0, 12)}...`;
 }
 
-/** The record the public path serves for `ipnsName`, or `null` where it serves none. */
-async function fetchRecord(ipnsName: string): Promise<Uint8Array | null> {
-  const response = await fetch(recordUrl(ipnsName), {
-    headers: { Accept: IPNS_RECORD },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (response.status === 404) {
-    await response.body?.cancel();
-    return null;
-  }
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(`the endpoint answered ${response.status}`);
-  }
-  const drained = await drainCapped(response, RECORD_LIMIT);
-  if (drained.kind === 'tooLarge') {
-    throw new Error(`the endpoint served ${drained.observed} bytes, above ${RECORD_LIMIT}`);
-  }
-  return drained.body;
-}
-
 /**
  * Resolves `ipnsName` until `accept` takes the verified reading or `timeoutMs`
  * passes, and returns the last reading. A routing answer propagates and the
@@ -94,13 +67,19 @@ export async function resolveUntil(
   timeoutMs: number
 ): Promise<IpnsRecordReading> {
   const read = await observerReader();
+  const transport = new FetchRecordTransport([PUBLIC_ROUTING]);
   const deadline = Date.now() + timeoutMs;
   let last: IpnsRecordReading | null = null;
   let miss = 'the endpoint served no record';
   for (;;) {
     let record: Uint8Array | null = null;
     try {
-      record = await fetchRecord(ipnsName);
+      const answer = await transport.getRecord(PUBLIC_ROUTING, ipnsName, RECORD_LIMIT);
+      if (answer.kind === 'tooLarge') {
+        miss = `the endpoint served ${answer.observed} bytes, above ${RECORD_LIMIT}`;
+      } else {
+        record = answer.record;
+      }
     } catch (error) {
       miss = error instanceof Error ? error.message : String(error);
     }

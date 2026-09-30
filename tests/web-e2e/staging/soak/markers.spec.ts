@@ -20,23 +20,34 @@ import {
   byDate,
   dropBinned,
   freshValidity,
+  inPool,
   markerBytes,
   markerFile,
   oldestMarkerLine,
   overCap,
   purgeDue,
+  purgeWaiting,
   republishDue,
   sequencesLine,
+  unreadLine,
   type SequenceReading,
 } from './markers';
 import { SoakFailure } from './reasons';
 import { resolveUntil } from './recordReader';
 import { binRetention, inspectVault, ledgerPath, readLedger, writeLedger } from './vault';
 
-/** Each wait below ends inside this, so a slow night fails with its own reason. */
+/**
+ * Each wait below ends inside this, so a slow night fails with its own reason.
+ * The first test: sign-in 15, ledger 13, opens 20, sequences 25, republish 10.
+ */
 const TEST_MS = 5_400_000;
 /** A name the ledger holds was published a night ago or more. */
 const RESOLVE_MS = 120_000;
+const OPENS_MS = 1_200_000;
+const DOWNLOAD_MS = 60_000;
+/** The dialog reads and the resolves of every ledger name, together. */
+const SEQUENCES_MS = 1_500_000;
+const RESOLVE_WIDTH = 4;
 const PUBLISH_MS = 300_000;
 /** The session-start renewal publishes, then the public path takes it up. */
 const RENEWAL_MS = 600_000;
@@ -63,8 +74,21 @@ async function toSoak(files: FilesPage): Promise<void> {
 }
 
 async function opened(files: FilesPage, name: string): Promise<Uint8Array> {
-  const download = await files.save(name);
+  const download = await within(files.save(name), DOWNLOAD_MS, `${name} did not download`);
   return new Uint8Array(await readFile(await download.path()));
+}
+
+/** `work`, or a rejection once `ms` passes: a wait the page does not bound itself. */
+async function within<T>(work: Promise<T>, ms: number, late: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(late)), ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** The bin retention the owner saved in Settings. A scheduled night writes no settings. */
@@ -100,7 +124,12 @@ test('the owner markers open byte for byte and hold their sequences', async ({ o
   const list = byDate(markers(ledger));
 
   await check('owner markers open', 'marker-unreadable', async () => {
-    for (const marker of list) {
+    const deadline = Date.now() + OPENS_MS;
+    for (const [index, marker] of list.entries()) {
+      if (Date.now() >= deadline) {
+        const unread = list.slice(index).map((m) => m.date);
+        throw new SoakFailure('marker-unreadable', `no time to open ${unreadLine(unread)}`);
+      }
       const bytes = await opened(files, markerFile(marker.date));
       if (!Buffer.from(bytes).equals(Buffer.from(markerBytes(marker.date)))) {
         throw new SoakFailure(
@@ -114,17 +143,26 @@ test('the owner markers open byte for byte and hold their sequences', async ({ o
   await fact('owner oldest marker', oldestMarkerLine(oldest, today));
 
   const readings = await check('owner marker sequences', 'sequence-regressed', async () => {
-    const out: SequenceReading[] = [];
+    const deadline = Date.now() + SEQUENCES_MS;
+    const left = (): number => deadline - Date.now();
     for (const marker of list) {
-      const shown = await files.ipnsName(markerFile(marker.date));
-      if (shown !== marker.ipnsName) {
+      if (left() <= 0) break;
+      if ((await files.ipnsName(markerFile(marker.date))) !== marker.ipnsName) {
         throw new SoakFailure(
           'sequence-regressed',
           `the marker of ${marker.date} shows a new name`
         );
       }
+    }
+    const out: SequenceReading[] = [];
+    await inPool(list, RESOLVE_WIDTH, async (marker) => {
+      if (left() <= 0) return;
       const floor = BigInt(marker.sequence);
-      const reading = await resolveUntil(shown, (r) => r.sequence >= floor, RESOLVE_MS);
+      const reading = await resolveUntil(
+        marker.ipnsName,
+        (r) => r.sequence >= floor,
+        Math.min(RESOLVE_MS, left())
+      );
       if (reading.sequence < floor) {
         throw new SoakFailure(
           'sequence-regressed',
@@ -132,6 +170,14 @@ test('the owner markers open byte for byte and hold their sequences', async ({ o
         );
       }
       out.push({ date: marker.date, ledger: marker.sequence, resolved: reading.sequence });
+    });
+    const read = new Set(out.map((reading) => reading.date));
+    const unread = list.filter((marker) => !read.has(marker.date)).map((m) => m.date);
+    if (unread.length > 0) {
+      throw new SoakFailure(
+        'routing-unavailable',
+        `the sequence budget ended before ${unreadLine(unread)}`
+      );
     }
     return out;
   });
@@ -244,7 +290,9 @@ test("today's marker advances soak/ by one, and the bin holds the cap", async ({
       await bin.open();
       for (const entry of binned) {
         if (due.includes(entry)) await bin.gone(markerFile(entry.date), PURGE_MS);
-        else await bin.appeared(markerFile(entry.date));
+        else if (purgeWaiting(entry, retentionDays, today)) {
+          await bin.appeared(markerFile(entry.date));
+        }
       }
     }
     if (due.length > 0) {

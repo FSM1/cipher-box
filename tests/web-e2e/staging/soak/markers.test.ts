@@ -17,14 +17,17 @@ import {
   DAY_MS,
   dropBinned,
   freshValidity,
+  inPool,
   MARKER_CAP,
   markerBytes,
   markerFile,
   oldestMarkerLine,
   overCap,
   purgeDue,
+  purgeWaiting,
   republishDue,
   sequencesLine,
+  unreadLine,
 } from './markers';
 import { SoakFailure } from './reasons';
 
@@ -135,6 +138,45 @@ describe('the purge due date', () => {
   it('follows the saved retention', () => {
     expect(purgeDue(entry, 7, '2026-04-09')).toBe(true);
     expect(purgeDue(entry, 60, '2026-05-02')).toBe(false);
+  });
+
+  it('asserts neither side on the day the age equals the retention', () => {
+    expect(purgeWaiting(entry, 30, '2026-04-30')).toBe(true);
+    expect(purgeWaiting(entry, 30, '2026-05-01')).toBe(false);
+    expect(purgeDue(entry, 30, '2026-05-01')).toBe(false);
+  });
+});
+
+describe('the bounded pool', () => {
+  it('runs every item, never more than the width at once', async () => {
+    let running = 0;
+    let peak = 0;
+    const done: number[] = [];
+    await inPool([1, 2, 3, 4, 5, 6, 7, 8, 9], 4, async (item) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      done.push(item);
+      running -= 1;
+    });
+    expect(peak).toBe(4);
+    expect(done.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  it('takes no new item after a failure', async () => {
+    const started: number[] = [];
+    await expect(
+      inPool([1, 2, 3, 4, 5], 1, async (item) => {
+        started.push(item);
+        if (item === 2) throw new Error('stop');
+      })
+    ).rejects.toThrow('stop');
+    expect(started).toEqual([1, 2]);
+  });
+
+  it('names the first unread days and counts the rest', () => {
+    expect(unreadLine(['a', 'b'])).toBe('a, b');
+    expect(unreadLine(['a', 'b', 'c', 'd', 'e', 'f', 'g'])).toBe('a, b, c, d, e and 2 more');
   });
 });
 

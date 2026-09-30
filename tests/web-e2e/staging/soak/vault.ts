@@ -5,6 +5,7 @@
  */
 
 import { expect, type Page } from '@playwright/test';
+import type { SettingsOrigin } from '@cipherbox/client';
 import { BinPage } from '../../page-objects/bin.page';
 import type { FilesPage } from '../../page-objects/files.page';
 import { SettingsPage } from '../../page-objects/settings.page';
@@ -87,15 +88,17 @@ async function saveDefaultSettings(page: Page): Promise<void> {
   await expect(settings.savedMark).toBeVisible({ timeout: SETTINGS_MS });
 }
 
+const SETTINGS_ORIGINS: readonly SettingsOrigin[] = ['resolved', 'stale', 'defaults'];
+
 /** The bin retention as the bin page shows it, once the settings read lands. */
-export async function binRetention(page: Page): Promise<{ origin: string | null; days: number }> {
+export async function binRetention(page: Page): Promise<{ origin: SettingsOrigin; days: number }> {
   const bin = new BinPage(page);
   await bin.open();
   await expect(bin.retention).toHaveAttribute('data-origin', /.+/, { timeout: SETTINGS_MS });
-  return {
-    origin: await bin.retention.getAttribute('data-origin'),
-    days: Number(await bin.retention.getAttribute('data-days')),
-  };
+  const shown = await bin.retention.getAttribute('data-origin');
+  const origin = SETTINGS_ORIGINS.find((known) => known === shown);
+  if (origin === undefined) throw new Error(`the bin page shows the settings origin "${shown}"`);
+  return { origin, days: Number(await bin.retention.getAttribute('data-days')) };
 }
 
 /** Reads the ledger in the folder on screen, through the editor, and closes it unchanged. */

@@ -111,6 +111,42 @@ export function purgeDue(entry: Binned, retentionDays: number, today: string): b
   return ageDays(entry.binnedOn, today) > retentionDays;
 }
 
+/**
+ * Whether the bin must still list `entry`. The engine purges once the move is
+ * the retention old, so on the day the age equals the retention either is right.
+ */
+export function purgeWaiting(entry: Binned, retentionDays: number, today: string): boolean {
+  return ageDays(entry.binnedOn, today) < retentionDays;
+}
+
+/** Runs `work` over `items`, at most `width` at a time, and stops taking items after a failure. */
+export async function inPool<T>(
+  items: readonly T[],
+  width: number,
+  work: (item: T) => Promise<void>
+): Promise<void> {
+  let next = 0;
+  let failed = false;
+  const lane = async (): Promise<void> => {
+    while (!failed && next < items.length) {
+      const item = items[next++]!;
+      try {
+        await work(item);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, lane));
+}
+
+/** The days a spent time budget left unread, first few named. */
+export function unreadLine(dates: readonly string[]): string {
+  const named = dates.slice(0, 5).join(', ');
+  return dates.length > 5 ? `${named} and ${dates.length - 5} more` : named;
+}
+
 export interface SequenceReading {
   readonly date: string;
   readonly ledger: number;

@@ -51,10 +51,10 @@ export type { MediaReader } from './media/broker.js';
 // third-party SDK or address opaque engine byte strings by string key.
 // Host-agnostic `packages/login` carries its own; it cannot depend on this package.
 export { fromHex, toHex } from './seams/bytes.js';
-export { drainCapped } from './seams/cappedBody.js';
 
 // A session-free IPNS record read, for a Node observer of the routing network.
 export { openIpnsRecordReader } from './ipnsRecord.js';
+export { FetchRecordTransport } from './seams/recordTransport.js';
 export type { IpnsRecordReader, IpnsRecordReading } from './ipnsRecord.js';
 
 // The wire descriptors the UI exchanges with the engine over the transport.
