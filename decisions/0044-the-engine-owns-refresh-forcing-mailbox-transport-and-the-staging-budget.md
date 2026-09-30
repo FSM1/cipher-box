@@ -456,7 +456,7 @@ no host supplies it. Swapping the inbox means a second implementation inside the
   host is structural: the policy is a constructor value and `StagingStore` has no headroom
   method. No behaviour test proves it.
 - **D7:** `a_generous_headroom_lands_on_the_platform_cap`,
-  `the_cache_reservation_comes_off_headroom_before_the_staging_fraction`,
+  `headroom_is_unreduced_while_no_read_cache_exists`,
   `a_tiny_headroom_yields_a_tiny_budget_and_never_floors_up`,
   `a_headroom_near_the_integer_ceiling_does_not_wrap` and
   `every_shipped_platform_splits_within_its_headroom` in `crates/engine/src/storage_policy.rs`;
@@ -464,9 +464,8 @@ no host supplies it. Swapping the inbox means a second implementation inside the
   `a_refusal_quotes_the_room_left_never_the_whole_budget` in
   `crates/engine/src/content/budget.rs`; `storageHeadroom.test.ts` "reports quota minus usage when
   the estimate is complete" in `packages/client` (Web area).
-  `the_cache_reservation_comes_off_headroom_before_the_staging_fraction` proves the unconditional
-  form that lags D7 (E3); after FSM1/cipher-box#831 it proves the state with a read cache. No test
-  proves that headroom is unreduced while no read cache exists. That is a finding.
+  `headroom_is_unreduced_while_no_read_cache_exists` proves the state without a read cache; the
+  read-cache issue FSM1/cipher-box#831 adds the test for the state with one.
 - **D8:** `an_unmeasurable_host_is_distinguishable_from_a_full_one` and
   `a_measured_zero_headroom_yields_no_budget_and_stays_measured` in
   `crates/engine/src/storage_policy.rs`; `an_unmeasurable_host_is_never_reported_as_a_full_one`
