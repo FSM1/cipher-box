@@ -135,8 +135,8 @@ skips, and later nights compare with that baseline.
 
 Each marker test has a 90-minute timeout, so that a slow night fails with its
 own reason code. The two ledger tests keep the 10-minute project timeout. The
-share tests have 70 and 110 minutes, the grantee web leg 60 and the counter
-test 30. The timeouts of the whole suite sum to 470 minutes. That is more than
+share tests have 80 and 120 minutes, the grantee web leg 60 and the counter
+test 30. The timeouts of the whole suite sum to 490 minutes. That is more than
 the 360-minute limit of one GitHub-hosted job, so one hosted job cannot hold
 every test at its full timeout.
 

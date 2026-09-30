@@ -11,13 +11,11 @@ import { BinPage } from '../../page-objects/bin.page';
 import type { FilesPage } from '../../page-objects/files.page';
 import { SettingsPage } from '../../page-objects/settings.page';
 import type { SoakRole } from './accounts';
-import { archiveName, SOAK_FOLDER, soakFolderListed, type VaultState } from './bootstrap';
-import { DESKTOP_FOLDER, LEDGER_FILE } from './grantee';
+import { archiveName, soakFolderListed, type VaultState } from './bootstrap';
+import { DESKTOP_FOLDER, LEDGER_FILE, SOAK_FOLDER } from './paths';
 import { emptyLedger, formatLedger, parseLedger, type Ledger } from './ledger';
 import { markerBytes, markerFile, unreadLine } from './markers';
 import { SoakFailure, type FailureReason } from './reasons';
-
-export { LEDGER_FILE };
 
 /** The folders from the vault root to the ledger. The grantee ledger lists the OS markers. */
 export const LEDGER_FOLDERS: Readonly<Record<SoakRole, readonly string[]>> = {

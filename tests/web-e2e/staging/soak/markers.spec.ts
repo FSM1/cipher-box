@@ -9,7 +9,7 @@ import type { Page } from '@playwright/test';
 import type { IpnsRecordReading } from '@cipherbox/client';
 import { BinPage } from '../../page-objects/bin.page';
 import { FilesPage } from '../../page-objects/files.page';
-import { SOAK_FOLDER } from './bootstrap';
+import { LEDGER_FILE, SOAK_FOLDER } from './paths';
 import { check, expect, fact, test } from './fixtures';
 import { appendMarker, markers, utcDay, type Ledger } from './ledger';
 import {
@@ -35,14 +35,7 @@ import {
 } from './markers';
 import { SoakFailure } from './reasons';
 import { resolveUntil } from './recordReader';
-import {
-  binRetention,
-  LEDGER_FILE,
-  openLedger,
-  readMarkers,
-  toLedgerFolder,
-  writeLedger,
-} from './vault';
+import { binRetention, openLedger, readMarkers, toLedgerFolder, writeLedger } from './vault';
 
 /**
  * Each wait below ends inside this, so a slow night fails with its own reason.

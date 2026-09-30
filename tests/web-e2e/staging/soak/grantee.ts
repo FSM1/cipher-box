@@ -5,20 +5,15 @@
  * `soak/desktop/<leg>/marker-<date>.txt` with the bytes of `markerBytes`.
  */
 
-import { SOAK_FOLDER } from './bootstrap';
 import { isUtcDay, type Ledger, type LedgerLine } from './ledger';
 import { markerFile } from './markers';
+import { DESKTOP_FOLDER, LEDGER_FILE } from './paths';
 import { SoakFailure } from './reasons';
 
 export type DesktopLeg = 'macos' | 'linux' | 'windows';
 export type MarkerLeg = DesktopLeg | 'web';
 
 export const MARKER_LEGS: readonly MarkerLeg[] = ['macos', 'linux', 'windows', 'web'];
-
-/** The grantee's desktop folder, from the vault root. The web bootstrap builds it. */
-export const DESKTOP_FOLDER: readonly string[] = [SOAK_FOLDER, 'desktop'];
-/** The ledger file name, in `soak/` for the owner and in the desktop folder for the grantee. */
-export const LEDGER_FILE = 'ledger.txt';
 
 const LINE = /^marker (\S+) (\S+)$/;
 const MARKER_FILE = /^marker-(\d{4}-\d{2}-\d{2})\.txt$/;

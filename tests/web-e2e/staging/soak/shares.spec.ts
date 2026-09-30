@@ -15,6 +15,7 @@ import { SharedPage, type RowStanding } from '../../page-objects/shared.page';
 import { nudgedUntil } from '../fixtures';
 import { check, expect, fact, test } from './fixtures';
 import { utcDay } from './ledger';
+import { SoakFailure } from './reasons';
 import { markerFile } from './markers';
 import {
   CYCLE_FOLDER,
@@ -41,16 +42,17 @@ import {
   writeLedger,
 } from './vault';
 
-/** Owner sign-in 18, folder 12, mint 5, grantee sign-in 18, join 6, reads 10, epoch 3. */
-const SHARED_TEST_MS = 4_200_000;
+/** Owner sign-in 18, folder 12, mint 5, grantee sign-in 18, join 13, reads 10, epoch 3. */
+const SHARED_TEST_MS = 4_800_000;
 /** The above, plus leftover grants 6, conversion 6, standing 10, revoke 6, sign-in 18. */
-const CYCLE_TEST_MS = 6_600_000;
+const CYCLE_TEST_MS = 7_200_000;
 const PAGE_MS = 180_000;
 const LISTING_MS = 300_000;
 const READS_MS = 600_000;
 const CONVERSION_MS = 360_000;
 const STANDING_MS = 600_000;
 const EPOCH_MS = 180_000;
+const PREVIEW_MS = 60_000;
 
 const HOLDER_NAME = 'soak grantee';
 const FOLDER_PATH = /^\/files\/([0-9a-f]{32})$/;
@@ -114,9 +116,16 @@ async function join(
   link: URL,
   today: string
 ): Promise<{ held: FilesPage; scope: string }> {
-  const invite = await openLink(page, link);
-  await invite.expectState('joinable', PAGE_MS);
-  await expect(invite.entries.filter({ hasText: markerFile(today) })).toHaveCount(1);
+  let invite!: InvitePage;
+  let loaded = false;
+  // The page reads the preview once per load, so a new load reads a scope root that caught up.
+  await expect(async () => {
+    if (loaded) await page.goto('/files');
+    loaded = true;
+    invite = await openLink(page, link);
+    await invite.expectState('joinable', PREVIEW_MS);
+    await expect(invite.entries.filter({ hasText: markerFile(today) })).toHaveCount(1);
+  }).toPass({ timeout: LISTING_MS });
   await invite.name.fill(HOLDER_NAME);
   await invite.join();
   let scope: string | undefined;
@@ -193,10 +202,18 @@ test('the cycle folder mints, converts and revokes a read link in one night', as
   // A failed night can leave the grantee granted, which would hold the next join off a claim.
   await check('cycle leftover grants', 'cycle-epoch-flat', async () => {
     await share.open(CYCLE_FOLDER);
-    const people = share.page.getByTestId('share-people');
-    await expect(people.or(share.page.getByTestId('share-grants-unavailable'))).toBeVisible({
+    const unavailable = share.page.getByTestId('share-grants-unavailable');
+    await expect(share.page.getByTestId('share-people').or(unavailable)).toBeVisible({
       timeout: PAGE_MS,
     });
+    if (await unavailable.isVisible()) {
+      throw new SoakFailure(
+        'cycle-epoch-flat',
+        `the share dialog read no grants of ${CYCLE_FOLDER}/`
+      );
+    }
+    // The opening converts waiting claims, so a row can land until the dialog is idle.
+    await expect(share.closeButton).toBeEnabled({ timeout: PAGE_MS });
     for (let left = await share.grantRows.count(); left > 0; left -= 1) {
       await share.grantRows.first().getByTestId('share-revoke').click();
       await share.page.getByTestId('share-revoke-confirm').click();

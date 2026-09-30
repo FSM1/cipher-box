@@ -4,12 +4,10 @@
  */
 
 import type { Env } from '../../tools/loginSecretExport';
+import { SOAK_FOLDER } from './paths';
 import { SoakFailure } from './reasons';
 
 export const BOOTSTRAP_ENV = 'SOAK_BOOTSTRAP';
-
-/** The top-level folder of the soak, in both vaults. */
-export const SOAK_FOLDER = 'soak';
 
 /** What the run found in the vault before it wrote anything. */
 export interface VaultState {

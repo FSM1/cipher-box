@@ -133,6 +133,8 @@ export interface CounterCheck {
   readonly reason: FailureReason;
   /** The API uptime past which the check is due. */
   readonly dueAfterS: number;
+  /** The check compares with the stale-names baseline of the ledger. */
+  readonly needsBaseline?: true;
   /** The failed detail, or `null` for a pass. */
   readonly verdict: (readings: CounterReadings, staleBaseline: number) => string | null;
 }
@@ -152,6 +154,7 @@ export const COUNTER_CHECKS: readonly CounterCheck[] = [
     check: 'stale names in 24 hours',
     reason: 'stale-names-grew',
     dueAfterS: POST_DEPLOY_S,
+    needsBaseline: true,
     verdict: (r, baseline) => grew(r.staleNames, baseline, 'stale names'),
   },
   {
@@ -180,6 +183,11 @@ export const COUNTER_CHECKS: readonly CounterCheck[] = [
   },
 ];
 
+/** Whether a counter check is due at `uptimeS`, so the night reads the counters and the ledger. */
+export function anyCounterDue(uptimeS: number): boolean {
+  return COUNTER_CHECKS.some((entry) => uptimeS > entry.dueAfterS);
+}
+
 export type CounterPlan =
   | { readonly kind: 'check'; readonly entry: CounterCheck; readonly baseline: number }
   | { readonly kind: 'skip'; readonly entry: CounterCheck; readonly detail: string };
@@ -192,9 +200,9 @@ export function counterPlan(uptimeS: number, baseline: number | null): CounterPl
   return COUNTER_CHECKS.map((entry): CounterPlan => {
     if (uptimeS <= entry.dueAfterS) {
       const hours = entry.dueAfterS / HOUR_S;
-      return { kind: 'skip', entry, detail: `${uptimeLine(uptimeS)}; due after ${hours}` };
+      return { kind: 'skip', entry, detail: `${uptimeLine(uptimeS)}; due after ${hours} hours` };
     }
-    if (entry.reason === 'stale-names-grew' && baseline === null) {
+    if (entry.needsBaseline && baseline === null) {
       return { kind: 'skip', entry, detail: `${uptimeLine(uptimeS)}; no baseline yet` };
     }
     return { kind: 'check', entry, baseline: baseline ?? 0 };

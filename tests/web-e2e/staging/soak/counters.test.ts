@@ -171,6 +171,12 @@ describe('the post-deploy window', () => {
       kind: 'skip',
       detail: 'the API is up 13.5 hours; no baseline yet',
     });
+    expect(
+      counterPlan(13.5 * 3600, 2).find((plan) => plan.entry.reason === 'no-walk-in-window')
+    ).toMatchObject({
+      kind: 'skip',
+      detail: 'the API is up 13.5 hours; due after 25 hours',
+    });
     expect(baselineDue(25 * 3600)).toBe(false);
     expect(baselineDue(25 * 3600 + 1)).toBe(true);
   });
