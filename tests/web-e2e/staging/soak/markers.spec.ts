@@ -6,9 +6,9 @@
 
 import { readFile } from 'node:fs/promises';
 import type { Page } from '@playwright/test';
+import type { IpnsRecordReading } from '@cipherbox/client';
 import { BinPage } from '../../page-objects/bin.page';
 import { FilesPage } from '../../page-objects/files.page';
-import { SettingsPage } from '../../page-objects/settings.page';
 import { SOAK_FOLDER } from './bootstrap';
 import { check, expect, fact, test } from './fixtures';
 import { appendMarker, markers, utcDay, type Ledger } from './ledger';
@@ -30,9 +30,10 @@ import {
 } from './markers';
 import { SoakFailure } from './reasons';
 import { resolveUntil } from './recordReader';
-import { inspectVault, ledgerPath, readLedger, writeLedger } from './vault';
+import { inspectVault, ledgerPath, readLedger, SETTINGS_MS, writeLedger } from './vault';
 
-const TEST_MS = 1_800_000;
+/** Each wait below ends inside this, so a slow night fails with its own reason. */
+const TEST_MS = 5_400_000;
 /** A name the ledger holds was published a night ago or more. */
 const RESOLVE_MS = 120_000;
 const PUBLISH_MS = 300_000;
@@ -40,6 +41,8 @@ const PUBLISH_MS = 300_000;
 const RENEWAL_MS = 600_000;
 /** Bin expiry queues a due purge on the poll tick, and the queue drains it. */
 const PURGE_MS = 600_000;
+/** Two reads this far apart let a late publish of the night before land. */
+const SETTLE_MS = 65_000;
 
 async function openLedger(files: FilesPage): Promise<Ledger> {
   const found = await inspectVault(files, 'owner');
@@ -63,28 +66,33 @@ async function opened(files: FilesPage, name: string): Promise<Uint8Array> {
   return new Uint8Array(await readFile(await download.path()));
 }
 
-/**
- * The bin retention the owner saved in Settings. Bin expiry runs only on a
- * saved retention, so a vault that reads the defaults saves them once.
- */
+/** The bin retention the owner saved in Settings. A scheduled night writes no settings. */
 async function savedRetention(page: Page): Promise<number> {
   const bin = new BinPage(page);
   await bin.open();
-  await expect(bin.retention).toHaveAttribute('data-origin', /.+/, { timeout: 180_000 });
-  if ((await bin.retention.getAttribute('data-origin')) === 'defaults') {
-    const settings = new SettingsPage(page);
-    await settings.open();
-    await expect(settings.binRetention).not.toHaveValue('', { timeout: 180_000 });
-    await settings.save();
-    await expect(settings.savedMark).toBeVisible({ timeout: 180_000 });
-    await bin.open();
-    await expect(bin.retention).toHaveAttribute('data-origin', 'resolved', { timeout: 180_000 });
-  }
+  await expect(bin.retention).toHaveAttribute('data-origin', /.+/, { timeout: SETTINGS_MS });
+  const origin = await bin.retention.getAttribute('data-origin');
   const days = Number(await bin.retention.getAttribute('data-days'));
-  if (!Number.isInteger(days) || days <= 0) {
-    throw new SoakFailure('purge-missed', `the saved bin retention is ${days} days, so no bin`);
+  if (origin === 'defaults' || !Number.isInteger(days) || days <= 0) {
+    throw new SoakFailure(
+      'settings-unread',
+      `the settings read as ${origin} with a bin retention of ${days} days`
+    );
   }
   return days;
+}
+
+/** Reads the name of today's marker off its row, resolves it, and appends its ledger line. */
+async function recordMarker(files: FilesPage, ledger: Ledger, today: string): Promise<Ledger> {
+  const ipnsName = await files.ipnsName(markerFile(today));
+  const reading = await resolveUntil(ipnsName, () => true, PUBLISH_MS);
+  const next = appendMarker(ledger, {
+    date: today,
+    ipnsName,
+    sequence: Number(reading.sequence),
+  });
+  await writeLedger(files, next);
+  return next;
 }
 
 test('the owner markers open byte for byte and hold their sequences', async ({ owner }) => {
@@ -119,10 +127,10 @@ test('the owner markers open byte for byte and hold their sequences', async ({ o
       }
       const floor = BigInt(marker.sequence);
       const reading = await resolveUntil(shown, (r) => r.sequence >= floor, RESOLVE_MS);
-      if (reading === null || reading.sequence < floor) {
+      if (reading.sequence < floor) {
         throw new SoakFailure(
           'sequence-regressed',
-          `the marker of ${marker.date} resolved at ${reading?.sequence ?? 'no record'}, ledger ${floor}`
+          `the marker of ${marker.date} resolved at ${reading.sequence}, ledger ${floor}`
         );
       }
       out.push({ date: marker.date, ledger: marker.sequence, resolved: reading.sequence });
@@ -135,13 +143,13 @@ test('the owner markers open byte for byte and hold their sequences', async ({ o
   if (oldest !== undefined && republishDue(oldest, today)) {
     await check('oldest marker republished', 'republish-missed', async () => {
       const next = BigInt(oldest.sequence) + 1n;
-      const renewed = (r: { sequence: bigint; validUntil: bigint | null }) =>
+      const renewed = (r: IpnsRecordReading) =>
         r.sequence >= next && freshValidity(r.validUntil, Date.now());
       const reading = await resolveUntil(oldest.ipnsName, renewed, RENEWAL_MS);
-      if (reading === null || !renewed(reading)) {
+      if (!renewed(reading) || reading.sequence !== next) {
         throw new SoakFailure(
           'republish-missed',
-          `the marker of ${oldest.date} resolved at ${reading?.sequence ?? 'no record'}, valid to ${reading?.validity ?? '-'}; ledger ${oldest.sequence}`
+          `the marker of ${oldest.date} resolved at ${reading.sequence}, valid to ${reading.validity}; expected ${next}`
         );
       }
       await fact(
@@ -159,39 +167,34 @@ test("today's marker advances soak/ by one, and the bin holds the cap", async ({
   test.setTimeout(TEST_MS);
   const files = new FilesPage(owner);
   const today = utcDay(new Date());
+  const file = markerFile(today);
   let ledger = await check('owner marker ledger', 'ledger-unreadable', () => openLedger(files));
 
   if (markers(ledger).some((marker) => marker.date === today)) {
     await fact("today's marker", `${today} is in the ledger already`);
+  } else if ((await files.row(file).count()) > 0) {
+    // An earlier run of today wrote the marker and missed its ledger line.
+    ledger = await check("today's marker", 'sequence-not-advanced', () =>
+      recordMarker(files, ledger, today)
+    );
+    await fact("today's marker", `${today} was listed before its ledger line; no +1 check`);
   } else {
     const folder = await check('soak/ sequence', 'sequence-not-advanced', async () => {
       await files.toRoot();
       const ipnsName = await files.ipnsName(SOAK_FOLDER);
-      const reading = await resolveUntil(ipnsName, () => true, RESOLVE_MS);
-      if (reading === null) {
-        throw new SoakFailure('sequence-not-advanced', `${SOAK_FOLDER}/ resolved no record`);
-      }
+      const first = await resolveUntil(ipnsName, () => true, RESOLVE_MS);
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+      const second = await resolveUntil(ipnsName, () => true, RESOLVE_MS);
       await files.open(SOAK_FOLDER);
-      return { ipnsName, before: reading.sequence };
+      const before = first.sequence > second.sequence ? first.sequence : second.sequence;
+      return { ipnsName, before };
     });
 
     ledger = await check("today's marker", 'sequence-not-advanced', async () => {
-      const file = markerFile(today);
       await files.upload(file, markerBytes(today));
       await expect(files.row(file)).toBeVisible({ timeout: 180_000 });
       await files.published();
-      const ipnsName = await files.ipnsName(file);
-      const reading = await resolveUntil(ipnsName, () => true, PUBLISH_MS);
-      if (reading === null) {
-        throw new SoakFailure('sequence-not-advanced', `the marker of ${today} resolved no record`);
-      }
-      const next = appendMarker(ledger, {
-        date: today,
-        ipnsName,
-        sequence: Number(reading.sequence),
-      });
-      await writeLedger(files, next);
-      return next;
+      return recordMarker(files, ledger, today);
     });
 
     const cold = new FilesPage(await freshOwner());
@@ -203,49 +206,53 @@ test("today's marker advances soak/ by one, and the bin holds the cap", async ({
       }
       const expected = folder.before + 1n;
       const reading = await resolveUntil(shown, (r) => r.sequence >= expected, PUBLISH_MS);
-      if (reading?.sequence !== expected) {
+      if (reading.sequence !== expected) {
         throw new SoakFailure(
           'sequence-not-advanced',
-          `${SOAK_FOLDER}/ resolved at ${reading?.sequence ?? 'no record'}, not ${expected}`
+          `${SOAK_FOLDER}/ resolved at ${reading.sequence}, not ${expected}`
         );
       }
       await cold.open(SOAK_FOLDER);
-      await expect(cold.row(markerFile(today))).toBeVisible({ timeout: 180_000 });
+      await expect(cold.row(file)).toBeVisible({ timeout: 180_000 });
       await fact("today's marker", `${today}; ${SOAK_FOLDER}/ ${folder.before} to ${expected}`);
     });
   }
 
-  const retentionDays = await check('owner bin retention', 'purge-missed', () =>
+  const retentionDays = await check('owner bin retention', 'settings-unread', () =>
     savedRetention(owner)
   );
+  const bin = new BinPage(owner);
 
-  ledger = await check('owner marker cap', 'purge-missed', async () => {
-    const leaving = overCap(markers(ledger));
+  ledger = await check('owner marker cap', 'cap-missed', async () => {
+    const leaving = overCap(markers(ledger)).map((marker) => marker.date);
     if (leaving.length === 0) return ledger;
     await toSoak(files);
     // The ledger goes first: a marker it lists must open, so it never lists one in the bin.
-    const next = binMarkers(
-      ledger,
-      leaving.map((marker) => marker.date),
-      today
-    );
+    const next = binMarkers(ledger, leaving, today);
     await writeLedger(files, next);
-    for (const marker of leaving) {
-      await files.remove(markerFile(marker.date));
-      await expect(files.row(markerFile(marker.date))).toHaveCount(0);
+    for (const date of leaving) {
+      await files.remove(markerFile(date));
+      await expect(files.row(markerFile(date))).toHaveCount(0);
     }
     await files.published();
+    await bin.open();
+    for (const date of leaving) await bin.appeared(markerFile(date));
     return next;
   });
 
   await check('owner bin purge', 'purge-missed', async () => {
     const binned = binnedMarkers(ledger);
     const due = binned.filter((entry) => purgeDue(entry, retentionDays, today));
-    if (due.length > 0) {
-      const bin = new BinPage(owner);
+    if (binned.length > 0) {
       await bin.open();
-      for (const entry of due) await bin.gone(markerFile(entry.date), PURGE_MS);
+      for (const entry of binned) {
+        if (due.includes(entry)) await bin.gone(markerFile(entry.date), PURGE_MS);
+        else await bin.appeared(markerFile(entry.date));
+      }
+    }
+    if (due.length > 0) {
       await toSoak(files);
+      for (const entry of due) await expect(files.row(markerFile(entry.date))).toHaveCount(0);
       await writeLedger(
         files,
         dropBinned(

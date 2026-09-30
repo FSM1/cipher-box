@@ -14,10 +14,10 @@ export const MARKER_CAP = 90;
 /** A marker older than this has passed its renewal point (EOL window 90, renewal at 30 left). */
 export const REPUBLISH_AFTER_DAYS = 60;
 
-/** `EOL_RENEW_THRESHOLD` in `crates/engine/src/net/eol.rs`. */
-const RENEW_THRESHOLD_MS = 30 * 86_400_000;
-
 const DAY_MS = 86_400_000;
+
+/** `EOL_RENEW_THRESHOLD` in `crates/engine/src/net/eol.rs`. */
+const RENEW_THRESHOLD_MS = 30 * DAY_MS;
 
 const BINNED = /^binned (\S+) (\S+)$/;
 

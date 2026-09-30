@@ -26,7 +26,7 @@ import {
   sequencesLine,
 } from './markers';
 import { SoakFailure } from './reasons';
-import { OBSERVER_DIR_ENV, observerModule, recordUrl } from './recordReader';
+import { namePrefix, OBSERVER_DIR_ENV, observerModule, recordUrl } from './recordReader';
 
 const NAME = 'k51qzi5uqu5dlvj2baxnqndepeb86cbk3ng7n3i46uzyxzyqj2xjonzllnv0v8';
 const DAY_MS = 86_400_000;
@@ -167,6 +167,11 @@ describe('the summary lines', () => {
 describe('the public routing read', () => {
   it('asks delegated-ipfs.dev for the record of a name', () => {
     expect(recordUrl(NAME)).toBe(`https://delegated-ipfs.dev/routing/v1/ipns/${NAME}`);
+  });
+
+  it('names a record in an error by a short prefix only', () => {
+    expect(namePrefix(NAME)).toBe('k51qzi5uqu5d...');
+    expect(namePrefix(NAME)).not.toContain(NAME.slice(12));
   });
 
   it('loads the observer module from the configured folder', () => {

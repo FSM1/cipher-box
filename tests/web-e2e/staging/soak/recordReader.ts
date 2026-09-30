@@ -10,11 +10,13 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
+  drainCapped,
   openIpnsRecordReader,
   type IpnsRecordReader,
   type IpnsRecordReading,
 } from '@cipherbox/client';
 import type { Env } from '../../tools/loginSecretExport';
+import { SoakFailure } from './reasons';
 
 export const PUBLIC_ROUTING = 'https://delegated-ipfs.dev';
 
@@ -28,6 +30,9 @@ const DEFAULT_OBSERVER_DIR = fileURLToPath(
 );
 
 const POLL_MS = 15_000;
+
+/** `MAX_RECORD_BYTES` in `crates/engine/src/net/fanout.rs`. */
+const RECORD_LIMIT = 10 * 1024;
 
 export function observerModule(env: Env): { glue: string; wasm: string } {
   const dir = env[OBSERVER_DIR_ENV]?.trim() || DEFAULT_OBSERVER_DIR;
@@ -49,6 +54,11 @@ function observerReader(): Promise<IpnsRecordReader> {
   return reader;
 }
 
+/** A name cut to a short prefix: an error outside a {@link SoakFailure} reaches the public summary. */
+export function namePrefix(ipnsName: string): string {
+  return `${ipnsName.slice(0, 12)}...`;
+}
+
 /** The record the public path serves for `ipnsName`, or `null` where it serves none. */
 async function fetchRecord(ipnsName: string): Promise<Uint8Array | null> {
   const response = await fetch(recordUrl(ipnsName), {
@@ -61,37 +71,48 @@ async function fetchRecord(ipnsName: string): Promise<Uint8Array | null> {
   }
   if (!response.ok) {
     await response.body?.cancel();
-    throw new Error(`${PUBLIC_ROUTING} answered ${response.status} for ${ipnsName}`);
+    throw new Error(`the endpoint answered ${response.status}`);
   }
-  return new Uint8Array(await response.arrayBuffer());
+  const drained = await drainCapped(response, RECORD_LIMIT);
+  if (drained.kind === 'tooLarge') {
+    throw new Error(`the endpoint served ${drained.observed} bytes, above ${RECORD_LIMIT}`);
+  }
+  return drained.body;
 }
 
 /**
  * Resolves `ipnsName` until `accept` takes the verified reading or `timeoutMs`
- * passes, and returns the last reading, `null` where the path served none. A
- * routing answer propagates and the endpoint can fail for a while, so both are
- * asked again; a record the read refuses fails at once.
+ * passes, and returns the last reading. A routing answer propagates and the
+ * endpoint can fail for a while, so both are asked again; a record the read
+ * refuses fails at once. A poll that never got a record fails as
+ * `routing-unavailable`.
  */
 export async function resolveUntil(
   ipnsName: string,
   accept: (reading: IpnsRecordReading) => boolean,
   timeoutMs: number
-): Promise<IpnsRecordReading | null> {
+): Promise<IpnsRecordReading> {
   const read = await observerReader();
   const deadline = Date.now() + timeoutMs;
+  let last: IpnsRecordReading | null = null;
+  let miss = 'the endpoint served no record';
   for (;;) {
     let record: Uint8Array | null = null;
-    let failure: unknown = null;
     try {
       record = await fetchRecord(ipnsName);
     } catch (error) {
-      failure = error;
+      miss = error instanceof Error ? error.message : String(error);
     }
-    const reading = record === null ? null : read(ipnsName, record);
-    if (reading !== null && accept(reading)) return reading;
+    if (record !== null) {
+      last = read(ipnsName, record);
+      if (accept(last)) return last;
+    }
     if (Date.now() + POLL_MS > deadline) {
-      if (failure !== null) throw failure;
-      return reading;
+      if (last !== null) return last;
+      throw new SoakFailure(
+        'routing-unavailable',
+        `${PUBLIC_ROUTING} for ${namePrefix(ipnsName)}: ${miss}`
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
   }
