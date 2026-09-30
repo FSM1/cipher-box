@@ -9,7 +9,16 @@
  */
 
 import { appendFile, readFile } from 'node:fs/promises';
-import { decideGuard, newestStagingTag, refShape } from './guard';
+import {
+  compareStatus,
+  decideGuard,
+  mainCommit,
+  newestStagingTag,
+  refShape,
+  tagCommit,
+  type GitHubApi,
+  type ResolvedRef,
+} from './guard';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -17,55 +26,30 @@ function env(name: string): string {
   return value;
 }
 
-async function github(path: string): Promise<{ status: number; body: unknown }> {
-  const api = process.env.GITHUB_API_URL ?? 'https://api.github.com';
-  const response = await fetch(`${api}/repos/${env('GITHUB_REPOSITORY')}/${path}`, {
-    headers: {
-      authorization: `Bearer ${env('GH_TOKEN')}`,
-      accept: 'application/vnd.github+json',
-    },
-  });
-  const body: unknown = response.status === 200 ? await response.json() : null;
-  if (response.status !== 200 && response.status !== 404) {
-    throw new Error(`the GitHub API answered ${response.status} for a guard read`);
-  }
-  return { status: response.status, body };
-}
-
-interface GitObject {
-  object?: { type?: unknown; sha?: unknown };
-}
-
-/** The commit a tag points at, through an annotated tag object; `null` for no tag. */
-async function tagCommit(tag: string): Promise<string | null> {
-  let answer = await github(`git/ref/tags/${tag}`);
-  for (let hops = 0; hops < 4; hops += 1) {
-    if (answer.status === 404) return null;
-    const object = (answer.body as GitObject).object;
-    if (typeof object?.sha !== 'string') return null;
-    if (object.type === 'commit') return object.sha;
-    if (object.type !== 'tag') return null;
-    answer = await github(`git/tags/${object.sha}`);
-  }
-  return null;
-}
-
-async function compareStatus(sha: string): Promise<string> {
-  const answer = await github(`compare/main...${sha}`);
-  const status = (answer.body as { status?: unknown } | null)?.status;
-  return typeof status === 'string' ? status : 'missing';
-}
-
 async function guard(): Promise<number> {
+  const gh: GitHubApi = {
+    api: process.env.GITHUB_API_URL ?? 'https://api.github.com',
+    repo: env('GITHUB_REPOSITORY'),
+    token: env('GH_TOKEN'),
+    fetch,
+  };
   const ref = env('SOAK_REF');
   const shape = refShape(ref);
-  const commit = shape === 'tag' ? await tagCommit(ref) : shape === 'sha' ? ref : null;
+  const commit: ResolvedRef =
+    shape === 'tag'
+      ? await tagCommit(gh, ref)
+      : shape === 'sha'
+        ? { kind: 'commit', sha: ref }
+        : { kind: 'no-tag' };
   const decision = decideGuard({
     ref,
     baseUrl: process.env.SOAK_BASE_URL ?? '',
     expectedUrl: process.env.STAGING_APP_URL ?? '',
-    tagCommit: shape === 'tag' ? commit : null,
-    compareStatus: commit === null ? 'missing' : await compareStatus(commit),
+    commit,
+    compareStatus:
+      commit.kind === 'commit'
+        ? await compareStatus(gh, await mainCommit(gh), commit.sha)
+        : 'missing',
   });
   if (decision.kind === 'refuse') {
     process.stdout.write(`::error::${decision.reason}\n`);

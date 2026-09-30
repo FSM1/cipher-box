@@ -6,6 +6,8 @@
  * runs.
  */
 
+// No `m` flag: `$` then matches only at the end of the input, and a JS `$`
+// does not match before a trailing newline, so no second output line passes.
 /** The tag shape `tag-staging.yml` mints: `staging-<YYYYMMDD>-release-<n>`. */
 const RELEASE_TAG = /^staging-(\d{8})-release-(\d+)$/;
 
@@ -39,6 +41,15 @@ export function refShape(ref: string): RefShape {
   return 'refused';
 }
 
+/** What a ref resolves to. */
+export type ResolvedRef =
+  | { readonly kind: 'no-tag' }
+  | { readonly kind: 'not-a-commit' }
+  | { readonly kind: 'commit'; readonly sha: string };
+
+/** The compare statuses GitHub documents, and `missing` for every other answer. */
+export type CompareStatus = 'identical' | 'behind' | 'ahead' | 'diverged' | 'missing';
+
 export interface GuardInputs {
   /** The `ref` input, or the run's own SHA when the input is empty. */
   readonly ref: string;
@@ -46,10 +57,10 @@ export interface GuardInputs {
   readonly baseUrl: string;
   /** The `STAGING_APP_URL` variable. */
   readonly expectedUrl: string;
-  /** The commit a tag `ref` points at; `null` when no such tag exists. Unused for a SHA. */
-  readonly tagCommit: string | null;
-  /** The status of the compare from main to the resolved commit. */
-  readonly compareStatus: string;
+  /** What `ref` resolves to: a tag through the API, a SHA as itself. */
+  readonly commit: ResolvedRef;
+  /** The status of the compare from the main commit to the resolved commit. */
+  readonly compareStatus: CompareStatus;
 }
 
 export type GuardDecision =
@@ -72,27 +83,87 @@ export function decideGuard(inputs: GuardInputs): GuardDecision {
   if (baseUrl !== inputs.expectedUrl) {
     return refuse('base-url must be the staging app URL, the STAGING_APP_URL variable');
   }
-
-  let sha: string;
-  switch (refShape(inputs.ref)) {
-    case 'tag':
-      if (inputs.tagCommit === null) return refuse('ref names no staging release tag');
-      if (!SHA.test(inputs.tagCommit)) return refuse('the tag does not resolve to a commit');
-      sha = inputs.tagCommit;
-      break;
-    case 'sha':
-      sha = inputs.ref;
-      break;
-    case 'refused':
-      return refuse(
-        'ref must be a staging-<date>-release-<n> tag or a full commit SHA on main. A branch or a refs/pull/* ref is refused.'
-      );
+  if (refShape(inputs.ref) === 'refused') {
+    return refuse(
+      'ref must be a staging-<date>-release-<n> tag or a full commit SHA on main. A branch or a refs/pull/* ref is refused.'
+    );
   }
+  if (inputs.commit.kind === 'no-tag') return refuse('ref names no staging release tag');
+  if (inputs.commit.kind === 'not-a-commit') return refuse('the tag does not point at a commit');
+  if (!SHA.test(inputs.commit.sha)) return refuse('the ref resolved to no commit SHA');
 
   // Base-to-head: an ancestor of main compares as `behind`, main's own HEAD as
   // `identical`; anything off main is `ahead` or `diverged`.
   if (inputs.compareStatus !== 'identical' && inputs.compareStatus !== 'behind') {
     return refuse('the suite commit is not on main');
   }
-  return { kind: 'accept', sha, baseUrl, label: inputs.ref };
+  return { kind: 'accept', sha: inputs.commit.sha, baseUrl, label: inputs.ref };
+}
+
+/** The part of `fetch` the reads use, so a test can answer them. */
+export type Fetch = (
+  url: string,
+  init: { headers: Record<string, string> }
+) => Promise<{ status: number; json(): Promise<unknown> }>;
+
+export interface GitHubApi {
+  readonly api: string;
+  readonly repo: string;
+  readonly token: string;
+  readonly fetch: Fetch;
+}
+
+async function read(gh: GitHubApi, path: string): Promise<unknown> {
+  const response = await gh.fetch(`${gh.api}/repos/${gh.repo}/${path}`, {
+    headers: { authorization: `Bearer ${gh.token}`, accept: 'application/vnd.github+json' },
+  });
+  if (response.status === 404) return null;
+  if (response.status !== 200) {
+    throw new Error(`the GitHub API answered ${response.status} for a guard read`);
+  }
+  return response.json();
+}
+
+interface GitObject {
+  object?: { type?: unknown; sha?: unknown };
+}
+
+/** Annotated tags that point at annotated tags, followed at most this many times. */
+const TAG_HOPS = 4;
+
+/** The commit a tag points at, through annotated tag objects. */
+export async function tagCommit(gh: GitHubApi, tag: string): Promise<ResolvedRef> {
+  let answer = await read(gh, `git/ref/tags/${tag}`);
+  if (answer === null) return { kind: 'no-tag' };
+  for (let hop = 0; hop <= TAG_HOPS; hop += 1) {
+    const object = (answer as GitObject | null)?.object;
+    if (typeof object?.sha !== 'string') return { kind: 'not-a-commit' };
+    if (object.type === 'commit') return { kind: 'commit', sha: object.sha };
+    if (object.type !== 'tag' || hop === TAG_HOPS) return { kind: 'not-a-commit' };
+    answer = await read(gh, `git/tags/${object.sha}`);
+  }
+  return { kind: 'not-a-commit' };
+}
+
+/** The commit of the `main` branch, by its full ref, so a tag named `main` cannot stand in. */
+export async function mainCommit(gh: GitHubApi): Promise<string> {
+  const object = ((await read(gh, 'git/ref/heads/main')) as GitObject | null)?.object;
+  if (object?.type !== 'commit' || typeof object.sha !== 'string' || !SHA.test(object.sha)) {
+    throw new Error('refs/heads/main does not resolve to a commit');
+  }
+  return object.sha;
+}
+
+const COMPARE_STATUSES: ReadonlySet<string> = new Set(['identical', 'behind', 'ahead', 'diverged']);
+
+export async function compareStatus(
+  gh: GitHubApi,
+  base: string,
+  head: string
+): Promise<CompareStatus> {
+  const status = ((await read(gh, `compare/${base}...${head}`)) as { status?: unknown } | null)
+    ?.status;
+  return typeof status === 'string' && COMPARE_STATUSES.has(status)
+    ? (status as CompareStatus)
+    : 'missing';
 }
