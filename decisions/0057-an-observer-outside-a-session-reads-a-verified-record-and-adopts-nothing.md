@@ -24,6 +24,10 @@ Node. A deployed bundle carries no introspection hook (ADR 0049 D3), and TypeScr
 its own (rule 4). So the soak needs the Rust decoder, reached from Node, with no session. Every
 read in the engine passes the adoption gate (rule 6). The gate needs the floors and keys of a
 session, so a read with no session cannot run it.
+Amended by
+[ADR 0061](./0061-a-renewal-walk-over-every-owned-scope-renews-each-name-through-the-adoption-gate.md)
+on 2026-09-30: the republisher re-PUTs the same bytes and extends no validity; the engine's
+renewal walk gives an old record a fresh validity.
 
 ## Decision
 

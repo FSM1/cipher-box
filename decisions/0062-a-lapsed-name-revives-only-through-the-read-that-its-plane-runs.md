@@ -8,7 +8,9 @@
   [ADR 0013](./0013-a-lapsed-bin-index-record-is-rewritten-not-refused.md) (no background job
   promotes a record that no gate admitted),
   [ADR 0034](./0034-a-degraded-settings-load-falls-back-to-the-last-verified-copy-and-never-widens-placement.md)
-  (the settings ladder), and ADR 0061 (the renewal walk)
+  (the settings ladder), and
+  [ADR 0061](./0061-a-renewal-walk-over-every-owned-scope-renews-each-name-through-the-adoption-gate.md)
+  (the renewal walk)
 - **Implemented by:** not landed; FSM1/cipher-box#2108 tracks the change
 - **Amends:** none
 
