@@ -122,7 +122,8 @@ returns a trust verdict that nothing anchored.
    new module, the KAT manifest and `examples/kat_gen.rs`) and the engine gate, `net/author.rs`,
    `net/rotation.rs`, `rotation/reseal.rs`, `rotation/rotate_write.rs`, `rotation/trigger.rs`, the
    engine KAT generator, and the engine gate tests. The move changes no wire format and no KDF
-   edge, so no KAT vector changes its bytes.
+   edge. The section-signer vectors regenerate under the core generator with new bytes; their
+   verdicts do not change.
 5. **The blueprint reword lands in the code PR.** The reword follows acceptance of this ADR, in the
    same PR as the move, so the blueprint and the code cross the boundary together.
 6. **`crates/core` defines which entries are write-capable.** This is the accepted cost of the

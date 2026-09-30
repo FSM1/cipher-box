@@ -461,8 +461,9 @@ H(signed bytes)}` — covering grant blobs, owner blob, owner-write-blob, ascent
   pure. The stage-3 predicate takes a `VerifiedGrantSet`, a witness that only
   `verify_grant_set` and `verify_grant_set_bound` return, and reads the
   committed pseudonyms from it; a caller cannot authenticate structures against
-  a commitment the owner identity did not attest (ADR 0052 D2). The whole-record
-  fail-closed policy stays the engine gate's.
+  a commitment the owner identity did not attest (ADR 0052 D2). A section whose
+  own commitment is not the attested one fails with `commitment-invalid`. The
+  whole-record fail-closed policy stays the engine gate's.
 - **Pointer payloads**: the re-point object `{scopeId, currentRootName,
 writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the
   record, sealed under the scope's stable `pointerReadKey`. The vault pointer

@@ -68,6 +68,10 @@ pub fn is_committed_write_pseudonym(
 /// its single signer from, over the same recomputed input, so the two cannot
 /// disagree about which key signed the section. `None` where no committed
 /// pseudonym verifies, which is a record stage 3 refuses outright.
+///
+/// Precondition: `section` passed the adoption gate. The lookup reads
+/// `section.commitment` with no witness, so on any other section it names a
+/// signer that nothing anchored.
 pub fn write_body_signer(section: &GrantSection, scope: [u8; 16], epoch: u64) -> Option<[u8; 32]> {
     let body = &section.write_body;
     let input =
@@ -214,6 +218,11 @@ pub fn authenticate_section_structures(
     scope: [u8; 16],
     epoch: u64,
 ) -> Result<(), CodecError> {
+    // The attested set must be this section's own, or the verdict would adopt a
+    // section whose commitment nothing anchored.
+    if *commitment.commitment() != section.commitment {
+        return Err(TrustViolation::CommitmentInvalid.into());
+    }
     let mut auth = StructureAuthenticator {
         committed: committed_write_pseudonyms(commitment.commitment()),
         pinned: None,
@@ -332,5 +341,67 @@ mod tests {
                 "structure-signature-invalid"
             );
         }
+    }
+
+    /// A section wholly signed by `signer`, under a commitment that names it as
+    /// the owner pseudonym and is bound to `ipns_name`.
+    fn section_signed_by(signer: &Ed25519Signer, ipns_name: &[u8]) -> GrantSection {
+        use crate::seal::{PreservedFields, SignedOwnerBlob, SignedSealed};
+        let owner_ct = b"owner blob".to_vec();
+        let body = b"write body".to_vec();
+        let sign = |tag: u8, bytes: &[u8]| {
+            let input = StructureSigInput::over_ciphertext(SCOPE, EPOCH, tag, None, bytes);
+            sign_structure(signer, &input).to_bytes()
+        };
+        GrantSection {
+            commitment: GrantSetCommitment {
+                ipns_name: ipns_name.to_vec(),
+                owner_pseudonym_pk: signer.verifying_key().to_bytes(),
+                cut_epoch: 0,
+                entries: Vec::new(),
+                unknown: PreservedFields::new(),
+            },
+            commitment_sig: [0; 64],
+            grant_blobs: Vec::new(),
+            owner_blob: SignedOwnerBlob {
+                enc: [0x20; 32],
+                signature: sign(STRUCT_TAG_OWNER_BLOB, &owner_ct),
+                ciphertext: owner_ct,
+                unknown: PreservedFields::new(),
+            },
+            owner_write_blob: None,
+            ascent_link: None,
+            history_links: Vec::new(),
+            write_body: SignedSealed {
+                signature: sign(STRUCT_TAG_WRITE_BODY, &body),
+                sealed: body,
+                unknown: PreservedFields::new(),
+            },
+            unknown: PreservedFields::new(),
+        }
+    }
+
+    #[test]
+    fn a_witness_for_another_commitment_authenticates_nothing() {
+        use crate::seal::{sign_grant_set, verify_grant_set};
+        use crate::suite::ecdsa::EcdsaSigner;
+
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let pseudonym = Ed25519Signer::from_seed([0x5a; 32]);
+        let attested = section_signed_by(&pseudonym, b"scope-root-a");
+        let other = section_signed_by(&pseudonym, b"scope-root-b");
+        let sig = sign_grant_set(&owner, &attested.commitment).unwrap();
+        let witness = verify_grant_set(&owner.verifying_key(), &attested.commitment, &sig).unwrap();
+
+        authenticate_section_structures(&witness, &attested, SCOPE, EPOCH)
+            .expect("the witness authenticates its own section");
+        // Every structure of `other` verifies under a pseudonym the witness
+        // names, so only the binding refuses it.
+        assert_eq!(
+            authenticate_section_structures(&witness, &other, SCOPE, EPOCH)
+                .unwrap_err()
+                .check(),
+            "commitment-invalid"
+        );
     }
 }

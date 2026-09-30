@@ -1185,7 +1185,7 @@ pub fn sign_grant_set(
 ///     VerifiedGrantSet { commitment }
 /// }
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct VerifiedGrantSet<'a> {
     commitment: &'a GrantSetCommitment,
 }
@@ -1747,7 +1747,7 @@ mod tests {
             "the unbound form is name-blind by design"
         );
         assert_eq!(
-            verify_grant_set_bound(&verifier, &c, &sig, b"another-scope-root"),
+            verify_grant_set_bound(&verifier, &c, &sig, b"another-scope-root").map(drop),
             Err(GrantSetBindingError::ScopeMismatch)
         );
         assert_eq!(
