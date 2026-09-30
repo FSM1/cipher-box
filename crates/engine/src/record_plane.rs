@@ -85,6 +85,20 @@ pub enum DefaultsReason {
 }
 
 impl DefaultsReason {
+    /// Every defaults reason, in declaration order — the surface
+    /// `crates/engine/tests/kat_checks.rs` pins (see the crate header).
+    pub const CHECKS: &'static [&'static str] = &[
+        "unproven-first-run",
+        "suppressed",
+        "stranded-mint",
+        "rolled-back",
+        "revision-rolled-back",
+        "expired",
+        "timed-out",
+        "unreadable",
+        "floor-unreadable",
+    ];
+
     /// The stable check name a host renders, carrying no record figures — the
     /// floors and sequences the data-carrying variants hold are this device's
     /// own state, and a host has no use for them.
@@ -103,19 +117,26 @@ impl DefaultsReason {
         }
     }
 
-    /// Whether the load refused bytes the plane actually served, rather than
-    /// failing to reach it (blueprint/engine.md "Bin index record"). A caller
-    /// that retries on availability must not retry on a verdict.
-    pub(crate) fn is_verdict(self) -> bool {
+    /// The class label used in reject vectors: `trust` when the load refused
+    /// bytes the plane actually served, `availability` when it failed to reach
+    /// them (blueprint/engine.md "Bin index record").
+    #[must_use]
+    pub fn class(self) -> &'static str {
         match self {
-            Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => true,
+            Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => "trust",
             Self::UnprovenFirstRun
             | Self::Suppressed
             | Self::StrandedMint
             | Self::Expired
             | Self::TimedOut
-            | Self::FloorUnreadable => false,
+            | Self::FloorUnreadable => "availability",
         }
+    }
+
+    /// Whether the load refused served bytes. A caller that retries on
+    /// availability must not retry on a verdict.
+    pub(crate) fn is_verdict(self) -> bool {
+        self.class() == "trust"
     }
 }
 

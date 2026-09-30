@@ -57,6 +57,21 @@ pub enum NameError {
 }
 
 impl NameError {
+    /// Every node-name check, in declaration order — the surface
+    /// `crates/engine/tests/kat_checks.rs` pins (see the crate header).
+    pub const CHECKS: &'static [&'static str] = &[
+        "node-name-empty",
+        "node-name-too-long",
+        "node-name-dot-entry",
+        "node-name-separator",
+        "node-name-control",
+        "node-name-deceptive-character",
+        "node-name-reserved-character",
+        "node-name-trailing-dot-or-space",
+        "node-name-reserved-device",
+        "node-name-platform-junk",
+    ];
+
     /// The stable check label a refusal reports to a host.
     pub fn check(self) -> &'static str {
         match self {
@@ -70,6 +85,25 @@ impl NameError {
             Self::TrailingDotOrSpace => "node-name-trailing-dot-or-space",
             Self::ReservedDevice => "node-name-reserved-device",
             Self::PlatformJunk => "node-name-platform-junk",
+        }
+    }
+
+    /// The class label used in reject vectors. A name no kernel can carry, or
+    /// one that renders as another name, is suspect when a peer authored it:
+    /// `trust`. A name only some platform reserves is lawful elsewhere, so this
+    /// client's refusal is a `capability` limit.
+    pub fn class(self) -> &'static str {
+        match self {
+            Self::Empty
+            | Self::DotEntry
+            | Self::Separator
+            | Self::Control
+            | Self::DeceptiveCharacter => "trust",
+            Self::TooLong => "over-cap",
+            Self::ReservedCharacter
+            | Self::TrailingDotOrSpace
+            | Self::ReservedDevice
+            | Self::PlatformJunk => "capability",
         }
     }
 }
