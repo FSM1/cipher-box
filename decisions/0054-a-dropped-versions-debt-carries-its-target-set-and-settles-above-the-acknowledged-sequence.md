@@ -40,7 +40,10 @@ expands it with no gateway read. Encode refuses a set that is empty, does not en
 does not sum to the total, and decode reads the same bytes as unwritten (AGENTS.md rule 8). The
 unversioned entry the previous release wrote still decodes, as a prune debt. The previous release
 reads a versioned entry as unwritten, and the ledger never discards, so such an entry waits for
-this release.
+this release. Amended by
+[ADR 0059](./0059-a-dropped-version-whose-staged-root-does-not-read-journals-its-root-alone.md)
+D1 on 2026-09-29: a drop whose staged root does not give a target set journals a root-only debt,
+and the settle fetches the root.
 
 **D2 — The drain holds the acknowledged sequence of a PUT that did not confirm, signs above it,
 and settles nothing at or below it.** A publish whose PUT was acknowledged but not confirmed, or

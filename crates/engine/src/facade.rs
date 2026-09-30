@@ -173,7 +173,8 @@ use crate::sync::refresh::ManualRefresh;
 use crate::sync::staging::{
     DEAD_LETTER_NOTICES_PREFIX, DroppedVersionDebts, PreservedBounds, PreservedDeadLetter,
     StagedBlocks, read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
-    release_version_blocks, stage_op, take_dead_letter_notice, take_preserved_dead_letter,
+    release_version_blocks, stage_op, staged_record, take_dead_letter_notice,
+    take_preserved_dead_letter,
 };
 use crate::sync::staleness::{Connectivity, classify, next_boundary};
 use crate::sync::tick::{
@@ -382,6 +383,9 @@ pub struct SnapshotChild {
     /// Invite claims this owner device acked at this scope root and has not
     /// converted yet (ADR 0023 D5).
     pub pending_invite_claims: u32,
+    /// The node's `ipnsName` as its parent's child reference carries it; `None`
+    /// until a gate-passing read projects one.
+    pub ipns_name: Option<String>,
 }
 
 /// The refusal a version command earns when the file's history does not name
@@ -427,6 +431,10 @@ impl fmt::Debug for SnapshotChild {
             .field("content_version", &self.content_version)
             .field("content_cid", &self.content_cid)
             .field("pending_invite_claims", &self.pending_invite_claims)
+            .field(
+                "ipns_name",
+                &self.ipns_name.as_deref().map(RedactedText::of),
+            )
             .finish()
     }
 }
@@ -604,6 +612,18 @@ pub struct ScopeSharing {
     /// Every invite link this owner's commitment carries there, in commitment
     /// order and expired ones included, read off the scope's own record.
     pub invite_links: Vec<SharingInviteLink>,
+    /// The epochs the scope root's published record sits at; `None` for a node
+    /// that is not a scope root.
+    pub epochs: Option<ScopeEpochs>,
+}
+
+/// The read and write epoch one scope root's published record carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScopeEpochs {
+    /// Steps at every read-plane rotation of the scope.
+    pub read_epoch: u64,
+    /// Steps at every write-plane rotation of the scope.
+    pub write_epoch: u64,
 }
 
 /// A key-free read of the sharing state a host renders for one scope: this
@@ -3759,6 +3779,9 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Err(PublishError::SequenceExhausted) => {
                 "no sequence above the durable floor (never published)".to_owned()
             }
+            Err(PublishError::MarkUnrecorded(_)) => {
+                "durable mark write failed (never published)".to_owned()
+            }
             // A no-renewal (comfortably ahead) or a clean republish is not a
             // failure — nothing to surface.
             Ok(Some(PublishOutcome::Published { .. })) | Ok(None) => continue,
@@ -5330,8 +5353,8 @@ where {
     /// comes from the login secret alone, and only a load that finds neither a
     /// record nor a durable mark mints one. A device that holds a mark reaches
     /// that verdict from its own store and spends no network at all
-    /// ([`holds_a_bin_index_mark`]) — including a device whose own attempt
-    /// failed behind the revision it minted, which the mark keeps fail-closed.
+    /// ([`holds_a_bin_index_mark`]) — including a device whose own PUT left the
+    /// engine and can have landed, which the mark keeps fail-closed.
     async fn publish_genesis_bin_index(&self, api: &ApiClient<T::Http, T::CredentialStore>) {
         let Some(session) = self.session.as_ref() else {
             return;
@@ -9097,6 +9120,12 @@ where {
                 content_version: child.meta.content_version,
                 content_cid: child.meta.head_content_cid.clone(),
                 pending_invite_claims: claims.pending(child.meta.id),
+                ipns_name: child
+                    .meta
+                    .ipns_name
+                    .as_deref()
+                    .and_then(|name| std::str::from_utf8(name).ok())
+                    .map(str::to_owned),
             })
             .collect();
         let ancestors = rendered
@@ -9530,6 +9559,7 @@ where {
                 grant_refusal,
                 invite_link_refusal,
                 invite_links: Vec::new(),
+                epochs: None,
             });
         };
         let current = self
@@ -9594,6 +9624,10 @@ where {
             grant_refusal,
             invite_link_refusal,
             invite_links,
+            epochs: Some(ScopeEpochs {
+                read_epoch: current.current_read_epoch,
+                write_epoch: current.write_epoch,
+            }),
         })
     }
 
@@ -10626,37 +10660,41 @@ where {
     /// Journal the legs one command owes, in order, and report the id of the
     /// last — the op whose publish completes it.
     ///
-    /// A leg that will not journal takes the leg before it back off the queue:
-    /// a staged crossing left half-journaled would park the subtree in the
-    /// vault-root scope ([`relocation_legs`]), which is neither the move the
-    /// caller asked for nor the failure they were told about.
+    /// Two legs go in one atomic write: a staged crossing left half-journaled
+    /// would park the subtree in the vault-root scope ([`relocation_legs`]),
+    /// which is neither the move the caller asked for nor the failure they
+    /// were told about (ADR 0045 D6).
     async fn stage_legs_and_notify(
         &mut self,
         park: Option<&Op>,
         arrive: &Op,
     ) -> Result<CommandOutcome, EngineError> {
-        let parked = match park {
-            Some(op) => Some(self.journal(op).await?),
-            None => None,
+        let op_id = match park {
+            None => self.journal(arrive).await?,
+            Some(park) => {
+                let legs = [self.sealed(park).await?, self.sealed(arrive).await?];
+                let ids = self
+                    .seams
+                    .staging_store
+                    .enqueue_ops(&legs)
+                    .await
+                    .map_err(EngineError::from_seam)?;
+                *ids.last().ok_or_else(|| {
+                    EngineError::from_seam(SeamError::new("enqueue_ops returned no ids"))
+                })?
+            }
         };
-        match self.journal(arrive).await {
-            Ok(op_id) => {
-                // Best-effort push-invalidation trigger; a dropped receiver
-                // (host torn down) is fine.
-                let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-                Ok(CommandOutcome::Queued { op_id })
-            }
-            Err(error) => {
-                // Best-effort, and the caller still hears why the command
-                // failed: a leg a tick has already drained is gone from the
-                // queue, and a cleanup that reported itself instead would name
-                // the wrong cause.
-                if let Some(op_id) = parked {
-                    let _ = self.dequeue_op(op_id).await;
-                }
-                Err(error)
-            }
-        }
+        // Best-effort push-invalidation trigger; a dropped receiver (host torn
+        // down) is fine.
+        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        Ok(CommandOutcome::Queued { op_id })
+    }
+
+    /// Seal one op into a durable record, under an ephemeral of its own.
+    async fn sealed(&self, op: &Op) -> Result<Vec<u8>, EngineError> {
+        staged_record(&self.seams.staging_store, self.record_seal()?, op)
+            .await
+            .map_err(EngineError::from_seam)
     }
 
     /// Seal one op onto the durable queue, under an ephemeral of its own.
@@ -11220,6 +11258,7 @@ mod tests {
     fn a_host_facing_projection_debug_withholds_the_plaintext_name() {
         const NAME: &str = "quarterly-results.txt";
         const FOLDER: &str = "board-papers";
+        const IPNS_NAME: &str = "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4";
 
         let attrs = NodeAttrs {
             id: NodeId([1; 16]),
@@ -11246,6 +11285,7 @@ mod tests {
                 content_version: None,
                 content_cid: None,
                 pending_invite_claims: 0,
+                ipns_name: Some(IPNS_NAME.to_string()),
             }],
             ancestors: vec![Breadcrumb {
                 id: NodeId([4; 16]),
@@ -11269,7 +11309,9 @@ mod tests {
             ("SnapshotView", format!("{view:?}")),
         ] {
             assert!(
-                !rendered.contains(NAME) && !rendered.contains(FOLDER),
+                !rendered.contains(NAME)
+                    && !rendered.contains(FOLDER)
+                    && !rendered.contains(IPNS_NAME),
                 "a name never renders: {rendered}"
             );
             assert!(rendered.contains(shape), "the shape survives: {rendered}");

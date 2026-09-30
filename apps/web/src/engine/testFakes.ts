@@ -35,6 +35,7 @@ export function view(
       pending: 'none',
       deadLetter: false,
       pendingInviteClaims: 0,
+      ipnsName: null,
       contentVersion: null,
       contentCid: null,
     })),

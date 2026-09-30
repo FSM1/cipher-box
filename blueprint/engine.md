@@ -327,7 +327,11 @@ its degraded outcome applies a different policy rather than showing stale data.
   raised before the PUT, so it outlives any save that got as far as minting a
   revision — a member who expressed a placement choice this device could not
   authenticate is never talked back onto the default, which is precisely when
-  that reversal is cheapest. The adopted revision is raised by a store write
+  that reversal is cheapest. No durable mark refuses a settings save, so a
+  save on the same device is the exit from a stranded mint. The mint counter
+  rises before the head upload and the register, because the API answers both
+  and can refuse either (ADR 0034 D6). The adopted
+  revision is raised by a store write
   separate from the sequence floor's and not atomic with it, so it outlives a
   lost one. Absence is a verdict about _this device_ only, so an assumed
   placement must never latch account-scoped state, and the account's advisory
@@ -406,8 +410,20 @@ soft-deleted node (ADR 0031). Its record plane is the settings record's, so
 everything above under "Vault settings load" holds unchanged: the same
 three-rung ladder (the published record, this device's last-known-good copy,
 then an empty bin), the same three durable marks, and the same per-attempt body
-revision beside the per-name sequence floor. Only what differs is stated here.
+revision beside the per-name sequence floor. Only what differs is stated here,
+and that includes when the mint counter moves and where the revision comes from.
 
+- **The mint counter marks only a PUT that left the engine, and a seal counter
+  gives the revision** (ADR 0056). The publish port raises the mint counter to
+  the body revision after register-first, the floor read, the signature and the
+  size check, directly before the PUT. A mark the store does not take stops the
+  publish, and no PUT goes out. So a failure before the PUT leaves no mark, and
+  the next start publishes the genesis record again; a PUT that went out keeps
+  its mark whatever its outcome. The
+  body revision comes from a separate owner-local seal counter, raised before
+  each seal: one above the seal counter, the mint counter and the adopted
+  revision, so no two sealed bodies share a revision. The seal counter is not a
+  mark. The nonce is drawn before the revision, so a failed draw uses none.
 - **The seal key never rotates, so the nonce is always entropy.**
   `bin-index-seal-key` takes no epoch input and no per-record input, so one key
   seals every publish this account ever makes, on every device. Each seal
@@ -458,10 +474,10 @@ revision beside the per-name sequence floor. Only what differs is stated here.
 - **A mint counter with no adoption beside it is its own verdict.** The two
   adoption marks — the per-name sequence floor and the adopted body revision —
   prove a record this device took, so an absent record is withheld and the
-  rewrite refuses. The mint counter alone proves only an attempt this device
-  made, and one residual case where it is more: a publish that confirmed and
-  then lost its floor write. That case is why the load still refuses, and the
-  attempt case is why it refuses under its own reason, `StrandedMint`. The
+  rewrite refuses. The mint counter alone proves a PUT this device sent. That
+  PUT can have landed and then been withheld, or confirmed and then lost its
+  floor write, which is why the load still refuses. It can also have never
+  landed, which is why it refuses under its own reason, `StrandedMint`. The
   refusal is a device-local state: another device of the account holds no mark,
   so it publishes the record and clears it.
 - **The queue head never waits on the bin plane in silence** (ADR 0031,

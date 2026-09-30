@@ -160,7 +160,7 @@ record, so the overlay stamps `mtime = authored_at`" (`blueprint/engine.md` "Syn
 state-law bullet). That target-only form first appeared in the body of FSM1/cipher-box#878,
 which an agent wrote, and no owner decision stands behind it. It contradicts the resolution of
 FSM1/cipher-box#830. The owner accepted the FSM1/cipher-box#830 set as the rule on 2026-09-26.
-The code does not meet it yet (E3).
+`Op::authored_nodes` (`crates/engine/src/sync/op.rs`) is the one function.
 
 **D6 — A `move` is a relink and a rename in one entry, and one kernel rename is one
 command.** The intent op list of `#33` D5 gains `move`. A `move` carries the relink, the rename
@@ -338,9 +338,9 @@ Its gain is that the subtree publishes once, not twice.
    law" gains the citation (ADR 0045) on the rename sentence. `CONTEXT.md` gains the citation
    (ADR 0045) on the "Cross-scope move" and "Retained record" entries.
 
-8. **The code must follow the reworded blueprint.** FSM1/cipher-box#2013 tracks moving the
-   overlay and the drain onto the one authored-node set of D5 (E3). FSM1/cipher-box#2014 tracks
-   journaling the two legs of D6 in one atomic write (E2).
+8. **The code follows the reworded blueprint.** FSM1/cipher-box#2103 moved the overlay and the
+   drain onto the one authored-node set of D5 (E3), and journals the two legs of D6 in one
+   atomic write (E2).
 
 9. **No wire format, no KDF edge and no op record format changes.**
 
@@ -353,39 +353,7 @@ no member and no attacker can observe the field. While the walk is still dark, t
 the failed unseal to an uncharged halt, and the op waits at the queue head until the walk
 proves the boundary. That is an availability cost, not a trust cost.
 
-**E2 — The two legs of D6 are not journaled atomically.** `stage_legs_and_notify`
-(`crates/engine/src/facade.rs`) journals the parking leg and the arriving leg in two
-`enqueue_op` calls. If the arriving leg fails to journal, the command removes the parking leg
-on a best-effort basis (`let _ = self.dequeue_op(op_id)`). That removal cannot undo a parking
-leg that a tick already drained, and the code comment allows that case. The source is then cut,
-the subtree sits in the vault-root scope, and the caller hears that the command failed. That is
-a false failure that performed a scope exit, which D6 forbids. The fix is one atomic journal
-write for both legs, which needs a multi-entry enqueue on the `StagingStore` seam, and a test
-that fails the arriving leg's journal. FSM1/cipher-box#2014 tracks it.
-
-**E3 — The overlay and the drain stamp different node sets.** D5 requires one authored-node
-set that both call. In the code only the overlay calls `Op::stamp_authored`
-(`crates/engine/src/sync/op.rs`), and it stamps the op's target alone. The drain reads
-`applied.op.authored_at` at each authoring site in `crates/engine/src/sync/drain.rs` and in
-`crates/engine/src/net/author.rs`. The two sets differ:
-
-- For `rename`, `relink` and `move`, the overlay's `relocate` (`crates/engine/src/sync/overlay.rs`)
-  stamps the renamed or relinked node. The drain's `publish_ref_move` never republishes that
-  node's record; it publishes only the parent folders, with `modified_at = authored_at`. So the
-  overlay stamps a node that the drain does not author, and it does not stamp the parents that
-  the drain does author.
-- For `create`, the drain's `publish_create` stamps the child and the parent, and the overlay
-  stamps the child only. For `delete`, the drain republishes each parent at `authored_at`, and
-  the overlay stamps nothing.
-
-A folder's mtime therefore jumps at publish, which is what section 3 of the resolution of
-FSM1/cipher-box#830 exists to prevent. FSM1/cipher-box#2013 tracks the fix. Also, the overlay does not stamp a `prune`, a
-`restoreVersion` or a `deleteVersion`, although each authors its target's next record. The
-drain keeps the existing `modified_at` for those three kinds (`publish_prune`,
-`publish_restore_version` and `publish_delete_version` in `crates/engine/src/sync/drain.rs`), so
-the overlay and the drain agree there. Those kinds are outside the six-op list of the
-blueprint, and only its sentence "every op but a delete authors its target's next record"
-reaches them.
+**E2 and E3** were resolved by FSM1/cipher-box#2103 on 2026-09-30.
 
 **E4 — `authored_at` is a client-authored time.** A skewed or lying client publishes a skewed
 `modified_at`, and no gate check catches it. The only reader is the owner's own view, so this
@@ -441,10 +409,11 @@ until the arriving leg publishes. FSM1/cipher-box#1765 names this cost on purpos
 - **D5:** `a_content_op_stamps_its_authored_time_and_plaintext_size` and
   `a_metadata_op_stamps_time_over_a_projection_and_leaves_size_alone`
   (`crates/engine/src/sync/op.rs`), and `a_new_child_stamps_the_journaled_time_not_a_clock`
-  (`crates/engine/src/net/author.rs`) cover the stamp on one node. **Finding:** no test proves
-  that the overlay and the drain's publish plan stamp the same set of nodes, and no test
-  enumerates the op kinds, which the resolution of FSM1/cipher-box#830 asked for. The code does
-  not meet the D5 set today (E3, FSM1/cipher-box#2013).
+  (`crates/engine/src/net/author.rs`) cover the stamp on one node.
+  `each_op_kind_authors_its_own_set_of_nodes` (`crates/engine/src/sync/op.rs`) enumerates the
+  op kinds, and `an_op_renders_the_times_its_publish_writes`
+  (`crates/engine/tests/write_plane.rs`) proves that the overlay and the drain's publish plan
+  stamp the same set of nodes.
 - **D6:** `a_durable_queue_outage_never_destroys_the_destination_a_rename_did_not_replace` and
   `replacing_a_junk_holding_folder_keeps_the_destination_entry_when_the_queue_fails`
   (`crates/fuse/tests/fuse_op_core.rs`), `overlay_move_relinks_renames_and_replaces_in_one_step`
@@ -457,8 +426,10 @@ until the arriving leg publishes. FSM1/cipher-box#1765 names this cost on purpos
   `a_move_between_two_granted_folders_re_seals_into_the_destination_scope`,
   `a_restart_between_the_legs_of_a_staged_move_cuts_the_source_once` and
   `the_passes_that_cannot_author_a_staged_move_do_not_spend_it`
-  (`crates/engine/tests/owner_actions.rs`) cover the two legs. **Finding:** no test covers a
-  two-leg relocation whose arriving leg fails to journal (E2, FSM1/cipher-box#2014).
+  (`crates/engine/tests/owner_actions.rs`) cover the two legs.
+  `a_staged_move_whose_arriving_leg_will_not_journal_journals_no_leg`
+  (`crates/engine/tests/owner_actions.rs`) covers a two-leg relocation whose arriving leg fails
+  to journal.
 - **D7:** `conditional_edit_dead_letters_when_another_writer_took_the_head` and
   `a_second_queued_edit_dead_letters_behind_a_superseded_first`
   (`crates/engine/src/sync/rebase.rs`), and

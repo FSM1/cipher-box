@@ -73,9 +73,10 @@ impl InMemoryStagingStore {
         self.inner.lock().expect("lock").fail_remove_op = true;
     }
 
-    /// Lets the next `budget` enqueues through and fails every one after, so a
-    /// test can drop a durable-queue outage in the middle of a multi-op
-    /// sequence and see what the earlier entries already committed.
+    /// Lets the next `budget` enqueued entries through and fails every one
+    /// after, so a test can drop a durable-queue outage in the middle of a
+    /// multi-op sequence and see what the earlier entries already committed.
+    /// A multi-entry enqueue the budget cannot cover fails whole.
     pub fn fail_enqueue_after(&self, budget: u64) {
         self.inner.lock().expect("lock").enqueue_budget = Some(budget);
     }
@@ -206,6 +207,27 @@ impl StagingStore for InMemoryStagingStore {
         inner.next_op_id += 1;
         inner.ops.push((op_id, op.to_vec()));
         Ok(op_id)
+    }
+
+    async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>> {
+        let mut inner = self.inner.lock().expect("lock");
+        // The budget counts entries, and a set it cannot cover writes nothing.
+        let count = ops.len() as u64;
+        match inner.enqueue_budget {
+            Some(budget) if budget < count => {
+                return Err(SeamError::new("enqueue_ops unavailable"));
+            }
+            Some(budget) => inner.enqueue_budget = Some(budget - count),
+            None => {}
+        }
+        let mut ids = Vec::with_capacity(ops.len());
+        for op in ops {
+            let op_id = OpId(inner.next_op_id);
+            inner.next_op_id += 1;
+            inner.ops.push((op_id, op.clone()));
+            ids.push(op_id);
+        }
+        Ok(ids)
     }
 
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {

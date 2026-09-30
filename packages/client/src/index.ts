@@ -52,6 +52,10 @@ export type { MediaReader } from './media/broker.js';
 // Host-agnostic `packages/login` carries its own; it cannot depend on this package.
 export { fromHex, toHex } from './seams/bytes.js';
 
+// A session-free IPNS record read, for a Node observer of the routing network.
+export { openIpnsRecordReader } from './ipnsRecord.js';
+export type { IpnsRecordReader, IpnsRecordReading } from './ipnsRecord.js';
+
 // The wire descriptors the UI exchanges with the engine over the transport.
 export { KEEP_STORED_BEARER } from './worker/protocol.js';
 export type {
@@ -86,6 +90,7 @@ export type {
   GranteeNameSource,
   SharingInviteLinkDescriptor,
   ScopeSharingDescriptor,
+  ScopeEpochsDescriptor,
   BinOriginDescriptor,
   BinRowDescriptor,
   BinDescriptor,

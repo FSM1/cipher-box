@@ -9,7 +9,7 @@ use core::cell::RefCell;
 use core::num::NonZeroU64;
 use core::task::{Context, Poll, Waker};
 use core::time::Duration;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -23,7 +23,8 @@ use cipherbox_core::seal::MAX_READ_SEALED_BYTES;
 use cipherbox_core::seal::{
     BinIndex, ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
     Version as CoreVersion, decode_envelope, encode_envelope, encode_grant_section,
-    encode_read_body, open_read_body, seal_settings_record, set_grant_section, sign_grant_set,
+    encode_read_body, open_bin_index, open_read_body, seal_settings_record, set_grant_section,
+    sign_grant_set,
 };
 use cipherbox_core::suite::aead::{NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -65,8 +66,9 @@ use cipherbox_engine::sync::{
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
-    owner_identity, owner_pointer_read_key, owner_pseudonym, registry_batch_refused, seed_account,
-    seed_account_published_after_put, sequence_floor_label, serve_http,
+    bin_index_mark_keys, owner_identity, owner_pointer_read_key, owner_pseudonym,
+    registry_batch_refused, seed_account, seed_account_published_after_put, sequence_floor_label,
+    serve_http,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{
@@ -4556,12 +4558,12 @@ fn a_genesis_bin_index_that_did_not_land_is_published_by_a_later_start() {
     );
 }
 
-/// The mark the failed attempt left is a mark like any other: the device cannot
-/// tell an attempt that never reached the plane from one that did, so it never
-/// publishes an empty index over what another device may hold. The account
-/// recovers through the device that holds no mark, above.
+/// The mark a PUT that left the engine leaves is a mark like any other: the
+/// device cannot tell a refused PUT from one that landed, so it never publishes
+/// an empty index over what another device may hold. The account recovers
+/// through the device that holds no mark, above.
 #[test]
-fn the_device_whose_genesis_publish_minted_a_revision_retries_nothing() {
+fn the_device_whose_genesis_put_left_the_engine_retries_nothing() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let alice = world.device(b"alice");
@@ -4574,6 +4576,95 @@ fn the_device_whose_genesis_publish_minted_a_revision_retries_nothing() {
     assert!(
         standing_bin_record(&world).is_none(),
         "the marked device published nothing on its own retry",
+    );
+}
+
+/// A first run with no API to reach sends no PUT, so it leaves no bin index
+/// mark, and the next start with the API back publishes the record.
+#[test]
+fn a_fully_offline_genesis_leaves_no_bin_index_mark_and_the_next_start_publishes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    blocks.refuse_register(br#"{"statusCode":503}"#.to_vec());
+    let (first, _tasks) = provision_first_run(&world, &blocks, &alice);
+    assert!(
+        standing_bin_record(&world).is_none(),
+        "the offline start published nothing",
+    );
+    let floors = alice.floors(&SECRET);
+    for key in bin_index_mark_keys(&bin_name()) {
+        assert_eq!(
+            block_on(floors.sequence_floor(&key)).expect("the floor reads"),
+            None,
+            "the offline start left no bin index mark",
+        );
+    }
+    drop(first);
+    blocks.accept_uploads();
+    blocks.accept_registrations();
+
+    let (_engine, _tasks) = start_on_api(&world, &blocks, &alice, 43);
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        1,
+        "the next start published the record",
+    );
+}
+
+/// A genesis attempt that fails before its PUT leaves the engine cannot have
+/// landed, so it leaves no mark: the same device publishes at its next start,
+/// and a single-device account soft-deletes as normal.
+#[test]
+fn a_genesis_publish_that_failed_before_its_put_is_retried_by_the_same_device() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    let seal_key = kdf::bin_index_seal_key(&SECRET);
+    blocks.refuse_upload(Box::new(move |block| {
+        open_bin_index(seal_key.as_bytes(), block)
+            .is_ok()
+            .then(unreachable_upload)
+    }));
+    let (first, _tasks) = provision_first_run(&world, &blocks, &alice);
+    assert!(
+        standing_bin_record(&world).is_none(),
+        "the genesis publish failed at its head block upload",
+    );
+    drop(first);
+    blocks.accept_uploads();
+
+    let (mut engine, mut tasks) = start_on_api(&world, &blocks, &alice, 43);
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        1,
+        "the same device published the record its first run owed",
+    );
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..40u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.dead_letters.is_empty(),
+        "the soft delete dead-letters nothing"
+    );
+    assert_eq!(
+        bin_entries(&world, &alice, &blocks),
+        vec![doomed.0],
+        "and it binned the node",
     );
 }
 
@@ -13283,9 +13374,9 @@ fn a_deterministic_placement_refusal_holds_the_queued_write_rather_than_charging
 }
 
 /// The other half of the same fork: a settings load that degraded has no member
-/// action as its exit — a later tick may resolve the record — so the pass
-/// retries the head uncharged and takes no hold, which a host would render as
-/// "edit your settings" over a condition editing them does not clear.
+/// action as its exit — a later tick may resolve the record — so within these
+/// passes the head stays queued with no hold and no dead letter. A hold would
+/// render as "edit your settings" over a condition editing them does not clear.
 #[test]
 fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
     let world = FakeWorld::new();
@@ -13310,7 +13401,7 @@ fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
     assert!(
         view.dead_letters.is_empty(),
-        "an outage this pass could not resolve never spends the budget"
+        "within these passes the outage sends nothing to a dead letter"
     );
     assert_eq!(
         settings_hold(&view),
@@ -13330,6 +13421,168 @@ fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
             .contains(&root_cid),
         "with its staged version intact"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A stranded settings mint: a save that minted a revision and never landed.
+// ---------------------------------------------------------------------------
+
+/// More passes than the drain's unattributed budget.
+const PASSES_PAST_THE_OUTAGE_BUDGET: usize =
+    cipherbox_engine::sync::UNATTRIBUTED_BUDGET as usize + 10;
+
+/// The `External` settings the stranded save names, and the retry that lands.
+fn external_settings() -> VaultSettings {
+    VaultSettings {
+        pin_mode: PinMode::External,
+        byo: Some(member_node(ByoKind::Kubo)),
+        retention: RetentionPolicy::KeepAll,
+        bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+    }
+}
+
+/// Queue a content write on `alice`, then save `External` settings while the
+/// head upload fails, and leave. The save raised the mint counter and nothing
+/// landed, so the next cold start loads a stranded mint.
+fn queue_a_write_and_strand_a_settings_save(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+) -> (OpId, NodeId, Vec<u8>) {
+    let (mut engine, _events, _tasks) = boot(world, blocks, alice, 42);
+    let op_id = write_photo(&mut engine, "photo.bin");
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    assert!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        }))
+        .is_err(),
+        "the save does not reach the network"
+    );
+    blocks.accept_uploads();
+    let (root_cid, _) = staged_version(alice);
+    (op_id, photo, root_cid)
+}
+
+/// Restart `alice` over a stranded settings save and run past the outage
+/// budget, asserting the queued write is held under the settings reason and
+/// never charged. Returns the running engine and its loops.
+fn restart_into_a_stranded_mint_hold(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, Vec<BoxedTask>, NodeId) {
+    let (op_id, photo, root_cid) = queue_a_write_and_strand_a_settings_save(world, blocks, alice);
+    let (engine, _events, mut tasks) = boot(world, blocks, alice, 43);
+    for _ in 0..PASSES_PAST_THE_OUTAGE_BUDGET {
+        tick(world, &engine, &mut tasks);
+    }
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.dead_letters.is_empty(),
+        "a held head spends no budget: {:?}",
+        view.dead_letters,
+    );
+    assert_eq!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .len(),
+        1,
+        "it keeps its place in the queue"
+    );
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&root_cid),
+        "and its staged version with it"
+    );
+    let (hold, refusal) = settings_hold(&view).expect("the pass names what it waits on");
+    assert_eq!(hold.op_id, op_id);
+    assert_eq!(hold.node, photo);
+    assert_eq!(
+        refusal,
+        SettingsRefusal::Placement(PlacementRefusal::SettingsUnavailable(
+            DefaultsReason::StrandedMint
+        )),
+    );
+    (engine, tasks, photo)
+}
+
+/// The queued write publishes: its queue is empty, nothing dead-lettered, no
+/// hold stands, and its version is registered at its own name.
+fn assert_the_held_write_published(
+    engine: &Engine<FakeSeamTypes>,
+    alice: &FakeDevice,
+    photo: NodeId,
+) {
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert_eq!(view.queue_hold, None, "the hold let go");
+    assert!(view.dead_letters.is_empty(), "{:?}", view.dead_letters);
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the held write left the queue"
+    );
+    assert!(
+        !registered_content_cids(alice, &write_name(photo)).is_empty(),
+        "and its version registered at its own name"
+    );
+}
+
+/// No later tick clears a stranded mint on this device, so charging the head
+/// would dead-letter it after the outage budget under a reason that does not
+/// name the cause. The head holds, and the member sees the settings reason.
+#[test]
+fn a_stranded_settings_mint_holds_the_queued_write_rather_than_spending_its_budget() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    restart_into_a_stranded_mint_hold(&world, &blocks, &alice);
+}
+
+/// The settings save reads no mark, so a save on the same device is the exit:
+/// once it lands, the next pass lets go of the hold and the write publishes.
+#[test]
+fn a_settings_save_that_lands_releases_a_stranded_mint_hold() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut tasks, photo) = restart_into_a_stranded_mint_hold(&world, &blocks, &alice);
+
+    serve_http(&alice, &blocks, 400);
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert_the_held_write_published(&engine, &alice, photo);
+}
+
+/// A record another device publishes is the other exit: the running session's
+/// settings re-check resolves it, and the hold lets go under the placement it
+/// names.
+#[test]
+fn a_settings_record_that_resolves_releases_a_stranded_mint_hold() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (engine, mut tasks, photo) = restart_into_a_stranded_mint_hold(&world, &blocks, &alice);
+
+    let second = world.device(b"alice-second-device");
+    seed_settings(&world, &second, &blocks, PinMode::Hosted);
+    serve_http(&alice, &blocks, 400);
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+
+    assert_the_held_write_published(&engine, &alice, photo);
 }
 
 // ---------------------------------------------------------------------------
@@ -16138,5 +16391,236 @@ fn a_write_over_a_history_retention_cannot_shorten_still_publishes() {
             .dead_letters
             .is_empty(),
         "a co-writer's history never parks the member's own write",
+    );
+}
+
+/// The rendered `mtime` of every node in the view's tree.
+fn rendered_mtimes(engine: &Engine<FakeSeamTypes>) -> BTreeMap<NodeId, Option<u64>> {
+    let view = block_on(engine.view()).expect("a rendered view");
+    let mut walk = vec![ROOT];
+    let mut mtimes = BTreeMap::new();
+    while let Some(node) = walk.pop() {
+        mtimes.insert(node, view.attrs(node).and_then(|attrs| attrs.mtime));
+        walk.extend(view.children(node).into_iter().map(|child| child.id));
+    }
+    mtimes
+}
+
+/// Runs `act` and returns the nodes its overlay stamped: the ones now rendered
+/// at its authored time. Every other node keeps its time, and the
+/// publish moves no rendered time.
+fn stamped_by(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    act: impl FnOnce(&mut Engine<FakeSeamTypes>),
+) -> BTreeSet<NodeId> {
+    use cipherbox_engine::seams::Scheduler as _;
+
+    tick(world, engine, tasks);
+    let before = rendered_mtimes(engine);
+    let authored_at = Some(world.scheduler.now().0);
+    act(engine);
+    let rendered = rendered_mtimes(engine);
+    for (node, mtime) in &rendered {
+        if let Some(prior) = before.get(node) {
+            assert!(
+                *mtime == authored_at || mtime == prior,
+                "a node the op does not stamp keeps its time"
+            );
+        }
+    }
+    tick(world, engine, tasks);
+    assert_eq!(
+        rendered_mtimes(engine),
+        rendered,
+        "the publish writes the times the overlay rendered"
+    );
+    rendered
+        .into_iter()
+        .filter(|(_, mtime)| *mtime == authored_at)
+        .map(|(node, _)| node)
+        .collect()
+}
+
+/// `stamped_by` for one command.
+fn stamped_by_command(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    command: Command,
+) -> BTreeSet<NodeId> {
+    stamped_by(world, engine, tasks, |engine| {
+        block_on(engine.command(command)).expect("the command journals");
+    })
+}
+
+/// The overlay stamps exactly the nodes whose records the drain republishes at
+/// the op's authored time (ADR 0045 D5): a rename or a relocation stamps the
+/// folders, not the node.
+#[test]
+fn an_op_renders_the_times_its_publish_writes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    for name in ["a", "b"] {
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: name.into(),
+            kind: NodeKind::Folder,
+        }))
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+    let (a, b) = (child_id(&engine, ROOT, "a"), child_id(&engine, ROOT, "b"));
+    let created = stamped_by_command(
+        &world,
+        &mut engine,
+        &mut tasks,
+        Command::Create {
+            parent: a,
+            name: "x".into(),
+            kind: NodeKind::Folder,
+        },
+    );
+    let x = child_id(&engine, a, "x");
+    assert_eq!(
+        created,
+        BTreeSet::from([a, x]),
+        "a create stamps the node and its parent"
+    );
+
+    let rename = Command::Rename {
+        node: x,
+        new_name: "y".into(),
+    };
+    let relink = Command::Relink {
+        node: x,
+        new_parent: b,
+    };
+    let relocate = Command::Move {
+        node: x,
+        new_parent: a,
+        new_name: "z".into(),
+        replacing: None,
+    };
+    let restore = Command::Restore {
+        node: x,
+        into: None,
+    };
+    for (command, expected, why) in [
+        (rename, BTreeSet::from([a]), "a rename stamps the parent"),
+        (
+            relink,
+            BTreeSet::from([a, b]),
+            "a relink stamps both parents",
+        ),
+        (
+            relocate,
+            BTreeSet::from([a, b]),
+            "a move stamps both parents",
+        ),
+        (
+            Command::Delete { node: x },
+            BTreeSet::from([a]),
+            "a delete into the bin stamps the parent",
+        ),
+        (
+            restore,
+            BTreeSet::from([a]),
+            "a restore stamps the folder it restores into",
+        ),
+    ] {
+        assert_eq!(
+            stamped_by_command(&world, &mut engine, &mut tasks, command),
+            expected,
+            "{why}"
+        );
+    }
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: b,
+            name: "f.bin".into(),
+        },
+        b"first",
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, b, "f.bin");
+    assert_eq!(
+        stamped_by(&world, &mut engine, &mut tasks, |engine| {
+            write_file(engine, version(file), b"second").expect("the edit commits");
+        }),
+        BTreeSet::from([file]),
+        "a content op stamps the node alone"
+    );
+}
+
+/// A dual-linked node's rename or move republishes only the winning parent,
+/// which the drain resolves, so the overlay stamps that parent and not the
+/// folder of the other link.
+#[test]
+fn a_dual_linked_node_stamps_only_the_parent_its_publish_writes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, deep) = seed_dual_linked_file(&world, &blocks, &mut engine, &mut tasks);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "albums".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let albums = child_id(&engine, ROOT, "albums");
+    // The winning link: the higher counter, then the lower parent id.
+    let counter_under = |parent: NodeId| {
+        published_children(&world.record_store, &blocks, parent)
+            .iter()
+            .find(|child| child.id == deep.0)
+            .map(|child| child.link_counter)
+            .expect("both folders name the node")
+    };
+    let winner = [ROOT, photos]
+        .into_iter()
+        .min_by_key(|parent| (core::cmp::Reverse(counter_under(*parent)), *parent))
+        .expect("two links");
+
+    let renamed = stamped_by_command(
+        &world,
+        &mut engine,
+        &mut tasks,
+        Command::Rename {
+            node: deep,
+            new_name: "renamed.bin".into(),
+        },
+    );
+    assert_eq!(
+        renamed,
+        BTreeSet::from([winner]),
+        "a rename stamps the winning parent alone"
+    );
+
+    let moved = stamped_by_command(
+        &world,
+        &mut engine,
+        &mut tasks,
+        Command::Move {
+            node: deep,
+            new_parent: albums,
+            new_name: "moved.bin".into(),
+            replacing: None,
+        },
+    );
+    assert_eq!(
+        moved,
+        BTreeSet::from([winner, albums]),
+        "a move stamps the winning parent and the destination"
     );
 }

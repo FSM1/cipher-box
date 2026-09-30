@@ -57,6 +57,7 @@ function view(
             grantRefusal: null,
             inviteLinkRefusal: null,
             inviteLinks: NO_LINKS,
+            epochs: null,
             ...scopeState,
           },
   };

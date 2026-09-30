@@ -34,6 +34,7 @@ function fileRow(overrides: Partial<ListingRow> = {}): ListingRow {
     pending: 'none',
     deadLetter: false,
     pendingInviteClaims: 0,
+    ipnsName: null,
     ...overrides,
   };
 }

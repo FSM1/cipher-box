@@ -56,6 +56,12 @@ test.describe('browser seam conformance', () => {
     expect(outcome.ok).toBe(true);
   });
 
+  test('staging store queues a multi-entry enqueue whole or not at all', async ({ page }) => {
+    const outcome = await runSeam(page, 'stagingStoreBatch');
+    expect(outcome.error ?? '', 'staging batch behavioral failure').toBe('');
+    expect(outcome.ok).toBe(true);
+  });
+
   test('account switching reclaims snapshots and preserves owner-local bookkeeping', async ({
     page,
   }) => {

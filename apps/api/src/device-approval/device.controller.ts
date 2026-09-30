@@ -35,7 +35,8 @@ export class DeviceController {
   @ApiResponse({ status: 400, description: 'Malformed publicKey, signature, or label' })
   @ApiResponse({
     status: 401,
-    description: 'Missing token, an invalid identity token, or a signature that does not verify',
+    description:
+      'Missing token, an invalid or already-spent identity token, or a signature that does not verify',
   })
   @ApiResponse({
     status: 409,

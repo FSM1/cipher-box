@@ -645,7 +645,7 @@ const ATTEMPT_BUDGET: u32 = 5;
 /// two and a half minutes. It is finite because strict FIFO means the op that
 /// keeps halting holds every op behind it, and a queue with no exit is the
 /// silent permanent stall the valve exists to remove.
-const UNATTRIBUTED_BUDGET: u32 = 120;
+pub const UNATTRIBUTED_BUDGET: u32 = 120;
 
 /// The staging key holding per-op drain charges: a one-byte format tag followed
 /// by `(op_id, attempts, unattributed)` triples, big-endian and fixed-width,
@@ -689,8 +689,8 @@ pub enum QueueHoldReason {
     },
     /// The member's own settings were refused before any request was built, so
     /// every retry reaches the same verdict and charging one would spend the
-    /// version's budget and then release its staged blocks. The exit is
-    /// settings that name a placement this rule no longer refuses.
+    /// version's budget and then release its staged blocks. The exit is the
+    /// one its [`SettingsRefusal`] names.
     ///
     /// Render it through [`SettingsRefusal::check`], which names the rule and
     /// never the endpoint or the bearer the settings carry.
@@ -1286,6 +1286,22 @@ struct FolderState {
     body_unknown: PreservedFields,
     /// The record sequence this folder was last loaded or published at.
     sequence: u64,
+}
+
+/// The `modified_at` a plan republishes `folder` with: the op's authored time on
+/// one of its [authored nodes](Op::authored_nodes), which the overlay stamps
+/// from the same set, and the folder's own time otherwise.
+fn stamped_modified_at(
+    pass: &Pass,
+    op: &Op,
+    authored: &[NodeId],
+    folder: NodeId,
+) -> Result<u64, Halt> {
+    if authored.contains(&folder) {
+        Ok(op.authored_at.0)
+    } else {
+        Ok(pass.folder(folder)?.modified_at)
+    }
 }
 
 /// Where one child ref is going, under what name, and what it displaces —
@@ -2932,15 +2948,11 @@ where
 
         // Referent published: only now does the parent gain the ref to it.
         pass.folder_mut(parent)?.children.push(child.child_ref);
-        self.publish_folder(
-            scope,
-            pass,
-            parent,
-            applied.op.authored_at.0,
-            Some(applied.op_id),
-        )
-        .await
-        .map_err(Halt::from)?;
+        let authored = applied.op.authored_nodes(Vec::new);
+        let modified_at = stamped_modified_at(pass, &applied.op, &authored, parent)?;
+        self.publish_folder(scope, pass, parent, modified_at, Some(applied.op_id))
+            .await
+            .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
         self.emit_mirror_shortfall(applied, shortfall);
         // The parent's repaint lifts the child in without what its own record
@@ -2955,6 +2967,8 @@ where
                 1,
                 Some(&staged.root_cid),
             );
+        } else if let Some(meta) = self.cells.base.borrow_mut().node_mut(child_id) {
+            applied.op.stamp_authored(meta);
         }
         // Held only once the parent names it: a record nothing references is
         // not one the liveness loop should keep alive.
@@ -3077,7 +3091,9 @@ where
         // leaves the node binned and still linked, which is the residue the
         // entry-before-unlink order already settles on the retry.
         let count = unlink_from.len();
+        let authored = applied.op.authored_nodes(|| unlink_from.clone());
         for (at, parent) in unlink_from.into_iter().enumerate() {
+            let modified_at = stamped_modified_at(pass, &applied.op, &authored, parent)?;
             pass.folder_mut(parent)?
                 .children
                 .retain(|entry| entry.id != target.0);
@@ -3085,7 +3101,7 @@ where
                 scope,
                 pass,
                 parent,
-                applied.op.authored_at.0,
+                modified_at,
                 (at + 1 == count).then_some(applied.op_id),
             )
             .await
@@ -3222,11 +3238,13 @@ where
             Some(existing) => *existing = child,
             None => into_children.push(child),
         }
+        let authored = applied.op.authored_nodes(Vec::new);
+        let modified_at = stamped_modified_at(pass, &applied.op, &authored, into)?;
         self.publish_folder(
             scope,
             pass,
             into,
-            applied.op.authored_at.0,
+            modified_at,
             // The entry drop below is this plan's last act, not the relink: a
             // mark raised here would drop the op on the next pass and leave the
             // entry standing for a node the vault links again.
@@ -4490,8 +4508,6 @@ where
         if dest == target || self.cells.base.borrow().ancestors(dest).contains(&target) {
             return Err(Halt::Unclassified);
         }
-        let modified_at = applied.op.authored_at.0;
-
         // A crossing this pass carries no second end for is one it cannot
         // author, and the chain walk below would stall uncharged on the scope
         // root it cannot load. Charged by the pass holding the tick's
@@ -4576,6 +4592,10 @@ where
         // Only when one folder collapses the plan is the dest-add also its last
         // record; otherwise the source-remove below is.
         let single_record = source == dest;
+        // `source` is the base's winning parent, the one parent a rename or a
+        // relocation stamps.
+        let authored = applied.op.authored_nodes(|| vec![source]);
+        let modified_at = stamped_modified_at(pass, &applied.op, &authored, dest)?;
         let cas_base = self
             .publish_folder(
                 scope,
@@ -4599,8 +4619,9 @@ where
         // forever, so a quota refusal, a permanent one, or a spent attempt must
         // not be flattened into it. Only the undo's own failure is genuinely
         // unclassified.
+        let source_modified_at = stamped_modified_at(pass, &applied.op, &authored, source)?;
         if let Err(failure) = self
-            .publish_folder(scope, pass, source, modified_at, Some(applied.op_id))
+            .publish_folder(scope, pass, source, source_modified_at, Some(applied.op_id))
             .await
         {
             // A confirmed source-remove is the move complete on the network, so
@@ -5722,8 +5743,7 @@ where
         // Resolved before any byte moves: a session with no authenticated
         // destination publishes no version. What the refusal costs is
         // [`PlacementRefusal::holds`]'s to say — an outage this pass could not
-        // resolve is retried uncharged rather than spending a budget that ends
-        // by releasing the version's staged blocks.
+        // resolve spends the unattributed budget, never the attempt budget.
         let placement = self.inputs.placement.as_ref().map_err(|refusal| {
             refusal
                 .holds()

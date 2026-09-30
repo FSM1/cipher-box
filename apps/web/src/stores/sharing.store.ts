@@ -14,6 +14,7 @@
 import { toHex } from '@cipherbox/client';
 import type {
   Permission,
+  ScopeEpochsDescriptor,
   SharingDescriptor,
   SharingGrantDescriptor,
   SharingInviteLinkDescriptor,
@@ -53,6 +54,8 @@ export interface ScopeSharing {
   readonly inviteLinkRefusal: string | null;
   /** Every invite link this owner's commitment carries here, expired ones included. */
   readonly inviteLinks: readonly SharingInviteLinkDescriptor[];
+  /** The epochs the scope root's published record sits at; `null` where the node is no scope root. */
+  readonly epochs: ScopeEpochsDescriptor | null;
 }
 
 export interface SharingState {
@@ -130,6 +133,7 @@ export const sharingStore = {
           grantRefusal: view.state.grantRefusal,
           inviteLinkRefusal: view.state.inviteLinkRefusal,
           inviteLinks: Object.freeze(view.state.inviteLinks.map((link) => Object.freeze(link))),
+          epochs: view.state.epochs,
         })
       );
     }

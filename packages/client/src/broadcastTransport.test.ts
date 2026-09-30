@@ -624,6 +624,7 @@ describe('broadcast transport ↔ leader relay', () => {
           contentVersion: 9_007_199_254_740_993n,
           contentCid: new Uint8Array([0xc1, 0xd0]),
           pendingInviteClaims: 2,
+          ipnsName: 'k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4',
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],

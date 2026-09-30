@@ -17,6 +17,11 @@ struct Inner {
     failing_reads: bool,
     /// Floor keys whose epoch **read** is injected to fail.
     failing_read_keys: HashSet<Vec<u8>>,
+    /// Floor keys whose sequence **read** is injected to fail.
+    failing_sequence_read_keys: HashSet<Vec<u8>>,
+    /// Sequence floor keys whose raise is answered one below the value asked
+    /// for, and not stored.
+    under_reported_keys: HashSet<Vec<u8>>,
     /// Floor keys whose epoch **read** fails once a budget of earlier reads
     /// of the same bar is spent.
     read_budgets: HashMap<Vec<u8>, u64>,
@@ -36,10 +41,9 @@ impl Inner {
     /// so a fault injected for one name cannot fire for another that ends in it.
     /// A sequence floor is stored under its name label, so an injector names
     /// that label ([`sequence_floor_label`](crate::testkit::account::sequence_floor_label)).
+    /// The whole key matches too, for a unit test that drives this store bare.
     fn refuse(&self, key: &[u8]) -> Option<SeamError> {
-        let floor = key.get(OWNER_TAG_LEN..)?;
-        self.failing
-            .contains(floor)
+        injected(&self.failing, key)
             .then(|| SeamError::new(format!("floor raise injected to fail for key {key:?}")))
     }
 
@@ -65,8 +69,7 @@ impl Inner {
         if self.failing_reads {
             return Some(SeamError::new("floor read injected to fail"));
         }
-        let untagged = key.get(OWNER_TAG_LEN..).unwrap_or_default().to_vec();
-        if self.failing_read_keys.contains(key) || self.failing_read_keys.contains(&untagged) {
+        if injected(&self.failing_read_keys, key) {
             return Some(SeamError::new(format!(
                 "floor read injected to fail for key {key:?}"
             )));
@@ -74,6 +77,7 @@ impl Inner {
         if self.read_budgets.is_empty() {
             return None;
         }
+        let untagged = key.get(OWNER_TAG_LEN..).unwrap_or_default().to_vec();
         let budgeted = [key.to_vec(), untagged]
             .into_iter()
             .find(|candidate| self.read_budgets.contains_key(candidate))?;
@@ -86,6 +90,15 @@ impl Inner {
         *budget -= 1;
         None
     }
+}
+
+/// Whether `key` names an injected fault in `keys`, whole or with its owner tag
+/// stripped.
+fn injected(keys: &HashSet<Vec<u8>>, key: &[u8]) -> bool {
+    keys.contains(key)
+        || key
+            .get(OWNER_TAG_LEN..)
+            .is_some_and(|floor| keys.contains(floor))
 }
 
 /// In-memory monotonic-max floor store. Clones share state ("reopen").
@@ -118,6 +131,27 @@ impl InMemoryFloorStore {
             .insert(key.to_vec());
     }
 
+    /// Make every sequence-floor read naming `key` fail until
+    /// [`heal_floors`](Self::heal_floors) clears it.
+    pub fn fail_sequence_floor_reads_for(&self, key: &[u8]) {
+        self.inner
+            .lock()
+            .expect("lock")
+            .failing_sequence_read_keys
+            .insert(key.to_vec());
+    }
+
+    /// Answer every sequence-floor raise naming `key` one below the value asked
+    /// for, and store nothing: a store that did not take the value, which a
+    /// caller must refuse rather than act behind.
+    pub fn under_report_sequence_raises_for(&self, key: &[u8]) {
+        self.inner
+            .lock()
+            .expect("lock")
+            .under_reported_keys
+            .insert(key.to_vec());
+    }
+
     /// Restore every injected floor fault, the clear's and the commit's
     /// included — one heal for every injector this fake offers.
     pub fn heal_floors(&self) {
@@ -126,6 +160,8 @@ impl InMemoryFloorStore {
         inner.failing_clear = false;
         inner.failing_reads = false;
         inner.failing_read_keys.clear();
+        inner.failing_sequence_read_keys.clear();
+        inner.under_reported_keys.clear();
         inner.read_budgets.clear();
         inner.failing_commit = false;
         inner.raise_budget = None;
@@ -243,6 +279,11 @@ impl FloorStore for InMemoryFloorStore {
         if inner.failing_reads {
             return Err(SeamError::new("floor read injected to fail"));
         }
+        if injected(&inner.failing_sequence_read_keys, ipns_name) {
+            return Err(SeamError::new(format!(
+                "floor read injected to fail for key {ipns_name:?}"
+            )));
+        }
         Ok(inner.sequence.get(ipns_name).copied())
     }
 
@@ -250,6 +291,9 @@ impl FloorStore for InMemoryFloorStore {
         let mut inner = self.inner.lock().expect("lock");
         if let Some(error) = inner.refuse(ipns_name).or_else(|| inner.spend_raise()) {
             return Err(error);
+        }
+        if injected(&inner.under_reported_keys, ipns_name) {
+            return Ok(sequence.saturating_sub(1));
         }
         let skew = inner.raise_report_skew;
         Ok(raise(&mut inner.sequence, ipns_name, sequence).saturating_add(skew))

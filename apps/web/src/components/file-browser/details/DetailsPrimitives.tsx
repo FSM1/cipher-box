@@ -41,6 +41,15 @@ export function NodeRows({ row }: { row: ListingRow }) {
         <CopyableValue value={row.key} label="node id" />
       </DetailRow>
       <DetailRow label="modified">{row.modified}</DetailRow>
+
+      <DetailSection label="ipns" />
+      <DetailRow label="ipns name">
+        {row.ipnsName === null ? (
+          <DimValue>{UNKNOWN}</DimValue>
+        ) : (
+          <CopyableValue value={row.ipnsName} label="ipns name" />
+        )}
+      </DetailRow>
     </>
   );
 }

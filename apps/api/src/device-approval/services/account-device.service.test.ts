@@ -1,12 +1,18 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { QueryFailedError } from 'typeorm';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdentityTokenService } from '../../auth/services/identity-token.service';
 import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
 import { createTestDeviceKey, TestDeviceKey } from '../../testing/device-keys';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
+import {
+  bootedIdentityTokenService,
+  encodedIdentitySigningKey,
+  identityTokenWithJti,
+  identityTokenWithRawExp,
+} from '../../testing/identity-tokens';
 import { deviceRegistrationPayload } from '../device-signature';
 import { AccountDevice } from '../entities/account-device.entity';
 import { AccountDeviceService, RegisterDeviceInput } from './account-device.service';
@@ -23,14 +29,15 @@ describe('AccountDeviceService', () => {
   let clock: FakeClock;
   let service: AccountDeviceService;
   let subjects: Map<string, string>;
+  let spent: Set<string>;
   let account: string;
   let token: string;
   let device: TestDeviceKey;
 
-  /** Mints an identity token the stubbed verifier resolves to a fresh subject. */
-  function mintIdentityToken(): string {
+  /** Mints an identity token the stubbed verifier resolves to `subject`. */
+  function mintIdentityToken(subject: string = randomUUID()): string {
     const value = `token-${randomUUID()}`;
-    subjects.set(value, randomUUID());
+    subjects.set(value, subject);
     return value;
   }
 
@@ -38,7 +45,10 @@ describe('AccountDeviceService', () => {
     return subjects.get(identityToken) as string;
   }
 
-  /** A registration signed by `key` over `signedAccount` (defaults to honest). */
+  /**
+   * A registration signed by `key` over `signedAccount` (defaults to honest),
+   * presenting a fresh token for the identity `token` names: a token is spent.
+   */
   function registration(
     key: TestDeviceKey,
     signedAccount: string,
@@ -47,7 +57,7 @@ describe('AccountDeviceService', () => {
     return {
       publicKey: key.publicKey,
       signature: key.sign(deviceRegistrationPayload(signedAccount, key.publicKey)),
-      identityToken: token,
+      identityToken: mintIdentityToken(subjectOf(token)),
       ...overrides,
     };
   }
@@ -56,16 +66,30 @@ describe('AccountDeviceService', () => {
     devices = new FakeRepository<AccountDevice>();
     clock = new FakeClock();
     subjects = new Map();
+    spent = new Set();
     const identityTokens = {
       verify: async (value: string) => {
         const subject = subjects.get(value);
         if (!subject) {
           throw new Error('identity token does not verify');
         }
-        return { subject, method: 'google' as const };
+        return { subject, method: 'google' as const, tokenId: value, expiresAt: clock.now() };
+      },
+      spend: async (_manager: unknown, verified: { tokenId: string }) => {
+        if (spent.has(verified.tokenId)) {
+          throw new UnauthorizedException('Identity token already used');
+        }
+        spent.add(verified.tokenId);
       },
     } as unknown as IdentityTokenService;
-    service = new AccountDeviceService(
+    service = serviceOver(identityTokens, config);
+  }
+
+  function serviceOver(
+    identityTokens: IdentityTokenService,
+    config: Record<string, string | undefined> = {}
+  ) {
+    return new AccountDeviceService(
       devices as never,
       new FakeDataSource(devices as never) as never,
       identityTokens,
@@ -82,6 +106,22 @@ describe('AccountDeviceService', () => {
   });
 
   describe('register', () => {
+    let encodedPem: string;
+
+    beforeAll(() => {
+      encodedPem = encodedIdentitySigningKey();
+    });
+
+    /** Puts `service` over a real token service, and returns the spy on its `spend`. */
+    async function overRealTokens() {
+      const realTokens = await bootedIdentityTokenService(
+        { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+        clock
+      );
+      service = serviceOver(realTokens);
+      return vi.spyOn(realTokens, 'spend');
+    }
+
     it('creates the row from the proven account, the identity subject and the key', async () => {
       const created = await service.register(
         account,
@@ -144,6 +184,52 @@ describe('AccountDeviceService', () => {
       await expect(
         service.register(account, registration(device, account, { identityToken: 'forged' }))
       ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(devices.rows).toHaveLength(0);
+    });
+
+    it('refuses a replayed identity token, and writes nothing', async () => {
+      await service.register(account, registration(device, account, { identityToken: token }));
+
+      await expect(
+        service.register(
+          account,
+          registration(createTestDeviceKey(), account, { identityToken: token })
+        )
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(devices.rows).toHaveLength(1);
+    });
+
+    it('refuses a replayed token before the identity check, so a refusal names the replay', async () => {
+      await service.register(account, registration(device, account, { identityToken: token }));
+
+      const otherAccount = randomUUID();
+      await expect(
+        service.register(
+          otherAccount,
+          registration(createTestDeviceKey(), otherAccount, { identityToken: token })
+        )
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it('refuses a token whose token id is not a UUID with 401, before the uuid column sees it', async () => {
+      const spend = await overRealTokens();
+
+      const malformed = await identityTokenWithJti(encodedPem, clock, 'not-a-uuid');
+      await expect(
+        service.register(account, registration(device, account, { identityToken: malformed }))
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(spend).not.toHaveBeenCalled();
+      expect(devices.rows).toHaveLength(0);
+    });
+
+    it('refuses a token whose expiry is not finite with 401, before any spend', async () => {
+      const spend = await overRealTokens();
+
+      const unbounded = await identityTokenWithRawExp(encodedPem, '1e999');
+      await expect(
+        service.register(account, registration(device, account, { identityToken: unbounded }))
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(spend).not.toHaveBeenCalled();
       expect(devices.rows).toHaveLength(0);
     });
 

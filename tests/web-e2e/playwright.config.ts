@@ -5,7 +5,8 @@
 //
 // `E2E_SUITE` picks the slice: `smoke` (the default) is the PR gate's
 // bounded-minutes budget and drops every `@full`-tagged test; `full` is the main
-// gate and runs everything.
+// gate and runs everything; `soak` runs the staging soak (`staging/soak`)
+// alone, against `E2E_BASE_URL`.
 //
 // `E2E_BASE_URL` switches the whole run onto the deployed front instead: no
 // local server, the `staging` project only, and the real login the staging
@@ -18,8 +19,8 @@ import { previewCommand } from './preview';
 
 const suite = process.env.E2E_SUITE ?? 'smoke';
 // Reject an unrecognized value rather than silently running the smaller slice.
-if (suite !== 'smoke' && suite !== 'full') {
-  throw new Error(`E2E_SUITE must be smoke | full; got "${suite}"`);
+if (suite !== 'smoke' && suite !== 'full' && suite !== 'soak') {
+  throw new Error(`E2E_SUITE must be smoke | full | soak; got "${suite}"`);
 }
 
 const E2E_PORT = 4173;
@@ -44,6 +45,19 @@ const preview = (outDir: string, port: number, reuse = false) => ({
 });
 
 const stagingBaseUrl = process.env.E2E_BASE_URL?.trim();
+if (suite === 'soak' && !stagingBaseUrl) {
+  throw new Error('E2E_SUITE=soak runs against a deployed front; set E2E_BASE_URL');
+}
+
+// No trace: a staging run holds a real session, and its report is an artifact
+// of a public repository. A trace records every request header, which there
+// carries the session bearer and the accelerator pseudonym — a gateway
+// credential (blueprint/api.md Egress).
+const stagingUse = {
+  ...devices['Desktop Chrome'],
+  baseURL: stagingBaseUrl,
+  trace: 'off' as const,
+};
 
 /**
  * The deployed front, driven through the real login. Staging is a 2-vCPU box
@@ -62,17 +76,24 @@ const staging = {
     {
       name: 'staging',
       testDir: './staging',
-      testIgnore: '**/*.setup.ts',
+      testIgnore: ['**/*.setup.ts', '**/soak/**'],
       dependencies: ['staging-media'],
-      use: {
-        ...devices['Desktop Chrome'],
-        baseURL: stagingBaseUrl,
-        // No trace: this run holds a real session, and its report is an
-        // artifact of a public repository. A trace records every request
-        // header, which here carries the session bearer and the accelerator
-        // pseudonym — a gateway credential (blueprint/api.md Egress).
-        trace: 'off' as const,
-      },
+      use: stagingUse,
+    },
+  ],
+};
+
+/** The staging soak, as the two durable soak accounts (staging/README). */
+const soak = {
+  workers: 1,
+  fullyParallel: false,
+  timeout: 600_000,
+  projects: [
+    {
+      name: 'soak',
+      testDir: './staging/soak',
+      testMatch: '**/*.spec.ts',
+      use: stagingUse,
     },
   ],
 };
@@ -105,7 +126,7 @@ export default defineConfig({
   grepInvert: suite === 'smoke' ? /@full/ : undefined,
   retries: 0,
   reporter: isCi ? [['list'], ['html', { open: 'never' }]] : 'list',
-  ...(stagingBaseUrl ? staging : local),
+  ...(suite === 'soak' ? soak : stagingBaseUrl ? staging : local),
   use: {
     // Chrome's own headless, not Playwright's default `chrome-headless-shell`:
     // the shell segfaults on a page that registers a Service Worker, killing the

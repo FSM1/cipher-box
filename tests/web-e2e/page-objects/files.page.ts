@@ -1,5 +1,8 @@
 import { expect, type Download, type Locator, type Page } from '@playwright/test';
 
+/** The accessible name a row's selection checkbox carries. */
+const SELECT_PREFIX = 'select ';
+
 /** The vault browser route and the chrome around it. */
 export class FilesPage {
   constructor(readonly page: Page) {}
@@ -85,9 +88,24 @@ export class FilesPage {
    * row's text would match a substring of a longer sibling's.
    */
   row(name: string): Locator {
-    return this.page
+    return this.page.getByTestId('file-list-item').filter({
+      has: this.page.getByRole('checkbox', { name: `${SELECT_PREFIX}${name}`, exact: true }),
+    });
+  }
+
+  /** The names of the rows the listing shows now. */
+  async names(): Promise<Set<string>> {
+    const labels = await this.browser
       .getByTestId('file-list-item')
-      .filter({ has: this.page.getByRole('checkbox', { name: `select ${name}`, exact: true }) });
+      .getByRole('checkbox')
+      .evaluateAll((boxes) => boxes.map((box) => box.getAttribute('aria-label') ?? ''));
+    return new Set(labels.map((label) => label.slice(SELECT_PREFIX.length)));
+  }
+
+  /** Walks the trail back to the vault root. */
+  async toRoot(): Promise<void> {
+    await this.page.getByRole('button', { name: 'root', exact: true }).click();
+    await expect(this.breadcrumbs.locator('[aria-current="page"]')).toHaveText('root');
   }
 
   /**
@@ -208,6 +226,25 @@ export class FilesPage {
     await expect(this.previewDialog).toHaveCount(0);
   }
 
+  /** Raises the text editor on a row and waits for the file text to load into it. */
+  async openEditor(name: string): Promise<Locator> {
+    await this.act(name, 'edit');
+    const field = this.page.getByTestId('text-editor-field');
+    await expect(field).toBeVisible({ timeout: 60_000 });
+    return field;
+  }
+
+  /** Saves the open editor and waits for the write to leave the dialog. */
+  async saveEditor(): Promise<void> {
+    await this.page.getByTestId('text-editor-save').click();
+    await expect(this.page.getByTestId('text-editor-dialog')).toHaveCount(0, { timeout: 60_000 });
+  }
+
+  async cancelEditor(): Promise<void> {
+    await this.page.getByTestId('text-editor-cancel').click();
+    await expect(this.page.getByTestId('text-editor-dialog')).toHaveCount(0);
+  }
+
   async save(name: string): Promise<Download> {
     const [download] = await Promise.all([
       this.page.waitForEvent('download'),
@@ -227,7 +264,7 @@ export class FilesPage {
 
   /** Adds one row to the selection, or takes it back out. */
   async select(name: string): Promise<void> {
-    await this.page.getByRole('checkbox', { name: `select ${name}`, exact: true }).click();
+    await this.page.getByRole('checkbox', { name: `${SELECT_PREFIX}${name}`, exact: true }).click();
   }
 
   /** Selects every row of the listing, or clears it when all are selected. */

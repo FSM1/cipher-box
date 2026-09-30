@@ -28,6 +28,7 @@ function fileRow(overrides: Partial<ListingRow> = {}): ListingRow {
     pending: 'none',
     deadLetter: false,
     pendingInviteClaims: 0,
+    ipnsName: null,
     ...overrides,
   };
 }
@@ -66,6 +67,26 @@ describe('the details panel', () => {
     expect(rowText('version')).toBe('3');
     expect(rowText('modified')).toBe('14 Nov 2023');
     expect(rowText('queued')).toBe('nothing pending');
+  });
+
+  it('shows the ipns name of a file and of a folder, with a copy control', () => {
+    const name = 'k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4';
+    for (const row of [fileRow({ ipnsName: name }), folderRow({ ipnsName: name })]) {
+      const { unmount } = render(
+        <DetailsDialog row={row} access="owner" onClose={() => undefined} />
+      );
+
+      expect(rowText('ipns name')).toContain(name);
+      expect(screen.getByRole('button', { name: 'copy ipns name' })).toBeDefined();
+      unmount();
+    }
+  });
+
+  it('shows the ipns name as unknown until a read projects one', () => {
+    render(<DetailsDialog row={fileRow()} access="owner" onClose={() => undefined} />);
+
+    expect(rowText('ipns name')).toBe('unknown');
+    expect(screen.queryByRole('button', { name: 'copy ipns name' })).toBeNull();
   });
 
   it('renders the folder variant, which carries no content of its own', () => {

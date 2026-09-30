@@ -652,14 +652,42 @@ impl Op {
         self.staged_content().map(|c| &c.root_cid[..])
     }
 
-    /// Stamp this op's authored facts onto the node it targets — `mtime`
-    /// **overwriting** the projected time, and a content op's plaintext size.
-    /// The one function the pending-op overlay and the drain's publish plan
-    /// share, so a rendered node and the record that will publish it agree
-    /// (blueprint/engine.md "State law").
+    /// The nodes whose next records this op's publish authors at
+    /// `authored_at`, sorted: the set the pending-op overlay stamps and the
+    /// drain's publish plan writes, so a rendered node and the record that
+    /// will publish it agree (ADR 0045 D5). `parents` yields the folders that
+    /// name the target before the op applies, winner first
+    /// ([`Snapshot::links_ranked`](crate::sync::model::Snapshot::links_ranked));
+    /// only a kind that stamps them calls it.
+    pub fn authored_nodes(&self, parents: impl FnOnce() -> Vec<NodeId>) -> Vec<NodeId> {
+        let mut nodes = match &self.kind {
+            OpKind::Create { parent, .. } => vec![self.target, *parent],
+            OpKind::UpdateContent { .. } => vec![self.target],
+            // The name lives in the parent's child ref, so the child's own
+            // record does not change. A rename and a relocation republish the
+            // winning parent alone, and a delete unlinks from every parent.
+            OpKind::Rename { .. } => parents().into_iter().take(1).collect(),
+            OpKind::Delete { .. } => parents(),
+            OpKind::Relink { new_parent, .. } | OpKind::Move { new_parent, .. } => {
+                parents().into_iter().take(1).chain([*new_parent]).collect()
+            }
+            OpKind::Restore { into, .. } => vec![*into],
+            OpKind::Purge { .. }
+            | OpKind::Prune { .. }
+            | OpKind::RestoreVersion { .. }
+            | OpKind::DeleteVersion { .. } => Vec::new(),
+        };
+        nodes.sort();
+        nodes.dedup();
+        nodes
+    }
+
+    /// Stamp this op's authored facts onto one of its [authored
+    /// nodes](Self::authored_nodes): `mtime` **overwriting** the projected
+    /// time, and, on the target of a content op, its plaintext size.
     pub fn stamp_authored(&self, meta: &mut NodeMeta) {
         meta.mtime = Some(self.authored_at.0);
-        if let Some(content) = self.staged_content() {
+        if let Some(content) = self.staged_content().filter(|_| meta.id == self.target) {
             meta.size = Some(content.plaintext_size);
         }
     }
@@ -956,16 +984,96 @@ mod tests {
 
     #[test]
     fn a_metadata_op_stamps_time_over_a_projection_and_leaves_size_alone() {
-        let mut node = NodeMeta::new(id(1), "f.txt", NodeKind::File);
-        node.mtime = Some(999);
-        node.size = Some(42);
-        Op::rename(id(1), "g.txt", 1, at(1)).stamp_authored(&mut node);
+        let mut parent = NodeMeta::new(id(0), "docs", NodeKind::Folder);
+        parent.mtime = Some(999);
+        parent.size = Some(42);
+        Op::rename(id(1), "g.txt", 1, at(1)).stamp_authored(&mut parent);
         assert_eq!(
-            node.mtime,
+            parent.mtime,
             Some(1),
-            "the op authors the node's next record, so the projected time is stale"
+            "the op authors the parent's next record, so the projected time is stale"
         );
-        assert_eq!(node.size, Some(42), "a metadata op carries no size");
+        assert_eq!(parent.size, Some(42), "a metadata op carries no size");
+    }
+
+    #[test]
+    fn a_content_op_stamps_its_size_on_its_target_alone() {
+        let mut parent = NodeMeta::new(id(0), "docs", NodeKind::Folder);
+        let create = NewNode::File {
+            content: Some(staged(b"root", 9)),
+        };
+        Op::create(id(1), id(0), "f.txt", create, 1, at(5)).stamp_authored(&mut parent);
+        assert_eq!((parent.mtime, parent.size), (Some(5), None));
+    }
+
+    /// ADR 0045 D5.
+    #[test]
+    fn each_op_kind_authors_its_own_set_of_nodes() {
+        let (node, from, to) = (id(1), id(2), id(3));
+        let parents = [from];
+        for (op, expected, why) in [
+            (
+                Op::create(node, from, "a", NewNode::Folder, 1, at(1)),
+                vec![node, from],
+                "create",
+            ),
+            (Op::rename(node, "b", 1, at(1)), vec![from], "rename"),
+            (Op::delete(node, 1, at(1), 1, false), vec![from], "delete"),
+            (
+                Op::relink(node, from, to, 1, at(1), ScopeCrossing::Intra),
+                vec![from, to],
+                "relink",
+            ),
+            (
+                Op::move_node(node, from, to, "b", None, 1, at(1), ScopeCrossing::Intra),
+                vec![from, to],
+                "move",
+            ),
+            (
+                Op::update_content(node, staged(b"k", 1), None, 1, at(1)),
+                vec![node],
+                "update content",
+            ),
+            (
+                Op::restore(node, to, "a", NodeKind::Folder, 1, at(1)),
+                vec![to],
+                "restore",
+            ),
+        ] {
+            assert_eq!(op.authored_nodes(|| parents.to_vec()), expected, "{why}");
+        }
+        assert_eq!(
+            Op::rename(node, "b", 1, at(1)).authored_nodes(Vec::new),
+            Vec::new(),
+            "a node no folder names has no parent to stamp"
+        );
+
+        // Two links, winner first: the winner sorts after the other parent.
+        let (winner, other) = (id(4), id(2));
+        for (op, expected, why) in [
+            (
+                Op::rename(node, "b", 1, at(1)),
+                vec![winner],
+                "a rename keeps the winning parent alone",
+            ),
+            (
+                Op::move_node(node, winner, to, "b", None, 1, at(1), ScopeCrossing::Intra),
+                vec![to, winner],
+                "a move keeps the winning parent and the destination",
+            ),
+            (
+                Op::relink(node, winner, to, 1, at(1), ScopeCrossing::Intra),
+                vec![to, winner],
+                "a relink keeps the winning parent and the destination",
+            ),
+            (
+                Op::delete(node, 1, at(1), 1, false),
+                vec![other, winner],
+                "a delete keeps every parent",
+            ),
+        ] {
+            assert_eq!(op.authored_nodes(|| vec![winner, other]), expected, "{why}");
+        }
     }
 
     #[test]

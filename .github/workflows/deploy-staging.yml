@@ -165,6 +165,11 @@ jobs:
       - name: Build the engine WASM artifact
         run: pnpm --filter @cipherbox/web build:wasm
 
+      # The bytes this deploy ships carry no session-free record read
+      # (ADR 0057 D1).
+      - name: Engine WASM artifact carries no record read
+        run: pnpm --filter @cipherbox/client test:production-wasm
+
       - name: Build web app with staging env vars
         run: pnpm --filter @cipherbox/web build:bundle
         env:

@@ -20,6 +20,10 @@ crate-type = ["cdylib", "rlib"]
 # browser suite builds the WASM module with this feature; the production
 # artifact (built without it) never pulls the test kit.
 conformance = ["cipherbox-engine/test-kit"]
+# Compiles the session-free IPNS record read (`readIpnsRecord`) for an observer
+# of the routing network: the client Node suite and the staging soak. The
+# production artifact is built without it (ADR 0057 D1).
+observer = []
 
 [dependencies]
 cipherbox-engine.workspace = true
