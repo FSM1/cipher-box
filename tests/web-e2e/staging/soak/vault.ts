@@ -12,15 +12,16 @@ import type { FilesPage } from '../../page-objects/files.page';
 import { SettingsPage } from '../../page-objects/settings.page';
 import type { SoakRole } from './accounts';
 import { archiveName, SOAK_FOLDER, soakFolderListed, type VaultState } from './bootstrap';
+import { DESKTOP_FOLDER, LEDGER_FILE } from './grantee';
 import { emptyLedger, formatLedger, parseLedger, type Ledger } from './ledger';
 import { SoakFailure } from './reasons';
 
-export const LEDGER_FILE = 'ledger.txt';
+export { LEDGER_FILE };
 
 /** The folders from the vault root to the ledger. The grantee ledger lists the OS markers. */
 export const LEDGER_FOLDERS: Readonly<Record<SoakRole, readonly string[]>> = {
   owner: [SOAK_FOLDER],
-  grantee: [SOAK_FOLDER, 'desktop'],
+  grantee: DESKTOP_FOLDER,
 };
 
 /** How long a listing gets to show a row before the row counts as absent. */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ledgerLine,
-  ledgerPath,
+  granteeLedgerPath,
   legMarkers,
   markerDate,
   markerPath,
@@ -25,7 +25,7 @@ describe('the marker paths', () => {
       'linux',
       'marker-2026-09-30.txt',
     ]);
-    expect(ledgerPath()).toEqual(['soak', 'desktop', 'ledger.txt']);
+    expect(granteeLedgerPath()).toEqual(['soak', 'desktop', 'ledger.txt']);
   });
 
   it('read a marker day back from its file name only', () => {
