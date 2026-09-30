@@ -10343,14 +10343,13 @@ fn superseded_write_seed(
     .prev_seed()
 }
 
-/// ADR 0061 D4, end to end. A write grant moves the granted scope onto a fresh
-/// write seed, and the owner's history link names the seed it superseded. When
-/// the name wave stops before a node, the node's parent still names the node's
-/// old name, which only the superseded seed derives. The walk renews the node
-/// there, under that seed. A write under the superseded seed at an old name no
-/// parent names is not renewed.
+/// A write grant moves the granted scope onto a fresh write seed. When the
+/// name wave stops before a node, the node's parent still names the node's
+/// old name, which only the superseded seed derives. The walk signs only under
+/// the seed that derives the scope root's name, so it leaves that node to
+/// lapse, and it never renews a write under the superseded seed either.
 #[test]
-fn a_node_a_stopped_wave_did_not_reach_renews_at_its_old_name() {
+fn a_node_a_stopped_wave_did_not_reach_is_not_renewed_at_its_old_name() {
     let mut fx = GrantScenario::new();
     assert_eq!(
         fx.grant_folder_at(Permission::Write),
@@ -10406,8 +10405,8 @@ fn a_node_a_stopped_wave_did_not_reach_renews_at_its_old_name() {
 
     assert_eq!(
         sequence_at(&world, &old_leaf),
-        before + 1,
-        "the node renews at the old name its parent names"
+        before,
+        "nothing signs under the superseded seed"
     );
     assert_eq!(
         sequence_at(&world, &old_mid),

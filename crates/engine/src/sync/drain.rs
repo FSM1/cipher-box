@@ -2366,17 +2366,18 @@ where
     ///
     /// An endpoint split leaves two records at the floor, and a read can take
     /// our own losing record, which already carries the head op (ADR 0061 D3
-    /// step 7). The pass then builds on a gated record the head op does not
-    /// read as applied on, or on the resolved one when there is none.
+    /// step 7). The pass then builds on a gated record of the scope root, or of
+    /// a folder the head op writes, that the head op does not read as applied
+    /// on, or on the resolved records when there is none.
     async fn open_rebased_pass(
         &self,
         scope: &DrainScope<'_>,
         queued: &[(OpId, Op)],
     ) -> Result<(Pass, ReplayReport), Halt> {
         let (resolved, others) = self.scope_root_candidates(scope).await?;
-        let pass = self.open_pass(scope, &resolved).await?;
+        let mut pass = self.open_pass(scope, &resolved).await?;
         let rebased = self.rebase_queue(scope, queued);
-        if others.is_empty() || !head_reads_applied(&rebased, queued) {
+        if !head_reads_applied(&rebased, queued) {
             return Ok((pass, rebased));
         }
         for other in &others {
@@ -2388,8 +2389,100 @@ where
                 return Ok((pass, rebased));
             }
         }
-        let pass = self.open_pass(scope, &resolved).await?;
+        if !others.is_empty() {
+            pass = self.open_pass(scope, &resolved).await?;
+        }
+        for folder in self.head_folders(queued) {
+            if let Some(rebased) = self
+                .rebase_on_tied_folder(scope, &mut pass, folder, queued)
+                .await?
+            {
+                return Ok((pass, rebased));
+            }
+        }
         Ok((pass, self.rebase_queue(scope, queued)))
+    }
+
+    /// The non-root folders the head op writes a child ref into.
+    fn head_folders(&self, queued: &[(OpId, Op)]) -> Vec<NodeId> {
+        let Some((_, op)) = queued.first() else {
+            return Vec::new();
+        };
+        let folders = match op.kind {
+            OpKind::Create { parent, .. } => vec![parent],
+            OpKind::Restore { into, .. } => vec![into],
+            OpKind::Move {
+                from_parent,
+                new_parent,
+                ..
+            }
+            | OpKind::Relink {
+                from_parent,
+                new_parent,
+                ..
+            } => vec![new_parent, from_parent],
+            _ => self.published_parent(op.target).into_iter().collect(),
+        };
+        let root = self.cells.base.borrow().root;
+        let mut unique = Vec::new();
+        for folder in folders {
+            if folder != root && !unique.contains(&folder) {
+                unique.push(folder);
+            }
+        }
+        unique
+    }
+
+    /// Rebase onto another gated record `folder` serves at its sequence, when
+    /// the head op does not read as applied on it. A folder this pass cannot
+    /// load offers none.
+    async fn rebase_on_tied_folder(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        folder: NodeId,
+        queued: &[(OpId, Op)],
+    ) -> Result<Option<ReplayReport>, Halt> {
+        let Ok(plane) = self.ensure_folder(scope, pass, folder).await else {
+            return Ok(None);
+        };
+        if folder == plane.end.root {
+            return Ok(None);
+        }
+        let name = plane.end.write_name(&folder.0);
+        let Some(served) = self.served_child(&plane, folder, &name).await? else {
+            return Ok(None);
+        };
+        let held = pass.folder(folder)?.record.clone();
+        for record in served.records.iter().filter(|record| **record != held) {
+            let Ok(state) = self
+                .open_tied_folder(&plane, pass.anchor_for(&plane)?, folder, record)
+                .await
+            else {
+                continue;
+            };
+            self.repaint_folder(
+                scope,
+                folder,
+                &state.children,
+                state.sequence,
+                state.modified_at,
+            );
+            let rebased = self.rebase_queue(scope, queued);
+            if !head_reads_applied(&rebased, queued) {
+                *pass.folder_mut(folder)? = state;
+                return Ok(Some(rebased));
+            }
+        }
+        let state = pass.folder(folder)?;
+        self.repaint_folder(
+            scope,
+            folder,
+            &state.children,
+            state.sequence,
+            state.modified_at,
+        );
+        Ok(None)
     }
 
     /// The queue replayed onto the base snapshot.
@@ -2668,8 +2761,24 @@ where
             },
             _ => (resolved_bytes(resolved, &name, &self.seams.events)?, None),
         };
+        self.open_child_record(plane, anchor, &adopter, name, record_bytes, lagging, tied)
+            .await
+    }
+
+    /// Open one non-root node's `record_bytes` for re-authoring.
+    #[expect(clippy::too_many_arguments, reason = "one record's full opening")]
+    async fn open_child_record(
+        &self,
+        plane: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        adopter: &ChildAdopter<'_, H, SharerScopedFloorStore<'_, F>>,
+        name: IpnsName,
+        record_bytes: Vec<u8>,
+        lagging: Option<u64>,
+        tied: bool,
+    ) -> Result<LoadedNode, Halt> {
         let (adopted, envelope) = self
-            .open_for_reauthor(plane, anchor, &adopter, &name, &record_bytes, lagging)
+            .open_for_reauthor(plane, anchor, adopter, &name, &record_bytes, lagging)
             .await?;
         // The same two rollback guards the root load makes: this build authors
         // exactly `ENVELOPE_V`, and re-sealing a node at an epoch above the
@@ -2816,8 +2925,7 @@ where
         Ok(root.state)
     }
 
-    /// Load one non-root folder's state, refusing a node whose sealed body is
-    /// not a folder (a kind transplant).
+    /// Load one non-root folder's state.
     async fn load_child_folder(
         &self,
         plane: &SealPlane<'_>,
@@ -2827,28 +2935,39 @@ where
         let loaded = self
             .load_child_node(plane, anchor, folder, ResolveMode::CacheFirst)
             .await?;
-        let ReadBody::Folder {
-            created_at,
-            modified_at,
-            children,
-            unknown,
-        } = loaded.body
-        else {
-            return Err(Halt::Unclassified);
-        };
-        Ok(FolderState {
-            plane_root: plane.end.root,
-            name: loaded.name,
-            record: loaded.record,
-            commitment: None,
-            envelope_unknown: loaded.envelope_unknown,
-            epoch_tag_unknown: loaded.epoch_tag_unknown,
-            created_at,
-            modified_at,
-            children,
-            body_unknown: unknown,
-            sequence: loaded.sequence,
-        })
+        folder_state(plane, loaded)
+    }
+
+    /// One tied record of a non-root folder the head op writes, opened.
+    async fn open_tied_folder(
+        &self,
+        plane: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        folder: NodeId,
+        record_bytes: &[u8],
+    ) -> Result<FolderState, Halt> {
+        let name = plane.end.write_name(&folder.0);
+        let floors = plane.end.floors(&self.seams.floors);
+        let adopter = ChildAdopter::new(
+            &self.seams.gateway,
+            &self.seams.http,
+            &floors,
+            plane.end.root.0,
+            plane.end.read_scope_seed.clone(),
+            folder.0,
+        );
+        let loaded = self
+            .open_child_record(
+                plane,
+                anchor,
+                &adopter,
+                name,
+                record_bytes.to_vec(),
+                None,
+                true,
+            )
+            .await?;
+        folder_state(plane, loaded)
     }
 
     // -----------------------------------------------------------------------
@@ -7316,6 +7435,33 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
     is_wellformed_content_cid(cid)
         .then_some(cid)
         .ok_or(Halt::Permanent(DeadLetterReason::PayloadRefused))
+}
+
+/// A loaded node's state as a folder, refusing a node whose sealed body is not
+/// a folder (a kind transplant).
+fn folder_state(plane: &SealPlane<'_>, loaded: LoadedNode) -> Result<FolderState, Halt> {
+    let ReadBody::Folder {
+        created_at,
+        modified_at,
+        children,
+        unknown,
+    } = loaded.body
+    else {
+        return Err(Halt::Unclassified);
+    };
+    Ok(FolderState {
+        plane_root: plane.end.root,
+        name: loaded.name,
+        record: loaded.record,
+        commitment: None,
+        envelope_unknown: loaded.envelope_unknown,
+        epoch_tag_unknown: loaded.epoch_tag_unknown,
+        created_at,
+        modified_at,
+        children,
+        body_unknown: unknown,
+        sequence: loaded.sequence,
+    })
 }
 
 /// Whether the gate admits `record_bytes` at exactly the durable floor, as

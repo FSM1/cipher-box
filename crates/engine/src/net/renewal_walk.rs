@@ -127,18 +127,16 @@ struct ScopeMaterial {
 }
 
 impl ScopeMaterial {
-    /// The signer for `node_id` whose name is `name`: under the current write
-    /// seed, or under the seed a stopped name wave left the node at (ADR 0061
-    /// D4). `None` when neither derives `name`.
+    /// The signer for `node_id` whose name is `name`, under the write seed
+    /// that derives the scope root's own name. `None` when that seed does not
+    /// derive `name`: a node a stopped name wave left at an older name lapses
+    /// rather than signing under a superseded seed.
     fn signer_for(&self, node_id: &[u8; 16], name: &IpnsName) -> Option<Ed25519Signer> {
-        [
-            self.admitted.write_scope_seed.as_ref(),
-            self.admitted.superseded_write_seed.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .find(|seed| derive_write_name(seed, node_id) == *name)
-        .map(|seed| SessionIdentity::write_name_signer(seed, node_id))
+        self.admitted
+            .write_scope_seed
+            .as_ref()
+            .filter(|seed| derive_write_name(seed, node_id) == *name)
+            .map(|seed| SessionIdentity::write_name_signer(seed, node_id))
     }
 }
 
@@ -377,6 +375,9 @@ where
                             if admitted.write_scope_seed.is_none() {
                                 admitted.write_scope_seed = scope.write_seed.clone();
                             }
+                            admitted.write_scope_seed = admitted
+                                .write_scope_seed
+                                .filter(|seed| derive_write_name(seed, &scope_id) == scope.name);
                             Some(ScopeMaterial {
                                 name: scope.name.clone(),
                                 admitted,
@@ -814,7 +815,7 @@ mod tests {
     use super::*;
     use crate::net::rotation::AdmittedScopeRoot;
 
-    fn material(current: [u8; 32], superseded: Option<[u8; 32]>) -> ScopeMaterial {
+    fn material(current: [u8; 32]) -> ScopeMaterial {
         ScopeMaterial {
             name: derive_write_name(&current, &[0; 16]),
             admitted: AdmittedScopeRoot {
@@ -828,34 +829,24 @@ mod tests {
                 },
                 read_scope_seed: Zeroizing::new([0; 32]),
                 write_scope_seed: Some(Zeroizing::new(current)),
-                superseded_write_seed: superseded.map(Zeroizing::new),
             },
         }
     }
 
-    /// ADR 0061 D4: a node a stopped wave left at its old name signs under the
-    /// seed the history link names, and a name neither seed derives signs
-    /// under nothing.
+    /// A node signs only under the seed that derives its scope root's name; a
+    /// name any other seed derives, an older one included, is never renewed.
     #[test]
-    fn a_node_signs_under_whichever_seed_derives_the_name_its_parent_names() {
+    fn a_node_signs_only_under_the_scope_roots_own_seed() {
         let (current, old, node) = ([1u8; 32], [2u8; 32], [9u8; 16]);
-        let material = material(current, Some(old));
-        for seed in [current, old] {
-            let name = derive_write_name(&seed, &node);
-            let signer = material.signer_for(&node, &name).expect("a signer");
-            assert_eq!(IpnsName::from_public_key(&signer.verifying_key()), name);
-        }
+        let material = material(current);
+        let name = derive_write_name(&current, &node);
+        let signer = material.signer_for(&node, &name).expect("a signer");
+        assert_eq!(IpnsName::from_public_key(&signer.verifying_key()), name);
         assert!(
             material
-                .signer_for(&node, &derive_write_name(&[3u8; 32], &node))
-                .is_none(),
-            "a name no held seed derives is never renewed",
-        );
-        assert!(
-            super::tests::material(current, None)
                 .signer_for(&node, &derive_write_name(&old, &node))
                 .is_none(),
-            "an old name with no history link is never renewed",
+            "an old name is never renewed",
         );
     }
 }

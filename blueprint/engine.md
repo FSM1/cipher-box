@@ -116,8 +116,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   keeper (`keep_newest_last_known_good`) take the record with the later EOL,
   so a real write wins over a renewal walk's re-signature (ADR 0061 D3 step 7).
   The keeper can then hold the drain's own losing record, so at a split at the
-  floor the drain rebases onto a gated record on which its head op does not
-  read as applied.
+  floor the drain rebases onto a gated record of the scope root, or of a
+  folder the head op writes, on which its head op does not read as applied.
 - **Publish**: register-first, fail-closed — the API registration call
   precedes a name's first publish and publish blocks on it; ordinary writes
   send single-item batches, name waves and sweeps send bulk (FSM1/cipher-box-next#34 D2). Core
@@ -139,7 +139,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   periodically, the engine checks the EOLs of its renewal set (`HeldRecords`)
   and below ~30 days remaining republishes the same CID at seq+1 through the
   normal CAS path. The same pass then runs a bounded part of the **renewal
-  walk** (ADR 0061 D1 to D4), which reaches every other name of the vault. A
+  walk** (ADR 0061 D1 to D3), which reaches every other name of the vault. A
   session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
   set. The API republisher (~12 h inventory walk) re-PUTs the same bytes and
@@ -158,7 +158,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   with an EOL one day short of `eol_from(now)`. A `LostRace` is not retried in
   that cycle. The numbers: at most 500 visits for each pass, a walk window of
   60 days of EOL left, and a new cycle no sooner than 7 days after the previous
-  one began. A move can put a subtree behind the cursor for one cycle, so two
+  one began. A visit signs only under the write seed that derives its scope
+  root's name, so a node a stopped name wave left at an older name lapses.
+  A move can put a subtree behind the cursor for one cycle, so two
   visits of one name are at most `2 max(T, 7 days) + T` apart, where T is the
   longest time the owner takes to run `ceil(N / 500)` passes. The window holds
   when T is at most 19 days; for N = 10 000, that is 20 passes in each 19 days.

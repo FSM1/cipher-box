@@ -16861,3 +16861,158 @@ fn a_renewal_signed_inside_the_drains_window_never_hides_the_write() {
     );
     assert_eq!(queued(&alice), 0);
 }
+
+/// An interior folder after a lost race: the first device's create at
+/// `base + 1` confirmed with no tie, and this device's create, signed later at
+/// the same sequence with the later EOL, sits on the other endpoint. This
+/// device's create stays queued.
+struct InteriorSplit {
+    world: FakeWorld,
+    blocks: Blocks,
+    second: FakeDevice,
+    engine: Engine<FakeSeamTypes>,
+    tasks: Vec<BoxedTask>,
+    photos: NodeId,
+    base: u64,
+}
+
+fn interior_split(ours_first: bool) -> InteriorSplit {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let photos = child_id(&engine_a, ROOT, "photos");
+
+    let second = world.device(b"alice-second-device");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &second, 7);
+    tick_past_the_first_walk(&world, &engine, &mut tasks);
+    let (base, _) = published(&world.record_store, photos);
+    let endpoints = world.record_store.endpoints();
+    let base_record = world
+        .record_store
+        .record_at(&endpoints[0], write_name(photos).as_str())
+        .expect("photos has a record");
+
+    block_on(engine_a.command(Command::Create {
+        parent: photos,
+        name: "2026".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let sibling = world
+        .record_store
+        .record_at(&endpoints[0], write_name(photos).as_str())
+        .expect("photos has a record");
+    drop((engine_a, tasks_a));
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, write_name(photos).as_str(), base_record.clone());
+    }
+
+    block_on(engine.command(Command::Create {
+        parent: photos,
+        name: "2027".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    let theirs = usize::from(ours_first);
+    world.record_store.seed_record_after_put_at(
+        &endpoints[theirs],
+        write_name(photos).as_str(),
+        write_name(photos).as_str(),
+        sibling.clone(),
+    );
+    world.record_store.fail_put_endpoint(&endpoints[theirs]);
+    tick(&world, &engine, &mut tasks);
+    world.record_store.heal_put_endpoint(&endpoints[theirs]);
+    let at = |endpoint: usize| {
+        world
+            .record_store
+            .record_at(&endpoints[endpoint], write_name(photos).as_str())
+    };
+    assert_eq!(at(theirs), Some(sibling), "the endpoints split at base + 1");
+    assert_ne!(at(1 - theirs), at(theirs));
+    assert_eq!(queued(&second), 1, "the create stays queued");
+    InteriorSplit {
+        world,
+        blocks,
+        second,
+        engine,
+        tasks,
+        photos,
+        base,
+    }
+}
+
+fn assert_interior_healed(split: &InteriorSplit, case: &str) {
+    for endpoint in split.world.record_store.endpoints() {
+        let bytes = split
+            .world
+            .record_store
+            .record_at(&endpoint, write_name(split.photos).as_str())
+            .expect("a record");
+        let verified = IpnsRecord::unmarshal(&bytes)
+            .and_then(|record| record.verify(&write_name(split.photos)))
+            .expect("the record verifies");
+        assert_eq!(
+            verified.sequence,
+            split.base + 2,
+            "{case}: the heal signs above both"
+        );
+    }
+    assert_eq!(
+        published_names(&split.world.record_store, &split.blocks, split.photos),
+        ["2026", "2027"],
+        "{case}: the other device's confirmed write survives"
+    );
+    assert_eq!(queued(&split.second), 0, "{case}");
+}
+
+/// A restart between a lost race on an interior folder and its retry: the
+/// restarted session's first read takes our own record, which carries the
+/// later EOL, and the keeper holds it. The retry still rebases onto the
+/// record the head op does not read as applied on.
+#[test]
+fn an_interior_split_healed_after_a_restart_keeps_the_other_devices_write() {
+    for ours_first in [true, false] {
+        let mut split = interior_split(ours_first);
+        drop(core::mem::take(&mut split.tasks));
+        drop(split.world.scheduler.take_spawned_tasks());
+        let (mut engine, _events, mut tasks) = boot(&split.world, &split.blocks, &split.second, 8);
+        block_on(engine.command(Command::SetFocus {
+            node: Some(split.photos),
+        }))
+        .unwrap();
+        for _ in 0..4 {
+            tick(&split.world, &engine, &mut tasks);
+        }
+        assert_interior_healed(&split, &format!("restart, ours first: {ours_first}"));
+    }
+}
+
+/// The same lost race with no restart, where a tick re-reads the folder before
+/// the retry and the keeper moves to our own record.
+#[test]
+fn an_interior_split_healed_after_a_re_read_keeps_the_other_devices_write() {
+    for ours_first in [true, false] {
+        let mut split = interior_split(ours_first);
+        block_on(split.engine.command(Command::SetFocus {
+            node: Some(split.photos),
+        }))
+        .unwrap();
+        for _ in 0..4 {
+            tick(&split.world, &split.engine, &mut split.tasks);
+        }
+        assert_interior_healed(&split, &format!("re-read, ours first: {ours_first}"));
+    }
+}
