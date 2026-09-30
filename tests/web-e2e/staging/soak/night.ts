@@ -20,7 +20,7 @@ export const SOAK_LEGS = [
 ] as const;
 
 /** The job that checks the inputs before any leg reaches staging. */
-export const GUARD_JOB = 'guard';
+const GUARD_JOB = 'guard';
 
 export type SoakLeg = (typeof SOAK_LEGS)[number];
 
@@ -91,7 +91,7 @@ const STOPPED_NOTE =
 export function classifyLeg(leg: SoakLeg, result: string, found: LegResults): LegReport {
   const records = found.kind === 'records' ? found.records : [];
   const checks = records.filter((entry) => entry.kind === 'check');
-  const failedChecks = checks.filter((entry) => entry.outcome === 'failed').length;
+  const anyFailed = checks.some((entry) => entry.outcome === 'failed');
   const stopped = unfinishedTests(records).length > 0;
   const notes: string[] = [];
   if (found.kind === 'unparsable') notes.push(`The result lines do not parse: ${found.problem}.`);
@@ -101,11 +101,11 @@ export function classifyLeg(leg: SoakLeg, result: string, found: LegResults): Le
   if (result === 'cancelled' || result === 'skipped') {
     verdict = 'skipped';
   } else if (result === 'success') {
-    if (found.kind === 'missing' || checks.length === 0) {
+    if (checks.length === 0) {
       notes.push('The job passed and recorded no check.');
       verdict = 'failed';
     } else {
-      verdict = failedChecks > 0 || found.kind === 'unparsable' || stopped ? 'failed' : 'passed';
+      verdict = anyFailed || stopped ? 'failed' : 'passed';
     }
   } else {
     // `failure`, and every result GitHub does not document, fail closed.

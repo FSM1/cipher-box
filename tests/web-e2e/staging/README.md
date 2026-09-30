@@ -61,9 +61,9 @@ The workflow is `Staging Soak` (`.github/workflows/staging-soak.yml`). The
 `ref`. A dispatch takes `base-url`, `ref` and `bootstrap`. The `ref` must be a
 `staging-*` tag or a commit on main. The `base-url` must be the
 `STAGING_APP_URL` variable of the `staging` environment, which is also its
-default. The web leg is two
-jobs, `web-vault` and `web-shares`. The desktop legs follow on macOS, Linux and
-Windows, one at a time. The report job joins the result lines of every leg.
+default. The web leg is two jobs, `web-vault` and `web-shares`. The desktop legs
+follow on macOS, Linux and Windows, one at a time. The report job joins the
+result lines of every leg.
 
 ### The soak suite
 

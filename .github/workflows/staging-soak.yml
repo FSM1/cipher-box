@@ -49,8 +49,7 @@ on:
         value: ${{ jobs.report.outputs.reported }}
 
 # The whole run holds the staging group, which a deploy also holds, so no
-# deploy lands between two legs. The desktop leg workflow takes no group of its
-# own: it would wait on this run, its own caller.
+# deploy lands between two legs. The called desktop legs run under this group.
 concurrency:
   group: staging-environment
   cancel-in-progress: false
@@ -194,6 +193,8 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/soak-web-setup
+        with:
+          observer: 'false'
 
       - name: Run the share checks and the grantee web leg
         timeout-minutes: 270
