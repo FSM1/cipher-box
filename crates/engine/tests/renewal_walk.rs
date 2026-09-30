@@ -11,6 +11,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::kdf;
 
 use cipherbox_engine::net::eol::{eol_from, renewal_eol_from};
+use cipherbox_engine::net::renewal_walk::WALK_BUDGET;
 use cipherbox_engine::net::renewal_walk::cursor::{CursorStore, MAX_CURSOR_PATH};
 use cipherbox_engine::seams::{BoxedTask, HttpMethod, RecordTransport, Scheduler, UnixMillis};
 use cipherbox_engine::sync::BookkeepingSeal;
@@ -437,4 +438,56 @@ fn a_node_the_lazy_wave_has_not_reached_renews_and_reports_nothing() {
         }
     }
     assert_eq!(abuse, 0, "a lagging node is no violation");
+}
+
+/// A walk that parks at depth three resumes past each folder on its path, so a
+/// later pass reaches the siblings of an ancestor folder and the cycle closes.
+#[test]
+fn a_pass_that_parks_below_an_ancestor_resumes_at_that_ancestors_next_sibling() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        let mut folders: Vec<NodeId> = (0..8)
+            .map(|at| create_folder(&world, engine, tasks, ROOT, &format!("s{at}")))
+            .collect();
+        folders.sort();
+        let parked_in = create_folder(&world, engine, tasks, folders[0], "a");
+        const FANOUT: usize = 24;
+        for group in 0..WALK_BUDGET.div_ceil(FANOUT) + 1 {
+            let parent = create_folder(&world, engine, tasks, parked_in, &format!("g{group}"));
+            for at in 0..FANOUT {
+                block_on(engine.command(Command::Create {
+                    parent,
+                    name: format!("f{at}"),
+                    kind: NodeKind::Folder,
+                }))
+                .expect("a create stages");
+            }
+            tick(&world, engine, tasks);
+        }
+        folders
+    });
+    let siblings = &nodes[1..];
+    let before: Vec<VerifiedRecord> = siblings
+        .iter()
+        .map(|node| record_at(&world, &write_name(*node)))
+        .collect();
+
+    world.scheduler.advance(DAY * 65);
+    let started = world.scheduler.now();
+    let (_device, engine, mut tasks) = start_later(&world, &blocks, b"a later session");
+    for _ in 0..4 {
+        world.scheduler.advance(Duration::from_secs(60 * 60));
+        tick(&world, &engine, &mut tasks);
+    }
+
+    for (node, before) in siblings.iter().zip(&before) {
+        assert_renewed_at_start(
+            &world,
+            &write_name(*node),
+            before,
+            started,
+            "a sibling of the ancestor the walk parked below",
+        );
+    }
 }

@@ -431,6 +431,10 @@ where
                 }
                 _ => None,
             };
+            // The walk is inside `id`, so its parent resumes after it.
+            if let Some(parent) = frames.last_mut() {
+                parent.resume_after(Some(id));
+            }
             match reopened {
                 Some(body @ ReadBody::Folder { .. }) => frames.push(Frame::of(id, body)),
                 _ => {
