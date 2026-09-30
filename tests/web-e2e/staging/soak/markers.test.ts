@@ -25,8 +25,10 @@ import {
   overCap,
   purgeDue,
   purgeWaiting,
+  rebinMarkers,
   republishDue,
   sequencesLine,
+  strandedBinned,
   unreadLine,
 } from './markers';
 import { SoakFailure } from './reasons';
@@ -106,6 +108,20 @@ describe('the binned lines', () => {
     const left = dropBinned(binned, ['2026-01-01']);
     expect(binnedMarkers(left)).toEqual([{ date: '2026-01-02', binnedOn: '2026-04-01' }]);
     expect(markers(left)).toEqual([]);
+  });
+
+  it('find a binned marker that soak/ still lists, and date its second move to today', () => {
+    const binned = binMarkers(ledger, ['2026-01-01', '2026-01-02'], '2026-04-01');
+    const stranded = strandedBinned(
+      binnedMarkers(binned),
+      new Set([markerFile('2026-01-02'), 'ledger.txt'])
+    );
+    expect(stranded).toEqual([{ date: '2026-01-02', binnedOn: '2026-04-01' }]);
+    const again = parseLedger(formatLedger(rebinMarkers(binned, ['2026-01-02'], '2026-04-05')));
+    expect(binnedMarkers(again)).toEqual([
+      { date: '2026-01-01', binnedOn: '2026-04-01' },
+      { date: '2026-01-02', binnedOn: '2026-04-05' },
+    ]);
   });
 
   it('keep a line of another shape', () => {

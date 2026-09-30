@@ -32,6 +32,10 @@ export const SOAK_REASONS = {
   },
   'sign-in-failed': { kind: 'failure', meaning: 'a soak account did not sign in' },
   'marker-unreadable': { kind: 'failure', meaning: 'a ledger marker did not open byte for byte' },
+  'name-unread': {
+    kind: 'failure',
+    meaning: 'the details dialog did not show a marker name in time',
+  },
   'sequence-regressed': {
     kind: 'failure',
     meaning: 'a soak name resolved below the ledger sequence',

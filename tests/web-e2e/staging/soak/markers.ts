@@ -91,6 +91,24 @@ export function binMarkers(ledger: Ledger, dates: readonly string[], today: stri
   return { lines: [...kept, ...binned] };
 }
 
+/** The binned entries whose marker `soak/` still lists: a move to the bin that did not land. */
+export function strandedBinned(binned: readonly Binned[], listed: ReadonlySet<string>): Binned[] {
+  return binned.filter((entry) => listed.has(markerFile(entry.date)));
+}
+
+/** Dates the binned lines of `dates` to `today`, for a marker moved to the bin again. */
+export function rebinMarkers(ledger: Ledger, dates: readonly string[], today: string): Ledger {
+  const again = new Set(dates);
+  return {
+    lines: ledger.lines.map((line): LedgerLine => {
+      const entry = binnedEntry(line);
+      return entry !== null && again.has(entry.date)
+        ? { kind: 'other', text: `binned ${entry.date} ${today}` }
+        : line;
+    }),
+  };
+}
+
 /** Drops the binned lines of `dates`, whose purge is proven. */
 export function dropBinned(ledger: Ledger, dates: readonly string[]): Ledger {
   const purged = new Set(dates);
