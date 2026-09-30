@@ -34,11 +34,12 @@ pub trait StagingStore {
     async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId>;
 
     /// Appends several op records to the queue in one atomic write, in order,
-    /// and returns their ids in that order. An `Err` leaves none of them queued,
-    /// and no reader, before or after a crash, ever sees part of the set. Each
-    /// entry is stored as
-    /// [`Self::enqueue_op`] stores one, so a reader of the queue cannot tell the
-    /// two apart.
+    /// and returns their ids in that order. No reader, before or after a crash,
+    /// ever sees part of the set. An `Err` leaves none of them queued, except
+    /// one from the final durability barrier, which, as for
+    /// [`Self::enqueue_op`], leaves the whole set queued with its durability
+    /// unknown. Each entry is stored as [`Self::enqueue_op`] stores one, so a
+    /// reader of the queue cannot tell the two apart.
     async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>>;
 
     /// Every queued op in FIFO (ascending-id) order.

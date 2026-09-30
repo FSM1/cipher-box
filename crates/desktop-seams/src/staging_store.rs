@@ -165,11 +165,9 @@ impl FileStagingStore {
             let _ = self.roll_back_batch(&batch, batch.clone());
             return Err(err);
         }
-        // The unlink commits the whole set. A crash before this barrier lands
-        // can only bring the marker back, and the next open then rolls the
-        // whole set back.
-        let _ = fsync_dir(&self.ops_dir);
-        Ok(())
+        // The unlink commits the whole set; a failed barrier is `Err` with the
+        // durability unknown, as for `atomic_write`.
+        fsync_dir(&self.ops_dir)
     }
 
     fn op_path(&self, id: u64) -> PathBuf {
