@@ -185,6 +185,8 @@ impl StructureAuthenticator {
 /// "Structure signatures"). The engine passes the authenticated envelope's
 /// scope and epoch.
 ///
+/// A section whose commitment is not `attested`'s fails `commitment-invalid`.
+///
 /// ```
 /// use cipherbox_core::error::CodecError;
 /// use cipherbox_core::seal::{GrantSection, authenticate_section_structures, verify_grant_set};
