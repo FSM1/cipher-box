@@ -865,6 +865,77 @@ fn no_two_epoch_namespace_key_shapes_collide() {
     }
 }
 
+/// The at-rest disclosure the owner view's label closes: no durable key of the
+/// four per-recipient floors may carry any run of the recipient's encryption
+/// subkey, on the owner path or behind a sharer's contact label, and each floor
+/// still reads back through the view that raised it.
+#[test]
+fn no_durable_revocation_floor_key_names_the_recipient() {
+    use crate::seams::{
+        ContactLabel, OWNER_TAG_LEN, OwnerScopedFloorStore, SharerScopedFloorStore,
+    };
+    use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+
+    let store = InMemoryFloorStore::default();
+    let owner = OwnerScopedFloorStore::new(store.clone());
+    owner.bind(
+        &kdf::enc_subkey(&[7u8; 32]),
+        &kdf::contact_label_seed(&[7u8; 32]),
+    );
+    let sharer = SharerScopedFloorStore::granted_by(
+        &owner,
+        ContactLabel::of(
+            &kdf::contact_label_seed(&[7u8; 32]),
+            &[0x02; IDENTITY_PUBLIC_LEN],
+        ),
+    );
+    let recipient = X25519Secret::from_scalar([0x6b; 32]).public();
+    let subkey = recipient.to_bytes();
+    let scope = sid(0x0a);
+
+    async fn raise_all<F: FloorStore>(
+        floors: &F,
+        scope: &[u8; 16],
+        recipient: &X25519Public,
+    ) -> Result<(), SeamError> {
+        let subkey = recipient.to_bytes();
+        record_revocation_floor(floors, scope, &[subkey], 3).await?;
+        record_cut_epochs(floors, scope, &[subkey], 4).await?;
+        record_grant_floor(floors, scope, recipient, 5).await?;
+        floors
+            .raise_epoch_floor(&cleared_floor_key(scope, &subkey), 6)
+            .await?;
+        Ok(())
+    }
+    block_on(raise_all(&owner, &scope, &recipient)).expect("the owner floors raise");
+    block_on(raise_all(&sharer, &scope, &recipient)).expect("the sharer floors raise");
+
+    for (key, floor) in [
+        (revocation_floor_key(&scope, &subkey), 3),
+        (revocation_cut_epoch_key(&scope, &subkey), 4),
+        (grant_floor_key(&scope, &subkey), 5),
+        (cleared_floor_key(&scope, &subkey), 6),
+    ] {
+        assert_eq!(block_on(owner.epoch_floor(&key)).unwrap(), Some(floor));
+        assert_eq!(block_on(sharer.epoch_floor(&key)).unwrap(), Some(floor));
+    }
+    let keys = store.epoch_keys();
+    assert_eq!(keys.len(), 10, "two views of five floors hold ten keys");
+    for key in keys {
+        assert_eq!(
+            key.len(),
+            OWNER_TAG_LEN + SECRET_LEN,
+            "a durable epoch key is the owner tag and one label"
+        );
+        for run in subkey.windows(8) {
+            assert!(
+                !key.windows(run.len()).any(|w| w == run),
+                "a durable floor key carries part of the recipient subkey"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_scope_with_no_recorded_cut_reads_one_floor_key() {
     // The per-row work is attacker-sized, so the marker must gate it. A

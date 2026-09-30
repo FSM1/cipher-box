@@ -57,9 +57,9 @@ use cipherbox_engine::sync::op::ScopeCrossing;
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
 use cipherbox_engine::sync::{BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS};
 use cipherbox_engine::testkit::account::{
-    Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, owner_identity,
-    owner_pointer_read_key, owner_pseudonym, retire_targets, seed_account_with,
-    sequence_floor_label, serve_http,
+    Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, floor_label,
+    owner_identity, owner_pointer_read_key, owner_pseudonym, retire_targets, seed_account_with,
+    serve_http,
 };
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
@@ -656,7 +656,7 @@ impl GrantScenario {
         cut_epoch_floor.extend_from_slice(b"/cut-epoch");
         self.owner_device
             .floor_store
-            .fail_epoch_floor_reads_after(&cut_epoch_floor, 1);
+            .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 1);
         share(self);
         self.owner_device.floor_store.heal_floors();
     }
@@ -1272,7 +1272,7 @@ fn a_cut_whose_floor_raise_fails_still_refuses_the_next_owner_action() {
     import_recipient(&mut engine);
     alice
         .floor_store
-        .fail_floor_raises_for(&write_epoch_floor_key(&SCOPE));
+        .fail_floor_raises_for(&floor_label(&write_epoch_floor_key(&SCOPE)));
 
     assert!(
         block_on(engine.command(Command::ChangePermission {
@@ -2727,9 +2727,7 @@ fn a_source_remove_that_confirms_and_then_fails_still_commits_the_crossing() {
     // live when the failure lands.
     fx.owner_device
         .floor_store
-        .fail_floor_raises_for(&sequence_floor_label(
-            write_name(fx.folder).as_str().as_bytes(),
-        ));
+        .fail_floor_raises_for(&floor_label(write_name(fx.folder).as_str().as_bytes()));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     fx.owner_device.floor_store.heal_floors();
 
@@ -9224,8 +9222,8 @@ fn a_grant_retried_after_a_failed_pointer_post_delivers_the_pointer() {
     );
 }
 
-/// The durable grant floor the owner raises for the recipient at `scope`,
-/// unscoped: the fake strips the owner tag before it matches an injected fault.
+/// The grant floor the owner raises for the recipient at `scope`, as the engine
+/// keys it before the owner view labels it.
 fn grant_floor_key(scope: &[u8; 16], recipient_secret: &[u8; 32]) -> Vec<u8> {
     [
         scope.as_slice(),
@@ -9249,7 +9247,9 @@ fn a_grant_retried_after_a_failed_floor_raise_raises_the_floor() {
     let raised = |fx: &GrantScenario| {
         block_on(fx.owner_device.floors(&SECRET).epoch_floor(&floor)).expect("the floor reads")
     };
-    fx.owner_device.floor_store.fail_floor_raises_for(&floor);
+    fx.owner_device
+        .floor_store
+        .fail_floor_raises_for(&floor_label(&floor));
     assert!(
         fx.grant_folder_to_recipient().is_err(),
         "the row publishes and its floor raise fails"

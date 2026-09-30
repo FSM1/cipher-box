@@ -49,10 +49,10 @@ D8, so a new edge needs this record.
 ## Decision
 
 **D1 — The KDF edge catalog gains one edge, `name-label`.** Its inputs are `contactLabelSeed`
-and one sequence-namespace key. Its output is a 32-byte label. Its form is
+and one floor-store key. Its output is a 32-byte label. Its form is
 `keyed_hash(key = derive_key("cipherbox/v2/name-label", contactLabelSeed), message = key bytes)`.
-The message is the whole sequence-namespace key as the engine passes it today, so a raw
-`ipnsName` and a prefixed revision-mark key each label to distinct bytes. The message is
+The message is the whole floor-store key as the engine passes it, so a raw `ipnsName`, a
+prefixed revision-mark key and each suffixed epoch key label to distinct bytes. The message is
 variable-length. The catalog rule forbids a variable _context_, and this edge keeps its context
 fixed; BLAKE3 `keyed_hash` is a pseudorandom function over a message of any length, so a
 variable message is sound.
@@ -62,13 +62,16 @@ output never reaches the wire, and the session holds it at `Engine::start`. The 
 edge extends the contact-label pair's stated property to a second kind of durable state: a key
 that would otherwise name a record in the clear. No other seed gains a consumer.
 
-**D3 — The blind sits in the owner view, on the sequence arm only.** `OwnerScopedFloorStore`
-labels every sequence-namespace key before it prefixes the owner tag, so the durable key is the
-owner tag followed by the label, fixed at 64 bytes. Every sequence raise in the engine passes the
-owner view, on the owner path and on the sharer path, so one name keeps one durable key and one
-ratchet. `SharerScopedFloorStore` keeps its contact-label prefix on the epoch namespace and
-stays transparent on the sequence namespace. The epoch namespace does not change: a scope id is
-sealed body content, not a public name.
+**D3 — The blind sits in the owner view, on the sequence arm and the epoch arm.**
+`OwnerScopedFloorStore` labels every key in both namespaces before it prefixes the owner tag, so
+the durable key is the owner tag followed by the label, fixed at 64 bytes. Every sequence raise in
+the engine passes the owner view, on the owner path and on the sharer path, so one name keeps one
+durable key and one ratchet. `SharerScopedFloorStore` keeps its contact-label prefix on the epoch
+namespace and stays transparent on the sequence namespace. The owner view labels the epoch key
+after that prefix, so one (contact, scope) pair keeps one durable key. The epoch arm takes the
+label because the revocation, grant, cut-epoch and cleared floors append the raw recipient
+encryption subkey to the scope id (ADR 0032 E5); the view cannot tell those keys apart from a
+bare scope id without a parse, so it labels the whole arm.
 
 **D4 — The owner view binds `contactLabelSeed` beside the encryption secret.** The bind at
 `Engine::start` is the one place a session's secrets reach the store, and a read or raise before
