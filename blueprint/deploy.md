@@ -105,8 +105,11 @@ release-please stays — in its boring, single-component mode:
   root, the same changelog-sections config. The GitHub App token mechanism
   (`RELEASE_BOT_APP_ID` / `RELEASE_BOT_PRIVATE_KEY`) ports so release-PR
   pushes still trigger CI. The key is an environment secret: in
-  `release-bot` (deployment branch `main` only) for release-please, and in
-  `staging-approval` for the staging tag push.
+  `release-bot` (deployment branch `main` only) for release-please, which
+  uses it with `deployment: false` and so creates no deployment record, and
+  in `staging-approval` for the staging tag push.
+- A hand-pushed `staging-*` tag deploys nothing; use `tag-staging.yml` or a
+  dispatch of `deploy-staging.yml`.
 - **Version surfaces are exactly two files**: the root `package.json` (the
   manifest source) and `apps/desktop/src-tauri/tauri.conf.json` (via
   `extra-files` — the surface the Tauri updater and the About dialog read).

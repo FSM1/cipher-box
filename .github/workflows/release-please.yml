@@ -24,8 +24,10 @@ permissions: {}
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    # Holds the release-bot key; its branch policy admits `main` only.
-    environment: release-bot
+    # Scopes the release-bot key to an environment, with no deployment record.
+    environment:
+      name: release-bot
+      deployment: false
     outputs:
       releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
