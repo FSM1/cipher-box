@@ -27,7 +27,7 @@ use super::liveness::{EolRenewResult, HeldKey, HeldRecord, HeldRecords, hold_if_
 use super::publish::{PublishError, PublishOutcome, head_cid_from_value, put_and_confirm};
 use super::register::register;
 use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger};
-use super::rotation::{AdmittedScopeRoot, ScopeRootAdmission, admit_owned_scope_root};
+use super::rotation::{AdmittedScopeRoot, ScopeRootAdmission, admit_owned_scope_root, scope_name};
 use crate::api::{ApiClient, NameRegistration};
 use crate::bin_index::BinIndexKeys;
 use crate::content::Gateway;
@@ -116,8 +116,6 @@ pub(crate) struct WalkReport {
     pub(crate) renewals: Vec<EolRenewResult>,
     /// The names whose record the adoption gate refused.
     pub(crate) rejected: Vec<String>,
-    /// The visits the pass made.
-    pub(crate) visits: usize,
 }
 
 /// A scope's material as this pass admitted its root.
@@ -154,9 +152,9 @@ struct Frame {
 }
 
 impl Frame {
-    fn of(node_id: [u8; 16], body: &ReadBody) -> Self {
+    fn of(node_id: [u8; 16], body: ReadBody) -> Self {
         let mut children = match body {
-            ReadBody::Folder { children, .. } => children.clone(),
+            ReadBody::Folder { children, .. } => children,
             _ => Vec::new(),
         };
         children.sort_by_key(|child| child.id);
@@ -199,10 +197,11 @@ enum RootEnd {
 struct Pass<'s> {
     cursor: RenewalCursor,
     report: WalkReport,
+    visits: usize,
     materials: BTreeMap<[u8; 16], Option<ScopeMaterial>>,
     /// Every scope root the session knows, owned or not: the walk reaches
     /// each owned one as a root of its own.
-    scope_roots: &'s BTreeSet<[u8; 16]>,
+    scope_roots: BTreeSet<[u8; 16]>,
     due: Vec<Due>,
     /// The names a delete doomed, or `None` when the journal did not read.
     doomed: Option<BTreeSet<String>>,
@@ -213,7 +212,7 @@ struct Pass<'s> {
 
 impl Pass<'_> {
     fn budget_spent(&self) -> bool {
-        self.report.visits >= WALK_BUDGET
+        self.visits >= WALK_BUDGET
     }
 
     /// Every root in walk order.
@@ -277,13 +276,24 @@ where
         let store = CursorStore::new(self.staging, self.seal, self.enc_secret);
         let now = self.scheduler.now();
         let stored = store.load().await.ok().flatten();
+        let held = stored.as_ref().is_some_and(|cursor| {
+            cursor.root.is_none()
+                && cursor.cycle_start <= now
+                && !now.reached(Some(cursor.cycle_start.saturating_add(CYCLE_HOLD)))
+        });
+        if held {
+            return WalkReport::default();
+        }
         let mut pass = Pass {
-            cursor: stored
-                .clone()
-                .unwrap_or_else(|| RenewalCursor::starting(now)),
+            cursor: stored.unwrap_or_else(|| RenewalCursor::starting(now)),
             report: WalkReport::default(),
+            visits: 0,
             materials: BTreeMap::new(),
-            scope_roots,
+            scope_roots: scopes
+                .iter()
+                .map(|scope| scope.scope_id)
+                .chain(scope_roots.iter().copied())
+                .collect(),
             due: Vec::new(),
             doomed: None,
             owner_tag: owner_tag(self.enc_secret),
@@ -291,13 +301,6 @@ where
             bins,
         };
         if pass.cursor.root.is_none() {
-            let held = stored.is_some_and(|cursor| {
-                cursor.cycle_start <= now
-                    && !now.reached(Some(cursor.cycle_start.saturating_add(CYCLE_HOLD)))
-            });
-            if held {
-                return pass.report;
-            }
             pass.cursor = RenewalCursor::starting(now);
             pass.cursor.root = pass.roots().first().copied();
         }
@@ -356,7 +359,7 @@ where
         if !pass.materials.contains_key(&scope_id) {
             let material = match pass.scopes.iter().find(|scope| scope.scope_id == scope_id) {
                 Some(scope) => {
-                    pass.report.visits += 1;
+                    pass.visits += 1;
                     match admit_owned_scope_root(
                         self.transport,
                         self.gateway,
@@ -408,14 +411,8 @@ where
         let Some((plane, root_node, body)) = self.open_root(pass, root).await else {
             return RootEnd::Finished;
         };
-        let scope_roots: BTreeSet<[u8; 16]> = pass
-            .scopes
-            .iter()
-            .map(|scope| scope.scope_id)
-            .chain(pass.scope_roots.iter().copied())
-            .collect();
         let in_bin = matches!(root, WalkRoot::Bin(_));
-        let mut frames = vec![Frame::of(root_node, &body)];
+        let mut frames = vec![Frame::of(root_node, body)];
         if pass.cursor.path.first() != Some(&root_node) {
             pass.cursor.path = vec![root_node];
             pass.cursor.last_child = None;
@@ -427,13 +424,15 @@ where
                 break;
             };
             let reopened = match top.children.iter().find(|child| child.id == id) {
-                Some(child) if child.kind == NodeKind::Folder && !scope_roots.contains(&id) => {
+                Some(child)
+                    if child.kind == NodeKind::Folder && !pass.scope_roots.contains(&id) =>
+                {
                     self.visit(pass, &plane, child, in_bin).await
                 }
                 _ => None,
             };
             match reopened {
-                Some(body @ ReadBody::Folder { .. }) => frames.push(Frame::of(id, &body)),
+                Some(body @ ReadBody::Folder { .. }) => frames.push(Frame::of(id, body)),
                 _ => {
                     last = Some(id);
                     break;
@@ -463,7 +462,7 @@ where
                 continue;
             };
             top.next += 1;
-            if scope_roots.contains(&child.id) {
+            if pass.scope_roots.contains(&child.id) {
                 continue;
             }
             let Some(body) = self.visit(pass, &plane, &child, in_bin).await else {
@@ -474,7 +473,7 @@ where
             }
             let at_cap = frames.len() + 1 == MAX_CURSOR_PATH;
             if at_cap && !in_bin && pass.cursor.deferred.len() < MAX_DEFERRED_ROOTS {
-                if let Ok(name) = child_name(&child) {
+                if let Ok(name) = scope_name(&child.ipns_name) {
                     pass.cursor.deferred.push(DeferredRoot {
                         scope_id: plane.scope_id,
                         node_id: child.id,
@@ -483,7 +482,7 @@ where
                     continue;
                 }
             }
-            frames.push(Frame::of(child.id, &body));
+            frames.push(Frame::of(child.id, body));
         }
     }
 
@@ -551,7 +550,7 @@ where
         child: &ChildRef,
         in_bin: bool,
     ) -> Option<ReadBody> {
-        let name = child_name(child).ok()?;
+        let name = scope_name(&child.ipns_name).ok()?;
         self.admit(pass, plane, child.id, &name, in_bin).await
     }
 
@@ -571,7 +570,7 @@ where
             .material(pass, plane.scope_id)
             .await
             .map(|material| material.name.clone());
-        pass.report.visits += 1;
+        pass.visits += 1;
         let adopter = ChildAdopter::new(
             self.gateway,
             self.http,
@@ -631,9 +630,7 @@ where
         else {
             return;
         };
-        let window = i64::try_from(WALK_WINDOW.as_millis()).unwrap_or(i64::MAX);
-        let due = eol::remaining_millis(self.scheduler.now(), &verified.validity)
-            .is_some_and(|left| left > 0 && left <= window);
+        let due = eol::needs_renewal(self.scheduler.now(), &verified.validity, WALK_WINDOW);
         if !due || verified.sequence != sequence {
             return;
         }
@@ -801,13 +798,6 @@ fn park(cursor: &mut RenewalCursor, frames: &[Frame]) {
     } else {
         frames.last().and_then(Frame::last_visited)
     };
-}
-
-fn child_name(child: &ChildRef) -> Result<IpnsName, ()> {
-    core::str::from_utf8(&child.ipns_name)
-        .ok()
-        .and_then(|text| IpnsName::parse(text).ok())
-        .ok_or(())
 }
 
 #[cfg(test)]

@@ -10113,6 +10113,36 @@ fn a_write_grantees_delete_reaches_the_owners_bin_by_owner_capture() {
     assert_eq!(entry.origin_parent, fx.folder.0);
 }
 
+/// Stop the owner's session, then start it on a later device once the walk
+/// window has opened, and let the walk run. The later session stays alive in
+/// the returned device, engine and tasks.
+fn restart_later(
+    fx: GrantScenario,
+) -> (
+    FakeWorld,
+    EventStream,
+    (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>),
+) {
+    let GrantScenario {
+        world,
+        blocks,
+        engine,
+        _tasks,
+        ..
+    } = fx;
+    drop((engine, _tasks));
+    drop(world.scheduler.take_spawned_tasks());
+    world
+        .scheduler
+        .advance(Duration::from_secs(65 * 24 * 60 * 60));
+    let device = world.device(b"the owner's later device");
+    let (engine, events, mut tasks) = boot_owner(&world, &blocks, &device);
+    for _ in 0..3 {
+        tick(&world, &engine, &mut tasks);
+    }
+    (world, events, (device, engine, tasks))
+}
+
 /// ADR 0061 D1: a folder a grant cut into a scope root of its own is a walk
 /// root of its own. The walk waits for the boundary walk that names it, so a
 /// folder inside it renews at the next start, and the walk reports nothing for
@@ -10136,25 +10166,8 @@ fn a_folder_inside_a_granted_scope_renews_at_the_next_start() {
         0,
         "the session that minted the scope reports nothing either"
     );
-    let GrantScenario {
-        world,
-        blocks,
-        engine,
-        _tasks,
-        ..
-    } = fx;
-    drop((engine, _tasks));
-    drop(world.scheduler.take_spawned_tasks());
-    let before = sequence_at(&world, &write_name(inner));
-
-    world
-        .scheduler
-        .advance(Duration::from_secs(65 * 24 * 60 * 60));
-    let device = world.device(b"the owner's later device");
-    let (engine, mut events, mut tasks) = boot_owner(&world, &blocks, &device);
-    for _ in 0..3 {
-        tick(&world, &engine, &mut tasks);
-    }
+    let before = sequence_at(&fx.world, &write_name(inner));
+    let (world, mut events, _later) = restart_later(fx);
 
     assert_eq!(
         sequence_at(&world, &write_name(inner)),
@@ -10182,25 +10195,8 @@ fn a_folder_that_predates_a_grant_renews_at_the_next_start() {
     );
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let GrantScenario {
-        world,
-        blocks,
-        engine,
-        _tasks,
-        ..
-    } = fx;
-    drop((engine, _tasks));
-    drop(world.scheduler.take_spawned_tasks());
-    let before = sequence_at(&world, &write_name(older));
-
-    world
-        .scheduler
-        .advance(Duration::from_secs(65 * 24 * 60 * 60));
-    let device = world.device(b"the owner's later device");
-    let (engine, mut events, mut tasks) = boot_owner(&world, &blocks, &device);
-    for _ in 0..3 {
-        tick(&world, &engine, &mut tasks);
-    }
+    let before = sequence_at(&fx.world, &write_name(older));
+    let (world, mut events, _later) = restart_later(fx);
 
     assert_eq!(
         sequence_at(&world, &write_name(older)),
@@ -10383,25 +10379,8 @@ fn a_node_a_stopped_wave_did_not_reach_is_not_renewed_at_its_old_name() {
     );
     // A later write under the superseded seed, at a name no parent names.
     let (old_mid, stray) = publish_at_seed_name(&fx.world, &superseded, mid, &current_mid);
-    let GrantScenario {
-        world,
-        blocks,
-        engine,
-        _tasks,
-        ..
-    } = fx;
-    drop((engine, _tasks));
-    drop(world.scheduler.take_spawned_tasks());
-    let before = sequence_at(&world, &old_leaf);
-
-    world
-        .scheduler
-        .advance(Duration::from_secs(65 * 24 * 60 * 60));
-    let device = world.device(b"the owner's later device");
-    let (engine, mut events, mut tasks) = boot_owner(&world, &blocks, &device);
-    for _ in 0..3 {
-        tick(&world, &engine, &mut tasks);
-    }
+    let before = sequence_at(&fx.world, &old_leaf);
+    let (world, mut events, _later) = restart_later(fx);
 
     assert_eq!(
         sequence_at(&world, &old_leaf),

@@ -34,9 +34,8 @@ pub(crate) async fn keep_newest_last_known_good<S: SnapshotCache>(
         return Ok(());
     }
     let held = cached.and_then(|cached| verified_rank(name, &cached));
-    let offered = verified_rank(name, record_bytes);
     if let Some((held_sequence, held_eol)) = held {
-        let keep = match &offered {
+        let keep = match &verified_rank(name, record_bytes) {
             None => true,
             Some((sequence, eol)) => {
                 held_sequence > *sequence
