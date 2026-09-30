@@ -69,6 +69,10 @@ export const SOAK_REASONS = {
   'resolve-failures-grew': { kind: 'failure', meaning: 'republisher resolve failures grew' },
   'no-walk-in-window': { kind: 'failure', meaning: 'fewer than two walks in 24 hours' },
   'desktop-marker-missing': { kind: 'failure', meaning: 'an OS or browser marker did not open' },
+  'desktop-marker-unpublished': {
+    kind: 'failure',
+    meaning: 'the OS marker of today or its ledger line did not reach a cold mount',
+  },
   'post-deploy-window': {
     kind: 'skip',
     meaning: 'the API is up for less than 12 hours, so the counter checks skip',
