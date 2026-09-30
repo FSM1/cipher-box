@@ -156,9 +156,7 @@ impl From<facade::Permission> for Permission {
 // stored, so the provider bearer never crosses back into JS.
 // ---------------------------------------------------------------------------
 
-/// Where a version's bytes are pinned.
-/// A view reads it as this ordinal; a command names it as the string the
-/// engine type `PinMode` spells, hence the JS name.
+/// Where a version's bytes are pinned. The JS name is as for [`Permission`].
 #[wasm_bindgen(js_name = ViewPinMode)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PinMode {
@@ -181,8 +179,7 @@ impl From<EnginePinMode> for PinMode {
 }
 
 /// The kind of member-supplied IPFS provider, which fixes the reachability
-/// probe. A view reads it as this ordinal; a command names it as the string
-/// the engine type `ByoKind` spells, hence the JS name.
+/// probe. The JS name is as for [`Permission`].
 #[wasm_bindgen(js_name = ViewByoKind)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByoKind {

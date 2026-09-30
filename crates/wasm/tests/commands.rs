@@ -64,6 +64,16 @@ fn settings_command(access_token: JsValue) -> JsValue {
     ])
 }
 
+/// A `saveVaultSettings` on the hosted pin mode with no provider, plus `extra`.
+fn hosted_settings(extra: &[(&str, JsValue)]) -> JsValue {
+    let mut fields = vec![("pinMode", text("hosted")), ("byo", JsValue::NULL)];
+    fields.extend(extra.iter().cloned());
+    object(&[
+        ("kind", text("saveVaultSettings")),
+        ("settings", object(&fields)),
+    ])
+}
+
 fn bearer_of(command: Command) -> ByoBearer {
     match command {
         Command::SaveVaultSettings { settings } => {
@@ -162,19 +172,7 @@ fn a_u64_takes_a_bigint_in_range_alone() {
         assert!(decode_command(&mint(expires_at, admission_cap)).is_err());
     }
 
-    let with_retention = |keep: JsValue| {
-        object(&[
-            ("kind", text("saveVaultSettings")),
-            (
-                "settings",
-                object(&[
-                    ("pinMode", text("hosted")),
-                    ("byo", JsValue::NULL),
-                    ("keepLatestVersions", keep),
-                ]),
-            ),
-        ])
-    };
+    let with_retention = |keep: JsValue| hosted_settings(&[("keepLatestVersions", keep)]);
     assert!(decode_command(&with_retention(BigInt::from(3u64).into())).is_err());
     assert!(decode_command(&with_retention(JsValue::from(3))).is_ok());
 }
@@ -444,18 +442,7 @@ fn a_bearer_the_engine_would_refuse_is_refused() {
 #[wasm_bindgen_test]
 fn a_retention_the_engine_would_refuse_is_refused() {
     let with = |keep: JsValue, bin: JsValue| {
-        object(&[
-            ("kind", text("saveVaultSettings")),
-            (
-                "settings",
-                object(&[
-                    ("pinMode", text("hosted")),
-                    ("byo", JsValue::NULL),
-                    ("keepLatestVersions", keep),
-                    ("binRetentionDays", bin),
-                ]),
-            ),
-        ])
+        hosted_settings(&[("keepLatestVersions", keep), ("binRetentionDays", bin)])
     };
     assert!(decode_command(&with(JsValue::from(0), JsValue::NULL)).is_err());
     assert!(
@@ -468,17 +455,7 @@ fn a_retention_the_engine_would_refuse_is_refused() {
     assert!(decode_command(&with(JsValue::from(2_f64.powi(32) + 1.0), JsValue::NULL)).is_err());
     assert!(decode_command(&with(JsValue::NULL, JsValue::from(0))).is_ok());
 
-    let absent = object(&[
-        ("kind", text("saveVaultSettings")),
-        (
-            "settings",
-            object(&[
-                ("pinMode", text("hosted")),
-                ("byo", JsValue::NULL),
-                ("keepLatestVersions", JsValue::NULL),
-            ]),
-        ),
-    ]);
+    let absent = hosted_settings(&[("keepLatestVersions", JsValue::NULL)]);
     match decode_command(&absent).unwrap() {
         Command::SaveVaultSettings { settings } => {
             assert_eq!(settings.retention, RetentionPolicy::KeepAll);

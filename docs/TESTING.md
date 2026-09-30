@@ -41,7 +41,7 @@ bindings in `packages/client/wasm/`, which git does not track. On a fresh
 clone, build them before `pnpm typecheck` or a client test:
 
 ```bash
-pnpm --filter @cipherbox/web build:wasm
+pnpm --filter @cipherbox/client build:wasm
 ```
 
 ### Per-package unit tests

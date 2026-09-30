@@ -12,13 +12,14 @@
 use cipherbox_engine::content::ByoBearer;
 use cipherbox_engine::facade::{Command, CommandOutcome};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
-use cipherbox_engine::wire::{BIGINT_TAG, KEEP_STORED_BEARER, bearer_from_bytes};
+use cipherbox_engine::seams::check_bearer;
+use cipherbox_engine::wire::{BIGINT_TAG, KEEP_STORED_BEARER};
 use js_sys::{Array, ArrayBuffer, BigInt, JsString, Object, Reflect, Uint8Array};
 use serde::Serialize;
 use serde_wasm_bindgen::Serializer;
 use tsify::Ts;
 use wasm_bindgen::prelude::*;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 /// The one serializer configuration, matching the tsify attributes on the
 /// engine types: `u64` as `bigint`, an absent `Option` as `null`.
@@ -145,9 +146,17 @@ fn take_fragment(value: &JsValue) -> Result<Zeroizing<String>, JsError> {
 /// A provider bearer, from the `ArrayBuffer` the host transferred. A view is
 /// refused: the host moves and wipes a buffer alone, so a view would reach
 /// here as a clone nobody scrubs. Bytes that are no sendable bearer are wiped
-/// before the refusal returns.
+/// before the refusal returns; `String::from_utf8` reuses the allocation, so
+/// the credential is never copied.
 fn take_bearer(value: &JsValue) -> Result<Zeroizing<String>, JsError> {
     let buffer = value.dyn_ref::<ArrayBuffer>().ok_or_else(refused)?;
-    bearer_from_bytes(Uint8Array::new(buffer).to_vec())
-        .map_err(|error| JsError::new(&error.to_string()))
+    let not_a_bearer = || JsError::new("accessToken must be a sendable bearer");
+    let token = Zeroizing::new(String::from_utf8(Uint8Array::new(buffer).to_vec()).map_err(
+        |error| {
+            error.into_bytes().zeroize();
+            not_a_bearer()
+        },
+    )?);
+    check_bearer(&token).map_err(|_| not_a_bearer())?;
+    Ok(token)
 }

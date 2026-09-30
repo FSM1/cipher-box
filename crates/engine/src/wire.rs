@@ -15,7 +15,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::content::ByoBearer;
 use crate::facade::{NodeId, NodeKind};
-use crate::seams::{OpId, UnixMillis, check_bearer};
+use crate::seams::{OpId, UnixMillis};
 use crate::settings::{DEFAULT_BIN_RETENTION_DAYS, MAX_BIN_RETENTION_DAYS};
 use crate::{Contact, MintedInviteLink, RetentionPolicy};
 
@@ -269,34 +269,9 @@ pub mod bin_retention_days {
     }
 }
 
-/// A bearer a host sent as bytes, as the zeroizing text a request splices.
-/// `String::from_utf8` reuses the allocation, so the credential is never
-/// copied, and the refused bytes are wiped before the refusal returns. The
-/// refusal carries no part of the value.
-pub fn bearer_from_bytes(bytes: Vec<u8>) -> Result<Zeroizing<String>, InvalidBearerBytes> {
-    let token = Zeroizing::new(String::from_utf8(bytes).map_err(|error| {
-        error.into_bytes().zeroize();
-        InvalidBearerBytes
-    })?);
-    check_bearer(&token).map_err(|_| InvalidBearerBytes)?;
-    Ok(token)
-}
-
-/// The bytes are not a sendable bearer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvalidBearerBytes;
-
-impl fmt::Display for InvalidBearerBytes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("accessToken must be a sendable bearer")
-    }
-}
-
-impl std::error::Error for InvalidBearerBytes {}
-
 /// `null` stores no bearer and [`KEEP_STORED_BEARER`] keeps the stored one.
 /// A bearer's bytes are refused and wiped here: the boundary takes them into a
-/// zeroizing buffer itself ([`bearer_from_bytes`]), outside the serde decode
+/// zeroizing buffer itself, outside the serde decode
 /// that buffers the whole command.
 impl<'de> Deserialize<'de> for ByoBearer {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
