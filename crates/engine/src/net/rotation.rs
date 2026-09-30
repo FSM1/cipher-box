@@ -1726,6 +1726,92 @@ async fn write_plane_of_gated<F: FloorStore>(
     })
 }
 
+/// One owned scope root as the renewal walk admitted it (ADR 0061 D3 step 1).
+pub(crate) struct AdmittedScopeRoot {
+    /// The record bytes the gate admitted.
+    pub(crate) record_bytes: Vec<u8>,
+    /// The admitted sequence.
+    pub(crate) sequence: u64,
+    pub(crate) read_body: ReadBody,
+    pub(crate) read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
+    /// `None` when the root is held keyless.
+    pub(crate) write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
+    /// The write scope seed the root's own write history link supersedes, the
+    /// seed a stopped name wave's unreached nodes still derive from (ADR 0061
+    /// D4).
+    pub(crate) superseded_write_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
+}
+
+/// Why the renewal walk admitted no owned scope root.
+pub(crate) enum ScopeRootAdmission {
+    /// The gate refused the record: a trust violation.
+    Rejected,
+    /// No record could be read: availability.
+    Unavailable,
+}
+
+/// Gate the owned scope root `scope_id` at `name` through the root adopter,
+/// under `ascent` for a scope below the vault root, and open its write plane.
+#[expect(clippy::too_many_arguments, reason = "one root read's full seam set")]
+pub(crate) async fn admit_owned_scope_root<T, H, F, S>(
+    transport: &T,
+    gateway: &Gateway,
+    http: &H,
+    floors: &F,
+    snapshot_cache: &S,
+    enc_secret: &X25519Secret,
+    identity: &EcdsaVerifier,
+    scope_id: [u8; 16],
+    ascent: Option<&Zeroizing<[u8; SECRET_LEN]>>,
+    name: &IpnsName,
+) -> Result<AdmittedScopeRoot, ScopeRootAdmission>
+where
+    T: RecordTransport,
+    H: Http,
+    F: FloorStore,
+    S: SnapshotCache,
+{
+    let adopter = RootAdopter::new(gateway, http, floors, enc_secret, identity, scope_id);
+    let adopter = match ascent {
+        Some(seed) => adopter.under_parent_node_seed(seed.clone()),
+        None => adopter,
+    };
+    let Some((_, record_bytes)) = fanout_get_verify(transport, name).await else {
+        return Err(ScopeRootAdmission::Unavailable);
+    };
+    let gated = gated_root_cached(&adopter, snapshot_cache, name, &record_bytes, None)
+        .await
+        .map_err(|verdict| match verdict {
+            RootGateVerdict::Unavailable => ScopeRootAdmission::Unavailable,
+            RootGateVerdict::Rejected
+            | RootGateVerdict::Superseded
+            | RootGateVerdict::NotResealable => ScopeRootAdmission::Rejected,
+        })?;
+    let superseded_write_seed = match write_plane_of_gated(floors, &gated, scope_id).await {
+        Ok(plane) => {
+            let ctx = AadContext {
+                v: gated.envelope.v,
+                id: gated.envelope.id,
+                scope: scope_id,
+                epoch: plane.epoch,
+                struct_tag: STRUCT_TAG_WRITE_HISTORY_LINK,
+            };
+            open_owner_history_link(enc_secret, &ctx, &plane.body.write_history_link)
+                .ok()
+                .map(|payload| Zeroizing::new(*payload.prev_seed()))
+        }
+        Err(_) => None,
+    };
+    Ok(AdmittedScopeRoot {
+        record_bytes,
+        sequence: gated.sequence,
+        read_body: gated.read_body,
+        read_scope_seed: gated.read_scope_seed,
+        write_scope_seed: gated.write_scope_seed,
+        superseded_write_seed,
+    })
+}
+
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerRotationNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport,
@@ -12400,6 +12486,74 @@ mod tests {
             child_names_of(&read_only_open(&harness, SCOPE, &outcome.new_root_name))
                 .contains(&staged.descendant.name.as_str().as_bytes().to_vec()),
             "the descendant scope root keeps the name its own wave will move"
+        );
+    }
+
+    /// ADR 0061 D4: after a name wave, the renewal walk's root admission reads
+    /// the seed the wave superseded off the owner's own write history link, and
+    /// that seed derives the old name a node the wave did not reach sits at.
+    #[test]
+    fn the_walk_admission_recovers_the_seed_a_wave_superseded() {
+        let harness = Harness::plain();
+        let staged = staged_scope_with(
+            &harness,
+            |descendant, _| vec![child_ref(CHILD_SCOPE, descendant)],
+            Vec::new(),
+        );
+        let owner = owner_identity();
+        let net = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
+        let mut entropy = SeededEntropy::new(61);
+        let outcome = block_on(rotate_scope_write(
+            &mut entropy,
+            &net,
+            &net,
+            &write_plan(&staged.root, &owner),
+        ))
+        .expect("the wave completes");
+        // The liveness pass consults the scope pointer before the walk, and the
+        // consult raises the write-epoch floor on sight.
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            OWNER_ROOT_EPOCH + 1,
+        ))
+        .expect("the floor raises");
+
+        let admitted = block_on(admit_owned_scope_root(
+            &harness.transport,
+            &harness.gateway,
+            &harness.http,
+            &harness.floors,
+            &harness.cache,
+            &owner_enc(),
+            &owner.verifying_key(),
+            SCOPE,
+            None,
+            &outcome.new_root_name,
+        ))
+        .unwrap_or_else(|_| panic!("the moved root is admitted"));
+
+        let fresh = SeededEntropy::first_draw(61);
+        assert!(
+            admitted
+                .write_scope_seed
+                .as_ref()
+                .is_some_and(|seed| ct_eq(seed, &fresh)),
+            "the current write seed is the one the wave minted",
+        );
+        let superseded = admitted
+            .superseded_write_seed
+            .expect("the owner's history link opens");
+        assert!(ct_eq(&superseded, &OWNER_ROOT_WRITE_SCOPE_SEED));
+        assert_eq!(
+            derive_write_name(&superseded, &MID),
+            staged.mid_name,
+            "a node the wave did not reach renews at its old name",
         );
     }
 

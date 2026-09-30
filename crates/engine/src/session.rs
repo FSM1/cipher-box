@@ -295,6 +295,10 @@ pub(crate) struct SessionState {
     /// Scope roots this session owes a scope-exit cut for, driven by the drain.
     /// Session-lived, like the orphan-head set.
     pub(crate) pending_scope_exits: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// The names the drain is publishing right now (`DrainCells::publishing`).
+    pub(crate) publishing: Rc<RefCell<BTreeSet<String>>>,
+    /// The drain's lost races (`DrainCells::lost_races`).
+    pub(crate) lost_races: Rc<RefCell<BTreeMap<String, Vec<u8>>>>,
     /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
     /// successes and reports rung changes; [`snapshot`](crate::facade::Engine::snapshot)
     /// classifies at read time off the same cell.
@@ -488,6 +492,8 @@ impl SessionState {
             snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId::VAULT_ROOT))),
             held_records: Rc::new(RefCell::new(HeldRecords::new())),
             pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
+            publishing: Rc::new(RefCell::new(BTreeSet::new())),
+            lost_races: Rc::new(RefCell::new(BTreeMap::new())),
             sync_status: Rc::new(RefCell::new(SyncStatus::default())),
             scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
             scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
@@ -544,6 +550,8 @@ impl SessionState {
             dead_letters: &self.dead_letters,
             observed_unlinks: &self.observed_unlinks,
             pending_scope_exits: &self.pending_scope_exits,
+            publishing: &self.publishing,
+            lost_races: &self.lost_races,
         }
     }
 }

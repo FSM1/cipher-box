@@ -120,7 +120,13 @@ scenario fails the meta-test):
   and the withheld-update escalation;
 - the offline queue — FIFO replay through rebase, dead-letter on
   revoked-while-offline with staged bytes preserved, staging-budget
-  fail-fast.
+  fail-fast;
+- the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
+  virtual clock, a file that no session opens or publishes for 65 days is at
+  S + 1 with a fresh validity after the passes that ADR 0061 consequence 2
+  names; a bin entry and a deferred depth-64 folder renew; a publish during
+  the registration wait makes the walk refuse; at one sequence the later EOL
+  wins in the resolve and in the last-known-good keeper.
 
 Adversarial cases are first-class: the harness can replay, transplant, and
 re-sign records with any key it holds; every crypto-review finding (FSM1/cipher-box-next#35)

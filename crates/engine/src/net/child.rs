@@ -26,7 +26,7 @@ use zeroize::Zeroizing;
 use super::adopter::{LocalHead, assemble_head_envelope, reject};
 use super::fanout::fanout_get_verify;
 use super::last_known_good::keep_newest_last_known_good;
-use super::resolve::{AdoptOutcome, Adopter, GatePass, ResolveOutcome, resolve};
+use super::resolve::{AdoptOutcome, Adopter, GatePass, ResolveOutcome, resolve_gated};
 use crate::content::Gateway;
 use crate::gate::{Adopted, GateError, GateStage, RejectionReason, floor};
 use crate::rotation::lagging_read_seed;
@@ -375,10 +375,31 @@ where
     H: Http,
     F: FloorStore,
 {
+    resolve_child_record(transport, snapshot_cache, adopter, name, scope_root, mode)
+        .await
+        .map(|(adopted, _)| adopted)
+}
+
+/// [`resolve_child`], with the record bytes it admitted.
+pub(crate) async fn resolve_child_record<T, S, H, F>(
+    transport: &T,
+    snapshot_cache: &S,
+    adopter: &ChildAdopter<'_, H, F>,
+    name: &IpnsName,
+    scope_root: Option<&IpnsName>,
+    mode: ResolveMode,
+) -> Result<(Adopted, Vec<u8>), ChildResolveError>
+where
+    T: RecordTransport,
+    S: SnapshotCache,
+    H: Http,
+    F: FloorStore,
+{
     let unavailable = |e: SeamError| ChildResolveError::Unavailable(e.message().to_owned());
-    let resolved = resolve(transport, snapshot_cache, adopter, name, mode)
+    let gated = resolve_gated(transport, snapshot_cache, adopter, name, mode)
         .await
         .map_err(unavailable)?;
+    let resolved = gated.resolved;
     let lagging = async |record_bytes: &[u8], epoch| {
         read_lagging(
             transport,
@@ -390,9 +411,15 @@ where
             epoch,
         )
         .await
+        .map(|adopted| (adopted, record_bytes.to_vec()))
     };
     let (record_bytes, current) = match resolved.outcome {
-        ResolveOutcome::Adopted(adopted) => return Ok(adopted),
+        ResolveOutcome::Adopted(adopted) => {
+            let (_, bytes) = gated.held_record.ok_or_else(|| {
+                ChildResolveError::Unavailable("the adopted record's bytes are not held".to_owned())
+            })?;
+            return Ok((adopted, bytes));
+        }
         ResolveOutcome::TrustViolation(rejection) => {
             let fetched = adopter.assembled_record_bytes(name);
             return match (lagging_epoch(&rejection.reason), fetched) {
@@ -426,7 +453,7 @@ where
             .await
             .map_err(unavailable)?;
     }
-    Ok(adopted)
+    Ok((adopted, record_bytes))
 }
 
 /// The record's epoch when the gate refused it for lagging the read-epoch

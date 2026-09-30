@@ -31,6 +31,7 @@ use futures_channel::mpsc;
 use crate::facade::{Event, WriteHandle};
 use crate::grants::conversion::CONVERSION_RECORD_PREFIX;
 use crate::grants::{CONTACTS_PREFIX, RECEIVED_SHARES_PREFIX};
+use crate::net::renewal_walk::cursor::RENEWAL_CURSOR_PREFIX;
 use crate::net::{
     ACKED_SEQUENCE_PREFIX, NODE_TOMBSTONE_PREFIX, RETIRE_LEDGER_PREFIX, StagingRetireLedger,
 };
@@ -58,9 +59,9 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// doomed-name journal entry, a
 /// received-shares list, a contact book, or the
 /// notices of its versionless dead letters, the scope roots that still owe a
-/// scope-exit cut, or the conversion record. All are per-owner, so their whole prefixes are
-/// referenced — an entry this session cannot read belongs to the identity that
-/// still needs it.
+/// scope-exit cut, the conversion record, or the renewal walk's cursor. All
+/// are per-owner, so their whole prefixes are referenced — an entry this
+/// session cannot read belongs to the identity that still needs it.
 ///
 /// Which of these seal their values, and why the op-id marks do not, is
 /// [`crate::sync::bookkeeping`]'s rule.
@@ -76,6 +77,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(DEAD_LETTER_NOTICES_PREFIX)
         || key.starts_with(SCOPE_EXIT_DEBT_PREFIX)
         || key.starts_with(CONVERSION_RECORD_PREFIX)
+        || key.starts_with(RENEWAL_CURSOR_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.
@@ -1504,6 +1506,7 @@ mod tests {
                 CONTACTS_PREFIX,
                 SCOPE_EXIT_DEBT_PREFIX,
                 CONVERSION_RECORD_PREFIX,
+                RENEWAL_CURSOR_PREFIX,
             ] {
                 store
                     .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())

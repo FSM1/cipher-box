@@ -1610,7 +1610,7 @@ fn dual_linked_across_a_grant(fx: &mut GrantScenario) -> (NodeId, NodeId, NodeId
             // Above the create's own, so the folder the grant moves is the one
             // a reader resolves the node under, and so the one whose plane the
             // node's own record is re-keyed to.
-            link_counter: 1,
+            link_counter: 2,
             unknown: PreservedFields::new(),
         },
     );

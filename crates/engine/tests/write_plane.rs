@@ -45,6 +45,7 @@ use cipherbox_engine::net::author::{
     AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
     author_scope_root_with_section,
 };
+use cipherbox_engine::net::renewal_walk::cursor::RENEWAL_CURSOR_PREFIX;
 use cipherbox_engine::net::{
     ChildAdopter, RE_PUT_INTERVAL, REGISTRY_BATCH_MAX, ReclaimStall, ReclaimStallReason,
     ResolveOutcome, StagingRetireLedger, resolve,
@@ -1445,7 +1446,7 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
     // blocks once its record has published, leaving only the queue bookkeeping.
     assert_eq!(
         block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![drained_key(), mark_key()],
+        vec![cursor_key(), drained_key(), mark_key()],
         "no staged block survives a published version, only queue bookkeeping"
     );
     assert!(
@@ -2735,9 +2736,12 @@ fn a_truncated_file_fails_the_commit_and_publishes_nothing() {
         block_on(engine_a.view()).unwrap().children(ROOT).is_empty(),
         "nothing was journaled, so nothing publishes"
     );
+    let cursor = block_on(alice.staging_store.staged_bytes(&cursor_key()))
+        .unwrap()
+        .map_or(0, |cursor| cursor.len() as u64);
     assert_eq!(
         block_on(alice.staging_store.staged_bytes_total()).unwrap(),
-        0,
+        cursor,
         "the failed write releases every block it staged"
     );
 }
@@ -2822,7 +2826,7 @@ fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_block
     );
     assert_eq!(
         block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![drained_key(), mark_key()],
+        vec![cursor_key(), drained_key(), mark_key()],
         "blocks no key opens are released, never held against the budget"
     );
     assert_eq!(
@@ -3176,7 +3180,7 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
         );
         assert_eq!(
             block_on(alice.staging_store.staged_keys()).unwrap(),
-            vec![drained_key(), mark_key()],
+            vec![cursor_key(), drained_key(), mark_key()],
             "the retry re-removes it, so the residue holds no staging budget"
         );
         assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
@@ -4027,10 +4031,10 @@ fn a_root_the_gate_refuses_at_the_pre_signature_re_resolve_is_a_trust_violation(
 }
 
 /// Our root lands on the first endpoint and the sibling's on the second, at one
-/// sequence. The first endpoint wins a tie on every read, so the retry must
-/// rebase onto the sibling's record, which the confirm adopted, and not onto
-/// ours: ours already holds the op, which would then read as applied and leave
-/// the split for good.
+/// sequence. A read can take ours at the tie, so the retry must rebase onto the
+/// sibling's record, which the confirm named the winner, and not onto ours:
+/// ours already holds the op, which would then read as applied and leave the
+/// split for good.
 #[test]
 fn a_split_where_our_root_holds_the_first_endpoint_heals_above_both_records() {
     let SiblingRoot {
@@ -9777,7 +9781,7 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
         block_on(alice.staging_store.staged_keys())
             .unwrap()
             .iter()
-            .all(|key| *key == drained_key()),
+            .all(|key| *key == drained_key() || *key == cursor_key()),
         "the staging budget holds nothing but queue bookkeeping"
     );
     assert!(
@@ -9938,6 +9942,11 @@ fn mark_key() -> Vec<u8> {
 /// This account's drained-op mark key.
 fn drained_key() -> Vec<u8> {
     owner_scoped_key(DRAINED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET))
+}
+
+/// This account's renewal cursor key, which the liveness pass writes.
+fn cursor_key() -> Vec<u8> {
+    owner_scoped_key(RENEWAL_CURSOR_PREFIX, &kdf::enc_subkey(&SECRET))
 }
 
 /// Plant a published-op mark over `op_id` under `enc_secret`'s identity,
@@ -16303,10 +16312,11 @@ fn a_file_the_wave_has_not_reached_reads_after_a_cut() {
         .clone();
     let (sequence, _) = published(&world.record_store, file);
     let file_name = write_name(file);
+    // The renewal walk at the second device's start would read the file.
+    world.record_store.fail_get_for(file_name.as_str());
     let bob = world.device(b"alice-second-device");
     let (engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
 
-    world.record_store.fail_get_for(file_name.as_str());
     block_on(engine_a.command(Command::RotateNow { node: ROOT })).expect("the cut lands");
     tick(&world, &engine_a, &mut tasks);
     tick(&world, &engine_b, &mut tasks_b);

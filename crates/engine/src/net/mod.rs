@@ -35,6 +35,7 @@ pub(crate) mod provision;
 pub mod publish;
 pub mod record_publish;
 pub mod register;
+pub mod renewal_walk;
 pub mod resolve;
 pub mod retire;
 pub mod revival;

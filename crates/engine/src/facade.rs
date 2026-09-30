@@ -52,8 +52,8 @@ use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner, RegisteredDevice};
 use crate::bin_index::{
-    BinIndexKeys, BinIndexLoad, BinnedNode, holds_a_bin_index_mark, load_bin_index,
-    publish_bin_index,
+    BinIndexKeys, BinIndexLoad, BinnedNode, cached_bin_index, holds_a_bin_index_mark,
+    load_bin_index, publish_bin_index,
 };
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::limits::folder_listing_budget;
@@ -101,6 +101,7 @@ use crate::net::VaultPointerVoucher;
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
+use crate::net::renewal_walk::{BinRoot, RenewalWalk, WalkGuards, WalkScope};
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, MovedScopeSeed, RotationAncestry, SweptScopeState};
@@ -3745,6 +3746,26 @@ fn rendered_name(rendered: &Snapshot, node: NodeId) -> String {
         .unwrap_or_default()
 }
 
+/// The renewal walk's bin roots: every entry of the cached bin index.
+async fn bin_roots<S: SnapshotCache>(snapshot_cache: &S, keys: &BinIndexKeys) -> Vec<BinRoot> {
+    let Some(index) = cached_bin_index(snapshot_cache, keys).await else {
+        return Vec::new();
+    };
+    index
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let name = scope_name(entry.ipns_name()).ok()?;
+            Some(BinRoot {
+                node_id: entry.node_id,
+                scope_id: entry.scope_id,
+                name,
+                deleted_at: entry.deleted_at,
+            })
+        })
+        .collect()
+}
+
 /// Emit an [`Event::RenewalFailed`] for every sub-EOL renewal that did not land
 /// (a lost CAS race or a fail-closed publish failure). A comfortably-ahead or
 /// republished record emits nothing. Best-effort over the in-process channel: a
@@ -5579,16 +5600,17 @@ where {
     /// Spawn the ~hourly liveness loop (blueprint/engine.md "Liveness"):
     /// actively-used vaults keep their own records alive off the injected
     /// scheduler, so no client depends on the API republisher. Each pass runs
-    /// the keyless re-PUT (every held record, byte-for-byte) and then the
-    /// sub-EOL seq+1 renewal (any name inside the 30-day EOL window). The task
-    /// holds only `Rc`/seam-handle clones, so the engine may drop while it is
-    /// parked; the alive latch then stops it.
+    /// the keyless re-PUT (every held record, byte-for-byte), the sub-EOL
+    /// seq+1 renewal of the renewal set, and then a bounded part of the
+    /// renewal walk (ADR 0061). The task holds only `Rc`/seam-handle clones, so
+    /// the engine may drop while it is parked; the alive latch then stops it.
     fn spawn_liveness_loop(&self, api: Rc<ApiClient<T::Http, T::CredentialStore>>)
     where
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
         T::SnapshotCache: Clone + 'static,
+        T::StagingStore: Clone + 'static,
     {
         let scheduler = self.seams.scheduler.clone();
         let transport = self.record_transport.clone();
@@ -5606,6 +5628,13 @@ where {
         let scope_write_seeds = self.state.scope_write_seeds.clone();
         let on_access_misses = self.state.on_access_misses.clone();
         let root_id = self.state.snapshot.borrow().root.0;
+        let staging = LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone());
+        let base = self.state.snapshot.clone();
+        let root_name = self.state.current_root_name.clone();
+        let walked = self.state.walked_read_epochs.clone();
+        let bin_keys = self.secrets.tick_bin_keys.clone();
+        let publishing = self.state.publishing.clone();
+        let orphan_heads = self.state.orphan_heads.clone();
         self.seams.scheduler.spawn(Box::pin(async move {
             // One latch per session: the loop is spawned once per start.
             let scope_tree_walked = Cell::new(false);
@@ -5660,6 +5689,61 @@ where {
                 let renewals =
                     eol_renew_pass(&transport, &api, &floors, &scheduler, &profile, &records).await;
                 emit_renewal_failures(&events, &renewals);
+                let session_keys = pointer_keys.borrow().clone();
+                if let Some(keys) = session_keys {
+                    let scopes: Vec<WalkScope> = owned_sweep_targets(
+                        &base.borrow(),
+                        root_name.borrow().as_ref(),
+                        &walked,
+                        &scope_read_seeds,
+                        &scope_write_seeds,
+                    )
+                    .into_iter()
+                    .filter_map(|target| {
+                        let name = scope_name(&target.scope.ipns_name).ok()?;
+                        Some(WalkScope {
+                            scope_id: target.scope.scope_id,
+                            name,
+                            ascent: target.ascent,
+                            write_seed: cached_seed(&scope_write_seeds, &target.scope.scope_id),
+                        })
+                    })
+                    .collect();
+                    let bin_keys = bin_keys.borrow().clone();
+                    let bins = match &bin_keys {
+                        Some(keys) => bin_roots(&snapshot_cache, keys).await,
+                        None => Vec::new(),
+                    };
+                    let walk = RenewalWalk {
+                        transport: &transport,
+                        api: &api,
+                        floors: &floors,
+                        snapshot_cache: &snapshot_cache,
+                        staging: &staging,
+                        scheduler: &scheduler,
+                        profile: &profile,
+                        gateway: &gateway,
+                        http: &http,
+                        enc_secret: &keys.enc_secret,
+                        identity: &keys.owner_identity,
+                        seal: BookkeepingSeal::new(&keys.enc_secret, &*entropy),
+                        bin_keys: bin_keys.as_deref(),
+                        guards: WalkGuards {
+                            publishing: &publishing,
+                            orphan_heads: &orphan_heads,
+                            held: &held,
+                        },
+                    };
+                    let report = walk.pass(&scopes, &bins, &|| alive.get()).await;
+                    emit_renewal_failures(&events, &report.renewals);
+                    for routing_key in &report.rejected {
+                        emit_trust_violation(
+                            &events,
+                            routing_key,
+                            "the renewal walk's adoption gate refused the record",
+                        );
+                    }
+                }
                 LivenessControl::Continue
             })
             .await;

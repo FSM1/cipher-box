@@ -77,7 +77,7 @@ by the decomposition (FSM1/cipher-box-next#28 D3) and the rotation design's mand
 | **RecordTransport** | Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes against a configured endpoint set    | `fetch`                                      | `reqwest`     |
 | **Http**            | Plain HTTP for the API client, trustless gateway, and BYO providers                                       | `fetch`                                      | `reqwest`     |
 | **Scheduler**       | Timers, background task execution, wall clock (ADR 0044)                                                  | Worker timers                                | Tokio         |
-| **StagingStore**    | Durable op queue + staged upload bytes (storage-policy budget)                                            | IndexedDB + OPFS                             | Local journal |
+| **StagingStore**    | Durable op queue + staged upload bytes (storage-policy budget); the `renewal-cursor` (ADR 0061 D2)        | IndexedDB + OPFS                             | Local journal |
 | **SnapshotCache**   | Durable last-known-good record/metadata cache backing cache-first reads                                   | IndexedDB                                    | Local store   |
 | **CredentialStore** | Refresh-token persistence                                                                                 | No-op (HTTP-only cookie rides the Http seam) | OS keychain   |
 
@@ -112,6 +112,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   (FSM1/cipher-box-next#23 D5). Fan-out GET across the endpoint set, core record verify, then the
   adoption gate; only gate-passing records touch the snapshot. Cold-resolve
   tails (~11 s median, up to ~60 s) are tolerated as background reconciliation.
+  At one sequence, the fan-out resolve (`fanout::scan`) and the last-known-good
+  keeper (`keep_newest_last_known_good`) take the record with the later EOL,
+  so a real write wins over a renewal walk's re-signature (ADR 0061 D3 step 7).
+  The drain keeps the winner of a lost race in session memory and rebases onto
+  it, because the keeper can then hold the drain's own losing record.
 - **Publish**: register-first, fail-closed — the API registration call
   precedes a name's first publish and publish blocks on it; ordinary writes
   send single-item batches, name waves and sweeps send bulk (FSM1/cipher-box-next#34 D2). Core
@@ -125,11 +130,35 @@ bytes (FSM1/cipher-box-next#28 D2).
 - **Liveness — the engine's half of the two re-PUT layers** (FSM1/cipher-box-next#24 D2/D5): an
   ~hourly Scheduler job keyless-re-PUTs every record the session holds, so
   actively used vaults keep themselves alive; on session start and
-  periodically, the engine checks the EOLs of names it holds keys for and
-  below ~30 days remaining republishes the same CID at seq+1 through the
-  normal CAS path. The API republisher (~12 h inventory walk) backstops
-  dormant vaults only — no client depends on the background re-PUT loop, and
-  no client resolve path ever touches the API's record cache (FSM1/cipher-box-next#24 D3).
+  periodically, the engine checks the EOLs of its renewal set (`HeldRecords`)
+  and below ~30 days remaining republishes the same CID at seq+1 through the
+  normal CAS path. The same pass then runs a bounded part of the **renewal
+  walk** (ADR 0061 D1 to D4), which reaches every other name of the vault. A
+  session renews only a name whose signer derives from a write seed it holds:
+  a read grantee signs nothing, and a write grantee renews only its renewal
+  set. The API republisher (~12 h inventory walk) re-PUTs the same bytes and
+  extends no validity; it backstops dormant vaults only — no client depends on
+  the background re-PUT loop, and no client resolve path ever touches the API's
+  record cache (FSM1/cipher-box-next#24 D3).
+- **Renewal walk** (ADR 0061). The roots are the vault root scope, each other
+  owned scope in scope-id order, each bin index entry, and each deferred root.
+  The walk is depth-first in node-id order and stops at a scope-root boundary.
+  A visit admits the record through the gate (`gate::adopt` for a scope root,
+  the gated child resolve otherwise) and renews it when its EOL is inside the
+  walk window. It skips a doomed name, a name the retire ledger owes a retire,
+  a name the parent no longer names, and a name the drain is publishing. It
+  registers in batches, reads the name again after the registration, reads the
+  durable floor with no await before the signature, and signs at `floor + 1`
+  with an EOL one day short of `eol_from(now)`. A `LostRace` is not retried in
+  that cycle. The numbers: at most 500 visits for each pass, a walk window of
+  60 days of EOL left, and a new cycle no sooner than 7 days after the previous
+  one began. A move can put a subtree behind the cursor for one cycle, so two
+  visits of one name are at most `2 max(T, 7 days) + T` apart, where T is the
+  longest time the owner takes to run `ceil(N / 500)` passes. The window holds
+  when T is at most 19 days; for N = 10 000, that is 20 passes in each 19 days.
+  The cursor (`renewal-cursor`) holds the path of folder ids from the root, at
+  most 64, and at most 256 deferred roots; a folder at depth 64 becomes a
+  deferred root.
 - **Revival**: after a >EOL lapse, a key-holding session fetches cached bytes
   from the authenticated recovery endpoint and extracts the last-known CID —
   or recovers it from the pin set's name→CID mapping — then mints a fresh

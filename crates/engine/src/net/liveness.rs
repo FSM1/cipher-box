@@ -14,7 +14,9 @@
 //!   a name with below-threshold EOL remaining is republished at seq+1 through
 //!   the normal CAS path with a fresh 90-day EOL.
 //!
-//! The API republisher (~12 h inventory walk) backstops dormant vaults only.
+//! The renewal walk ([`super::renewal_walk`]) renews every other name of the
+//! vault. The API republisher (~12 h inventory walk) re-PUTs the same bytes and
+//! backstops dormant vaults only.
 
 use core::cell::RefCell;
 use core::fmt;
@@ -219,11 +221,14 @@ pub fn hold_if_unchanged(
 ///   (`sync::drain`);
 /// - an **owned scope pointer**, from a confirmed mint or re-point flip and from
 ///   the hourly re-enrolment (`net::rotation`) — a grantee derives neither that
-///   name nor its signer, so it holds no pointer.
+///   name nor its signer, so it holds no pointer;
+/// - the **vault settings record** and the **bin index**, from their loads and
+///   their confirmed publishes.
 ///
 /// The set is session memory: it starts empty, is never persisted, and is
 /// cleared at teardown, so a session keeps alive only what it proved current
-/// itself.
+/// itself. Every other name of the vault renews through the renewal walk
+/// ([`super::renewal_walk`], ADR 0061), which holds nothing here.
 pub type HeldRecords = BTreeMap<HeldKey, HeldRecord>;
 
 /// Drop every held record whose plane no longer serves it, across every plane

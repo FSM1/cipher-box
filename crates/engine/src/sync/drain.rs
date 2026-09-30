@@ -1196,6 +1196,35 @@ pub(crate) struct DrainCells<'a> {
     pub(crate) dead_letters: &'a RefCell<RetainedDeadLetters>,
     pub(crate) observed_unlinks: &'a RefCell<Vec<UnlinkedChild>>,
     pub(crate) pending_scope_exits: &'a RefCell<BTreeSet<NodeId>>,
+    /// The names this drain is publishing right now, which the renewal walk
+    /// stays clear of (ADR 0061 D3 step 2).
+    pub(crate) publishing: &'a RefCell<BTreeSet<String>>,
+    /// The winner of each name's lost race, which the retry rebases onto. The
+    /// last-known-good copy cannot hold it: at one sequence the keeper takes
+    /// the later EOL, which can be our own losing record (ADR 0061 D3 step 7).
+    pub(crate) lost_races: &'a RefCell<BTreeMap<String, Vec<u8>>>,
+}
+
+/// Holds one name in [`DrainCells::publishing`] while its publish runs.
+struct PublishingName<'a> {
+    set: &'a RefCell<BTreeSet<String>>,
+    name: String,
+}
+
+impl<'a> PublishingName<'a> {
+    fn hold(set: &'a RefCell<BTreeSet<String>>, name: &IpnsName) -> Self {
+        set.borrow_mut().insert(name.as_str().to_owned());
+        Self {
+            set,
+            name: name.as_str().to_owned(),
+        }
+    }
+}
+
+impl Drop for PublishingName<'_> {
+    fn drop(&mut self) {
+        self.set.borrow_mut().remove(&self.name);
+    }
 }
 
 /// The values one tick decides before its drain runs.
@@ -2515,7 +2544,17 @@ where
         let resolved = self
             .gated_scope_root(scope, end, ResolveMode::CacheFirst)
             .await?;
-        resolved_bytes(resolved, end.root_name, &self.seams.events)
+        resolved_bytes(
+            resolved,
+            end.root_name,
+            self.lost_race_winner(end.root_name),
+            &self.seams.events,
+        )
+    }
+
+    /// The record that won this name's last lost race, if any.
+    fn lost_race_winner(&self, name: &IpnsName) -> Option<Vec<u8>> {
+        self.cells.lost_races.borrow().get(name.as_str()).cloned()
     }
 
     /// One end's scope root through its own gate, under `mode`.
@@ -2582,7 +2621,15 @@ where
                 ),
                 _ => return Err(refuse_record(&self.seams.events, &name, rejection)),
             },
-            _ => (resolved_bytes(resolved, &name, &self.seams.events)?, None),
+            _ => (
+                resolved_bytes(
+                    resolved,
+                    &name,
+                    self.lost_race_winner(&name),
+                    &self.seams.events,
+                )?,
+                None,
+            ),
         };
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, &adopter, &name, &record_bytes, lagging)
@@ -6327,6 +6374,7 @@ where
                 if acked != Acknowledged::Nothing {
                     let _ = ledger.forget_acknowledged(&owner, node.0).await;
                 }
+                self.cells.lost_races.borrow_mut().remove(name.as_str());
                 record_bytes
             }
             // Its bytes may still surface at `sequence`, so the next publish
@@ -6346,6 +6394,10 @@ where
                 // can keep serving our own record, which already holds this op.
                 // Our PUT was acked either way, so the halt stays an attempt.
                 if let Some(winner) = winner {
+                    self.cells
+                        .lost_races
+                        .borrow_mut()
+                        .insert(name.as_str().to_owned(), winner.clone());
                     let adopted = self
                         .adopt_node_record(scope, plane, node, name, is_scope_root, &winner, None)
                         .await;
@@ -6448,6 +6500,7 @@ where
         let preflighted = preflight(&binding, &plane.end.read_key(node_id), head)
             .map_err(|_| Halt::UploadAttempt)?;
         let signer = SessionIdentity::write_name_signer(plane.end.write_scope_seed, node_id);
+        let _publishing = PublishingName::hold(self.cells.publishing, name);
         let PublishReceipt {
             outcome,
             record_bytes,
@@ -7240,12 +7293,13 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
 /// exactly the fail-open rule 6 forbids. An adopt carries the bytes this pass
 /// gated, never the cache, which keeps a newer copy this pass did not gate.
 ///
-/// At the floor, the cached copy wins while the endpoints still serve it: after
-/// a lost tie it holds the winner, and the first endpoint can keep serving our
-/// own losing record, which already carries the op being rebased.
+/// At the floor, a lost race's `winner` wins while the endpoints still serve
+/// it, then the cached copy: the freshest pick can be our own losing record,
+/// which already carries the op being rebased.
 fn resolved_bytes(
     gated: GatedResolve,
     name: &IpnsName,
+    winner: Option<Vec<u8>>,
     events: &mpsc::UnboundedSender<Event>,
 ) -> Result<Vec<u8>, Halt> {
     match gated.resolved.outcome {
@@ -7253,10 +7307,14 @@ fn resolved_bytes(
             .held_record
             .map(|(_, bytes)| bytes)
             .ok_or(Halt::Unclassified),
-        ResolveOutcome::Current { record_bytes } => Ok(gated
-            .resolved
-            .last_known_good
-            .filter(|cached| gated.tied.contains(cached))
+        ResolveOutcome::Current { record_bytes } => Ok(winner
+            .filter(|winner| *winner == record_bytes || gated.tied.contains(winner))
+            .or_else(|| {
+                gated
+                    .resolved
+                    .last_known_good
+                    .filter(|cached| gated.tied.contains(cached))
+            })
             .unwrap_or(record_bytes)),
         ResolveOutcome::NoUpdate => gated.resolved.last_known_good.ok_or(Halt::Unclassified),
         ResolveOutcome::TrustViolation(rejection) => Err(refuse_record(events, name, &rejection)),
@@ -7437,7 +7495,7 @@ mod tests {
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
-            resolved_bytes(resolved, &refused_name(), &events),
+            resolved_bytes(resolved, &refused_name(), None, &events),
             Ok(gated)
         );
     }
@@ -7463,12 +7521,51 @@ mod tests {
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
-            resolved_bytes(at_floor(vec![cached.clone()]), &refused_name(), &events),
+            resolved_bytes(
+                at_floor(vec![cached.clone()]),
+                &refused_name(),
+                None,
+                &events
+            ),
             Ok(cached.clone())
         );
         assert_eq!(
-            resolved_bytes(at_floor(Vec::new()), &refused_name(), &events),
+            resolved_bytes(at_floor(Vec::new()), &refused_name(), None, &events),
             Ok(first.clone())
+        );
+    }
+
+    /// A lost race's winner is the base while an endpoint serves it, even when
+    /// the cached copy has moved to our own record at the same sequence.
+    #[test]
+    fn at_the_floor_a_lost_race_winner_is_the_base_while_it_is_still_served() {
+        let (ours, winner) = (b"ours".to_vec(), b"winner".to_vec());
+        let at_floor = |tied: Vec<Vec<u8>>| GatedResolve {
+            resolved: crate::net::Resolved {
+                last_known_good: Some(ours.clone()),
+                outcome: ResolveOutcome::Current {
+                    record_bytes: ours.clone(),
+                },
+                current_at_floor: None,
+            },
+            hold: None,
+            held_record: None,
+            read_scope_seed: None,
+            tied,
+        };
+        let (events, _rx) = mpsc::unbounded();
+        assert_eq!(
+            resolved_bytes(
+                at_floor(vec![winner.clone()]),
+                &refused_name(),
+                Some(winner.clone()),
+                &events
+            ),
+            Ok(winner.clone())
+        );
+        assert_eq!(
+            resolved_bytes(at_floor(Vec::new()), &refused_name(), Some(winner), &events),
+            Ok(ours)
         );
     }
 
@@ -7493,6 +7590,7 @@ mod tests {
                 tied: Vec::new(),
             },
             &refused_name(),
+            None,
             &events,
         );
         drop(events);

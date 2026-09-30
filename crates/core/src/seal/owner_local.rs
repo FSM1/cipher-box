@@ -65,11 +65,13 @@ pub enum OwnerLocalKind {
     PendingConversions,
     /// The owner device's last-seen grantee name per identity (ADR 0027 D4).
     GranteeNames,
+    /// Where the renewal walk resumes (ADR 0061 D2).
+    RenewalCursor,
 }
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::ReceivedShares,
         Self::ContactBook,
         Self::RetireLedger,
@@ -77,6 +79,7 @@ impl OwnerLocalKind {
         Self::ScopeExitDebt,
         Self::PendingConversions,
         Self::GranteeNames,
+        Self::RenewalCursor,
     ];
 
     /// The kind's stable name — the `info` suffix and the manifest key.
@@ -89,6 +92,7 @@ impl OwnerLocalKind {
             Self::ScopeExitDebt => "scope-exit-debt",
             Self::PendingConversions => "pending-conversions",
             Self::GranteeNames => "grantee-names",
+            Self::RenewalCursor => "renewal-cursor",
         }
     }
 
@@ -102,6 +106,7 @@ impl OwnerLocalKind {
             Self::ScopeExitDebt => 0x06,
             Self::PendingConversions => 0x07,
             Self::GranteeNames => 0x08,
+            Self::RenewalCursor => 0x09,
         }
     }
 
@@ -310,6 +315,7 @@ mod tests {
                 OwnerLocalKind::ScopeExitDebt => 4,
                 OwnerLocalKind::PendingConversions => 5,
                 OwnerLocalKind::GranteeNames => 6,
+                OwnerLocalKind::RenewalCursor => 7,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],
