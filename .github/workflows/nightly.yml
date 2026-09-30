@@ -227,6 +227,6 @@ jobs:
           if [ -n "${number}" ]; then
             gh issue comment "${number}" --body-file "${RUNNER_TEMP}/nightly-report.md"
           else
-            gh issue create --title "${TITLE}" --label v2-build --label comp:ci \
+            gh issue create --title "${TITLE}" --label comp:ci \
               --body-file "${RUNNER_TEMP}/nightly-report.md"
           fi

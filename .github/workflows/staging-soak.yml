@@ -310,7 +310,7 @@ jobs:
           if [ -n "${number}" ]; then
             gh issue comment "${number}" --body-file "${body}"
           else
-            gh issue create --title "${TITLE}" --label v2-build --label comp:ci --label comp:deploy \
+            gh issue create --title "${TITLE}" --label comp:ci --label comp:deploy \
               --body-file "${body}"
           fi
 
