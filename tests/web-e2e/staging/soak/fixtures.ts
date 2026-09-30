@@ -4,7 +4,7 @@
  * one, so no teardown removes an account (ADR 0053 D4).
  */
 
-import { test as base, type BrowserContext, type Page } from '@playwright/test';
+import { test as base, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { signIn } from '../fixtures';
 import { installTestWallet } from '../wallet';
 import { soakWalletKey, type SoakRole } from './accounts';
@@ -13,13 +13,15 @@ import { record, shortDetail, unrecordedFailure } from './summary';
 
 export { expect } from '@playwright/test';
 
-/** Opens a fresh browser context, signed in as the soak grantee. */
-export type OpenGrantee = () => Promise<Page>;
+/** Opens a fresh browser context, signed in as one soak account. */
+export type OpenContext = () => Promise<Page>;
 
 interface SoakFixtures {
   /** The default page, signed in as the soak owner. */
   owner: Page;
-  grantee: OpenGrantee;
+  /** A second owner client, from an empty profile. */
+  freshOwner: OpenContext;
+  grantee: OpenContext;
   failClosed: void;
 }
 
@@ -48,18 +50,30 @@ export const test = base.extend<SoakFixtures>({
     await use(page);
   },
 
+  freshOwner: async ({ browser }, use) => {
+    await openContexts(browser, 'owner', use);
+  },
+
   grantee: async ({ browser }, use) => {
-    const opened: BrowserContext[] = [];
-    await use(async () => {
-      const context = await browser.newContext();
-      opened.push(context);
-      const page = await context.newPage();
-      await signInAs(page, 'grantee');
-      return page;
-    });
-    for (const context of opened) await context.close();
+    await openContexts(browser, 'grantee', use);
   },
 });
+
+async function openContexts(
+  browser: Browser,
+  role: SoakRole,
+  use: (open: OpenContext) => Promise<void>
+): Promise<void> {
+  const opened: BrowserContext[] = [];
+  await use(async () => {
+    const context = await browser.newContext();
+    opened.push(context);
+    const page = await context.newPage();
+    await signInAs(page, role);
+    return page;
+  });
+  for (const context of opened) await context.close();
+}
 
 async function signInAs(page: Page, role: SoakRole): Promise<void> {
   await check(`${role} sign-in`, 'sign-in-failed', async () => {

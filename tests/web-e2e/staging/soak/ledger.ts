@@ -1,7 +1,7 @@
 /**
  * The soak ledger: one text file in the vault, read and rewritten in place
  * through the text editor. The first line is the header; each marker line is
- * `<date> <marker CID> <record sequence at write time>`. A line of any other
+ * `<date> <marker IPNS name> <record sequence at write time>`. A line of any other
  * shape is kept as it is, so a later suite can add lines that this one carries
  * through a rewrite.
  */
@@ -13,7 +13,7 @@ export const LEDGER_HEADER = 'cipherbox-soak-ledger 1';
 export interface Marker {
   /** The UTC day the marker was written, as `YYYY-MM-DD`. */
   readonly date: string;
-  readonly cid: string;
+  readonly ipnsName: string;
   readonly sequence: number;
 }
 
@@ -69,7 +69,7 @@ export function appendMarker(ledger: Ledger, marker: Marker): Ledger {
 
 /** The marker line. Refuses a marker that {@link parseLedger} would reject. */
 function markerText(marker: Marker): string {
-  const line = `${marker.date} ${marker.cid} ${marker.sequence}`;
+  const line = `${marker.date} ${marker.ipnsName} ${marker.sequence}`;
   if (parseMarkerLine(line) === null) {
     throw new SoakFailure('ledger-unparsable', `the marker of ${marker.date} is not writable`);
   }
@@ -79,12 +79,12 @@ function markerText(marker: Marker): string {
 function parseMarkerLine(line: string): Marker | null {
   const fields = line.split(' ');
   if (fields.length !== 3) return null;
-  const [date, cid, sequence] = fields as [string, string, string];
-  if (!isUtcDay(date) || !/^[A-Za-z0-9]+$/.test(cid) || !/^(0|[1-9]\d*)$/.test(sequence)) {
+  const [date, ipnsName, sequence] = fields as [string, string, string];
+  if (!isUtcDay(date) || !/^[A-Za-z0-9]+$/.test(ipnsName) || !/^(0|[1-9]\d*)$/.test(sequence)) {
     return null;
   }
   const value = Number(sequence);
-  return Number.isSafeInteger(value) ? { date, cid, sequence: value } : null;
+  return Number.isSafeInteger(value) ? { date, ipnsName, sequence: value } : null;
 }
 
 /** A real calendar day as `YYYY-MM-DD`. */
