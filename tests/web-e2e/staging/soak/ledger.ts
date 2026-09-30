@@ -98,3 +98,30 @@ export function isUtcDay(value: string): boolean {
 export function utcDay(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
+
+const KEY = /^[a-z][a-z-]*$/;
+const FIELD = /^\S+$/;
+
+/**
+ * The fields after `key` on the one line `<key> <field>...`, or `null` when no
+ * line carries the key. Two such lines are `ledger-unparsable`.
+ */
+export function keyedLine(ledger: Ledger, key: string): string[] | null {
+  const found = ledger.lines.flatMap((line) =>
+    line.kind === 'other' && line.text.startsWith(`${key} `) ? [line.text] : []
+  );
+  if (found.length > 1) throw new SoakFailure('ledger-unparsable', `two lines start "${key}"`);
+  return found.length === 0 ? null : found[0]!.split(' ').slice(1);
+}
+
+/** Replaces the line of `key`, or appends it. Refuses a line {@link keyedLine} would misread. */
+export function withKeyedLine(ledger: Ledger, key: string, fields: readonly string[]): Ledger {
+  if (!KEY.test(key) || fields.length === 0 || !fields.every((field) => FIELD.test(field))) {
+    throw new SoakFailure('ledger-unparsable', `the "${key}" line is not writable`);
+  }
+  keyedLine(ledger, key);
+  const kept = ledger.lines.filter(
+    (line) => line.kind !== 'other' || !line.text.startsWith(`${key} `)
+  );
+  return { lines: [...kept, { kind: 'other', text: [key, ...fields].join(' ') }] };
+}

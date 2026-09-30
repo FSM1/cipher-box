@@ -4,7 +4,6 @@
  * marker advances `soak/` by one, and the cap and the purge keep the bin.
  */
 
-import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Page } from '@playwright/test';
 import type { IpnsRecordReading } from '@cipherbox/client';
@@ -38,10 +37,10 @@ import { SoakFailure } from './reasons';
 import { resolveUntil } from './recordReader';
 import {
   binRetention,
-  inspectVault,
+  download,
   LEDGER_FILE,
-  ledgerPath,
-  readLedger,
+  openLedger,
+  toLedgerFolder,
   writeLedger,
 } from './vault';
 
@@ -65,41 +64,6 @@ const RENEWAL_MS = 600_000;
 const PURGE_MS = 600_000;
 /** Two reads this far apart let a late publish of the night before land. */
 const SETTLE_MS = 65_000;
-
-async function openLedger(files: FilesPage): Promise<Ledger> {
-  const found = await inspectVault(files, 'owner');
-  if (!found.ledger) {
-    throw new SoakFailure(
-      'unbootstrapped-or-wiped',
-      `the owner vault has no ${ledgerPath('owner')}`
-    );
-  }
-  return readLedger(files);
-}
-
-async function toSoak(files: FilesPage): Promise<void> {
-  await files.openFromSidebar();
-  await files.toRoot();
-  await files.open(SOAK_FOLDER);
-}
-
-async function opened(files: FilesPage, name: string): Promise<Uint8Array> {
-  const download = await within(files.save(name), DOWNLOAD_MS, `${name} did not download`);
-  return new Uint8Array(await readFile(await download.path()));
-}
-
-/** `work`, or a rejection once `ms` passes: a wait the page does not bound itself. */
-async function within<T>(work: Promise<T>, ms: number, late: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(late)), ms);
-  });
-  try {
-    return await Promise.race([work, timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 /** The bin retention the owner saved in Settings. A scheduled night writes no settings. */
 async function savedRetention(page: Page): Promise<number> {
@@ -130,7 +94,9 @@ test('the owner markers open byte for byte and hold their sequences', async ({ o
   test.setTimeout(TEST_MS);
   const files = new FilesPage(owner);
   const today = utcDay(new Date());
-  const ledger = await check('owner marker ledger', 'ledger-unreadable', () => openLedger(files));
+  const ledger = await check('owner marker ledger', 'ledger-unreadable', () =>
+    openLedger(files, 'owner')
+  );
   const list = byDate(markers(ledger));
 
   await check('owner markers open', 'marker-unreadable', async () => {
@@ -140,7 +106,7 @@ test('the owner markers open byte for byte and hold their sequences', async ({ o
         const unread = list.slice(index).map((m) => m.date);
         throw new SoakFailure('marker-unreadable', `no time to open ${unreadLine(unread)}`);
       }
-      const bytes = await opened(files, markerFile(marker.date));
+      const bytes = await download(files, markerFile(marker.date), DOWNLOAD_MS);
       if (!Buffer.from(bytes).equals(Buffer.from(markerBytes(marker.date)))) {
         throw new SoakFailure(
           'marker-unreadable',
@@ -225,7 +191,9 @@ test("today's marker advances soak/ by one, and the bin holds the cap", async ({
   const files = new FilesPage(owner);
   const today = utcDay(new Date());
   const file = markerFile(today);
-  let ledger = await check('owner marker ledger', 'ledger-unreadable', () => openLedger(files));
+  let ledger = await check('owner marker ledger', 'ledger-unreadable', () =>
+    openLedger(files, 'owner')
+  );
 
   if (markers(ledger).some((marker) => marker.date === today)) {
     await fact("today's marker", `${today} is in the ledger already`);
@@ -281,7 +249,7 @@ test("today's marker advances soak/ by one, and the bin holds the cap", async ({
   const bin = new BinPage(owner);
 
   ledger = await check('owner marker cap', 'cap-missed', async () => {
-    await toSoak(files);
+    await toLedgerFolder(files, 'owner');
     await expect(files.row(LEDGER_FILE)).toBeVisible({ timeout: 180_000 });
     const stranded = strandedBinned(binnedMarkers(ledger), await files.names()).map(
       (entry) => entry.date
@@ -315,7 +283,7 @@ test("today's marker advances soak/ by one, and the bin holds the cap", async ({
       }
     }
     if (due.length > 0) {
-      await toSoak(files);
+      await toLedgerFolder(files, 'owner');
       for (const entry of due) await expect(files.row(markerFile(entry.date))).toHaveCount(0);
       await writeLedger(
         files,

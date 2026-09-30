@@ -4,10 +4,12 @@ import {
   emptyLedger,
   formatLedger,
   isUtcDay,
+  keyedLine,
   LEDGER_HEADER,
   markers,
   parseLedger,
   utcDay,
+  withKeyedLine,
   type Ledger,
 } from './ledger';
 import { SoakFailure } from './reasons';
@@ -87,6 +89,31 @@ describe('the soak ledger', () => {
   it('refuses to write a kept line that would read back as a marker', () => {
     const ledger: Ledger = { lines: [{ kind: 'other', text: `2026-09-28 ${NAME} 1 extra` }] };
     expect(reasonOf(() => formatLedger(ledger))).toBe('ledger-unparsable');
+  });
+
+  it('replaces a keyed line in place of appending a second', () => {
+    let ledger = appendMarker(emptyLedger(), { date: '2026-09-30', ipnsName: NAME, sequence: 7 });
+    expect(keyedLine(ledger, 'stale-names-baseline')).toBeNull();
+    ledger = withKeyedLine(ledger, 'stale-names-baseline', ['2']);
+    ledger = withKeyedLine(ledger, 'stale-names-baseline', ['3']);
+    const read = parseLedger(formatLedger(ledger));
+    expect(keyedLine(read, 'stale-names-baseline')).toEqual(['3']);
+    expect(markers(read)).toHaveLength(1);
+    expect(formatLedger(read).match(/stale-names-baseline/g)).toHaveLength(1);
+  });
+
+  it('refuses two lines of one key as ledger-unparsable', () => {
+    const ledger = parseLedger(`${LEDGER_HEADER}\nshared-link 1 a\nshared-link 2 b\n`);
+    expect(reasonOf(() => keyedLine(ledger, 'shared-link'))).toBe('ledger-unparsable');
+  });
+
+  it.each([
+    ['a field with a space', 'shared-link', ['a b']],
+    ['an empty field', 'shared-link', ['']],
+    ['no field', 'shared-link', []],
+    ['a key that reads as a marker', '2026-09-30', ['x']],
+  ])('refuses to write %s', (_label, key, fields) => {
+    expect(reasonOf(() => withKeyedLine(emptyLedger(), key, fields))).toBe('ledger-unparsable');
   });
 
   it('names UTC days', () => {

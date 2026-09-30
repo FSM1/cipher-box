@@ -285,7 +285,7 @@ export class SharePage {
    * by its shortest lifetime less `inMs` for the mint. The engine reads its own
    * clock in its worker, which does not move.
    */
-  async mintExpiringIn(inMs: number): Promise<void> {
+  async mintExpiringIn(inMs: number, terms: Omit<LinkTerms, 'lifetime'> = {}): Promise<URL> {
     const choice = this.page.getByLabel('link expires');
     await expect(choice).toBeVisible();
     const offered = await choice
@@ -305,7 +305,7 @@ export class SharePage {
       inMs - days * DAY_MS
     );
     try {
-      await this.mintLink({ lifetime });
+      return await this.mintLink({ ...terms, lifetime });
     } finally {
       await this.page.evaluate(() => window.__cipherboxE2eRestoreNow?.());
     }

@@ -8,7 +8,7 @@ import { test as base, type Browser, type BrowserContext, type Page } from '@pla
 import { signIn } from '../fixtures';
 import { installTestWallet } from '../wallet';
 import { soakWalletKey, type SoakRole } from './accounts';
-import { SoakFailure, type FailureReason } from './reasons';
+import { SoakFailure, type FailureReason, type SkipReason } from './reasons';
 import { record, shortDetail, unrecordedFailure } from './summary';
 
 export { expect } from '@playwright/test';
@@ -22,6 +22,8 @@ interface SoakFixtures {
   /** A second owner client, from an empty profile. */
   freshOwner: OpenContext;
   grantee: OpenContext;
+  /** A fresh context with the grantee wallet and no session, as a link holder opens a link. */
+  holder: OpenContext;
   failClosed: void;
 }
 
@@ -57,19 +59,25 @@ export const test = base.extend<SoakFixtures>({
   grantee: async ({ browser }, use) => {
     await openContexts(browser, 'grantee', use);
   },
+
+  holder: async ({ browser }, use) => {
+    await openContexts(browser, 'grantee', use, false);
+  },
 });
 
 async function openContexts(
   browser: Browser,
   role: SoakRole,
-  use: (open: OpenContext) => Promise<void>
+  use: (open: OpenContext) => Promise<void>,
+  signedIn = true
 ): Promise<void> {
   const opened: BrowserContext[] = [];
   await use(async () => {
     const context = await browser.newContext();
     opened.push(context);
     const page = await context.newPage();
-    await signInAs(page, role);
+    if (signedIn) await signInAs(page, role);
+    else await installTestWallet(page, soakWalletKey(process.env, role));
     return page;
   });
   for (const context of opened) await context.close();
@@ -114,6 +122,17 @@ export async function check<T>(
   }
   await record({ kind: 'check', check: name, outcome: 'passed' });
   return value;
+}
+
+/** Records a check the night skips, with the skip reason and why. */
+export function skipped(name: string, reason: SkipReason, detail: string): Promise<void> {
+  return record({
+    kind: 'check',
+    check: name,
+    outcome: 'skipped',
+    reason,
+    detail: shortDetail(detail),
+  });
 }
 
 export function fact(label: string, value: string): Promise<void> {

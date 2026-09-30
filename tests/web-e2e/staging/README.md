@@ -92,9 +92,46 @@ The republish check treats a validity as fresh when the EOL is more than 30
 days ahead. That value copies the engine renewal threshold,
 `EOL_RENEW_THRESHOLD` in `crates/engine/src/net/eol.rs`.
 
+The share checks use two folders in `soak/`, both read links. `soak/shared`
+holds one long-running link. The first night with no `shared-link` line in the
+owner ledger mints it and records the line `shared-link <read epoch> <URL>`. The
+dialog offers no "never" lifetime, so the mint sets a deadline 100 years ahead.
+Every night a fresh grantee context joins through the URL and opens each marker
+in the folder, and the read epoch must stay at the recorded value.
+`soak/cycle` mints a 30-day read link every night. A fresh grantee context
+joins and opens the marker of the night, the owner converts the claim, the
+owner revokes the grantee, and a third context sees the link revoked. The link
+URL is a bearer capability. It lives only in the owner ledger. A fact shows the
+URL up to its fragment, and the ledger text reaches the editor without a `fill`
+step, so the report does not show it.
+
+The OS markers live in the grantee vault. A desktop leg writes
+`soak/desktop/<os>/marker-<date>.txt`, where `<os>` is `macos`, `linux` or
+`windows`, with the text `cipherbox soak marker <os> <date>` and a line feed. It
+then adds the line `marker <os> <date>` to the grantee ledger. The web leg opens
+each OS marker in the ledger byte for byte and writes
+`soak/desktop/web/marker-<date>.txt` in the same shape, with its line
+`marker web <date>`.
+
+The counter checks read Grafana Cloud through the Mimir query endpoint. The
+base URL is `GRAFANA_PROMETHEUS_URL` without its `/push` suffix, and the basic
+authentication is `GRAFANA_PROMETHEUS_USERNAME` with
+`STAGING_GRAFANA_READ_TOKEN`. When the API process is up for 12 hours or less,
+each counter check records a skip with the reason `post-deploy-window`. The
+first reading past that window records its stale-names increase in the owner
+ledger as `stale-names-baseline <count>`, and later nights compare with it.
+`increase` extrapolates to the edges of its window, so two walks at a 12-hour
+cadence can read a little below 2. The walk check passes from 1.9.
+
 Each marker test has a 90-minute timeout, so that a slow night fails with its
-own reason code. The two ledger tests keep the 10-minute project timeout. Give
-the web leg of the soak workflow a job timeout of at least 210 minutes.
+own reason code. The two ledger tests keep the 10-minute project timeout. The
+share tests have 70 and 110 minutes, the grantee web leg 60 and the counter
+test 30. The timeouts of the whole suite sum to 470 minutes. That is more than
+the 360-minute limit of one GitHub-hosted job, so one hosted job cannot hold
+every test at its full timeout.
+
+Playwright runs the files in name order, so the ledger tests, and a bootstrap,
+run before every other spec.
 
 Each check names a reason code from `soak/reasons.ts` and appends its outcome to
 `test-results/soak-results.jsonl`. The summary writer prints that file as

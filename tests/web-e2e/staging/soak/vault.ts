@@ -4,7 +4,8 @@
  * builds the folders it lives in.
  */
 
-import { expect, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { expect, type Locator, type Page } from '@playwright/test';
 import type { SettingsOrigin } from '@cipherbox/client';
 import { BinPage } from '../../page-objects/bin.page';
 import type { FilesPage } from '../../page-objects/files.page';
@@ -12,6 +13,7 @@ import { SettingsPage } from '../../page-objects/settings.page';
 import type { SoakRole } from './accounts';
 import { archiveName, SOAK_FOLDER, soakFolderListed, type VaultState } from './bootstrap';
 import { emptyLedger, formatLedger, parseLedger, type Ledger } from './ledger';
+import { SoakFailure } from './reasons';
 
 export const LEDGER_FILE = 'ledger.txt';
 
@@ -101,6 +103,25 @@ export async function binRetention(page: Page): Promise<{ origin: SettingsOrigin
   return { origin, days: Number(await bin.retention.getAttribute('data-days')) };
 }
 
+/** Walks to the ledger of `role` and reads it; a vault without one is `unbootstrapped-or-wiped`. */
+export async function openLedger(files: FilesPage, role: SoakRole): Promise<Ledger> {
+  const found = await inspectVault(files, role);
+  if (!found.ledger) {
+    throw new SoakFailure(
+      'unbootstrapped-or-wiped',
+      `the ${role} vault has no ${ledgerPath(role)}`
+    );
+  }
+  return readLedger(files);
+}
+
+/** Opens the folder that holds the ledger of `role`. */
+export async function toLedgerFolder(files: FilesPage, role: SoakRole): Promise<void> {
+  await files.openFromSidebar();
+  await files.toRoot();
+  for (const folder of LEDGER_FOLDERS[role]) await files.open(folder);
+}
+
 /** Reads the ledger in the folder on screen, through the editor, and closes it unchanged. */
 export async function readLedger(files: FilesPage): Promise<Ledger> {
   const field = await files.openEditor(LEDGER_FILE);
@@ -113,20 +134,55 @@ export async function readLedger(files: FilesPage): Promise<Ledger> {
 export async function writeLedger(files: FilesPage, ledger: Ledger): Promise<void> {
   const text = formatLedger(ledger);
   const field = await files.openEditor(LEDGER_FILE);
-  await field.fill(text);
+  await setText(field, text);
   await files.saveEditor();
   await files.published();
+}
+
+/**
+ * Sets the editor text without `fill`: the ledger holds a bearer link URL, and
+ * a `fill` step title and a `toHaveValue` failure both print the text.
+ */
+async function setText(field: Locator, text: string): Promise<void> {
+  await field.evaluate((element, value) => {
+    const area = element as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(area), 'value')?.set;
+    setter?.call(area, value);
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  }, text);
+  if ((await field.inputValue()) !== text)
+    throw new Error('the editor did not take the ledger text');
+}
+
+/** The bytes of `name` in the folder on screen, downloaded within `ms`. */
+export async function download(files: FilesPage, name: string, ms: number): Promise<Uint8Array> {
+  const saved = await within(files.save(name), ms, `${name} did not download`);
+  return new Uint8Array(await readFile(await saved.path()));
+}
+
+/** `work`, or a rejection once `ms` passes: a wait the page does not bound itself. */
+export async function within<T>(work: Promise<T>, ms: number, late: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(late)), ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function ledgerPath(role: SoakRole): string {
   return [...LEDGER_FOLDERS[role], LEDGER_FILE].join('/');
 }
 
-async function synced(files: FilesPage): Promise<void> {
+export async function synced(files: FilesPage): Promise<void> {
   await expect(files.status).toHaveAttribute('data-staleness', 'fresh', { timeout: 180_000 });
 }
 
-async function listed(files: FilesPage, name: string): Promise<boolean> {
+/** Whether the listing on screen shows `name` within a minute. */
+export async function listed(files: FilesPage, name: string): Promise<boolean> {
   return files
     .row(name)
     .waitFor({ state: 'visible', timeout: LISTED_WITHIN_MS })
