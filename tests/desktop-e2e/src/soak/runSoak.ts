@@ -23,10 +23,9 @@ import { markerBytes } from '../../../web-e2e/staging/soak/markers';
 import { SoakFailure, type FailureReason } from '../../../web-e2e/staging/soak/reasons';
 import { renderSummary } from '../../../web-e2e/staging/soak/summary';
 import {
-  DESKTOP_FOLDER,
   MARKER_LEGS,
   ledgerLine,
-  ledgerPath,
+  granteeLedgerPath,
   legMarkers,
   markerPath,
   markersToRead,
@@ -36,6 +35,7 @@ import {
   type LegMarker,
   type MarkerLeg,
 } from '../../../web-e2e/staging/soak/grantee';
+import { DESKTOP_FOLDER } from '../../../web-e2e/staging/soak/paths';
 import { describe, withDeadline } from '../cli';
 import { startInstance, type Instance } from '../instance';
 import { PollTimeout, poll } from '../poll';
@@ -329,7 +329,7 @@ async function open(context: LegContext, name: string, devKey: string): Promise<
 }
 
 async function readGranteeLedger(context: LegContext, instance: Instance): Promise<Ledger> {
-  const path = join(instance.mountRoot, ...ledgerPath());
+  const path = join(instance.mountRoot, ...granteeLedgerPath());
   try {
     return ledgerFrom(
       await poll(
@@ -357,7 +357,7 @@ function ledgerFrom(read: Buffer | Errno): Ledger {
     throw read === 'ENOENT'
       ? new SoakFailure(
           'unbootstrapped-or-wiped',
-          `the grantee vault has no ${ledgerPath().join('/')}`
+          `the grantee vault has no ${granteeLedgerPath().join('/')}`
         )
       : new SoakFailure('ledger-unreadable', `the grantee ledger did not open: ${read}`);
   }
@@ -435,7 +435,7 @@ async function writeMarker(instance: Instance, today: LegMarker): Promise<void> 
   }
 
   // The ledger as it is now, not as the leg read it before the marker reads.
-  const ledgerAt = join(instance.mountRoot, ...ledgerPath());
+  const ledgerAt = join(instance.mountRoot, ...granteeLedgerPath());
   await instance.refresh();
   const ledger = ledgerFrom(await readOrErrno(ledgerAt));
   const next = recordMarker(ledger, today);
@@ -457,7 +457,7 @@ async function servesMarker(
   today: LegMarker
 ): Promise<void> {
   const markerAt = join(reader.mountRoot, ...markerPath(today));
-  const ledgerAt = join(reader.mountRoot, ...ledgerPath());
+  const ledgerAt = join(reader.mountRoot, ...granteeLedgerPath());
   const line = ledgerLine(today);
   await poll(
     refreshingAfterFirst(reader, async () => {

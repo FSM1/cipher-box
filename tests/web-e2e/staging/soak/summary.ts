@@ -9,7 +9,13 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { TestInfo } from '@playwright/test';
-import { isSoakReason, reasonKind, SOAK_REASONS, type FailureReason } from './reasons';
+import {
+  isSoakReason,
+  reasonKind,
+  SOAK_REASONS,
+  type FailureReason,
+  type SkipReason,
+} from './reasons';
 
 /** Inside Playwright's output folder, which a run clears when it starts. */
 export const RESULTS_FILE = fileURLToPath(
@@ -25,6 +31,13 @@ export type SoakRecord =
       readonly check: string;
       readonly outcome: 'failed';
       readonly reason: FailureReason;
+      readonly detail: string;
+    }
+  | {
+      readonly kind: 'check';
+      readonly check: string;
+      readonly outcome: 'skipped';
+      readonly reason: SkipReason;
       readonly detail: string;
     }
   | { readonly kind: 'fact'; readonly label: string; readonly value: string }
@@ -111,13 +124,15 @@ export function renderSummary(records: readonly SoakRecord[]): string {
   );
   const facts = records.filter((entry) => entry.kind === 'fact');
   const failed = checks.filter((entry) => entry.outcome === 'failed').length;
+  const skipped = checks.filter((entry) => entry.outcome === 'skipped').length;
+  const skips = skipped > 0 ? ` ${skipped} skipped.` : '';
 
   const verdict =
     checks.length === 0
       ? 'The soak failed: no check recorded a result.'
       : failed > 0
-        ? `${failed} of ${checks.length} soak checks failed.`
-        : `All ${checks.length} soak checks passed.`;
+        ? `${failed} of ${checks.length} soak checks failed.${skips}`
+        : `All ${checks.length - skipped} soak checks passed.${skips}`;
 
   const out = ['## Staging soak', '', verdict];
   if (checks.length > 0) {
@@ -158,9 +173,10 @@ function invalid(value: unknown): string | null {
   if (entry.outcome === 'passed') {
     return entry.reason === undefined ? null : 'a passed check names no reason';
   }
-  if (entry.outcome !== 'failed') return 'an unknown outcome';
+  if (entry.outcome !== 'failed' && entry.outcome !== 'skipped') return 'an unknown outcome';
   if (!isSoakReason(entry.reason)) return 'an unknown reason code';
-  if (reasonKind(entry.reason) !== 'failure') return 'a failed check needs a failure reason';
+  const kind = entry.outcome === 'failed' ? 'failure' : 'skip';
+  if (reasonKind(entry.reason) !== kind) return `a ${entry.outcome} check needs a ${kind} reason`;
   return typeof entry.detail === 'string' ? null : 'a detail must be text';
 }
 

@@ -7,16 +7,13 @@
 
 import { isUtcDay, type Ledger, type LedgerLine } from './ledger';
 import { markerFile } from './markers';
+import { DESKTOP_FOLDER, LEDGER_FILE } from './paths';
 import { SoakFailure } from './reasons';
 
 export type DesktopLeg = 'macos' | 'linux' | 'windows';
 export type MarkerLeg = DesktopLeg | 'web';
 
 export const MARKER_LEGS: readonly MarkerLeg[] = ['macos', 'linux', 'windows', 'web'];
-
-/** The grantee's desktop folder, from the vault root. The web bootstrap builds it. */
-export const DESKTOP_FOLDER: readonly string[] = ['soak', 'desktop'];
-export const LEDGER_FILE = 'ledger.txt';
 
 const LINE = /^marker (\S+) (\S+)$/;
 const MARKER_FILE = /^marker-(\d{4}-\d{2}-\d{2})\.txt$/;
@@ -30,7 +27,7 @@ export function markerPath(marker: LegMarker): string[] {
   return [...DESKTOP_FOLDER, marker.leg, markerFile(marker.date)];
 }
 
-export function ledgerPath(): string[] {
+export function granteeLedgerPath(): string[] {
   return [...DESKTOP_FOLDER, LEDGER_FILE];
 }
 
@@ -73,9 +70,15 @@ export function markerDate(fileName: string): string | null {
 }
 
 /**
- * What a leg must read: every marker of the other legs, from the ledger and
- * from the folder listings both, so a marker that lost its line and a line that
- * lost its marker each count.
+ * The newest markers of each other leg that a leg reads. Three legs of 14 are
+ * 42 downloads, which fit the 20-minute read budget of the web leg with room.
+ */
+export const READ_WINDOW = 14;
+
+/**
+ * What a leg must read: the newest {@link READ_WINDOW} markers of each other
+ * leg, from the ledger and from the folder listings both, so a marker that lost
+ * its line and a line that lost its marker each count.
  */
 export function markersToRead(
   ledger: Ledger,
@@ -93,9 +96,12 @@ export function markersToRead(
       if (date !== null) add({ leg, date });
     }
   }
-  return [...found.values()].sort(
-    (a, b) =>
-      MARKER_LEGS.indexOf(a.leg) - MARKER_LEGS.indexOf(b.leg) || a.date.localeCompare(b.date)
+  const all = [...found.values()];
+  return MARKER_LEGS.flatMap((leg) =>
+    all
+      .filter((marker) => marker.leg === leg)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-READ_WINDOW)
   );
 }
 

@@ -124,9 +124,9 @@ out takes every mount away and fails with its own reason code:
 
 1. `sign-in`: the API serves a login, the mount opens, the first refresh lands.
 2. `ledger`: `soak/desktop/ledger.txt` opens and parses.
-3. `marker listing` and `markers`: every marker of the other legs under
-   `soak/desktop/<leg>/` opens byte for byte, from the ledger lines and the
-   folder listings both.
+3. `marker listing` and `markers`: the newest 14 markers (`READ_WINDOW`) of
+   each other leg under `soak/desktop/<leg>/` open byte for byte, from the
+   ledger lines and the folder listings both.
 4. `writer reopen`, only when an earlier step took the writer away: a new
    writer signs in.
 5. `marker write`: the marker of today goes to

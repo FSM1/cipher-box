@@ -8,7 +8,7 @@ import { test as base, type Browser, type BrowserContext, type Page } from '@pla
 import { signIn } from '../fixtures';
 import { installTestWallet } from '../wallet';
 import { soakWalletKey, type SoakRole } from './accounts';
-import { SoakFailure, type FailureReason } from './reasons';
+import { SoakFailure, type FailureReason, type SkipReason } from './reasons';
 import { record, shortDetail, unrecordedFailure } from './summary';
 
 export { expect } from '@playwright/test';
@@ -114,6 +114,17 @@ export async function check<T>(
   }
   await record({ kind: 'check', check: name, outcome: 'passed' });
   return value;
+}
+
+/** Records a check the night skips, with the skip reason and why. */
+export function skipped(name: string, reason: SkipReason, detail: string): Promise<void> {
+  return record({
+    kind: 'check',
+    check: name,
+    outcome: 'skipped',
+    reason,
+    detail: shortDetail(detail),
+  });
 }
 
 export function fact(label: string, value: string): Promise<void> {
