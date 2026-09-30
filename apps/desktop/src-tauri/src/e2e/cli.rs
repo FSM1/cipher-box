@@ -60,6 +60,19 @@ pub fn control_file(args: impl IntoIterator<Item = OsString>) -> Result<Option<P
     }
 }
 
+/// The environment variable that moves this instance's local data directory.
+const DATA_DIR: &str = "CIPHERBOX_E2E_DATA_DIR";
+
+/// The local data directory the environment names, if it names one.
+pub fn data_dir_override() -> Option<PathBuf> {
+    data_dir(std::env::var_os(DATA_DIR))
+}
+
+/// Absent and empty are one state: no override.
+fn data_dir(value: Option<OsString>) -> Option<PathBuf> {
+    value.filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
 /// The login secret standard input carries.
 pub fn dev_key_from_stdin() -> Result<Zeroizing<Vec<u8>>, String> {
     read_dev_key(unbuffered_stdin()?)
@@ -204,6 +217,16 @@ mod tests {
 
     fn read(line: &str) -> Result<Zeroizing<Vec<u8>>, String> {
         read_dev_key(line.as_bytes())
+    }
+
+    #[test]
+    fn reads_a_data_directory_override_and_takes_empty_as_none() {
+        assert_eq!(
+            data_dir(Some(OsString::from("/tmp/instance/data"))),
+            Some(PathBuf::from("/tmp/instance/data"))
+        );
+        assert_eq!(data_dir(Some(OsString::new())), None);
+        assert_eq!(data_dir(None), None);
     }
 
     #[test]

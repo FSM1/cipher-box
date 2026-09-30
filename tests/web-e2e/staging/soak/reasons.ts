@@ -72,7 +72,7 @@ export const SOAK_REASONS = {
   'desktop-marker-unpublished': {
     kind: 'failure',
     meaning:
-      "the OS marker of today or its ledger line did not save on the writer's mount, or did not reach a cold mount",
+      "the OS marker of today did not save on the writer's mount, or it or its ledger line did not reach a cold mount",
   },
   'post-deploy-window': {
     kind: 'skip',

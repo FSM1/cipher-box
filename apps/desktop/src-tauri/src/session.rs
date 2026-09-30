@@ -49,7 +49,14 @@ pub fn open_key_custody(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn local_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+/// Where this device keeps its stores. An `e2e-hook` build takes an override,
+/// because on Windows the resolver is the known-folder lookup, which ignores
+/// the per-instance `USERPROFILE`.
+pub(crate) fn local_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(feature = "e2e-hook")]
+    if let Some(dir) = crate::e2e::data_dir_override() {
+        return Ok(dir);
+    }
     app.path()
         .local_data_dir()
         .map_err(|error| format!("this device has no local data directory: {error}"))

@@ -35,6 +35,16 @@ const DEFAULT_MOUNT_NAME = 'CipherBox';
  */
 const UNMOUNT_WITHIN_MS = 30_000;
 
+/** Moves the data directory of an `e2e-hook` build. */
+export const DATA_DIR_ENV = 'CIPHERBOX_E2E_DATA_DIR';
+
+const DATA_LOCAL = /^e2e: home=.* data_local=(.*)$/m;
+
+/** The data directory the shell announced on its log, or `null` before the line. */
+export function announcedDataDir(log: string): string | null {
+  return DATA_LOCAL.exec(log)?.[1]?.replace(/\r$/, '') ?? null;
+}
+
 export interface InstanceOptions {
   /** Names the instance in every message and log file. */
   name: string;
@@ -132,19 +142,15 @@ export async function startInstance(options: InstanceOptions): Promise<Instance>
   await rm(join(home, DEFAULT_MOUNT_NAME), { recursive: true, force: true });
 
   const controlFile = join(home, 'control');
+  const dataDir = join(home, 'data');
   await rm(controlFile, { force: true });
 
   const logPath = join(logDir, `${name}.log`);
   const log = createWriteStream(logPath);
   const child = spawn(binary, ['--dev-key-stdin', '--control-file', controlFile], {
-    // Linux takes the data directory from `XDG_DATA_HOME` before `HOME`, so a
-    // runner that sets it would give two instances one cache.
-    env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      XDG_DATA_HOME: join(home, '.local', 'share'),
-    },
+    // The OS resolver can ignore the per-instance home (the Windows known
+    // folders, a runner's `XDG_DATA_HOME`), so the data directory is named.
+    env: { ...process.env, HOME: home, USERPROFILE: home, [DATA_DIR_ENV]: dataDir },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   // The key crosses on standard input. An argument would put a live login
@@ -172,6 +178,19 @@ export async function startInstance(options: InstanceOptions): Promise<Instance>
       (found): found is ControlEndpoint => found !== null,
       {
         what: `${name} to write its control file at ${controlFile}`,
+        timeoutMs: budget.controlFileMs,
+        intervalMs: budget.intervalMs,
+      }
+    );
+
+    await poll(
+      async () => {
+        await refuseIfDead(shell, name);
+        return announcedDataDir(await readFile(logPath, 'utf8').catch(() => ''));
+      },
+      (announced) => announced === dataDir,
+      {
+        what: `${name} to announce its data directory as ${dataDir}`,
         timeoutMs: budget.controlFileMs,
         intervalMs: budget.intervalMs,
       }

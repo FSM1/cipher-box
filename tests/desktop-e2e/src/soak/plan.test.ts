@@ -53,12 +53,11 @@ describe('the step budgets', () => {
     expect(readBudget(budgets, 100)).toBe(budgets.readBaseMs + 100 * budgets.readPerMarkerMs);
   });
 
-  it('fit the start waits of an instance together inside the sign-in budget', () => {
+  it('fit every wait of a sign-in, one after the other, inside the sign-in budget', () => {
     const budgets = soakBudgets(PRODUCTION_PROFILE);
     const waits = legDeadlines(budgets, PRODUCTION_PROFILE);
-    expect(waits.apiReadyMs + waits.controlFileMs + waits.mountMs).toBeLessThanOrEqual(
-      budgets.signInMs
-    );
+    const signIn = waits.apiReadyMs + 2 * waits.controlFileMs + 2 * waits.mountMs + waits.refreshMs;
+    expect(signIn).toBeLessThanOrEqual(budgets.signInMs);
     expect(waits.readIntervalMs).toBe(PRODUCTION_PROFILE.pollCadenceMs);
   });
 });

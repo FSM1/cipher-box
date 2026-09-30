@@ -111,7 +111,7 @@ async function main(): Promise<number> {
   await mkdir(dirname(resultsFile), { recursive: true });
   const recorder = new Recorder((line) => appendFile(resultsFile, `${line}\n`));
 
-  let leg: DesktopLeg;
+  let leg: DesktopLeg | undefined;
   let binary: string;
   try {
     if (argv.length > 0)
@@ -123,7 +123,7 @@ async function main(): Promise<number> {
     binary = resolve(REPO_ROOT, named);
     await requireFile(binary, `CIPHERBOX_DESKTOP_BINARY names ${binary}, and no file is there.`);
   } catch (error) {
-    await recorder.unrecorded(`${process.platform} desktop leg`, error);
+    await recorder.unrecorded(`${leg ?? process.platform} desktop leg`, error);
     await writeSummary(recorder);
     throw error;
   }
@@ -205,7 +205,7 @@ async function runLeg(context: LegContext): Promise<void> {
 
   const today: LegMarker = { leg, date: utcDay(new Date()) };
   await step(context, 'marker write', 'desktop-marker-unpublished', budgets.writeMs, async () => {
-    await stillMounted(writer.instance);
+    await requireLiveMount(writer.instance);
     await writeMarker(writer.instance, ledger, today);
   });
 
@@ -239,10 +239,7 @@ async function runLeg(context: LegContext): Promise<void> {
   );
 }
 
-/**
- * One recorded step, bounded by its budget. A kernel call on a mount carries
- * no timeout, so the bound takes every mount away before it reports.
- */
+/** One recorded step, bounded by its budget; the bound releases as `withDeadline` does. */
 function step<T>(
   context: LegContext,
   name: string,
@@ -275,10 +272,11 @@ async function release(context: LegContext): Promise<void> {
 }
 
 /**
- * Fails a write on a mount that a bound or a stalled read took away: the
- * mount point is then a plain local folder, and a write there proves nothing.
+ * Fails unless the mount is a live filesystem and its shell still answers. A
+ * mount that a bound or a stalled read took away leaves a plain local folder,
+ * and a write there proves nothing.
  */
-async function stillMounted(instance: Instance): Promise<void> {
+async function requireLiveMount(instance: Instance): Promise<void> {
   if (!(await isMounted(instance.mountRoot))) {
     throw new SoakFailure(
       'desktop-marker-unpublished',
@@ -323,14 +321,10 @@ async function open(context: LegContext, name: string, devKey: string): Promise<
 
 async function readGranteeLedger(context: LegContext, instance: Instance): Promise<Ledger> {
   const path = join(instance.mountRoot, ...ledgerPath());
-  let reads = 0;
   let text: Buffer;
   try {
     text = await poll(
-      async () => {
-        if (reads++ > 0) await instance.refresh();
-        return readOrErrno(path);
-      },
+      refreshingAfterFirst(instance, () => readOrErrno(path)),
       (seen): seen is Buffer => Buffer.isBuffer(seen),
       {
         what: `${instance.name}: the grantee ledger to open`,
@@ -371,12 +365,10 @@ async function markerReads(
   const budget = readBudget(budgets, toRead.length);
   return step(context, 'markers', 'desktop-marker-missing', budget, async () => {
     const unread = new Map(toRead.map((marker) => [ledgerLine(marker), marker]));
-    let rounds = 0;
     try {
       await poll(
-        async () => {
-          if (rounds++ > 0) await instance.refresh();
-          const seen: Record<string, string> = {};
+        refreshingAfterFirst(instance, async () => {
+          const seen: Record<string, MarkerState> = {};
           for (const [line, marker] of unread) {
             const state = await markerState(
               join(instance.mountRoot, ...markerPath(marker)),
@@ -386,7 +378,7 @@ async function markerReads(
             else seen[line] = state;
           }
           return seen;
-        },
+        }),
         () => unread.size === 0,
         {
           what: `${instance.name}: every marker of the other legs to open`,
@@ -444,10 +436,8 @@ async function servesMarker(
   const markerAt = join(reader.mountRoot, ...markerPath(today));
   const ledgerAt = join(reader.mountRoot, ...ledgerPath());
   const line = ledgerLine(today);
-  let rounds = 0;
   await poll(
-    async () => {
-      if (rounds++ > 0) await reader.refresh();
+    refreshingAfterFirst(reader, async () => {
       const marker = await markerState(markerAt, today.date);
       const ledger = await readOrErrno(ledgerAt);
       return {
@@ -458,7 +448,7 @@ async function servesMarker(
             : 'absent'
           : ledger,
       };
-    },
+    }),
     (seen) => seen.marker === 'served' && seen.line === 'served',
     {
       what: `${reader.name}: the marker of today and its ledger line to reach a cold mount`,
@@ -469,20 +459,35 @@ async function servesMarker(
   );
 }
 
+/** The code a refused read carries, such as `ENOENT`. */
+type Errno = `E${string}`;
+
+type MarkerState = 'served' | 'other bytes' | Errno;
+
 /** `served` when the marker holds the bytes of its date, else what the read saw. */
-async function markerState(path: string, date: string): Promise<string> {
+async function markerState(path: string, date: string): Promise<MarkerState> {
   const read = await readOrErrno(path);
   if (!Buffer.isBuffer(read)) return read;
   return read.equals(markerBytes(date)) ? 'served' : 'other bytes';
 }
 
 /** The file's bytes, or the errno the mount refused the read with. */
-async function readOrErrno(path: string): Promise<Buffer | string> {
+async function readOrErrno(path: string): Promise<Buffer | Errno> {
   try {
     return await readFile(path);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code ?? String(error);
+    const code = (error as NodeJS.ErrnoException).code;
+    return code?.startsWith('E') ? (code as Errno) : 'EUNKNOWN';
   }
+}
+
+/** `probe`, with a nocache refresh before every call after the first. */
+function refreshingAfterFirst<T>(instance: Instance, probe: () => Promise<T>): () => Promise<T> {
+  let calls = 0;
+  return async () => {
+    if (calls++ > 0) await instance.refresh();
+    return probe();
+  };
 }
 
 async function listOrEmpty(path: string): Promise<string[]> {

@@ -20,7 +20,7 @@ export function legOf(platform: NodeJS.Platform): DesktopLeg {
 
 /** The time each step of a leg gets, so a slow night fails with the reason of its step. */
 export interface SoakBudgets {
-  /** The API serves a login, the shell writes its control file, and the mount opens. */
+  /** The API serves a login, the mount opens, and the first refresh lands. */
   signInMs: number;
   /** The grantee ledger opens through the mount. */
   ledgerMs: number;
@@ -37,7 +37,7 @@ export interface SoakBudgets {
 export function soakBudgets(profile: SyncTimingProfile = PRODUCTION_PROFILE): SoakBudgets {
   const tick = profile.pollCadenceMs;
   return {
-    signInMs: 20 * tick,
+    signInMs: 30 * tick,
     ledgerMs: 10 * tick,
     readBaseMs: 10 * tick,
     readPerMarkerMs: Math.round(tick / 10),
@@ -51,19 +51,23 @@ export function readBudget(budgets: SoakBudgets, markers: number): number {
 }
 
 /**
- * The instance waits of a leg. The API, the control file and the mount waits
- * together fit inside the sign-in budget, so a start that runs out names the
- * wait that ran out.
+ * The instance waits of a leg. A sign-in runs the API wait, two control-file
+ * waits (the file, then the data directory line), two mount waits (the status,
+ * then the mount root) and one refresh, one after the other. Together they fit
+ * inside the sign-in budget, so a sign-in that runs out names the wait that
+ * ran out.
  */
 export function legDeadlines(
   budgets: SoakBudgets,
   profile: SyncTimingProfile = PRODUCTION_PROFILE
 ): Deadlines {
+  const share = (fraction: number): number => Math.round(budgets.signInMs * fraction);
   return {
     ...deadlines(profile),
-    apiReadyMs: Math.round(budgets.signInMs / 4),
-    controlFileMs: Math.round(budgets.signInMs / 4),
-    mountMs: Math.round(budgets.signInMs / 2),
+    apiReadyMs: share(0.1),
+    controlFileMs: share(0.1),
+    mountMs: share(0.2),
+    refreshMs: share(0.2),
   };
 }
 
