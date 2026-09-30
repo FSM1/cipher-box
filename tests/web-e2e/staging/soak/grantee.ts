@@ -1,21 +1,22 @@
 /**
- * The leg markers in the grantee vault, in the shape the desktop legs use
- * (`tests/desktop-e2e/src/soak/plan.ts`, not landed yet): each leg writes
- * `soak/desktop/<leg>/marker-<date>.txt` with the bytes of `markerBytes`
- * and adds the line `marker <leg> <date>` to `soak/desktop/ledger.txt`. A mount
- * shows no IPNS name or sequence, so the line carries neither. The functions
- * here keep the names and logic of that module, so the one that lands second
- * imports them in place of this copy.
+ * The grantee ledger and the leg markers, shared by the desktop legs and the
+ * web leg. The ledger is `soak/desktop/ledger.txt`; each marker a leg writes
+ * adds one `marker <leg> <date>` line, and the marker itself is
+ * `soak/desktop/<leg>/marker-<date>.txt` with the bytes of `markerBytes`.
  */
 
 import { isUtcDay, type Ledger, type LedgerLine } from './ledger';
+import { markerFile } from './markers';
 import { SoakFailure } from './reasons';
 
 export type DesktopLeg = 'macos' | 'linux' | 'windows';
 export type MarkerLeg = DesktopLeg | 'web';
 
 export const MARKER_LEGS: readonly MarkerLeg[] = ['macos', 'linux', 'windows', 'web'];
-export const DESKTOP_LEGS: readonly DesktopLeg[] = ['macos', 'linux', 'windows'];
+
+/** The grantee's desktop folder, from the vault root. The web bootstrap builds it. */
+export const DESKTOP_FOLDER: readonly string[] = ['soak', 'desktop'];
+export const LEDGER_FILE = 'ledger.txt';
 
 const LINE = /^marker (\S+) (\S+)$/;
 const MARKER_FILE = /^marker-(\d{4}-\d{2}-\d{2})\.txt$/;
@@ -23,6 +24,14 @@ const MARKER_FILE = /^marker-(\d{4}-\d{2}-\d{2})\.txt$/;
 export interface LegMarker {
   readonly leg: MarkerLeg;
   readonly date: string;
+}
+
+export function markerPath(marker: LegMarker): string[] {
+  return [...DESKTOP_FOLDER, marker.leg, markerFile(marker.date)];
+}
+
+export function ledgerPath(): string[] {
+  return [...DESKTOP_FOLDER, LEDGER_FILE];
 }
 
 /** The ledger line of one leg marker. Refuses a line that {@link legMarkers} would reject. */

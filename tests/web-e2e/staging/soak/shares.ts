@@ -6,7 +6,7 @@
  * summary or a log shows only {@link linkPrefix}.
  */
 
-import { markerDate } from './desktop';
+import { markerDate } from './grantee';
 import { keyedLine, withKeyedLine, type Ledger } from './ledger';
 import { DAY_MS } from './markers';
 import { SoakFailure } from './reasons';

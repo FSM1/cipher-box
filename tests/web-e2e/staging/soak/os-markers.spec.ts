@@ -6,13 +6,13 @@
 
 import { FilesPage } from '../../page-objects/files.page';
 import {
-  DESKTOP_LEGS,
+  MARKER_LEGS,
   markersToRead,
   readLine,
   recordMarker,
   type LegMarker,
   type MarkerLeg,
-} from './desktop';
+} from './grantee';
 import { check, expect, fact, test } from './fixtures';
 import { utcDay } from './ledger';
 import { markerBytes, markerFile, unreadLine } from './markers';
@@ -24,6 +24,8 @@ const TEST_MS = 3_600_000;
 const OPENS_MS = 1_200_000;
 const DOWNLOAD_MS = 60_000;
 const PAGE_MS = 180_000;
+
+const OS_LEGS = MARKER_LEGS.filter((leg) => leg !== 'web');
 
 /** Opens `soak/desktop/<leg>/`; `false` when the listing never shows it. */
 async function openLeg(files: FilesPage, leg: MarkerLeg): Promise<boolean> {
@@ -48,12 +50,12 @@ test('the grantee web leg opens the OS markers and writes a browser marker', asy
   const read: LegMarker[] = [];
   await check('OS markers open in the browser', 'desktop-marker-missing', async () => {
     const listings: Partial<Record<MarkerLeg, string[]>> = {};
-    for (const leg of DESKTOP_LEGS) {
+    for (const leg of OS_LEGS) {
       if (await openLeg(files, leg)) listings[leg] = [...(await files.names())];
     }
     const due = markersToRead(ledger, listings, 'web');
     const deadline = Date.now() + OPENS_MS;
-    for (const leg of DESKTOP_LEGS) {
+    for (const leg of OS_LEGS) {
       const ofLeg = due.filter((marker) => marker.leg === leg);
       if (ofLeg.length === 0) continue;
       if (!(await openLeg(files, leg))) {
