@@ -110,3 +110,4 @@ renews no name under a superseded seed.
 8. Accepted residual: a grantee runs no walk, so a shared folder lapses for its grantees when the
    owner starts no session for about two months. The owner accepted it on 2026-09-30; the research
    for a grantee walk is FSM1/cipher-box#2111.
+9. Under D4, a node that a stopped name wave left at an older name lapses, and ADR 0062 revives it.

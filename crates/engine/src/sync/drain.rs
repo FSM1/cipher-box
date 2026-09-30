@@ -2386,9 +2386,9 @@ where
                 self.open_root_candidate(scope, bytes)
             })
             .await;
-        if let Some((mut pass, state, rebased)) = chosen {
-            pass.insert(root, state);
-            return Ok((pass, rebased));
+        if let Some((mut tied, state, rebased)) = chosen {
+            tied.insert(root, state);
+            return Ok((tied, rebased));
         }
         for folder in self.head_folders(queued) {
             if let Some(rebased) = self

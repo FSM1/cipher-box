@@ -12412,6 +12412,15 @@ fn concurrent_root_extend(records: &InMemoryRecordStore, blocks: &Blocks, extra:
     let (sequence, _) = published(records, ROOT);
     let mut children = published_children(records, blocks, ROOT);
     children.extend(extra);
+    let record = root_record_with(blocks, children, sequence + 1, EOL);
+    for endpoint in records.endpoints() {
+        records.seed_record(&endpoint, write_name(ROOT).as_str(), record.clone());
+    }
+}
+
+/// A scope-root record at `sequence` that seals `children`, signed with `eol`
+/// and not yet on any endpoint.
+fn root_record_with(blocks: &Blocks, children: Vec<ChildRef>, sequence: u64, eol: &str) -> Vec<u8> {
     let fixture = owner_root_fixture(OwnerRootSpec {
         writer_pseudonym: &owner_pseudonym(),
         pointer_read_key: owner_pointer_read_key(),
@@ -12427,22 +12436,33 @@ fn concurrent_root_extend(records: &InMemoryRecordStore, blocks: &Blocks, extra:
         grants: Vec::new(),
     });
     blocks.put(fixture.head_block.clone());
-    let record = IpnsRecord::create_v2(
+    IpnsRecord::create_v2(
         &write_signer(ROOT),
         format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
-        sequence + 1,
+        sequence,
         TTL_NANOS,
-        EOL,
+        eol,
     )
-    .marshal();
-    for endpoint in records.endpoints() {
-        records.seed_record(&endpoint, fixture.name.as_str(), record.clone());
-    }
+    .marshal()
 }
 
 /// Another writer publishes `folder`'s next record, adding `extra` on top of
 /// whatever the folder currently carries.
 fn concurrent_add(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId, extra: ChildRef) {
+    let mut children = published_children(records, blocks, folder);
+    children.push(extra);
+    let head = folder_head_with(records, blocks, folder, children);
+    publish_next_record(records, blocks, folder, &head);
+}
+
+/// Another writer's head for `folder` that seals `children` over the folder's
+/// published body.
+fn folder_head_with(
+    records: &InMemoryRecordStore,
+    blocks: &Blocks,
+    folder: NodeId,
+    children: Vec<ChildRef>,
+) -> AuthoredHead {
     let (_, head_cid) = published(records, folder);
     let envelope =
         decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
@@ -12450,15 +12470,13 @@ fn concurrent_add(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId
     let ReadBody::Folder {
         created_at,
         modified_at,
-        mut children,
         unknown,
+        ..
     } = open_read_body(&envelope, &read_key).expect("opens")
     else {
         panic!("expected a folder body");
     };
-    children.push(extra);
-
-    let head = author_child_envelope(EnvelopeAuthoring {
+    author_child_envelope(EnvelopeAuthoring {
         node_id: folder.0,
         scope_id: SCOPE,
         epoch: envelope.epoch,
@@ -12473,8 +12491,7 @@ fn concurrent_add(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId
         carried_unknown: envelope.unknown.clone(),
         carried_epoch_tag_unknown: envelope.epoch_tag_unknown.clone(),
     })
-    .expect("the concurrent writer authors a valid record");
-    publish_next_record(records, blocks, folder, &head);
+    .expect("the concurrent writer authors a valid record")
 }
 
 /// Publish `head` under `folder`'s write name at the sequence after its current
@@ -17027,35 +17044,7 @@ fn folder_record_with(
     sequence: u64,
     eol: &str,
 ) -> Vec<u8> {
-    let (_, head_cid) = published(records, folder);
-    let envelope =
-        decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
-    let read_key = read_key_of(folder);
-    let ReadBody::Folder {
-        created_at,
-        modified_at,
-        unknown,
-        ..
-    } = open_read_body(&envelope, &read_key).expect("opens")
-    else {
-        panic!("expected a folder body");
-    };
-    let head = author_child_envelope(EnvelopeAuthoring {
-        node_id: folder.0,
-        scope_id: SCOPE,
-        epoch: envelope.epoch,
-        read_key: &read_key,
-        nonce: &[0x3D; 24],
-        body: &ReadBody::Folder {
-            created_at,
-            modified_at,
-            children,
-            unknown,
-        },
-        carried_unknown: envelope.unknown.clone(),
-        carried_epoch_tag_unknown: envelope.epoch_tag_unknown.clone(),
-    })
-    .expect("the other writer authors a valid record");
+    let head = folder_head_with(records, blocks, folder, children);
     blocks.put(head.block.clone());
     IpnsRecord::create_v2(
         &write_signer(folder),
@@ -17166,4 +17155,60 @@ fn a_tied_record_that_drops_a_subtree_leaves_the_base_when_none_is_chosen() {
 #[test]
 fn a_tied_record_that_drops_a_subtree_leaves_the_base_before_another_is_chosen() {
     a_tried_record_keeps_the_subtree_it_does_not_name(true);
+}
+
+/// A lost race on the scope root, where the other endpoint serves a tied record
+/// that does not name the folder `k` and on which the head create reads as
+/// applied, and a queued rename sits below `k`. Trying that record must not drop
+/// `k`'s subtree from the base, so the rename still publishes.
+#[test]
+fn a_tied_scope_root_record_that_drops_a_subtree_leaves_the_base() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    tick_past_the_first_walk(&world, &engine, &mut tasks);
+    create_under(&mut engine, ROOT, "k");
+    tick(&world, &engine, &mut tasks);
+    let k = child_id(&engine, ROOT, "k");
+    create_under(&mut engine, k, "f");
+    tick(&world, &engine, &mut tasks);
+    let f = child_id(&engine, k, "f");
+    let (base, _) = published(&world.record_store, ROOT);
+
+    create_under(&mut engine, ROOT, "2027");
+    let created = child_id(&engine, ROOT, "2027");
+    block_on(engine.command(Command::Rename {
+        node: f,
+        new_name: "g".into(),
+    }))
+    .unwrap();
+    let applied = root_record_with(
+        &blocks,
+        vec![child_ref(created.0, "2027", CoreNodeKind::Folder)],
+        base + 1,
+        &renewal_eol_from(Scheduler::now(&world.scheduler)),
+    );
+    let theirs = &world.record_store.endpoints()[1];
+    world.record_store.seed_record_after_put_at(
+        theirs,
+        write_name(ROOT).as_str(),
+        write_name(ROOT).as_str(),
+        applied,
+    );
+    world.record_store.fail_put_endpoint(theirs);
+    tick(&world, &engine, &mut tasks);
+    world.record_store.heal_put_endpoint(theirs);
+    assert_eq!(queued(&alice), 2, "the create and the rename stay queued");
+
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+    assert_eq!(queued(&alice), 0);
+    assert_eq!(
+        published_names(&world.record_store, &blocks, k),
+        ["g"],
+        "the rename below k publishes"
+    );
 }
