@@ -93,6 +93,7 @@ export interface DeadLetterDescriptor {
  * The rule that refused the member's own settings, as the engine's stable check
  * names. Only the verdicts a settings hold can carry: a hold waits on the member
  * changing something, so a provider's own answer is retried rather than held.
+ * `settings-unavailable` is the stranded mint, whose exit is a settings save.
  */
 export const SETTINGS_HOLD_CHECKS = [
   'byo-endpoint-invalid',
@@ -101,6 +102,7 @@ export const SETTINGS_HOLD_CHECKS = [
   'byo-credential-invalid',
   'byo-provider-missing',
   'byo-no-external-ingress',
+  'settings-unavailable',
 ] as const;
 
 export type SettingsHoldCheck = (typeof SETTINGS_HOLD_CHECKS)[number];

@@ -645,7 +645,7 @@ const ATTEMPT_BUDGET: u32 = 5;
 /// two and a half minutes. It is finite because strict FIFO means the op that
 /// keeps halting holds every op behind it, and a queue with no exit is the
 /// silent permanent stall the valve exists to remove.
-const UNATTRIBUTED_BUDGET: u32 = 120;
+pub const UNATTRIBUTED_BUDGET: u32 = 120;
 
 /// The staging key holding per-op drain charges: a one-byte format tag followed
 /// by `(op_id, attempts, unattributed)` triples, big-endian and fixed-width,
@@ -689,8 +689,8 @@ pub enum QueueHoldReason {
     },
     /// The member's own settings were refused before any request was built, so
     /// every retry reaches the same verdict and charging one would spend the
-    /// version's budget and then release its staged blocks. The exit is
-    /// settings that name a placement this rule no longer refuses.
+    /// version's budget and then release its staged blocks. The exit is the
+    /// one its [`SettingsRefusal`] names.
     ///
     /// Render it through [`SettingsRefusal::check`], which names the rule and
     /// never the endpoint or the bearer the settings carry.
@@ -5722,8 +5722,7 @@ where
         // Resolved before any byte moves: a session with no authenticated
         // destination publishes no version. What the refusal costs is
         // [`PlacementRefusal::holds`]'s to say — an outage this pass could not
-        // resolve is retried uncharged rather than spending a budget that ends
-        // by releasing the version's staged blocks.
+        // resolve spends the unattributed budget, never the attempt budget.
         let placement = self.inputs.placement.as_ref().map_err(|refusal| {
             refusal
                 .holds()

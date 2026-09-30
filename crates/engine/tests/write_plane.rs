@@ -13374,9 +13374,9 @@ fn a_deterministic_placement_refusal_holds_the_queued_write_rather_than_charging
 }
 
 /// The other half of the same fork: a settings load that degraded has no member
-/// action as its exit — a later tick may resolve the record — so the pass
-/// retries the head uncharged and takes no hold, which a host would render as
-/// "edit your settings" over a condition editing them does not clear.
+/// action as its exit — a later tick may resolve the record — so within these
+/// passes the head stays queued with no hold and no dead letter. A hold would
+/// render as "edit your settings" over a condition editing them does not clear.
 #[test]
 fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
     let world = FakeWorld::new();
@@ -13401,7 +13401,7 @@ fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
     assert!(
         view.dead_letters.is_empty(),
-        "an outage this pass could not resolve never spends the budget"
+        "within these passes the outage sends nothing to a dead letter"
     );
     assert_eq!(
         settings_hold(&view),
@@ -13421,6 +13421,168 @@ fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
             .contains(&root_cid),
         "with its staged version intact"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A stranded settings mint: a save that minted a revision and never landed.
+// ---------------------------------------------------------------------------
+
+/// More passes than the drain's unattributed budget.
+const PASSES_PAST_THE_OUTAGE_BUDGET: usize =
+    cipherbox_engine::sync::UNATTRIBUTED_BUDGET as usize + 10;
+
+/// The `External` settings the stranded save names, and the retry that lands.
+fn external_settings() -> VaultSettings {
+    VaultSettings {
+        pin_mode: PinMode::External,
+        byo: Some(member_node(ByoKind::Kubo)),
+        retention: RetentionPolicy::KeepAll,
+        bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+    }
+}
+
+/// Queue a content write on `alice`, then save `External` settings while the
+/// head upload fails, and leave. The save raised the mint counter and nothing
+/// landed, so the next cold start loads a stranded mint.
+fn queue_a_write_and_strand_a_settings_save(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+) -> (OpId, NodeId, Vec<u8>) {
+    let (mut engine, _events, _tasks) = boot(world, blocks, alice, 42);
+    let op_id = write_photo(&mut engine, "photo.bin");
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    assert!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        }))
+        .is_err(),
+        "the save does not reach the network"
+    );
+    blocks.accept_uploads();
+    let (root_cid, _) = staged_version(alice);
+    (op_id, photo, root_cid)
+}
+
+/// Restart `alice` over a stranded settings save and run past the outage
+/// budget, asserting the queued write is held under the settings reason and
+/// never charged. Returns the running engine and its loops.
+fn restart_into_a_stranded_mint_hold(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, Vec<BoxedTask>, NodeId) {
+    let (op_id, photo, root_cid) = queue_a_write_and_strand_a_settings_save(world, blocks, alice);
+    let (engine, _events, mut tasks) = boot(world, blocks, alice, 43);
+    for _ in 0..PASSES_PAST_THE_OUTAGE_BUDGET {
+        tick(world, &engine, &mut tasks);
+    }
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.dead_letters.is_empty(),
+        "a held head spends no budget: {:?}",
+        view.dead_letters,
+    );
+    assert_eq!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .len(),
+        1,
+        "it keeps its place in the queue"
+    );
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&root_cid),
+        "and its staged version with it"
+    );
+    let (hold, refusal) = settings_hold(&view).expect("the pass names what it waits on");
+    assert_eq!(hold.op_id, op_id);
+    assert_eq!(hold.node, photo);
+    assert_eq!(
+        refusal,
+        SettingsRefusal::Placement(PlacementRefusal::SettingsUnavailable(
+            DefaultsReason::StrandedMint
+        )),
+    );
+    (engine, tasks, photo)
+}
+
+/// The queued write publishes: its queue is empty, nothing dead-lettered, no
+/// hold stands, and its version is registered at its own name.
+fn assert_the_held_write_published(
+    engine: &Engine<FakeSeamTypes>,
+    alice: &FakeDevice,
+    photo: NodeId,
+) {
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert_eq!(view.queue_hold, None, "the hold let go");
+    assert!(view.dead_letters.is_empty(), "{:?}", view.dead_letters);
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the held write left the queue"
+    );
+    assert!(
+        !registered_content_cids(alice, &write_name(photo)).is_empty(),
+        "and its version registered at its own name"
+    );
+}
+
+/// No later tick clears a stranded mint on this device, so charging the head
+/// would dead-letter it after the outage budget under a reason that does not
+/// name the cause. The head holds, and the member sees the settings reason.
+#[test]
+fn a_stranded_settings_mint_holds_the_queued_write_rather_than_spending_its_budget() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    restart_into_a_stranded_mint_hold(&world, &blocks, &alice);
+}
+
+/// The settings save reads no mark, so a save on the same device is the exit:
+/// once it lands, the next pass lets go of the hold and the write publishes.
+#[test]
+fn a_settings_save_that_lands_releases_a_stranded_mint_hold() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut tasks, photo) = restart_into_a_stranded_mint_hold(&world, &blocks, &alice);
+
+    serve_http(&alice, &blocks, 400);
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert_the_held_write_published(&engine, &alice, photo);
+}
+
+/// A record another device publishes is the other exit: the running session's
+/// settings re-check resolves it, and the hold lets go under the placement it
+/// names.
+#[test]
+fn a_settings_record_that_resolves_releases_a_stranded_mint_hold() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (engine, mut tasks, photo) = restart_into_a_stranded_mint_hold(&world, &blocks, &alice);
+
+    let second = world.device(b"alice-second-device");
+    seed_settings(&world, &second, &blocks, PinMode::Hosted);
+    serve_http(&alice, &blocks, 400);
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+
+    assert_the_held_write_published(&engine, &alice, photo);
 }
 
 // ---------------------------------------------------------------------------
