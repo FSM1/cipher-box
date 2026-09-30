@@ -89,7 +89,10 @@ the identity token, and the row records the identity subject the device signed i
 subject is fixed at registration: a re-registration of the same key under another subject is
 refused and changes nothing. One key registers to one account. A per-account cap bounds the
 rows. Revocation is a hard delete, with the effect ADR 0009 D5 states. The rule landed with
-FSM1/cipher-box#1312; this ADR records it.
+FSM1/cipher-box#1312; this ADR records it. Amended by
+[ADR 0058](./0058-the-identity-subject-binds-to-the-account-at-login-and-a-device-registration-reads-the-bind.md)
+D3 on 2026-09-29: the row records the subject that the account bound at login, and a
+registration from an unbound account, or with a token of another subject, is refused.
 
 **D3 — One identity subject reaches at most one account, and an identity with no registered
 device gets no rendezvous.** The registry refuses a registration whose identity subject is
@@ -268,7 +271,8 @@ beside it is unsalted SHA-256 of Google's `sub`, a normalized email or an EIP-55
 guesses in a narrow domain, and can recover a wallet address by hashing the public on-chain
 addresses that match the prefix and the suffix. `account_devices.identity_subject_id` joins each
 subject to a `user_id`, so the partial identifier attaches to an account.
-FSM1/cipher-box#2011 tracks the removal of the column or a keyed hash.
+Closed on 2026-09-29: the owner chose the drop over a keyed hash, and FSM1/cipher-box#2092 drops
+the column. The unsalted hash stays.
 
 **E3 — The operator can steer a pre-reconstruction device.** The operator issues the identity
 token (ADR 0008 D1) and runs the registry. It can map a subject to any account. D2 and D3 do
@@ -276,14 +280,17 @@ not defend against the operator; ADR 0009 D3, the comparison value on both scree
 defence.
 
 **E4 — A leaked identity token lets another account claim a member's subject first.** The
-identity token is a 300-second bearer, and the API accepts it more than once
+identity token is a 300-second bearer. A device registration spends it by its `jti`, and
+`POST /device-approval/session` accepts it more than once
 (`apps/api/src/auth/services/identity-token.service.ts`). At registration the registry does not
 check that the presented token belongs to the account of the session
 (`apps/api/src/device-approval/services/account-device.service.ts`). A holder of a full session
 on their own account and a leaked identity token of another member can therefore register a
 device under that member's subject first. D3 then refuses every device registration of the
 member, and the member's approval requests post to the wrong account. No key is disclosed: a
-factor for another TSS key does not open the member's account. FSM1/cipher-box#2012 tracks it.
+factor for another TSS key does not open the member's account. The spend stops a replay of a
+spent token, not the first claim. ADR 0058 proposes the bind of the subject to the account at
+login; FSM1/cipher-box#2012 tracks it.
 
 **E5 — Methods do not cross-link.** Google and email for the same person yield two subjects
 and two accounts. D1 leaves linking open and builds none (FSM1/cipher-box#1273).

@@ -93,7 +93,7 @@ What left the API relative to v1 — with the design that removed it:
 - **`spent_identity_tokens`**: a device registration spends the identity token
   it presents, and records the token's `jti` and expiry here, and nothing else.
   A replay of a spent token answers 401. `POST /auth/login` and
-  `POST /device-approval/session` do not spend the token.
+  `POST /device-approval/session` do not spend the token (ADR 0058).
 
 ## Pin/name registry
 
