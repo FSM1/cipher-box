@@ -468,7 +468,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
                 "/content/upload",
                 Some(APPLICATION_OCTET_STREAM),
                 &[(CONTENT_CID, cid)],
-                Some(content.to_vec()),
+                Some(content),
                 self.deadlines.transfer_ms,
             )
             .await?;
@@ -721,12 +721,15 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         path: &str,
         body: &B,
     ) -> Result<HttpResponse, ApiError> {
+        // A body can carry a credential (an identity token), so the one
+        // serialized copy this client owns is wiped on drop.
+        let body = Zeroizing::new(to_json(body));
         self.request_authed_with(
             method,
             path,
             Some(APPLICATION_JSON),
             &[],
-            Some(to_json(body)),
+            Some(&body),
             self.deadlines.control_ms,
         )
         .await
@@ -750,18 +753,11 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         path: &str,
         content_type: Option<&str>,
         extra_headers: &[(&str, &str)],
-        body: Option<Vec<u8>>,
+        body: Option<&[u8]>,
         timeout_ms: u64,
     ) -> Result<HttpResponse, ApiError> {
         let first = self
-            .send_with_token(
-                method,
-                path,
-                content_type,
-                extra_headers,
-                body.clone(),
-                timeout_ms,
-            )
+            .send_with_token(method, path, content_type, extra_headers, body, timeout_ms)
             .await?;
         if first.status != 401 {
             return Ok(first);
@@ -783,7 +779,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         path: &str,
         content_type: Option<&str>,
         extra_headers: &[(&str, &str)],
-        body: Option<Vec<u8>>,
+        body: Option<&[u8]>,
         timeout_ms: u64,
     ) -> Result<HttpResponse, ApiError> {
         let mut headers = Vec::new();
@@ -813,7 +809,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             method,
             url: self.url(path),
             headers,
-            body,
+            body: body.map(<[u8]>::to_vec),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(timeout_ms),
         };
