@@ -2426,7 +2426,8 @@ where
 
     /// Rebase onto another gated record `folder` serves at its sequence, when
     /// the head op does not read as applied on it. A folder this pass cannot
-    /// load offers none.
+    /// load or read offers none, so a failed probe drops the head op as landed
+    /// and does not stall the queue.
     async fn rebase_on_tied_folder(
         &self,
         scope: &DrainScope<'_>,
@@ -2441,7 +2442,7 @@ where
             return Ok(None);
         }
         let name = plane.end.write_name(&folder.0);
-        let Some(served) = self.served_child(&plane, folder, &name).await? else {
+        let Ok(Some(served)) = self.served_child(&plane, folder, &name).await else {
             return Ok(None);
         };
         let held = &pass.folder(folder)?.record;

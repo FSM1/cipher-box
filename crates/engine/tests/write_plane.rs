@@ -16888,6 +16888,7 @@ struct InteriorSplit {
     blocks: Blocks,
     second: FakeDevice,
     engine: Engine<FakeSeamTypes>,
+    events: EventStream,
     tasks: Vec<BoxedTask>,
     photos: NodeId,
     base: u64,
@@ -16909,7 +16910,7 @@ fn interior_split(ours_first: bool) -> InteriorSplit {
     let photos = child_id(&engine_a, ROOT, "photos");
 
     let second = world.device(b"alice-second-device");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &second, 7);
+    let (mut engine, events, mut tasks) = boot(&world, &blocks, &second, 7);
     tick_past_the_first_walk(&world, &engine, &mut tasks);
     let (base, _) = published(&world.record_store, photos);
     let endpoints = world.record_store.endpoints();
@@ -16965,6 +16966,7 @@ fn interior_split(ours_first: bool) -> InteriorSplit {
         blocks,
         second,
         engine,
+        events,
         tasks,
         photos,
         base,
@@ -17210,5 +17212,42 @@ fn a_tied_scope_root_record_that_drops_a_subtree_leaves_the_base() {
         published_names(&world.record_store, &blocks, k),
         ["g"],
         "the rename below k publishes"
+    );
+}
+
+/// After a lost race on an interior folder, the base holds our own record, on
+/// which the head create reads as applied, and the other endpoint serves a
+/// record the child gate refuses. The drain then reads no tied record for the
+/// folder, so the head op drops as landed and the queue does not stall.
+#[test]
+fn a_refused_tied_record_does_not_stall_a_head_op_that_landed() {
+    let mut split = interior_split(true);
+    block_on(split.engine.command(Command::SetFocus {
+        node: Some(split.photos),
+    }))
+    .unwrap();
+    let (_, root_head) = published(&split.world.record_store, ROOT);
+    let transplant = IpnsRecord::create_v2(
+        &write_signer(split.photos),
+        format!("/ipfs/{root_head}").as_bytes(),
+        split.base + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    let endpoints = split.world.record_store.endpoints();
+    split.world.record_store.seed_record(
+        &endpoints[1],
+        write_name(split.photos).as_str(),
+        transplant,
+    );
+    let _ = events_so_far(&mut split.events);
+    for _ in 0..4 {
+        tick(&split.world, &split.engine, &mut split.tasks);
+    }
+    assert_eq!(queued(&split.second), 0, "the head op drops as landed");
+    assert!(
+        !accused_nobody(&mut split.events),
+        "the refused record is still reported"
     );
 }
