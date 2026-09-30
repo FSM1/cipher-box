@@ -1,134 +1,21 @@
 /**
- * The pure parts of the desktop soak leg: the leg names, the marker paths, the
- * grantee ledger lines, the time budgets, and the environment the remote-stack
- * mode reads. The marker name and bytes and the ledger file format are the web
- * soak's own, so both sides read what the other writes.
- *
- * The grantee ledger is `soak/desktop/ledger.txt`. Each marker a leg writes adds
- * one `marker <leg> <date>` line, and the marker itself is
- * `soak/desktop/<leg>/marker-<date>.txt`.
+ * The pure parts of the desktop soak leg: its platform, its time budgets, and
+ * the environment the remote-stack mode reads. The grantee ledger and the
+ * marker helpers are the web soak's own (`grantee.ts`).
  */
 
-import { isUtcDay, type Ledger, type LedgerLine } from '../../../web-e2e/staging/soak/ledger';
-import { markerFile } from '../../../web-e2e/staging/soak/markers';
-import { SoakFailure } from '../../../web-e2e/staging/soak/reasons';
+import type { DesktopLeg } from '../../../web-e2e/staging/soak/grantee';
 import { PRODUCTION_PROFILE, deadlines, type Deadlines, type SyncTimingProfile } from '../profile';
-
-export type DesktopLeg = 'macos' | 'linux' | 'windows';
-export type MarkerLeg = DesktopLeg | 'web';
-
-export const MARKER_LEGS: readonly MarkerLeg[] = ['macos', 'linux', 'windows', 'web'];
-
-/** The grantee's desktop folder, from the vault root. The web bootstrap builds it. */
-export const DESKTOP_FOLDER: readonly string[] = ['soak', 'desktop'];
-export const LEDGER_FILE = 'ledger.txt';
 
 export const LOGIN_SECRET_ENV = 'SOAK_GRANTEE_LOGIN_SECRET';
 export const API_URL_ENV = 'VITE_API_URL';
 export const ROUTING_ENDPOINTS_ENV = 'VITE_ROUTING_ENDPOINTS';
-
-const LINE = /^marker (\S+) (\S+)$/;
-const MARKER_FILE = /^marker-(\d{4}-\d{2}-\d{2})\.txt$/;
-
-export interface LegMarker {
-  readonly leg: MarkerLeg;
-  readonly date: string;
-}
 
 export function legOf(platform: NodeJS.Platform): DesktopLeg {
   if (platform === 'darwin') return 'macos';
   if (platform === 'linux') return 'linux';
   if (platform === 'win32') return 'windows';
   throw new Error(`no desktop soak leg runs on ${platform}`);
-}
-
-export function markerPath(marker: LegMarker): string[] {
-  return [...DESKTOP_FOLDER, marker.leg, markerFile(marker.date)];
-}
-
-export function ledgerPath(): string[] {
-  return [...DESKTOP_FOLDER, LEDGER_FILE];
-}
-
-/** The ledger line of one leg marker. Refuses a line that {@link legMarkers} would reject. */
-export function ledgerLine(marker: LegMarker): string {
-  const line = `marker ${marker.leg} ${marker.date}`;
-  if (parseLine(line) === null) {
-    throw new SoakFailure(
-      'ledger-unparsable',
-      `the ${marker.leg} marker of ${marker.date} is not writable`
-    );
-  }
-  return line;
-}
-
-/** The leg markers the ledger lists. A `marker ` line of another shape is `ledger-unparsable`. */
-export function legMarkers(ledger: Ledger): LegMarker[] {
-  return ledger.lines.flatMap((line) => {
-    if (line.kind !== 'other' || !line.text.startsWith('marker ')) return [];
-    const marker = parseLine(line.text);
-    if (marker === null) {
-      throw new SoakFailure('ledger-unparsable', `"${line.text}" is not a leg marker line`);
-    }
-    return [marker];
-  });
-}
-
-/** Adds the line of `marker` once: a second run on one day leaves the ledger as it is. */
-export function recordMarker(ledger: Ledger, marker: LegMarker): Ledger {
-  const text = ledgerLine(marker);
-  if (ledger.lines.some((line) => line.kind === 'other' && line.text === text)) return ledger;
-  const added: LedgerLine = { kind: 'other', text };
-  return { lines: [...ledger.lines, added] };
-}
-
-/** The day a listed file names, or `null` for a file that is not a marker. */
-export function markerDate(fileName: string): string | null {
-  const match = MARKER_FILE.exec(fileName);
-  return match !== null && isUtcDay(match[1]!) ? match[1]! : null;
-}
-
-/**
- * What a leg must read: every marker of the other legs, from the ledger and
- * from the folder listings both, so a marker that lost its line and a line that
- * lost its marker each count.
- */
-export function markersToRead(
-  ledger: Ledger,
-  listed: Readonly<Partial<Record<MarkerLeg, readonly string[]>>>,
-  self: DesktopLeg
-): LegMarker[] {
-  const found = new Map<string, LegMarker>();
-  const add = (marker: LegMarker): void => {
-    if (marker.leg !== self) found.set(`${marker.leg} ${marker.date}`, marker);
-  };
-  legMarkers(ledger).forEach(add);
-  for (const leg of MARKER_LEGS) {
-    for (const name of listed[leg] ?? []) {
-      const date = markerDate(name);
-      if (date !== null) add({ leg, date });
-    }
-  }
-  return [...found.values()].sort(
-    (a, b) =>
-      MARKER_LEGS.indexOf(a.leg) - MARKER_LEGS.indexOf(b.leg) || a.date.localeCompare(b.date)
-  );
-}
-
-/** The summary fact of what a leg read, one count per leg. */
-export function readLine(read: readonly LegMarker[]): string {
-  if (read.length === 0) return 'no marker of another leg yet';
-  return MARKER_LEGS.flatMap((leg) => {
-    const count = read.filter((marker) => marker.leg === leg).length;
-    return count === 0 ? [] : [`${leg} ${count}`];
-  }).join(', ');
-}
-
-function parseLine(text: string): LegMarker | null {
-  const match = LINE.exec(text);
-  if (match === null) return null;
-  const leg = MARKER_LEGS.find((known) => known === match[1]);
-  return leg !== undefined && isUtcDay(match[2]!) ? { leg, date: match[2]! } : null;
 }
 
 /** The time each step of a leg gets, so a slow night fails with the reason of its step. */
@@ -163,20 +50,29 @@ export function readBudget(budgets: SoakBudgets, markers: number): number {
   return budgets.readBaseMs + markers * budgets.readPerMarkerMs;
 }
 
-/** The instance waits of a leg: each start wait fits inside the sign-in budget. */
+/**
+ * The instance waits of a leg. The API, the control file and the mount waits
+ * together fit inside the sign-in budget, so a start that runs out names the
+ * wait that ran out.
+ */
 export function legDeadlines(
   budgets: SoakBudgets,
   profile: SyncTimingProfile = PRODUCTION_PROFILE
 ): Deadlines {
   return {
     ...deadlines(profile),
-    apiReadyMs: budgets.signInMs,
-    controlFileMs: budgets.signInMs,
-    mountMs: budgets.signInMs,
+    apiReadyMs: Math.round(budgets.signInMs / 4),
+    controlFileMs: Math.round(budgets.signInMs / 4),
+    mountMs: Math.round(budgets.signInMs / 2),
   };
 }
 
 type Env = Readonly<Record<string, string | undefined>>;
+
+/** `env` without the soak variables, for the environment a host inherits. */
+export function withoutSoakVars(env: Env): Record<string, string | undefined> {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('SOAK_')));
+}
 
 /**
  * The grantee login secret as the host reads it: 64 lowercase hex characters.

@@ -22,6 +22,20 @@ import {
 import { markerBytes } from '../../../web-e2e/staging/soak/markers';
 import { SoakFailure, type FailureReason } from '../../../web-e2e/staging/soak/reasons';
 import { renderSummary } from '../../../web-e2e/staging/soak/summary';
+import {
+  DESKTOP_FOLDER,
+  MARKER_LEGS,
+  ledgerLine,
+  ledgerPath,
+  legMarkers,
+  markerPath,
+  markersToRead,
+  readLine,
+  recordMarker,
+  type DesktopLeg,
+  type LegMarker,
+  type MarkerLeg,
+} from '../../../web-e2e/staging/soak/grantee';
 import { describe, withDeadline } from '../cli';
 import { startInstance, type Instance } from '../instance';
 import { PollTimeout, poll } from '../poll';
@@ -29,29 +43,25 @@ import { PRODUCTION_PROFILE, type Deadlines } from '../profile';
 import { isMounted } from '../scenario';
 import { requireFile, serves } from '../stack';
 import {
-  DESKTOP_FOLDER,
-  MARKER_LEGS,
-  ledgerLine,
-  ledgerPath,
   legDeadlines,
-  legMarkers,
   legOf,
   loginSecret,
-  markerPath,
-  markersToRead,
   readBudget,
-  readLine,
-  recordMarker,
   remoteStack,
   soakBudgets,
-  type DesktopLeg,
-  type LegMarker,
-  type MarkerLeg,
+  withoutSoakVars,
   type SoakBudgets,
 } from './plan';
 import { Recorder } from './recorder';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+
+/**
+ * What a step bound adds past the waits inside it, so a wait that ran out
+ * reports its own last value, and releases a stalled read, before the bound
+ * takes every mount away.
+ */
+const STEP_GRACE_MS = 60_000;
 
 const USAGE = `Usage: tsx src/soak/runSoak.ts [--help]
 
@@ -83,6 +93,8 @@ interface LegContext {
   deadlines: Deadlines;
   /** Every instance this leg started, so any bound can take the mounts away. */
   started: Instance[];
+  /** The starts in flight. A bound waits for them, so no child outlives the leg. */
+  opening: Set<Promise<unknown>>;
 }
 
 async function main(): Promise<number> {
@@ -91,13 +103,6 @@ async function main(): Promise<number> {
     process.stdout.write(USAGE);
     return 0;
   }
-  if (argv.length > 0) throw new Error(`unknown argument ${argv[0]}. Run --help for the options.`);
-
-  const leg = legOf(process.platform);
-  const named = process.env.CIPHERBOX_DESKTOP_BINARY;
-  if (!named) throw new Error('CIPHERBOX_DESKTOP_BINARY is unset. Point it at an e2e-hook build.');
-  const binary = resolve(REPO_ROOT, named);
-  await requireFile(binary, `CIPHERBOX_DESKTOP_BINARY names ${binary}, and no file is there.`);
 
   const workdir =
     process.env.CIPHERBOX_E2E_WORKDIR ?? (await mkdtemp(join(tmpdir(), 'cipherbox-desktop-soak-')));
@@ -105,6 +110,23 @@ async function main(): Promise<number> {
   const resultsFile = process.env.SOAK_RESULTS_FILE ?? join(workdir, 'soak-results.jsonl');
   await mkdir(dirname(resultsFile), { recursive: true });
   const recorder = new Recorder((line) => appendFile(resultsFile, `${line}\n`));
+
+  let leg: DesktopLeg;
+  let binary: string;
+  try {
+    if (argv.length > 0)
+      throw new Error(`unknown argument ${argv[0]}. Run --help for the options.`);
+    leg = legOf(process.platform);
+    const named = process.env.CIPHERBOX_DESKTOP_BINARY;
+    if (!named)
+      throw new Error('CIPHERBOX_DESKTOP_BINARY is unset. Point it at an e2e-hook build.');
+    binary = resolve(REPO_ROOT, named);
+    await requireFile(binary, `CIPHERBOX_DESKTOP_BINARY names ${binary}, and no file is there.`);
+  } catch (error) {
+    await recorder.unrecorded(`${process.platform} desktop leg`, error);
+    await writeSummary(recorder);
+    throw error;
+  }
 
   const budgets = soakBudgets(PRODUCTION_PROFILE);
   const context: LegContext = {
@@ -115,6 +137,7 @@ async function main(): Promise<number> {
     budgets,
     deadlines: legDeadlines(budgets, PRODUCTION_PROFILE),
     started: [],
+    opening: new Set(),
   };
 
   const test = `${leg} desktop leg`;
@@ -128,34 +151,38 @@ async function main(): Promise<number> {
     for (const instance of [...context.started].reverse()) await instance.stop();
   }
   await recorder.phase(test, 'ended');
-
-  const summary = renderSummary(recorder.records);
-  const summaryFile = process.env.GITHUB_STEP_SUMMARY;
-  if (summaryFile) await appendFile(summaryFile, summary);
-  else process.stdout.write(`\n${summary}`);
+  await writeSummary(recorder);
 
   if (recorder.failures > 0) return 1;
   if (!process.env.CIPHERBOX_E2E_WORKDIR) await rm(workdir, { recursive: true, force: true });
   return 0;
 }
 
+async function writeSummary(recorder: Recorder): Promise<void> {
+  const summary = renderSummary(recorder.records);
+  const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+  if (summaryFile) await appendFile(summaryFile, summary);
+  else process.stdout.write(`\n${summary}`);
+}
+
 async function runLeg(context: LegContext): Promise<void> {
   const { leg, recorder, budgets } = context;
 
-  const writer = await step(context, 'sign-in', 'sign-in-failed', async () => {
+  const writer = await step(context, 'sign-in', 'sign-in-failed', budgets.signInMs, async () => {
     const stack = remoteStack(process.env);
     const devKey = loginSecret(process.env);
     // The host inherits this environment. The secret reaches it on standard
     // input alone, so no soak secret stays behind for the child to read.
+    const kept = withoutSoakVars(process.env);
     for (const name of Object.keys(process.env)) {
-      if (name.startsWith('SOAK_')) delete process.env[name];
+      if (!(name in kept)) delete process.env[name];
     }
     await poll(
       () => serves(stack.apiUrl),
       (up) => up,
       {
         what: 'the API to serve a login',
-        timeoutMs: budgets.signInMs,
+        timeoutMs: context.deadlines.apiReadyMs,
         intervalMs: context.deadlines.intervalMs,
       }
     );
@@ -164,7 +191,7 @@ async function runLeg(context: LegContext): Promise<void> {
     return { instance, devKey };
   });
 
-  const ledger = await step(context, 'ledger', 'ledger-unreadable', () =>
+  const ledger = await step(context, 'ledger', 'ledger-unreadable', budgets.ledgerMs, () =>
     readGranteeLedger(context, writer.instance)
   );
 
@@ -177,75 +204,95 @@ async function runLeg(context: LegContext): Promise<void> {
   if (read !== null) await recorder.fact(`${leg} markers read`, readLine(read));
 
   const today: LegMarker = { leg, date: utcDay(new Date()) };
-  await step(context, 'marker write', 'desktop-marker-unpublished', () =>
-    bounded(
-      context,
-      writeMarker(writer.instance, ledger, today),
-      budgets.writeMs,
-      'the marker write'
-    )
+  await step(context, 'marker write', 'desktop-marker-unpublished', budgets.writeMs, async () => {
+    await stillMounted(writer.instance);
+    await writeMarker(writer.instance, ledger, today);
+  });
+
+  const reader = await step(
+    context,
+    'cold sign-in',
+    'sign-in-failed',
+    budgets.signInMs,
+    async () => {
+      const instance = await open(context, 'reader', writer.devKey);
+      await instance.refresh();
+      return instance;
+    }
   );
 
-  const reader = await step(context, 'cold sign-in', 'sign-in-failed', async () => {
-    const instance = await open(context, 'reader', writer.devKey);
-    await instance.refresh();
-    return instance;
-  });
-
-  await step(context, 'marker published', 'desktop-marker-unpublished', async () => {
-    await servesMarker(context, reader, today);
-    const settled = await writer.instance.status();
-    if (settled.deadLetters > 0) {
-      throw new SoakFailure(
-        'desktop-marker-unpublished',
-        `the writer dead-lettered ${settled.deadLetters} ops`
-      );
+  await step(
+    context,
+    'marker published',
+    'desktop-marker-unpublished',
+    budgets.publishMs,
+    async () => {
+      await servesMarker(context, reader, today);
+      const settled = await writer.instance.status();
+      if (settled.deadLetters > 0) {
+        throw new SoakFailure(
+          'desktop-marker-unpublished',
+          `the writer dead-lettered ${settled.deadLetters} ops`
+        );
+      }
     }
-  });
+  );
 }
 
 /**
- * One recorded step. Every wait inside it is a poll with its own deadline, and
- * a bare filesystem call goes through {@link bounded}.
+ * One recorded step, bounded by its budget. A kernel call on a mount carries
+ * no timeout, so the bound takes every mount away before it reports.
  */
 function step<T>(
   context: LegContext,
   name: string,
   reason: FailureReason,
+  budgetMs: number,
   body: () => Promise<T>
 ): Promise<T> {
   const check = `${context.leg} ${name}`;
   const started = Date.now();
-  return context.recorder.check(check, reason, body).then(
-    (value) => {
-      process.stdout.write(`- ${check}: passed in ${Date.now() - started}ms\n`);
-      return value;
-    },
-    (error: unknown) => {
-      process.stdout.write(`- ${check}: FAILED after ${Date.now() - started}ms\n`);
-      throw error;
-    }
-  );
+  return context.recorder
+    .check(check, reason, () =>
+      withDeadline(body(), budgetMs + STEP_GRACE_MS, `the ${check} step`, () => release(context))
+    )
+    .then(
+      (value) => {
+        process.stdout.write(`- ${check}: passed in ${Date.now() - started}ms\n`);
+        return value;
+      },
+      (error: unknown) => {
+        process.stdout.write(`- ${check}: FAILED after ${Date.now() - started}ms\n`);
+        throw error;
+      }
+    );
+}
+
+/** Lets each start in flight end on its own deadline, then takes every mount away. */
+async function release(context: LegContext): Promise<void> {
+  await Promise.allSettled([...context.opening]);
+  await Promise.allSettled(context.started.map((instance) => instance.abandon()));
 }
 
 /**
- * Bounds filesystem calls on a mount. A kernel call on a mount carries no
- * timeout, so the bound takes every mount away before it reports.
+ * Fails a write on a mount that a bound or a stalled read took away: the
+ * mount point is then a plain local folder, and a write there proves nothing.
  */
-function bounded<T>(
-  context: LegContext,
-  work: Promise<T>,
-  budgetMs: number,
-  what: string
-): Promise<T> {
-  return withDeadline(work, budgetMs, what, () =>
-    Promise.allSettled(context.started.map((instance) => instance.abandon()))
-  );
+async function stillMounted(instance: Instance): Promise<void> {
+  if (!(await isMounted(instance.mountRoot))) {
+    throw new SoakFailure(
+      'desktop-marker-unpublished',
+      `${instance.name} has no mount to write to`
+    );
+  }
+  await instance.status();
 }
 
+/** Starts an instance on an empty home, so it holds nothing an earlier run cached. */
 async function open(context: LegContext, name: string, devKey: string): Promise<Instance> {
   const home = join(context.workdir, name);
-  const instance = await startInstance({
+  await rm(home, { recursive: true, force: true });
+  const starting = startInstance({
     name: `${context.leg}-${name}`,
     home,
     devKey,
@@ -253,6 +300,13 @@ async function open(context: LegContext, name: string, devKey: string): Promise<
     logDir: join(context.workdir, 'logs'),
     deadlines: context.deadlines,
   });
+  context.opening.add(starting);
+  let instance: Instance;
+  try {
+    instance = await starting;
+  } finally {
+    context.opening.delete(starting);
+  }
   context.started.push(instance);
   await poll(
     () => isMounted(instance.mountRoot),
@@ -300,21 +354,22 @@ async function readGranteeLedger(context: LegContext, instance: Instance): Promi
 }
 
 /** Reads every marker of the other legs, byte for byte, and returns what it read. */
-function markerReads(
+async function markerReads(
   context: LegContext,
   instance: Instance,
   ledger: Ledger
 ): Promise<LegMarker[]> {
   const { leg, budgets } = context;
-  return step(context, 'markers', 'desktop-marker-missing', async () => {
-    const listed = await bounded(
-      context,
-      listLegFolders(instance),
-      budgets.readBaseMs,
-      'the listing of the leg folders'
-    );
-    const toRead = markersToRead(ledger, listed, leg);
-    const budget = readBudget(budgets, toRead.length);
+  const listed = await step(
+    context,
+    'marker listing',
+    'desktop-marker-missing',
+    budgets.readBaseMs,
+    () => listLegFolders(instance)
+  );
+  const toRead = markersToRead(ledger, listed, leg);
+  const budget = readBudget(budgets, toRead.length);
+  return step(context, 'markers', 'desktop-marker-missing', budget, async () => {
     const unread = new Map(toRead.map((marker) => [ledgerLine(marker), marker]));
     let rounds = 0;
     try {

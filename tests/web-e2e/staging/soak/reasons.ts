@@ -71,7 +71,8 @@ export const SOAK_REASONS = {
   'desktop-marker-missing': { kind: 'failure', meaning: 'an OS or browser marker did not open' },
   'desktop-marker-unpublished': {
     kind: 'failure',
-    meaning: 'the OS marker of today or its ledger line did not reach a cold mount',
+    meaning:
+      "the OS marker of today or its ledger line did not save on the writer's mount, or did not reach a cold mount",
   },
   'post-deploy-window': {
     kind: 'skip',

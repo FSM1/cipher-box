@@ -118,25 +118,27 @@ API before it starts the host. The host signs in as the soak grantee with
 `SOAK_GRANTEE_LOGIN_SECRET`, which the leg writes to its standard input only.
 The leg removes every `SOAK_*` variable from the environment the host inherits.
 
-A build without `VITE_ENVIRONMENT` runs the production timings, so every wait
-polls against a budget of many 30-second ticks (`src/soak/plan.ts`). The leg
-runs these steps, and each one names its own reason code:
+A build without `VITE_ENVIRONMENT` runs the production timings. Each step has
+a budget of many 30-second ticks (`src/soak/plan.ts`), and a step that runs
+out takes every mount away and fails with its own reason code:
 
 1. `sign-in`: the API serves a login, the mount opens, the first refresh lands.
 2. `ledger`: `soak/desktop/ledger.txt` opens and parses.
-3. `markers`: every marker of the other legs under `soak/desktop/<leg>/`
-   opens byte for byte, from the ledger lines and the folder listings both.
+3. `marker listing` and `markers`: every marker of the other legs under
+   `soak/desktop/<leg>/` opens byte for byte, from the ledger lines and the
+   folder listings both.
 4. `marker write`: the marker of today goes to
    `soak/desktop/<leg>/marker-<date>.txt`, and `marker <leg> <date>` goes to
-   the ledger. A second run on one day writes neither again.
+   the ledger. A second run on one day writes neither again. A mount that an
+   earlier step took away fails this step.
 5. `cold sign-in` and `marker published`: a second instance on an empty home
    serves the marker and its ledger line, so only a publish can pass.
 
-The legs are `macos`, `linux`, `windows` and `web`. The marker bytes, the
-ledger format, the reason codes and the result lines are the web soak's own
-(`tests/web-e2e/staging/soak`). The leg appends its result lines to
-`SOAK_RESULTS_FILE` and its summary to `GITHUB_STEP_SUMMARY`. Run it only from
-the soak workflow, against staging.
+The legs are `macos`, `linux`, `windows` and `web`. The grantee ledger and
+marker helpers (`grantee.ts`), the marker bytes, the reason codes and the
+result lines are the web soak's own (`tests/web-e2e/staging/soak`). The leg
+appends its result lines to `SOAK_RESULTS_FILE` and its summary to
+`GITHUB_STEP_SUMMARY`. Run it only from the soak workflow, against staging.
 
 ## Not in this suite
 

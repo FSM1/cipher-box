@@ -137,7 +137,14 @@ export async function startInstance(options: InstanceOptions): Promise<Instance>
   const logPath = join(logDir, `${name}.log`);
   const log = createWriteStream(logPath);
   const child = spawn(binary, ['--dev-key-stdin', '--control-file', controlFile], {
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+    // Linux takes the data directory from `XDG_DATA_HOME` before `HOME`, so a
+    // runner that sets it would give two instances one cache.
+    env: {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      XDG_DATA_HOME: join(home, '.local', 'share'),
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   // The key crosses on standard input. An argument would put a live login
