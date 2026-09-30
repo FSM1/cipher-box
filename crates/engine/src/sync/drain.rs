@@ -2380,17 +2380,15 @@ where
         if !head_reads_applied(&rebased, queued) {
             return Ok((pass, rebased));
         }
-        for other in &others {
-            let Ok(pass) = self.open_pass(scope, other).await else {
-                continue;
-            };
-            let rebased = self.rebase_queue(scope, queued);
-            if !head_reads_applied(&rebased, queued) {
-                return Ok((pass, rebased));
-            }
-        }
-        if !others.is_empty() {
-            pass = self.open_pass(scope, &resolved).await?;
+        let root = scope.source.root;
+        let chosen = self
+            .first_unapplied(scope, queued, root, &others, |bytes| {
+                self.open_root_candidate(scope, bytes)
+            })
+            .await;
+        if let Some((mut pass, state, rebased)) = chosen {
+            pass.insert(root, state);
+            return Ok((pass, rebased));
         }
         for folder in self.head_folders(queued) {
             if let Some(rebased) = self
@@ -2403,34 +2401,27 @@ where
         Ok((pass, self.rebase_queue(scope, queued)))
     }
 
-    /// The non-root folders the head op writes a child ref into.
+    /// The folders among the head op's authored nodes: a tied record of any
+    /// folder the op republishes can already carry the op.
     fn head_folders(&self, queued: &[(OpId, Op)]) -> Vec<NodeId> {
         let Some((_, op)) = queued.first() else {
             return Vec::new();
         };
-        let folders = match op.kind {
-            OpKind::Create { parent, .. } => vec![parent],
-            OpKind::Restore { into, .. } => vec![into],
-            OpKind::Move {
-                from_parent,
-                new_parent,
-                ..
-            }
-            | OpKind::Relink {
-                from_parent,
-                new_parent,
-                ..
-            } => vec![new_parent, from_parent],
-            _ => self.published_parent(op.target).into_iter().collect(),
-        };
-        let root = self.cells.base.borrow().root;
-        let mut unique = Vec::new();
-        for folder in folders {
-            if folder != root && !unique.contains(&folder) {
-                unique.push(folder);
-            }
-        }
-        unique
+        let base = self.cells.base.borrow();
+        op.authored_nodes(|| {
+            base.links_ranked(op.target)
+                .iter()
+                .map(|link| link.parent)
+                .collect()
+        })
+        .into_iter()
+        .filter(|node| {
+            *node != base.root
+                && base
+                    .node(*node)
+                    .is_some_and(|meta| meta.kind == crate::facade::NodeKind::Folder)
+        })
+        .collect()
     }
 
     /// Rebase onto another gated record `folder` serves at its sequence, when
@@ -2453,44 +2444,67 @@ where
         let Some(served) = self.served_child(&plane, folder, &name).await? else {
             return Ok(None);
         };
-        let held = pass.folder(folder)?.record.clone();
-        for record in served.records.iter().filter(|record| **record != held) {
-            let Ok(state) = self
-                .open_tied_folder(&plane, pass.anchor_for(&plane)?, folder, record)
-                .await
-            else {
+        let held = &pass.folder(folder)?.record;
+        let others: Vec<Vec<u8>> = served
+            .records
+            .into_iter()
+            .filter(|record| record != held)
+            .collect();
+        let anchor = pass.anchor_for(&plane)?;
+        let plane = &plane;
+        let chosen = self
+            .first_unapplied(scope, queued, folder, &others, |bytes| async move {
+                let state = self.open_tied_folder(plane, anchor, folder, bytes).await?;
+                Ok(((), state))
+            })
+            .await;
+        let Some(((), state, rebased)) = chosen else {
+            return Ok(None);
+        };
+        *pass.folder_mut(folder)? = state;
+        Ok(Some(rebased))
+    }
+
+    /// The first of `candidates` for `folder` on which the head op does not
+    /// read as applied. Each try paints and replays a copy of the base, since
+    /// a record that does not name a child would drop its subtree; only the
+    /// chosen record reaches the base.
+    async fn first_unapplied<'c, Opened, Fut>(
+        &self,
+        scope: &DrainScope<'_>,
+        queued: &[(OpId, Op)],
+        folder: NodeId,
+        candidates: &'c [Vec<u8>],
+        open: impl Fn(&'c [u8]) -> Fut,
+    ) -> Option<(Opened, FolderState, ReplayReport)>
+    where
+        Fut: core::future::Future<Output = Result<(Opened, FolderState), Halt>>,
+    {
+        for bytes in candidates {
+            let Ok((opened, state)) = open(bytes).await else {
                 continue;
             };
-            self.repaint_folder(
+            let mut trial = self.cells.base.borrow().clone();
+            paint_folder(
                 scope,
+                &mut trial,
                 folder,
                 &state.children,
                 state.sequence,
                 state.modified_at,
             );
-            let rebased = self.rebase_queue(scope, queued);
+            let rebased = replay_on(scope, &trial, queued);
             if !head_reads_applied(&rebased, queued) {
-                *pass.folder_mut(folder)? = state;
-                return Ok(Some(rebased));
+                *self.cells.base.borrow_mut() = trial;
+                return Some((opened, state, rebased));
             }
         }
-        let state = pass.folder(folder)?;
-        self.repaint_folder(
-            scope,
-            folder,
-            &state.children,
-            state.sequence,
-            state.modified_at,
-        );
-        Ok(None)
+        None
     }
 
     /// The queue replayed onto the base snapshot.
     fn rebase_queue(&self, scope: &DrainScope<'_>, queued: &[(OpId, Op)]) -> ReplayReport {
-        let base = self.cells.base.borrow();
-        let ops: Vec<Op> = queued.iter().map(|(_, op)| op.clone()).collect();
-        let local = apply_overlay(&base, &ops);
-        replay(&base, &local, queued, scope.scope_roots)
+        replay_on(scope, &self.cells.base.borrow(), queued)
     }
 
     /// The source scope root [`resolved_bytes`] picks, and every other record
@@ -2524,16 +2538,7 @@ where
     /// Open a pass anchored on the scope root `record_bytes`, whose epoch every
     /// record this pass seals is bound to.
     async fn open_pass(&self, scope: &DrainScope<'_>, record_bytes: &[u8]) -> Result<Pass, Halt> {
-        let root = self.open_root_record(&scope.source, record_bytes).await?;
-        let mut pass = Pass {
-            root: scope.source.root,
-            epoch: root.epoch,
-            history_links: root.history_links,
-            second_ratchet: None,
-            folders: Vec::new(),
-            journalled: Vec::new(),
-        };
-        let state = root.state;
+        let (mut pass, state) = self.open_root_candidate(scope, record_bytes).await?;
         self.repaint_folder(
             scope,
             scope.source.root,
@@ -2543,6 +2548,25 @@ where
         );
         pass.insert(scope.source.root, state);
         Ok(pass)
+    }
+
+    /// A pass anchored on the scope root `record_bytes`, and that root's state,
+    /// which neither the pass nor the base holds yet.
+    async fn open_root_candidate(
+        &self,
+        scope: &DrainScope<'_>,
+        record_bytes: &[u8],
+    ) -> Result<(Pass, FolderState), Halt> {
+        let root = self.open_root_record(&scope.source, record_bytes).await?;
+        let pass = Pass {
+            root: scope.source.root,
+            epoch: root.epoch,
+            history_links: root.history_links,
+            second_ratchet: None,
+            folders: Vec::new(),
+            journalled: Vec::new(),
+        };
+        Ok((pass, root.state))
     }
 
     /// One end's scope root as the record plane serves it ([`resolved_bytes`]),
@@ -6699,23 +6723,14 @@ where
         sequence: u64,
         modified_at: u64,
     ) {
-        let mut base = self.cells.base.borrow_mut();
-        match scope.granted {
-            Some(GrantedPass { plane, .. }) => {
-                let split = plane.split(&base, children);
-                project_folder_partial(
-                    &mut base,
-                    folder,
-                    &split.linkable,
-                    &split.withheld,
-                    sequence,
-                    modified_at,
-                );
-            }
-            None => {
-                project_folder(&mut base, folder, children, sequence, modified_at);
-            }
-        }
+        paint_folder(
+            scope,
+            &mut self.cells.base.borrow_mut(),
+            folder,
+            children,
+            sequence,
+            modified_at,
+        );
     }
 
     /// Insert a just-published record into the live held set so the liveness
@@ -7435,6 +7450,41 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
     is_wellformed_content_cid(cid)
         .then_some(cid)
         .ok_or(Halt::Permanent(DeadLetterReason::PayloadRefused))
+}
+
+/// Merge one folder's published children into `base`, under the cross-plane
+/// rule when the pass is grafted.
+fn paint_folder(
+    scope: &DrainScope<'_>,
+    base: &mut Snapshot,
+    folder: NodeId,
+    children: &[ChildRef],
+    sequence: u64,
+    modified_at: u64,
+) {
+    match scope.granted {
+        Some(GrantedPass { plane, .. }) => {
+            let split = plane.split(base, children);
+            project_folder_partial(
+                base,
+                folder,
+                &split.linkable,
+                &split.withheld,
+                sequence,
+                modified_at,
+            );
+        }
+        None => {
+            project_folder(base, folder, children, sequence, modified_at);
+        }
+    }
+}
+
+/// The queue replayed onto `base`.
+fn replay_on(scope: &DrainScope<'_>, base: &Snapshot, queued: &[(OpId, Op)]) -> ReplayReport {
+    let ops: Vec<Op> = queued.iter().map(|(_, op)| op.clone()).collect();
+    let local = apply_overlay(base, &ops);
+    replay(base, &local, queued, scope.scope_roots)
 }
 
 /// A loaded node's state as a folder, refusing a node whose sealed body is not

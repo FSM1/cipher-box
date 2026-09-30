@@ -53,8 +53,8 @@ use cipherbox_engine::net::{
 };
 use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, HttpResponse, OpId, RecordTransport, Scheduler, SeamError, SeamResult,
-    SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, EndpointId, FloorStore, HttpResponse, OpId, RecordTransport, Scheduler, SeamError,
+    SeamResult, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
     Destinations, SettingsOrigin, SettingsPublishError, SettingsRefusal, VaultSettings,
@@ -17015,4 +17015,155 @@ fn an_interior_split_healed_after_a_re_read_keeps_the_other_devices_write() {
         }
         assert_interior_healed(&split, &format!("re-read, ours first: {ours_first}"));
     }
+}
+
+/// A record for `folder` at `sequence` that seals `children`, signed with `eol`
+/// and not yet on any endpoint.
+fn folder_record_with(
+    records: &InMemoryRecordStore,
+    blocks: &Blocks,
+    folder: NodeId,
+    children: Vec<ChildRef>,
+    sequence: u64,
+    eol: &str,
+) -> Vec<u8> {
+    let (_, head_cid) = published(records, folder);
+    let envelope =
+        decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
+    let read_key = read_key_of(folder);
+    let ReadBody::Folder {
+        created_at,
+        modified_at,
+        unknown,
+        ..
+    } = open_read_body(&envelope, &read_key).expect("opens")
+    else {
+        panic!("expected a folder body");
+    };
+    let head = author_child_envelope(EnvelopeAuthoring {
+        node_id: folder.0,
+        scope_id: SCOPE,
+        epoch: envelope.epoch,
+        read_key: &read_key,
+        nonce: &[0x3D; 24],
+        body: &ReadBody::Folder {
+            created_at,
+            modified_at,
+            children,
+            unknown,
+        },
+        carried_unknown: envelope.unknown.clone(),
+        carried_epoch_tag_unknown: envelope.epoch_tag_unknown.clone(),
+    })
+    .expect("the other writer authors a valid record");
+    blocks.put(head.block.clone());
+    IpnsRecord::create_v2(
+        &write_signer(folder),
+        format!("/ipfs/{}", head.cid).as_bytes(),
+        sequence,
+        TTL_NANOS,
+        eol,
+    )
+    .marshal()
+}
+
+/// A lost race on `photos`, where the other endpoints serve tied records that
+/// do not name the folder `k`, and a queued rename sits below `k`. With
+/// `chosen`, one endpoint also serves a record that names `k` and on which the
+/// head create does not read as applied, after one that reads it as applied.
+/// Trying a record that does not name `k` must not drop `k`'s subtree from the
+/// base, so the rename still publishes.
+fn a_tried_record_keeps_the_subtree_it_does_not_name(chosen: bool) {
+    let world = FakeWorld {
+        record_store: InMemoryRecordStore::new(vec![
+            EndpointId::new("fake:someguy"),
+            EndpointId::new("fake:public-routing"),
+            EndpointId::new("fake:third"),
+        ]),
+        ..FakeWorld::new()
+    };
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    tick_past_the_first_walk(&world, &engine, &mut tasks);
+    create_under(&mut engine, ROOT, "photos");
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    create_under(&mut engine, photos, "k");
+    tick(&world, &engine, &mut tasks);
+    let k = child_id(&engine, photos, "k");
+    create_under(&mut engine, k, "f");
+    tick(&world, &engine, &mut tasks);
+    let f = child_id(&engine, k, "f");
+    let (base, _) = published(&world.record_store, photos);
+
+    create_under(&mut engine, photos, "2027");
+    let created = child_id(&engine, photos, "2027");
+    block_on(engine.command(Command::Rename {
+        node: f,
+        new_name: "g".into(),
+    }))
+    .unwrap();
+    let eol = renewal_eol_from(Scheduler::now(&world.scheduler));
+    let applied = folder_record_with(
+        &world.record_store,
+        &blocks,
+        photos,
+        vec![child_ref(created.0, "2027", CoreNodeKind::Folder)],
+        base + 1,
+        &eol,
+    );
+    let unapplied = folder_record_with(
+        &world.record_store,
+        &blocks,
+        photos,
+        published_children(&world.record_store, &blocks, photos),
+        base + 1,
+        &eol,
+    );
+    let endpoints = world.record_store.endpoints();
+    let served = [applied.clone(), if chosen { unapplied } else { applied }];
+    for (endpoint, record) in endpoints[1..].iter().zip(served) {
+        world.record_store.seed_record_after_put_at(
+            endpoint,
+            write_name(photos).as_str(),
+            write_name(photos).as_str(),
+            record,
+        );
+        world.record_store.fail_put_endpoint(endpoint);
+    }
+    tick(&world, &engine, &mut tasks);
+    for endpoint in &endpoints[1..] {
+        world.record_store.heal_put_endpoint(endpoint);
+    }
+    assert_eq!(queued(&alice), 2, "the create and the rename stay queued");
+
+    block_on(engine.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+    assert_eq!(queued(&alice), 0, "chosen: {chosen}");
+    assert_eq!(
+        published_names(&world.record_store, &blocks, k),
+        ["g"],
+        "chosen: {chosen}: the rename below k publishes"
+    );
+    if chosen {
+        assert_eq!(
+            published_names(&world.record_store, &blocks, photos),
+            ["2027", "k"],
+            "the create publishes over the record that names k"
+        );
+    }
+}
+
+#[test]
+fn a_tied_record_that_drops_a_subtree_leaves_the_base_when_none_is_chosen() {
+    a_tried_record_keeps_the_subtree_it_does_not_name(false);
+}
+
+#[test]
+fn a_tied_record_that_drops_a_subtree_leaves_the_base_before_another_is_chosen() {
+    a_tried_record_keeps_the_subtree_it_does_not_name(true);
 }
