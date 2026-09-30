@@ -122,9 +122,13 @@ account's advisory BYO flag is read only in the restricting direction: `advisory
 never assume the default. The rule landed with FSM1/cipher-box#1149; this ADR records it.
 
 **D6 — The sealed body carries a monotonic revision per publish attempt.** The engine mints the
-revision for each publish attempt and advances it before the PUT. A reader refuses a revision
-below the highest it has adopted at the same sequence. That refusal is a trust violation, not
-staleness. A record at a strictly higher sequence won its own CAS and is never held to the
+revision for each publish attempt and advances the mint counter before the seal, so before the
+head upload, the register and the PUT. The API answers the head upload and the register and can
+refuse either. A mint counter raised after them would let that refusal leave this device with no
+mark, and the next start would take the `UnprovenFirstRun` defaults (D5). So a minted revision
+outlives every attempt that can reach the network, and a retry never reuses it. A reader refuses
+a revision below the highest it has adopted at the same sequence. That refusal is a trust
+violation, not staleness. A record at a strictly higher sequence won its own CAS and is never held to the
 device-local revision, or the legitimate publish of a second device would be refused permanently.
 The writer's mint counter and the reader's adopted high-water are separate durable values. An
 attempt that never landed advances only the mint counter, so it never makes a device refuse the
