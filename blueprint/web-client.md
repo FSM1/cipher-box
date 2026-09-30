@@ -65,6 +65,13 @@ What dies relative to v1 — with the design that killed it:
   engine worker; Vite fingerprints and serves it immutable. Single-threaded —
   no wasm threads or SharedArrayBuffer in v2.0; the worker already keeps all
   engine work off the UI thread.
+- **Record read outside a session**: a module built with the `observer`
+  feature exports `readIpnsRecord`; the production module does not.
+  `packages/client` opens such a module under Node through
+  `openIpnsRecordReader`. The read verifies a signed IPNS record under the key in
+  its name and returns the sequence and the EOL. It runs no adoption gate,
+  adopts nothing, and no product path calls it; its consumers are the client
+  Node suite and the staging soak, whose build of the module is not landed ([ADR 0057](../decisions/0057-an-observer-outside-a-session-reads-a-verified-record-and-adopts-nothing.md) D1).
 - **Types are generated, not hand-mirrored**: the wasm-bindgen `.d.ts` output
   is the boundary contract; `packages/client` re-exports those types through
   its facade proxy. No hand-maintained TS mirror of engine structures — the
