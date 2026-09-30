@@ -164,7 +164,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   the end of the pass that orphaned it, per attempt. A fan-out that
   acknowledged nothing, or that every endpoint refused, does **not** qualify:
   no ack is not proof nothing stored, and an endpoint that states a refusal can
-  keep the record (ADR 0047 D4, ADR 0060).
+  keep the record (ADR 0047 D4, ADR 0060 Consequence 8).
   A **delete** reclaims its own target at once — the shortened parent is a
   record the pass resolved and republished — and holds every descendant in a
   bounded quarantine. A descendant is reached through a `ChildRef`, which any

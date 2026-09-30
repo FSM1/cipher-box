@@ -1442,6 +1442,39 @@ fn a_refusal_supersedes_only_the_revision_it_names() {
     );
 }
 
+/// An endpoint that states a refusal can keep the record, so the head block of
+/// a refused publish stays charged.
+#[test]
+fn a_bin_publish_every_endpoint_refused_retires_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"only-device");
+    answer_bin_puts(&device, &[400, 400]);
+    serve_http(&device, &blocks, 4);
+    let orphans = OrphanHeads::default();
+
+    let outcome = block_on(publish_bin_index(
+        &device.record_store,
+        &api(&device),
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(1),
+        &orphans,
+        &keys(),
+        &binned(&[1]),
+    ));
+    assert!(matches!(
+        outcome,
+        Err(BinIndexPublishError::Publish(RecordPublishError::Publish(
+            PublishError::AllEndpointsRefused
+        )))
+    ));
+    assert!(blocks.retired().is_empty(), "nothing was retired");
+    assert!(orphans.pending().is_empty(), "nothing is pending either");
+}
+
 /// A refusal the store cannot record leaves the mark, the fail-closed side.
 #[test]
 fn a_refusal_the_store_does_not_take_keeps_the_mark() {

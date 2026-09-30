@@ -1970,6 +1970,47 @@ fn a_settings_publish_whose_fan_out_acked_nothing_retires_nothing() {
     assert!(orphans.pending().is_empty(), "nothing is pending either");
 }
 
+/// An endpoint that states a refusal can keep the record, so a publish that
+/// every endpoint refused leaves its head block charged, as one with no ack
+/// does.
+#[test]
+fn a_settings_publish_every_endpoint_refused_retires_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    for endpoint in device.record_store.endpoints() {
+        device
+            .record_store
+            .answer_put_for_at(&endpoint, settings_name(&SECRET).as_str(), 400);
+    }
+    serve_http(&device, &blocks, 4);
+    let orphans = OrphanHeads::default();
+
+    let outcome = block_on(publish_settings(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(9),
+        &orphans,
+        &SECRET,
+        &configured(),
+    ));
+    assert!(matches!(
+        outcome.unwrap_err(),
+        SettingsPublishError::Publish(_),
+    ));
+    assert!(blocks.retired().is_empty(), "nothing was retired");
+    assert!(orphans.pending().is_empty(), "nothing is pending either");
+}
+
 // ---------------------------------------------------------------------------
 // The facade caller: a host saves settings through `Command::SaveVaultSettings`,
 // and the confirmed record joins the session's renewal set.

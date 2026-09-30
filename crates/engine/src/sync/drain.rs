@@ -8233,9 +8233,8 @@ mod tests {
 
     /// The destruction-critical arm: a fan-out that acked nothing, or that
     /// every endpoint refused, may still have stored the record, so its head
-    /// stays pinned. Everything else here
-    /// stopped short of the transport with a charged row behind it, or with no
-    /// row at all.
+    /// stays pinned. Everything else here stopped short of the transport with a
+    /// charged row behind it, or with no row at all.
     #[test]
     fn only_a_publish_that_never_reached_the_transport_orphans_its_head() {
         use RecordPublishError::Upload;

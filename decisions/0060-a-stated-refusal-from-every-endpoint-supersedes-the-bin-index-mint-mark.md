@@ -83,8 +83,8 @@ bodies. A later PUT raises the mint above the refusal and is a mark again.
    refusal counter beside it, so it still reads as a mark (ADR 0020). A previous build that
    reads state from this build ignores the refusal counter and reads `StrandedMint`, the
    restrictive side.
-5. The head block of a refused publish stays charged, and ADR 0047 D4 applies, because an
-   endpoint that states a refusal can keep the record.
+5. `blueprint/engine.md` "Retirement": the head block of a refused publish stays charged, and
+   ADR 0047 D4 applies, because an endpoint that states a refusal can keep the record.
 6. The vault settings plane keeps its mint counter and its mark rule (ADR 0034 D5), so no PUT
    outcome clears a settings mark.
 7. `CONTEXT.md` does not change. No wire format, KDF edge or KAT vector changes.
