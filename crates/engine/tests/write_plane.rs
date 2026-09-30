@@ -17220,7 +17220,7 @@ fn a_tied_scope_root_record_that_drops_a_subtree_leaves_the_base() {
 /// record the child gate refuses. The drain then reads no tied record for the
 /// folder, so the head op drops as landed and the queue does not stall.
 #[test]
-fn a_refused_tied_record_does_not_stall_a_head_op_that_landed() {
+fn a_folder_that_does_not_load_offers_no_tied_record() {
     let mut split = interior_split(true);
     block_on(split.engine.command(Command::SetFocus {
         node: Some(split.photos),
@@ -17251,3 +17251,49 @@ fn a_refused_tied_record_does_not_stall_a_head_op_that_landed() {
         "the refused record is still reported"
     );
 }
+
+/// The folder loads, and then the read for a tied record meets a record the
+/// child gate refuses. The head op already reads as applied, so it drops as
+/// landed and the queue does not stall.
+#[test]
+fn a_refused_tied_record_read_does_not_stall_a_head_op_that_landed() {
+    let mut split = interior_split(true);
+    block_on(split.engine.command(Command::SetFocus {
+        node: Some(split.photos),
+    }))
+    .unwrap();
+    let (_, root_head) = published(&split.world.record_store, ROOT);
+    let transplant = IpnsRecord::create_v2(
+        &write_signer(split.photos),
+        format!("/ipfs/{root_head}").as_bytes(),
+        split.base + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    let key = write_name(split.photos);
+    let endpoints = split.world.record_store.endpoints().len();
+    let before = split.world.record_store.get_count(key.as_str());
+    split.world.record_store.serve_gets_for_after(
+        key.as_str(),
+        TIED_READ_AFTER,
+        endpoints,
+        transplant,
+    );
+    let _ = events_so_far(&mut split.events);
+    tick(&split.world, &split.engine, &mut split.tasks);
+    assert!(
+        split.world.record_store.get_count(key.as_str()) >= before + TIED_READ_AFTER + endpoints,
+        "the read for a tied record ran"
+    );
+    assert_eq!(queued(&split.second), 0, "the head op drops as landed");
+    assert!(
+        !accused_nobody(&mut split.events),
+        "the refused record is still reported"
+    );
+}
+
+/// The GETs of the folder's name one tick answers before the drain reads it for
+/// a tied record: the tick's own read and the drain's folder load, one GET for
+/// each of the two endpoints.
+const TIED_READ_AFTER: usize = 4;

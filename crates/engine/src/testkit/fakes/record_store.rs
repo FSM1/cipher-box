@@ -19,6 +19,10 @@ type EndpointRecords = HashMap<String, Vec<u8>>;
 /// (`None` for every endpoint).
 type DeferredRecords = HashMap<String, Vec<(String, Vec<u8>, Option<EndpointId>)>>;
 
+/// For each routing key: the GETs still to answer from the store, the GETs then
+/// to answer with the record, and the record.
+type SwappedRecords = HashMap<String, (usize, usize, Vec<u8>)>;
+
 /// In-memory fake of the `/routing/v1` endpoint set: one map of opaque
 /// record bytes per configured endpoint, holding the **highest sequence** at
 /// each routing key as a real endpoint does ([`supersedes`]).
@@ -67,6 +71,8 @@ pub struct InMemoryRecordStore {
     stalling_gets: Arc<AtomicBool>,
     /// ([`stall_gets_for_after`](InMemoryRecordStore::stall_gets_for_after)).
     stalling_keys: Arc<Mutex<HashMap<String, usize>>>,
+    /// ([`serve_gets_for_after`](InMemoryRecordStore::serve_gets_for_after)).
+    swapped_keys: Arc<Mutex<SwappedRecords>>,
 }
 
 impl InMemoryRecordStore {
@@ -95,6 +101,7 @@ impl InMemoryRecordStore {
             dropping_puts: Arc::new(AtomicBool::new(false)),
             stalling_gets: Arc::new(AtomicBool::new(false)),
             stalling_keys: Arc::default(),
+            swapped_keys: Arc::default(),
         }
     }
 
@@ -315,6 +322,35 @@ impl InMemoryRecordStore {
             .insert(routing_key.to_owned(), budget);
     }
 
+    /// Answer the `count` GETs under `routing_key` that come after `answered`
+    /// more of them with `record`, then answer from the store again, so one
+    /// read of a name sees other bytes between two that do not.
+    pub fn serve_gets_for_after(
+        &self,
+        routing_key: &str,
+        answered: usize,
+        count: usize,
+        record: Vec<u8>,
+    ) {
+        self.swapped_keys
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned(), (answered, count, record));
+    }
+
+    /// The bytes [`serve_gets_for_after`](Self::serve_gets_for_after) answers
+    /// this GET under `routing_key` with, if any.
+    fn swapped(&self, routing_key: &str) -> Option<Vec<u8>> {
+        let mut keys = self.swapped_keys.lock().expect("lock");
+        let (answered, count, record) = keys.get_mut(routing_key)?;
+        if let Some(left) = answered.checked_sub(1) {
+            *answered = left;
+            return None;
+        }
+        *count = count.checked_sub(1)?;
+        Some(record.clone())
+    }
+
     /// Park every GET for ever — the shape of a name no source answers for.
     /// The future stays `Pending`, so a deterministic executor parks on it
     /// rather than spinning.
@@ -393,6 +429,9 @@ impl RecordTransport for InMemoryRecordStore {
         }
         if self.get_failing_key(routing_key) {
             return Err(SeamError::new(format!("get refused for {routing_key}")));
+        }
+        if let Some(record) = self.swapped(routing_key) {
+            return Ok(Some(record));
         }
         let record = self
             .inner
