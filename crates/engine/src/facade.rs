@@ -173,7 +173,8 @@ use crate::sync::refresh::ManualRefresh;
 use crate::sync::staging::{
     DEAD_LETTER_NOTICES_PREFIX, DroppedVersionDebts, PreservedBounds, PreservedDeadLetter,
     StagedBlocks, read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
-    release_version_blocks, stage_op, take_dead_letter_notice, take_preserved_dead_letter,
+    release_version_blocks, stage_op, staged_record, take_dead_letter_notice,
+    take_preserved_dead_letter,
 };
 use crate::sync::staleness::{Connectivity, classify, next_boundary};
 use crate::sync::tick::{
@@ -10659,37 +10660,41 @@ where {
     /// Journal the legs one command owes, in order, and report the id of the
     /// last — the op whose publish completes it.
     ///
-    /// A leg that will not journal takes the leg before it back off the queue:
-    /// a staged crossing left half-journaled would park the subtree in the
-    /// vault-root scope ([`relocation_legs`]), which is neither the move the
-    /// caller asked for nor the failure they were told about.
+    /// Two legs go in one atomic write: a staged crossing left half-journaled
+    /// would park the subtree in the vault-root scope ([`relocation_legs`]),
+    /// which is neither the move the caller asked for nor the failure they
+    /// were told about (ADR 0045 D6).
     async fn stage_legs_and_notify(
         &mut self,
         park: Option<&Op>,
         arrive: &Op,
     ) -> Result<CommandOutcome, EngineError> {
-        let parked = match park {
-            Some(op) => Some(self.journal(op).await?),
-            None => None,
+        let op_id = match park {
+            None => self.journal(arrive).await?,
+            Some(park) => {
+                let legs = [self.sealed(park).await?, self.sealed(arrive).await?];
+                let ids = self
+                    .seams
+                    .staging_store
+                    .enqueue_ops(&legs)
+                    .await
+                    .map_err(EngineError::from_seam)?;
+                *ids.last().ok_or_else(|| {
+                    EngineError::from_seam(SeamError::new("enqueue_ops returned no ids"))
+                })?
+            }
         };
-        match self.journal(arrive).await {
-            Ok(op_id) => {
-                // Best-effort push-invalidation trigger; a dropped receiver
-                // (host torn down) is fine.
-                let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-                Ok(CommandOutcome::Queued { op_id })
-            }
-            Err(error) => {
-                // Best-effort, and the caller still hears why the command
-                // failed: a leg a tick has already drained is gone from the
-                // queue, and a cleanup that reported itself instead would name
-                // the wrong cause.
-                if let Some(op_id) = parked {
-                    let _ = self.dequeue_op(op_id).await;
-                }
-                Err(error)
-            }
-        }
+        // Best-effort push-invalidation trigger; a dropped receiver (host torn
+        // down) is fine.
+        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        Ok(CommandOutcome::Queued { op_id })
+    }
+
+    /// Seal one op into a durable record, under an ephemeral of its own.
+    async fn sealed(&self, op: &Op) -> Result<Vec<u8>, EngineError> {
+        staged_record(&self.seams.staging_store, self.record_seal()?, op)
+            .await
+            .map_err(EngineError::from_seam)
     }
 
     /// Seal one op onto the durable queue, under an ephemeral of its own.

@@ -2952,6 +2952,29 @@ fn a_move_between_two_granted_folders_re_seals_into_the_destination_scope() {
     );
 }
 
+/// Both legs of a staged move are journaled or neither is (ADR 0045 D6). With
+/// the arriving leg's journal refused and removal refused too, no cleanup can
+/// take the parking leg back, so only a set written as one leaves nothing.
+#[test]
+fn a_staged_move_whose_arriving_leg_will_not_journal_journals_no_leg() {
+    let mut fx = GrantScenario::new();
+    let (holiday, album) = two_granted_folders(&mut fx);
+    let staging = fx.owner_device.staging_store.inner();
+    staging.fail_enqueue_after(1);
+    staging.fail_remove_op();
+
+    let refused = block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }));
+
+    assert!(refused.is_err(), "the caller hears that the move failed");
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "and no leg of it is queued"
+    );
+}
+
 /// The legs are two durable ops, so a restart between them resumes at the one
 /// still queued. The cut belongs to the leg that already published, and the
 /// debt it settled is durable: the resumed leg publishes the arrival and cuts

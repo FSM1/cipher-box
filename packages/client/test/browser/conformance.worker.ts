@@ -131,6 +131,41 @@ async function assertStagedEntryCount(dirName: string, expected: number): Promis
 }
 
 /**
+ * A multi-entry enqueue is one IndexedDB transaction: an add that throws part
+ * way through leaves none of the set queued, now or after a reopen.
+ */
+async function runStagingBatchBehavioral(): Promise<void> {
+  const name = 'conf-staging-batch';
+  await deleteDatabase(name);
+  const store = new OpfsStagingStore(name);
+  const single = await store.enqueueOp(new Uint8Array([1]));
+
+  const add = IDBObjectStore.prototype.add;
+  let calls = 0;
+  IDBObjectStore.prototype.add = function (this: IDBObjectStore, ...args) {
+    calls += 1;
+    if (calls === 2) throw new DOMException('refused', 'DataError');
+    return add.apply(this, args);
+  };
+  let refused = false;
+  try {
+    await store.enqueueOps([new Uint8Array([2]), new Uint8Array([3])]);
+  } catch {
+    refused = true;
+  } finally {
+    IDBObjectStore.prototype.add = add;
+  }
+  if (!refused) throw new Error('enqueueOps: the refused add did not fail the set');
+
+  for (const reader of [store, new OpfsStagingStore(name)]) {
+    const ids = (await reader.queuedOps()).map(([id]) => id);
+    if (ids.length !== 1 || ids[0] !== single) {
+      throw new Error(`enqueueOps: a failed set left entries queued: [${ids.join(', ')}]`);
+    }
+  }
+}
+
+/**
  * In-flight write debris — the temp a killed put leaves behind — is not a
  * staged record: it stays out of the orphan-GC enumeration and the staging
  * budget, and a reopened store reclaims it (nothing else can, precisely
@@ -174,6 +209,7 @@ const STAGED_AFTER_KIT: Record<string, number> = {
   'failed-replacement': 1,
   'failed-first-put': 0,
   cleared: 0,
+  batched: 0,
 };
 
 /** Stores are per-fault: the kit asserts on leftover staged counts, so another
@@ -508,6 +544,10 @@ async function run(seam: string): Promise<void> {
     }
     case 'stagingStoreDebris': {
       await runStagingDebrisBehavioral();
+      return;
+    }
+    case 'stagingStoreBatch': {
+      await runStagingBatchBehavioral();
       return;
     }
     case 'storeReclaim': {

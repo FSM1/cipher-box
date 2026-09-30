@@ -24,11 +24,24 @@ pub fn apply_overlay(base: &Snapshot, ops: &[Op]) -> Snapshot {
     view
 }
 
-/// Apply one op to the working view optimistically (intent, not rebase).
-///
-/// An op that authors a *change* to its target stamps [`Op::stamp_authored`];
-/// the ops that only remove state — a delete, a prune — have nothing to stamp.
+/// Apply one op to the working view optimistically (intent, not rebase), then
+/// stamp its [authored nodes](Op::authored_nodes).
 fn apply_one(view: &mut Snapshot, op: &Op) {
+    let authored = op.authored_nodes(|| {
+        view.links_ranked(op.target)
+            .iter()
+            .map(|link| link.parent)
+            .collect()
+    });
+    apply_intent(view, op);
+    for node in authored {
+        if let Some(meta) = view.node_mut(node) {
+            op.stamp_authored(meta);
+        }
+    }
+}
+
+fn apply_intent(view: &mut Snapshot, op: &Op) {
     match &op.kind {
         OpKind::Create { parent, name, node } => {
             let mut meta = NodeMeta::new(op.target, name.clone(), node.kind());
@@ -36,7 +49,6 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
             if op.staged_content().is_some() {
                 meta.content_version = Some(1);
             }
-            op.stamp_authored(&mut meta);
             view.upsert_node(meta);
             view.link_next(*parent, op.target);
         }
@@ -46,7 +58,6 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
         OpKind::Rename { new_name } => {
             if let Some(node) = view.node_mut(op.target) {
                 node.rename(new_name.clone());
-                op.stamp_authored(node);
             }
         }
         OpKind::Relink { new_parent, .. } => relocate(view, op, *new_parent, None, None),
@@ -65,15 +76,12 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
         OpKind::UpdateContent { .. } => {
             if let Some(node) = view.node_mut(op.target) {
                 node.content_version = node.content_version.map(|count| count + 1);
-                op.stamp_authored(node);
             }
         }
         // The node is binned, so nothing in the base renders it: the overlay
         // materializes it at the destination the command resolved.
         OpKind::Restore { into, name, kind } => {
-            let mut meta = NodeMeta::new(op.target, name.clone(), *kind);
-            op.stamp_authored(&mut meta);
-            view.upsert_node(meta);
+            view.upsert_node(NodeMeta::new(op.target, name.clone(), *kind));
             view.link_next(*into, op.target);
         }
         // A purged node is already absent from the rendered view; the bin is
@@ -122,11 +130,8 @@ fn relocate(
             })
     });
     view.relocate(op.target, new_parent, vacating);
-    if let Some(node) = view.node_mut(op.target) {
-        if let Some(new_name) = new_name {
-            node.rename(new_name);
-        }
-        op.stamp_authored(node);
+    if let (Some(node), Some(new_name)) = (view.node_mut(op.target), new_name) {
+        node.rename(new_name);
     }
 }
 

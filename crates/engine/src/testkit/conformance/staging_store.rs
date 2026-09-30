@@ -1,5 +1,5 @@
 //! Conformance kit: [`StagingStore`] FIFO ordering, durability, orphan-GC
-//! support, and `put_staged_bytes` failure atomicity.
+//! support, multi-entry enqueue, and `put_staged_bytes` failure atomicity.
 
 use crate::seams::StagingStore;
 
@@ -25,17 +25,20 @@ pub enum Backing {
     FailedFirstPut,
     /// The "forget this device" erase.
     Cleared,
+    /// The multi-entry enqueue.
+    Batched,
 }
 
 impl Backing {
     /// Every backing the kit asks for, so a host that has to enumerate them
     /// (one behind a string boundary, say) reads the set off the kit rather
     /// than transcribing it.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Ordering,
         Self::FailedReplacement,
         Self::FailedFirstPut,
         Self::Cleared,
+        Self::Batched,
     ];
 
     /// A stable label a host can key a directory, database name, or map entry
@@ -46,6 +49,7 @@ impl Backing {
             Self::FailedReplacement => "failed-replacement",
             Self::FailedFirstPut => "failed-first-put",
             Self::Cleared => "cleared",
+            Self::Batched => "batched",
         }
     }
 }
@@ -69,6 +73,70 @@ where
     failed_replacement_put(&mut open, &mut arm_failed_put).await;
     failed_first_put(&mut open, &mut arm_failed_put).await;
     clearing(&mut open).await;
+    batched_enqueue(&mut open).await;
+}
+
+/// A multi-entry enqueue queues its entries in order, verbatim, under ids that
+/// continue the single-entry progression, and they survive reopen like any
+/// other entry.
+async fn batched_enqueue<S, F>(open: &mut F)
+where
+    S: StagingStore,
+    F: AsyncFnMut(Backing) -> S,
+{
+    let store = open(Backing::Batched).await;
+    assert!(
+        store.queued_ops().await.unwrap().is_empty()
+            && store.staged_keys().await.unwrap().is_empty(),
+        "every kit backing is its own, and starts empty"
+    );
+    assert_eq!(
+        store.enqueue_ops(&[]).await.unwrap(),
+        Vec::new(),
+        "an empty set queues nothing"
+    );
+    let single = store.enqueue_op(b"op-single").await.unwrap();
+    let batch = store
+        .enqueue_ops(&[b"op-park".to_vec(), b"op-arrive".to_vec()])
+        .await
+        .unwrap();
+    let [park, arrive] = batch[..] else {
+        panic!("a multi-entry enqueue must return one id per entry");
+    };
+    assert!(
+        single < park && park < arrive,
+        "a set's ids continue the progression, in the set's order"
+    );
+    let after = store.enqueue_op(b"op-after").await.unwrap();
+    assert!(after > arrive, "and the progression continues past the set");
+
+    let expected = vec![
+        (single, b"op-single".to_vec()),
+        (park, b"op-park".to_vec()),
+        (arrive, b"op-arrive".to_vec()),
+        (after, b"op-after".to_vec()),
+    ];
+    assert_eq!(
+        store.queued_ops().await.unwrap(),
+        expected,
+        "a set's entries queue FIFO with payloads verbatim"
+    );
+    assert_eq!(
+        open(Backing::Batched).await.queued_ops().await.unwrap(),
+        expected,
+        "and survive reopen"
+    );
+
+    store.remove_op(park).await.unwrap();
+    assert_eq!(
+        store.queued_ops().await.unwrap(),
+        vec![
+            (single, b"op-single".to_vec()),
+            (arrive, b"op-arrive".to_vec()),
+            (after, b"op-after".to_vec()),
+        ],
+        "an entry of a set is removed alone"
+    );
 }
 
 /// FIFO ordering, id progression, staged-byte accounting, orphan-GC support,

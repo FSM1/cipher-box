@@ -95,6 +95,19 @@ pub async fn stage_op<S: StagingStore>(
     seal: RecordSeal<'_>,
     op: &Op,
 ) -> SeamResult<OpId> {
+    store
+        .enqueue_op(&staged_record(store, seal, op).await?)
+        .await
+}
+
+/// The sealed record [`stage_op`] journals for `op`, after every check it
+/// makes, for a caller that journals several records in one atomic write
+/// ([`StagingStore::enqueue_ops`]).
+pub(crate) async fn staged_record<S: StagingStore>(
+    store: &S,
+    seal: RecordSeal<'_>,
+    op: &Op,
+) -> SeamResult<Vec<u8>> {
     if !op.crossing_is_coherent() {
         return Err(SeamError::new(
             "stage_op: a relocation that keeps its parent cannot claim to leave its scope",
@@ -109,7 +122,7 @@ pub async fn stage_op<S: StagingStore>(
             SeamError::new("stage_op: staged root block does not address to the op's content root")
         })?;
     }
-    store.enqueue_op(&record).await
+    Ok(record)
 }
 
 /// The staging key holding the **op records** of dead letters whose staged bytes

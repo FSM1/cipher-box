@@ -118,6 +118,11 @@ impl<S: StagingStore> StagingStore for LiveSeam<S> {
         self.seam.enqueue_op(op).await
     }
 
+    async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>> {
+        self.writable("staging_store enqueue_ops")?;
+        self.seam.enqueue_ops(ops).await
+    }
+
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
         self.seam.queued_ops().await
     }
@@ -226,6 +231,7 @@ mod tests {
             alive.set(false);
 
             seam.enqueue_op(b"op").await.unwrap_err();
+            seam.enqueue_ops(&[b"op".to_vec()]).await.unwrap_err();
             seam.put_staged_bytes(b"key", b"bytes").await.unwrap_err();
             seam.remove_op(op).await.unwrap_err();
             seam.remove_staged_bytes(b"key").await.unwrap_err();

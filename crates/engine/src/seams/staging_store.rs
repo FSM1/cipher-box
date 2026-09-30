@@ -30,8 +30,17 @@ pub struct OpId(pub u64);
 /// Hosts: IndexedDB + OPFS (web), local journal (desktop).
 pub trait StagingStore {
     /// Appends an opaque op record to the durable FIFO queue and returns
-    /// its id.
+    /// its id. An `Err` after the commit point can leave the op queued, with
+    /// its durability unknown.
     async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId>;
+
+    /// Appends several op records to the queue in one atomic write, in order,
+    /// and returns their ids in that order. No reader, before or after a crash,
+    /// ever sees part of the set. An `Err` leaves none of them queued, except
+    /// an `Err` after the commit point, which, as for [`Self::enqueue_op`], can
+    /// leave the whole set queued with its durability unknown. Each entry is stored as [`Self::enqueue_op`] stores one, so a
+    /// reader of the queue cannot tell the two apart.
+    async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>>;
 
     /// Every queued op in FIFO (ascending-id) order.
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>>;
@@ -97,7 +106,7 @@ pub trait StagingStore {
 /// counted beside the command path's enqueues; the engine wraps the host's
 /// store once, and every handle it hands out is a clone of that one.
 ///
-/// Only the three methods that change which ops are queued count. Staged bytes
+/// Only the methods that change which ops are queued count. Staged bytes
 /// are not an operand of the state law, and a live write handle churns them.
 pub struct QueueGenerationStore<S> {
     seam: S,
@@ -158,6 +167,11 @@ impl<S: StagingStore> StagingStore for QueueGenerationStore<S> {
         self.seam.enqueue_op(op).await
     }
 
+    async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>> {
+        self.mutating();
+        self.seam.enqueue_ops(ops).await
+    }
+
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
         self.seam.queued_ops().await
     }
@@ -212,11 +226,14 @@ mod tests {
         let enqueued = store.generation();
         block_on(store.remove_op(op)).expect("remove");
         let removed = store.generation();
+        block_on(store.enqueue_ops(&[b"a".to_vec(), b"b".to_vec()])).expect("enqueue a set");
+        let batched = store.generation();
         block_on(store.clear()).expect("clear");
 
         assert_ne!(enqueued, start);
         assert_ne!(removed, enqueued);
-        assert_ne!(store.generation(), removed);
+        assert_ne!(batched, removed);
+        assert_ne!(store.generation(), batched);
     }
 
     #[test]

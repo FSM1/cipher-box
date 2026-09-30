@@ -9,7 +9,7 @@ use core::cell::RefCell;
 use core::num::NonZeroU64;
 use core::task::{Context, Poll, Waker};
 use core::time::Duration;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -16391,5 +16391,236 @@ fn a_write_over_a_history_retention_cannot_shorten_still_publishes() {
             .dead_letters
             .is_empty(),
         "a co-writer's history never parks the member's own write",
+    );
+}
+
+/// The rendered `mtime` of every node in the view's tree.
+fn rendered_mtimes(engine: &Engine<FakeSeamTypes>) -> BTreeMap<NodeId, Option<u64>> {
+    let view = block_on(engine.view()).expect("a rendered view");
+    let mut walk = vec![ROOT];
+    let mut mtimes = BTreeMap::new();
+    while let Some(node) = walk.pop() {
+        mtimes.insert(node, view.attrs(node).and_then(|attrs| attrs.mtime));
+        walk.extend(view.children(node).into_iter().map(|child| child.id));
+    }
+    mtimes
+}
+
+/// Runs `act` and returns the nodes its overlay stamped: the ones now rendered
+/// at its authored time. Every other node keeps its time, and the
+/// publish moves no rendered time.
+fn stamped_by(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    act: impl FnOnce(&mut Engine<FakeSeamTypes>),
+) -> BTreeSet<NodeId> {
+    use cipherbox_engine::seams::Scheduler as _;
+
+    tick(world, engine, tasks);
+    let before = rendered_mtimes(engine);
+    let authored_at = Some(world.scheduler.now().0);
+    act(engine);
+    let rendered = rendered_mtimes(engine);
+    for (node, mtime) in &rendered {
+        if let Some(prior) = before.get(node) {
+            assert!(
+                *mtime == authored_at || mtime == prior,
+                "a node the op does not stamp keeps its time"
+            );
+        }
+    }
+    tick(world, engine, tasks);
+    assert_eq!(
+        rendered_mtimes(engine),
+        rendered,
+        "the publish writes the times the overlay rendered"
+    );
+    rendered
+        .into_iter()
+        .filter(|(_, mtime)| *mtime == authored_at)
+        .map(|(node, _)| node)
+        .collect()
+}
+
+/// `stamped_by` for one command.
+fn stamped_by_command(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    command: Command,
+) -> BTreeSet<NodeId> {
+    stamped_by(world, engine, tasks, |engine| {
+        block_on(engine.command(command)).expect("the command journals");
+    })
+}
+
+/// The overlay stamps exactly the nodes whose records the drain republishes at
+/// the op's authored time (ADR 0045 D5): a rename or a relocation stamps the
+/// folders, not the node.
+#[test]
+fn an_op_renders_the_times_its_publish_writes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    for name in ["a", "b"] {
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: name.into(),
+            kind: NodeKind::Folder,
+        }))
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+    let (a, b) = (child_id(&engine, ROOT, "a"), child_id(&engine, ROOT, "b"));
+    let created = stamped_by_command(
+        &world,
+        &mut engine,
+        &mut tasks,
+        Command::Create {
+            parent: a,
+            name: "x".into(),
+            kind: NodeKind::Folder,
+        },
+    );
+    let x = child_id(&engine, a, "x");
+    assert_eq!(
+        created,
+        BTreeSet::from([a, x]),
+        "a create stamps the node and its parent"
+    );
+
+    let rename = Command::Rename {
+        node: x,
+        new_name: "y".into(),
+    };
+    let relink = Command::Relink {
+        node: x,
+        new_parent: b,
+    };
+    let relocate = Command::Move {
+        node: x,
+        new_parent: a,
+        new_name: "z".into(),
+        replacing: None,
+    };
+    let restore = Command::Restore {
+        node: x,
+        into: None,
+    };
+    for (command, expected, why) in [
+        (rename, BTreeSet::from([a]), "a rename stamps the parent"),
+        (
+            relink,
+            BTreeSet::from([a, b]),
+            "a relink stamps both parents",
+        ),
+        (
+            relocate,
+            BTreeSet::from([a, b]),
+            "a move stamps both parents",
+        ),
+        (
+            Command::Delete { node: x },
+            BTreeSet::from([a]),
+            "a delete into the bin stamps the parent",
+        ),
+        (
+            restore,
+            BTreeSet::from([a]),
+            "a restore stamps the folder it restores into",
+        ),
+    ] {
+        assert_eq!(
+            stamped_by_command(&world, &mut engine, &mut tasks, command),
+            expected,
+            "{why}"
+        );
+    }
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: b,
+            name: "f.bin".into(),
+        },
+        b"first",
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, b, "f.bin");
+    assert_eq!(
+        stamped_by(&world, &mut engine, &mut tasks, |engine| {
+            write_file(engine, version(file), b"second").expect("the edit commits");
+        }),
+        BTreeSet::from([file]),
+        "a content op stamps the node alone"
+    );
+}
+
+/// A dual-linked node's rename or move republishes only the winning parent,
+/// which the drain resolves, so the overlay stamps that parent and not the
+/// folder of the other link.
+#[test]
+fn a_dual_linked_node_stamps_only_the_parent_its_publish_writes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, deep) = seed_dual_linked_file(&world, &blocks, &mut engine, &mut tasks);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "albums".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let albums = child_id(&engine, ROOT, "albums");
+    // The winning link: the higher counter, then the lower parent id.
+    let counter_under = |parent: NodeId| {
+        published_children(&world.record_store, &blocks, parent)
+            .iter()
+            .find(|child| child.id == deep.0)
+            .map(|child| child.link_counter)
+            .expect("both folders name the node")
+    };
+    let winner = [ROOT, photos]
+        .into_iter()
+        .min_by_key(|parent| (core::cmp::Reverse(counter_under(*parent)), *parent))
+        .expect("two links");
+
+    let renamed = stamped_by_command(
+        &world,
+        &mut engine,
+        &mut tasks,
+        Command::Rename {
+            node: deep,
+            new_name: "renamed.bin".into(),
+        },
+    );
+    assert_eq!(
+        renamed,
+        BTreeSet::from([winner]),
+        "a rename stamps the winning parent alone"
+    );
+
+    let moved = stamped_by_command(
+        &world,
+        &mut engine,
+        &mut tasks,
+        Command::Move {
+            node: deep,
+            new_parent: albums,
+            new_name: "moved.bin".into(),
+            replacing: None,
+        },
+    );
+    assert_eq!(
+        moved,
+        BTreeSet::from([winner, albums]),
+        "a move stamps the winning parent and the destination"
     );
 }
