@@ -6863,8 +6863,8 @@ fn section_signer_owner_identity() -> EcdsaSigner {
 fn build_section_signer_vectors() -> (Vec<SectionSignerAcceptVector>, Vec<RejectVector>) {
     let p = seal_probe();
     let owner_identity = section_signer_owner_identity();
-    let owner = Ed25519Signer::from_seed([0x5a; 32]);
-    let grantee = Ed25519Signer::from_seed([0x55; 32]);
+    let owner = ed_signer(0x5a);
+    let grantee = ed_signer(0x55);
     let grantee_tag = [0x66; 32];
 
     let sign_as = |signer: &Ed25519Signer, tag: u8, recipient: Option<[u8; 32]>, bytes: &[u8]| {

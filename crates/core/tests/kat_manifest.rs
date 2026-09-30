@@ -4835,18 +4835,19 @@ fn section_signer_stage_three(m: &Manifest, bytes: &[u8]) -> Result<(), CodecErr
     seal::authenticate_section_structures(&attested, &section, envelope.scope, envelope.epoch)
 }
 
-/// Stage 3's **pre-pin** view: for each structure, every committed write-capable
-/// pseudonym whose key verifies it. The pin stops at the first signer, so only
-/// this wider view shows that a reject vector's every signature is individually
-/// valid — that the pin, and nothing else, refuses it.
+/// Stage 3's **pre-pin** view: for each structure, its `structTag` and every
+/// committed write-capable pseudonym whose key verifies it. The pin stops at the
+/// first signer, so only this wider view shows that a reject vector's every
+/// signature is individually valid — that the pin, and nothing else, refuses it.
 fn signers_per_structure(
     envelope: &seal::Envelope,
     section: &seal::GrantSection,
-) -> Vec<BTreeSet<[u8; 32]>> {
+) -> Vec<(u8, BTreeSet<[u8; 32]>)> {
     let committed = seal::committed_write_pseudonyms(&section.commitment);
     let mut out = Vec::new();
-    let walked: Result<(), core::convert::Infallible> =
-        seal::for_each_structure(section, |tag, recipient, bytes, signature| {
+    let Ok(()) = seal::for_each_structure::<core::convert::Infallible>(
+        section,
+        |tag, recipient, bytes, signature| {
             let input = StructureSigInput::over_ciphertext(
                 envelope.scope,
                 envelope.epoch,
@@ -4855,19 +4856,18 @@ fn signers_per_structure(
                 bytes,
             );
             let sig = Ed25519Signature::from_bytes(*signature);
-            out.push(
-                committed
-                    .iter()
-                    .filter(|pk| {
-                        Ed25519Verifier::from_bytes(**pk)
-                            .is_some_and(|v| verify_structure(&v, &input, &sig).is_ok())
-                    })
-                    .copied()
-                    .collect(),
-            );
+            let signers = committed
+                .iter()
+                .filter(|pk| {
+                    Ed25519Verifier::from_bytes(**pk)
+                        .is_some_and(|v| verify_structure(&v, &input, &sig).is_ok())
+                })
+                .copied()
+                .collect();
+            out.push((tag, signers));
             Ok(())
-        });
-    walked.expect("the walk never fails");
+        },
+    );
     out
 }
 
@@ -4897,20 +4897,15 @@ fn section_signer_accept_vectors_authenticate_under_one_committed_signer() {
             "{}: a one-pseudonym commitment pins vacuously",
             v.name
         );
-        let signers: BTreeSet<[u8; 32]> = signers_per_structure(&envelope, &section)
-            .into_iter()
-            .flatten()
-            .collect();
+        let mut signers = BTreeSet::new();
+        for (tag, structure_signers) in signers_per_structure(&envelope, &section) {
+            kinds.insert(tag);
+            signers.extend(structure_signers);
+        }
         let [signer] = signers.into_iter().collect::<Vec<_>>()[..] else {
             panic!("{}: one section, one signer", v.name);
         };
         signed_by_a_non_owner |= signer != section.commitment.owner_pseudonym_pk;
-        let walked: Result<(), core::convert::Infallible> =
-            seal::for_each_structure(&section, |tag, _, _, _| {
-                kinds.insert(tag);
-                Ok(())
-            });
-        walked.expect("the walk never fails");
     }
     assert!(
         signed_by_a_non_owner,
@@ -4948,7 +4943,7 @@ fn section_signer_reject_vectors_fire_the_named_check() {
     for v in &vectors {
         let (envelope, section) = section_signer_head(&unhex(&v.name, &v.hex));
         let per_structure = signers_per_structure(&envelope, &section);
-        for (i, signers) in per_structure.iter().enumerate() {
+        for (i, (_, signers)) in per_structure.iter().enumerate() {
             assert_eq!(
                 signers.len(),
                 1,
@@ -4956,7 +4951,10 @@ fn section_signer_reject_vectors_fire_the_named_check() {
                 v.name
             );
         }
-        let distinct: BTreeSet<[u8; 32]> = per_structure.into_iter().flatten().collect();
+        let distinct: BTreeSet<[u8; 32]> = per_structure
+            .into_iter()
+            .flat_map(|(_, signers)| signers)
+            .collect();
         assert_eq!(distinct.len(), 2, "{}: two committed signers", v.name);
         splices_a_grant_blob |= !section.grant_blobs.is_empty();
     }

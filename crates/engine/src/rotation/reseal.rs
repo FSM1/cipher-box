@@ -42,9 +42,10 @@ use cipherbox_core::seal::{
     STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY,
     STRUCT_TAG_WRITE_HISTORY_LINK, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob,
     SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody, encode_grant_section,
-    encode_write_body, is_write_body_over_bound, open_ascent_link, open_history_link,
-    open_owner_blob, seal, seal_ascent_link_to, seal_grant_blob, seal_history_link,
-    seal_owner_blob, seal_owner_history_link, seal_owner_write_blob, sign_structure,
+    encode_write_body, is_committed_write_pseudonym, is_write_body_over_bound, open_ascent_link,
+    open_history_link, open_owner_blob, seal, seal_ascent_link_to, seal_grant_blob,
+    seal_history_link, seal_owner_blob, seal_owner_history_link, seal_owner_write_blob,
+    sign_structure,
 };
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -56,7 +57,6 @@ use crate::content::limits::{MAX_RETAINED_HISTORY_LINK_BYTES, resealable_section
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
 use crate::grants::{enforce_committed_ledger, recipient_blinded_tag};
 use crate::net::author::ENVELOPE_V;
-use cipherbox_core::seal::is_committed_write_pseudonym;
 
 /// How many history links a re-seal carries forward — the ratchet's retained
 /// window, in rotations (blueprint/core.md "History-link retention"). The window

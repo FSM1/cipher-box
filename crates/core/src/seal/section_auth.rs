@@ -180,12 +180,10 @@ impl StructureAuthenticator {
 }
 
 /// Stage 3's predicate: every structure signature `section` carries verifies,
-/// at `scope` and `epoch`, under **one** of the pseudonyms the attested
-/// `commitment` names — whatever epoch a structure's own sealed AAD binds
-/// (blueprint/core.md "Structure signatures"). The engine passes the
-/// authenticated envelope's scope and epoch.
-///
-/// The pseudonyms come from `commitment`, never from `section.commitment`.
+/// at `scope` and `epoch`, under **one** of the pseudonyms `attested` names —
+/// whatever epoch a structure's own sealed AAD binds (blueprint/core.md
+/// "Structure signatures"). The engine passes the authenticated envelope's
+/// scope and epoch.
 ///
 /// ```
 /// use cipherbox_core::error::CodecError;
@@ -213,18 +211,18 @@ impl StructureAuthenticator {
 /// }
 /// ```
 pub fn authenticate_section_structures(
-    commitment: &VerifiedGrantSet<'_>,
+    attested: &VerifiedGrantSet<'_>,
     section: &GrantSection,
     scope: [u8; 16],
     epoch: u64,
 ) -> Result<(), CodecError> {
     // The attested set must be this section's own, or the verdict would adopt a
     // section whose commitment nothing anchored.
-    if *commitment.commitment() != section.commitment {
+    if *attested.commitment() != section.commitment {
         return Err(TrustViolation::CommitmentInvalid.into());
     }
     let mut auth = StructureAuthenticator {
-        committed: committed_write_pseudonyms(commitment.commitment()),
+        committed: committed_write_pseudonyms(attested.commitment()),
         pinned: None,
     };
     for_each_structure(section, |tag, recipient, ct, sig| {
