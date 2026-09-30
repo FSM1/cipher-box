@@ -54,6 +54,7 @@ export { fromHex, toHex } from './seams/bytes.js';
 
 // A session-free IPNS record read, for a Node observer of the routing network.
 export { openIpnsRecordReader } from './ipnsRecord.js';
+export { FetchRecordTransport } from './seams/recordTransport.js';
 export type { IpnsRecordReader, IpnsRecordReading } from './ipnsRecord.js';
 
 // The wire descriptors the UI exchanges with the engine over the transport.

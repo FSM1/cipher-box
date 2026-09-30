@@ -346,8 +346,8 @@ One `nightly.yml` (cron) owns the scheduled slots testing.md defined
   (ADR 0053 D1, D4). The web leg signs in with the wallet key; a desktop
   leg gives the login secret to an `e2e-hook` host built from the staging
   tag, and the shipped bundle never carries the hook (D3). Ledger: a text
-  file in the owner vault's `soak/`, each day marker with its date, CID
-  and record sequence, at most 90, oldest binned nightly. Checks (product
+  file in the owner vault's `soak/`, each day marker with its date, IPNS
+  name and record sequence, at most 90, oldest binned nightly. Checks (product
   surfaces, never a hook, ADR 0049 D3): every marker opens byte for byte
   from an empty profile; no soak name's sequence goes below the ledger;
   today's marker publishes and re-resolves from a second fresh context

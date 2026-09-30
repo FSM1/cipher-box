@@ -103,9 +103,11 @@ pub fn orphaned_head(error: &RecordPublishError) -> bool {
             | PublishError::MarkUnrecorded(_) => true,
             // Nothing was ever addressed, so there is no CID to retire.
             PublishError::EmptyHeadCid | PublishError::EmptyInlineValue => false,
-            // No ack is not proof nothing stored: unpinning a head a live
-            // record may still name is loss, where the row is only a leak.
-            PublishError::AllEndpointsFailed => false,
+            // Neither no ack nor a stated refusal proves nothing stored: an
+            // endpoint can state a refusal and keep the record. Unpinning a
+            // head a live record may still name is loss, where the row is only
+            // a leak (ADR 0047 D4, ADR 0060).
+            PublishError::AllEndpointsFailed | PublishError::AllEndpointsRefused => false,
         },
     }
 }

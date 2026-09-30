@@ -124,6 +124,18 @@ describe('FetchRecordTransport.getRecord', () => {
   });
 });
 
+describe('FetchRecordTransport.putRecord', () => {
+  it('rejects a non-2xx answer with the status the engine classifies', async () => {
+    for (const status of [400, 429, 503]) {
+      stubFetch(new Response(null, { status }));
+
+      await expect(transport().putRecord(ENDPOINT, KEY, new Uint8Array([1]))).rejects.toMatchObject(
+        { status }
+      );
+    }
+  });
+});
+
 /** The header the gated CipherBox resolve leg reads, of the request `init`. */
 function authorizationOf(init: RequestInit): string | undefined {
   return (init.headers as Record<string, string>).Authorization;
