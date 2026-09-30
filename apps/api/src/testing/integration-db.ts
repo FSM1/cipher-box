@@ -4,6 +4,7 @@ import { AuthMethod } from '../auth/entities/auth-method.entity';
 import { AcceleratorToken } from '../auth/entities/accelerator-token.entity';
 import { IdentitySubject } from '../auth/entities/identity-subject.entity';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
+import { SpentIdentityToken } from '../auth/entities/spent-identity-token.entity';
 import { User } from '../auth/entities/user.entity';
 import { AccountDevice } from '../device-approval/entities/account-device.entity';
 import { DeviceApproval } from '../device-approval/entities/device-approval.entity';
@@ -17,6 +18,8 @@ import { AddNameInventoryAndPinnedCids1784566605863 } from '../migrations/178456
 import { AddPinReferences1788134400000 } from '../migrations/1788134400000-AddPinReferences';
 import { AddRecordCache1784600557946 } from '../migrations/1784600557946-AddRecordCache';
 import { AddRefreshTokenExpiresAtIndex1789358810000 } from '../migrations/1789358810000-AddRefreshTokenExpiresAtIndex';
+import { AddSpentIdentityTokens1790640000001 } from '../migrations/1790640000001-AddSpentIdentityTokens';
+import { DropIdentitySubjectDisplay1790640000000 } from '../migrations/1790640000000-DropIdentitySubjectDisplay';
 import { InitAuthSchema1784513040045 } from '../migrations/1784513040045-InitAuthSchema';
 import { NameInventory } from '../registry/entities/name-inventory.entity';
 import { PinReference } from '../registry/entities/pin-reference.entity';
@@ -48,6 +51,7 @@ const ENTITIES = [
   MailboxMessage,
   RecordCache,
   IdentitySubject,
+  SpentIdentityToken,
   AccountDevice,
   DeviceApproval,
 ];
@@ -62,6 +66,8 @@ const MIGRATIONS = [
   AddAcceleratorTokens1787681144572,
   AddPinReferences1788134400000,
   AddRefreshTokenExpiresAtIndex1789358810000,
+  DropIdentitySubjectDisplay1790640000000,
+  AddSpentIdentityTokens1790640000001,
 ];
 
 export interface IntegrationDatabase {

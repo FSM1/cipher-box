@@ -9,6 +9,7 @@
  */
 
 import { createIdentityExchange, type IdentityCredential } from '@cipherbox/login';
+import type { Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
 import { mainnet } from 'viem/chains';
@@ -26,8 +27,17 @@ export function apiBaseUrl(): string {
  * own identity subject and none shares another's per-account rate budget.
  */
 export async function mintIdentity(origin: string): Promise<IdentityCredential> {
-  const exchange = createIdentityExchange(apiBaseUrl());
-  const account = privateKeyToAccount(generatePrivateKey());
+  return walletIdentity(apiBaseUrl(), origin, generatePrivateKey());
+}
+
+/** Signs in as the wallet `privateKey` holds, through the API at `apiUrl`. */
+export async function walletIdentity(
+  apiUrl: string,
+  origin: string,
+  privateKey: Hex
+): Promise<IdentityCredential> {
+  const exchange = createIdentityExchange(apiUrl);
+  const account = privateKeyToAccount(privateKey);
   const message = createSiweMessage({
     address: account.address,
     chainId: mainnet.id,

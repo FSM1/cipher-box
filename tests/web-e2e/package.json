@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "vitest run",
     "test:e2e": "playwright test",
     "typecheck": "tsc -b"
   },
@@ -12,9 +13,13 @@
     "@cipherbox/login": "workspace:*",
     "@cipherbox/web": "workspace:*",
     "@playwright/test": "^1.56.0",
+    "@toruslabs/tss-dkls-lib": "^4.1.0",
     "@types/node": "^22.19.7",
+    "@web3auth/mpc-core-kit": "^3.5.0",
+    "tsx": "^4.23.1",
     "typescript": "^5.9.3",
     "viem": "^2.44.4",
-    "vite": "^8.1.5"
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
   }
 }

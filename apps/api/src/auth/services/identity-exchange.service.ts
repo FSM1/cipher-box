@@ -39,7 +39,7 @@ export class IdentityExchangeService {
 
   async fromGoogleToken(idToken: string): Promise<IdentityGrant> {
     const identity = await this.google.verify(idToken);
-    return this.mint('google', identity.subject, truncateEmail(identity.email), identity.email);
+    return this.mint('google', identity.subject, identity.email);
   }
 
   sendEmailCode(email: string): Promise<void> {
@@ -48,7 +48,7 @@ export class IdentityExchangeService {
 
   async fromEmailCode(email: string, code: string): Promise<IdentityGrant> {
     const address = this.emailOtp.verify(email, code);
-    return this.mint('email', address, truncateEmail(address), address);
+    return this.mint('email', address, address);
   }
 
   async fromWalletSignature(message: string, signature: `0x${string}`): Promise<IdentityGrant> {
@@ -63,24 +63,16 @@ export class IdentityExchangeService {
       nonce,
       SIWE_LOGIN_STATEMENT
     );
-    return this.mint('wallet', address, this.siwe.truncateWalletAddress(address), null);
+    return this.mint('wallet', address, null);
   }
 
   private async mint(
     method: IdentitySubjectKind,
     identifier: string,
-    identifierDisplay: string,
     email: string | null
   ): Promise<IdentityGrant> {
-    const verifierId = await this.subjects.resolve(method, identifier, identifierDisplay);
+    const verifierId = await this.subjects.resolve(method, identifier);
     const { token, expiresAt } = await this.tokens.sign({ subject: verifierId, method });
     return { token, verifierId, email, expiresAt };
   }
-}
-
-/** Truncated address for display, e.g. "al***@example.com". */
-function truncateEmail(email: string): string {
-  const [local, domain] = email.split('@');
-  if (!domain) return '***';
-  return `${local.slice(0, 2)}***@${domain}`;
 }

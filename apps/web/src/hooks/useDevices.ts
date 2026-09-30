@@ -76,6 +76,9 @@ export function useDevices(): DevicesRead {
         const challenge = await facade.deviceRegistrationChallenge(publicKey);
         const signature = await identity.sign(Uint8Array.from(challenge));
         await facade.registerDevice(publicKey, signature, identityToken, null);
+        // The API refuses a spent token, so a second registration in this
+        // sign-in could only fail; the pane then asks for a fresh sign-in.
+        session?.dropIdentityToken();
         setThisDevice(publicKey);
         await read(facade);
       }),

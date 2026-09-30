@@ -23,7 +23,8 @@ use cipherbox_core::seal::MAX_READ_SEALED_BYTES;
 use cipherbox_core::seal::{
     BinIndex, ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
     Version as CoreVersion, decode_envelope, encode_envelope, encode_grant_section,
-    encode_read_body, open_read_body, seal_settings_record, set_grant_section, sign_grant_set,
+    encode_read_body, open_bin_index, open_read_body, seal_settings_record, set_grant_section,
+    sign_grant_set,
 };
 use cipherbox_core::suite::aead::{NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -65,8 +66,9 @@ use cipherbox_engine::sync::{
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
-    owner_identity, owner_pointer_read_key, owner_pseudonym, registry_batch_refused, seed_account,
-    seed_account_published_after_put, sequence_floor_label, serve_http,
+    bin_index_mark_keys, owner_identity, owner_pointer_read_key, owner_pseudonym,
+    registry_batch_refused, seed_account, seed_account_published_after_put, sequence_floor_label,
+    serve_http,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{
@@ -4556,12 +4558,12 @@ fn a_genesis_bin_index_that_did_not_land_is_published_by_a_later_start() {
     );
 }
 
-/// The mark the failed attempt left is a mark like any other: the device cannot
-/// tell an attempt that never reached the plane from one that did, so it never
-/// publishes an empty index over what another device may hold. The account
-/// recovers through the device that holds no mark, above.
+/// The mark a PUT that left the engine leaves is a mark like any other: the
+/// device cannot tell a refused PUT from one that landed, so it never publishes
+/// an empty index over what another device may hold. The account recovers
+/// through the device that holds no mark, above.
 #[test]
-fn the_device_whose_genesis_publish_minted_a_revision_retries_nothing() {
+fn the_device_whose_genesis_put_left_the_engine_retries_nothing() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let alice = world.device(b"alice");
@@ -4574,6 +4576,95 @@ fn the_device_whose_genesis_publish_minted_a_revision_retries_nothing() {
     assert!(
         standing_bin_record(&world).is_none(),
         "the marked device published nothing on its own retry",
+    );
+}
+
+/// A first run with no API to reach sends no PUT, so it leaves no bin index
+/// mark, and the next start with the API back publishes the record.
+#[test]
+fn a_fully_offline_genesis_leaves_no_bin_index_mark_and_the_next_start_publishes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    blocks.refuse_register(br#"{"statusCode":503}"#.to_vec());
+    let (first, _tasks) = provision_first_run(&world, &blocks, &alice);
+    assert!(
+        standing_bin_record(&world).is_none(),
+        "the offline start published nothing",
+    );
+    let floors = alice.floors(&SECRET);
+    for key in bin_index_mark_keys(&bin_name()) {
+        assert_eq!(
+            block_on(floors.sequence_floor(&key)).expect("the floor reads"),
+            None,
+            "the offline start left no bin index mark",
+        );
+    }
+    drop(first);
+    blocks.accept_uploads();
+    blocks.accept_registrations();
+
+    let (_engine, _tasks) = start_on_api(&world, &blocks, &alice, 43);
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        1,
+        "the next start published the record",
+    );
+}
+
+/// A genesis attempt that fails before its PUT leaves the engine cannot have
+/// landed, so it leaves no mark: the same device publishes at its next start,
+/// and a single-device account soft-deletes as normal.
+#[test]
+fn a_genesis_publish_that_failed_before_its_put_is_retried_by_the_same_device() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    let seal_key = kdf::bin_index_seal_key(&SECRET);
+    blocks.refuse_upload(Box::new(move |block| {
+        open_bin_index(seal_key.as_bytes(), block)
+            .is_ok()
+            .then(unreachable_upload)
+    }));
+    let (first, _tasks) = provision_first_run(&world, &blocks, &alice);
+    assert!(
+        standing_bin_record(&world).is_none(),
+        "the genesis publish failed at its head block upload",
+    );
+    drop(first);
+    blocks.accept_uploads();
+
+    let (mut engine, mut tasks) = start_on_api(&world, &blocks, &alice, 43);
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        1,
+        "the same device published the record its first run owed",
+    );
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..40u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.dead_letters.is_empty(),
+        "the soft delete dead-letters nothing"
+    );
+    assert_eq!(
+        bin_entries(&world, &alice, &blocks),
+        vec![doomed.0],
+        "and it binned the node",
     );
 }
 
