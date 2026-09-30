@@ -285,6 +285,14 @@ const FIXTURES: &[(&str, &str)] = &[
         include_str!("../kat/vectors/grant/section_reject.json"),
     ),
     (
+        "vectors/grant/section_signer_accept.json",
+        include_str!("../kat/vectors/grant/section_signer_accept.json"),
+    ),
+    (
+        "vectors/grant/section_signer_reject.json",
+        include_str!("../kat/vectors/grant/section_signer_reject.json"),
+    ),
+    (
         "vectors/content/seal.json",
         include_str!("../kat/vectors/content/seal.json"),
     ),
@@ -836,6 +844,9 @@ struct GrantManifest {
     grant_set_reject: RejectSection,
     section_accept: FileCount,
     section_reject: RejectSection,
+    section_signer_owner_identity_pk: String,
+    section_signer_accept: FileCount,
+    section_signer_reject: RejectSection,
 }
 
 #[derive(Deserialize)]
@@ -894,6 +905,14 @@ struct SectionAcceptVector {
     grant_blob_count: usize,
     history_link_count: usize,
     has_ascent_link: bool,
+}
+
+/// A scope-root head block whose grant section stage 3 accepts.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SectionSignerAcceptVector {
+    name: String,
+    hex: String,
 }
 
 #[derive(Deserialize)]
@@ -1673,6 +1692,16 @@ fn section_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
     serde_json::from_str(fixture(&m.grant.section_reject.file)).expect("section_reject shape")
 }
 
+fn section_signer_accept_vectors(m: &Manifest) -> Vec<SectionSignerAcceptVector> {
+    serde_json::from_str(fixture(&m.grant.section_signer_accept.file))
+        .expect("section_signer_accept shape")
+}
+
+fn section_signer_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
+    serde_json::from_str(fixture(&m.grant.section_signer_reject.file))
+        .expect("section_signer_reject shape")
+}
+
 fn unhex(name: &str, hex: &str) -> Vec<u8> {
     let bytes = hex::decode(hex).unwrap_or_else(|e| panic!("vector {name}: bad hex: {e}"));
     // Lowercase hex is part of the fixture contract.
@@ -1771,6 +1800,8 @@ fn fixture_table_matches_manifest_files() {
         m.grant.grant_set_reject.file.as_str(),
         m.grant.section_accept.file.as_str(),
         m.grant.section_reject.file.as_str(),
+        m.grant.section_signer_accept.file.as_str(),
+        m.grant.section_signer_reject.file.as_str(),
         m.content.seal.file.as_str(),
         m.content.seal_reject.file.as_str(),
         m.content.cid.file.as_str(),
@@ -2086,6 +2117,11 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
             .map(|v| v.check),
     );
     covered.extend(section_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(
+        section_signer_reject_vectors(&m)
+            .into_iter()
+            .map(|v| v.check),
+    );
     // Content plane: the content-open and content-CID reject families pin
     // `seal-open-failed`/`truncated` and `content-cid-mismatch`.
     covered.extend(content_seal_reject_vectors(&m).into_iter().map(|v| v.check));
@@ -4770,6 +4806,163 @@ fn grant_section_reject_vectors_fire_the_named_check() {
             .iter()
             .any(|c| c == "duplicate-grant-tag"),
         "grant-section reject must cover the duplicate-tag confused-deputy check"
+    );
+}
+
+/// A section-signer head block's envelope and decoded grant section.
+fn section_signer_head(bytes: &[u8]) -> (seal::Envelope, seal::GrantSection) {
+    let envelope = decode_envelope(bytes).expect("head block decodes");
+    let section = decode_grant_section(
+        seal::grant_section_bytes(&envelope).expect("a head block carries its section"),
+    )
+    .expect("grant section decodes");
+    (envelope, section)
+}
+
+/// Stages 2 then 3 over one frozen head block, as the adoption gate runs them.
+/// Every vector passes stage 2: one whose commitment signature is bad proves
+/// nothing about stage 3, so that is a fixture fault, never the verdict.
+fn section_signer_stage_three(m: &Manifest, bytes: &[u8]) -> Result<(), CodecError> {
+    let (envelope, section) = section_signer_head(bytes);
+    let owner = EcdsaVerifier::from_sec1(&unhex(
+        "sectionSignerOwnerIdentityPk",
+        &m.grant.section_signer_owner_identity_pk,
+    ))
+    .expect("owner identity");
+    let sig = EcdsaSignature::from_compact(&section.commitment_sig).expect("compact sig");
+    let attested = verify_grant_set(&owner, &section.commitment, &sig)
+        .expect("every vector passes stage 2, so stage 3 owns the verdict");
+    seal::authenticate_section_structures(&attested, &section, envelope.scope, envelope.epoch)
+}
+
+/// Stage 3's **pre-pin** view: for each structure, every committed write-capable
+/// pseudonym whose key verifies it. The pin stops at the first signer, so only
+/// this wider view shows that a reject vector's every signature is individually
+/// valid — that the pin, and nothing else, refuses it.
+fn signers_per_structure(
+    envelope: &seal::Envelope,
+    section: &seal::GrantSection,
+) -> Vec<BTreeSet<[u8; 32]>> {
+    let committed = seal::committed_write_pseudonyms(&section.commitment);
+    let mut out = Vec::new();
+    let walked: Result<(), core::convert::Infallible> =
+        seal::for_each_structure(section, |tag, recipient, bytes, signature| {
+            let input = StructureSigInput::over_ciphertext(
+                envelope.scope,
+                envelope.epoch,
+                tag,
+                recipient,
+                bytes,
+            );
+            let sig = Ed25519Signature::from_bytes(*signature);
+            out.push(
+                committed
+                    .iter()
+                    .filter(|pk| {
+                        Ed25519Verifier::from_bytes(**pk)
+                            .is_some_and(|v| verify_structure(&v, &input, &sig).is_ok())
+                    })
+                    .copied()
+                    .collect(),
+            );
+            Ok(())
+        });
+    walked.expect("the walk never fails");
+    out
+}
+
+#[test]
+fn section_signer_accept_vectors_authenticate_under_one_committed_signer() {
+    let m = manifest();
+    let vectors = section_signer_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.section_signer_accept.count,
+        "section-signer accept count drift"
+    );
+    let mut names = BTreeSet::new();
+    let mut signed_by_a_non_owner = false;
+    let mut kinds = BTreeSet::new();
+    for v in &vectors {
+        assert!(names.insert(v.name.clone()), "duplicate {}", v.name);
+        let bytes = unhex(&v.name, &v.hex);
+        section_signer_stage_three(&m, &bytes)
+            .unwrap_or_else(|e| panic!("section-signer accept {}: {e}", v.name));
+
+        // Non-vacuous: more than one committed pseudonym is on offer, and
+        // exactly one of them signed the whole section.
+        let (envelope, section) = section_signer_head(&bytes);
+        assert!(
+            seal::committed_write_pseudonyms(&section.commitment).len() > 1,
+            "{}: a one-pseudonym commitment pins vacuously",
+            v.name
+        );
+        let signers: BTreeSet<[u8; 32]> = signers_per_structure(&envelope, &section)
+            .into_iter()
+            .flatten()
+            .collect();
+        let [signer] = signers.into_iter().collect::<Vec<_>>()[..] else {
+            panic!("{}: one section, one signer", v.name);
+        };
+        signed_by_a_non_owner |= signer != section.commitment.owner_pseudonym_pk;
+        let walked: Result<(), core::convert::Infallible> =
+            seal::for_each_structure(&section, |tag, _, _, _| {
+                kinds.insert(tag);
+                Ok(())
+            });
+        walked.expect("the walk never fails");
+    }
+    assert!(
+        signed_by_a_non_owner,
+        "pinning must not narrow *who* may sign: one accept vector is signed \
+         throughout by a committed pseudonym that is not the owner's"
+    );
+    assert_eq!(
+        kinds,
+        BTreeSet::from([
+            STRUCT_TAG_OWNER_BLOB,
+            STRUCT_TAG_OWNER_WRITE_BLOB,
+            STRUCT_TAG_HISTORY_LINK,
+            STRUCT_TAG_WRITE_BODY,
+            STRUCT_TAG_ASCENT_LINK,
+        ]),
+        "the accept family signs every structure kind but the grant blob, which \
+         the splice reject carries"
+    );
+}
+
+#[test]
+fn section_signer_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = section_signer_reject_vectors(&m);
+    check_reject_family(
+        "section-signer",
+        &vectors,
+        &m.grant.section_signer_reject,
+        |bytes| section_signer_stage_three(&m, bytes),
+    );
+    // The pin, and nothing else, refuses these: every structure signature is
+    // individually valid under exactly one committed pseudonym, and together
+    // they name two.
+    let mut splices_a_grant_blob = false;
+    for v in &vectors {
+        let (envelope, section) = section_signer_head(&unhex(&v.name, &v.hex));
+        let per_structure = signers_per_structure(&envelope, &section);
+        for (i, signers) in per_structure.iter().enumerate() {
+            assert_eq!(
+                signers.len(),
+                1,
+                "{}: structure {i} must verify under exactly one committed pseudonym",
+                v.name
+            );
+        }
+        let distinct: BTreeSet<[u8; 32]> = per_structure.into_iter().flatten().collect();
+        assert_eq!(distinct.len(), 2, "{}: two committed signers", v.name);
+        splices_a_grant_blob |= !section.grant_blobs.is_empty();
+    }
+    assert!(
+        splices_a_grant_blob,
+        "one reject exercises the recipientTag arm of the signed input"
     );
 }
 

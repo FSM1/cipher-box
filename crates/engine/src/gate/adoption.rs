@@ -17,20 +17,17 @@
 //! AAD-confirmed-unseal rule of the floor law.
 
 use core::fmt;
-use std::collections::BTreeSet;
 
 use cipherbox_core::error::{CodecError, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, AscentLink, Envelope, GrantSection, GrantSetCommitment, Permission,
-    PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
-    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
-    STRUCT_TAG_WRITE_BODY, StructureSigInput, open_ascent_link, open_grant_blob, open_owner_blob,
-    open_read_body, refuse_stale_cut_epoch, verify_grant_set_bound, verify_structure,
+    AadContext, AscentLink, Envelope, GrantSection, GrantSetCommitment, PreservedFields, ReadBody,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_BLOB, VerifiedGrantSet,
+    authenticate_section_structures, open_ascent_link, open_grant_blob, open_owner_blob,
+    open_read_body, refuse_stale_cut_epoch, verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
-use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
 use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
@@ -350,21 +347,22 @@ fn cut_epoch_floor_key(scope_id: &[u8; 16]) -> Vec<u8> {
 /// replay apart from the set in force (blueprint/engine.md "Adoption gate and
 /// floors"). The classification path a `/shared` row renders holds a record to
 /// this same bar without unsealing it, so the two never disagree.
-pub(crate) fn verify_commitment_in_force(
+pub(crate) fn verify_commitment_in_force<'s>(
     owner_identity: &EcdsaVerifier,
-    section: &GrantSection,
+    section: &'s GrantSection,
     ipns_name: &[u8],
     cut_epoch_floor: u64,
-) -> Result<(), CodecError> {
+) -> Result<VerifiedGrantSet<'s>, CodecError> {
     let commitment_sig = EcdsaSignature::from_compact(&section.commitment_sig)
         .ok_or(CodecError::from(TrustViolation::CommitmentInvalid))?;
-    verify_grant_set_bound(
+    let verified = verify_grant_set_bound(
         owner_identity,
         &section.commitment,
         &commitment_sig,
         ipns_name,
     )?;
-    refuse_stale_cut_epoch(&section.commitment, cut_epoch_floor)
+    refuse_stale_cut_epoch(&section.commitment, cut_epoch_floor)?;
+    Ok(verified)
 }
 
 /// `scope_id`'s cut-epoch floor, zero where this device recorded none — the bar
@@ -449,203 +447,6 @@ impl PendingAdoption {
     }
 }
 
-/// The committed write-capable pseudonym keys of a scope root: the owner
-/// pseudonym plus every write-permission entry's. Read-only entries never
-/// authorize a seed-bearing structure.
-///
-/// Deduplicated: only a tag is unique across committed entries, so one pseudonym
-/// may be named by many. A repeat authenticates nothing the first copy did not,
-/// and each copy would cost another trial verification.
-///
-/// Left compressed. A commitment may name 1024 writers while the pin means at
-/// most one is ever used, so decompressing eagerly would reinstate an
-/// O(pseudonyms) cost the scan itself no longer pays.
-#[doc(hidden)]
-pub fn committed_write_pseudonyms(commitment: &GrantSetCommitment) -> Vec<[u8; 32]> {
-    let writers = commitment
-        .entries
-        .iter()
-        .filter(|e| e.permission == Permission::Write)
-        .map(|e| e.pseudonym_pk);
-    let mut seen = BTreeSet::new();
-    core::iter::once(commitment.owner_pseudonym_pk)
-        .chain(writers)
-        .filter(|pk| seen.insert(*pk))
-        .collect()
-}
-
-/// The committed pseudonym whose signature authenticates `section`'s write body
-/// — the author of the grant ledger that body carries, and so the party an abuse
-/// event over a rewritten row names.
-///
-/// Takes the same `(section, envelope)` pair [`authenticate_section_structures`]
-/// does, and recomputes the same preimage from the same authenticated envelope,
-/// so the two cannot disagree about which key signed the section. A structure
-/// signature binds the envelope's epoch whatever epoch its own AAD seals under
-/// (`rotation/reseal.rs`), so the write epoch is not this input.
-///
-/// One trial verification over the very set stage 3 pins its single signer from,
-/// so this can only ever name a pseudonym the owner committed. `None` where none
-/// of them verifies, which is a record stage 3 refuses outright.
-pub(crate) fn write_body_signer(section: &GrantSection, envelope: &Envelope) -> Option<[u8; 32]> {
-    let body = &section.write_body;
-    let input = StructureSigInput::over_ciphertext(
-        envelope.scope,
-        envelope.epoch,
-        STRUCT_TAG_WRITE_BODY,
-        None,
-        &body.sealed,
-    );
-    let signature = Ed25519Signature::from_bytes(body.signature);
-    committed_write_pseudonyms(&section.commitment)
-        .into_iter()
-        .find(|pseudonym| {
-            Ed25519Verifier::from_bytes(*pseudonym)
-                .is_some_and(|key| verify_structure(&key, &input, &signature).is_ok())
-        })
-}
-
-/// Whether `pseudonym_pk` is one of a scope root's committed write-capable
-/// pseudonyms — [`committed_write_pseudonyms`]'s membership test, without
-/// materialising the set. The set the gate authenticates a section against, so a
-/// re-seal can bind its own signer to exactly it (fail-closed symmetry).
-pub fn is_committed_write_pseudonym(
-    commitment: &GrantSetCommitment,
-    pseudonym_pk: &[u8; 32],
-) -> bool {
-    commitment.owner_pseudonym_pk == *pseudonym_pk
-        || commitment
-            .entries
-            .iter()
-            .any(|e| e.permission == Permission::Write && e.pseudonym_pk == *pseudonym_pk)
-}
-
-/// Trial-verifier over a section's committed write-capable pseudonyms, pinning
-/// the one that authenticated the section's first structure — the **one
-/// section, one signer** rule (blueprint/engine.md "Adoption gate and floors").
-/// The scan therefore runs at most once per record, so worst-case work is
-/// `pseudonyms + structures` rather than their product.
-struct StructureAuthenticator {
-    committed: Vec<[u8; 32]>,
-    pinned: Option<Ed25519Verifier>,
-}
-
-impl StructureAuthenticator {
-    /// Authenticate one seed-bearing structure against the committed write-capable
-    /// pseudonyms, recomputing the signed input **from the record's actual sealed
-    /// bytes**: the `ciphertext_hash` is `H(ciphertext)` over `ciphertext`,
-    /// and `scope`/`epoch` come from the authenticated envelope — never a
-    /// caller-supplied [`StructureSigInput`]. A signature therefore proves "the
-    /// committed writer signed *these* bytes at *this* scope/epoch", not merely
-    /// "the writer once signed some hash".
-    ///
-    /// The first structure is trusted iff the recomputed input verifies under at
-    /// least one committed pseudonym, which pins that pseudonym as the section's
-    /// signer; every later structure must verify under **that** key alone. Any
-    /// other outcome is a `structure-signature-invalid` trust violation over the
-    /// whole record.
-    fn authenticate(
-        &mut self,
-        scope: [u8; 16],
-        epoch: u64,
-        struct_tag: u8,
-        recipient_tag: Option<[u8; 32]>,
-        ciphertext: &[u8],
-        signature: &[u8; 64],
-    ) -> Result<(), CodecError> {
-        let input =
-            StructureSigInput::over_ciphertext(scope, epoch, struct_tag, recipient_tag, ciphertext);
-        let sig = Ed25519Signature::from_bytes(*signature);
-        if let Some(pinned) = &self.pinned {
-            return verify_structure(pinned, &input, &sig);
-        }
-        // A pseudonym that is not a valid point verifies nothing, so a failed
-        // decompression falls through exactly as a failed signature does.
-        for pseudonym in self
-            .committed
-            .iter()
-            .filter_map(|pk| Ed25519Verifier::from_bytes(*pk))
-        {
-            if verify_structure(&pseudonym, &input, &sig).is_ok() {
-                self.pinned = Some(pseudonym);
-                return Ok(());
-            }
-        }
-        Err(TrustViolation::StructureSignatureInvalid.into())
-    }
-}
-
-/// Visit every seed-bearing structure `section` carries — its `structTag`,
-/// recipient tag, signed-over bytes and detached signature — short-circuit on
-/// the first `Err`. The single definition of *what* stage 3 authenticates, so a
-/// new structure kind cannot reach the wire covered by only some of the passes
-/// that walk one. The signed-over bytes are the structure's ciphertext, except
-/// for the ascent link ([`ascent_link_sig_body`]).
-#[doc(hidden)]
-pub fn for_each_structure<E>(
-    section: &GrantSection,
-    mut visit: impl FnMut(u8, Option<[u8; 32]>, &[u8], &[u8; 64]) -> Result<(), E>,
-) -> Result<(), E> {
-    let owner = &section.owner_blob;
-    visit(
-        STRUCT_TAG_OWNER_BLOB,
-        None,
-        &owner.ciphertext,
-        &owner.signature,
-    )?;
-    if let Some(b) = &section.owner_write_blob {
-        visit(
-            STRUCT_TAG_OWNER_WRITE_BLOB,
-            None,
-            &b.ciphertext,
-            &b.signature,
-        )?;
-    }
-    for b in &section.grant_blobs {
-        visit(
-            STRUCT_TAG_GRANT_BLOB,
-            Some(b.tag),
-            &b.ciphertext,
-            &b.signature,
-        )?;
-    }
-    for l in &section.history_links {
-        visit(STRUCT_TAG_HISTORY_LINK, None, &l.sealed, &l.signature)?;
-    }
-    let body = &section.write_body;
-    visit(STRUCT_TAG_WRITE_BODY, None, &body.sealed, &body.signature)?;
-    if let Some(a) = &section.ascent_link {
-        visit(STRUCT_TAG_ASCENT_LINK, None, &a.sig_body(), &a.signature)?;
-    }
-    Ok(())
-}
-
-/// The gate's stage-3 predicate: authenticate every structure signature
-/// `section` carries against **one** of the pseudonyms its own commitment names,
-/// recomputed at `envelope`'s scope and epoch — whatever epoch a structure's own
-/// sealed AAD binds (blueprint/core.md "Structure signatures"). The single
-/// signer is pinned by the first structure ([`StructureAuthenticator`]).
-///
-/// Stage 3 only: the pseudonyms come from the section's own commitment, which
-/// [`verify_grant_set`] anchors to the owner identity at stage 2.
-///
-/// Also run release-active on the produce side (`net/author.rs`), so a scope
-/// root this build's own gate would reject is never signed (AGENTS.md rule 8).
-#[doc(hidden)]
-pub fn authenticate_section_structures(
-    section: &GrantSection,
-    envelope: &Envelope,
-) -> Result<(), CodecError> {
-    let (scope, epoch) = (envelope.scope, envelope.epoch);
-    let mut auth = StructureAuthenticator {
-        committed: committed_write_pseudonyms(&section.commitment),
-        pinned: None,
-    };
-    for_each_structure(section, |tag, recipient, ct, sig| {
-        auth.authenticate(scope, epoch, tag, recipient, ct, sig)
-    })
-}
-
 impl SeedBlob<'_> {
     /// The structured AAD the blob claims to be sealed under — cross-checked
     /// against the envelope before it is trusted.
@@ -725,7 +526,7 @@ pub async fn adopt_deferred<F: FloorStore>(
     let cut_epoch_floor = read_cut_epoch_floor(floors, &reader.scope_id)
         .await
         .map_err(GateError::Seam)?;
-    verify_commitment_in_force(
+    let attested = verify_commitment_in_force(
         reader.owner_identity,
         section,
         candidate.name.as_str().as_bytes(),
@@ -733,10 +534,10 @@ pub async fn adopt_deferred<F: FloorStore>(
     )
     .map_err(|e| reject(GateStage::CommitmentVerify, RejectionReason::Trust(e)))?;
 
-    // Stage 3 — grant-section authentication under `authenticate_structure`'s
-    // recompute contract. Any failure rejects the whole record (#39 D3).
+    // Stage 3 — core's predicate over the commitment stage 2 attested. Any
+    // failure rejects the whole record (#39 D3).
     let epoch = candidate.envelope.epoch;
-    authenticate_section_structures(section, &candidate.envelope)
+    authenticate_section_structures(&attested, section, candidate.envelope.scope, epoch)
         .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
     // A reader entering by its own grant blob descends from nobody, and stage 6
     // cross-checks the seed that blob wraps against this record's read key — the
@@ -916,8 +717,6 @@ fn reject(stage: GateStage, reason: RejectionReason) -> GateError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cipherbox_core::seal::sign_structure;
-    use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     #[test]
     fn stage_names_are_stable_and_complete() {
@@ -963,110 +762,5 @@ mod tests {
     #[test]
     fn floor_verdicts_are_the_two_engine_domain_names() {
         assert_eq!(FLOOR_VERDICTS, &["sequence-not-newer", "epoch-below-floor"]);
-    }
-
-    const SCOPE: [u8; 16] = [0x11; 16];
-    const EPOCH: u64 = 7;
-
-    fn committed_signers() -> Vec<Ed25519Signer> {
-        (0u8..4)
-            .map(|i| Ed25519Signer::from_seed([i; 32]))
-            .collect()
-    }
-
-    fn authenticator(signers: &[Ed25519Signer]) -> StructureAuthenticator {
-        StructureAuthenticator {
-            committed: signers
-                .iter()
-                .map(|s| s.verifying_key().to_bytes())
-                .collect(),
-            pinned: None,
-        }
-    }
-
-    /// Sign `ciphertext` as an owner blob at the fixture scope/epoch.
-    fn signed(signer: &Ed25519Signer, ciphertext: &[u8]) -> [u8; 64] {
-        let input = StructureSigInput::over_ciphertext(
-            SCOPE,
-            EPOCH,
-            STRUCT_TAG_OWNER_BLOB,
-            None,
-            ciphertext,
-        );
-        sign_structure(signer, &input).to_bytes()
-    }
-
-    fn authenticate(
-        auth: &mut StructureAuthenticator,
-        ciphertext: &[u8],
-        signature: &[u8; 64],
-    ) -> Result<(), CodecError> {
-        auth.authenticate(
-            SCOPE,
-            EPOCH,
-            STRUCT_TAG_OWNER_BLOB,
-            None,
-            ciphertext,
-            signature,
-        )
-    }
-
-    #[test]
-    fn any_committed_pseudonym_can_pin_the_sections_signer() {
-        // Pinning must not narrow *who* may sign a section — only how many
-        // signers one section may have. Every committed pseudonym, at whatever
-        // index, still authenticates a section of its own.
-        let signers = committed_signers();
-        for signer in &signers {
-            let mut auth = authenticator(&signers);
-            for structure in [&b"first"[..], b"second", b"third"] {
-                authenticate(&mut auth, structure, &signed(signer, structure))
-                    .expect("one committed pseudonym signs the whole section");
-            }
-        }
-    }
-
-    #[test]
-    fn a_section_signed_by_two_committed_pseudonyms_is_unadoptable() {
-        let signers = committed_signers();
-        let mut auth = authenticator(&signers);
-        authenticate(&mut auth, b"first", &signed(&signers[0], b"first")).expect("pins signer 0");
-        assert_eq!(
-            authenticate(&mut auth, b"second", &signed(&signers[1], b"second"))
-                .unwrap_err()
-                .check(),
-            "structure-signature-invalid",
-            "a second committed signer must not authenticate the same section"
-        );
-    }
-
-    #[test]
-    fn a_commitment_naming_no_usable_write_pseudonym_authenticates_nothing() {
-        // Zero candidates: nothing can pin, so nothing adopts.
-        let signer = Ed25519Signer::from_seed([1; 32]);
-        let mut auth = authenticator(&[]);
-        assert_eq!(
-            authenticate(&mut auth, b"first", &signed(&signer, b"first"))
-                .unwrap_err()
-                .check(),
-            "structure-signature-invalid"
-        );
-    }
-
-    #[test]
-    fn a_signature_from_no_committed_pseudonym_is_rejected_pinned_or_not() {
-        let signers = committed_signers();
-        let outsider = Ed25519Signer::from_seed([0x99; 32]);
-        let mut fresh = authenticator(&signers);
-        let mut pinned = authenticator(&signers);
-        authenticate(&mut pinned, b"first", &signed(&signers[2], b"first")).expect("pins signer 2");
-        for auth in [&mut fresh, &mut pinned] {
-            assert_eq!(
-                authenticate(auth, b"forged", &signed(&outsider, b"forged"))
-                    .unwrap_err()
-                    .check(),
-                "structure-signature-invalid"
-            );
-        }
     }
 }

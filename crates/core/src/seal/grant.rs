@@ -1174,17 +1174,40 @@ pub fn sign_grant_set(
     Ok(signer.sign_detcbor(&encode_grant_set_commitment(c)?))
 }
 
+/// A grant-set commitment the owner identity attested. Only
+/// [`verify_grant_set`] and [`verify_grant_set_bound`] return one, so a
+/// predicate that takes it cannot run over a commitment nothing anchored
+/// (ADR 0052 D2). It borrows the commitment and carries no secret.
+///
+/// ```compile_fail,E0451
+/// use cipherbox_core::seal::{GrantSetCommitment, VerifiedGrantSet};
+/// fn forge(commitment: &GrantSetCommitment) -> VerifiedGrantSet<'_> {
+///     VerifiedGrantSet { commitment }
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifiedGrantSet<'a> {
+    commitment: &'a GrantSetCommitment,
+}
+
+impl<'a> VerifiedGrantSet<'a> {
+    /// The attested commitment.
+    pub fn commitment(&self) -> &'a GrantSetCommitment {
+        self.commitment
+    }
+}
+
 /// Verify a grant-set commitment's owner signature. Fails closed with
 /// [`TrustViolation::CommitmentInvalid`] when the owner identity key did not
 /// attest this tag/pseudonym set — the fail-closed check a recipient runs
 /// before trusting a grant.
-pub fn verify_grant_set(
+pub fn verify_grant_set<'a>(
     verifier: &EcdsaVerifier,
-    c: &GrantSetCommitment,
+    c: &'a GrantSetCommitment,
     sig: &EcdsaSignature,
-) -> Result<(), CodecError> {
+) -> Result<VerifiedGrantSet<'a>, CodecError> {
     if verifier.verify_detcbor(&encode_grant_set_commitment(c)?, sig) {
-        Ok(())
+        Ok(VerifiedGrantSet { commitment: c })
     } else {
         Err(TrustViolation::CommitmentInvalid.into())
     }
@@ -1236,12 +1259,12 @@ impl From<GrantSetBindingError> for CodecError {
 /// verify re-encodes the whole commitment and does an ECDSA verify, so an
 /// attacker-supplied wrong-scope record costs a memcmp rather than a signature
 /// check.
-pub fn verify_grant_set_bound(
+pub fn verify_grant_set_bound<'a>(
     verifier: &EcdsaVerifier,
-    c: &GrantSetCommitment,
+    c: &'a GrantSetCommitment,
     sig: &EcdsaSignature,
     scope_root_name: &[u8],
-) -> Result<(), GrantSetBindingError> {
+) -> Result<VerifiedGrantSet<'a>, GrantSetBindingError> {
     if c.ipns_name != scope_root_name {
         return Err(GrantSetBindingError::ScopeMismatch);
     }

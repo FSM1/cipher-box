@@ -359,6 +359,7 @@ fn authorize_cut(plan: &GrantCutPlan<'_>) -> Result<(), RevokeError> {
         &current_sig,
         plan.scope_root_name.as_str().as_bytes(),
     )
+    .map(drop)
     .map_err(|e| match e {
         GrantSetBindingError::Verify(_) => RevokeError::UnauthorizedSigner,
         GrantSetBindingError::ScopeMismatch => RevokeError::CommitmentScopeMismatch,

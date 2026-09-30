@@ -54,9 +54,9 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use super::cascade::CascadeTarget;
 use crate::content::limits::{MAX_RETAINED_HISTORY_LINK_BYTES, resealable_section_bytes};
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
-use crate::gate::is_committed_write_pseudonym;
 use crate::grants::{enforce_committed_ledger, recipient_blinded_tag};
 use crate::net::author::ENVELOPE_V;
+use cipherbox_core::seal::is_committed_write_pseudonym;
 
 /// How many history links a re-seal carries forward — the ratchet's retained
 /// window, in rotations (blueprint/core.md "History-link retention"). The window

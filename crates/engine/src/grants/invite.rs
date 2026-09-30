@@ -826,6 +826,7 @@ impl OwnerAuthority<'_> {
             scope.commitment,
             scope.commitment_sig,
         )
+        .map(drop)
         .map_err(|_| InviteError::NotOwner)
     }
 }

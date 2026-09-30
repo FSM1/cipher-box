@@ -464,7 +464,7 @@ fn a_settings_publish_that_never_confirmed_is_still_a_mark_of_a_choice() {
     );
 }
 
-/// ADR 0034 D5 holds beside ADR 0060: the settings mint is raised before the
+/// ADR 0034 D6 holds beside ADR 0060: the settings mint is raised before the
 /// seal, so a PUT that every endpoint refused by a stated answer still leaves
 /// the mark of a placement choice.
 #[test]

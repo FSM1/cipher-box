@@ -650,9 +650,9 @@ enum InteriorAdmission {
     /// the mint cannot hand the grantee's scope a node the gate never proved.
     Measured(BTreeSet<[u8; 16]>),
     /// Every node the gate authenticates in one of the two scopes. A resume
-    /// runs no pass, so it widens the splice window a committed writer of the
-    /// leaving scope already holds, from "between the pass and the mint" to
-    /// "between the two attempts"; the bound a resume owes is not landed.
+    /// runs no pass, so a committed writer of the leaving scope can splice a
+    /// node in; an accepted residual, as its ascent link and source name key
+    /// already let it author in the granted scope.
     Unmeasured,
 }
 

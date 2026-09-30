@@ -856,7 +856,7 @@ where
         cache_key: settings_cache_key(&name),
         adopted_key: revision_adopted_key(&name),
         mint_key: revision_mint_key(&name),
-        // The settings mint is raised before the seal (ADR 0034 D5), so no
+        // The settings mint is raised before the seal (ADR 0034 D6), so no
         // PUT outcome clears it.
         refused_key: None,
         // The reader of this record is always its signer, so a lapsed EOL is a

@@ -127,9 +127,10 @@ re-sign records with any key it holds; every crypto-review finding (FSM1/cipher-
 gets a pinned regression scenario.
 
 The engine also ships **its own KAT vectors**, under core's regime but for the
-formats and predicates core cannot reach: the content-DAG root, and the
-adoption gate's stage-3 verdict over whole scope-root head blocks — including
-the **one section, one signer** reject. They are written only by
+formats and predicates core cannot reach: the content-DAG root and the
+rotation and check-surface reject families. The stage-3 **one section, one
+signer** vectors are core's, in the KAT `grant` family (ADR 0052 D4). The
+engine vectors are written only by
 `cargo run -p cipherbox-engine --example kat_gen`, and the **Engine simulation
 tests** gate regenerates all of `crates/engine/kat` and diffs it before running
 the suites, so a verdict change that is not a deliberate re-freeze fails there

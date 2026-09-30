@@ -469,11 +469,11 @@ gate-passed record (`blueprint/core.md` "Write-body").
   `a_grant_at_the_cuts_own_epoch_lifts_it`, `a_grant_older_than_the_cut_does_not_lift_it`,
   `a_scope_with_no_recorded_cut_reads_one_floor_key` and
   `a_floor_store_that_refuses_re_keys_nothing`.
-- **D8:** engine `gate/adoption.rs` `any_committed_pseudonym_can_pin_the_sections_signer`,
+- **D8:** core `seal/section_auth.rs` `any_committed_pseudonym_can_pin_the_sections_signer`,
   `a_section_signed_by_two_committed_pseudonyms_is_unadoptable` and
-  `a_signature_from_no_committed_pseudonym_is_rejected_pinned_or_not`; the engine KAT suite
-  `crates/engine/tests/kat_gate.rs` `accept_vectors_authenticate_under_one_committed_signer` and
-  `a_section_signed_by_two_committed_pseudonyms_fails_closed` (the splice vector included);
+  `a_signature_from_no_committed_pseudonym_is_rejected_pinned_or_not`; the core KAT
+  `section_signer_accept_vectors_authenticate_under_one_committed_signer` and
+  `section_signer_reject_vectors_fire_the_named_check` (the splice vector included);
   `net/author.rs` `a_scope_root_envelope_whose_section_has_two_signers_is_refused` (release-active
   produce side).
 - **D9:** core `seal/structure.rs` `a_swapped_ascent_public_never_verifies`; the core KAT

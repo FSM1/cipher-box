@@ -334,8 +334,8 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
   encode (ADR 0033) — `historyLinks` at 256, `grantBlobs` and the commitment's
   `entries` both at 1024 (`too-many-structures`) — the commitment additionally
   refuses a repeated `tag` (`duplicate-grant-tag`), and two history links may
-  not carry equal sealed bytes (`duplicate-history-link`): the gate's stage-3
-  work is `pseudonyms + structures` (engine.md "One section, one signer"), so an
+  not carry equal sealed bytes (`duplicate-history-link`): stage 3's work is
+  `pseudonyms + structures` ("One section, one signer" below), so an
   unbounded collection on **either** side of that sum is a reader-CPU amplifier,
   and each epoch mints one link under a fresh nonce, so a repeat is an authored
   anomaly. The two 1024 ceilings
@@ -374,6 +374,38 @@ ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
   at that root could fit. Honest use is nowhere near it: producers prune history
   links to a far smaller retained window, and a body only approaches its bound
   through preserved unknowns.
+- **One section, one signer** (ADR 0032 D8, ADR 0052): stage 3 of the adoption
+  gate is core's predicate `authenticate_section_structures`. A section is a
+  single rotator's work: it re-seals and detached-signs every structure with its
+  own writer pseudonym, re-signing at the record's read epoch even the history
+  links it carries forward verbatim. The predicate therefore **pins** the
+  committed write-capable pseudonym that authenticated the section's first
+  structure and requires every later structure to verify under that key alone;
+  a section signed by two committed pseudonyms fails with
+  `structure-signature-invalid`, a trust violation. The committed write-capable
+  set is a core definition: the owner pseudonym plus the pseudonym of every
+  `write` entry, repeats removed (`committed_write_pseudonyms`). Every reader of
+  the set uses it, including the write-body signer lookup and a re-seal's own
+  signer check.
+  The pin closes a **structure splice**: a structure lifted verbatim out of a
+  different record at the same scope and epoch, authored by a different
+  committed writer, recomputes an identical signed input — `scope`, `epoch`,
+  `structTag`, `recipientTag` and `H(ciphertext)` all match — so per-structure
+  trial-verify adopted it. It also bounds stage 3's work at
+  `pseudonyms + structures` rather than their product: without it an accepted
+  contact commits 1024 write pseudonyms of their own and spreads a section's
+  signatures across them, buying ~1000x reader-CPU amplification for ~1284
+  signatures. That sum is the reason for the section bounds above.
+  The pinned signer may be **any** committed write-capable pseudonym, not the
+  owner's specifically: the commitment carries no read epoch so that
+  grantee-triggered rotation needs no owner signature (`CONTEXT.md`).
+  Per-structure signers would need a per-structure signer index on the wire,
+  since the gate cannot otherwise avoid the product — a format change, not a
+  relaxation of this rule. The produce side runs the same predicate
+  release-active (the engine's `net/author.rs::check_scope_root`), so a build
+  never signs a section its own gate rejects. The KAT `grant` family freezes the
+  rule over whole scope-root head blocks (`sectionSignerAccept`,
+  `sectionSignerReject`, the splice included).
 - **History-link retention** (ADR 0033): a link minted at epoch `e` is sealed
   under **its own** epoch's structure key and carries the _preceding_ epoch's
   seed, so the ratchet is a **contiguous chain** walkable only backward, one
@@ -426,7 +458,11 @@ H(signed bytes)}` — covering grant blobs, owner blob, owner-write-blob, ascent
   sign the swapped body — but it makes the swap attributable to a pseudonym the
   owner committed, and an owner cut overwrites it by deriving the public half
   from the parent seed instead of carrying it. Verification is per-structure and
-  pure; the whole-record fail-closed policy is the engine's gate stage.
+  pure. The stage-3 predicate takes a `VerifiedGrantSet`, a witness that only
+  `verify_grant_set` and `verify_grant_set_bound` return, and reads the
+  committed pseudonyms from it; a caller cannot authenticate structures against
+  a commitment the owner identity did not attest (ADR 0052 D2). The whole-record
+  fail-closed policy stays the engine gate's.
 - **Pointer payloads**: the re-point object `{scopeId, currentRootName,
 writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the
   record, sealed under the scope's stable `pointerReadKey`. The vault pointer

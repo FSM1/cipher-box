@@ -205,16 +205,10 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    The `/shared` classification path holds a record to this same stage and makes
    the same raise, so a device the owner cut — which adopts no post-cut record,
    and therefore never reaches the raise below — learns the cut too.
-3. **Grant-section authentication** (scope roots) — every seed-bearing
-   structure (grant blobs, owner blob, the optional owner-write-blob, ascent
-   link, history links, write-body) verifies under **one** committed
-   write-capable pseudonym via core's pure per-structure checks; any failure
-   rejects the **whole record** as a trust violation (FSM1/cipher-box-next#39 D3). The
-   owner-write-blob is optional on the wire, but a **present** one with a
-   missing or invalid structure signature is a whole-record trust violation,
-   never staleness (its signature is recomputed at the authenticated envelope
-   epoch like every other structure, though its sealed AAD binds the write
-   epoch).
+3. **Grant-section authentication** (scope roots) — core's
+   `authenticate_section_structures` over the `VerifiedGrantSet` that stage 2
+   returned, at the authenticated envelope's scope and epoch; any failure
+   rejects the **whole record** as a trust violation (FSM1/cipher-box-next#39 D3).
 4. **Sequence** — strictly newer than the durable per-name floor.
 5. **Epoch** — epoch tag at or above the scope's durable epoch floor. An
    interior record below the floor is opened only by the three readers that the
@@ -222,30 +216,9 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
 6. **Unseal** — success required; core's trust-violation error class carries
    through fail-closed.
 
-**One section, one signer** (stage 3, ADR 0032). A section is a single rotator's
-work: it re-seals and detached-signs every structure with its own writer
-pseudonym, re-signing at the record's read epoch even the history links it
-carries forward verbatim (`rotation/reseal.rs`). The gate therefore **pins** the
-pseudonym that authenticated the section's first structure and requires every
-later structure to verify under that key alone; a section signed by two
-committed pseudonyms is unadoptable, not merely unusual.
-
-It closes a **structure splice**: a structure lifted verbatim out of a different
-record at the same scope and epoch, authored by a different committed writer,
-recomputes an identical signed input — `scope`, `epoch`, `structTag`,
-`recipientTag` and `H(ciphertext)` all match — so per-structure trial-verify
-adopted it. It is also what bounds stage 3's work at `pseudonyms + structures`
-rather than their product: without it an accepted contact commits 1024 write
-pseudonyms of their own and spreads a section's signatures across them, buying
-~1000x reader-CPU amplification for ~1284 signatures. The produce side runs the
-same predicate release-active (`net/author.rs::check_scope_root`), so this build
-never signs a section its own gate rejects.
-
-The pinned signer may be **any** committed write-capable pseudonym, not the
-owner's specifically: the commitment carries no read epoch so that
-grantee-triggered rotation needs no owner signature (`CONTEXT.md`). Per-structure signers would
-need a per-structure signer index on the wire, since the gate cannot otherwise
-avoid the product — a format change, not a relaxation of this rule.
+**One section, one signer** (stage 3, ADR 0032 D8): the rule, its work bound
+and the splice it closes are core's (core.md "One section, one signer",
+ADR 0052).
 
 A gate failure is never mere staleness: the engine pins last-known-good,
 raises the withheld-update escalation where applicable, and never renders the
@@ -1083,8 +1056,11 @@ surviving committed grants uniformly in the republish it already does.
   in — a fresh mint needs no history) → for write grants, the write-scope cut
   (fresh write scope seed + name wave over the subtree) → update the parent
   scope's direct-child-scope index → publish → post the sealed share pointer
-  to the recipient's mailbox. An **append**, on an existing scope root: one
-  more row and grant blob, the commitment re-signed, and the root published
+  to the recipient's mailbox. A committed writer of the parent scope can splice
+  a source-scope node into a stalled resume; the resume admits it, and the
+  writer gains no capability, because the ascent link and the source name key
+  already let it author in the granted scope. An **append**, on an existing
+  scope root: one more row and grant blob, the commitment re-signed, and the root published
   once at the current epoch — no new seed, no re-seal of the subtree, no
   converge step; the new grantee reads the whole history of the scope (D6). A
   direct grant, a link mint and a conversion each append, so links and direct

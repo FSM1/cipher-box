@@ -6,7 +6,7 @@
 //! the owner-signed grant-set commitment. This module is the **framing codec**
 //! that assembles and parses that bundle: it composes the per-structure seal
 //! outputs of [`super::grant`]/[`super::write_body`] as **opaque sealed bytes**
-//! and introduces no crypto of its own. The adoption gate (`crates/engine`)
+//! and introduces no crypto of its own. Stage 3 ([`super::section_auth`])
 //! consumes a decoded [`GrantSection`], enumerates its structures, and
 //! recomputes each `H(ciphertext)` before verifying the signatures — so the
 //! record itself is the completeness authority, never a side list.
@@ -20,7 +20,7 @@
 //! symmetric sealed blob `nonce||ct||tag` for history link / write-body.
 //!
 //! Signatures are carried as raw fixed-width bytes and never parsed or verified
-//! here — that is the gate's crypto step. This codec only frames and enforces
+//! here — that is stage 3's crypto step. This codec only frames and enforces
 //! structure (lengths, required fields, tag uniqueness), fail-closed.
 
 use std::collections::BTreeSet;
@@ -275,10 +275,11 @@ pub struct GrantSection {
     pub unknown: PreservedFields,
 }
 
-/// The frozen bound on a section's history links: the gate's stage-3 work is
-/// `pseudonyms + structures` (blueprint/engine.md "One section, one signer"), so
-/// an unbounded collection on either side lets one record dictate another
-/// reader's CPU budget. Producers prune to a far smaller retained window
+/// The frozen bound on a section's history links: stage 3's work is
+/// `pseudonyms + structures` ([`super::authenticate_section_structures`],
+/// blueprint/core.md "One section, one signer"), so an unbounded
+/// collection on either side lets one record dictate another reader's CPU
+/// budget. Producers prune to a far smaller retained window
 /// (`rotation/reseal.rs`), leaving this a malformed-input guard an honest
 /// rotator never approaches.
 pub const MAX_HISTORY_LINKS: usize = 256;

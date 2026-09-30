@@ -28,9 +28,10 @@ use cipherbox_core::error::{CodecError, TrustViolation};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
     CarriedCut, ChildRef, Envelope, GrantSection, GrantSetBindingError, NodeKind, PreservedFields,
-    ReadBody, Version, decode_grant_section, encode_envelope_within, encode_grant_section,
-    envelope_over_bound, grant_section_bytes, has_grant_section, is_grant_section_over_bound,
-    seal_read_body, set_grant_section, verify_grant_set_bound,
+    ReadBody, Version, authenticate_section_structures, decode_grant_section,
+    encode_envelope_within, encode_grant_section, envelope_over_bound, grant_section_bytes,
+    has_grant_section, is_grant_section_over_bound, seal_read_body, set_grant_section,
+    verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use futures_channel::mpsc;
@@ -40,7 +41,7 @@ use crate::content::limits::{
 };
 use crate::content::root_block_cid;
 use crate::facade::{Event, emit_trust_violation};
-use crate::gate::{GateRejection, authenticate_section_structures};
+use crate::gate::GateRejection;
 
 /// The envelope format+suite version this build authors (blueprint/core.md).
 pub const ENVELOPE_V: u64 = 1;
@@ -357,10 +358,7 @@ pub fn author_scope_root_with_section(
 
 /// The checks the gate makes on arrival, run here first so a root this build's
 /// own gate always rejects is never signed (release-active). The commitment
-/// binding and stage 3, in the gate's own order: without the commitment
-/// signature the stage-3 pass is self-referential — it authenticates structures
-/// against the pseudonyms the section's own commitment names, so a wholly
-/// attacker-authored section is internally consistent. Stage 2's cut bar is
+/// binding and stage 3, in the gate's own order. Stage 2's cut bar is
 /// measured against the reader's own durable floor, not a property of these
 /// bytes, so it has no encode-side counterpart.
 ///
@@ -385,7 +383,7 @@ fn check_scope_root(
     }
     let commitment_sig = EcdsaSignature::from_compact(&section.commitment_sig)
         .ok_or(AuthorError::CommitmentSignatureInvalid)?;
-    verify_grant_set_bound(
+    let verified = verify_grant_set_bound(
         owner_identity,
         &section.commitment,
         &commitment_sig,
@@ -395,7 +393,7 @@ fn check_scope_root(
         GrantSetBindingError::Verify(_) => AuthorError::CommitmentSignatureInvalid,
         GrantSetBindingError::ScopeMismatch => AuthorError::CommitmentNameMismatch,
     })?;
-    authenticate_section_structures(&section, envelope)
+    authenticate_section_structures(&verified, &section, envelope.scope, envelope.epoch)
         .map_err(|_| AuthorError::SectionSignatureInvalid)?;
     Ok(section.commitment.entries.len())
 }
