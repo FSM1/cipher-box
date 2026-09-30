@@ -12,7 +12,7 @@ use cipherbox_engine::settings::MAX_BIN_RETENTION_DAYS;
 use cipherbox_engine::wire::BIGINT_TAG;
 use cipherbox_engine::{PinMode, RetentionPolicy};
 use cipherbox_wasm::boundary::decode_command;
-use js_sys::{BigInt, Object, Reflect, Uint8Array};
+use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -220,6 +220,34 @@ fn a_command_past_the_depth_bound_is_refused() {
     }
     let nested = object(&[("kind", text("manualRefresh")), ("extra", deep)]);
     assert_eq!(message(&nested), "the command nests too deep");
+}
+
+/// No command field is an array, so an array is refused before the decode
+/// buffers it: a cycle through one, and one of vast length, never walk.
+#[wasm_bindgen_test]
+fn an_array_in_a_command_is_refused() {
+    let looped = Array::new();
+    let command = object(&[
+        ("kind", text("manualRefresh")),
+        ("extra", looped.clone().into()),
+    ]);
+    looped.push(&command);
+    let sparse = Array::new_with_length(u32::MAX);
+    let refresh = |extra: JsValue| object(&[("kind", text("manualRefresh")), ("extra", extra)]);
+    for refused in [
+        command,
+        refresh(sparse.into()),
+        refresh(Array::new().into()),
+    ] {
+        let error = JsValue::from(decode_command(&refused).unwrap_err());
+        assert_eq!(
+            Reflect::get(&error, &text("message"))
+                .unwrap()
+                .as_string()
+                .unwrap(),
+            "the command does not decode"
+        );
+    }
 }
 
 /// A deadline at the epoch decodes, as a `u64` in range, and the engine refuses

@@ -86,7 +86,9 @@ const MAX_COMMAND_DEPTH: usize = 8;
 /// A copy of `value` with each `bigint` in its plain objects replaced by a
 /// [`BIGINT_TAG`] object, so the decode tells a `bigint` from a `number`.
 /// Bytes and every other value pass as they are. A host object that already
-/// has the tag key is refused, so no tag reaches the decode but this one.
+/// has the tag key is refused, so no tag reaches the decode but this one. No
+/// command field is an array, so an array is refused before serde buffers it
+/// without a bound.
 fn tag_bigints(value: &JsValue, depth: usize) -> Result<JsValue, JsError> {
     if value.is_bigint() {
         let decimal = value
@@ -97,11 +99,10 @@ fn tag_bigints(value: &JsValue, depth: usize) -> Result<JsValue, JsError> {
         Reflect::set(&tagged, &BIGINT_TAG.into(), &decimal).map_err(|_| refused())?;
         return Ok(tagged.into());
     }
-    if !value.is_object()
-        || Array::is_array(value)
-        || value.is_instance_of::<ArrayBuffer>()
-        || ArrayBuffer::is_view(value)
-    {
+    if Array::is_array(value) {
+        return Err(refused());
+    }
+    if !value.is_object() || value.is_instance_of::<ArrayBuffer>() || ArrayBuffer::is_view(value) {
         return Ok(value.clone());
     }
     if depth >= MAX_COMMAND_DEPTH {
