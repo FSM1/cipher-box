@@ -5580,6 +5580,8 @@ fn an_admission_cap_out_of_range_is_refused_and_publishes_nothing() {
 #[test]
 fn an_invite_deadline_not_after_now_is_refused_and_publishes_nothing() {
     let mut fx = GrantScenario::new();
+    // The fixture clock starts at the epoch; `now - 1` needs it past zero.
+    fx.world.scheduler.advance(Duration::from_secs(60));
     let now = fx.world.scheduler.now().0;
     for at in [0, now - 1, now] {
         assert_eq!(
