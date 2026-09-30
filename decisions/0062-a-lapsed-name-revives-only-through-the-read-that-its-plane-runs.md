@@ -1,6 +1,6 @@
 # ADR 0062 — A lapsed name revives only through the read that its plane runs
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-09-30
 - **Date:** 2026-09-30
 - **Relates to:** `blueprint/engine.md` "Resolve/publish pipeline" (Revival), "Pointer planes" and
   "Vault settings load", `blueprint/api.md` "Republisher module and recovery", the `CONTEXT.md`
@@ -99,14 +99,11 @@ reports a `TrustViolation`.
 4. `CONTEXT.md` adds the term "Revival" and extends "Recovery endpoint" with the D1 steps.
 5. `blueprint/testing.md` adds two virtual-clock tests: a lapsed file record revives through the
    gate, and a device that starts after 100 days offline finds its vault root.
-
-## Residuals
-
-- A bad recovery server can give a new device an old copy of a record while the network has no
-  copy. The device then restores that old copy and signs it again. For a vault pointer or a scope
-  pointer from before a rotation, the old copy sets an old read epoch on the device. The device
-  can then write new files under a key that a removed grantee still holds, so that grantee can read
-  them. The user sees "restored from the server copy". Another owner device reports a trust
-  violation only when the copy is below its floor or at a lower read epoch. A copy exactly one
-  sequence behind is signed one above it, so it lands at that device's floor, and that device takes
-  it with no signal. Does the owner accept this risk for a device with no floor?
+6. Accepted residual: a bad recovery server can give a new device an old copy of a record while
+   the network has no copy. The device then restores that old copy and signs it again. For a vault
+   pointer or a scope pointer from before a rotation, the old copy sets an old read epoch on the
+   device. The device can then write new files under a key that a removed grantee still holds, so
+   that grantee can read them. The user sees "restored from the server copy". Another owner device
+   reports a trust violation only when the copy is below its floor or at a lower read epoch. A
+   copy exactly one sequence behind is signed one above it, so it lands at that device's floor,
+   and that device takes it with no signal. The owner accepted it on 2026-09-30.
