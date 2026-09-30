@@ -13,12 +13,50 @@
 //!
 //! [`is_expired`] carries one verdict outside liveness — the vault settings
 //! resolve's authority check (blueprint/engine.md "Vault settings load").
+//! [`verify_record_outside_session`] serves a host that watches a name with no
+//! session open.
 
 use core::time::Duration;
 
-use cipherbox_core::ipns::DEFAULT_VALIDITY_DAYS;
+use cipherbox_core::error::{CodecError, Malformed};
+use cipherbox_core::ipns::{DEFAULT_VALIDITY_DAYS, IpnsName, IpnsRecord};
 
+use crate::net::MAX_RECORD_BYTES;
 use crate::seams::UnixMillis;
+
+/// What a signed IPNS record says about its own liveness, verified against the
+/// name it was fetched under — the read an observer outside any session makes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordReading {
+    /// The record sequence number.
+    pub sequence: u64,
+    /// The signed RFC3339 EOL text.
+    pub validity: String,
+    /// The EOL as Unix millis; `None` where the text does not parse.
+    pub valid_until: Option<u64>,
+}
+
+/// Verify `record` under `ipns_name` and read its sequence and EOL. The name's
+/// key is the only trust anchor, so a record signed for another name fails.
+/// Not a gated read: it adopts nothing, checks no floor, and does not compare the EOL with the time.
+pub fn verify_record_outside_session(
+    ipns_name: &str,
+    record: &[u8],
+) -> Result<RecordReading, CodecError> {
+    if record.len() > MAX_RECORD_BYTES {
+        return Err(Malformed::IpnsRecordMalformed.into());
+    }
+    let name = IpnsName::parse(ipns_name)?;
+    let verified = IpnsRecord::unmarshal(record)?.verify(&name)?;
+    let valid_until = parse_rfc3339(&verified.validity);
+    let validity =
+        String::from_utf8(verified.validity).map_err(|_| Malformed::IpnsRecordMalformed)?;
+    Ok(RecordReading {
+        sequence: verified.sequence,
+        validity,
+        valid_until,
+    })
+}
 
 /// Seconds in one day.
 const SECS_PER_DAY: u64 = 24 * 60 * 60;
@@ -214,6 +252,81 @@ mod tests {
                 "round-trip at second precision: {s}"
             );
         }
+    }
+
+    #[test]
+    fn a_record_reads_its_sequence_and_eol_under_its_own_name_only() {
+        use cipherbox_core::suite::ed25519::Ed25519Signer;
+
+        let signer = Ed25519Signer::from_seed([0x31; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let eol = eol_from(UnixMillis(1_700_000_000_000));
+        let record = IpnsRecord::create_v2(&signer, b"/ipfs/bafyreading", 7, 1, &eol).marshal();
+
+        assert_eq!(
+            verify_record_outside_session(name.as_str(), &record),
+            Ok(RecordReading {
+                sequence: 7,
+                validity: eol.clone(),
+                valid_until: parse_rfc3339(eol.as_bytes()),
+            })
+        );
+
+        let other =
+            IpnsName::from_public_key(&Ed25519Signer::from_seed([0x32; 32]).verifying_key());
+        assert_eq!(
+            verify_record_outside_session(other.as_str(), &record).map_err(|error| error.class()),
+            Err("trust"),
+            "a record signed for another name is a trust violation"
+        );
+        assert_eq!(
+            verify_record_outside_session(name.as_str(), &record[..record.len() - 1])
+                .map_err(|error| error.class()),
+            Err("malformed")
+        );
+    }
+
+    /// A validly signed record of exactly `len` bytes. Each value byte adds two
+    /// bytes, and a TTL of 24 adds one CBOR byte, so a search over both lands
+    /// on any length. Length prefixes grow with the value, so the padding sits
+    /// a few bytes under half the gap to the empty-value record.
+    fn signed_record_of_len(
+        signer: &cipherbox_core::suite::ed25519::Ed25519Signer,
+        len: usize,
+    ) -> Vec<u8> {
+        let eol = eol_from(UnixMillis(1_700_000_000_000));
+        let base = IpnsRecord::create_v2(signer, b"/ipfs/", 1, 1, &eol)
+            .marshal()
+            .len();
+        let top = len.saturating_sub(base) / 2;
+        (top.saturating_sub(8)..=top)
+            .flat_map(|pad| [1u64, 24].map(move |ttl| (pad, ttl)))
+            .map(|(pad, ttl)| {
+                let value = [b"/ipfs/".as_slice(), &vec![b'a'; pad]].concat();
+                IpnsRecord::create_v2(signer, &value, 1, ttl, &eol).marshal()
+            })
+            .find(|record| record.len() == len)
+            .expect("some padding reaches the length")
+    }
+
+    #[test]
+    fn a_record_past_the_fetch_cap_is_refused_before_the_decoder() {
+        use cipherbox_core::suite::ed25519::Ed25519Signer;
+
+        let signer = Ed25519Signer::from_seed([0x33; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+
+        let at_cap = signed_record_of_len(&signer, MAX_RECORD_BYTES);
+        assert_eq!(
+            verify_record_outside_session(name.as_str(), &at_cap).map(|reading| reading.sequence),
+            Ok(1),
+            "a record at the cap reaches the decoder"
+        );
+        let over_cap = signed_record_of_len(&signer, MAX_RECORD_BYTES + 1);
+        assert_eq!(
+            verify_record_outside_session(name.as_str(), &over_cap),
+            Err(Malformed::IpnsRecordMalformed.into())
+        );
     }
 
     #[test]

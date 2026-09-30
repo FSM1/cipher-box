@@ -122,6 +122,7 @@ describe('EngineProvider', () => {
         grantRefusal: null,
         inviteLinkRefusal: null,
         inviteLinks: [],
+        epochs: null,
       },
     });
 

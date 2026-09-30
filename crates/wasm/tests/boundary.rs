@@ -20,6 +20,8 @@ use js_sys::{Array, BigInt, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::wasm_bindgen_test;
 
+const IPNS_NAME: &str = "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4";
+
 /// getrandom's `wasm_js` backend must reach `crypto.getRandomValues` in the
 /// worker/JS scope — the getrandom parity surface. A dependency-level need:
 /// engine logic still takes injected entropy.
@@ -403,6 +405,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 content_version: Some(2),
                 content_cid: Some(vec![0xC1, 0xD0]),
                 pending_invite_claims: 0,
+                ipns_name: Some(IPNS_NAME.into()),
             },
             facade::SnapshotChild {
                 id: facade::NodeId([4u8; 16]),
@@ -415,6 +418,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 content_version: None,
                 content_cid: None,
                 pending_invite_claims: 2,
+                ipns_name: None,
             },
         ],
         ancestors: vec![facade::Breadcrumb {
@@ -595,6 +599,12 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         get(&folder_child, "pendingInviteClaims").as_f64(),
         Some(2.0)
     );
+    assert_eq!(
+        get(&file, "ipnsName").as_string().as_deref(),
+        Some(IPNS_NAME),
+        "ipnsName must cross as a string under that JS name"
+    );
+    assert!(get(&folder_child, "ipnsName").is_undefined());
 
     let ancestors = get(&view, "ancestors").unchecked_into::<Array>();
     assert_eq!(ancestors.length(), 1);

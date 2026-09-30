@@ -70,8 +70,8 @@ use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, ContentProfile,
     DeadLetterReason, Engine, EngineError, Event, EventStream, GatewayConfig, InvitePreview,
     LinkPreviewState, LoginSecret, NodeId, NodeKind, Permission, PreviewEntry, PreviewNames,
-    RecordReader, SessionBearer, SharePointer, SharingInviteLink, StoragePolicy, SyncTimingProfile,
-    decode_queue, load_bin_index, poll_verified, post_sealed,
+    RecordReader, ScopeEpochs, SessionBearer, SharePointer, SharingInviteLink, StoragePolicy,
+    SyncTimingProfile, decode_queue, load_bin_index, poll_verified, post_sealed,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -4878,6 +4878,72 @@ fn listed_link(link: &GrantRow, expires_at: UnixMillis, expired: bool) -> Vec<Sh
         contact_budget_full: false,
         refused_claims: 0,
     }]
+}
+
+/// The details dialog shows a node's `ipnsName` off the snapshot row: the name
+/// its parent's child reference carries, which is the node's write name.
+#[test]
+fn a_snapshot_row_carries_the_ipns_name_of_a_published_child() {
+    let mut fx = GrantScenario::new();
+    block_on(fx.engine.command(Command::Create {
+        parent: ROOT,
+        name: "notes.txt".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a metadata create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let children = block_on(fx.engine.snapshot(ROOT))
+        .expect("the root lists")
+        .children;
+    let file = children
+        .iter()
+        .find(|child| child.kind == NodeKind::File)
+        .expect("the file is listed");
+    let folder = children
+        .iter()
+        .find(|child| child.id == fx.folder)
+        .expect("the folder is listed");
+    for row in [file, folder] {
+        assert_eq!(row.ipns_name.as_deref(), Some(write_name(row.id).as_str()));
+    }
+}
+
+/// The share dialog's epoch row reads the scope root's published record, so a
+/// person revoke steps the read epoch by one and leaves the write epoch alone.
+#[test]
+fn the_sharing_read_steps_the_read_epoch_by_one_on_a_person_revoke() {
+    let mut fx = GrantScenario::new();
+    let epochs = |fx: &GrantScenario| {
+        block_on(fx.engine.sharing(fx.folder))
+            .expect("a sharing read")
+            .state
+            .expect("the scope resolved")
+            .epochs
+    };
+    assert_eq!(
+        epochs(&fx),
+        None,
+        "an ordinary folder is not a scope root, so it has no epochs"
+    );
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let granted = epochs(&fx).expect("a scope root carries its epochs");
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        epochs(&fx),
+        Some(ScopeEpochs {
+            read_epoch: granted.read_epoch + 1,
+            write_epoch: granted.write_epoch,
+        })
+    );
 }
 
 /// The link half of a share dialog: the deadline the owner-signed link entry

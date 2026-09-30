@@ -48,6 +48,8 @@ export interface ListingRow {
   deadLetter: boolean;
   /** Invite claims that wait for the owner to convert them at this folder. */
   pendingInviteClaims: number;
+  /** The node's `ipnsName`; `null` until a read projects one. */
+  ipnsName: string | null;
 }
 
 /**
@@ -75,6 +77,7 @@ function toRow(child: SnapshotChildDescriptor): ListingRow {
     pending: child.pending,
     deadLetter: child.deadLetter,
     pendingInviteClaims: child.pendingInviteClaims,
+    ipnsName: child.ipnsName,
   };
 }
 

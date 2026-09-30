@@ -69,6 +69,7 @@ function view(
       grantRefusal: null,
       inviteLinkRefusal: null,
       inviteLinks: links,
+      epochs: null,
     },
   };
 }

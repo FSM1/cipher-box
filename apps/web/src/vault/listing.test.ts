@@ -12,6 +12,7 @@ function child(overrides: Partial<SnapshotChildDescriptor> = {}): SnapshotChildD
     pending: 'none',
     deadLetter: false,
     pendingInviteClaims: 0,
+    ipnsName: null,
     contentVersion: null,
     contentCid: null,
     ...overrides,
@@ -36,6 +37,15 @@ describe('listingRows', () => {
 
     expect(row.name).toBe('a'.repeat(96) + '…');
     expect(row.storedName).toBe(long);
+  });
+
+  it("carries the node's ipnsName through, and null while unprojected", () => {
+    const name = 'k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4';
+    const [named] = listingRows([child({ ipnsName: name })]);
+    const [unprojected] = listingRows([child()]);
+
+    expect(named.ipnsName).toBe(name);
+    expect(unprojected.ipnsName).toBeNull();
   });
 
   it('renders name and kind before the projection lands', () => {

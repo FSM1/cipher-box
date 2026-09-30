@@ -25,6 +25,7 @@ const ROW: ListingRow = {
   pending: 'none',
   deadLetter: false,
   pendingInviteClaims: 0,
+  ipnsName: null,
 };
 
 function storageWith(binRetentionDays: number): VaultStorageDescriptor {
