@@ -10,6 +10,7 @@
 //! the member typed.
 
 use cipherbox_engine::content::ByoBearer;
+use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
 use cipherbox_engine::facade::{Command, CommandOutcome, Event};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_engine::seams::check_bearer;
@@ -43,7 +44,21 @@ pub fn decode_command(command: &JsValue) -> Result<Command, JsError> {
         let Command::ClaimInviteLink { fragment: slot, .. } = &mut decoded else {
             return Err(refused());
         };
-        *slot = take_fragment(&fragment)?;
+        *slot = take_text(&fragment, MAX_FRAGMENT_TEXT_LEN)?;
+        return Ok(decoded);
+    }
+    if kind == "registerDevice" {
+        let token = field(command, "identityToken");
+        let mut decoded = decode(&with_placeholder(command, &["identityToken"], &"".into())?)?;
+        let Command::RegisterDevice {
+            identity_token: slot,
+            ..
+        } = &mut decoded
+        else {
+            return Err(refused());
+        };
+        // A char is at most two UTF-16 units; the engine checks the char count.
+        *slot = take_text(&token, 2 * MAX_IDENTITY_TOKEN_CHARS)?;
         return Ok(decoded);
     }
     if kind == "saveVaultSettings" {
@@ -158,11 +173,11 @@ fn with_placeholder(
     Ok(copy.into())
 }
 
-/// An invite link's fragment, measured before it is copied into linear memory:
-/// past the engine's own text bound it cannot be a link.
-fn take_fragment(value: &JsValue) -> Result<Zeroizing<String>, JsError> {
+/// A secret text field, measured in UTF-16 units before it is copied into
+/// linear memory: past `max_units` the engine would refuse it anyway.
+fn take_text(value: &JsValue, max_units: usize) -> Result<Zeroizing<String>, JsError> {
     let text = value.dyn_ref::<JsString>().ok_or_else(refused)?;
-    if text.length() as usize > MAX_FRAGMENT_TEXT_LEN {
+    if text.length() as usize > max_units {
         return Err(refused());
     }
     text.as_string().map(Zeroizing::new).ok_or_else(refused)

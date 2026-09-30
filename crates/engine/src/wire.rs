@@ -147,11 +147,11 @@ pub mod node_kind {
     }
 }
 
-/// An invite fragment, which the boundary takes into a zeroizing buffer itself,
-/// outside the serde decode that buffers the whole command. This decode takes
-/// only the empty placeholder the boundary puts in its place, and wipes and
-/// refuses anything else.
-pub mod fragment_placeholder {
+/// A secret text field — an invite fragment, an identity token — which the
+/// boundary takes into a zeroizing buffer itself, outside the serde decode that
+/// buffers the whole command. This decode takes only the empty placeholder the
+/// boundary puts in its place, and wipes and refuses anything else.
+pub mod secret_placeholder {
     use super::*;
 
     /// Takes `""` alone.
@@ -163,7 +163,7 @@ pub mod fragment_placeholder {
             Ok(text)
         } else {
             Err(de::Error::custom(
-                "a fragment is taken outside the command decode",
+                "a secret is taken outside the command decode",
             ))
         }
     }

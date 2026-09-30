@@ -1639,7 +1639,7 @@ pub enum Command {
         /// The link's URL fragment, verbatim.
         #[cfg_attr(
             feature = "wasm",
-            serde(with = "crate::wire::fragment_placeholder"),
+            serde(with = "crate::wire::secret_placeholder"),
             tsify(type = "string")
         )]
         fragment: Zeroizing<String>,
@@ -1718,8 +1718,14 @@ pub enum Command {
         /// [`Engine::device_registration_challenge`]; made in browser custody,
         /// so it crosses as bytes the engine never produced.
         signature: String,
-        /// The CipherBox identity token this device signed in with.
-        identity_token: String,
+        /// The CipherBox identity token this device signed in with: a bearer
+        /// credential.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::secret_placeholder"),
+            tsify(type = "string")
+        )]
+        identity_token: Zeroizing<String>,
         /// A display label for the approval prompt: context, never evidence.
         label: Option<String>,
     },
@@ -18211,7 +18217,7 @@ mod tests {
         block_on(engine.command(Command::RegisterDevice {
             public_key: DEVICE_KEY.to_owned(),
             signature: device_signature(),
-            identity_token: "identity-token".to_owned(),
+            identity_token: "identity-token".to_owned().into(),
             label: Some("Laptop".to_owned()),
         }))
         .expect("the registry accepted the key");
