@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.8.0](https://github.com/FSM1/cipher-box/compare/v2.7.1...v2.8.0) (2026-09-30)
+
+
+### Features
+
+* **api:** count completed republisher walks in republisher_walks_total ([#2088](https://github.com/FSM1/cipher-box/issues/2088)) ([bae613a](https://github.com/FSM1/cipher-box/commit/bae613ab926ed9ee49e2c98d19a40670439954dd))
+* **desktop-e2e:** add the remote-stack mode and the soak scenario per OS ([#2120](https://github.com/FSM1/cipher-box/issues/2120)) ([784ba64](https://github.com/FSM1/cipher-box/commit/784ba648785f9c92c621ad0a24714a8735d1c5c1))
+* **web-e2e:** add the soak login-secret export tool and the staging runbook ([#2089](https://github.com/FSM1/cipher-box/issues/2089)) ([145ee94](https://github.com/FSM1/cipher-box/commit/145ee94dffe26a7002b54b3c7d94204427f8b7cb))
+* **web-e2e:** add the soak share folders, counter checks and grantee web leg ([#2121](https://github.com/FSM1/cipher-box/issues/2121)) ([01b8de4](https://github.com/FSM1/cipher-box/commit/01b8de4cc39d3768289cb76f7ec3f8d2f533b828))
+* **web-e2e:** add the soak suite skeleton, ledger, bootstrap and reason codes ([#2102](https://github.com/FSM1/cipher-box/issues/2102)) ([0947e80](https://github.com/FSM1/cipher-box/commit/0947e80c2d2b21b4f24b1e9658832901eba2057e))
+* **web-e2e:** add the soak vault checks for markers, sequence floor, republish and purge ([#2107](https://github.com/FSM1/cipher-box/issues/2107)) ([cbeeff8](https://github.com/FSM1/cipher-box/commit/cbeeff8f4650fc4d589b4d4098065362b0b4ad75))
+* **web:** show the IPNS name and the scope epochs, and export a Node record read ([#2091](https://github.com/FSM1/cipher-box/issues/2091)) ([1ce940c](https://github.com/FSM1/cipher-box/commit/1ce940c44e9c31a95bd85fbe2f16e88db4caf63b))
+
+
+### Bug Fixes
+
+* **api:** spend the identity token at registration and drop the subject display column ([#2092](https://github.com/FSM1/cipher-box/issues/2092)) ([63a5491](https://github.com/FSM1/cipher-box/commit/63a5491dcee9d8d16bfe31194541b39dbfac2c05))
+* **engine:** hold the op queue on a stranded settings mint ([#2100](https://github.com/FSM1/cipher-box/issues/2100)) ([d123ac8](https://github.com/FSM1/cipher-box/commit/d123ac88e195650ea3428813d3450f75a34affc2))
+* **engine:** journal a root-only debt when a dropped version's staged root is gone ([#2105](https://github.com/FSM1/cipher-box/issues/2105)) ([c0eb46e](https://github.com/FSM1/cipher-box/commit/c0eb46e73fea845af8c5be4b73f3c1a748c90999))
+* **engine:** journal both legs of a move at once and share the stamped set ([#2103](https://github.com/FSM1/cipher-box/issues/2103)) ([3b9032f](https://github.com/FSM1/cipher-box/commit/3b9032fb6298136ec22ef3a04aab766c155c037a))
+* **engine:** let a stated refusal from every endpoint supersede the bin index mint mark ([#2106](https://github.com/FSM1/cipher-box/issues/2106)) ([be55d76](https://github.com/FSM1/cipher-box/commit/be55d767f4c088c07f4705e0a6f0e41eb4df3393))
+* **engine:** mark a bin index publish only once its PUT leaves ([#2090](https://github.com/FSM1/cipher-box/issues/2090)) ([ada161e](https://github.com/FSM1/cipher-box/commit/ada161e7e2300414b9f5931fc811efb3056c8ad8))
+
 ## [2.7.1](https://github.com/FSM1/cipher-box/compare/v2.7.0...v2.7.1) (2026-09-28)
 
 
