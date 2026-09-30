@@ -60,6 +60,13 @@ describe('the step budgets', () => {
     expect(signIn).toBeLessThanOrEqual(budgets.signInMs);
     expect(waits.readIntervalMs).toBe(PRODUCTION_PROFILE.pollCadenceMs);
   });
+
+  it('fit the waits of the marker write, a status and a refresh, inside its budget', () => {
+    const budgets = soakBudgets(PRODUCTION_PROFILE);
+    const waits = legDeadlines(budgets, PRODUCTION_PROFILE);
+    // Both control calls are bounded by `refreshMs`; the rest of the budget is the file work.
+    expect(2 * waits.refreshMs).toBeLessThan(budgets.writeMs);
+  });
 });
 
 describe('the login secret', () => {

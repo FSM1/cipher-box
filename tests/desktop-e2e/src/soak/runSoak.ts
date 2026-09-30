@@ -195,17 +195,16 @@ async function runLeg(context: LegContext): Promise<void> {
     readGranteeLedger(context, writer.instance)
   );
 
-  // A missing marker fails the night, and the leg still writes its own, so
-  // the next night has one to read.
   const read = await markerReads(context, writer.instance, ledger).catch((error: unknown) => {
     if (!recorder.recorded(error)) throw error;
     return null;
   });
   if (read !== null) await recorder.fact(`${leg} markers read`, readLine(read));
 
-  // A stalled read takes the writer away. A new writer still writes the
-  // marker of today, so one bad night does not empty the next.
-  const writing = writer.instance.abandoned
+  // A missing marker fails the night, and the leg still writes its own, so
+  // the next night has one to read. A stalled read or a step bound takes the
+  // writer away, so a new writer writes it then.
+  const markerWriter = writer.instance.abandoned
     ? await step(context, 'writer reopen', 'sign-in-failed', budgets.signInMs, async () => {
         const instance = await open(context, 'writer-reopened', writer.devKey);
         await instance.refresh();
@@ -215,8 +214,8 @@ async function runLeg(context: LegContext): Promise<void> {
 
   const today: LegMarker = { leg, date: utcDay(new Date()) };
   await step(context, 'marker write', 'desktop-marker-unpublished', budgets.writeMs, async () => {
-    await requireLiveMount(writing);
-    await writeMarker(writing, today);
+    await requireLiveMount(markerWriter);
+    await writeMarker(markerWriter, today);
   });
 
   const reader = await step(
@@ -238,7 +237,7 @@ async function runLeg(context: LegContext): Promise<void> {
     budgets.publishMs,
     async () => {
       await servesMarker(context, reader, today);
-      const settled = await writing.status();
+      const settled = await markerWriter.status();
       if (settled.deadLetters > 0) {
         throw new SoakFailure(
           'desktop-marker-unpublished',
@@ -331,28 +330,38 @@ async function open(context: LegContext, name: string, devKey: string): Promise<
 
 async function readGranteeLedger(context: LegContext, instance: Instance): Promise<Ledger> {
   const path = join(instance.mountRoot, ...ledgerPath());
-  let text: Buffer;
   try {
-    text = await poll(
-      refreshingAfterFirst(instance, () => readOrErrno(path)),
-      (seen): seen is Buffer => Buffer.isBuffer(seen),
-      {
-        what: `${instance.name}: the grantee ledger to open`,
-        timeoutMs: context.budgets.ledgerMs,
-        intervalMs: context.deadlines.readIntervalMs,
-        release: () => instance.abandon(),
-      }
+    return ledgerFrom(
+      await poll(
+        refreshingAfterFirst(instance, () => readOrErrno(path)),
+        (seen): seen is Buffer => Buffer.isBuffer(seen),
+        {
+          what: `${instance.name}: the grantee ledger to open`,
+          timeoutMs: context.budgets.ledgerMs,
+          intervalMs: context.deadlines.readIntervalMs,
+          release: () => instance.abandon(),
+        }
+      )
     );
   } catch (error) {
-    if (error instanceof PollTimeout && error.last === 'ENOENT') {
-      throw new SoakFailure(
-        'unbootstrapped-or-wiped',
-        `the grantee vault has no ${ledgerPath().join('/')}`
-      );
+    if (error instanceof PollTimeout && typeof error.last === 'string') {
+      return ledgerFrom(error.last as Errno);
     }
     throw error;
   }
-  const ledger = parseLedger(text.toString('utf8'));
+}
+
+/** The grantee ledger one read gave, with every leg marker line checked. */
+function ledgerFrom(read: Buffer | Errno): Ledger {
+  if (!Buffer.isBuffer(read)) {
+    throw read === 'ENOENT'
+      ? new SoakFailure(
+          'unbootstrapped-or-wiped',
+          `the grantee vault has no ${ledgerPath().join('/')}`
+        )
+      : new SoakFailure('ledger-unreadable', `the grantee ledger did not open: ${read}`);
+  }
+  const ledger = parseLedger(read.toString('utf8'));
   legMarkers(ledger);
   return ledger;
 }
@@ -428,11 +437,7 @@ async function writeMarker(instance: Instance, today: LegMarker): Promise<void> 
   // The ledger as it is now, not as the leg read it before the marker reads.
   const ledgerAt = join(instance.mountRoot, ...ledgerPath());
   await instance.refresh();
-  const current = await readOrErrno(ledgerAt);
-  if (!Buffer.isBuffer(current)) {
-    throw new SoakFailure('ledger-unreadable', `the grantee ledger did not open: ${current}`);
-  }
-  const ledger = parseLedger(current.toString('utf8'));
+  const ledger = ledgerFrom(await readOrErrno(ledgerAt));
   const next = recordMarker(ledger, today);
   if (next === ledger) return;
   try {

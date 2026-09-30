@@ -27,7 +27,7 @@ export interface SoakBudgets {
   /** The reads of the other legs' markers, before the per-marker share. */
   readBaseMs: number;
   readPerMarkerMs: number;
-  /** Today's marker and its ledger line land on the writer's mount. */
+  /** Today's marker and its ledger line land on the writer's mount: a status, a refresh, the files. */
   writeMs: number;
   /** A cold mount serves both, after its own sign-in. */
   publishMs: number;
@@ -41,7 +41,7 @@ export function soakBudgets(profile: SyncTimingProfile = PRODUCTION_PROFILE): So
     ledgerMs: 10 * tick,
     readBaseMs: 10 * tick,
     readPerMarkerMs: Math.round(tick / 10),
-    writeMs: 10 * tick,
+    writeMs: 15 * tick,
     publishMs: 20 * tick,
   };
 }

@@ -66,8 +66,7 @@ interface Shell {
 }
 
 export class Instance {
-  /** Whether a bound or a stalled read took this instance away. */
-  abandoned = false;
+  private wasAbandoned = false;
 
   constructor(
     readonly name: string,
@@ -95,8 +94,13 @@ export class Instance {
    * Node has. Removing the mount is what returns those calls, so a scenario
    * that ran out of time does this before it does anything else.
    */
+  /** Whether a bound or a stalled read took this instance away. */
+  get abandoned(): boolean {
+    return this.wasAbandoned;
+  }
+
   async abandon(): Promise<void> {
-    this.abandoned = true;
+    this.wasAbandoned = true;
     this.shell.child.kill('SIGKILL');
     await forceUnmount(this.mountRoot);
   }
