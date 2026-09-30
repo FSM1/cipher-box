@@ -15,7 +15,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::content::ByoBearer;
 use crate::facade::{NodeId, NodeKind};
-use crate::seams::check_bearer;
+use crate::seams::{OpId, UnixMillis, check_bearer};
 use crate::settings::{DEFAULT_BIN_RETENTION_DAYS, MAX_BIN_RETENTION_DAYS};
 use crate::{Contact, MintedInviteLink, RetentionPolicy};
 
@@ -142,16 +142,89 @@ pub mod node_kind {
     }
 }
 
-/// A text value the boundary holds in a zeroizing buffer. The decoded string
-/// moves into the buffer, so no second copy is made.
-pub mod zeroizing_string {
+/// An invite fragment, which the boundary takes into a zeroizing buffer itself,
+/// outside the serde decode that buffers the whole command. This decode takes
+/// only the empty placeholder the boundary puts in its place, and wipes and
+/// refuses anything else.
+pub mod fragment_placeholder {
     use super::*;
 
-    /// Takes a JS string.
+    /// Takes `""` alone.
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Zeroizing<String>, D::Error> {
-        String::deserialize(deserializer).map(Zeroizing::new)
+        let text = Zeroizing::new(String::deserialize(deserializer)?);
+        if text.is_empty() {
+            Ok(text)
+        } else {
+            Err(de::Error::custom(
+                "a fragment is taken outside the command decode",
+            ))
+        }
+    }
+}
+
+/// The key of the object the boundary puts in place of each JS `bigint` before
+/// the decode. Serde buffers a tagged command before it picks the variant, and
+/// the buffer holds a safe-integer `number` and a `bigint` as the same integer;
+/// the tag keeps them apart, so a `u64` field takes a `bigint` alone and a
+/// `number` field refuses one.
+pub const BIGINT_TAG: &str = "$bigint";
+
+/// A `u64` from a tagged `bigint`.
+pub mod big_u64 {
+    use super::*;
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Tagged {
+        #[serde(rename = "$bigint")]
+        decimal: String,
+    }
+
+    /// Refuses a `number`, a negative value, and one past `u64::MAX`.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        let Tagged { decimal } = Tagged::deserialize(deserializer)?;
+        decimal
+            .parse()
+            .map_err(|_| de::Error::custom("a u64 is a bigint in 0..=2^64-1"))
+    }
+}
+
+/// An optional `u64` from a tagged `bigint`; `null` and `undefined` are absent.
+pub mod opt_big_u64 {
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct Wire(#[serde(with = "big_u64")] u64);
+
+    /// Refuses a present value that is no tagged `bigint` in range.
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        Ok(Option::<Wire>::deserialize(deserializer)?.map(|Wire(n)| n))
+    }
+}
+
+/// An op id from a tagged `bigint`.
+pub mod op_id {
+    use super::*;
+
+    /// Refuses what [`big_u64`] refuses.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<OpId, D::Error> {
+        big_u64::deserialize(deserializer).map(OpId)
+    }
+}
+
+/// An optional Unix-millis instant from a tagged `bigint`.
+pub mod opt_unix_millis {
+    use super::*;
+
+    /// Refuses what [`opt_big_u64`] refuses.
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<UnixMillis>, D::Error> {
+        opt_big_u64::deserialize(deserializer).map(|at| at.map(UnixMillis))
     }
 }
 

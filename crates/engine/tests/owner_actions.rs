@@ -5575,6 +5575,26 @@ fn an_admission_cap_out_of_range_is_refused_and_publishes_nothing() {
     assert!(published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none());
 }
 
+/// A deadline at the epoch mints a link expired before anyone reads it, so it
+/// is refused before anything publishes.
+#[test]
+fn an_invite_deadline_at_the_epoch_is_refused_and_publishes_nothing() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        block_on(fx.engine.command(Command::CreateInviteLink {
+            node: fx.folder,
+            permission: Permission::Read,
+            expires_at: Some(UnixMillis(0)),
+            owner_name: String::new(),
+            admission_cap: None,
+        })),
+        Err(EngineError::MalformedInput {
+            check: "invite-deadline-out-of-range"
+        })
+    );
+    assert!(published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none());
+}
+
 /// With two links and no tag, a revoke has no defined cut, so it refuses and
 /// publishes nothing.
 #[test]

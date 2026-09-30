@@ -279,13 +279,16 @@ export class EngineHost implements EngineHostLike {
 
   async command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
     // A buffer the descriptor carries arrived transferred, so this realm holds
-    // the only copy, and the engine copies what it keeps: this frame is the
-    // terminal owner that scrubs it, on every route out.
+    // the only copy. The engine copies what it keeps before `command` returns,
+    // so this frame, the terminal owner, scrubs it then rather than when the
+    // command settles.
+    let answer: Promise<CommandOutcomeDescriptor>;
     try {
-      return await this.handle.command(command);
+      answer = this.handle.command(command);
     } finally {
       wipeTransfer(commandTransfer(command));
     }
+    return await answer;
   }
 
   async beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {

@@ -8,11 +8,11 @@
  * structurally at wiring time.
  */
 
-import type { Command, CommandOutcome } from '../../wasm/cipherbox_wasm.js';
+import type { Command, CommandOutcome, NodeId } from '../../wasm/cipherbox_wasm.js';
 import type { SiweIntent } from './protocol.js';
 
-/** Opaque wasm-bindgen `NodeId` handle. */
-export type WasmNodeId = object;
+/** wasm-bindgen `NodeId` handle. */
+export type WasmNodeId = NodeId;
 
 /** wasm-bindgen `Event` — key-free view state; a getter is `undefined` off-variant. */
 export interface WasmEvent {

@@ -1437,6 +1437,7 @@ pub enum Command {
     /// published state.
     CancelUpload {
         /// The queue id [`Engine::commit_write`] returned.
+        #[cfg_attr(feature = "wasm", serde(with = "crate::wire::op_id"))]
         op_id: OpId,
     },
     /// Drop one parked write: the preserved entry goes, and its staged version
@@ -1444,6 +1445,7 @@ pub enum Command {
     DiscardDeadLetter {
         /// The op id the dead letter was announced under, and the identity the
         /// preserved entry carries.
+        #[cfg_attr(feature = "wasm", serde(with = "crate::wire::op_id"))]
         op_id: OpId,
     },
     /// Re-queue one parked write's staged version as a **fresh** op, anchored on
@@ -1456,6 +1458,7 @@ pub enum Command {
     /// for them.
     RecoverDeadLetter {
         /// The op id the dead letter was announced under.
+        #[cfg_attr(feature = "wasm", serde(with = "crate::wire::op_id"))]
         op_id: OpId,
     },
 
@@ -1592,6 +1595,7 @@ pub enum Command {
         /// The link's owner-signed deadline, or `None` for
         /// [`DEFAULT_LINK_LIFETIME`] from now. A claim past it converts
         /// nothing.
+        #[cfg_attr(feature = "wasm", serde(with = "crate::wire::opt_unix_millis"))]
         expires_at: Option<UnixMillis>,
         /// The owner's name, which the fragment carries under the owner
         /// signature (ADR 0027 D5). May be empty.
@@ -1599,6 +1603,7 @@ pub enum Command {
         /// How many people the link may admit, or `None` for
         /// [`DEFAULT_ADMISSION_CAP`]. Zero and a value above
         /// [`MAX_ADMISSION_CAP`] are refused.
+        #[cfg_attr(feature = "wasm", serde(with = "crate::wire::opt_big_u64"))]
         admission_cap: Option<u64>,
     },
     /// Revoke an invite link the owner minted at `node` (owner-only). Every
@@ -1632,7 +1637,7 @@ pub enum Command {
         /// The link's URL fragment, verbatim.
         #[cfg_attr(
             feature = "wasm",
-            serde(with = "crate::wire::zeroizing_string"),
+            serde(with = "crate::wire::fragment_placeholder"),
             tsify(type = "string")
         )]
         fragment: Zeroizing<String>,
@@ -7044,6 +7049,13 @@ where {
         owner_name: &str,
         admission_cap: Option<u64>,
     ) -> Result<CommandOutcome, EngineError> {
+        // The epoch itself is no deadline a host means: it mints a link that
+        // is expired before anyone reads it.
+        if expires_at == Some(UnixMillis(0)) {
+            return Err(EngineError::MalformedInput {
+                check: "invite-deadline-out-of-range",
+            });
+        }
         let admission_cap = admission_cap.unwrap_or(DEFAULT_ADMISSION_CAP);
         if !(1..=MAX_ADMISSION_CAP).contains(&admission_cap) {
             return Err(EngineError::MalformedInput {

@@ -127,6 +127,74 @@ fn a_command_decodes_from_its_generated_shape() {
     assert!(decode_command(&manual).unwrap() == Command::ManualRefresh);
 }
 
+fn mint(expires_at: JsValue, admission_cap: JsValue) -> JsValue {
+    object(&[
+        ("kind", text("createInviteLink")),
+        ("node", node(4)),
+        ("permission", text("read")),
+        ("expiresAt", expires_at),
+        ("ownerName", text("")),
+        ("admissionCap", admission_cap),
+    ])
+}
+
+/// A `u64` field takes a `bigint` in range alone: not a `number`, even a safe
+/// integer one, and not a negative or an over-range `bigint`. A `number` field
+/// refuses a `bigint`.
+#[wasm_bindgen_test]
+fn a_u64_takes_a_bigint_in_range_alone() {
+    let cancel = |op_id: JsValue| object(&[("kind", text("cancelUpload")), ("opId", op_id)]);
+    assert!(decode_command(&cancel(JsValue::from(5))).is_err());
+    assert!(decode_command(&cancel(BigInt::from(-1).into())).is_err());
+    assert!(decode_command(&cancel(BigInt::from(5u64).into())).is_ok());
+
+    let past_u64: JsValue = BigInt::new(&text("18446744073709551616"))
+        .expect("2^64 is a bigint")
+        .into();
+    for (expires_at, admission_cap) in [
+        (past_u64, JsValue::NULL),
+        (JsValue::from(1_700_000_000_000_f64), JsValue::NULL),
+        (JsValue::NULL, JsValue::from(2.5)),
+        (JsValue::NULL, JsValue::from(-1)),
+        (JsValue::NULL, JsValue::from(3)),
+        (JsValue::NULL, BigInt::from(-1).into()),
+    ] {
+        assert!(decode_command(&mint(expires_at, admission_cap)).is_err());
+    }
+
+    let with_retention = |keep: JsValue| {
+        object(&[
+            ("kind", text("saveVaultSettings")),
+            (
+                "settings",
+                object(&[
+                    ("pinMode", text("hosted")),
+                    ("byo", JsValue::NULL),
+                    ("keepLatestVersions", keep),
+                ]),
+            ),
+        ])
+    };
+    assert!(decode_command(&with_retention(BigInt::from(3u64).into())).is_err());
+    assert!(decode_command(&with_retention(JsValue::from(3))).is_ok());
+}
+
+/// A deadline at the epoch decodes, as a `u64` in range, and the engine refuses
+/// it when it mints.
+#[wasm_bindgen_test]
+fn a_zero_deadline_decodes_for_the_engine_to_refuse() {
+    assert!(
+        decode_command(&mint(BigInt::from(0u64).into(), JsValue::NULL)).unwrap()
+            == Command::CreateInviteLink {
+                node: NodeId([4; 16]),
+                permission: Permission::Read,
+                expires_at: Some(UnixMillis(0)),
+                owner_name: String::new(),
+                admission_cap: None,
+            }
+    );
+}
+
 /// An op id and a deadline past 2^53 cross as the `bigint` the engine minted.
 #[wasm_bindgen_test]
 fn a_u64_decodes_from_a_bigint_whole() {
@@ -141,16 +209,9 @@ fn a_u64_decodes_from_a_bigint_whole() {
             }
     );
 
-    let mint = object(&[
-        ("kind", text("createInviteLink")),
-        ("node", node(4)),
-        ("permission", text("read")),
-        ("expiresAt", BigInt::from(u64::MAX).into()),
-        ("ownerName", text("")),
-        ("admissionCap", BigInt::from(5u64).into()),
-    ]);
+    let minted = mint(BigInt::from(u64::MAX).into(), BigInt::from(5u64).into());
     assert!(
-        decode_command(&mint).unwrap()
+        decode_command(&minted).unwrap()
             == Command::CreateInviteLink {
                 node: NodeId([4; 16]),
                 permission: Permission::Read,
@@ -184,8 +245,10 @@ fn an_unknown_field_is_refused() {
     ]);
     assert!(decode_command(&rename).is_err());
 
-    let refresh = object(&[("kind", text("manualRefresh")), ("force", JsValue::TRUE)]);
-    assert!(decode_command(&refresh).is_err());
+    for kind in ["manualRefresh", "logout", "forgetDevice"] {
+        let bare = object(&[("kind", text(kind)), ("force", JsValue::TRUE)]);
+        assert!(decode_command(&bare).is_err(), "{kind}");
+    }
 
     let claim = object(&[
         ("kind", text("claimInviteLink")),
@@ -207,10 +270,16 @@ fn an_unknown_field_is_refused() {
     settings = settings_command(JsValue::NULL);
     Reflect::set(&settings, &text("force"), &JsValue::TRUE).unwrap();
     assert!(decode_command(&settings).is_err());
+
+    settings = settings_command(JsValue::NULL);
+    let inner = Reflect::get(&settings, &text("settings")).unwrap();
+    Reflect::set(&inner, &text("pinned"), &JsValue::TRUE).unwrap();
+    assert!(decode_command(&settings).is_err());
 }
 
-/// Each refusal the TS checkers made before this decode existed: no field is
-/// coerced into a plausible value of the right type.
+/// No field is coerced into a plausible value of another type: not a number
+/// into text, not text or a short buffer into a node id, not a truthy number
+/// into a flag, and not an unknown literal into an enum.
 #[wasm_bindgen_test]
 fn a_field_of_the_wrong_type_is_refused() {
     let refused = [
@@ -232,10 +301,6 @@ fn a_field_of_the_wrong_type_is_refused() {
             ("node", node(1)),
             ("linkTag", JsValue::NULL),
             ("removeGrantees", JsValue::from(1)),
-        ]),
-        object(&[
-            ("kind", text("cancelUpload")),
-            ("opId", BigInt::from(-1).into()),
         ]),
         object(&[
             ("kind", text("changePermission")),
@@ -292,6 +357,19 @@ fn a_fragment_past_the_engine_bound_is_refused() {
     assert!(decode_command(&not_text).is_err());
 }
 
+/// The serde decode of a claim takes only the empty placeholder the boundary
+/// puts in the fragment's place, so a claim cannot reach the engine by a path
+/// that buffers its fragment and frees it without a wipe.
+#[wasm_bindgen_test]
+fn the_plain_serde_decode_refuses_a_real_fragment() {
+    let claim = object(&[
+        ("kind", text("claimInviteLink")),
+        ("fragment", text(FRAGMENT)),
+        ("name", text("")),
+    ]);
+    assert!(serde_wasm_bindgen::from_value::<Command>(claim).is_err());
+}
+
 /// The bearer is three-state: a transferred buffer sets it, `"keep"` keeps the
 /// stored one, and `null` stores none.
 #[wasm_bindgen_test]
@@ -345,8 +423,9 @@ fn the_bearer_path_leaves_the_callers_object_whole() {
     );
 }
 
-/// A bearer as text, an unsendable one, and one that is no buffer at all are
-/// all refused.
+/// A bearer as text, an unsendable one, a view rather than the transferred
+/// buffer, and one that is no buffer at all are all refused. The host moves
+/// and wipes an `ArrayBuffer` alone, so a view would reach here as a clone.
 #[wasm_bindgen_test]
 fn a_bearer_the_engine_would_refuse_is_refused() {
     for token in [
@@ -354,12 +433,12 @@ fn a_bearer_the_engine_would_refuse_is_refused() {
         buffer(b""),
         buffer(b"has space"),
         buffer(&[0xff, 0xfe]),
+        bytes(BEARER),
         JsValue::from(7),
         object(&[]),
     ] {
         assert!(decode_command(&settings_command(token)).is_err());
     }
-    assert!(decode_command(&settings_command(bytes(BEARER))).is_ok());
 }
 
 #[wasm_bindgen_test]

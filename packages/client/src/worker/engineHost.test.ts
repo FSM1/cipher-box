@@ -441,7 +441,7 @@ describe('EngineHost commands', () => {
     expect(handed).toEqual([command]);
   });
 
-  it('scrubs the transferred BYO bearer once the engine has answered', async () => {
+  it('scrubs the transferred BYO bearer once the engine has taken it', async () => {
     const bearer = new TextEncoder().encode('s3cret');
     const seen: number[][] = [];
     const host = await commandingHost((command) => {
@@ -456,6 +456,18 @@ describe('EngineHost commands', () => {
     });
 
     expect(seen).toEqual([[...new TextEncoder().encode('s3cret')]]);
+    expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+  });
+
+  it('scrubs the transferred BYO bearer before the command settles', async () => {
+    const bearer = new TextEncoder().encode('s3cret');
+    const host = await commandingHost(() => new Promise<CommandOutcomeDescriptor>(() => undefined));
+
+    void host.command({
+      kind: 'saveVaultSettings',
+      settings: byoSettings(bearer.buffer as ArrayBuffer),
+    });
+
     expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
   });
 

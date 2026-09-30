@@ -15,6 +15,7 @@
 import { reclaimOtherAccountStores } from '../accountStores.js';
 import { makeBrowserSeams, type BrowserSeams } from './browserSeams.js';
 import { EngineHost } from './engineHost.js';
+import type * as GeneratedGlue from '../../wasm/cipherbox_wasm.js';
 import type { EngineWasm } from './engineWasm.js';
 import { serveEngine, type WorkerScopeLike } from './serve.js';
 import type { WorkerMessage } from './protocol.js';
@@ -60,7 +61,10 @@ async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
     // The quota estimate is independent of the WASM fetch and compile, so it
     // rides alongside them rather than extending cold start.
     const headroom = measureStorageHeadroomBytes();
-    const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
+    // Typed as the generated module, then checked against what the worker
+    // drives, so a binding renamed in `crates/wasm` fails the build here.
+    const glue = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as typeof GeneratedGlue;
+    const wasm = glue satisfies WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
     const host = new EngineHost(wasm, (accountId) => openAccount(config, accountId), {
       apiBaseUrl: config.apiBaseUrl,

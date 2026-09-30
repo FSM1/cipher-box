@@ -198,7 +198,7 @@ jobs:
     needs: changes
     if: |
       needs.changes.outputs.ts == 'true' || needs.changes.outputs.web == 'true' ||
-      needs.changes.outputs.e2e == 'true'
+      needs.changes.outputs.rust == 'true' || needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -34,6 +34,16 @@ pnpm test
 This runs `test` in every workspace in parallel. It does not run E2E, load, or
 desktop tests.
 
+### Build the engine WASM first
+
+`packages/client` imports its command types from the generated engine
+bindings in `packages/client/wasm/`, which git does not track. On a fresh
+clone, build them before `pnpm typecheck` or a client test:
+
+```bash
+pnpm --filter @cipherbox/web build:wasm
+```
+
 ### Per-package unit tests
 
 ```bash

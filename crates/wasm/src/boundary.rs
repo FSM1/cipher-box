@@ -12,8 +12,8 @@
 use cipherbox_engine::content::ByoBearer;
 use cipherbox_engine::facade::{Command, CommandOutcome};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
-use cipherbox_engine::wire::{KEEP_STORED_BEARER, bearer_from_bytes};
-use js_sys::{ArrayBuffer, JsString, Object, Reflect, Uint8Array};
+use cipherbox_engine::wire::{BIGINT_TAG, KEEP_STORED_BEARER, bearer_from_bytes};
+use js_sys::{Array, ArrayBuffer, BigInt, JsString, Object, Reflect, Uint8Array};
 use serde::Serialize;
 use serde_wasm_bindgen::Serializer;
 use tsify::Ts;
@@ -74,7 +74,35 @@ pub fn encode_outcome(outcome: &CommandOutcome) -> Result<Ts<CommandOutcome>, Js
 }
 
 fn decode(command: &JsValue) -> Result<Command, JsError> {
-    serde_wasm_bindgen::from_value(command.clone()).map_err(|_| refused())
+    serde_wasm_bindgen::from_value(tag_bigints(command)?).map_err(|_| refused())
+}
+
+/// A copy of `value` with each `bigint` in its plain objects replaced by a
+/// [`BIGINT_TAG`] object, so the decode tells a `bigint` from a `number`.
+/// Bytes and every other value pass as they are.
+fn tag_bigints(value: &JsValue) -> Result<JsValue, JsError> {
+    if value.is_bigint() {
+        let decimal = value
+            .unchecked_ref::<BigInt>()
+            .to_string(10)
+            .map_err(|_| refused())?;
+        let tagged = Object::new();
+        Reflect::set(&tagged, &BIGINT_TAG.into(), &decimal).map_err(|_| refused())?;
+        return Ok(tagged.into());
+    }
+    if !value.is_object()
+        || Array::is_array(value)
+        || value.is_instance_of::<ArrayBuffer>()
+        || ArrayBuffer::is_view(value)
+    {
+        return Ok(value.clone());
+    }
+    let copy = Object::new();
+    for key in Object::keys(value.unchecked_ref::<Object>()).iter() {
+        let inner = tag_bigints(&Reflect::get(value, &key).map_err(|_| refused())?)?;
+        Reflect::set(&copy, &key, &inner).map_err(|_| refused())?;
+    }
+    Ok(copy.into())
 }
 
 /// `value[key]`, or `undefined` where `value` is no object.
@@ -114,15 +142,12 @@ fn take_fragment(value: &JsValue) -> Result<Zeroizing<String>, JsError> {
     text.as_string().map(Zeroizing::new).ok_or_else(refused)
 }
 
-/// A provider bearer, from the buffer the host transferred. Bytes that are no
-/// sendable bearer are wiped before the refusal returns.
+/// A provider bearer, from the `ArrayBuffer` the host transferred. A view is
+/// refused: the host moves and wipes a buffer alone, so a view would reach
+/// here as a clone nobody scrubs. Bytes that are no sendable bearer are wiped
+/// before the refusal returns.
 fn take_bearer(value: &JsValue) -> Result<Zeroizing<String>, JsError> {
-    let bytes = if let Some(buffer) = value.dyn_ref::<ArrayBuffer>() {
-        Uint8Array::new(buffer).to_vec()
-    } else if let Some(view) = value.dyn_ref::<Uint8Array>() {
-        view.to_vec()
-    } else {
-        return Err(refused());
-    };
-    bearer_from_bytes(bytes).map_err(|error| JsError::new(&error.to_string()))
+    let buffer = value.dyn_ref::<ArrayBuffer>().ok_or_else(refused)?;
+    bearer_from_bytes(Uint8Array::new(buffer).to_vec())
+        .map_err(|error| JsError::new(&error.to_string()))
 }
