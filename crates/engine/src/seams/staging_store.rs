@@ -30,15 +30,15 @@ pub struct OpId(pub u64);
 /// Hosts: IndexedDB + OPFS (web), local journal (desktop).
 pub trait StagingStore {
     /// Appends an opaque op record to the durable FIFO queue and returns
-    /// its id.
+    /// its id. An `Err` after the commit point can leave the op queued, with
+    /// its durability unknown.
     async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId>;
 
     /// Appends several op records to the queue in one atomic write, in order,
     /// and returns their ids in that order. No reader, before or after a crash,
     /// ever sees part of the set. An `Err` leaves none of them queued, except
-    /// one from the final durability barrier, which, as for
-    /// [`Self::enqueue_op`], leaves the whole set queued with its durability
-    /// unknown. Each entry is stored as [`Self::enqueue_op`] stores one, so a
+    /// an `Err` after the commit point, which, as for [`Self::enqueue_op`], can
+    /// leave the whole set queued with its durability unknown. Each entry is stored as [`Self::enqueue_op`] stores one, so a
     /// reader of the queue cannot tell the two apart.
     async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<OpId>>;
 

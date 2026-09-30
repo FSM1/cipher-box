@@ -168,6 +168,7 @@ impl FileStagingStore {
         // The unlink commits the whole set; a failed barrier is `Err` with the
         // durability unknown, as for `atomic_write`.
         fsync_dir(&self.ops_dir)
+            .map_err(|err| std::io::Error::new(err.kind(), format!("commit barrier: {err}")))
     }
 
     fn op_path(&self, id: u64) -> PathBuf {

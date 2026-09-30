@@ -45,7 +45,7 @@ export interface SnapshotCacheSeam {
 /** Durable op queue (FIFO, strictly increasing never-reused ids) plus staged bytes. */
 export interface StagingStoreSeam {
   enqueueOp(op: Uint8Array): Promise<number>;
-  /** Appends every op in one atomic write, in order: all of them are queued, or none. */
+  /** Appends every op in one atomic write, in order: all or none (an error after commit can leave all). */
   enqueueOps(ops: Uint8Array[]): Promise<number[]>;
   queuedOps(): Promise<Array<[number, Uint8Array]>>;
   removeOp(opId: number): Promise<void>;
