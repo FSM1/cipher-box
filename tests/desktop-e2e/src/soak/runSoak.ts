@@ -203,10 +203,20 @@ async function runLeg(context: LegContext): Promise<void> {
   });
   if (read !== null) await recorder.fact(`${leg} markers read`, readLine(read));
 
+  // A stalled read takes the writer away. A new writer still writes the
+  // marker of today, so one bad night does not empty the next.
+  const writing = writer.instance.abandoned
+    ? await step(context, 'writer reopen', 'sign-in-failed', budgets.signInMs, async () => {
+        const instance = await open(context, 'writer-reopened', writer.devKey);
+        await instance.refresh();
+        return instance;
+      })
+    : writer.instance;
+
   const today: LegMarker = { leg, date: utcDay(new Date()) };
   await step(context, 'marker write', 'desktop-marker-unpublished', budgets.writeMs, async () => {
-    await requireLiveMount(writer.instance);
-    await writeMarker(writer.instance, ledger, today);
+    await requireLiveMount(writing);
+    await writeMarker(writing, today);
   });
 
   const reader = await step(
@@ -228,7 +238,7 @@ async function runLeg(context: LegContext): Promise<void> {
     budgets.publishMs,
     async () => {
       await servesMarker(context, reader, today);
-      const settled = await writer.instance.status();
+      const settled = await writing.status();
       if (settled.deadLetters > 0) {
         throw new SoakFailure(
           'desktop-marker-unpublished',
@@ -408,17 +418,25 @@ async function listLegFolders(instance: Instance): Promise<Partial<Record<Marker
 }
 
 /** The marker of today and its ledger line, each written once on a rerun of the day. */
-async function writeMarker(instance: Instance, ledger: Ledger, today: LegMarker): Promise<void> {
+async function writeMarker(instance: Instance, today: LegMarker): Promise<void> {
   await mkdir(join(instance.mountRoot, ...DESKTOP_FOLDER, today.leg), { recursive: true });
   const path = join(instance.mountRoot, ...markerPath(today));
   if ((await markerState(path, today.date)) !== 'served') {
     await writeFile(path, markerBytes(today.date));
   }
 
+  // The ledger as it is now, not as the leg read it before the marker reads.
+  const ledgerAt = join(instance.mountRoot, ...ledgerPath());
+  await instance.refresh();
+  const current = await readOrErrno(ledgerAt);
+  if (!Buffer.isBuffer(current)) {
+    throw new SoakFailure('ledger-unreadable', `the grantee ledger did not open: ${current}`);
+  }
+  const ledger = parseLedger(current.toString('utf8'));
   const next = recordMarker(ledger, today);
   if (next === ledger) return;
   try {
-    await writeFile(join(instance.mountRoot, ...ledgerPath()), formatLedger(next));
+    await writeFile(ledgerAt, formatLedger(next));
   } catch (error) {
     throw new SoakFailure(
       'ledger-unreadable',

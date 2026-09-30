@@ -66,6 +66,9 @@ interface Shell {
 }
 
 export class Instance {
+  /** Whether a bound or a stalled read took this instance away. */
+  abandoned = false;
+
   constructor(
     readonly name: string,
     /** The path the shell reported once it mounted. */
@@ -93,6 +96,7 @@ export class Instance {
    * that ran out of time does this before it does anything else.
    */
   async abandon(): Promise<void> {
+    this.abandoned = true;
     this.shell.child.kill('SIGKILL');
     await forceUnmount(this.mountRoot);
   }

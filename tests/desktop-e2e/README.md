@@ -127,11 +127,13 @@ out takes every mount away and fails with its own reason code:
 3. `marker listing` and `markers`: every marker of the other legs under
    `soak/desktop/<leg>/` opens byte for byte, from the ledger lines and the
    folder listings both.
-4. `marker write`: the marker of today goes to
+4. `writer reopen`, only when an earlier step took the writer away: a new
+   writer signs in.
+5. `marker write`: the marker of today goes to
    `soak/desktop/<leg>/marker-<date>.txt`, and `marker <leg> <date>` goes to
-   the ledger. A second run on one day writes neither again. A mount that an
-   earlier step took away fails this step.
-5. `cold sign-in` and `marker published`: a second instance on an empty home
+   the ledger as it reads after a refresh. A second run on one day writes
+   neither again.
+6. `cold sign-in` and `marker published`: a second instance on an empty home
    serves the marker and its ledger line, so only a publish can pass.
 
 The legs are `macos`, `linux`, `windows` and `web`. The grantee ledger and
