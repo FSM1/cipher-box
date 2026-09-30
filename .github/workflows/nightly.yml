@@ -1,8 +1,9 @@
 # The scheduled tier (blueprint/deploy.md "Scheduled tier"): one cron surface
 # owning every slot that runs off a schedule and never blocks a pull request —
-# long-horizon liveness, full-matrix flake surveillance, and the Cloudflare
-# range watch. A failure in any of them opens or updates one tracking issue, so
-# a scheduled red is never a square nobody reads.
+# long-horizon liveness, full-matrix flake surveillance, the Cloudflare range
+# watch, and the staging soak. A failure in any of them opens or updates one
+# tracking issue, so a scheduled red is never a square nobody reads; the soak
+# reports into its own issue.
 #
 # The liveness slot runs two profiles: the in-process one drives months of
 # virtual time through the republisher walk, and the stack one runs the shipped
@@ -129,9 +130,47 @@ jobs:
       - name: Diff the trusted ranges against Cloudflare
         run: node scripts/check-cloudflare-ranges.mjs
 
+  # The soak suite comes from the tag that staging runs, so the tests and the
+  # deploy are one revision.
+  staging-soak-tag:
+    name: Resolve The Staging Tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pick the newest staging tag
+        id: tag
+        run: |
+          set -euo pipefail
+          tag=$(git tag -l 'staging-*' --sort=-v:refname | head -n 1)
+          if [ -z "${tag}" ]; then
+            echo '::error::no staging-* tag exists, so the soak has no suite source. Tag a staging release first.'
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+  # The soak reports into its own issue, so the report below does not wait on it.
+  staging-soak:
+    name: Staging Soak
+    needs: staging-soak-tag
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/staging-soak.yml
+    with:
+      ref: ${{ needs.staging-soak-tag.outputs.tag }}
+
   report:
     name: Report A Nightly Failure
-    needs: [api-liveness, flake-surveillance, cloudflare-ranges]
+    needs: [api-liveness, flake-surveillance, cloudflare-ranges, staging-soak-tag]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -148,6 +187,7 @@ jobs:
           LIVENESS: ${{ needs.api-liveness.result }}
           SURVEILLANCE: ${{ needs.flake-surveillance.result }}
           RANGES: ${{ needs.cloudflare-ranges.result }}
+          SOAK_TAG: ${{ needs.staging-soak-tag.result }}
           TITLE: 'ci: a nightly run failed'
         run: |
           set -euo pipefail
@@ -159,6 +199,7 @@ jobs:
             echo "| API Long-Horizon Liveness | ${LIVENESS} |"
             echo "| Full-Matrix Flake Surveillance | ${SURVEILLANCE} |"
             echo "| Cloudflare Range Watch | ${RANGES} |"
+            echo "| Staging Soak tag | ${SOAK_TAG} |"
           } > "${RUNNER_TEMP}/nightly-report.md"
           number=$(gh issue list --state open --label comp:ci --limit 500 --json number,title \
             --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')

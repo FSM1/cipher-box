@@ -1,0 +1,167 @@
+# One desktop leg of the Staging Soak (`staging-soak.yml`, which orders the
+# legs). It builds the `e2e-hook` host from the suite ref with the staging
+# endpoint values and no `VITE_ENVIRONMENT`, so the host runs the production
+# timings, and runs the remote-stack harness (`tests/desktop-e2e`, "The
+# remote-stack mode") as the soak grantee.
+name: Staging Soak Desktop Leg
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: 'The runner image'
+        required: true
+        type: string
+      leg:
+        description: 'The leg id, which names the results artifact'
+        required: true
+        type: string
+      ref:
+        description: 'Git ref of the suite sources'
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  leg:
+    name: Desktop Leg
+    runs-on: ${{ inputs.os }}
+    environment: staging
+    concurrency:
+      group: staging-environment
+      cancel-in-progress: false
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      # Compile-time inputs of the host (`apps/desktop/src-tauri/src/engine/config.rs`).
+      # The harness reads the first two again to check the API before it starts
+      # the host. The routing fallback is the one `apps/desktop/scripts/buildEnv.mjs`
+      # gives a bundle built with no value.
+      VITE_API_URL: ${{ vars.API_URL }}
+      VITE_ROUTING_ENDPOINTS: ${{ vars.VITE_ROUTING_ENDPOINTS || 'https://delegated-ipfs.dev' }}
+      VITE_ROUTING_ACCELERATOR_URL: ${{ vars.VITE_ROUTING_ACCELERATOR_URL }}
+      VITE_READ_ACCELERATOR_URL: ${{ vars.VITE_READ_ACCELERATOR_URL }}
+      VITE_PUBLIC_GATEWAYS: ${{ vars.VITE_PUBLIC_GATEWAYS }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-fuse-t
+        if: runner.os == 'macOS'
+
+      - uses: ./.github/actions/setup-winfsp
+        if: runner.os == 'Windows'
+
+      - name: Provision the Linux mount and shell dependencies
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            fuse3 \
+            pkg-config \
+            build-essential \
+            xvfb \
+            x11-utils
+          sudo modprobe fuse
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: desktop
+          save-if: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `tauri-build` embeds the frontend, so the bundle must exist before cargo.
+      - name: Build the desktop frontend
+        run: pnpm --filter "@cipherbox/desktop..." run build
+
+      - name: Build the desktop host with the e2e hook
+        run: cargo build -p cipherbox-desktop --features e2e-hook
+
+      # Below the job cap, so the cleanup below still runs after a stop here.
+      - name: Run the desktop soak leg
+        id: soak
+        timeout-minutes: 110
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            Xvfb :99 -screen 0 1024x768x24 > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+            export DISPLAY=:99
+            export WEBKIT_DISABLE_DMABUF_RENDERER=1
+            for _ in $(seq 1 30); do
+              xdpyinfo -display :99 > /dev/null 2>&1 && break
+              sleep 1
+            done
+            xdpyinfo -display :99 > /dev/null \
+              || { echo '--- Xvfb log ---'; cat "$RUNNER_TEMP/xvfb.log"; exit 1; }
+          fi
+          pnpm --filter @cipherbox/desktop-e2e run test:soak
+        env:
+          CIPHERBOX_DESKTOP_BINARY: ${{ github.workspace }}/target/debug/cipherbox-desktop${{ runner.os == 'Windows' && '.exe' || '' }}
+          CIPHERBOX_E2E_WORKDIR: ${{ runner.temp }}/desktop-soak
+          SOAK_RESULTS_FILE: ${{ runner.temp }}/desktop-soak-results/soak-results.jsonl
+          SOAK_GRANTEE_LOGIN_SECRET: ${{ secrets.SOAK_GRANTEE_LOGIN_SECRET }}
+
+      # A stopped step skips the harness's own teardown, so a host can still
+      # hold a mount and send writes. This takes every host and mount away
+      # before the next leg starts.
+      - name: Stop every host and take every mount away
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          host='target/debug/cipherbox-desktop'
+          workdir="${RUNNER_TEMP}/desktop-soak"
+          case "$RUNNER_OS" in
+            macOS)
+              pkill -9 -f "${host}" || true
+              mount | awk -v root="${workdir}" 'index($0, root) { print $3 }' \
+                | while read -r target; do diskutil unmount force "${target}" || true; done
+              running=$(pgrep -f "${host}" | wc -l | tr -d ' ')
+              ;;
+            Linux)
+              pkill -9 -f "${host}" || true
+              findmnt -rn -o TARGET | grep -F "${workdir}" \
+                | while read -r target; do fusermount3 -uz "${target}" || true; done
+              running=$(pgrep -f "${host}" | wc -l | tr -d ' ')
+              ;;
+            Windows)
+              # WinFsp takes the mount away with the process.
+              taskkill //F //IM cipherbox-desktop.exe || true
+              running=$(tasklist //FI 'IMAGENAME eq cipherbox-desktop.exe' //NH | grep -c cipherbox-desktop || true)
+              ;;
+          esac
+          if [ "${running}" != 0 ]; then
+            echo '::error::a desktop host still runs after the cleanup'
+            exit 1
+          fi
+
+      - name: Upload the result lines
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: soak-results-${{ inputs.leg }}
+          path: ${{ runner.temp }}/desktop-soak-results/soak-results.jsonl
+          retention-days: 30
+          if-no-files-found: ignore
+          overwrite: true

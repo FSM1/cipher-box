@@ -1,0 +1,315 @@
+# The Staging Soak (blueprint/deploy.md "Scheduled tier", ADR 0053): the soak
+# suite against the deployed staging front, as the two durable soak accounts.
+# `nightly.yml` calls it with the newest `staging-*` tag as `ref`, so the suite
+# and the deploy are one revision.
+#
+# The legs run one at a time: the `needs` chain orders them, and each leg holds
+# the job-level `staging-environment` group, which a deploy also holds. The web
+# leg is two jobs, because the suite's test timeouts sum past the cap of one
+# hosted job. A leg runs after a failed leg, and stops on a cancelled run. Only
+# a web leg that found no soak ledger skips the legs after it.
+#
+# Each leg uploads its `soak-results.jsonl`. The report joins them, and a
+# failed night opens or comments on the `ci: the staging soak failed` issue.
+name: Staging Soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      base-url:
+        description: The deployed app to soak
+        required: false
+        default: https://app-staging.cipherbox.cc
+        type: string
+      ref:
+        description: 'Git ref of the suite sources (a staging tag)'
+        required: false
+        type: string
+      bootstrap:
+        description: 'Archive any soak folder and build both ledgers'
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      base-url:
+        description: The deployed app to soak
+        required: false
+        default: https://app-staging.cipherbox.cc
+        type: string
+      ref:
+        description: 'Git ref of the suite sources (a staging tag)'
+        required: false
+        type: string
+      bootstrap:
+        description: 'Archive any soak folder and build both ledgers'
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+jobs:
+  # The ledger checks run first in this job, so a bootstrap lands before any
+  # other spec reads a ledger.
+  web-vault:
+    name: 'Soak: Web Vault'
+    runs-on: ubuntu-latest
+    environment: staging
+    concurrency:
+      group: staging-environment
+      cancel-in-progress: false
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    outputs:
+      unbootstrapped: ${{ steps.ledger.outputs.unbootstrapped }}
+    env:
+      E2E_SUITE: soak
+      E2E_BASE_URL: ${{ inputs.base-url }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      # The vault checks read each record through the `observer` WASM module.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: client-browser
+          save-if: false
+
+      - uses: ./.github/actions/wasm-bindgen-cli
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the packages the suite imports and the observer module
+        run: |
+          pnpm --filter @cipherbox/client --filter @cipherbox/login --filter @cipherbox/auth-ui run build
+          pnpm --filter @cipherbox/client run build:wasm-conformance
+
+      - uses: ./.github/actions/playwright-chromium
+        with:
+          package: '@cipherbox/web-e2e'
+          working-directory: tests/web-e2e
+
+      - name: Run the ledger, marker and counter checks
+        timeout-minutes: 240
+        run: >-
+          pnpm --filter @cipherbox/web-e2e exec playwright test
+          staging/soak/ledger.spec.ts staging/soak/markers.spec.ts staging/soak/republisher.spec.ts
+        env:
+          SOAK_BOOTSTRAP: ${{ inputs.bootstrap }}
+          SOAK_OWNER_WALLET_KEY: ${{ secrets.SOAK_OWNER_WALLET_KEY }}
+          SOAK_GRANTEE_WALLET_KEY: ${{ secrets.SOAK_GRANTEE_WALLET_KEY }}
+          GRAFANA_PROMETHEUS_URL: ${{ vars.GRAFANA_PROMETHEUS_URL }}
+          GRAFANA_PROMETHEUS_USERNAME: ${{ vars.GRAFANA_PROMETHEUS_USERNAME }}
+          STAGING_GRAFANA_READ_TOKEN: ${{ secrets.STAGING_GRAFANA_READ_TOKEN }}
+
+      - name: Tell whether the vault had a soak ledger
+        id: ledger
+        if: always()
+        run: >-
+          pnpm --filter @cipherbox/web-e2e exec tsx staging/soak/reportNight.ts
+          unbootstrapped test-results/soak-results.jsonl >> "$GITHUB_OUTPUT"
+
+      - name: Write the job summary
+        if: always()
+        run: pnpm --filter @cipherbox/web-e2e exec tsx staging/soak/writeSummary.ts >> "$GITHUB_STEP_SUMMARY"
+
+      # The result lines only. The Playwright report stays on the runner: a
+      # soak page can show a bearer link URL.
+      - name: Upload the result lines
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: soak-results-web-vault
+          path: tests/web-e2e/test-results/soak-results.jsonl
+          retention-days: 30
+          if-no-files-found: ignore
+          overwrite: true
+
+  web-shares:
+    name: 'Soak: Web Shares'
+    needs: web-vault
+    if: ${{ !cancelled() && needs.web-vault.outputs.unbootstrapped != 'true' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    concurrency:
+      group: staging-environment
+      cancel-in-progress: false
+    timeout-minutes: 330
+    permissions:
+      contents: read
+    env:
+      E2E_SUITE: soak
+      E2E_BASE_URL: ${{ inputs.base-url }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: client-browser
+          save-if: false
+
+      - uses: ./.github/actions/wasm-bindgen-cli
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the packages the suite imports and the observer module
+        run: |
+          pnpm --filter @cipherbox/client --filter @cipherbox/login --filter @cipherbox/auth-ui run build
+          pnpm --filter @cipherbox/client run build:wasm-conformance
+
+      - uses: ./.github/actions/playwright-chromium
+        with:
+          package: '@cipherbox/web-e2e'
+          working-directory: tests/web-e2e
+
+      - name: Run the share checks and the grantee web leg
+        timeout-minutes: 270
+        run: >-
+          pnpm --filter @cipherbox/web-e2e exec playwright test
+          staging/soak/os-markers.spec.ts staging/soak/shares.spec.ts
+        env:
+          SOAK_OWNER_WALLET_KEY: ${{ secrets.SOAK_OWNER_WALLET_KEY }}
+          SOAK_GRANTEE_WALLET_KEY: ${{ secrets.SOAK_GRANTEE_WALLET_KEY }}
+
+      - name: Write the job summary
+        if: always()
+        run: pnpm --filter @cipherbox/web-e2e exec tsx staging/soak/writeSummary.ts >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the result lines
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: soak-results-web-shares
+          path: tests/web-e2e/test-results/soak-results.jsonl
+          retention-days: 30
+          if-no-files-found: ignore
+          overwrite: true
+
+  # One job per OS, not a matrix: a matrix runs its legs at the same time.
+  desktop-macos:
+    name: 'Soak: Desktop (macos)'
+    needs: [web-vault, web-shares]
+    if: ${{ !cancelled() && needs.web-vault.outputs.unbootstrapped != 'true' }}
+    uses: ./.github/workflows/staging-soak-desktop.yml
+    permissions:
+      contents: read
+    with:
+      os: macos-latest
+      leg: desktop-macos
+      ref: ${{ inputs.ref || github.sha }}
+
+  desktop-linux:
+    name: 'Soak: Desktop (linux)'
+    needs: [web-vault, desktop-macos]
+    if: ${{ !cancelled() && needs.web-vault.outputs.unbootstrapped != 'true' }}
+    uses: ./.github/workflows/staging-soak-desktop.yml
+    permissions:
+      contents: read
+    with:
+      os: ubuntu-latest
+      leg: desktop-linux
+      ref: ${{ inputs.ref || github.sha }}
+
+  desktop-windows:
+    name: 'Soak: Desktop (windows)'
+    needs: [web-vault, desktop-linux]
+    if: ${{ !cancelled() && needs.web-vault.outputs.unbootstrapped != 'true' }}
+    uses: ./.github/workflows/staging-soak-desktop.yml
+    permissions:
+      contents: read
+    with:
+      os: windows-latest
+      leg: desktop-windows
+      ref: ${{ inputs.ref || github.sha }}
+
+  report:
+    name: 'Soak: Report'
+    needs: [web-vault, web-shares, desktop-macos, desktop-linux, desktop-windows]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A leg that uploaded nothing reads as missing, which the report fails
+      # closed on, so an empty download is no error here.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          pattern: soak-results-*
+          path: ${{ runner.temp }}/soak-results
+
+      - name: Classify the night
+        env:
+          SOAK_NEEDS: ${{ toJSON(needs) }}
+          SOAK_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          pnpm --filter @cipherbox/web-e2e exec tsx staging/soak/reportNight.ts \
+            report "${RUNNER_TEMP}/soak-results" "${RUNNER_TEMP}/soak-night"
+          cat "${RUNNER_TEMP}/soak-night/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # One tracking issue, reused, so a soak that stays red for a week files
+      # one issue. A skipped night writes no `issue.md`, so it touches none.
+      - name: Open or comment on the soak issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: 'ci: the staging soak failed'
+        run: |
+          set -euo pipefail
+          body="${RUNNER_TEMP}/soak-night/issue.md"
+          if [ ! -f "${body}" ]; then
+            echo 'The night did not fail. No issue is touched.'
+            exit 0
+          fi
+          number=$(gh issue list --state open --label comp:ci --limit 500 --json number,title \
+            --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body-file "${body}"
+          else
+            gh issue create --title "${TITLE}" --label v2-build --label comp:ci --label comp:deploy \
+              --body-file "${body}"
+          fi

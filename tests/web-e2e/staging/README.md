@@ -56,8 +56,11 @@ input (ADR 0053 D3). The login secret is the Web3Auth TSS key for the pair
 verifier plus subject id, so a staging reset changes it and leaves the wallet
 key valid.
 
-The `Staging Soak` workflow is not landed yet. The steps below that dispatch it
-apply when it lands.
+The workflow is `Staging Soak` (`.github/workflows/staging-soak.yml`). The
+`Staging Soak` slot of `nightly.yml` calls it with the newest `staging-*` tag as
+`ref`. A dispatch takes `base-url`, `ref` and `bootstrap`. The web leg is two
+jobs, `web-vault` and `web-shares`. The desktop legs follow on macOS, Linux and
+Windows, one at a time. The report job joins the result lines of every leg.
 
 ### The soak suite
 
