@@ -194,8 +194,9 @@ with FSM1/cipher-box#1939; this ADR records it.
   open, which authenticates the owner, and the body grammar of this build (D2). A copy for
   another account, a tampered copy, or a copy from an unknown schema does not open.
 - **The one permissive arm needs proof of absence on this device.** `UnprovenFirstRun` needs
-  three independent marks absent and readable (D5). The mint counter rises before the PUT, so a
-  choice that the member expressed but never landed still refuses. The adopted revision rises in
+  three independent marks absent and readable (D5). The mint counter rises before the seal, and
+  so before the head upload, the register and the PUT (D6), so a choice that the member expressed
+  but never landed still refuses. The adopted revision rises in
   a store write apart from the sequence floor, so it outlives a lost floor write.
 - **A server-controlled signal only restricts.** The advisory flag can refuse an assumed default.
   It can never authorise one (D5).
