@@ -44,6 +44,13 @@ describe('the soak records', () => {
       detail: 'the owner vault has no soak/ledger.txt',
     },
     { kind: 'fact', label: 'owner ledger markers', value: '0' },
+    {
+      kind: 'check',
+      check: 'walks in 24 hours',
+      outcome: 'skipped',
+      reason: 'post-deploy-window',
+      detail: 'the API is up 3.0 hours',
+    },
     { kind: 'test', test: 'the owner vault', phase: 'started' },
     { kind: 'test', test: 'the owner vault', phase: 'ended' },
   ];
@@ -63,8 +70,12 @@ describe('the soak records', () => {
       { kind: 'check', check: 'a', outcome: 'failed', reason: 'post-deploy-window', detail: '' },
     ],
     [
-      'a skipped check',
-      { kind: 'check', check: 'a', outcome: 'skipped', reason: 'post-deploy-window', detail: '' },
+      'a skipped check with a failure reason',
+      { kind: 'check', check: 'a', outcome: 'skipped', reason: 'no-walk-in-window', detail: '' },
+    ],
+    [
+      'a skipped check with no detail',
+      { kind: 'check', check: 'a', outcome: 'skipped', reason: 'post-deploy-window' },
     ],
     [
       'an unknown reason',
@@ -137,6 +148,26 @@ describe('the job summary', () => {
         { kind: 'check', check: 'b', outcome: 'passed' },
       ])
     ).toContain('All 2 soak checks passed.');
+  });
+
+  it('counts a skipped check apart, and names its reason', () => {
+    const skip: SoakRecord = {
+      kind: 'check',
+      check: 'walks in 24 hours',
+      outcome: 'skipped',
+      reason: 'post-deploy-window',
+      detail: 'the API is up 3.0 hours',
+    };
+    const passed = renderSummary([{ kind: 'check', check: 'a', outcome: 'passed' }, skip]);
+    expect(passed).toContain('All 1 soak checks passed. 1 skipped.');
+    expect(passed).toContain(
+      `| walks in 24 hours | skipped | \`post-deploy-window\`: ${SOAK_REASONS['post-deploy-window'].meaning} | the API is up 3.0 hours |`
+    );
+    const failed = renderSummary([
+      { kind: 'check', check: 'a', outcome: 'failed', reason: 'purge-missed', detail: 'x' },
+      skip,
+    ]);
+    expect(failed).toContain('1 of 2 soak checks failed. 1 skipped.');
   });
 
   it('cuts a detail to its first line and the budget', () => {

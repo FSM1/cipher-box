@@ -4,25 +4,33 @@
  * builds the folders it lives in.
  */
 
-import { expect, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { expect, type Locator, type Page } from '@playwright/test';
 import type { SettingsOrigin } from '@cipherbox/client';
 import { BinPage } from '../../page-objects/bin.page';
 import type { FilesPage } from '../../page-objects/files.page';
 import { SettingsPage } from '../../page-objects/settings.page';
 import type { SoakRole } from './accounts';
-import { archiveName, SOAK_FOLDER, soakFolderListed, type VaultState } from './bootstrap';
+import { archiveName, soakFolderListed, type VaultState } from './bootstrap';
+import { DESKTOP_FOLDER, LEDGER_FILE, SOAK_FOLDER } from './paths';
 import { emptyLedger, formatLedger, parseLedger, type Ledger } from './ledger';
-
-export const LEDGER_FILE = 'ledger.txt';
+import { markerBytes, markerFile, unreadLine } from './markers';
+import { SoakFailure, type FailureReason } from './reasons';
 
 /** The folders from the vault root to the ledger. The grantee ledger lists the OS markers. */
 export const LEDGER_FOLDERS: Readonly<Record<SoakRole, readonly string[]>> = {
   owner: [SOAK_FOLDER],
-  grantee: [SOAK_FOLDER, 'desktop'],
+  grantee: DESKTOP_FOLDER,
 };
 
 /** How long a listing gets to show a row before the row counts as absent. */
 const LISTED_WITHIN_MS = 60_000;
+
+/** How long one marker download gets. */
+const MARKER_DOWNLOAD_MS = 60_000;
+
+/** How long an uploaded marker gets to show its row. */
+const MARKER_ROW_MS = 180_000;
 
 /** How long the settings read and save get. */
 const SETTINGS_MS = 60_000;
@@ -101,6 +109,25 @@ export async function binRetention(page: Page): Promise<{ origin: SettingsOrigin
   return { origin, days: Number(await bin.retention.getAttribute('data-days')) };
 }
 
+/** Walks to the ledger of `role` and reads it; a vault without one is `unbootstrapped-or-wiped`. */
+export async function openLedger(files: FilesPage, role: SoakRole): Promise<Ledger> {
+  const found = await inspectVault(files, role);
+  if (!found.ledger) {
+    throw new SoakFailure(
+      'unbootstrapped-or-wiped',
+      `the ${role} vault has no ${ledgerPath(role)}`
+    );
+  }
+  return readLedger(files);
+}
+
+/** Opens the folder that holds the ledger of `role`. */
+export async function toLedgerFolder(files: FilesPage, role: SoakRole): Promise<void> {
+  await files.openFromSidebar();
+  await files.toRoot();
+  for (const folder of LEDGER_FOLDERS[role]) await files.open(folder);
+}
+
 /** Reads the ledger in the folder on screen, through the editor, and closes it unchanged. */
 export async function readLedger(files: FilesPage): Promise<Ledger> {
   const field = await files.openEditor(LEDGER_FILE);
@@ -113,20 +140,83 @@ export async function readLedger(files: FilesPage): Promise<Ledger> {
 export async function writeLedger(files: FilesPage, ledger: Ledger): Promise<void> {
   const text = formatLedger(ledger);
   const field = await files.openEditor(LEDGER_FILE);
-  await field.fill(text);
+  await setText(field, text);
   await files.saveEditor();
   await files.published();
+}
+
+/**
+ * Sets the editor text without `fill`: the ledger holds a bearer link URL, and
+ * a `fill` step title and a `toHaveValue` failure both print the text.
+ */
+async function setText(field: Locator, text: string): Promise<void> {
+  await field.evaluate((element, value) => {
+    const area = element as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(area), 'value')?.set;
+    setter?.call(area, value);
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  }, text);
+  if ((await field.inputValue()) !== text)
+    throw new Error('the editor did not take the ledger text');
+}
+
+/** The bytes of `name` in the folder on screen, downloaded within `ms`. */
+export async function download(files: FilesPage, name: string, ms: number): Promise<Uint8Array> {
+  const saved = await within(files.save(name), ms, `${name} did not download`);
+  return new Uint8Array(await readFile(await saved.path()));
+}
+
+/** Opens the marker of each of `dates` in the folder on screen, byte for byte, inside `ms`. */
+export async function readMarkers(
+  files: FilesPage,
+  dates: readonly string[],
+  ms: number,
+  reason: FailureReason
+): Promise<void> {
+  const deadline = Date.now() + ms;
+  for (const [index, date] of dates.entries()) {
+    if (Date.now() >= deadline) {
+      throw new SoakFailure(reason, `no time to open ${unreadLine(dates.slice(index))}`);
+    }
+    const bytes = await download(files, markerFile(date), MARKER_DOWNLOAD_MS);
+    if (!Buffer.from(bytes).equals(Buffer.from(markerBytes(date)))) {
+      throw new SoakFailure(reason, `the marker of ${date} opened other bytes`);
+    }
+  }
+}
+
+/** Uploads the marker of `date` to the folder on screen, unless it is listed already. */
+export async function ensureMarker(files: FilesPage, date: string): Promise<void> {
+  const file = markerFile(date);
+  if (await listed(files, file)) return;
+  await files.upload(file, markerBytes(date));
+  await expect(files.row(file)).toBeVisible({ timeout: MARKER_ROW_MS });
+  await files.published();
+}
+
+/** `work`, or a rejection once `ms` passes: a wait the page does not bound itself. */
+async function within<T>(work: Promise<T>, ms: number, late: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(late)), ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function ledgerPath(role: SoakRole): string {
   return [...LEDGER_FOLDERS[role], LEDGER_FILE].join('/');
 }
 
-async function synced(files: FilesPage): Promise<void> {
+export async function synced(files: FilesPage): Promise<void> {
   await expect(files.status).toHaveAttribute('data-staleness', 'fresh', { timeout: 180_000 });
 }
 
-async function listed(files: FilesPage, name: string): Promise<boolean> {
+/** Whether the listing on screen shows `name` within a minute. */
+export async function listed(files: FilesPage, name: string): Promise<boolean> {
   return files
     .row(name)
     .waitFor({ state: 'visible', timeout: LISTED_WITHIN_MS })

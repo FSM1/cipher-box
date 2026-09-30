@@ -61,17 +61,39 @@ export const SOAK_REASONS = {
     kind: 'failure',
     meaning: 'the public routing endpoint served no record for a soak name',
   },
+  'share-folder-unready': {
+    kind: 'failure',
+    meaning: 'the owner did not ready a share folder and its marker',
+  },
+  'link-unminted': { kind: 'failure', meaning: 'the owner did not mint a link or read its epoch' },
+  'holder-read-failed': {
+    kind: 'failure',
+    meaning: 'a link holder did not read a marker byte for byte',
+  },
+  'claim-unconverted': {
+    kind: 'failure',
+    meaning: 'a claim did not convert to a granted standing within the invite budget',
+  },
   'shared-epoch-stepped': { kind: 'failure', meaning: 'the long-running link epoch moved' },
-  'cycle-epoch-flat': { kind: 'failure', meaning: 'the revoke did not step the read epoch' },
+  'cycle-epoch-flat': {
+    kind: 'failure',
+    meaning: 'the revoke left a grant, or did not step the read epoch by one',
+  },
   'link-not-revoked': { kind: 'failure', meaning: 'a revoked link still opened' },
+  'counters-unread': { kind: 'failure', meaning: 'the Grafana query did not answer' },
   'stale-names-grew': { kind: 'failure', meaning: 'stale names grew past the baseline' },
   'walks-skipped-grew': { kind: 'failure', meaning: 'the republisher skipped a walk' },
   'resolve-failures-grew': { kind: 'failure', meaning: 'republisher resolve failures grew' },
   'no-walk-in-window': { kind: 'failure', meaning: 'fewer than two walks in 24 hours' },
+  'last-walk-empty': { kind: 'failure', meaning: 'the last republisher walk found no name' },
   'desktop-marker-missing': { kind: 'failure', meaning: 'an OS or browser marker did not open' },
+  'browser-marker-unwritten': {
+    kind: 'failure',
+    meaning: 'the browser marker did not publish with its ledger line',
+  },
   'post-deploy-window': {
     kind: 'skip',
-    meaning: 'the API is up for less than 12 hours, so the counter checks skip',
+    meaning: 'the API started too recently for the republisher walks this counter needs',
   },
 } as const satisfies Record<string, { kind: ReasonKind; meaning: string }>;
 
@@ -80,6 +102,8 @@ export type SoakReason = keyof typeof SOAK_REASONS;
 export type FailureReason = {
   [R in SoakReason]: (typeof SOAK_REASONS)[R]['kind'] extends 'failure' ? R : never;
 }[SoakReason];
+
+export type SkipReason = Exclude<SoakReason, FailureReason>;
 
 export function isSoakReason(value: unknown): value is SoakReason {
   return typeof value === 'string' && Object.hasOwn(SOAK_REASONS, value);
