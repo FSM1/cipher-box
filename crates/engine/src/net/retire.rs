@@ -24,7 +24,7 @@ use super::REGISTRY_BATCH_MAX;
 use crate::api::{ApiClient, ApiError};
 use crate::content::{
     ContentPlane, ContentProfile, Expansion, Gateway, RetireTarget, expand_retire_targets,
-    read_block,
+    expand_staged_root, read_block,
 };
 use crate::net::publish::PublishError;
 use crate::net::record_publish::RecordPublishError;
@@ -508,8 +508,8 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
 /// - unversioned, read only: `node(16) | owedBytes | manifestBytes | cid`, a
 ///   [`DebtOrigin::Prune`] debt;
 /// - versioned: `ENTRY_V2 | origin | node(16) | owedBytes | manifestBytes |
-///   cid`, and for [`DebtOrigin::DroppedVersion`] one `cid | pinnedBytes` per
-///   target after it, the root last.
+///   cid`; a [`DebtOrigin::DroppedVersion`] entry adds one `cid | pinnedBytes`
+///   per target after it, the root last.
 ///
 /// Figures are big-endian `u64`. `cid` is the binary CID the entry is keyed
 /// by, which binds the value to its key.
@@ -523,6 +523,7 @@ fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> SeamResult<Zeroizing<Vec<u8>>
     let (origin, targets) = match &entry.origin {
         DebtOrigin::Prune => (ORIGIN_PRUNE, None),
         DebtOrigin::DroppedVersion(targets) => (ORIGIN_DROPPED_VERSION, Some(targets.as_slice())),
+        DebtOrigin::DroppedRoot => (ORIGIN_DROPPED_ROOT, None),
     };
     let pairs = targets.map_or(0, <[RetireTarget]>::len);
     let mut stored = Zeroizing::new(Vec::with_capacity(
@@ -556,6 +557,7 @@ fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> SeamResult<Zeroizing<Vec<u8>>
 const ENTRY_V2: u8 = 2;
 const ORIGIN_PRUNE: u8 = 0;
 const ORIGIN_DROPPED_VERSION: u8 = 1;
+const ORIGIN_DROPPED_ROOT: u8 = 2;
 
 /// Whether a dropped version's target set is one the settle may send: it is not
 /// empty, it ends at the entry's own root, and its figures sum to the total.
@@ -589,6 +591,7 @@ fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
     let manifest_bytes = u64::from_be_bytes(*manifest);
     let origin = match origin_tag {
         ORIGIN_PRUNE if tail.is_empty() => DebtOrigin::Prune,
+        ORIGIN_DROPPED_ROOT if tail.is_empty() => DebtOrigin::DroppedRoot,
         ORIGIN_DROPPED_VERSION => {
             let targets = decode_targets(tail, cid.len())?;
             let root = is_wellformed_content_cid(cid).then(|| encode_content_cid_str(cid))?;
@@ -730,7 +733,9 @@ where
         };
         let owing = match (retired, &entry.origin) {
             (true, _) => OwingRecord::Retired,
-            (false, DebtOrigin::DroppedVersion(_)) => OwingRecord::Unconfirmed,
+            (false, DebtOrigin::DroppedVersion(_) | DebtOrigin::DroppedRoot) => {
+                OwingRecord::Unconfirmed
+            }
             (false, DebtOrigin::Prune) => OwingRecord::Published,
         };
         let node = match live_of.entry((entry.node, owing)) {
@@ -869,13 +874,13 @@ pub enum ReclaimStallReason {
     TargetStillLive,
     /// The doomed root itself could not be expanded — no source served the block,
     /// or the manifest is not this version's — so what the retire would name is
-    /// unknown. The figure falls back to the ceiling the prune quoted.
+    /// unknown. The figure falls back to the figure the entry quoted.
     TargetUnexpandable,
 }
 
 /// One owed entry's whole expansion: the target set it carries, or else its
 /// own fetched root block. `None` leaves the entry owed for the figure the
-/// prune quoted: a root no source served, or a manifest that is not this
+/// entry quoted: a root no source served, or a manifest that is not this
 /// version's.
 async fn expand_owed<H: Http>(entry: &OwedRetire, source: &RootSource<'_, H>) -> Option<Expansion> {
     if let DebtOrigin::DroppedVersion(targets) = &entry.origin {
@@ -894,13 +899,20 @@ async fn expand_owed<H: Http>(entry: &OwedRetire, source: &RootSource<'_, H>) ->
     )
     .await
     .ok()?;
-    expand_retire_targets(
-        &entry.target,
-        &root_block,
-        source.profile,
-        entry.manifest_bytes,
-    )
-    .ok()
+    match entry.origin {
+        // The op record this device wrote names the root, and the fetch
+        // verifies the block against it, so no quoted total bounds it.
+        DebtOrigin::DroppedRoot => {
+            expand_staged_root(&entry.target, &root_block, source.profile).ok()
+        }
+        DebtOrigin::Prune | DebtOrigin::DroppedVersion(_) => expand_retire_targets(
+            &entry.target,
+            &root_block,
+            source.profile,
+            entry.manifest_bytes,
+        )
+        .ok(),
+    }
 }
 
 /// How one owed entry's registry call ended.
@@ -1765,6 +1777,111 @@ mod tests {
         let store = InMemoryStagingStore::default();
         owe(&store, OWNER, &entry);
         assert_eq!(owed_entries(&store, OWNER), vec![entry]);
+    }
+
+    /// The bytes the previous release wrote for a dropped version, framed by
+    /// hand so a change to the encoder cannot move them.
+    #[test]
+    fn a_dropped_version_the_previous_release_wrote_still_reads() {
+        let (entry, _) = dropped_version(&[11u8; 100]);
+        let DebtOrigin::DroppedVersion(targets) = &entry.origin else {
+            unreachable!("a dropped version carries its targets");
+        };
+        let (_, cid) = encoded(&entry);
+        let mut stored = vec![2u8, 1u8];
+        stored.extend_from_slice(&entry.node);
+        stored.extend_from_slice(&entry.owed_bytes.to_be_bytes());
+        stored.extend_from_slice(&entry.manifest_bytes.to_be_bytes());
+        stored.extend_from_slice(&cid);
+        for target in targets {
+            stored.extend_from_slice(&decode_content_cid_str(&target.cid).unwrap());
+            stored.extend_from_slice(&target.pinned_bytes.to_be_bytes());
+        }
+        assert_eq!(
+            decode_entry(&stored, &cid),
+            Some(OwedRetire {
+                target: String::new(),
+                ..entry
+            })
+        );
+    }
+
+    /// The debt a dead letter journals for a version whose staged root did not
+    /// read, priced at the op record's size.
+    fn dropped_root(plaintext: &[u8]) -> (OwedRetire, Vec<u8>, Vec<String>) {
+        let (entry, root_block, leaf_cids) = owed_version(plaintext);
+        let entry = OwedRetire {
+            origin: DebtOrigin::DroppedRoot,
+            ..OwedRetire::whole(entry.node, entry.target, plaintext.len() as u64)
+        };
+        (entry, root_block, leaf_cids)
+    }
+
+    #[test]
+    fn a_dropped_root_round_trips_and_a_tail_reads_as_nothing() {
+        let (entry, ..) = dropped_root(&[12u8; 100]);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+        assert_eq!(owed_entries(&store, OWNER), vec![entry.clone()]);
+
+        let (stored, cid) = encoded(&entry);
+        assert_eq!(stored[1], ORIGIN_DROPPED_ROOT);
+        let tailed = [&stored[..], &cid[..], &[0u8; 8]].concat();
+        assert_eq!(decode_entry(&tailed, &cid), None);
+    }
+
+    /// The settle fetches a dropped root, reads its node as unconfirmed, and
+    /// retires the whole version under the node's record, off the fetched
+    /// manifest rather than the op record's size.
+    #[test]
+    fn a_dropped_root_settles_off_its_fetched_root_under_the_nodes_record() {
+        let (entry, root_block, leaf_cids) = dropped_root(&(0..100u8).collect::<Vec<_>>());
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+        let http = ledger_http(&entry, Some(root_block), Some(1));
+        let asked = RefCell::new(Vec::new());
+
+        let pass = drain_with_live(&store, OWNER, &http, async |_, owing| {
+            asked.borrow_mut().push(owing);
+            Some(owning(BTreeSet::new()))
+        });
+
+        assert_eq!(asked.into_inner(), vec![OwingRecord::Unconfirmed]);
+        assert_eq!(
+            retire_entries(&http),
+            vec![
+                (Some(OWNER_NAME.to_owned()), leaf_cids),
+                (Some(OWNER_NAME.to_owned()), vec![entry.target.clone()])
+            ]
+        );
+        assert_eq!(pass.still_owed, 0);
+        assert!(owed_entries(&store, OWNER).is_empty());
+    }
+
+    /// A dropped root no source serves stays owed, as a stall the host can
+    /// see, at the figure the drop quoted.
+    #[test]
+    fn a_dropped_root_no_source_serves_stalls_at_its_quoted_figure() {
+        let (entry, ..) = dropped_root(&[13u8; 100]);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+        let http = ledger_http(&entry, None, Some(1));
+
+        let pass = drain_with_live(&store, OWNER, &http, async |_, _| {
+            Some(owning(BTreeSet::new()))
+        });
+
+        assert_eq!(pass.still_owed, entry.owed_bytes);
+        assert_eq!(
+            pass.stalls,
+            vec![ReclaimStall {
+                node: NODE,
+                target: entry.target.clone(),
+                reason: ReclaimStallReason::TargetUnexpandable,
+            }]
+        );
+        assert_eq!(owed_entries(&store, OWNER), vec![entry]);
+        assert!(retire_batches(&http).is_empty());
     }
 
     /// An acknowledged sequence keeps its highest value, reads only for the

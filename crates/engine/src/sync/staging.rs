@@ -371,29 +371,36 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
     /// [`Self::drop_version`] over a root block the caller already read. The
     /// journal is best-effort: a failure leaves the rows charged, which is a
     /// leak, never a loss, and is reported ([`Event::RegistryDebtUnjournaled`]).
-    /// A root that is gone names nothing to journal.
+    /// A root that does not give a target set journals its CID alone, priced at
+    /// the op record's size, and the settle fetches it (ADR 0059 D1).
     async fn drop_staged(&self, op: &Op, root: &[u8], block: Option<&[u8]>) {
         let manifest = block
             .filter(|block| verify_cid(root, block).is_ok())
             .and_then(|block| decode_root(block).ok());
-        if let (Some(block), true) = (block, manifest.is_some()) {
-            let target = encode_content_cid_str(root);
-            let journaled = match expand_staged_root(&target, block, self.profile) {
-                Ok(expansion) => {
-                    let debt = OwedRetire {
-                        origin: DebtOrigin::DroppedVersion(expansion.targets),
-                        ..OwedRetire::whole(op.target.0, target, expansion.pinned_bytes)
-                    };
-                    StagingRetireLedger::new(self.store, self.seal)
-                        .owe(&self.reader.owner_tag(), &[debt])
-                        .await
-                        .is_ok()
+        let target = encode_content_cid_str(root);
+        let expansion =
+            block.and_then(|block| expand_staged_root(&target, block, self.profile).ok());
+        let debt = match expansion {
+            Some(expansion) => OwedRetire {
+                origin: DebtOrigin::DroppedVersion(expansion.targets),
+                ..OwedRetire::whole(op.target.0, target, expansion.pinned_bytes)
+            },
+            None => {
+                let size = op
+                    .staged_content()
+                    .map_or(0, |content| content.plaintext_size);
+                OwedRetire {
+                    origin: DebtOrigin::DroppedRoot,
+                    ..OwedRetire::whole(op.target.0, target, size)
                 }
-                Err(_) => false,
-            };
-            if !journaled {
-                let _ = self.events.unbounded_send(Event::RegistryDebtUnjournaled);
             }
+        };
+        let journaled = StagingRetireLedger::new(self.store, self.seal)
+            .owe(&self.reader.owner_tag(), &[debt])
+            .await
+            .is_ok();
+        if !journaled {
+            let _ = self.events.unbounded_send(Event::RegistryDebtUnjournaled);
         }
         let leaves = manifest
             .map(|manifest| manifest.leaf_cids)
@@ -1015,6 +1022,7 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
     let before = kept.len();
     let mut slots = Vec::with_capacity(before);
     let mut sized = Vec::with_capacity(before);
+    let mut gone = Vec::new();
     for entry in kept {
         let Some(op) = debts.opens(&entry.record) else {
             slots.push(Slot::Foreign(entry));
@@ -1028,7 +1036,10 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
                 let bytes = version_bytes(&manifest, block.len(), &staged);
                 (Some(block), bytes)
             }
-            Ok(OpenedVersion::Gone) => continue,
+            Ok(OpenedVersion::Gone) => {
+                gone.push((op, root));
+                continue;
+            }
             // A root this build cannot decode, or a store that cannot answer,
             // decides nothing: keep the entry, unsized, and let the next pass
             // judge it.
@@ -1072,6 +1083,9 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
         debts
             .drop_staged(&parked.op, &parked.root, parked.block.as_deref())
             .await;
+    }
+    for (op, root) in gone {
+        debts.drop_staged(&op, &root, None).await;
     }
 }
 
@@ -1168,7 +1182,7 @@ mod tests {
     use crate::sync::op::{NewNode, StagedContent};
     use crate::sync::record::{RecordClass, RecordReader};
     use crate::testkit::fakes::InMemoryStagingStore;
-    use crate::testkit::{SeededEntropy, block_on, frame_version};
+    use crate::testkit::{SeededEntropy, block_on, frame_version, frame_version_with};
     use cipherbox_core::content::{compute_cid, decode_content_cid_str};
     use cipherbox_core::suite::aead::KEY_LEN;
     use cipherbox_core::suite::x25519::X25519Secret;
@@ -2063,6 +2077,97 @@ mod tests {
         });
     }
 
+    /// A preserved version whose staged root is gone journals the root alone,
+    /// at the op record's size (ADR 0059 D1).
+    #[test]
+    fn a_preserved_version_whose_root_is_gone_owes_its_root_alone() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let (root_cid, size) = (staged.root_cid.clone(), staged.plaintext_size);
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            park(&store, &record).await;
+            store.remove_staged_bytes(&root_cid).await.unwrap();
+            let events = reconcile(&store, bounds(ROOMY)).await;
+
+            assert!(events.is_empty());
+            assert_eq!(
+                owed_by_owner(&store).await,
+                vec![OwedRetire {
+                    origin: DebtOrigin::DroppedRoot,
+                    ..OwedRetire::whole(id(1).0, encode_content_cid_str(&root_cid), size)
+                }]
+            );
+        });
+    }
+
+    /// The same debt when the trim's age bound is what drops the entry.
+    #[test]
+    fn an_expired_preserved_version_whose_root_is_gone_owes_its_root_alone() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let (root_cid, size) = (staged.root_cid.clone(), staged.plaintext_size);
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            park(&store, &record).await;
+            store.remove_staged_bytes(&root_cid).await.unwrap();
+            let expired = PreservedBounds {
+                ttl: Duration::ZERO,
+                ..bounds(ROOMY)
+            };
+            let events = reconcile(&store, expired).await;
+
+            assert!(events.is_empty());
+            assert_eq!(
+                owed_by_owner(&store).await,
+                vec![OwedRetire {
+                    origin: DebtOrigin::DroppedRoot,
+                    ..OwedRetire::whole(id(1).0, encode_content_cid_str(&root_cid), size)
+                }]
+            );
+        });
+    }
+
+    /// A root that verifies and decodes but does not expand under this build's
+    /// profile gives no target set, so the drop journals the root alone.
+    #[test]
+    fn a_trimmed_version_whose_root_does_not_expand_owes_its_root_alone() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let plaintext = b"forty bytes of content ------------------";
+            let (blocks, root_block, content) =
+                frame_version_with(plaintext, [9; KEY_LEN], 1, ContentProfile::PRODUCTION);
+            let staged = StagedContent {
+                root_cid: content.content_cid().to_vec(),
+                plaintext_size: content.size(),
+                sealed_content_key: b"sealed-key-blob".to_vec(),
+                scope: NodeId([0; 16]),
+                epoch: 1,
+            };
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let (root_cid, size) = (staged.root_cid.clone(), staged.plaintext_size);
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            park(&store, &record).await;
+            let expired = PreservedBounds {
+                ttl: Duration::ZERO,
+                ..bounds(ROOMY)
+            };
+            let events = reconcile(&store, expired).await;
+
+            assert!(kept_records(&store).await.is_empty());
+            assert!(events.is_empty(), "the debt journals: {events:?}");
+            assert_eq!(
+                owed_by_owner(&store).await,
+                vec![OwedRetire {
+                    origin: DebtOrigin::DroppedRoot,
+                    ..OwedRetire::whole(id(1).0, encode_content_cid_str(&root_cid), size)
+                }]
+            );
+        });
+    }
+
     /// A trimmed version whose debt did not reach the ledger is reported, not
     /// dropped in silence.
     #[test]
@@ -2155,9 +2260,16 @@ mod tests {
             );
             assert_eq!(
                 sweep(&store, &[]).await.unwrap().len(),
-                blocks.len() + 1,
-                "its blocks are referenced by nothing and become collectable"
+                blocks.len(),
+                "the drop releases the root, and its leaves become collectable"
             );
+            assert!(matches!(
+                owed_by_owner(&store).await[..],
+                [OwedRetire {
+                    origin: DebtOrigin::DroppedRoot,
+                    ..
+                }]
+            ));
         });
     }
 

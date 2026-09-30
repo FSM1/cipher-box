@@ -136,7 +136,9 @@ decide whether the carve-outs join this ADR as a Dn and the "Retirement" bullet.
 **E4 — An acknowledged PUT that never becomes live leaks everything it charged.** D2 keeps the
 name, the head and every content row of such an op, and no later pass learns that the record
 never landed. The attempt budget per op bounds the cost. Narrowed by ADR 0054 on 2026-09-27 to a version
-whose staged root is already gone (ADR 0054 E1).
+whose staged root is already gone (ADR 0054 E1). Amended by ADR 0059 D1 on 2026-09-29: narrowed
+to a version whose root no source serves, or does not expand under this build's profile, which
+stalls permanently with its figure in the pending-reclaim figure.
 
 **E5 — A version whose root the name wave cannot fetch carries its root alone.** Its leaves lose
 their reference edges when the old name retires. They stay pinned only because the registry

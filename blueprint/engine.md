@@ -151,7 +151,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   version — a discard, a refused preserved entry, or the preserved-set trim —
   journals every row the version charged to the retire ledger first, and the
   settle retires them once the name holds a record above the sequence its PUT
-  was acknowledged at (ADR 0054). A publish that fails **before the record reaches
+  was acknowledged at (ADR 0054). A drop whose staged root is gone, fails its
+  own CID, or does not decode journals the same debt from the root CID the op
+  record names (ADR 0059). A publish that fails **before the record reaches
   the transport** — register-first, the floor read, the head-CID echo, or an
   upload whose ack never came back — is the mirror case: its head block may
   already be pinned under its own charged row, no record can name it, and the
@@ -1484,7 +1486,9 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   version that falls outside the rule loses that reference, and what it owes the
   registry is journaled to the retire ledger before the shortened history
   publishes. A version a dead letter drops journals its whole target set, root
-  and leaves, so the settle needs no gateway read (ADR 0054). A write-rotation name wave registers every version's root and
+  and leaves, so the settle needs no gateway read (ADR 0054). A version whose
+  staged root does not read journals its root alone, and the settle fetches the
+  root (ADR 0059). A write-rotation name wave registers every version's root and
   leaves at the node's new name before the record moves (ADR 0047). A version
   whose root the name wave cannot fetch carries its root alone. Its leaves lose
   their reference edges when the old name retires, and stay pinned only because

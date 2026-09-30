@@ -22,7 +22,8 @@ pub enum OwingRecord {
     /// permanently unsettleable against a never-discard ledger.
     Retired,
     /// The node's record may carry a version a dead letter dropped
-    /// ([`DebtOrigin::DroppedVersion`]), or may never have published.
+    /// ([`DebtOrigin::DroppedVersion`], [`DebtOrigin::DroppedRoot`]), or may
+    /// never have published.
     ///
     /// A record at or below the node's acknowledged sequence, or one the
     /// endpoints serve tied with other bytes, stands the entry down: a PUT of
@@ -47,6 +48,11 @@ pub enum DebtOrigin {
     /// the root last, each with its pinned bytes. The owing node reads as
     /// [`OwingRecord::Unconfirmed`].
     DroppedVersion(Vec<RetireTarget>),
+    /// A dead letter dropped a staged version whose root did not give a target
+    /// set, so only the root CID the op record names is journaled, and the
+    /// settle fetches the root. The owing node reads as
+    /// [`OwingRecord::Unconfirmed`] (ADR 0059 D1).
+    DroppedRoot,
 }
 
 /// One owed retirement: a doomed version's **root** `contentCid` and the pinned

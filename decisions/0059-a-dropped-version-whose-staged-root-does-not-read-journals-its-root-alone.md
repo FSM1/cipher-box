@@ -11,8 +11,8 @@
   it charged), [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md) (durable
   staging state reads the previous release), the `blueprint/engine.md` "Resolve/publish pipeline"
   section ("Retirement" bullet) and "Content plane" section ("Referenced equals kept" bullet)
-- **Implemented by:** not landed
-- **Amends:** ADR 0054 D1
+- **Implemented by:** FSM1/cipher-box#2105
+- **Amends:** ADR 0054 D1 and E1, ADR 0047 E4
 
 ## Context
 
@@ -34,7 +34,8 @@ entry with the origin "dropped root", which carries no target set. The owed figu
 that the op record carries. The settle fetches the root over the gateway ladder and expands it, as
 for a prune debt. It reads the owing node under `OwingRecord::Unconfirmed`, as for a dropped
 version. A root that no source serves keeps the entry, as a `TargetUnexpandable` stall with its
-figure in the pending-reclaim figure. Encode refuses a dropped-root entry with a target tail, and
+figure in the pending-reclaim figure. So does a root that does not expand under this build's
+profile, which stalls permanently with its figure in the pending-reclaim figure. Encode refuses a dropped-root entry with a target tail, and
 decode reads such bytes as unwritten (AGENTS.md rule 8). The upload path writes nothing new.
 
 This release reads every entry the previous release wrote with no change. The previous release
