@@ -10,7 +10,7 @@
   [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md),
   [ADR 0033](./0033-every-attacker-sized-field-has-one-canonical-form-and-a-symmetric-fail-closed-bound.md),
   and ADR 0062 (the revival of a lapsed name)
-- **Implemented by:** FSM1/cipher-box#2112 (D1 to D3)
+- **Implemented by:** FSM1/cipher-box#2112 (D1 to D4)
 - **Amends:** [ADR 0057](./0057-an-observer-outside-a-session-reads-a-verified-record-and-adopts-nothing.md) Context
 
 ## Context
@@ -70,12 +70,8 @@ cursor that does not open or decode, or a replayed older one, costs only work.
 
 A `LostRace` ends the renewal of that name for this cycle, with no retry.
 
-**D4 — A node that a stopped name wave did not reach renews at its old name.** When the parent
-names a name that the current write seed does not derive, the owner's walk derives the older write
-seed through the write-plane history link. It renews the node only if the derived name is the name
-that the parent names, and only after D3 step 1 admits the body against the scope's current
-commitment, so a write that a revoked writer made after the revocation is never renewed. D3 step 2
-stops the walk at each old name that the wave retired.
+**D4 — The walk renews a node only under the write seed that derives its scope root's name.** It
+renews no name under a superseded seed.
 
 ## Alternatives considered
 
@@ -85,8 +81,8 @@ stops the walk at each old name that the wave retired.
   days, restarts a long walk at the root.
 - **A breadth-first frontier of names as the cursor.** A flat folder makes it as large as the vault.
 - **Re-sign at the same sequence.** Each renewal then confirms as a `LostRace` against itself.
-- **The name wave owns the liveness of its old names.** A wave stopped for longer than the EOL
-  reads `Absent` at each old name, and each node needs a revival (ADR 0062).
+- **Renew a node at its old name under a superseded seed**, derived through the write-plane
+  history link. The walk then signs under a seed that does not derive its scope root's name.
 - **A keyed re-signer on the API**, as v1 had. The zero-knowledge server must hold no signing key.
 
 ## Consequences

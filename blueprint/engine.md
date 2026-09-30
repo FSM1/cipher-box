@@ -139,7 +139,7 @@ bytes (FSM1/cipher-box-next#28 D2).
   periodically, the engine checks the EOLs of its renewal set (`HeldRecords`)
   and below ~30 days remaining republishes the same CID at seq+1 through the
   normal CAS path. The same pass then runs a bounded part of the **renewal
-  walk** (ADR 0061 D1 to D3), which reaches every other name of the vault. A
+  walk** (ADR 0061 D1 to D4), which reaches every other name of the vault. A
   session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
   set. The API republisher (~12 h inventory walk) re-PUTs the same bytes and
