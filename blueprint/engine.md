@@ -121,9 +121,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   re-resolves and rebases (FSM1/cipher-box-next#23 D3/D4). A 4xx answer to a PUT
   is a stated refusal, and any other answer that is not 2xx, or no answer, is an
   unknown outcome; the engine classifies the status the transport reports
-  (ADR 0060 D1). A publish that every endpoint refused fails as refused, apart
-  from one that no endpoint acked (ADR 0060 D2); both keep the head block
-  charged (see "Retirement").
+  (ADR 0060 D1). A publish that every endpoint refused fails as refused, and
+  any other publish that no endpoint acked fails as not acked (ADR 0060 D2);
+  both keep the head block charged (see "Retirement").
 - **TTL/EOL**: every record sets TTL explicitly from the sync timing profile
   (production 1 minute; dev/CI 1–5 s; never a library default) and a 90-day
   client-signed EOL; TTL and EOL are independent (FSM1/cipher-box-next#33 D3, FSM1/cipher-box-next#24 D1).

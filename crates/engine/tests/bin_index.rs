@@ -1230,7 +1230,7 @@ fn publish_under(
     world: &FakeWorld,
     device: &FakeDevice,
     blocks: &Blocks,
-    transport: &impl RecordTransportClone,
+    transport: &(impl RecordTransport + Clone + 'static),
     index: &BinIndex,
     seed: u64,
 ) -> Result<(), BinIndexPublishError> {
@@ -1249,10 +1249,6 @@ fn publish_under(
     ))
     .map(|_| ())
 }
-
-/// The bounds `publish_bin_index` puts on its transport.
-trait RecordTransportClone: RecordTransport + Clone + 'static {}
-impl<T: RecordTransport + Clone + 'static> RecordTransportClone for T {}
 
 /// A 4xx answer states that the hop did not act on the PUT. When every
 /// endpoint states it, the record did not leave, so the device holds no mark
@@ -1301,7 +1297,8 @@ fn a_put_every_endpoint_refused_by_a_stated_answer_leaves_no_live_mark() {
 /// refusal at the other endpoint does not clear the mark.
 #[test]
 fn a_stated_refusal_beside_an_unknown_outcome_keeps_the_mark() {
-    for unknown in [500, 502, 503, 504, 301, 0] {
+    // `None` is an endpoint that gives no answer.
+    for unknown in [Some(500), Some(502), Some(503), Some(504), Some(301), None] {
         let world = FakeWorld::new();
         let blocks = Blocks::default();
         let device = world.device(b"only-device");
@@ -1309,12 +1306,13 @@ fn a_stated_refusal_beside_an_unknown_outcome_keeps_the_mark() {
         device
             .record_store
             .answer_put_for_at(&endpoints[0], name().as_str(), 400);
-        if unknown == 0 {
-            device.record_store.fail_put_endpoint(&endpoints[1]);
-        } else {
-            device
-                .record_store
-                .answer_put_for_at(&endpoints[1], name().as_str(), unknown);
+        match unknown {
+            Some(status) => {
+                device
+                    .record_store
+                    .answer_put_for_at(&endpoints[1], name().as_str(), status);
+            }
+            None => device.record_store.fail_put_endpoint(&endpoints[1]),
         }
 
         let outcome = publish_with(
@@ -1331,13 +1329,13 @@ fn a_stated_refusal_beside_an_unknown_outcome_keeps_the_mark() {
                     PublishError::AllEndpointsFailed
                 )))
             ),
-            "{unknown}: {outcome:?}",
+            "{unknown:?}: {outcome:?}",
         );
         device.record_store.heal_put_endpoint(&endpoints[1]);
         assert_eq!(
             load(&world, &device, &blocks, &keys()),
             BinIndexLoad::Empty(DefaultsReason::StrandedMint),
-            "{unknown}: the mark stays",
+            "{unknown:?}: the mark stays",
         );
     }
 }
@@ -1415,36 +1413,29 @@ fn a_refusal_supersedes_only_the_revision_it_names() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let device = world.device(b"only-device");
-    block_on(
-        device
-            .floor_store
-            .raise_sequence_floor(&mark(b"bin-index-revision-mint/", &name()), 3),
-    )
-    .expect("the mint counter raises");
+    let raise = |prefix: &[u8], value| {
+        block_on(
+            device
+                .floor_store
+                .raise_sequence_floor(&mark(prefix, &name()), value),
+        )
+        .expect("the counter raises");
+    };
+    raise(b"bin-index-revision-mint/", 3);
     assert_eq!(
         load(&world, &device, &blocks, &keys()),
         BinIndexLoad::Empty(DefaultsReason::StrandedMint),
         "the previous release's counter reads as a mark",
     );
 
-    block_on(
-        device
-            .floor_store
-            .raise_sequence_floor(&mark(b"bin-index-revision-refused/", &name()), 2),
-    )
-    .expect("the refusal raises");
+    raise(b"bin-index-revision-refused/", 2);
     assert_eq!(
         load(&world, &device, &blocks, &keys()),
         BinIndexLoad::Empty(DefaultsReason::StrandedMint),
         "a refusal below the mint does not reach it",
     );
 
-    block_on(
-        device
-            .floor_store
-            .raise_sequence_floor(&mark(b"bin-index-revision-refused/", &name()), 3),
-    )
-    .expect("the refusal raises");
+    raise(b"bin-index-revision-refused/", 3);
     assert_eq!(
         load(&world, &device, &blocks, &keys()),
         BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun),

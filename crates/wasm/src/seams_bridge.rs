@@ -52,11 +52,12 @@ pub(crate) fn seam_error(value: JsValue) -> SeamError {
 fn put_seam_error(value: JsValue) -> SeamError {
     let status = Reflect::get(&value, &JsValue::from_str("status"))
         .ok()
-        .and_then(|status| status.as_f64())
-        .filter(|status| status.fract() == 0.0 && (100.0..=599.0).contains(status));
+        .and_then(|status| required_u64(status).ok())
+        .and_then(|status| u16::try_from(status).ok())
+        .filter(|status| (100..=599).contains(status));
     let error = seam_error(value);
     match status {
-        Some(status) => SeamError::http_status(error.message(), status as u16),
+        Some(status) => SeamError::http_status(error.message(), status),
         None => error,
     }
 }

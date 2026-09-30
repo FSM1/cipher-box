@@ -573,16 +573,17 @@ fn authorization(server: &MockServer) -> Option<String> {
 #[tokio::test]
 async fn reqwest_record_transport_reports_the_status_of_a_rejected_put() {
     let server = MockServer::start();
-    for status in [400_u16, 429, 503, 302] {
-        let transport = ReqwestRecordTransport::new(
-            vec![format!("{}/status-{status}", server.base_url())],
-            None,
-        )
-        .expect("client builds");
-        let endpoint = transport.endpoints().remove(0);
-
+    let statuses = [400_u16, 429, 503, 302];
+    let transport = ReqwestRecordTransport::new(
+        statuses.map(|status| format!("{}/status-{status}", server.base_url())),
+        None,
+    )
+    .expect("client builds");
+    let endpoints = transport.endpoints();
+    assert_eq!(endpoints.len(), statuses.len());
+    for (endpoint, status) in endpoints.iter().zip(statuses) {
         let error = transport
-            .put_record(&endpoint, "k51-refused-name", b"opaque-record")
+            .put_record(endpoint, "k51-refused-name", b"opaque-record")
             .await
             .expect_err("a non-2xx answer is no ack");
 

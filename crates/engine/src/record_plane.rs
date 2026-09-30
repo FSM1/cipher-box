@@ -150,7 +150,7 @@ pub(crate) async fn live_mint<F: FloorStore>(
         return Ok(minted);
     };
     let refused = floor::sequence_floor(floors, refused_key).await?;
-    Ok(minted.filter(|_| refused.is_none_or(|refused| refused < mint)))
+    Ok(refused.is_none_or(|refused| refused < mint).then_some(mint))
 }
 
 /// A durable-store key under `prefix`. Every prefix ends in `/`, so none can
