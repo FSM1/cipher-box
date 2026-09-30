@@ -37,7 +37,8 @@ find the vault root, and it does not start.
 5. After the registration, the fan-out still reads `Absent`, or serves exactly the admitted record.
 6. After the adopt commits, read the durable floor with no await before the signature. The floor
    must be at or below the admitted sequence S. Sign at S + 1 with the EOL `eol_from(now)` minus
-   one day (ADR 0061 D3 step 6).
+   one day, as a renewal does (ADR 0061 D3 step 6), so a revival never wins a tie against a real
+   record at the same sequence.
 
 A refusal in step 3 of bytes that the plane served is a `TrustViolation`. A body that is not
 available is an availability failure, not a `TrustViolation`.
@@ -64,8 +65,8 @@ an older device does not report `RolledBack` for good.
 
 **D5 — A device with no floor revives a name from the corroborated recovery record, and the user
 sees it.** The shell shows a "restored from the server copy" state for such a vault. When another
-owner device later reads a revived record below its own floor, its gate reports a
-`TrustViolation`.
+owner device later reads a revived record below its own floor, or at a lower read epoch, its gate
+reports a `TrustViolation`.
 
 ## Alternatives considered
 
@@ -105,5 +106,7 @@ owner device later reads a revived record below its own floor, its gate reports 
   copy. The device then restores that old copy and signs it again. For a vault pointer or a scope
   pointer from before a rotation, the old copy sets an old read epoch on the device. The device
   can then write new files under a key that a removed grantee still holds, so that grantee can read
-  them. The user sees "restored from the server copy", and another owner device reports a trust
-  violation later. Does the owner accept this risk for a device with no floor?
+  them. The user sees "restored from the server copy". Another owner device reports a trust
+  violation only when the copy is below its floor or at a lower read epoch. A copy exactly one
+  sequence behind is signed one above it, so it lands at that device's floor, and that device takes
+  it with no signal. Does the owner accept this risk for a device with no floor?
