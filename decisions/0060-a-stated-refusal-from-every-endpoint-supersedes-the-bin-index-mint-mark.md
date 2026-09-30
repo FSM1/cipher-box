@@ -12,7 +12,7 @@
   D5 (the settings marks), [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md)
   (a build reads the durable state that the previous release wrote), and the
   `blueprint/engine.md` sections "Resolve/publish pipeline" and "Bin index record"
-- **Implemented by:** not landed; FSM1/cipher-box#2096 tracks the change
+- **Implemented by:** FSM1/cipher-box#2106 (closes FSM1/cipher-box#2096)
 - **Amends:** ADR 0056 D1, ADR 0031 D10
 
 ## Context
@@ -83,7 +83,8 @@ bodies. A later PUT raises the mint above the refusal and is a mark again.
    refusal counter beside it, so it still reads as a mark (ADR 0020). A previous build that
    reads state from this build ignores the refusal counter and reads `StrandedMint`, the
    restrictive side.
-5. The head block of a refused publish is an orphan, so `retire::orphaned_head` retires it.
+5. The head block of a refused publish stays charged, and ADR 0047 D4 applies, because an
+   endpoint that states a refusal can keep the record.
 6. The vault settings plane keeps its mint counter and its mark rule (ADR 0034 D5), so no PUT
    outcome clears a settings mark.
 7. `CONTEXT.md` does not change. No wire format, KDF edge or KAT vector changes.

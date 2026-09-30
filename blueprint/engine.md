@@ -122,7 +122,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   is a stated refusal, and any other answer that is not 2xx, or no answer, is an
   unknown outcome; the engine classifies the status the transport reports
   (ADR 0060 D1). A publish that every endpoint refused fails as refused, apart
-  from one that no endpoint acked (ADR 0060 D2).
+  from one that no endpoint acked (ADR 0060 D2); both keep the head block
+  charged (see "Retirement").
 - **TTL/EOL**: every record sets TTL explicitly from the sync timing profile
   (production 1 minute; dev/CI 1–5 s; never a library default) and a 90-day
   client-signed EOL; TTL and EOL are independent (FSM1/cipher-box-next#33 D3, FSM1/cipher-box-next#24 D1).
@@ -161,8 +162,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   already be pinned under its own charged row, no record can name it, and the
   retry re-authors under a fresh seal nonce, so the drain retires that head at
   the end of the pass that orphaned it, per attempt. A fan-out that
-  acknowledged nothing does **not** qualify: no ack is not proof nothing stored
-  (ADR 0047).
+  acknowledged nothing, or that every endpoint refused, does **not** qualify:
+  no ack is not proof nothing stored, and an endpoint that states a refusal can
+  keep the record (ADR 0047 D4, ADR 0060).
   A **delete** reclaims its own target at once — the shortened parent is a
   record the pass resolved and republished — and holds every descendant in a
   bounded quarantine. A descendant is reached through a `ChildRef`, which any

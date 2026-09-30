@@ -56,7 +56,6 @@ fn put_seam_error(value: JsValue) -> SeamError {
         .filter(|status| status.fract() == 0.0 && (100.0..=599.0).contains(status));
     let error = seam_error(value);
     match status {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         Some(status) => SeamError::http_status(error.message(), status as u16),
         None => error,
     }

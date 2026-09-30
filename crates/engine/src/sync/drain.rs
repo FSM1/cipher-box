@@ -8231,8 +8231,9 @@ mod tests {
         }
     }
 
-    /// The destruction-critical arm: a fan-out that acked nothing may still
-    /// have stored the record, so its head stays pinned. Everything else here
+    /// The destruction-critical arm: a fan-out that acked nothing, or that
+    /// every endpoint refused, may still have stored the record, so its head
+    /// stays pinned. Everything else here
     /// stopped short of the transport with a charged row behind it, or with no
     /// row at all.
     #[test]
@@ -8241,6 +8242,10 @@ mod tests {
         for (error, orphaned) in [
             (
                 RecordPublishError::Publish(PublishError::AllEndpointsFailed),
+                false,
+            ),
+            (
+                RecordPublishError::Publish(PublishError::AllEndpointsRefused),
                 false,
             ),
             (
