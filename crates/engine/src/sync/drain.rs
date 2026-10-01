@@ -7743,6 +7743,7 @@ mod tests {
             )),
             read_scope_seed: None,
             tied: Vec::new(),
+            absent: false,
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
@@ -7769,6 +7770,7 @@ mod tests {
             held_record: None,
             read_scope_seed: None,
             tied,
+            absent: false,
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
@@ -7800,6 +7802,7 @@ mod tests {
                 held_record: None,
                 read_scope_seed: None,
                 tied: Vec::new(),
+                absent: false,
             },
             &refused_name(),
             &events,

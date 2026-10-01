@@ -127,10 +127,14 @@ scenario fails the meta-test):
   names; a bin entry, a deferred depth-64 folder and a node that lags a cut
   renew; a pass that parks below an ancestor resumes at that ancestor's next
   sibling; a link cycle ends in the pass that meets it; an unavailable scope
-  root, a 503 registration or a failed PUT keeps the cursor for the next
-  pass, across sessions, until one day after the first keep-back; a scope
-  root with no record moves the cursor at once and emits `renewalFailed`; a
-  doomed-name journal that does not list renews and stores nothing; a publish during the
+  root or child, a 503 registration, a failed ledger read or a failed PUT
+  keeps the cursor for the next pass, across sessions, for one day from the
+  cycle's first keep-back at most; a scope root or child with no record and
+  a 4xx registration move the cursor at once and emit `renewalFailed`; a
+  doomed-name journal that does not list, or holds an entry that does not
+  open, renews and stores nothing and emits `renewalFailed`; unit tests in
+  `net::renewal_walk` fix the window edge at exactly one day, a keep-back
+  time ahead of the clock, and one window for each cycle; a publish during the
   registration wait makes the walk refuse; at one
   sequence the later EOL wins in the resolve and in the last-known-good
   keeper. `tests/owner_actions.rs` covers a nested owned scope and a node a stopped

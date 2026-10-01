@@ -17,10 +17,12 @@ use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::eol::{eol_from, renewal_eol_from};
 use cipherbox_engine::net::renewal_walk::WALK_BUDGET;
 use cipherbox_engine::net::renewal_walk::cursor::{CursorStore, MAX_CURSOR_PATH, RenewalCursor};
+use cipherbox_engine::net::retire::NODE_TOMBSTONE_PREFIX;
 use cipherbox_engine::seams::{
-    BoxedTask, HttpMethod, HttpRequest, HttpResponse, RecordTransport, Scheduler, UnixMillis,
+    BoxedTask, HttpMethod, HttpRequest, HttpResponse, RecordTransport, Scheduler, SnapshotCache,
+    StagingStore, UnixMillis,
 };
-use cipherbox_engine::sync::BookkeepingSeal;
+use cipherbox_engine::sync::{BookkeepingSeal, doomed_journal_key, owner_tag};
 use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, seed_account};
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED,
@@ -740,7 +742,10 @@ fn a_transient_failure_keeps_the_cursor_back_for_one_window_across_sessions() {
             assert_eq!(cursor.kept_back_since, since, "session {session}");
             assert!(cursor.root.is_some(), "session {session} keeps the range");
         } else {
-            assert_eq!(cursor.kept_back_since, None, "past the window");
+            assert_eq!(
+                cursor.kept_back_since, since,
+                "the cycle's window stays spent"
+            );
             assert_eq!(cursor.root, None, "the pass stores where it stopped");
         }
         drop(tasks);
@@ -761,17 +766,24 @@ fn a_transient_failure_that_outlasts_the_window_stores_the_cursor() {
     let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
     world.record_store.fail_get_for(write_name(ROOT).as_str());
     tick(&world, &engine, &mut tasks);
+    let since = stored_cursor(&device)
+        .expect("a kept-back cursor")
+        .kept_back_since;
+    assert!(since.is_some(), "the first pass keeps the cursor back");
     for hour in 1..24 {
         world.scheduler.advance(HOUR);
         tick(&world, &engine, &mut tasks);
         let cursor = stored_cursor(&device).expect("a kept-back cursor");
-        assert!(cursor.kept_back_since.is_some(), "hour {hour}");
+        assert_eq!(cursor.kept_back_since, since, "hour {hour}");
         assert!(cursor.root.is_some(), "hour {hour}: the range is kept");
     }
     world.scheduler.advance(HOUR * 2);
     tick(&world, &engine, &mut tasks);
     let cursor = stored_cursor(&device).expect("the stored cursor");
-    assert_eq!(cursor.kept_back_since, None);
+    assert_eq!(
+        cursor.kept_back_since, since,
+        "the cycle's window stays spent"
+    );
     assert_eq!(cursor.root, None, "the pass stores where it stopped");
 }
 
@@ -799,9 +811,18 @@ fn a_failed_put_after_a_registration_keeps_the_cursor_for_the_next_pass() {
     assert_renewed_at_start(&world, &name, &before, started, "the file");
 }
 
+/// Whether `events` carried a `renewalFailed` for `routing_key` whose detail
+/// holds `detail`.
+fn renewal_failed(events: &mut EventStream, routing_key: &str, detail: &str) -> bool {
+    core::iter::from_fn(|| events.try_next()).any(|event| {
+        matches!(event, Event::RenewalFailed { routing_key: key, detail: text }
+            if key == routing_key && text.contains(detail))
+    })
+}
+
 /// A doomed-name journal that does not list leaves the walk unable to skip a
-/// doomed name, so the pass renews nothing and stores nothing; the next pass
-/// that lists renews the file.
+/// doomed name, so the pass renews nothing, stores nothing and reports the
+/// stall; the next pass that lists renews the file.
 #[test]
 fn a_journal_that_does_not_list_renews_nothing_and_stores_nothing() {
     let world = FakeWorld::new();
@@ -809,13 +830,164 @@ fn a_journal_that_does_not_list_renews_nothing_and_stores_nothing() {
     let (name, before) = a_file_left_for_65_days(&world, &blocks);
     let started = world.scheduler.now();
     let device = world.device(b"a later session");
-    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
     device.staging_store.inner().fail_staged_keys();
     tick(&world, &engine, &mut tasks);
     assert_eq!(record_at(&world, &name), before, "the pass renews nothing");
     assert_eq!(stored_cursor(&device), None, "the pass stores nothing");
+    assert!(
+        renewal_failed(
+            &mut events,
+            write_name(ROOT).as_str(),
+            "doomed-name journal"
+        ),
+        "the stall is reported"
+    );
 
     device.staging_store.inner().heal_staged_keys();
+    world.scheduler.advance(HOUR);
+    tick(&world, &engine, &mut tasks);
+    assert_renewed_at_start(&world, &name, &before, started, "the file");
+}
+
+/// A doomed-name journal entry that does not open could name any name, so the
+/// pass renews nothing, stores nothing and reports the stall.
+#[test]
+fn an_unreadable_doomed_journal_entry_stops_the_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, before) = a_file_left_for_65_days(&world, &blocks);
+    let device = world.device(b"a later session");
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    let entry = doomed_journal_key(&owner_tag(&kdf::enc_subkey(&SECRET)), ROOT, NodeId([7; 16]));
+    block_on(
+        device
+            .staging_store
+            .put_staged_bytes(&entry, b"not a sealed reclamation"),
+    )
+    .expect("stage the entry");
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(record_at(&world, &name), before, "the pass renews nothing");
+    assert_eq!(stored_cursor(&device), None, "the pass stores nothing");
+    assert!(
+        renewal_failed(
+            &mut events,
+            write_name(ROOT).as_str(),
+            "doomed-name journal"
+        ),
+        "the stall is reported"
+    );
+}
+
+/// A registry that refuses the file's registration with a 409 refuses it for
+/// good: the pass moves the cursor on at once and reports the file.
+#[test]
+fn a_4xx_registration_refusal_moves_the_cursor_at_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, before) = a_file_left_for_65_days(&world, &blocks);
+    let device = world.device(b"a later session");
+    for _ in 0..4000 {
+        let (blocks, key) = (blocks.clone(), name.as_str().to_owned());
+        device.http.enqueue_derived(move |request| {
+            if registers(request, &key) {
+                return Ok(HttpResponse {
+                    status: 409,
+                    headers: Vec::new(),
+                    body: b"{\"statusCode\":409,\"message\":\"conflict\"}".to_vec(),
+                });
+            }
+            blocks.reply(request)
+        });
+    }
+    let (engine, mut events, mut tasks) = boot_served(&world, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert_eq!(record_at(&world, &name), before, "the pass renews nothing");
+    let cursor = stored_cursor(&device).expect("the pass stored its cursor");
+    assert_eq!(cursor.root, None, "the cursor moved past the file");
+    assert_eq!(cursor.kept_back_since, None);
+    assert!(
+        renewal_failed(&mut events, name.as_str(), ""),
+        "the file is reported"
+    );
+}
+
+/// A file record no endpoint can serve, with no cached copy, makes the pass
+/// keep the cursor back, so the next pass renews the file.
+#[test]
+fn an_unavailable_child_keeps_the_cursor_for_the_next_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, before) = a_file_left_for_65_days(&world, &blocks);
+    let started = world.scheduler.now();
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    block_on(device.snapshot_cache.remove(name.as_str().as_bytes())).expect("drop the cache");
+    world.record_store.fail_get_for(name.as_str());
+    tick(&world, &engine, &mut tasks);
+    world.record_store.heal_get_for(name.as_str());
+    assert_eq!(
+        record_at(&world, &name),
+        before,
+        "the first pass renews nothing"
+    );
+    let cursor = stored_cursor(&device).expect("a kept-back cursor");
+    assert!(
+        cursor.kept_back_since.is_some(),
+        "the pass kept the cursor back"
+    );
+
+    world.scheduler.advance(HOUR);
+    tick(&world, &engine, &mut tasks);
+    assert_renewed_at_start(&world, &name, &before, started, "the file");
+}
+
+/// The endpoints agree the file holds no record and no copy is cached: a
+/// permanent failure, so the pass moves the cursor on and reports the file.
+#[test]
+fn a_child_with_no_record_moves_the_cursor_at_once_and_is_reported() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, _) = a_file_left_for_65_days(&world, &blocks);
+    let device = world.device(b"a later session");
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    block_on(device.snapshot_cache.remove(name.as_str().as_bytes())).expect("drop the cache");
+    world
+        .record_store
+        .serve_gets_for_after(name.as_str(), 0, usize::MAX, None);
+    tick(&world, &engine, &mut tasks);
+
+    let cursor = stored_cursor(&device).expect("the pass stored its cursor");
+    assert_eq!(cursor.root, None, "the cursor moved past the file");
+    assert_eq!(cursor.kept_back_since, None);
+    assert!(
+        renewal_failed(&mut events, name.as_str(), "no record"),
+        "the file is reported"
+    );
+}
+
+/// A retire ledger read that fails makes the pass keep the cursor back, so the
+/// next pass renews the file.
+#[test]
+fn a_failed_ledger_read_keeps_the_cursor_for_the_next_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, before) = a_file_left_for_65_days(&world, &blocks);
+    let started = world.scheduler.now();
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    device
+        .staging_store
+        .inner()
+        .fail_staged_reads_under(NODE_TOMBSTONE_PREFIX);
+    tick(&world, &engine, &mut tasks);
+    device.staging_store.inner().heal_staged_reads();
+    assert_eq!(
+        record_at(&world, &name),
+        before,
+        "the first pass renews nothing"
+    );
+
     world.scheduler.advance(HOUR);
     tick(&world, &engine, &mut tasks);
     assert_renewed_at_start(&world, &name, &before, started, "the file");

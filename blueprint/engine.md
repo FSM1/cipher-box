@@ -161,18 +161,22 @@ bytes (FSM1/cipher-box-next#28 D2).
   one began. A visit signs only under the write seed that derives its scope
   root's name, so a node a stopped name wave left at an older name lapses.
   The walk enters each folder once for each pass, so a link cycle ends.
-  A pass that meets a transient failure (a transport error, a 429 or 5xx,
-  an unavailable read, a failed PUT or a store error) keeps the stored
-  cursor, so the next pass repeats its range. The cursor records when the
-  first such pass began the run, and the first pass one day later stores
-  where it stopped, across sessions. A permanent failure (no record, a
-  superseded root, a 4xx refusal, a decode error) moves the cursor on at
-  once and emits `renewalFailed`. A pass whose doomed-name
-  journal does not list renews nothing and stores nothing.
+  A pass that meets a transient failure (a transport error, a 401 after the
+  refresh, a 429 or 5xx, an unavailable read, a root below its own floor, a
+  failed PUT or a store error) keeps the stored cursor, so the next pass
+  repeats its range. The cursor records the cycle's first keep-back time;
+  one day after it, or when it is ahead of the clock, each pass of the cycle
+  stores where it stopped, across sessions. A permanent failure (no record
+  at any endpoint and none cached, a 403 or other 4xx, a decode error, an
+  acknowledged sequence that does not open) moves the cursor on at once and
+  emits `renewalFailed`. A pass whose doomed-name journal does not list, or
+  holds an entry that does not read or open, renews nothing, stores nothing
+  and emits `renewalFailed` for each owned scope root.
   A move can put a subtree behind the cursor for one cycle, so two
   visits of one name are at most `2 max(T, 7 days) + T` apart, where T is the
-  longest time the owner takes to run `ceil(N / 500)` passes. The window holds
-  when T is at most 19 days; for N = 10 000, that is 20 passes in each 19 days.
+  longest time the owner takes to run `ceil(N / 500)` passes plus at most one
+  day of keep-back. The window holds when T is at most 19 days, so the passes
+  take at most 18 days; for N = 10 000, that is 20 passes in each 18 days.
   The cursor (`renewal-cursor`) holds the path of folder ids from the root, at
   most 64, and at most 256 deferred roots; a folder at depth 64 becomes a
   deferred root. A deferred root cannot carry a bin key, so a binned subtree

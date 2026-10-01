@@ -12,6 +12,7 @@ struct Inner {
     staged: BTreeMap<Vec<u8>, Vec<u8>>,
     fail_queued_ops: bool,
     fail_staged_keys: bool,
+    fail_staged_reads_under: Option<Vec<u8>>,
     fail_remove_op: bool,
     enqueue_budget: Option<u64>,
     staged_write_budget: Option<Arm>,
@@ -31,6 +32,7 @@ impl Default for Inner {
             staged: BTreeMap::new(),
             fail_queued_ops: false,
             fail_staged_keys: false,
+            fail_staged_reads_under: None,
             fail_remove_op: false,
             enqueue_budget: None,
             staged_write_budget: None,
@@ -78,6 +80,18 @@ impl InMemoryStagingStore {
     /// [`fail_staged_keys`](Self::fail_staged_keys).
     pub fn heal_staged_keys(&self) {
         self.inner.lock().expect("lock").fail_staged_keys = false;
+    }
+
+    /// Makes `staged_bytes` return a seam error for every key under `prefix`
+    /// until [`heal_staged_reads`](Self::heal_staged_reads).
+    pub fn fail_staged_reads_under(&self, prefix: &[u8]) {
+        self.inner.lock().expect("lock").fail_staged_reads_under = Some(prefix.to_vec());
+    }
+
+    /// Reads every staged key again after
+    /// [`fail_staged_reads_under`](Self::fail_staged_reads_under).
+    pub fn heal_staged_reads(&self) {
+        self.inner.lock().expect("lock").fail_staged_reads_under = None;
     }
 
     /// Makes `remove_op` return a seam error without dropping the record, so
@@ -283,13 +297,15 @@ impl StagingStore for InMemoryStagingStore {
     }
 
     async fn staged_bytes(&self, staging_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
-        Ok(self
-            .inner
-            .lock()
-            .expect("lock")
-            .staged
-            .get(staging_key)
-            .cloned())
+        let inner = self.inner.lock().expect("lock");
+        if inner
+            .fail_staged_reads_under
+            .as_ref()
+            .is_some_and(|prefix| staging_key.starts_with(prefix))
+        {
+            return Err(SeamError::new("injected staged_bytes failure"));
+        }
+        Ok(inner.staged.get(staging_key).cloned())
     }
 
     async fn remove_staged_bytes(&self, staging_key: &[u8]) -> SeamResult<()> {

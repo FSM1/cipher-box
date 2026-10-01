@@ -344,6 +344,14 @@ struct LaggingAnchor {
     history_links: Vec<SignedSealed>,
 }
 
+/// What [`resolve_child_record`] found.
+pub(crate) enum ChildRecord {
+    /// The adopted body, and the record bytes it admitted.
+    Admitted(Adopted, Vec<u8>),
+    /// The endpoints agree the name holds no record, and none is cached.
+    Absent,
+}
+
 /// Why a child-record resolve produced no adopted body.
 pub(crate) enum ChildResolveError {
     /// No reachable source and no cached record — availability staleness.
@@ -375,12 +383,16 @@ where
     H: Http,
     F: FloorStore,
 {
-    resolve_child_record(transport, snapshot_cache, adopter, name, scope_root, mode)
-        .await
-        .map(|(adopted, _)| adopted)
+    match resolve_child_record(transport, snapshot_cache, adopter, name, scope_root, mode).await? {
+        ChildRecord::Admitted(adopted, _) => Ok(adopted),
+        ChildRecord::Absent => Err(ChildResolveError::Unavailable(NO_RECORD.to_owned())),
+    }
 }
 
-/// [`resolve_child`], with the record bytes it admitted.
+const NO_RECORD: &str = "no record source reachable and no cached record";
+
+/// [`resolve_child`], with the record bytes it admitted, and a name the
+/// endpoints agree holds no record kept apart from an unreachable one.
 pub(crate) async fn resolve_child_record<T, S, H, F>(
     transport: &T,
     snapshot_cache: &S,
@@ -388,7 +400,7 @@ pub(crate) async fn resolve_child_record<T, S, H, F>(
     name: &IpnsName,
     scope_root: Option<&IpnsName>,
     mode: ResolveMode,
-) -> Result<(Adopted, Vec<u8>), ChildResolveError>
+) -> Result<ChildRecord, ChildResolveError>
 where
     T: RecordTransport,
     S: SnapshotCache,
@@ -411,14 +423,14 @@ where
             epoch,
         )
         .await
-        .map(|adopted| (adopted, record_bytes.to_vec()))
+        .map(|adopted| ChildRecord::Admitted(adopted, record_bytes.to_vec()))
     };
     let (record_bytes, current) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
             let (_, bytes) = gated.held_record.ok_or_else(|| {
                 ChildResolveError::Unavailable("the adopted record's bytes are not held".to_owned())
             })?;
-            return Ok((adopted, bytes));
+            return Ok(ChildRecord::Admitted(adopted, bytes));
         }
         ResolveOutcome::TrustViolation(rejection) => {
             let fetched = adopter.assembled_record_bytes(name);
@@ -429,14 +441,11 @@ where
             };
         }
         ResolveOutcome::Current { record_bytes } => (record_bytes, true),
-        ResolveOutcome::NoUpdate => {
-            let cached = resolved.last_known_good.ok_or_else(|| {
-                ChildResolveError::Unavailable(
-                    "no record source reachable and no cached record".to_owned(),
-                )
-            })?;
-            (cached, false)
-        }
+        ResolveOutcome::NoUpdate => match resolved.last_known_good {
+            Some(cached) => (cached, false),
+            None if gated.absent => return Ok(ChildRecord::Absent),
+            None => return Err(ChildResolveError::Unavailable(NO_RECORD.to_owned())),
+        },
     };
     let adopted = match adopter.open_at_floor(name, &record_bytes).await {
         Ok(adopted) => adopted,
@@ -453,7 +462,7 @@ where
             .await
             .map_err(unavailable)?;
     }
-    Ok((adopted, record_bytes))
+    Ok(ChildRecord::Admitted(adopted, record_bytes))
 }
 
 /// The record's epoch when the gate refused it for lagging the read-epoch

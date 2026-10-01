@@ -5779,10 +5779,10 @@ where {
                             "the renewal walk's adoption gate refused the record",
                         );
                     }
-                    for routing_key in report.gone {
+                    for (routing_key, detail) in report.failed {
                         let _ = events.unbounded_send(Event::RenewalFailed {
                             routing_key,
-                            detail: "the scope root holds no record the walk can renew".to_owned(),
+                            detail: detail.to_owned(),
                         });
                     }
                 }

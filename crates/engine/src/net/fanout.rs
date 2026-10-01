@@ -271,8 +271,26 @@ pub(crate) async fn fanout_get_tied<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
 ) -> Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)> {
-    let Scan { best, tied, .. } = scan(transport, name).await;
-    best.map(|(verified, bytes)| (verified, bytes, tied))
+    fanout_get_tied_classified(transport, name).await.0
+}
+
+/// [`fanout_get_tied`], and whether the endpoints agree the name holds no
+/// record when none serves one, under [`VacancyRule::Unanimous`].
+pub(crate) async fn fanout_get_tied_classified<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> (Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)>, bool) {
+    let Scan {
+        best,
+        tied,
+        vacant,
+        failures,
+    } = scan(transport, name).await;
+    let absent = best.is_none() && vacant > 0 && failures.is_empty();
+    (
+        best.map(|(verified, bytes)| (verified, bytes, tied)),
+        absent,
+    )
 }
 
 /// Every endpoint's answer to one fan-out GET, before a caller reads it.

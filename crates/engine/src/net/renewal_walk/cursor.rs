@@ -82,9 +82,9 @@ pub struct DeferredRoot {
 pub struct RenewalCursor {
     /// When the current (or last) cycle began.
     pub cycle_start: UnixMillis,
-    /// When the first pass in an unbroken run of passes that met a transient
-    /// failure kept this cursor back, so the run ends one window after it
-    /// began, across sessions.
+    /// When this cycle's first pass that met a transient failure kept the
+    /// cursor back, so the cycle's keep-back ends one window after it, across
+    /// sessions.
     pub kept_back_since: Option<UnixMillis>,
     /// The root the walk is in, or `None` once the cycle finished.
     pub root: Option<WalkRoot>,

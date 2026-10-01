@@ -20,7 +20,7 @@ use self::cursor::{
     CursorStore, DeferredRoot, MAX_CURSOR_PATH, MAX_DEFERRED_ROOTS, RenewalCursor, WalkRoot,
 };
 use super::REGISTRY_BATCH_MAX;
-use super::child::{ChildAdopter, ChildResolveError, resolve_child_record};
+use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
 use super::eol::{self, renewal_eol_from};
 use super::fanout::{FanoutRecord, MAX_RECORD_BYTES, fanout_get_classified};
 use super::liveness::{EolRenewResult, HeldKey, HeldRecord, HeldRecords, hold_if_unchanged};
@@ -36,7 +36,7 @@ use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, RetireLedger, Scheduler, SnapshotCache,
-    StagingStore,
+    StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::sync::doomed::{journalled_keys, open_reclamation};
@@ -54,12 +54,21 @@ pub const WALK_WINDOW: Duration = Duration::from_secs(60 * DAY);
 /// A new cycle begins no sooner than this after the previous one began.
 pub const CYCLE_HOLD: Duration = Duration::from_secs(7 * DAY);
 
-/// How long a run of passes that meet a transient failure keeps the cursor
-/// back (ADR 0061 D2). A pass in the run stores the cursor it began from, so
-/// the next pass repeats its range; the first pass past the window stores where
-/// it stopped, so a root that stays unavailable does not stall the walk. A
-/// permanent failure moves the cursor on at once.
+/// The most time one cycle keeps the cursor back (ADR 0061 D2). From the
+/// cycle's first pass that meets a transient failure, for one window, a pass
+/// that meets one stores the cursor it began from, so the next pass repeats
+/// its range. After the window, every pass of the cycle stores where it
+/// stopped, so the cycle runs at most one window longer. A permanent failure
+/// moves the cursor on at once.
 pub const KEEP_BACK_WINDOW: Duration = Duration::from_secs(DAY);
+
+/// Why the walk renews no name under an owned scope root this pass.
+const JOURNAL_UNLISTED: &str =
+    "the doomed-name journal does not list, so the renewal walk renews nothing";
+/// Why the walk does not renew a name the endpoints agree holds no record.
+const NO_RECORD: &str = "the name holds no record the renewal walk can renew";
+/// Why the walk does not renew a name whose acknowledged sequence is unreadable.
+const ACK_UNREADABLE: &str = "the retire ledger's acknowledged sequence does not open";
 
 /// The most poll cadences the liveness loop waits for the session's first
 /// boundary walk before it skips the renewal walk for that pass. A walk that
@@ -123,8 +132,8 @@ pub(crate) struct WalkReport {
     pub(crate) renewals: Vec<EolRenewResult>,
     /// The names whose record the adoption gate refused.
     pub(crate) rejected: Vec<String>,
-    /// The owned scope roots that hold no record the walk can renew.
-    pub(crate) gone: Vec<String>,
+    /// The names the walk cannot renew, each with why.
+    pub(crate) failed: Vec<(String, &'static str)>,
 }
 
 /// A scope's material as this pass admitted its root.
@@ -300,7 +309,13 @@ where
         }
         let owner_tag = owner_tag(self.enc_secret);
         let Some(doomed) = self.doomed_names(&owner_tag).await else {
-            return WalkReport::default();
+            return WalkReport {
+                failed: scopes
+                    .iter()
+                    .map(|scope| (scope.name.as_str().to_owned(), JOURNAL_UNLISTED))
+                    .collect(),
+                ..WalkReport::default()
+            };
         };
         let mut pass = Pass {
             cursor: stored.unwrap_or_else(|| RenewalCursor::starting(now)),
@@ -340,19 +355,7 @@ where
             }
         }
         self.flush(&mut pass).await;
-        let since = origin.kept_back_since.unwrap_or(now);
-        let cursor = if pass.kept_back && !now.reached(Some(since.saturating_add(KEEP_BACK_WINDOW)))
-        {
-            RenewalCursor {
-                kept_back_since: Some(since),
-                ..origin
-            }
-        } else {
-            RenewalCursor {
-                kept_back_since: None,
-                ..pass.cursor
-            }
-        };
+        let cursor = cursor_to_store(origin, pass.cursor, pass.kept_back, now);
         // A cursor that does not store only costs work: the next pass starts
         // the cycle again.
         let _ = store.save(&cursor).await;
@@ -360,23 +363,16 @@ where
     }
 
     /// The names every doomed-name journal entry of this owner holds, or `None`
-    /// when the store does not list. An entry that does not open names nothing
-    /// here: renewing a doomed name leaks a registration, where a walk that
-    /// renews nothing lets the vault lapse.
+    /// when the store does not list or an entry does not read or open: renewing
+    /// a doomed name leaks a registration.
     async fn doomed_names(&self, owner_tag: &[u8; 32]) -> Option<BTreeSet<String>> {
         let keys = self.staging.staged_keys().await.ok()?;
         let mut doomed = BTreeSet::new();
         for (key, _, _) in journalled_keys(owner_tag, &keys) {
-            let Some(reclamation) = self
-                .staging
-                .staged_bytes(&key)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|blob| open_reclamation(self.seal, &blob))
-            else {
+            let Some(blob) = self.staging.staged_bytes(&key).await.ok()? else {
                 continue;
             };
+            let reclamation = open_reclamation(self.seal, &blob)?;
             doomed.extend(reclamation.names());
             doomed.extend(reclamation.quarantined.into_iter().map(|held| held.name));
         }
@@ -428,7 +424,9 @@ where
                             None
                         }
                         Err(ScopeRootAdmission::Gone) => {
-                            pass.report.gone.push(scope.name.as_str().to_owned());
+                            pass.report
+                                .failed
+                                .push((scope.name.as_str().to_owned(), NO_RECORD));
                             None
                         }
                     }
@@ -639,7 +637,7 @@ where
         )
         .await
         {
-            Ok((adopted, bytes)) => {
+            Ok(ChildRecord::Admitted(adopted, bytes)) => {
                 self.consider(
                     pass,
                     plane.scope_id,
@@ -650,6 +648,12 @@ where
                 )
                 .await;
                 Some(adopted.read_body)
+            }
+            Ok(ChildRecord::Absent) => {
+                pass.report
+                    .failed
+                    .push((name.as_str().to_owned(), NO_RECORD));
+                None
             }
             Err(ChildResolveError::Gate(GateError::Rejected(rejection)))
                 if in_bin && rejection.stage == GateStage::GrantSection =>
@@ -724,7 +728,11 @@ where
         match ledger.acknowledged(&pass.owner_tag, node_id, key).await {
             Ok(Acknowledged::Nothing) => {}
             Ok(Acknowledged::At(acked)) if acked <= sequence => {}
-            Ok(Acknowledged::At(_) | Acknowledged::Unreadable) => return,
+            Ok(Acknowledged::At(_)) => return,
+            Ok(Acknowledged::Unreadable) => {
+                pass.report.failed.push((key.to_owned(), ACK_UNREADABLE));
+                return;
+            }
             Err(_) => {
                 pass.kept_back = true;
                 return;
@@ -848,19 +856,40 @@ where
     }
 }
 
-/// Store where the walk stops: the path of folders down to the deepest one it
-/// is listing, capped at the depth-cap folder, whose subtree a later pass
-/// starts again.
-/// Whether a refused registration can pass: the API was not reached, or it
-/// answered 429 or 5xx.
+/// The cursor a pass stores (ADR 0061 D2): the one it began from while a
+/// visit met a transient failure and the cycle's [`KEEP_BACK_WINDOW`] is open,
+/// else the one it `walked` to. The window opens at the cycle's first
+/// keep-back, and a start ahead of the clock ends it.
+fn cursor_to_store(
+    origin: RenewalCursor,
+    walked: RenewalCursor,
+    kept_back: bool,
+    now: UnixMillis,
+) -> RenewalCursor {
+    if !kept_back {
+        return walked;
+    }
+    match origin.kept_back_since {
+        None => RenewalCursor {
+            kept_back_since: Some(now),
+            ..origin
+        },
+        Some(since)
+            if since <= now && !now.reached(Some(since.saturating_add(KEEP_BACK_WINDOW))) =>
+        {
+            origin
+        }
+        Some(_) => walked,
+    }
+}
+
+/// Whether a refused registration can pass: the API was not reached, it
+/// answered 429 or 5xx, or the session's refresh failed.
 fn transient_registration(error: &ApiError) -> bool {
     match error {
-        ApiError::Transport(_) => true,
+        ApiError::Transport(_) | ApiError::Unauthorized => true,
         ApiError::Status { status, .. } => *status == 429 || *status >= 500,
-        ApiError::Unauthorized
-        | ApiError::Forbidden
-        | ApiError::Decode(_)
-        | ApiError::MalformedContentCid => false,
+        ApiError::Forbidden | ApiError::Decode(_) | ApiError::MalformedContentCid => false,
     }
 }
 
@@ -888,6 +917,9 @@ fn transient_renewal(outcome: &Result<Option<PublishOutcome>, PublishError>) -> 
     }
 }
 
+/// Store where the walk stops: the path of folders down to the deepest one it
+/// is listing, capped at the depth-cap folder, whose subtree a later pass
+/// starts again.
 fn park(cursor: &mut RenewalCursor, frames: &[Frame]) {
     cursor.path = frames
         .iter()
@@ -922,6 +954,79 @@ mod tests {
                 write_scope_seed: Some(Zeroizing::new(current)),
             },
         }
+    }
+
+    const HOUR_MS: u64 = 60 * 60 * 1000;
+
+    fn cursor_at(root: u8, kept_back_since: Option<u64>) -> RenewalCursor {
+        RenewalCursor {
+            root: Some(WalkRoot::Scope([root; 16])),
+            kept_back_since: kept_back_since.map(UnixMillis),
+            ..RenewalCursor::starting(UnixMillis(0))
+        }
+    }
+
+    /// The window is open up to one millisecond before 24 hours after the
+    /// cycle's first keep-back, and closed at 24 hours.
+    #[test]
+    fn the_keep_back_window_closes_at_exactly_one_day() {
+        let since = 5 * HOUR_MS;
+        let end = since + 24 * HOUR_MS;
+        let (origin, walked) = (cursor_at(1, Some(since)), cursor_at(2, Some(since)));
+        let open = cursor_to_store(origin.clone(), walked.clone(), true, UnixMillis(end - 1));
+        assert_eq!(open, origin, "one millisecond before the end");
+        let closed = cursor_to_store(origin, walked.clone(), true, UnixMillis(end));
+        assert_eq!(closed, walked, "at the end");
+    }
+
+    /// A first keep-back time ahead of the clock ends the window.
+    #[test]
+    fn a_keep_back_time_ahead_of_the_clock_ends_the_window() {
+        let (origin, walked) = (
+            cursor_at(1, Some(10 * HOUR_MS)),
+            cursor_at(2, Some(10 * HOUR_MS)),
+        );
+        let stored = cursor_to_store(origin, walked.clone(), true, UnixMillis(9 * HOUR_MS));
+        assert_eq!(stored, walked);
+    }
+
+    /// A cycle keeps the cursor back for one window at most: a pass between two
+    /// runs of transient failures does not open a second window.
+    #[test]
+    fn a_cycle_keeps_the_cursor_back_for_one_window_at_most() {
+        let first = cursor_to_store(
+            cursor_at(1, None),
+            cursor_at(2, None),
+            true,
+            UnixMillis(HOUR_MS),
+        );
+        assert_eq!(
+            first,
+            cursor_at(1, Some(HOUR_MS)),
+            "the first keep-back opens the window"
+        );
+        let clear = cursor_to_store(
+            first,
+            cursor_at(3, Some(HOUR_MS)),
+            false,
+            UnixMillis(2 * HOUR_MS),
+        );
+        assert_eq!(
+            clear,
+            cursor_at(3, Some(HOUR_MS)),
+            "a clean pass moves on and keeps the time"
+        );
+        let late = cursor_to_store(
+            clear,
+            cursor_at(4, Some(HOUR_MS)),
+            true,
+            UnixMillis(26 * HOUR_MS),
+        );
+        assert_eq!(
+            late,
+            cursor_at(4, Some(HOUR_MS)),
+            "no second window in the cycle"
+        );
     }
 
     /// A node signs only under the seed that derives its scope root's name; a
