@@ -1030,15 +1030,19 @@ id, the cut epoch, and the steps still owed in command order (a read cut, a
 write cut, an interior move, the delivery of a write grant). The entry holds no
 seed; a re-drive recovers an in-flight write seed from the published records.
 A refused write stops the command with `Err` before any publish. A stored
-record that does not open is never written over: every write refuses, and the
-renewal walk renews nothing, until it opens. The entry
+record that does not open is never written over: every write refuses until it
+opens, and meanwhile the renewal walk renews as if no work were owed, signing
+only names the current seed derives, and reports the record on each pass. The entry
 advances as each step lands, and clears after the cut-epoch floor record, the
 write-epoch floor raise and the index re-point. Each sync pass re-drives every
 entry after the drain, and the first pass of a session does so before the
 renewal walk. After its first publish, a command whose step stops returns
 `Ok`; the engine emits `rotationWorkOwed` at once and on each pass while the
 entry stands, with the class of the stop (`availability`, `capability` or
-`trust`), and the same command on that scope re-drives the entry. A
+`trust`), and the same command on that scope re-drives the entry. A re-drive
+that finds the work can never land, because the cut set never published or the
+recipient left the contact book, drops the entry and emits
+`rotationWorkAbandoned` once. A
 relocation into another scope, a delete, a purge, or a restore into another
 scope that takes a folder with an owed interior move out of the scope it
 left is refused, retryably, until the move lands; a crossing the queue

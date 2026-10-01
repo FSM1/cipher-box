@@ -11121,6 +11121,57 @@ fn the_renewal_walk_skips_a_scope_with_owed_work() {
     );
 }
 
+/// A stored owed record that does not open skips no scope: the walk renews
+/// every name as if no work were owed, and reports the record on each pass.
+#[test]
+fn the_renewal_walk_renews_past_an_owed_record_that_does_not_open() {
+    let mut fx = GrantScenario::new();
+    let recipient = recipient_identity().verifying_key().to_sec1();
+    fx.world.mailbox_hub.forget_recipient(&recipient);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the delivery is owed");
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let inner_before = sequence_at(&fx.world, &write_name(inner));
+    let outer_before = sequence_at(&fx.world, &write_name(outer));
+    let key = owed_rotation_key(&kdf::enc_subkey(&SECRET));
+    block_on(
+        fx.owner_device
+            .staging_store
+            .put_staged_bytes(&key, b"not an owed rotation record"),
+    )
+    .expect("stage the bytes");
+
+    let (world, mut events, _later) = restart_later_on_the_same_device(fx);
+
+    assert_eq!(
+        sequence_at(&world, &write_name(outer)),
+        outer_before + 1,
+        "the vault root's scope renews"
+    );
+    assert_eq!(
+        sequence_at(&world, &write_name(inner)),
+        inner_before + 1,
+        "and so does the scope the record cannot say is owed"
+    );
+    assert!(
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::RenewalFailed { detail, .. } if detail.contains("owed rotation record")
+        )),
+        "the host is told the record does not read"
+    );
+}
+
 /// ADR 0063 consequence 8: a device that holds no owed entry meets a scope
 /// root whose name the write seed it holds does not derive. The walk tells
 /// the owner the write cut did not finish.
@@ -11148,6 +11199,64 @@ fn the_walk_reports_a_write_cut_that_did_not_finish() {
         unfinished,
         vec![folder],
         "the walk reports the unfinished write cut at its scope root"
+    );
+}
+
+/// ADR 0061 D4 holds per name, not through the owed skip: with an owed record
+/// that does not open, the walk renews the granted scope root and still signs
+/// nothing at a name only the superseded seed derives.
+#[test]
+fn an_unopenable_owed_record_signs_no_name_the_current_seed_does_not_derive() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let mid = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "mid");
+    let leaf = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, mid, "leaf");
+    let material = block_on(fx.engine.walked_scope_material(fx.folder))
+        .expect("the walk resolved the granted scope");
+    let scope_root = derive_write_name(&material.write_scope_seed, &fx.folder.0);
+    let current_leaf = derive_write_name(&material.write_scope_seed, &leaf.0);
+    let superseded = superseded_write_seed(
+        &fx.world,
+        &fx.blocks,
+        fx.folder,
+        &fx.granted_scope_repoint(),
+        &material.write_scope_seed,
+    );
+    let (old_leaf, _) = publish_at_seed_name(&fx.world, &superseded, leaf, &current_leaf);
+    name_child_at(
+        &fx.world,
+        &fx.blocks,
+        &material.write_scope_seed,
+        &material.read_scope_seed,
+        mid,
+        leaf,
+        &old_leaf,
+    );
+    let leaf_before = sequence_at(&fx.world, &old_leaf);
+    let root_before = sequence_at(&fx.world, &scope_root);
+    let key = owed_rotation_key(&kdf::enc_subkey(&SECRET));
+
+    let (world, _events, _later) = restart_later_with(fx, |device| {
+        block_on(
+            device
+                .staging_store
+                .put_staged_bytes(&key, b"not an owed rotation record"),
+        )
+        .expect("stage the bytes");
+    });
+
+    assert_eq!(
+        sequence_at(&world, &scope_root),
+        root_before + 1,
+        "the walk renews the granted scope root"
+    );
+    assert_eq!(
+        sequence_at(&world, &old_leaf),
+        leaf_before,
+        "and signs nothing under the superseded seed"
     );
 }
 

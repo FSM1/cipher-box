@@ -73,9 +73,9 @@ const CURSOR_UNREAD: &str = "the renewal cursor does not read, so the renewal wa
 const NO_RECORD: &str = "the name holds no record the renewal walk can renew";
 /// Why the walk does not renew a name whose acknowledged sequence is unreadable.
 const ACK_UNREADABLE: &str = "the retire ledger's acknowledged sequence does not open";
-/// Why the walk renews nothing this pass.
+/// Why the walk renews every name as if no scope had owed work this pass.
 const OWED_UNREAD: &str =
-    "the owed rotation record does not read, so the renewal walk renews nothing";
+    "the owed rotation record does not read, so the renewal walk renews as if no work were owed";
 
 /// The most poll cadences the liveness loop waits for the session's first
 /// boundary walk before it skips the renewal walk for that pass. A walk that
@@ -144,7 +144,8 @@ pub(crate) struct WalkReport {
     pub(crate) renewals: Vec<EolRenewResult>,
     /// The names whose record the adoption gate refused.
     pub(crate) rejected: Vec<String>,
-    /// The names the walk cannot renew, each with why.
+    /// The names the walk cannot renew, or renews without a record it does
+    /// not read, each with why.
     pub(crate) failed: Vec<(String, &'static str)>,
     /// The owned scope roots with a write cut that did not finish and no owed
     /// entry on this device (ADR 0063 consequence 8).
@@ -359,14 +360,26 @@ where
         let Some(doomed) = self.doomed_names(&owner_tag).await else {
             return stalled(scopes, JOURNAL_UNREADABLE);
         };
-        let Ok(owed) = owed else {
-            return stalled(scopes, OWED_UNREAD);
+        // A record that does not read skips no scope: a lapsed name loses the
+        // data under it, and `signer_for` signs only a name the current seed
+        // derives (ADR 0061 D4).
+        let (owed, owed_unread) = match owed {
+            Ok(owed) => (owed, false),
+            Err(_) => (BTreeSet::new(), true),
         };
         let report = WalkReport {
             failed: scopes
                 .iter()
-                .filter(|scope| doomed.unreadable.contains(&scope.scope_id))
-                .map(|scope| (scope.name.as_str().to_owned(), JOURNAL_UNREADABLE))
+                .filter_map(|scope| {
+                    if doomed.unreadable.contains(&scope.scope_id) {
+                        Some(JOURNAL_UNREADABLE)
+                    } else if owed_unread {
+                        Some(OWED_UNREAD)
+                    } else {
+                        None
+                    }
+                    .map(|detail| (scope.name.as_str().to_owned(), detail))
+                })
                 .collect(),
             underived,
             ..WalkReport::default()
