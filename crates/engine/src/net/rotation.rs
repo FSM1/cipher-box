@@ -2277,24 +2277,36 @@ where
     E: Entropy,
 {
     /// Author `record`'s envelope over `current` — the record it replaces — dry
-    /// run it, and CAS-publish it register-first at `name`.
+    /// run it, and CAS-publish it register-first at the name `current` was
+    /// read at.
     ///
     /// A landed publish hands back the base the record it just authored
     /// republishes from: the read body and the preserved fields are carried
-    /// forward byte for byte, so the record now standing at `name` has the same
-    /// ones, and the CAS bound rises to the sequence this publish spent
+    /// forward byte for byte, so the record now standing at the name has the
+    /// same ones, and the CAS bound rises to the sequence this publish spent
     /// ([`GatedRoots`]).
     async fn run(
         &self,
-        name: &IpnsName,
         record: &ResealedScopeRoot,
         override_seed: &[u8; SECRET_LEN],
         current: RepublishBase,
     ) -> Result<RepublishBase, RotationPublishError> {
+        let name = &current.observed.name().clone();
         // The write floor the signature clears must still hold when the record
         // lands ([`floor::WriteEpochLease`]).
         let _write_lease = floor::acquire_write_epoch_lease(&record.scope_id)
             .ok_or(RotationPublishError::NotPublished)?;
+        // Refused before the head upload and the carried-cut report, which no
+        // refusal can take back (ADR 0041 D1); the signature checks again.
+        PublishBar {
+            scope_id: record.scope_id,
+            read_epoch: record.read_epoch,
+            write_epoch: Some(record.write_epoch),
+            cut_epoch: Some(record.section.commitment.cut_epoch),
+        }
+        .refuse_below(self.floors)
+        .await
+        .map_err(|error| record_publish_verdict(RecordPublishError::Publish(error)))?;
 
         let node_seed = kdf::node_seed(override_seed, &record.scope_id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
@@ -2416,7 +2428,7 @@ where
         };
         let published = self
             .root_publish()
-            .run(&name, record, &override_seed, current)
+            .run(record, &override_seed, current)
             .await?;
         // Only on a landed publish: a race the record plane refused leaves the
         // slot empty, so the next publish re-resolves.
@@ -2473,7 +2485,7 @@ where
             .await
             .map_err(|_| RotationPublishError::NotPublished)?;
         self.root_publish()
-            .run(&name, record, &override_seed, base)
+            .run(record, &override_seed, base)
             .await?;
         Ok(children)
     }
@@ -2868,7 +2880,7 @@ where
             .map_err(|_| RotationPublishError::Rejected)?;
         let floors = self.granted_floors(granted);
         self.root_publish(&floors)
-            .run(&name, record, &override_seed, current)
+            .run(record, &override_seed, current)
             .await?;
         Ok(())
     }
@@ -11109,7 +11121,7 @@ mod tests {
         }
 
         /// Raise the cut-epoch floor to `cut_epoch` on the `nth` write-epoch
-        /// floor read from now — `check_publishable` reads the write bar
+        /// floor read from now — `PublishBar::read_floors` reads the write bar
         /// immediately before the cut bar, so `nth = 2` lands the raise inside
         /// its own window.
         fn cut_on_write_read(&self, nth: usize, cut_epoch: u64) {
@@ -11193,7 +11205,7 @@ mod tests {
         assert!(published_at(&harness, &moved.new_name));
     }
 
-    /// The owner arm of the same window, at `check_publishable`.
+    /// The owner arm of the same window, at the root publish.
     #[test]
     fn a_consult_inside_the_owner_publish_window_cannot_move_the_floor() {
         let (harness, _root, cut) = staged_cut();
@@ -11256,6 +11268,37 @@ mod tests {
             1,
             "the staged record still stands at its name"
         );
+    }
+
+    /// The upload and the carried-cut report cannot be taken back, so a floor
+    /// raised after the gated read refuses the run before either.
+    #[test]
+    fn a_floor_raised_before_the_root_publish_refuses_with_no_upload() {
+        let (harness, root, cut) = staged_cut();
+        let floors = ConsultingFloors::wrapping(&harness.floors);
+        floors.cut_on_write_read(2, cut.section.commitment.cut_epoch + 1);
+
+        assert_eq!(
+            block_on(
+                harness
+                    .net_rooted_with_floors(
+                        RotationAncestry::rooted_at(SCOPE, &OWNER_ROOT_SCOPE_SEED, &[]),
+                        &floors,
+                    )
+                    .publish_scope_root(&cut)
+            ),
+            Err(RotationPublishError::Rejected),
+        );
+        assert!(floors.fired.get(), "the raise must land before the run");
+        assert!(
+            !harness
+                .http
+                .requests()
+                .iter()
+                .any(|request| request.url.contains("/content/upload")),
+            "no head block was uploaded",
+        );
+        assert_eq!(published_head(&harness, &root.name).0.sequence, 1);
     }
 
     #[test]
@@ -11378,6 +11421,39 @@ mod tests {
         });
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
         root
+    }
+
+    /// A resume takes its write epoch from the owner-signed re-point, so a
+    /// device with no write floor reads it as zero and the root lands: a
+    /// floor any reader holds is at or below the epoch the re-point vouches.
+    #[test]
+    fn a_resumed_wave_with_no_write_floor_republishes_the_root() {
+        let harness = Harness::plain();
+        let root = staged_childless_root(&harness);
+        let owner = owner_identity();
+        let fresh_device = InMemoryFloorStore::default();
+        let net = wave_with(
+            &harness,
+            &owner,
+            &root.name,
+            &root.grant_section.commitment,
+            &fresh_device,
+            &harness.entropy,
+        );
+        let resumed = ResumedRoot {
+            name: root.name.clone(),
+            write_epoch: OWNER_ROOT_EPOCH,
+        };
+        block_on(net.resolve_node(&SCOPE, Some(&resumed))).expect("the resumed root resolves");
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&fresh_device, &SCOPE)).unwrap(),
+            None,
+            "the resume read no write floor"
+        );
+
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("the root lands");
+        assert!(published_at(&harness, &moved.new_name));
     }
 
     #[test]

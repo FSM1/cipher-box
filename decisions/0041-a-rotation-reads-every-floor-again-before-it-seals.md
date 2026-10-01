@@ -122,7 +122,7 @@ only evidence the step rests on. A refused retire leaves every old name live. Th
 FSM1/cipher-box#1307; this ADR records it.
 
 **D4 — The owner re-seal reads the cut-epoch floor under the write-epoch lease.**
-`RootPublish::check_publishable` in `crates/engine/src/net/rotation.rs` reads the read-epoch, the
+`PublishBar::refuse_below` in `crates/engine/src/net/publish.rs` reads the read-epoch, the
 write-epoch and the cut-epoch floors while `RootPublish::run` holds the write-epoch lease, and
 refuses release-active when `record.section.commitment.cut_epoch < cut_floor`, with the same strict
 `<` as `refuse_stale_cut_epoch` in core. Every production `ScopeRootPublisher` reaches it: the owner
@@ -314,7 +314,7 @@ device, is not seen. The wave can then sign a root at a cut epoch that its own s
 a higher sequence than the post-cut record: the defect FSM1/cipher-box#1750 closed on the owner
 re-seal. D1 covers this arm, and the code lags it. No test covers it. FSM1/cipher-box#2016 tracks
 the fix. FSM1/cipher-box#2063 closed this on 2026-09-27: every scope-root signer calls one gate check,
-`refuse_below_cut_floor`.
+`PublishBar`.
 
 **E2 — The lease holds the write-epoch floor alone.** D4 reads the cut-epoch and read-epoch floors
 under the write-epoch lease, but the lease does not stop a raise of either. The regression test

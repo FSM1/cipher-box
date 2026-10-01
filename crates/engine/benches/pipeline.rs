@@ -21,6 +21,7 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{PreservedFields, ReadBody};
 
 use cipherbox_engine::gate::{Adopted, Candidate, GateError, ReaderContext, adopt};
+use cipherbox_engine::net::author::ENVELOPE_V;
 use cipherbox_engine::net::{
     AdoptOutcome, Adopter, GatePass, Observed, PublishRequest, publish, resolve,
 };
@@ -55,6 +56,11 @@ const PAYLOAD_SIZES: [usize; 3] = [64 * 1024, 1024 * 1024, 4 * 1024 * 1024];
 /// Samples per framing point: criterion's default 100 cannot fit in its
 /// measurement window once an iteration costs milliseconds.
 const FRAMING_SAMPLES: usize = 20;
+
+/// A publish basis at `name` with no record read there.
+fn fresh(name: &IpnsName) -> Observed {
+    Observed::gated(name, 0, ENVELOPE_V).expect("this build's envelope version")
+}
 
 fn payload(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i % 251) as u8).collect()
@@ -204,7 +210,7 @@ fn bench_publish(c: &mut Criterion) {
     let signer = kdf::ipns_keypair(&[0x99; 32]);
     let name = IpnsName::from_public_key(&signer.verifying_key());
     let request = PublishRequest {
-        observed: &Observed::unread(&name),
+        observed: &fresh(&name),
         signer: &signer,
         head_cid: "bafybenchhead".into(),
         content_cids: vec!["bafybenchleaf".into()],

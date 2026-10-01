@@ -110,7 +110,7 @@ must clear.
 - `net/child.rs` `adopt` and the at-floor re-open: `floor::check` with the envelope epoch.
 - `sync/drain.rs` root load: `floor::check` at the floor.
 - `net/record_publish.rs` `preflight`: the envelope epoch must equal the head binding, and
-  the `EpochBar` is the encode side of stage 5.
+  the `PublishBar` is the encode side of stage 5.
 - `grants/revocation.rs` `classify`: `record_epoch < epoch_floor` is `EpochLag`, never a
   revocation and never an authorship verdict.
 

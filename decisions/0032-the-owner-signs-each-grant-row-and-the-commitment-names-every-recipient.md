@@ -388,7 +388,7 @@ the other's set. The publish plane settles that race.
 **E4 — One owner publish path signs a commitment with no cut-floor read.** The cut-epoch bar
 of D6 depends on the reader's own floor, not on the bytes, so `net/author.rs::check_scope_root`
 has no copy of it. The owner re-seal publish does read the floor: under the write-epoch lease,
-`RootPublish::check_publishable` in `net/rotation.rs` refuses release-active when the re-sealed
+`RootPublish::run` in `net/rotation.rs` refuses release-active when the re-sealed
 commitment's `cutEpoch` is below the durable cut-epoch floor (FSM1/cipher-box#1750, 2026-09-05).
 One path signs a commitment and reads no cut-epoch floor: the root arm of the write wave
 (`WriteWaveNet::publish_moved` in `net/rotation.rs`), which reads only the read-epoch and

@@ -28,6 +28,11 @@ use cipherbox_engine::net::{
 use cipherbox_engine::seams::{FloorStore, HttpResponse, RecordTransport, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, block_on};
 
+/// A publish basis at `name` with no record read there.
+fn fresh(name: &IpnsName) -> Observed {
+    Observed::gated(name, 0, ENVELOPE_V).expect("this build's envelope version")
+}
+
 fn pointer_name() -> IpnsName {
     IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5d; 32]).verifying_key())
 }
@@ -188,7 +193,7 @@ fn a_record_below_any_floor_of_its_bar_is_refused_at_the_signature() {
         let signer = Ed25519Signer::from_seed([seed; 32]);
         let name = name_of(&signer);
         assert_eq!(
-            publish_under(&device, &signer, &Observed::unread(&name), Some(bar)),
+            publish_under(&device, &signer, &fresh(&name), Some(bar)),
             Err(PublishError::BelowBar { floor, at, epoch }),
         );
         assert!(nothing_reached_the_transport(&device, &name));
@@ -196,12 +201,7 @@ fn a_record_below_any_floor_of_its_bar_is_refused_at_the_signature() {
     let signer = Ed25519Signer::from_seed([0x44; 32]);
     let name = name_of(&signer);
     assert_eq!(
-        publish_under(
-            &device,
-            &signer,
-            &Observed::unread(&name),
-            Some(root_bar(5, 4, 3))
-        ),
+        publish_under(&device, &signer, &fresh(&name), Some(root_bar(5, 4, 3))),
         Ok(PublishOutcome::Published { sequence: 1 }),
     );
 }

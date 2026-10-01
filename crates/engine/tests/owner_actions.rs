@@ -654,13 +654,14 @@ impl GrantScenario {
         });
     }
 
-    /// Run `share` with this folder's cut-epoch bar unreadable, then heal it.
+    /// Run `share` with this folder's cut-epoch bar unreadable past the two
+    /// reads its scope-root publish makes, then heal it.
     fn with_a_failing_cut(&mut self, share: impl FnOnce(&mut Self)) {
         let mut cut_epoch_floor = self.folder.0.to_vec();
         cut_epoch_floor.extend_from_slice(b"/cut-epoch");
         self.owner_device
             .floor_store
-            .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 1);
+            .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 2);
         share(self);
         self.owner_device.floor_store.heal_floors();
     }

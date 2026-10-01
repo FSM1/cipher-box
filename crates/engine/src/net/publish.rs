@@ -134,9 +134,8 @@ pub struct Observed {
 }
 
 impl Observed {
-    /// An author that read no record at `name`: the durable floor alone bars
-    /// the sequence.
-    pub fn unread(name: &IpnsName) -> Self {
+    /// No read at `name`, only for a body authored fresh or one its source read version-checked.
+    pub(crate) fn unread(name: &IpnsName) -> Self {
         Self {
             name: name.clone(),
             sequence: 0,
