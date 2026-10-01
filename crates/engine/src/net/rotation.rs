@@ -11129,8 +11129,8 @@ mod tests {
 
         /// Raise the cut-epoch floor to `cut_epoch` on the `nth` write-epoch
         /// floor read from now — `PublishBar::read_floors` reads the write bar
-        /// immediately before the cut bar, so `nth = 2` lands the raise inside
-        /// its own window.
+        /// immediately before the cut bar, so the raise lands inside the window
+        /// of the read it fires on.
         fn cut_on_write_read(&self, nth: usize, cut_epoch: u64) {
             self.cut_countdown.set(nth);
             self.cut.set(Some(cut_epoch));
@@ -11252,7 +11252,9 @@ mod tests {
     fn a_cut_floor_rise_inside_the_owner_publish_window_refuses_the_re_seal() {
         let (harness, root, cut) = staged_cut();
         let floors = ConsultingFloors::wrapping(&harness.floors);
-        floors.cut_on_write_read(2, 1);
+        // The third write-floor read is the signature's, after the early
+        // refusal passed and the head uploaded.
+        floors.cut_on_write_read(3, 1);
 
         assert_eq!(
             block_on(
@@ -11269,6 +11271,14 @@ mod tests {
         assert!(
             floors.fired.get(),
             "the raise must reach the guard's window"
+        );
+        assert!(
+            harness
+                .http
+                .requests()
+                .iter()
+                .any(|request| request.url.contains("/content/upload")),
+            "the head uploaded before the signature refused",
         );
         assert_eq!(
             published_head(&harness, &root.name).0.sequence,

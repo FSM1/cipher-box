@@ -314,7 +314,7 @@ device, is not seen. The wave can then sign a root at a cut epoch that its own s
 a higher sequence than the post-cut record: the defect FSM1/cipher-box#1750 closed on the owner
 re-seal. D1 covers this arm, and the code lags it. No test covers it. FSM1/cipher-box#2016 tracks
 the fix. FSM1/cipher-box#2063 closed this on 2026-09-27: every scope-root signer calls one gate check,
-`PublishBar`.
+`PublishBar::refuse_below`, and the `SignatureGate` checks the bar again.
 
 **E2 — The lease holds the write-epoch floor alone.** D4 reads the cut-epoch and read-epoch floors
 under the write-epoch lease, but the lease does not stop a raise of either. The regression test

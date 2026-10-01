@@ -642,9 +642,9 @@ impl GrantScenario {
     /// live, the parent index names it at the name the **parent's** own write
     /// seed derives, and the recipient was never told where it answers.
     ///
-    /// The mint adopts the root it publishes, so one read of that scope's
-    /// cut-epoch bar is spent by the time the cut's own resolve makes the next
-    /// one — which is the read this fails.
+    /// The mint's scope-root publish spends two reads of that scope's cut-epoch
+    /// bar, the early refusal and the signature, so the cut's own resolve makes
+    /// the next one — which is the read this fails.
     fn strand_the_owed_wave(&mut self) {
         self.with_a_failing_cut(|fx| {
             assert!(
