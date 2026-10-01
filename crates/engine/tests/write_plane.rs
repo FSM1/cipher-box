@@ -5464,6 +5464,77 @@ fn a_child_another_parent_still_names_is_never_captured() {
     );
 }
 
+/// A second owner device that loaded the source folder but never the
+/// destination sees a move as a departure. The node stays live under the
+/// destination, so the device must not bin it or re-key it.
+#[test]
+fn a_move_into_a_folder_this_device_never_loaded_is_never_captured() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    for name in ["left", "right"] {
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: name.into(),
+            kind: NodeKind::Folder,
+        }))
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+    let left = child_id(&engine, ROOT, "left");
+    let right = child_id(&engine, ROOT, "right");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: left,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let leaf = child_id(&engine, left, "notes.txt");
+
+    let second = world.device(b"alice-second-device");
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &second, 7);
+    block_on(engine_b.command(Command::SetFocus { node: Some(left) })).unwrap();
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        child_id(&engine_b, left, "notes.txt"),
+        leaf,
+        "the second device loaded the source folder"
+    );
+
+    block_on(engine.command(Command::Move {
+        node: leaf,
+        new_parent: right,
+        new_name: "notes.txt".into(),
+        replacing: None,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        published_names(&world.record_store, &blocks, right),
+        ["notes.txt"]
+    );
+
+    for _ in 0..3 {
+        tick(&world, &engine_b, &mut tasks_b);
+    }
+
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "a node the destination still names is no capture"
+    );
+    assert!(
+        opens_under(&world, &blocks, leaf, &read_key_of(leaf)),
+        "and it still opens under the scope read seed"
+    );
+}
+
 /// A capture the merge already dropped from the base outlives the pass that
 /// could not settle it. Without that, one refused publish would leave the node
 /// with no entry, no re-key, and no route back.
