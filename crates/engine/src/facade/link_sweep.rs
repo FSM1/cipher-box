@@ -261,7 +261,7 @@ where
         )?;
         let node = NodeId(target.scope.scope_id);
         let report = self
-            .rotate_cut(node, target, &scope_root_name, &cut, None)
+            .rotate_cut(node, target, &scope_root_name, &cut, None, &[])
             .await?;
         let rekeyed = report
             .read

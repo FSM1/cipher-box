@@ -12169,6 +12169,7 @@ mod tests {
             min_read_epoch: OWNER_ROOT_EPOCH,
             current_root_name: &root.name,
             is_vault_anchor: true,
+            held_outside: &[],
         }
     }
 

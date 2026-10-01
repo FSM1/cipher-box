@@ -1674,12 +1674,14 @@ fn a_delete_unlinks_a_node_from_a_folder_in_each_end_of_the_pass() {
 
 /// A node linked from `keep`, a folder of the vault's own scope, at the
 /// create's counter of 1, and from `inner`, a folder inside the granted folder,
-/// at `inner_counter`. `keep` is drawn so its id falls below `inner`'s when
-/// `keep_below` holds, and above it otherwise.
+/// at `inner_counter`, then the folder granted at `permission`. `keep` is drawn
+/// so its id falls below `inner`'s when `keep_below` holds, and above it
+/// otherwise.
 fn dual_linked_at(
     fx: &mut GrantScenario,
     inner_counter: u64,
     keep_below: bool,
+    permission: Permission,
 ) -> (NodeId, NodeId, NodeId) {
     let inner =
         create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "box");
@@ -1713,9 +1715,14 @@ fn dual_linked_at(
     );
     block_on(fx.engine.command(Command::SetFocus { node: Some(inner) })).expect("the focus moves");
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     (keep, deep, inner)
+}
+
+/// Whether `inner`'s link to the node wins over `keep`'s at counter 1.
+fn inner_wins(inner_counter: u64, keep_below: bool) -> bool {
+    inner_counter > 1 || (inner_counter == 1 && !keep_below)
 }
 
 /// The grant re-seals a dual-linked node into the granted scope only when the
@@ -1725,15 +1732,15 @@ fn dual_linked_at(
 fn assert_grant_and_delete_follow_the_link_rank(inner_counter: u64) {
     for keep_below in [true, false] {
         let mut fx = GrantScenario::new();
-        let (keep, deep, inner) = dual_linked_at(&mut fx, inner_counter, keep_below);
-        let inner_wins = inner_counter > 1 || (inner_counter == 1 && !keep_below);
+        let (keep, deep, inner) =
+            dual_linked_at(&mut fx, inner_counter, keep_below, Permission::Read);
         let case = format!("inner counter {inner_counter}, keep below {keep_below}");
 
         let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
         let granted_key = |node: NodeId| {
             *kdf::read_key(kdf::node_seed(&override_seed, &node.0).as_bytes()).as_bytes()
         };
-        let deep_key = if inner_wins {
+        let deep_key = if inner_wins(inner_counter, keep_below) {
             granted_key(deep)
         } else {
             read_key_of(deep)
@@ -1761,6 +1768,63 @@ fn assert_grant_and_delete_follow_the_link_rank(inner_counter: u64) {
     }
 }
 
+/// A write grant's name wave leaves a node the link rank holds outside the
+/// granted folder at its name, sealed in the vault's own scope, in either
+/// parent-id order.
+fn assert_write_grant_follows_the_link_rank(inner_counter: u64) {
+    for keep_below in [true, false] {
+        let mut fx = GrantScenario::new();
+        let (keep, deep, inner) =
+            dual_linked_at(&mut fx, inner_counter, keep_below, Permission::Write);
+        if inner_wins(inner_counter, keep_below) {
+            continue;
+        }
+        let case = format!("inner counter {inner_counter}, keep below {keep_below}");
+        let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+        let moved_inner = published_child_name(
+            &fx.world,
+            &fx.blocks,
+            &fx.granted_scope_repoint().current_root,
+            &read_key_under(&override_seed, fx.folder),
+            "box",
+        );
+        assert_ne!(
+            moved_inner,
+            write_name(inner),
+            "{case}: the wave moved the granted folder's own nodes"
+        );
+        assert_eq!(
+            published_child_name(
+                &fx.world,
+                &fx.blocks,
+                &moved_inner,
+                &read_key_under(&override_seed, inner),
+                "deep"
+            ),
+            write_name(deep),
+            "{case}: and the moved folder names the held node at the name it held"
+        );
+        assert_eq!(
+            published_child_name(
+                &fx.world,
+                &fx.blocks,
+                &write_name(keep),
+                &read_key_of(keep),
+                "deep"
+            ),
+            write_name(deep),
+            "{case}: the vault's folder names the node at the name it held"
+        );
+        let head =
+            published_head(&fx.world, &fx.blocks, &write_name(deep)).expect("deep is published");
+        let envelope = decode_envelope(&head).expect("the head block decodes");
+        assert!(
+            open_read_body(&envelope, &read_key_of(deep)).is_ok(),
+            "{case}: and the node there still seals in the vault's own scope"
+        );
+    }
+}
+
 #[test]
 fn a_dual_link_tie_moves_with_a_grant_only_under_the_lower_parent_id() {
     assert_grant_and_delete_follow_the_link_rank(1);
@@ -1769,6 +1833,16 @@ fn a_dual_link_tie_moves_with_a_grant_only_under_the_lower_parent_id() {
 #[test]
 fn a_dual_link_the_granted_folder_loses_stays_in_the_vault_scope() {
     assert_grant_and_delete_follow_the_link_rank(0);
+}
+
+#[test]
+fn a_write_grant_leaves_a_tied_node_held_outside_at_its_name() {
+    assert_write_grant_follows_the_link_rank(1);
+}
+
+#[test]
+fn a_write_grant_leaves_a_node_whose_granted_link_loses_at_its_name() {
+    assert_write_grant_follows_the_link_rank(0);
 }
 
 /// The `ipnsName` `folder`'s published record names `child` by, read under

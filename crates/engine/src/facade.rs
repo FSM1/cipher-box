@@ -7134,6 +7134,7 @@ where {
             .vault_pointer_index
             .get()
             .map(|index| session.vault_pointer_signer(index));
+        let held_outside = held_outside(&*self.render().await?, node);
         let report = self
             .conversion_pass(session, api, &keys)
             .rotate_cut(
@@ -7142,6 +7143,7 @@ where {
                 scope_root_name,
                 cut,
                 vault_pointer_signer.as_ref(),
+                &held_outside,
             )
             .await?;
         if let Some(write) = report.write.as_ref() {
