@@ -22,8 +22,8 @@ export const IDENTITY_TOKEN_AUDIENCE = 'web3auth';
 /** Long enough for the Core Kit handshake, short enough that a leak is stale. */
 const TOKEN_TTL_SECONDS = 300;
 
-/** Covers a verifying instance whose clock runs behind the signing instance's. */
-const EXPIRY_SKEW_SECONDS = 60;
+/** How far one instance's clock may run behind another's. */
+const CLOCK_SKEW_SECONDS = 60;
 
 /** Expired rows one spend reclaims; each spend adds one row, so the table tracks its live set. */
 const SPENT_SWEEP_BATCH = 100;
@@ -32,7 +32,7 @@ const SPENT_SWEEP_BATCH = 100;
  * How long past its token's expiry a spent row survives, so an instance whose
  * clock runs behind still finds the row for as long as it accepts the token.
  */
-const SPENT_ROW_GRACE_MS = 60_000;
+const SPENT_ROW_GRACE_MS = CLOCK_SKEW_SECONDS * 1000;
 
 export interface IdentityTokenClaims {
   /** The `identity_subjects` row id — the Core Kit `verifierId`. */
@@ -144,7 +144,7 @@ export class IdentityTokenService implements OnModuleInit {
     // bound it by the lifetime `sign` stamps; an absent or invalid `exp` gives NaN,
     // which fails the comparison.
     const expiresAt = new Date((exp ?? NaN) * 1000);
-    const latestExpiryMs = now.getTime() + (TOKEN_TTL_SECONDS + EXPIRY_SKEW_SECONDS) * 1000;
+    const latestExpiryMs = now.getTime() + (TOKEN_TTL_SECONDS + CLOCK_SKEW_SECONDS) * 1000;
     if (
       typeof tokenId !== 'string' ||
       !UUID_RE.test(tokenId) ||
