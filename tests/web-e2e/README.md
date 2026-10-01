@@ -138,6 +138,7 @@ them.
 
    ```sh
    export VITE_ENVIRONMENT=ci VITE_API_URL=http://localhost:3000 \
+     VITE_GOOGLE_CLIENT_ID=web-e2e-google-client-id \
      VITE_ROUTING_ENDPOINTS=http://localhost:3001 \
      VITE_READ_ACCELERATOR_URL=http://127.0.0.1:8080
    pnpm --filter @cipherbox/web run build:wasm
