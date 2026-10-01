@@ -10192,6 +10192,90 @@ fn a_delete_of_a_folder_with_an_owed_move_is_refused() {
     );
 }
 
+/// A delete of a folder above one whose interior move is owed is refused too:
+/// it takes that folder from the scope the move re-seals it into.
+#[test]
+fn a_delete_of_a_folder_above_an_owed_move_is_refused() {
+    let mut fx = GrantScenario::new();
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "inner");
+    let root = write_name(ROOT);
+    fx.world.record_store.fail_put_for(root.as_str());
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.owed_scopes(), vec![inner], "the interior move is owed");
+    fx.world.record_store.heal_put_for(root.as_str());
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Delete { node: outer })),
+        work_owed()
+    );
+}
+
+/// Bin `outer` and the folder inside it, and stage an owed interior move of
+/// that folder out of the vault root's scope for the next session.
+fn bin_a_folder_over_an_owed_move(fx: &mut GrantScenario) -> (NodeId, NodeId) {
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "inner");
+    assert!(matches!(
+        block_on(fx.engine.command(Command::Delete { node: outer })),
+        Ok(CommandOutcome::Queued { .. })
+    ));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    stage_owed_record(
+        fx,
+        &OwedRecord::from([(
+            inner,
+            OwedEntry {
+                cut_epoch: 0,
+                steps: vec![OwedStep::InteriorMove { left_scope: ROOT }],
+            },
+        )]),
+    );
+    (outer, inner)
+}
+
+/// A restore of a binned folder above one whose interior move is owed is
+/// refused into another scope.
+#[test]
+fn a_restore_of_a_binned_folder_above_an_owed_move_into_another_scope_is_refused() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx);
+
+    let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &fresh, &mut tasks);
+    assert_eq!(
+        block_on(fresh.command(Command::Restore {
+            node: outer,
+            into: Some(fx.folder),
+        })),
+        work_owed()
+    );
+}
+
+/// A purge of a binned folder above one whose interior move is owed is
+/// refused while the move is owed.
+#[test]
+fn a_purge_of_a_binned_folder_above_an_owed_move_is_refused() {
+    let mut fx = GrantScenario::new();
+    let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx);
+
+    let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &fresh, &mut tasks);
+    assert_eq!(
+        block_on(fresh.command(Command::Purge { node: outer })),
+        work_owed()
+    );
+}
+
 /// A restore of a binned folder whose interior move is owed is refused into
 /// another scope, and lands in the scope the move left.
 #[test]
@@ -10236,11 +10320,11 @@ fn a_restore_of_a_folder_with_an_owed_move_into_another_scope_is_refused() {
     );
 }
 
-/// A crossing queued before the share never carries the promoted folder out of
-/// the scope its owed interior move re-seals it into: the crossing's re-seal
-/// refuses the promoted root, and the pass lands the move.
+/// A crossing queued before the share waits while the interior move of the
+/// folder it carries is owed: no attempt is spent and no trust violation is
+/// raised over the owner's own promoted root.
 #[test]
-fn a_queued_crossing_of_a_folder_with_an_owed_move_does_not_publish() {
+fn a_queued_crossing_of_a_folder_with_an_owed_move_waits_for_the_move() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     let carried =
@@ -10264,14 +10348,31 @@ fn a_queued_crossing_of_a_folder_with_an_owed_move_does_not_publish() {
         Ok(CommandOutcome::Done)
     );
     assert_eq!(fx.owed_scopes(), vec![carried], "the interior move is owed");
-    fx.world.record_store.heal_put_for(root.as_str());
 
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert!(
-        !queued_crossings(&fx.owner_device).is_empty(),
-        "the crossing did not publish"
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        abuse_events(&mut fx._events),
+        0,
+        "no trust violation is raised"
     );
-    assert_eq!(fx.owed_scopes(), vec![], "and the owed move landed");
+    assert!(
+        block_on(fx.engine.status())
+            .expect("the status reads")
+            .dead_letters
+            .is_empty(),
+        "and no attempt is spent"
+    );
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Cross],
+        "the crossing waits for the move"
+    );
+
+    fx.world.record_store.heal_put_for(root.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.owed_scopes(), vec![], "the owed move landed");
 }
 
 /// A record at the folder's name with no grant section does not prove a

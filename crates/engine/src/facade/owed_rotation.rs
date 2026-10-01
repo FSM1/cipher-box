@@ -10,12 +10,10 @@ use crate::grants::resume_owed_interior_move;
 use crate::rotation::{RotateOnCutError, WriteRotateError, owed_read_cut};
 use crate::sync::owed_rotation::{OwedEntry, OwedRecordError, OwedRotation, OwedStep, ScopeHold};
 
-/// What stopped one owed step: a key-material-free check, and whether a later
-/// pass could clear it.
+/// What stopped one owed step: a key-material-free check, and its class.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OwedStop {
     pub(crate) detail: String,
-    pub(crate) retryable: bool,
     pub(crate) class: OwedWorkClass,
     /// The work can never land, so the entry is dropped.
     terminal: bool,
@@ -23,17 +21,17 @@ pub(crate) struct OwedStop {
 
 impl OwedStop {
     fn of(step: &'static str, error: &EngineError) -> Self {
-        let (class, retryable) = match error {
-            EngineError::TrustViolation { .. } => ("trust-violation", false),
+        let class = OwedWorkClass::of(error);
+        let label = match error {
             EngineError::MalformedInput { check } | EngineError::UnsupportedTarget { check } => {
-                (*check, false)
+                *check
             }
-            _ => ("unavailable", true),
+            _ if class == OwedWorkClass::Trust => "trust-violation",
+            _ => "unavailable",
         };
         Self {
-            detail: format!("{step}: {class}"),
-            retryable,
-            class: OwedWorkClass::of(error),
+            detail: format!("{step}: {label}"),
+            class,
             terminal: false,
         }
     }
@@ -45,23 +43,21 @@ impl OwedStop {
 
     /// A grant step that stopped after its promotion publish.
     pub(crate) fn of_grant(error: &CreateGrantError) -> Self {
-        let class = match error.class() {
-            "availability" => OwedWorkClass::Availability,
-            "trust" => OwedWorkClass::Trust,
-            _ => OwedWorkClass::Capability,
-        };
         Self {
             detail: error.check().to_owned(),
-            retryable: class == OwedWorkClass::Availability,
-            class,
+            class: OwedWorkClass::of(&EngineError::from_create_grant(error.clone())),
             terminal: false,
         }
+    }
+
+    /// Whether a later pass could clear what stopped the step.
+    pub(crate) fn retryable(&self) -> bool {
+        self.class == OwedWorkClass::Availability
     }
 
     fn refused(detail: &'static str) -> Self {
         Self {
             detail: detail.to_owned(),
-            retryable: false,
             class: OwedWorkClass::Capability,
             terminal: false,
         }
@@ -71,7 +67,6 @@ impl OwedStop {
     /// writer-authored, so it is never grounds to drop the entry.
     fn pending(detail: &'static str) -> Self {
         Self {
-            retryable: true,
             class: OwedWorkClass::Availability,
             ..Self::refused(detail)
         }
@@ -175,8 +170,8 @@ where
     pub(crate) fn report_owed(&self, scope_root: NodeId, stop: OwedStop) {
         let _ = self.events.unbounded_send(Event::RotationWorkOwed {
             scope_root,
+            retryable: stop.retryable(),
             detail: stop.detail,
-            retryable: stop.retryable,
             class: stop.class,
         });
     }
@@ -799,7 +794,6 @@ struct OwedScope {
 fn cut_stop(error: RotateOnCutError) -> OwedStop {
     OwedStop {
         detail: error.check().to_owned(),
-        retryable: error.is_retryable(),
         terminal: false,
         class: OwedWorkClass::of(&EngineError::from_cut_rotation(error)),
     }

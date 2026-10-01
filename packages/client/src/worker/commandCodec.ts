@@ -20,6 +20,7 @@ import type {
   InvitePreviewState,
   NodeKind,
   OpProgressPhase,
+  OwedWorkClass,
   PendingClass,
   Permission,
   PinMode,
@@ -245,6 +246,12 @@ const STALL_REASONS: Record<ReclaimStallReason, true> = {
   targetUnexpandable: true,
 };
 
+const OWED_WORK_CLASSES: Record<OwedWorkClass, true> = {
+  availability: true,
+  capability: true,
+  trust: true,
+};
+
 const AUTH_METHOD_KINDS: Record<AuthMethodKind, true> = {
   identity: true,
   wallet: true,
@@ -279,6 +286,7 @@ export function readEvent(event: EventDescriptor): EventDescriptor {
   if (event.kind === 'stalenessChanged') known(STALENESS, event.staleness, 'staleness');
   if (event.kind === 'deadLetter') known(DEAD_LETTER_REASONS, event.reason, 'dead letter reason');
   if (event.kind === 'opProgress') known(OP_PHASES, event.phase, 'op phase');
+  if (event.kind === 'rotationWorkOwed') known(OWED_WORK_CLASSES, event.class, 'owed work class');
   return event;
 }
 

@@ -61,12 +61,14 @@ use crate::settings::{
     load_settings_at, owner_bin_retention_days, owner_retention, redecide_placement,
     report_settings_verdict, summarize_settings,
 };
+use crate::sync::BookkeepingSeal;
 use crate::sync::drain::{
     Drain, DrainScope, EngineSeams, GrantedPass, ScopeEnd, SealPlane, TickInputs, TickScopes,
     hold_captures,
 };
 use crate::sync::model::Snapshot;
 use crate::sync::op::{Op, OpKind};
+use crate::sync::owed_rotation::OwedRotation;
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 use crate::sync::project::{UnlinkedChild, merge_root};
 use crate::sync::rebase::{QueueScanMemo, enclosing_scope_root};
@@ -1083,6 +1085,16 @@ where
                 }),
             })
             .collect();
+        let owed_moves: Option<Vec<NodeId>> = OwedRotation::new(
+            &self.seams.staging,
+            BookkeepingSeal::new(enc_subkey, &*self.seams.entropy),
+            enc_subkey,
+            &state.owed_rotation,
+        )
+        .interior_moves()
+        .await
+        .ok()
+        .map(|moves| moves.into_iter().map(|(scope, _)| scope).collect());
         let drain = Drain::new(
             &self.seams,
             state.drain_cells(),
@@ -1091,6 +1103,7 @@ where
                 bin_keys: &pass.bin_keys,
                 bin_retention_days: owner_bin_retention_days(&state.settings_summary),
                 retention: owner_retention(&state.settings_summary),
+                owed_moves: owed_moves.as_deref(),
             },
         );
         drain

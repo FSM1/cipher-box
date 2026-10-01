@@ -3496,6 +3496,23 @@ fn refuse_an_owed_move_under(
     Ok(())
 }
 
+/// [`refuse_an_owed_move_under`] for `node` in the bin. No view links a
+/// binned subtree, so an owed folder the rendered tree does not hold may sit
+/// under `node`, and it refuses too.
+fn refuse_an_owed_move_in_the_bin(
+    rendered: &Snapshot,
+    node: NodeId,
+    owed_moves: &[(NodeId, NodeId)],
+) -> Result<(), EngineError> {
+    if owed_moves
+        .iter()
+        .any(|(scope, _)| *scope == node || !rendered.contains(*scope))
+    {
+        return Err(EngineError::rotation_work_owed());
+    }
+    Ok(())
+}
+
 /// Refuse a staged relocation the vault root has no room to park.
 ///
 /// The parking leg links the subtree into the vault root ([`relocation_legs`]),
@@ -6718,14 +6735,13 @@ where {
                 }
                 refuse_outside_vault(&rendered, into)?;
                 let lands_in = scope_of(&rendered, into, &self.relocation_scope_roots());
-                if self
+                let leaving: Vec<_> = self
                     .owed_moves()
                     .await?
-                    .iter()
-                    .any(|(scope, left)| *scope == node && *left != lands_in)
-                {
-                    return Err(EngineError::rotation_work_owed());
-                }
+                    .into_iter()
+                    .filter(|(_, left)| *left != lands_in)
+                    .collect();
+                refuse_an_owed_move_in_the_bin(&rendered, node, &leaving)?;
                 refuse_full_parent(&rendered, into, None, None, &self.authored_scope_roots())?;
                 let base_sequence = rendered.record_sequence(into).unwrap_or(1);
                 let op = Op::restore(
@@ -6740,9 +6756,12 @@ where {
             }
             Command::Purge { node } => {
                 let entry = self.binned_node(node).await?;
+                let owed_moves = self.owed_moves().await?;
+                let rendered = self.render().await?;
+                refuse_an_owed_move_in_the_bin(&rendered, node, &owed_moves)?;
                 // A node the rendered view still holds is one the user still
                 // sees in its folder: the entry alone never licenses a purge.
-                if self.render().await?.contains(node) {
+                if rendered.contains(node) {
                     return Err(EngineError::UnsupportedTarget {
                         check: "purge-target-still-linked",
                     });

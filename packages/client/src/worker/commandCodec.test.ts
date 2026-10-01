@@ -45,6 +45,20 @@ describe('readEvent', () => {
     expect(() => readEvent(skewed({ kind: 'toString' }))).toThrow('unknown WASM event kind');
   });
 
+  it('fails closed on an owed work class this build does not know', () => {
+    const owed = { kind: 'rotationWorkOwed', scopeRoot: new Uint8Array(16), detail: 'x' };
+    expect(() => readEvent(skewed({ ...owed, retryable: false, class: 'somethingNew' }))).toThrow(
+      'unknown WASM owed work class: somethingNew'
+    );
+    const known: EventDescriptor = {
+      ...owed,
+      kind: 'rotationWorkOwed',
+      retryable: false,
+      class: 'trust',
+    };
+    expect(readEvent(known)).toBe(known);
+  });
+
   it('fails closed on a staleness level this build does not know', () => {
     expect(() => readEvent(skewed({ kind: 'stalenessChanged', staleness: 'frozen' }))).toThrow(
       'unknown WASM staleness: frozen'

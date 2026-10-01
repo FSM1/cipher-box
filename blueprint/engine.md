@@ -1037,9 +1037,10 @@ renewal walk. After its first publish, a command whose step stops returns
 `Ok`; the engine emits `rotationWorkOwed` at once and on each pass while the
 entry stands, with the class of the stop (`availability`, `capability` or
 `trust`), and the same command on that scope re-drives the entry. A
-relocation into another scope, a delete, or a restore into another scope
-that takes a folder with an owed interior move out of the scope it left is
-refused, retryably, until the move lands. At the entry's own cut epoch the published state does not tell a read cascade that
+relocation into another scope, a delete, a purge, or a restore into another
+scope that takes a folder with an owed interior move out of the scope it
+left is refused, retryably, until the move lands; a crossing the queue
+already holds waits for it, uncharged. At the entry's own cut epoch the published state does not tell a read cascade that
 landed from one that did not, so a re-drive after a lost advance runs one more.
 
 The **expired-link sweep**
