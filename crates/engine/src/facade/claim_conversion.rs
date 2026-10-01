@@ -143,6 +143,10 @@ pub(crate) trait ConversionSites {
     /// The folder label the claimant's share pointer carries.
     async fn folder_name(&self, node: NodeId) -> Result<String, EngineError>;
 
+    /// The nodes a grant of `node` leaves outside its scope
+    /// ([`GranteeScopePlan::held_outside`]).
+    async fn held_outside(&self, node: NodeId) -> Result<Vec<HeldNode>, EngineError>;
+
     /// The scope roots of `index` that sit inside the folder `node`.
     async fn child_scopes_inside(
         &self,
@@ -498,6 +502,12 @@ where
             }
         }
         for (node, claims) in folders {
+            // Owed rotation work at the scope lands first; its claims wait.
+            let hold = self.owed.hold(node);
+            if hold.is_none() || !matches!(self.owed().entry(node).await, Ok(None)) {
+                failure.get_or_insert(EngineError::rotation_work_owed());
+                continue;
+            }
             if let Err(e) = self.convert_at(sites, node, &claims, &mut verdicts).await {
                 failure.get_or_insert(e);
             }
@@ -1085,6 +1095,10 @@ impl<T: SeamTypes> ConversionSites for EngineSites<'_, T> {
         share_display_name(&rendered, node)
     }
 
+    async fn held_outside(&self, node: NodeId) -> Result<Vec<HeldNode>, EngineError> {
+        Ok(held_outside(&*self.engine.render().await?, node))
+    }
+
     async fn child_scopes_inside(
         &self,
         node: NodeId,
@@ -1152,6 +1166,10 @@ impl ConversionSites for TickSites<'_> {
 
     async fn folder_name(&self, node: NodeId) -> Result<String, EngineError> {
         share_display_name(&self.boundaries.base.borrow(), node)
+    }
+
+    async fn held_outside(&self, node: NodeId) -> Result<Vec<HeldNode>, EngineError> {
+        Ok(held_outside(&self.boundaries.base.borrow(), node))
     }
 
     async fn child_scopes_inside(

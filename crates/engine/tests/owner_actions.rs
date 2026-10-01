@@ -1505,6 +1505,38 @@ fn a_write_revoke_refuses_a_lagging_grandchild_the_ratchet_cannot_open() {
     );
 }
 
+/// A wave that stops on a node beyond the ratchet leaves its cut owed: no pass
+/// drops the entry for an epoch it cannot read yet.
+#[test]
+fn a_write_revoke_stopped_beyond_the_ratchet_stays_owed() {
+    let mut fx = GrantScenario::new();
+    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_unopenable_node(&fx, &revokee_seed, child, 0);
+    assert!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1())
+            .is_err()
+    );
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the cut is owed");
+
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let events = events_so_far(&mut fx._events);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::RotationWorkAbandoned { .. })),
+        "no pass drops it"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::RotationWorkOwed { scope_root, .. } if *scope_root == fx.folder
+        )),
+        "and each pass reports it"
+    );
+}
+
 /// A lagging node beyond the ratchet is not a trust verdict (ADR 0021 D5).
 #[test]
 fn a_write_revoke_reports_a_child_beyond_the_ratchet_as_an_unsupported_target() {
@@ -2226,21 +2258,23 @@ fn assert_a_relinked_ref_refuses_then_moves(via_root: bool) {
     );
 
     // Before the root publish nothing is left behind, so a refresh and a retry
-    // recover; after it, the stalled move is a partial commit a retry resumes.
-    let expected = if via_root {
-        EngineError::Seam {
-            message: "grant creation failed: held-ref-relinked".to_owned(),
-        }
+    // recover; after it, the stalled move is owed (ADR 0063 D5).
+    if via_root {
+        assert_eq!(
+            fx.grant_folder_to_recipient(),
+            Err(EngineError::Seam {
+                message: "grant creation failed: held-ref-relinked".to_owned(),
+            }),
+            "{case}: the grant refuses the move, never as a trust violation"
+        );
     } else {
-        EngineError::PartialCommit {
-            check: "held-ref-relinked",
-        }
-    };
-    assert_eq!(
-        fx.grant_folder_to_recipient(),
-        Err(expected),
-        "{case}: the grant refuses the move, never as a trust violation"
-    );
+        assert_eq!(
+            fx.grant_folder_to_recipient(),
+            Ok(CommandOutcome::Done),
+            "{case}: the root landed, so the stalled move is owed"
+        );
+        assert_eq!(fx.owed_scopes(), vec![fx.folder]);
+    }
     if !via_root {
         assert_eq!(
             published_child_names(&fx.world, &fx.blocks, holder, &read_key_of(holder)),
@@ -10144,9 +10178,10 @@ fn an_owed_cut_whose_parent_index_omits_the_scope_is_finished_from_its_pointer()
     assert_the_revoke_finished(&fx, &revokee_seed);
 }
 
-/// A downgrade whose wave stops still holds the gate at the cut it published,
-/// so the downgraded writer's replay of the root before the cut does not read
-/// as a cut that never landed, and the owed wave is not dropped.
+/// A downgrade whose wave stops before it reads the cut set still holds the
+/// gate at the cut it published, so the downgraded writer's replay of the root
+/// before the cut does not read as a cut that never landed, and the owed wave
+/// is not dropped.
 #[test]
 fn a_replayed_pre_cut_root_does_not_drop_an_owed_downgrade() {
     let mut fx = GrantScenario::new();
@@ -10159,12 +10194,11 @@ fn a_replayed_pre_cut_root_does_not_drop_an_owed_downgrade() {
         .expect("the granted root");
     let writer_seed = grantee_write_scope_seed(&section, &granted.current_root, &fx.folder.0, 1);
     let pre_cut = published_value(&fx.world, &granted.current_root);
-    fx.world
-        .scheduler
-        .advance(fx.engine.profile().pointer_consult_interval * 2);
+    // The command's reads and the cut-set publish answer; the wave's first
+    // read of the root, ahead of any adoption of the cut set, does not.
     fx.world
         .record_store
-        .fail_get_for(folder_pointer(&fx).as_str());
+        .serve_gets_for_after(granted.current_root.as_str(), 5, usize::MAX, None);
     let folder = fx.folder;
     assert_eq!(
         command_across_retries(
@@ -10183,7 +10217,7 @@ fn a_replayed_pre_cut_root_does_not_drop_an_owed_downgrade() {
     );
     fx.world
         .record_store
-        .heal_get_for(folder_pointer(&fx).as_str());
+        .serve_gets_for_after(granted.current_root.as_str(), 0, 0, None);
     publish_value_under(&fx.world, &writer_seed, fx.folder, &pre_cut);
     let _ = events_so_far(&mut fx._events);
 
@@ -10291,6 +10325,172 @@ fn a_rename_over_owed_work_is_refused() {
             }
         ),
         work_owed()
+    );
+}
+
+/// A claim at a scope whose write link mint still owes its interior move
+/// waits: the conversion does not move the scope off the write epoch the owed
+/// move resumes at, and both land once the parent publishes again.
+#[test]
+fn a_claim_at_a_scope_with_an_owed_move_waits_for_the_move() {
+    let mut fx = GrantScenario::new();
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    let fragment = fx.mint_link_at(Permission::Write);
+    assert_eq!(
+        fx.owed_scopes(),
+        vec![fx.folder],
+        "the interior move is owed"
+    );
+    let claimant = fx.post_claims(&fragment, 1);
+    assert_eq!(fx.convert(), work_owed(), "the claim waits for the move");
+
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let _ = fx.owed_scopes();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.owed_scopes(), vec![], "the owed move landed");
+    assert!(
+        fx.granted_to().contains(&claimant[0]),
+        "and the claim converted after it"
+    );
+}
+
+/// An upgrade's write-scope cut runs under an owed entry: a wave that stops
+/// leaves it owed, the command is refused retryably, and the next pass
+/// finishes the wave.
+#[test]
+fn an_upgrade_whose_wave_stops_is_owed_and_finished_by_the_pass() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let minted = fx.granted_scope_repoint().write_epoch;
+    fx.world
+        .record_store
+        .fail_put_for(folder_pointer(&fx).as_str());
+    let folder = fx.folder;
+    let upgrade = || Command::ChangePermission {
+        node: folder,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        permission: Permission::Write,
+    };
+    assert_eq!(command_across_retries(&mut fx, upgrade()), work_owed());
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "and the wave is owed");
+
+    fx.world
+        .record_store
+        .heal_put_for(folder_pointer(&fx).as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let moved = fx.granted_scope_repoint();
+    assert_eq!(moved.write_epoch, minted + 1, "the pass ran the owed wave");
+
+    assert_eq!(
+        command_across_retries(&mut fx, upgrade()),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        fx.committed_permission(&fx.granted_scope_repoint().current_root),
+        Some(CorePermission::Write)
+    );
+}
+
+/// A drop whose clear the store refuses is not told: the entry still stands,
+/// so the pass reports it owed, and the pass that drops it tells once.
+#[test]
+fn an_abandon_whose_clear_fails_is_told_once_the_clear_lands() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(11));
+    let unknown: [u8; IDENTITY_PUBLIC_LEN] = bystander_identity()
+        .try_into()
+        .expect("a compressed identity key");
+    let record = OwedRecord::from([(
+        fx.folder,
+        OwedEntry {
+            cut_epoch: 0,
+            steps: vec![OwedStep::DeliverGrant {
+                recipient_identity_pk: unknown,
+                write: false,
+            }],
+        },
+    )]);
+    let blob =
+        seal_owed_record(BookkeepingSeal::new(&enc, &entropy), &record).expect("the record seals");
+    block_on(
+        fx.owner_device
+            .staging_store
+            .put_staged_bytes(&owed_rotation_key(&enc), &blob),
+    )
+    .expect("stage the record");
+    fx.owner_device
+        .staging_store
+        .inner()
+        .interrupt_staged_removal_after(&owed_rotation_key(&enc), 0);
+
+    let (fresh, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &fresh, &mut tasks);
+    let first = events_so_far(&mut events);
+    assert!(
+        !first
+            .iter()
+            .any(|event| matches!(event, Event::RotationWorkAbandoned { .. })),
+        "a drop that did not land is not told"
+    );
+    assert!(
+        first.iter().any(|event| matches!(
+            event,
+            Event::RotationWorkOwed { scope_root, .. } if *scope_root == fx.folder
+        )),
+        "the entry still stands, so it is owed"
+    );
+
+    for _ in 0..2 {
+        tick(&fx.world, &fresh, &mut tasks);
+    }
+    assert_eq!(
+        abandoned(&mut events),
+        vec![(fx.folder, "owed-grant-recipient-unknown".to_owned())],
+        "the drop that lands is told once"
+    );
+}
+
+/// A share re-run over an owed move that fails writes the move back; when the
+/// store refuses that write, the command says so rather than losing the move
+/// in silence.
+#[test]
+fn a_share_re_run_whose_write_back_fails_reports_the_store() {
+    let mut fx = GrantScenario::new();
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.owed_scopes(),
+        vec![fx.folder],
+        "the interior move is owed"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    fx.world
+        .record_store
+        .fail_get_for(write_name(ROOT).as_str());
+    let enc = kdf::enc_subkey(&SECRET);
+    fx.owner_device
+        .staging_store
+        .inner()
+        .interrupt_staged_write_after(&owed_rotation_key(&enc), 0);
+
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::Seam {
+            message: "owed-rotation-not-durable".to_owned(),
+        })
     );
 }
 

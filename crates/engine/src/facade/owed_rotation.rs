@@ -96,8 +96,9 @@ const OWED_WAVE_AT_ANOTHER_EPOCH: &str = "owed-write-cut-at-another-write-epoch"
 /// contact book.
 const OWED_RECIPIENT_UNKNOWN: &str = "owed-grant-recipient-unknown";
 
-/// The check a re-drive reports for an interior move whose folder no longer
-/// sits under the scope it left.
+/// The check a re-drive reports for an interior move whose folder does not sit
+/// under the scope it left. The tree is writer-authored, so this is never
+/// grounds to drop the entry.
 const OWED_MOVE_SOURCE_MOVED: &str = "owed-interior-move-source-moved";
 /// Neither the enclosing scope's index nor the owner-signed scope pointer names
 /// a root for the owed scope. The index is writer-authored, so this is never
@@ -252,7 +253,7 @@ where
             Ok(report) => report,
             // The wave runs last, so the cut set is published, and the floor
             // holds the gate at it: a replayed pre-cut root would read as a cut
-            // that never landed. A raise that fails is the re-drive's to retry.
+            // that never landed.
             Err(error @ RotateOnCutError::Write(_)) => {
                 let _ = record_cut_epoch_floor(
                     self.floors,
@@ -262,21 +263,21 @@ where
                 .await;
                 self.stop_owed(node, write.into_iter().collect(), cut_stop(&error))
                     .await;
-                return Ok(None);
+                return stopped(error);
             }
             Err(error) => {
                 return match self.cut_set_published(target, cut).await {
                     Some(true) => {
                         self.stop_owed(node, steps, cut_stop(&error)).await;
-                        Ok(None)
+                        stopped(error)
                     }
                     Some(false) => {
                         let _ = self.owed().clear(node).await;
-                        Err(EngineError::from_rotation(error))
+                        Err(EngineError::from_cut_rotation(error))
                     }
                     // Unknown: the entry stands, and the re-drive drops it if
                     // the published root never carried the cut.
-                    None => Err(EngineError::from_rotation(error)),
+                    None => Err(EngineError::from_cut_rotation(error)),
                 };
             }
         };
@@ -380,6 +381,21 @@ where
                 Ok(entry)
             }
             _ => Err(EngineError::rotation_work_owed()),
+        }
+    }
+
+    /// Write `entry` back at `scope` under the hold, after a re-run of the
+    /// command that took it failed. An entry the re-run left there already owes
+    /// the same work.
+    pub(crate) async fn restore_owed(
+        &self,
+        scope: NodeId,
+        entry: OwedEntry,
+    ) -> Result<(), EngineError> {
+        let _hold = self.hold_owed(scope)?;
+        match self.owed().owe(scope, entry).await {
+            Ok(()) | Err(OwedRecordError::Standing) => Ok(()),
+            Err(error) => Err(EngineError::from_owed_record(error)),
         }
     }
 
@@ -571,7 +587,7 @@ where
         let stop = |e: EngineError| OwedStop::of(step, &e);
         let parent = sites.enclosing(node).await.map_err(stop)?;
         if parent.scope.scope_id != left_scope.0 {
-            return Err(OwedStop::abandoned(OWED_MOVE_SOURCE_MOVED));
+            return Err(OwedStop::pending(OWED_MOVE_SOURCE_MOVED));
         }
         let net = self.net(&parent, PointerConsultArm::Permitted);
         let current = net
@@ -582,6 +598,7 @@ where
             .child_scopes_inside(node, &current.direct_child_scope_index)
             .await
             .map_err(stop)?;
+        let held = sites.held_outside(node).await.map_err(stop)?;
         let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
         let pointer_read_key = self.scope_keys.pointer_read_key(&node.0);
         let pseudonym_signer = self.scope_keys.writer_pseudonym(&node.0);
@@ -594,6 +611,7 @@ where
             write_cut: None,
             pointer_read_key: &pointer_read_key,
             subtree_child_index: &subtree,
+            held_outside: &held,
         };
         let parent_plan = parent_scope_plan(&parent, &current, self.enc_secret);
         let owner = OwnerGrantKeys {
@@ -761,6 +779,17 @@ struct OwedScope {
     current: CascadeTarget,
     /// The owner-signed scope pointer names `target`.
     pointer_placed: bool,
+}
+
+/// The answer of a command whose cut stopped after the cut set landed, with the
+/// work owed: `Ok(None)` for a stop a later pass may clear (ADR 0063 D5), and
+/// the verdict itself for a fail-closed one, which the host must see.
+fn stopped<T>(error: RotateOnCutError) -> Result<Option<T>, EngineError> {
+    if error.is_retryable() {
+        Ok(None)
+    } else {
+        Err(EngineError::from_cut_rotation(error))
+    }
 }
 
 /// The stop a plane rotation failure reports.

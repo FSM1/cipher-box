@@ -2269,7 +2269,8 @@ pub enum Event {
         retryable: bool,
     },
     /// Owed rotation work that can never land was dropped: its cut set never
-    /// published, or its folder or recipient is gone (ADR 0063 D3). Sent once.
+    /// published, or its recipient left the contact book (ADR 0063 D3). Sent
+    /// once.
     RotationWorkAbandoned {
         /// The scope root the work was owed at.
         #[cfg_attr(
@@ -6819,23 +6820,27 @@ where {
                 owner_name,
                 admission_cap,
             } => {
-                self.create_invite_link(node, permission, expires_at, &owner_name, admission_cap)
-                    .await
+                Box::pin(self.create_invite_link(
+                    node,
+                    permission,
+                    expires_at,
+                    &owner_name,
+                    admission_cap,
+                ))
+                .await
             }
             Command::RevokeInviteLink {
                 node,
                 link_tag,
                 remove_grantees,
-            } => self
-                .revoke_invite_link(node, link_tag.as_deref(), remove_grantees)
+            } => Box::pin(self.revoke_invite_link(node, link_tag.as_deref(), remove_grantees))
                 .await
                 .map(|()| CommandOutcome::Done),
             Command::ClaimInviteLink { fragment, name } => self
                 .claim_invite_link(&fragment, name)
                 .await
                 .map(|()| CommandOutcome::Done),
-            Command::ConvertInviteClaims { node } => self
-                .convert_invite_claims(node)
+            Command::ConvertInviteClaims { node } => Box::pin(self.convert_invite_claims(node))
                 .await
                 .map(|()| CommandOutcome::Done),
             Command::DismissRefusedClaims { node } => self
@@ -6848,40 +6853,37 @@ where {
                 permission,
                 grantee_name,
             } => {
-                self.grant(
+                Box::pin(self.grant(
                     node,
                     &recipient_identity_public_key,
                     permission,
                     grantee_name.as_deref(),
-                )
+                ))
                 .await
             }
             Command::Revoke {
                 node,
                 recipient_identity_public_key,
-            } => self
-                .revoke_grant(node, &recipient_identity_public_key)
+            } => Box::pin(self.revoke_grant(node, &recipient_identity_public_key))
                 .await
                 .map(|()| CommandOutcome::Done),
             Command::ChangePermission {
                 node,
                 recipient_identity_public_key,
                 permission,
-            } => self
-                .change_permission(node, &recipient_identity_public_key, permission)
+            } => Box::pin(self.change_permission(node, &recipient_identity_public_key, permission))
                 .await
                 .map(|()| CommandOutcome::Done),
             Command::RenameGrantee {
                 node,
                 recipient_identity_public_key,
                 name,
-            } => self
-                .rename_grantee(node, &recipient_identity_public_key, &name)
+            } => Box::pin(self.rename_grantee(node, &recipient_identity_public_key, &name))
                 .await
                 .map(|()| CommandOutcome::Done),
-            Command::RotateNow { node } => {
-                self.rotate_now(node).await.map(|()| CommandOutcome::Done)
-            }
+            Command::RotateNow { node } => Box::pin(self.rotate_now(node))
+                .await
+                .map(|()| CommandOutcome::Done),
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
             Command::SaveVaultSettings { settings } => {
                 self.save_vault_settings(&settings).await?;
@@ -7527,7 +7529,8 @@ where {
     }
 
     /// Drive an authorized cut at `target` through the planes it demands
-    /// ([`rotate_on_cut`] over the production [`OwnerCutNet`]).
+    /// ([`rotate_on_cut`] over the production [`OwnerCutNet`]), under an entry
+    /// its caller already owes.
     async fn drive_cut(
         &self,
         node: NodeId,
@@ -7752,7 +7755,10 @@ where {
             ScopeShare::InviteLink { .. } => None,
         };
         let sites = self.sites(session, api);
-        match (pass.redrive_scope(&sites, node).await?, owed_delivery) {
+        match (
+            Box::pin(pass.redrive_scope(&sites, node)).await?,
+            owed_delivery,
+        ) {
             (Redriven::Finished, Some(recipient)) => {
                 self.contact_store(session)
                     .vouch(&recipient)
@@ -7767,7 +7773,7 @@ where {
                 let owed = pass.take_owed_move(node).await?;
                 let rerun = Box::pin(self.share_scope(node, share, permission)).await;
                 if rerun.is_err() {
-                    let _ = pass.owe(node, owed).await;
+                    pass.restore_owed(node, owed).await?;
                 }
                 return rerun;
             }
@@ -7793,14 +7799,13 @@ where {
             .find(|child| child.scope_id == node.0)
             .cloned()
         {
-            return self
-                .append_share(
-                    node,
-                    share,
-                    permission,
-                    OwnerScope::indexed(&current, scope),
-                )
-                .await;
+            return Box::pin(self.append_share(
+                node,
+                share,
+                permission,
+                OwnerScope::indexed(&current, scope),
+            ))
+            .await;
         }
         let minted_name = match &share {
             ScopeShare::Contact { grantee_name, .. } => {
@@ -7899,7 +7904,7 @@ where {
                     display_name,
                     grantee_name: minted_name.as_ref(),
                 };
-                let outcome = create_grant(
+                let outcome = Box::pin(create_grant(
                     &mut SharedEntropy(&self.entropy),
                     &net,
                     &voucher,
@@ -7907,7 +7912,7 @@ where {
                     &recipient,
                     &owner,
                     &parent_plan,
-                )
+                ))
                 .await;
                 let granted = match outcome {
                     Ok(granted) => granted,
@@ -7931,7 +7936,7 @@ where {
                 owner_name,
                 admission_cap,
             } => {
-                let minted = mint_invite_link(
+                let minted = Box::pin(mint_invite_link(
                     &mut SharedEntropy(&self.entropy),
                     &net,
                     &voucher,
@@ -7948,7 +7953,7 @@ where {
                         owner_name,
                         folder_name: &display_name,
                     },
-                )
+                ))
                 .await;
                 let minted = match minted {
                     Ok(minted) => minted,
@@ -8032,11 +8037,11 @@ where {
                         .resolve_owned_scope(&keys, minted, checks.index_lost_a_root)
                         .await?;
                     let moved = self
-                        .moved_by_write_cut(node, &minted.target, &minted.current)
+                        .moved_by_write_cut(node, &minted.target, &minted.current, false)
                         .await?;
                     parsed_scope_name(&moved.scope.ipns_name)
                 };
-                match moved.await {
+                match Box::pin(moved).await {
                     Ok(name) => {
                         owed_steps.remove(0);
                         let _ = pass.owed().advance_to(node, &owed_steps[0]).await;
@@ -8597,19 +8602,20 @@ where {
         gated: &GatedScope<'_, T>,
         check: &'static str,
     ) -> Result<GatedScope<'a, T>, EngineError> {
-        let moved = self
-            .moved_by_write_cut(node, &gated.target, &gated.current)
-            .await?;
+        let moved =
+            Box::pin(self.moved_by_write_cut(node, &gated.target, &gated.current, true)).await?;
         self.resolve_owned_scope(keys, moved, check).await
     }
 
     /// Run the write-scope cut over the set `current` publishes at `target`
     /// ([`cut_for_write_scope`]), and answer the root the wave moved it to.
+    /// `owe` is false only for a caller whose own entry already owes the cut.
     async fn moved_by_write_cut(
         &self,
         node: NodeId,
         target: &OwnerScope,
         current: &CascadeTarget,
+        owe: bool,
     ) -> Result<OwnerScope, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
@@ -8619,16 +8625,25 @@ where {
             session.identity(),
         ))
         .map_err(EngineError::from_revoke)?;
-        // A write-scope cut sets the write plane, so the wave ran and its
-        // outcome names the root the scope moved to.
-        let moved = self
-            .drive_cut(node, target, &scope_root_name, &cut)
-            .await?
-            .write
-            .map(|write| write.new_root_name)
-            .ok_or(EngineError::TrustViolation {
-                message: "the write-scope cut reported no name wave".to_owned(),
-            })?;
+        // A write-scope cut sets the write plane, so a wave that ran names the
+        // root the scope moved to. Under `owe` a wave that stops leaves the cut
+        // owed, and this command waits for it.
+        // Boxed: a cut future nested under a command's own future overflows a
+        // test thread's stack.
+        let report = if owe {
+            Box::pin(self.drive_owed_cut(node, target, &scope_root_name, &cut, current.write_epoch))
+                .await?
+                .ok_or_else(EngineError::rotation_work_owed)?
+        } else {
+            Box::pin(self.drive_cut(node, target, &scope_root_name, &cut)).await?
+        };
+        let moved =
+            report
+                .write
+                .map(|write| write.new_root_name)
+                .ok_or(EngineError::TrustViolation {
+                    message: "the write-scope cut reported no name wave".to_owned(),
+                })?;
         Ok(OwnerScope {
             scope: ChildScopeRef::new(node.0, moved.as_str().as_bytes().to_vec()),
             parent_node_seed: target.parent_node_seed.clone(),
@@ -9102,7 +9117,6 @@ where {
         )
     }
 
-    /// The owner material a conversion pass holds for its duration.
     /// The owner sites a command's conversion pass places scopes through.
     fn sites<'a>(
         &'a self,
@@ -9123,6 +9137,7 @@ where {
             .map(|index| session.vault_pointer_signer(index))
     }
 
+    /// The owner material a conversion pass holds for its duration.
     fn pass_keys<'a>(&self, session: &'a SessionIdentity) -> Result<PassKeys<'a>, EngineError> {
         Ok(PassKeys {
             owner_identity: session.owner_identity(),
