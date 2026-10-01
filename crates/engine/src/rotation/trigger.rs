@@ -24,8 +24,9 @@ use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Public;
 
 use super::cascade::{CascadeError, CascadeOutcome};
+use super::eager_set::ResolveFailure;
 use super::rotate::{RotateError, RotationOutcome};
-use super::rotate_write::{WriteRotateError, WriteRotationOutcome};
+use super::rotate_write::{WritePublishError, WriteRotateError, WriteRotationOutcome};
 use crate::facade::NodeId;
 use crate::grants::ledger::{AuthorityViolation, enforce_committed_ledger};
 
@@ -740,6 +741,23 @@ impl RotateOnCutError {
             // A malformed cut: re-driving the same one reaches it again.
             RotateOnCutError::WriteOnlyCutWithdrawsRead => false,
         }
+    }
+
+    /// Whether the write wave met a lagging node no held history link reaches
+    /// (ADR 0021 D5).
+    pub fn is_unreadable(&self) -> bool {
+        matches!(
+            self,
+            RotateOnCutError::Write(
+                WriteRotateError::Resolve {
+                    reason: ResolveFailure::Unreadable,
+                    ..
+                } | WriteRotateError::Publish {
+                    error: WritePublishError::Unreadable,
+                    ..
+                }
+            )
+        )
     }
 }
 

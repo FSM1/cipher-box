@@ -2563,11 +2563,12 @@ impl EngineError {
     /// [`from_rotation`](EngineError::from_rotation), with a node no held
     /// history link reaches kept off the trust axis (ADR 0021 D5).
     fn from_cut_rotation(err: RotateOnCutError) -> Self {
-        match err.class() {
-            "capability" => EngineError::ContentUnavailable {
+        if err.is_unreadable() {
+            EngineError::ContentUnavailable {
                 message: err.to_string(),
-            },
-            _ => EngineError::from_rotation(err),
+            }
+        } else {
+            EngineError::from_rotation(err)
         }
     }
 
@@ -13856,6 +13857,30 @@ mod tests {
         };
         let debug = format!("{command:?}");
         assert_eq!(debug, "Command(create)", "payloads must never leak");
+    }
+
+    /// Only the wave's unreachable lagging node leaves the trust axis: an
+    /// owner-key refusal, also classed "capability", stays a verdict no retry
+    /// clears.
+    #[test]
+    fn a_cut_maps_only_an_unreadable_node_off_the_trust_axis() {
+        let unreadable = RotateOnCutError::Write(crate::rotation::WriteRotateError::Resolve {
+            node_id: [0x11; 16],
+            reason: ResolveFailure::Unreadable,
+        });
+        assert!(matches!(
+            EngineError::from_cut_rotation(unreadable),
+            EngineError::ContentUnavailable { .. }
+        ));
+        let owner_key_refusal =
+            RotateOnCutError::Read(crate::rotation::CascadeError::OwnerSubkeyMissing {
+                scope_id: [0x11; 16],
+            });
+        assert_eq!(owner_key_refusal.class(), "capability");
+        assert!(matches!(
+            EngineError::from_cut_rotation(owner_key_refusal),
+            EngineError::TrustViolation { .. }
+        ));
     }
 
     #[test]
