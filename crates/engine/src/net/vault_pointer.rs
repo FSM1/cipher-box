@@ -10,6 +10,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
 
 use super::fanout::{FanoutRecord, fanout_get_classified};
+use super::publish::Observed;
 use super::rotation::{PointerPipeline, publish_pointer_over};
 use crate::api::ApiClient;
 use crate::entropy::Entropy;
@@ -152,10 +153,9 @@ where
                 scheduler: self.scheduler,
                 profile: self.profile,
             },
-            &self.name(),
+            &Observed::record(&self.name(), standing.sequence),
             &self.signer,
             &block,
-            standing.sequence,
         )
         .await
         .map(drop)

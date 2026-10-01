@@ -49,6 +49,19 @@ pub(crate) async fn keep_newest_last_known_good<S: SnapshotCache>(
     snapshot_cache.put(key, record_bytes).await
 }
 
+/// Leave `record_bytes` as `name`'s last-known-good, then run `commit`, the
+/// floor advance the gate pass that admitted it owes — the order
+/// [`keep_newest_last_known_good`] requires, stated once.
+pub(crate) async fn keep_then_commit<S: SnapshotCache, T>(
+    snapshot_cache: &S,
+    name: &IpnsName,
+    record_bytes: &[u8],
+    commit: impl Future<Output = Result<T, SeamError>>,
+) -> Result<T, SeamError> {
+    keep_newest_last_known_good(snapshot_cache, name, record_bytes).await?;
+    commit.await
+}
+
 /// A verified record's sequence and signed EOL, the two keys it ranks by.
 fn verified_rank(name: &IpnsName, record_bytes: &[u8]) -> Option<(u64, Vec<u8>)> {
     IpnsRecord::unmarshal(record_bytes)

@@ -43,7 +43,7 @@ use crate::facade::{Event, emit_trust_violation};
 use crate::gate::floor;
 use crate::gate::floor::RevisionMintError;
 use crate::net::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue, hold_if_unchanged};
-use crate::net::publish::PublishOutcome;
+use crate::net::publish::{Observed, PublishOutcome};
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_settings, publish_record,
 };
@@ -759,11 +759,10 @@ where
         scheduler,
         profile,
         &RecordPublishRequest {
-            name: &name,
+            observed: &Observed::unread(&name),
             signer: &signer,
             head: &head,
             content_cids: Vec::new(),
-            min_current_sequence: None,
         },
     )
     .await

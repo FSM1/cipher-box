@@ -19,7 +19,7 @@ use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 use zeroize::Zeroizing;
 
 use super::fanout::fanout_get_tied_classified;
-use super::last_known_good::keep_newest_last_known_good;
+use super::last_known_good::{keep_newest_last_known_good, keep_then_commit};
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::head_cid_from_value;
 use crate::facade::NodeId;
@@ -335,16 +335,16 @@ where
             }) => {
                 // Only gate-passing records touch the snapshot; the same verified
                 // bytes ride out to the liveness hold, so no re-fetch/re-get.
-                keep_newest_last_known_good(snapshot_cache, name, &bytes).await?;
-                // Durable-first: the floors move on the pass that also left the
-                // bytes as last-known-good, never ahead of it.
-                let adopted = match pass {
-                    GatePass::Deferred(pending) => adopter.commit_adoption(pending).await?,
-                    GatePass::DeferredSequence(pending) => {
-                        adopter.commit_sequence_adoption(pending).await?
+                let adopted = keep_then_commit(snapshot_cache, name, &bytes, async {
+                    match pass {
+                        GatePass::Deferred(pending) => adopter.commit_adoption(pending).await,
+                        GatePass::DeferredSequence(pending) => {
+                            adopter.commit_sequence_adoption(pending).await
+                        }
+                        GatePass::Advanced(adopted) => Ok(adopted),
                     }
-                    GatePass::Advanced(adopted) => adopted,
-                };
+                })
+                .await?;
                 (
                     ResolveOutcome::Adopted(adopted),
                     GatedParts {

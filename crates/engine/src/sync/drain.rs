@@ -65,11 +65,13 @@ use crate::gate::{
 use crate::grants::grafted::{FloorNamespace, GraftedPlane};
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
-    AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
+    AuthorError, AuthoredHead, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
     author_scope_root_envelope, new_child, report_carried_cut,
 };
-use crate::net::last_known_good::keep_newest_last_known_good;
-use crate::net::publish::{PublishError, PublishOutcome, PublishReceipt};
+use crate::net::last_known_good::keep_then_commit;
+use crate::net::publish::{
+    Observed, PublishError, PublishOutcome, PublishReceipt, refuse_foreign_version,
+};
 use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
@@ -881,6 +883,7 @@ impl SealPlane<'_> {
             node_id: *node_id,
             scope_id: self.end.root.0,
             epoch: self.epoch,
+            write_epoch: None,
         }
     }
 }
@@ -1555,8 +1558,9 @@ impl LoadedRoot {
 struct LoadedNode {
     name: IpnsName,
     record: Vec<u8>,
-    sequence: u64,
-    /// The endpoints serve other bytes at `sequence` too.
+    /// The record a republish at `name` builds on.
+    observed: Observed,
+    /// The endpoints serve other bytes at the observed sequence too.
     tied: bool,
     envelope_unknown: PreservedFields,
     epoch_tag_unknown: PreservedFields,
@@ -2627,12 +2631,7 @@ where
         )
         .await
         .map_err(|_| Halt::UploadAttempt)?;
-        // Encode/decode fail-closed symmetry: this build authors exactly
-        // `ENVELOPE_V`, so republishing a newer client's root would silently
-        // downgrade `v` — the exact rollback the read-body AAD defends against.
-        if envelope.v != ENVELOPE_V {
-            return Err(Halt::Unclassified);
-        }
+        refuse_foreign_version(envelope.v).map_err(|_| Halt::Unclassified)?;
         let read_key = source.read_key(&source.root.0);
         let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::UploadAttempt)?;
         let ReadBody::Folder {
@@ -2805,19 +2804,17 @@ where
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, adopter, &name, &record_bytes, lagging)
             .await?;
-        // The same two rollback guards the root load makes: this build authors
-        // exactly `ENVELOPE_V`, and re-sealing a node at an epoch above the
-        // scope's would cross the AAD epoch binding.
-        if envelope.v != ENVELOPE_V {
-            return Err(Halt::Unclassified);
-        }
+        let observed =
+            Observed::gated(&name, adopted.sequence, envelope.v).map_err(|_| Halt::Unclassified)?;
+        // Re-sealing a node at an epoch above the scope's would cross the AAD
+        // epoch binding.
         if adopted.epoch > anchor.epoch {
             return Err(Halt::Unclassified);
         }
         Ok(LoadedNode {
             name,
             record: record_bytes,
-            sequence: adopted.sequence,
+            observed,
             tied,
             envelope_unknown: envelope.unknown,
             epoch_tag_unknown: envelope.epoch_tag_unknown,
@@ -3161,7 +3158,7 @@ where
                 scope,
                 &plane,
                 child_id,
-                &child_name,
+                Observed::unread(&child_name),
                 false,
                 &child.body,
                 content_cids,
@@ -4350,7 +4347,9 @@ where
                     scope,
                     to,
                     node,
-                    &name,
+                    // The load may have read the `from` end's floors, so the `to`
+                    // end's own floor bars the sequence.
+                    Observed::unread(&name),
                     false,
                     &body,
                     content_cids,
@@ -5034,12 +5033,14 @@ where
                 ReadBody::Folder { .. } => Vec::new(),
             };
             let name = dest.end.write_name(&node.0);
+            // The load read the source end's floors, so the destination's own
+            // floor bars the sequence.
             let published = self
                 .publish_node(
                     scope,
                     dest,
                     node,
-                    &name,
+                    Observed::unread(&name),
                     false,
                     &body,
                     content_cids,
@@ -5315,7 +5316,7 @@ where
                 scope,
                 &plane,
                 target,
-                &loaded.name,
+                loaded.observed,
                 false,
                 &body,
                 content_cids,
@@ -5434,7 +5435,7 @@ where
                 scope,
                 &plane,
                 target,
-                &loaded.name,
+                loaded.observed,
                 false,
                 &body,
                 content_cids,
@@ -5571,7 +5572,7 @@ where
                 scope,
                 &plane,
                 target,
-                &loaded.name,
+                loaded.observed,
                 false,
                 &body,
                 content_cids,
@@ -5656,7 +5657,7 @@ where
                 scope,
                 &plane,
                 target,
-                &loaded.name,
+                loaded.observed,
                 false,
                 &body,
                 content_cids,
@@ -5834,7 +5835,7 @@ where
             && (loaded.tied
                 || match acked {
                     Acknowledged::Nothing => false,
-                    Acknowledged::At(acked) => loaded.sequence <= acked,
+                    Acknowledged::At(acked) => loaded.observed.sequence() <= acked,
                     Acknowledged::Unreadable => true,
                 })
         {
@@ -6347,7 +6348,8 @@ where
         let plane = scope
             .folder_plane(pass, folder)
             .map_err(PublishHalt::before_the_put)?;
-        self.reresolve_before_signing(scope, &plane, folder, &name, commitment.as_ref(), &built_on)
+        let observed = self
+            .reresolve_before_signing(scope, &plane, folder, &name, commitment.as_ref(), &built_on)
             .await
             .map_err(PublishHalt::before_the_put)?;
         let published = self
@@ -6355,7 +6357,7 @@ where
                 scope,
                 &plane,
                 folder,
-                &name,
+                observed,
                 commitment.is_some(),
                 &body,
                 Vec::new(),
@@ -6392,7 +6394,7 @@ where
         name: &IpnsName,
         commitment: Option<&GrantSetCommitment>,
         built_on: &(u64, Vec<u8>),
-    ) -> Result<(), Halt> {
+    ) -> Result<Observed, Halt> {
         let served = if commitment.is_some() {
             let resolved = self
                 .gated_scope_root(scope, &plane.end, ResolveMode::NoCache)
@@ -6409,12 +6411,13 @@ where
         if served.is_some_and(|served| served.moved_past(built_on)) {
             return Err(Halt::LostRace);
         }
+        let observed = Observed::record(name, built_on.0);
         let Some(commitment) = commitment else {
-            return Ok(());
+            return Ok(observed);
         };
         let floors = plane.end.floors(&self.seams.floors);
         match refuse_below_cut_floor(&floors, &plane.end.root.0, commitment).await {
-            Ok(()) => Ok(()),
+            Ok(()) => Ok(observed),
             Err(GateError::Rejected(rejection)) => {
                 Err(refuse_record(&self.seams.events, name, &rejection))
             }
@@ -6483,7 +6486,7 @@ where
         scope: &DrainScope<'_>,
         plane: &SealPlane<'_>,
         node: NodeId,
-        name: &IpnsName,
+        observed: Observed,
         is_scope_root: bool,
         body: &ReadBody,
         content_cids: Vec<String>,
@@ -6491,6 +6494,7 @@ where
         carried_epoch_tag_unknown: PreservedFields,
         completes: Option<OpId>,
     ) -> Result<Published, PublishHalt> {
+        let name = &observed.name().clone();
         plane_seals(plane, node, name, is_scope_root).map_err(PublishHalt::before_the_put)?;
         let read_key = plane.end.read_key(&node.0);
         let nonce = fresh_nonce(&mut *self.seams.entropy.borrow_mut())
@@ -6524,9 +6528,11 @@ where
             .acknowledged(&owner, node.0, name.as_str())
             .await
             .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
-        let sign_above = match acked {
-            Acknowledged::Nothing => None,
-            Acknowledged::At(sequence) => Some(sequence),
+        // A PUT of ours the ledger acknowledged may still surface, so the
+        // signature clears it too.
+        let observed = match acked {
+            Acknowledged::Nothing => observed,
+            Acknowledged::At(sequence) => observed.clearing(sequence),
             // Any sequence may hide behind it: clear the most one op's charged
             // attempts can have signed above the floor.
             Acknowledged::Unreadable => {
@@ -6536,18 +6542,11 @@ where
                 )
                 .await
                 .map_err(|error| PublishHalt::before_the_put(seam(error)))?;
-                Some(floor.unwrap_or(0).saturating_add(u64::from(ATTEMPT_BUDGET)))
+                observed.clearing(floor.unwrap_or(0).saturating_add(u64::from(ATTEMPT_BUDGET)))
             }
         };
         let record_bytes = match self
-            .publish_head(
-                plane,
-                name,
-                &node.0,
-                &head,
-                content_cids.clone(),
-                sign_above,
-            )
+            .publish_head(plane, &observed, &node.0, &head, content_cids.clone())
             .await
             .map_err(PublishHalt::before_the_put)?
         {
@@ -6649,15 +6648,15 @@ where
             }
             adopter.adopt(name, record_bytes).await?
         };
-        keep_newest_last_known_good(&self.seams.snapshot_cache, name, record_bytes)
-            .await
-            .map_err(GateError::Seam)?;
-        Ok(adopted
-            .pass
-            .commit(&floors)
-            .await
-            .map_err(GateError::Seam)?
-            .sequence)
+        keep_then_commit(
+            &self.seams.snapshot_cache,
+            name,
+            record_bytes,
+            adopted.pass.commit(&floors),
+        )
+        .await
+        .map(|adopted| adopted.sequence)
+        .map_err(GateError::Seam)
     }
 
     /// Dry-run and publish one head. Only [`HeadPublish::Confirmed`] bytes
@@ -6666,17 +6665,16 @@ where
     async fn publish_head(
         &self,
         plane: &SealPlane<'_>,
-        name: &IpnsName,
+        observed: &Observed,
         node_id: &[u8; 16],
         head: &AuthoredHead,
         content_cids: Vec<String>,
-        acked: Option<u64>,
     ) -> Result<HeadPublish, Halt> {
         let binding = plane.head_binding(node_id);
         let preflighted = preflight(&binding, &plane.end.read_key(node_id), head)
             .map_err(|_| Halt::UploadAttempt)?;
         let signer = SessionIdentity::write_name_signer(plane.end.write_scope_seed, node_id);
-        let _publishing = PublishingName::hold(self.cells.publishing, name);
+        let _publishing = PublishingName::hold(self.cells.publishing, observed.name());
         let PublishReceipt {
             outcome,
             record_bytes,
@@ -6688,11 +6686,10 @@ where
             &self.seams.scheduler,
             &self.seams.profile,
             &RecordPublishRequest {
-                name,
+                observed,
                 signer: &signer,
                 head: &preflighted,
                 content_cids,
-                min_current_sequence: acked,
             },
         )
         .await
@@ -7511,7 +7508,7 @@ fn folder_state(plane: &SealPlane<'_>, loaded: LoadedNode) -> Result<FolderState
         modified_at,
         children,
         body_unknown: unknown,
-        sequence: loaded.sequence,
+        sequence: loaded.observed.sequence(),
     })
 }
 

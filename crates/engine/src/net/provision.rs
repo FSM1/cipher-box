@@ -9,7 +9,8 @@ use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use crate::api::{ApiClient, ApiError};
 use crate::net::fanout::{FanoutRecord, VacancyRule, fanout_get_under, fanout_get_verify};
 use crate::net::publish::{
-    InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, publish_inline,
+    InlineRecordRequest, Observed, PublishError, PublishOutcome, PublishReceipt, PublishVerdict,
+    publish_inline,
 };
 use crate::net::record_publish::{
     PreflightedHead, RecordPublishError, RecordPublishRequest, publish_record,
@@ -42,17 +43,10 @@ pub struct VaultProvisionNet<'a, T, H: Http, C: CredentialStore, F, Sch, Ad> {
 /// Carry a publish failure onto rule 6's axis: only this build's own
 /// release-active refusals and a mis-echoed CID are verdicts a retry repeats.
 fn publish_verdict(error: PublishError) -> WritePublishError {
-    match error {
-        PublishError::Register(_) => WritePublishError::RegistryFull,
-        PublishError::EmptyHeadCid
-        | PublishError::EmptyInlineValue
-        | PublishError::EpochBelowFloor { .. }
-        | PublishError::RecordTooLarge { .. }
-        | PublishError::SequenceExhausted => WritePublishError::Rejected,
-        PublishError::AllEndpointsFailed
-        | PublishError::AllEndpointsRefused
-        | PublishError::FloorRead(_)
-        | PublishError::MarkUnrecorded(_) => WritePublishError::NotLanded,
+    match error.verdict() {
+        PublishVerdict::RegistryRefused => WritePublishError::RegistryFull,
+        PublishVerdict::Refused => WritePublishError::Rejected,
+        PublishVerdict::NotLanded => WritePublishError::NotLanded,
     }
 }
 
@@ -133,11 +127,10 @@ where
             self.scheduler,
             self.profile,
             &RecordPublishRequest {
-                name,
+                observed: &Observed::unread(name),
                 signer,
                 head,
                 content_cids: Vec::new(),
-                min_current_sequence: None,
             },
         )
         .await
@@ -164,10 +157,9 @@ where
             self.scheduler,
             self.profile,
             &InlineRecordRequest {
-                name,
+                observed: &Observed::unread(name),
                 signer,
                 value: block,
-                min_current_sequence: None,
             },
         )
         .await

@@ -22,16 +22,18 @@ use self::cursor::{
 use super::REGISTRY_BATCH_MAX;
 use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
 use super::eol::{self, renewal_eol_from};
-use super::fanout::{FanoutRecord, MAX_RECORD_BYTES, fanout_get_classified};
+use super::fanout::{FanoutRecord, fanout_get_classified};
 use super::liveness::{EolRenewResult, HeldKey, HeldRecord, HeldRecords, hold_if_unchanged};
-use super::publish::{PublishError, PublishOutcome, head_cid_from_value, put_and_confirm};
+use super::publish::{
+    Observed, PublishError, PublishOutcome, SignatureGate, head_cid_from_value, put_and_confirm,
+};
 use super::register::register;
 use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger};
 use super::rotation::{AdmittedScopeRoot, ScopeRootAdmission, admit_owned_scope_root, scope_name};
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::bin_index::BinIndexKeys;
 use crate::content::Gateway;
-use crate::gate::{GateError, GateStage, floor};
+use crate::gate::{GateError, GateStage};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
@@ -820,29 +822,23 @@ where
             FanoutRecord::Unavailable(_) => return Some(Err(PublishError::AllEndpointsFailed)),
             FanoutRecord::Found(..) | FanoutRecord::Absent => return None,
         }
-        let floor = match floor::sequence_floor(self.floors, due.name.as_str().as_bytes()).await {
-            Ok(floor) => floor,
-            Err(error) => return Some(Err(PublishError::FloorRead(error))),
+        let observed = Observed::record(&due.name, due.sequence);
+        let gate = match SignatureGate::read(self.floors, &observed, None).await {
+            Ok(gate) => gate,
+            Err(error) => return Some(Err(error)),
         };
         // No await from here to the signature.
-        if floor != Some(due.sequence)
+        if gate.sequence_floor() != Some(due.sequence)
             || self.guards.publishing.borrow().contains(due.name.as_str())
         {
             return None;
         }
-        let Some(sequence) = due.sequence.checked_add(1) else {
-            return Some(Err(PublishError::SequenceExhausted));
-        };
         let ttl_nanos = u64::try_from(self.profile.record_ttl.as_nanos()).unwrap_or(u64::MAX);
         let eol = renewal_eol_from(self.scheduler.now());
-        let record_bytes =
-            IpnsRecord::create_v2(&due.signer, &due.value, sequence, ttl_nanos, &eol).marshal();
-        if record_bytes.len() > MAX_RECORD_BYTES {
-            return Some(Err(PublishError::RecordTooLarge {
-                size: record_bytes.len(),
-                limit: MAX_RECORD_BYTES,
-            }));
-        }
+        let (record_bytes, sequence) = match gate.sign(&due.signer, &due.value, ttl_nanos, &eol) {
+            Ok(signed) => signed,
+            Err(error) => return Some(Err(error)),
+        };
         let receipt = match put_and_confirm(
             self.transport,
             self.scheduler,
@@ -950,7 +946,8 @@ fn transient_renewal(outcome: &Result<Option<PublishOutcome>, PublishError>) -> 
             | PublishError::EmptyHeadCid
             | PublishError::EmptyInlineValue
             | PublishError::RecordTooLarge { .. }
-            | PublishError::EpochBelowFloor { .. }
+            | PublishError::BelowBar { .. }
+            | PublishError::ForeignVersion { .. }
             | PublishError::SequenceExhausted,
         ) => false,
     }

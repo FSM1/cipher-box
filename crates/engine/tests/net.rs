@@ -22,9 +22,9 @@ use cipherbox_engine::SyncTimingProfile;
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::net::eol;
 use cipherbox_engine::net::{
-    HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl, PublishError, PublishOutcome,
-    PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest, eol_republish,
-    keyless_re_put, publish, resolve, revive, run_liveness_loop,
+    HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl, Observed, PublishError,
+    PublishOutcome, PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest,
+    eol_republish, keyless_re_put, publish, resolve, revive, run_liveness_loop,
 };
 use cipherbox_engine::seams::{
     FloorStore, HttpResponse, RecordTransport, Scheduler, SnapshotCache, UnixMillis,
@@ -340,12 +340,11 @@ fn publish_registers_first_embeds_sequence_one_and_confirms() {
     device.http.enqueue_response(ok_200()); // register
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: vec!["bafyc1".into()],
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     let outcome = block_on(publish(
         &device.record_store,
@@ -384,12 +383,11 @@ fn publish_cas_embeds_the_exact_expected_sequence_floor_plus_one() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     let outcome = block_on(publish(
         &device.record_store,
@@ -421,12 +419,11 @@ fn register_first_fail_closed_puts_no_record() {
     });
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     let error = block_on(publish(
         &device.record_store,
@@ -472,12 +469,11 @@ fn publish_fails_closed_when_the_sequence_floor_cannot_be_read() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     let error = block_on(publish(
         &device.record_store,
@@ -517,12 +513,11 @@ fn publish_succeeds_on_any_ack_and_the_background_retry_reaches_the_failed_endpo
     let scheduler = world.scheduler.clone().with_auto_advance();
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     let outcome = block_on(publish(
         &device.record_store,
@@ -581,12 +576,11 @@ fn publish_all_endpoints_failing_is_fail_closed() {
     device.http.enqueue_response(ok_200()); // registration succeeds; the PUT does not
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     let error = block_on(publish(
         &device.record_store,
@@ -627,12 +621,11 @@ fn publish_confirm_detects_a_lost_cas_race() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     let outcome = block_on(publish(
         &device.record_store,
@@ -679,12 +672,11 @@ fn publish_confirm_reads_a_sibling_at_our_sequence_as_a_lost_race() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     let receipt = block_on(publish(
         &device.record_store,
@@ -741,12 +733,11 @@ fn publish_confirm_reads_a_sibling_on_a_later_endpoint_as_a_lost_race() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     let receipt = block_on(publish(
         &device.record_store,
@@ -801,12 +792,11 @@ fn publish_at_an_exhausted_sequence_floor_refuses_before_it_signs() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     let error = block_on(publish(
         &device.record_store,
@@ -1080,12 +1070,11 @@ fn eol_republish_renews_at_seq_plus_one_only_inside_the_window() {
     // adoption by advancing the durable sequence floor to 1 (the gate's job).
     device.http.enqueue_response(ok_200());
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
     block_on(publish(
         &device.record_store,
@@ -1595,12 +1584,11 @@ fn multi_day_eol_timeline_publish_renew_lapse_revive() {
     let endpoint = world.record_store.endpoints()[0].clone();
 
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &s,
         head_cid: "bafytimeline".into(),
         content_cids: Vec::new(),
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
 
     // T0: first publish (seq 1, EOL T0+90d); model adoption (floor → 1).

@@ -30,7 +30,8 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use super::eol::{self, EOL_RENEW_THRESHOLD};
 use super::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify, fanout_put};
 use super::publish::{
-    InlineRecordRequest, PublishError, PublishOutcome, PublishRequest, publish, publish_inline,
+    InlineRecordRequest, Observed, PublishError, PublishOutcome, PublishRequest, publish,
+    publish_inline,
 };
 use crate::api::ApiClient;
 use crate::profile::SyncTimingProfile;
@@ -385,7 +386,8 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let Some((verified, _bytes)) = fanout_get_verify(transport, request.name).await else {
+    let Some((verified, _bytes)) = fanout_get_verify(transport, request.observed.name()).await
+    else {
         return Ok(None);
     };
     if !eol::needs_renewal(scheduler.now(), &verified.validity, EOL_RENEW_THRESHOLD) {
@@ -443,10 +445,9 @@ where
         scheduler,
         profile,
         &InlineRecordRequest {
-            name,
+            observed: &Observed::record(name, verified.sequence),
             signer,
             value,
-            min_current_sequence: Some(verified.sequence),
         },
     )
     .await
@@ -509,17 +510,18 @@ where
                 if head_cid.is_empty() {
                     continue;
                 }
+                // Renewal is a normal CAS write: the sequence comes from the
+                // durable floor + 1, never the network's copy, which may carry
+                // another device's newer content.
+                let observed = Observed::unread(&name);
                 let request = PublishRequest {
-                    name: &name,
+                    observed: &observed,
                     signer: &hr.signer,
                     head_cid: head_cid.clone(),
                     content_cids: hr.content_cids.clone(),
-                    // Renewal is a normal CAS write: the sequence comes from the
-                    // durable floor + 1, not a recovered revival sequence.
-                    min_current_sequence: None,
                     // A renewal re-points the held value unchanged; the epoch it
                     // binds was barred at the publish that authored it.
-                    epoch_bar: None,
+                    bar: None,
                 };
                 eol_republish(transport, api, floors, scheduler, profile, &request).await
             }
@@ -552,7 +554,8 @@ mod tests {
     use super::super::eol;
     use super::super::fanout::MAX_RECORD_BYTES;
     use super::super::publish::{
-        InlineRecordRequest, PublishError, PublishOutcome, PublishRequest, publish, publish_inline,
+        InlineRecordRequest, Observed, PublishError, PublishOutcome, PublishRequest, publish,
+        publish_inline,
     };
     use crate::api::ApiClient;
     use crate::profile::SyncTimingProfile;
@@ -656,12 +659,11 @@ mod tests {
         let signer = Ed25519Signer::from_seed([9u8; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
         let request = PublishRequest {
-            name: &name,
+            observed: &Observed::unread(&name),
             signer: &signer,
             head_cid: String::new(),
             content_cids: Vec::new(),
-            min_current_sequence: None,
-            epoch_bar: None,
+            bar: None,
         };
         // Encode/decode fail-closed symmetry (security rule 8): an empty head CID
         // would sign `/ipfs/`, which head_cid_from_value always rejects — so
@@ -703,10 +705,9 @@ mod tests {
             &world.scheduler,
             &SyncTimingProfile::CI,
             &InlineRecordRequest {
-                name: &name,
+                observed: &Observed::unread(&name),
                 signer: &signer,
                 value: &[],
-                min_current_sequence: None,
             },
         ));
         assert_eq!(out, Err(PublishError::EmptyInlineValue));
@@ -739,12 +740,11 @@ mod tests {
         let signer = Ed25519Signer::from_seed([11u8; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
         let request = PublishRequest {
-            name: &name,
+            observed: &Observed::unread(&name),
             signer: &signer,
             head_cid: "b".repeat(MAX_RECORD_BYTES),
             content_cids: Vec::new(),
-            min_current_sequence: None,
-            epoch_bar: None,
+            bar: None,
         };
         // Encode/decode fail-closed symmetry (security rule 8): fanout_get_verify
         // skips an over-cap record, so publishing one would mint bytes this

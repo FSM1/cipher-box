@@ -58,8 +58,8 @@ pub use pointer_fetch::RecordPointerFetch;
 pub(crate) use pointer_fetch::{PointerConsult, PointerConsultError};
 pub(crate) use provision::VaultProvisionNet;
 pub use publish::{
-    InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish,
-    publish_inline,
+    BarFloor, InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome,
+    PublishReceipt, PublishRequest, PublishVerdict, publish, publish_inline,
 };
 pub use record_accelerator::RecordAccelerator;
 pub use record_publish::{PreflightError, RecordPublishError};

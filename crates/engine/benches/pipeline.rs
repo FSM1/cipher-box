@@ -21,7 +21,9 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{PreservedFields, ReadBody};
 
 use cipherbox_engine::gate::{Adopted, Candidate, GateError, ReaderContext, adopt};
-use cipherbox_engine::net::{AdoptOutcome, Adopter, GatePass, PublishRequest, publish, resolve};
+use cipherbox_engine::net::{
+    AdoptOutcome, Adopter, GatePass, Observed, PublishRequest, publish, resolve,
+};
 use cipherbox_engine::seams::{HttpResponse, RecordTransport};
 use cipherbox_engine::sync::ResolveMode;
 use cipherbox_engine::testkit::account::{Blocks, EOL, TTL_NANOS, owner_identity, serve_http};
@@ -202,12 +204,11 @@ fn bench_publish(c: &mut Criterion) {
     let signer = kdf::ipns_keypair(&[0x99; 32]);
     let name = IpnsName::from_public_key(&signer.verifying_key());
     let request = PublishRequest {
-        name: &name,
+        observed: &Observed::unread(&name),
         signer: &signer,
         head_cid: "bafybenchhead".into(),
         content_cids: vec!["bafybenchleaf".into()],
-        min_current_sequence: None,
-        epoch_bar: None,
+        bar: None,
     };
 
     c.bench_function("publish", |b| {

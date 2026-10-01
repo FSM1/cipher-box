@@ -9,15 +9,17 @@
 //! re-derive, so a head no reader could open cannot reach the network.
 
 use cipherbox_core::error::CodecError;
-use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::{decode_envelope, open_bin_index, open_read_body, open_settings_record};
+use cipherbox_core::seal::{
+    decode_envelope, decode_grant_section, grant_section_bytes, open_bin_index, open_read_body,
+    open_settings_record,
+};
 use cipherbox_core::suite::aead::KEY_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use super::author::AuthoredHead;
 use super::publish::{
-    EpochBar, PublishError, PublishReceipt, PublishRequest, PutMark, publish_marked,
+    Observed, PublishBar, PublishError, PublishReceipt, PublishRequest, PutMark, publish_marked,
 };
 use crate::api::{ApiClient, ApiError};
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
@@ -35,6 +37,9 @@ pub struct HeadBinding {
     pub scope_id: [u8; 16],
     /// The scope read epoch it is sealed at.
     pub epoch: u64,
+    /// For a scope root, the write epoch its owner-write-blob binds
+    /// ([`PublishBar::write_epoch`]).
+    pub write_epoch: Option<u64>,
 }
 
 /// A pre-publish dry-run failure. The op fails locally and **nothing** is
@@ -83,17 +88,17 @@ impl std::error::Error for PreflightError {}
 pub struct PreflightedHead {
     block: Vec<u8>,
     cid: String,
-    /// The read-epoch floor bar this head carries to its signature, for the
-    /// families that bind a scope epoch. Set from the dry run's own
-    /// [`HeadBinding`], so no caller can publish an envelope under a bar other
-    /// than the one it was proven against.
-    epoch_bar: Option<EpochBar>,
+    /// The floors this head must clear at its signature, for the families that
+    /// bind a scope epoch. Set from the dry run's own [`HeadBinding`] and the
+    /// head's own grant section, so no caller can publish an envelope under a
+    /// bar other than the one it was proven against.
+    bar: Option<PublishBar>,
 }
 
 impl PreflightedHead {
     /// Address `block` and cap it. Private: reachable only past a family's
     /// reopen proof.
-    fn new(block: Vec<u8>, epoch_bar: Option<EpochBar>) -> Result<Self, PreflightError> {
+    fn new(block: Vec<u8>, bar: Option<PublishBar>) -> Result<Self, PreflightError> {
         if block.len() > MAX_RESOLVED_RECORD_BYTES {
             return Err(PreflightError::TooLarge {
                 size: block.len(),
@@ -101,11 +106,7 @@ impl PreflightedHead {
             });
         }
         let cid = root_block_cid(&block);
-        Ok(Self {
-            block,
-            cid,
-            epoch_bar,
-        })
+        Ok(Self { block, cid, bar })
     }
 
     /// The head block's content CID, as the record `Value` spells it.
@@ -142,11 +143,17 @@ pub fn preflight(
         return Err(PreflightError::BindingMismatch);
     }
     open_read_body(envelope, read_key).map_err(PreflightError::Unseal)?;
+    let cut_epoch = grant_section_bytes(envelope)
+        .map(|bytes| decode_grant_section(bytes).map(|section| section.commitment.cut_epoch))
+        .transpose()
+        .map_err(PreflightError::Unseal)?;
     PreflightedHead::new(
         head.block.clone(),
-        Some(EpochBar {
+        Some(PublishBar {
             scope_id: binding.scope_id,
-            epoch: binding.epoch,
+            read_epoch: binding.epoch,
+            write_epoch: binding.write_epoch,
+            cut_epoch,
         }),
     )
 }
@@ -174,20 +181,17 @@ pub fn preflight_bin_index(
     PreflightedHead::new(block, None)
 }
 
-/// One record publish: the name and its narrow per-name signer, the
+/// One record publish: the observed name and its narrow per-name signer, the
 /// preflighted head, and the content CIDs to register alongside it.
 pub struct RecordPublishRequest<'a> {
-    /// The IPNS name being published.
-    pub name: &'a IpnsName,
-    /// The narrow per-name Ed25519 signer for [`Self::name`].
+    /// The record the publish builds on, and the name it publishes under.
+    pub observed: &'a Observed,
+    /// The narrow per-name Ed25519 signer for the observed name.
     pub signer: &'a Ed25519Signer,
     /// The dry-run head block to upload and point the record at.
     pub head: &'a PreflightedHead,
     /// The content CIDs to register/pin under this name.
     pub content_cids: Vec<String>,
-    /// Raises the CAS expected-current sequence (revival only; see
-    /// [`PublishRequest::min_current_sequence`]).
-    pub min_current_sequence: Option<u64>,
 }
 
 /// A fail-closed record-publish failure: what the publish *pipeline* reports
@@ -270,12 +274,11 @@ where
         scheduler,
         profile,
         &PublishRequest {
-            name: request.name,
+            observed: request.observed,
             signer: request.signer,
             head_cid: request.head.cid.clone(),
             content_cids: request.content_cids.clone(),
-            min_current_sequence: request.min_current_sequence,
-            epoch_bar: request.head.epoch_bar,
+            bar: request.head.bar,
         },
         mark,
     )
@@ -289,6 +292,7 @@ mod tests {
     use crate::net::author::{EnvelopeAuthoring, author_child_envelope};
     use crate::seams::{HttpResponse, RecordTransport};
     use crate::testkit::{FakeWorld, block_on};
+    use cipherbox_core::ipns::IpnsName;
     use cipherbox_core::seal::{PreservedFields, ReadBody};
 
     const READ_KEY: [u8; 32] = [8u8; 32];
@@ -299,6 +303,7 @@ mod tests {
             node_id: [1u8; 16],
             scope_id: [2u8; 16],
             epoch: 3,
+            write_epoch: None,
         }
     }
 
@@ -352,11 +357,10 @@ mod tests {
             &world.scheduler,
             &SyncTimingProfile::CI,
             &RecordPublishRequest {
-                name: &name,
+                observed: &Observed::unread(&name),
                 signer: &signer,
                 head: &preflighted,
                 content_cids: Vec::new(),
-                min_current_sequence: None,
             },
         ));
 

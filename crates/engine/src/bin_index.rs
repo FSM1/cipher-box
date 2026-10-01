@@ -29,7 +29,7 @@ use crate::entropy::{Entropy, EntropyError, fresh_nonce};
 use crate::gate::floor;
 use crate::gate::floor::RevisionMintError;
 use crate::net::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue, hold_if_unchanged};
-use crate::net::publish::{PublishError, PublishOutcome, PutMark};
+use crate::net::publish::{Observed, PublishError, PublishOutcome, PutMark};
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_bin_index,
     publish_record_marked,
@@ -361,11 +361,10 @@ where
         scheduler,
         profile,
         &RecordPublishRequest {
-            name,
+            observed: &Observed::unread(name),
             signer: &keys.signer,
             head: &head,
             content_cids: Vec::new(),
-            min_current_sequence: None,
         },
         Some(PutMark {
             key: &mint_key,

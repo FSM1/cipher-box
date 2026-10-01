@@ -25,7 +25,7 @@ use zeroize::Zeroizing;
 
 use super::adopter::{LocalHead, assemble_head_envelope, reject};
 use super::fanout::fanout_get_verify;
-use super::last_known_good::keep_newest_last_known_good;
+use super::last_known_good::{keep_newest_last_known_good, keep_then_commit};
 use super::resolve::{AdoptOutcome, Adopter, GatePass, ResolveOutcome, resolve_gated};
 use crate::content::Gateway;
 use crate::gate::{Adopted, GateError, GateStage, RejectionReason, floor};
@@ -550,13 +550,18 @@ where
         .open_interior_under(name, record_bytes, &seed)
         .await
         .map_err(ChildResolveError::Gate)?;
-    let seam = |e: SeamError| ChildResolveError::Unavailable(e.message().to_owned());
-    keep_newest_last_known_good(snapshot_cache, name, record_bytes)
-        .await
-        .map_err(seam)?;
-    floor::advance_sequence_on_unseal(adopter.floors, name.as_str().as_bytes(), adopted.sequence)
-        .await
-        .map_err(seam)?;
+    keep_then_commit(
+        snapshot_cache,
+        name,
+        record_bytes,
+        floor::advance_sequence_on_unseal(
+            adopter.floors,
+            name.as_str().as_bytes(),
+            adopted.sequence,
+        ),
+    )
+    .await
+    .map_err(|e| ChildResolveError::Unavailable(e.message().to_owned()))?;
     Ok(adopted)
 }
 

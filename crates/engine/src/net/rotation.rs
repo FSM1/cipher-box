@@ -49,12 +49,15 @@ use super::author::{
     author_scope_root_with_section, report_carried_cut,
 };
 use super::child::ChildAdopter;
-use super::last_known_good::keep_newest_last_known_good;
+use super::last_known_good::{keep_newest_last_known_good, keep_then_commit};
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::pointer_fetch::{
     ConsultedPointer, PointerConsult, PointerConsultError, RecordPointerFetch,
 };
-use super::publish::{InlineRecordRequest, PublishError, PublishOutcome, publish_inline};
+use super::publish::{
+    InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome, PublishVerdict,
+    publish_inline, refuse_foreign_version,
+};
 use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
@@ -69,9 +72,7 @@ use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
 use crate::gate::floor::PointerPlane;
-use crate::gate::{
-    Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor, refuse_below_cut_floor,
-};
+use crate::gate::{Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor};
 use crate::grants::child_index::canonicalize;
 use crate::grants::create::ScopePointerVoucher;
 use crate::grants::{
@@ -323,12 +324,12 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
 /// than retaining every descendant's record for the length of the walk.
 #[derive(Default)]
 pub struct GatedRoots {
-    inner: RefCell<Option<(IpnsName, RepublishBase)>>,
+    inner: RefCell<Option<RepublishBase>>,
 }
 
 impl GatedRoots {
-    fn park(&self, name: IpnsName, base: RepublishBase) {
-        *self.inner.borrow_mut() = Some((name, base));
+    fn park(&self, base: RepublishBase) {
+        *self.inner.borrow_mut() = Some(base);
     }
 
     /// The parked record for `name`, if that is the one parked. Matching on the
@@ -338,7 +339,7 @@ impl GatedRoots {
     fn take(&self, name: &IpnsName) -> Option<RepublishBase> {
         let mut parked = self.inner.borrow_mut();
         match parked.as_ref() {
-            Some((parked_name, _)) if parked_name == name => parked.take().map(|(_, base)| base),
+            Some(base) if base.observed.name() == name => parked.take(),
             _ => None,
         }
     }
@@ -409,11 +410,11 @@ struct RepublishBase {
     epoch_tag_unknown: PreservedFields,
     /// `None` when the root is held keyless — no seed to sign a republish under.
     write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
-    /// The CAS lower bound the republish must land above: the sequence a landed
-    /// publish at this name already spent ([`RootPublish::run`]), or the one the
+    /// The record the republish replaces, also clearing the sequence a landed
+    /// publish at this name already spent ([`RootPublish::run`]) or the one the
     /// record plane's own refused copy sits at
     /// ([`OwnerRotationNet::last_known_good_root`]).
-    min_current_sequence: Option<u64>,
+    observed: Observed,
 }
 
 /// A scope root a re-seal can run on: the gated record, and — where the record
@@ -424,15 +425,27 @@ struct ResealableRoot {
     over_sequence: Option<u64>,
 }
 
-impl From<ResealableRoot> for RepublishBase {
-    fn from(resealable: ResealableRoot) -> Self {
-        Self {
+/// The record a republish of `root` at `name` builds on, clearing
+/// `over_sequence` ([`ResealableRoot`]).
+fn root_observed(
+    name: &IpnsName,
+    root: &GatedScopeRoot,
+    over_sequence: Option<u64>,
+) -> Result<Observed, PublishError> {
+    Ok(Observed::gated(name, root.sequence, root.envelope.v)?.clearing(over_sequence.unwrap_or(0)))
+}
+
+impl RepublishBase {
+    /// The base a republish of `resealable` at `name` carries forward.
+    fn over(resealable: ResealableRoot, name: &IpnsName) -> Result<Self, PublishError> {
+        let observed = root_observed(name, &resealable.root, resealable.over_sequence)?;
+        Ok(Self {
             read_body: resealable.root.read_body,
             unknown: resealable.root.envelope.unknown,
             epoch_tag_unknown: resealable.root.envelope.epoch_tag_unknown,
             write_scope_seed: resealable.root.write_scope_seed,
-            min_current_sequence: resealable.over_sequence,
-        }
+            observed,
+        })
     }
 }
 
@@ -684,13 +697,15 @@ fn author_verdict(refusal: AuthorError) -> RotationPublishError {
 /// verdict on them would let anyone who can grow a record block the rotation.
 fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
-        RecordPublishError::HeadCidMismatch { .. }
-        | RecordPublishError::Publish(
-            PublishError::EmptyHeadCid
-            | PublishError::EpochBelowFloor { .. }
-            | PublishError::SequenceExhausted,
-        ) => RotationPublishError::Rejected,
-        _ => RotationPublishError::NotPublished,
+        RecordPublishError::HeadCidMismatch { .. } => RotationPublishError::Rejected,
+        RecordPublishError::Publish(PublishError::RecordTooLarge { .. })
+        | RecordPublishError::Upload(_) => RotationPublishError::NotPublished,
+        RecordPublishError::Publish(error) => match error.verdict() {
+            PublishVerdict::Refused => RotationPublishError::Rejected,
+            PublishVerdict::RegistryRefused | PublishVerdict::NotLanded => {
+                RotationPublishError::NotPublished
+            }
+        },
     }
 }
 
@@ -893,10 +908,11 @@ async fn gated_root_cached<H: Http, F: FloorStore, S: SnapshotCache>(
     expected_child: Option<[u8; 16]>,
 ) -> Result<GatedScopeRoot, RootGateVerdict> {
     let pass = gate_root_pass(adopter, name, record_bytes, expected_child).await?;
-    keep_newest_last_known_good(snapshot_cache, name, record_bytes)
-        .await
-        .map_err(|_| RootGateVerdict::Unavailable)?;
-    pass.commit(adopter).await
+    keep_then_commit(snapshot_cache, name, record_bytes, async {
+        Ok(pass.commit(adopter).await)
+    })
+    .await
+    .map_err(|_| RootGateVerdict::Unavailable)?
 }
 
 /// The write material a descendant scope root's own write plane runs under.
@@ -1218,21 +1234,20 @@ where
     // and overwrite the record it could not read, so an unreadable plane ends
     // the publish instead ([`FanoutRecord`]).
     let observed = match fanout_get_classified(pipeline.transport, name).await {
-        FanoutRecord::Found(record, _) => record.sequence,
-        FanoutRecord::Absent => 0,
+        FanoutRecord::Found(record, _) => Observed::record(name, record.sequence),
+        FanoutRecord::Absent => Observed::unread(name),
         FanoutRecord::Unavailable(_) => return Err(PointerPublishFailure::NotLanded),
     };
-    publish_pointer_over(pipeline, name, signer, block, observed).await
+    publish_pointer_over(pipeline, &observed, signer, block).await
 }
 
 /// [`publish_pointer_inline`] over a CAS bar the caller already read: the
-/// sequence of the record whose contents the new block was built from.
+/// record whose contents the new block was built from.
 pub(super) async fn publish_pointer_over<T, H, C, F, Sch>(
     pipeline: PointerPipeline<'_, T, H, C, F, Sch>,
-    name: &IpnsName,
+    observed: &Observed,
     signer: &Ed25519Signer,
     block: &[u8],
-    observed: u64,
 ) -> Result<Vec<u8>, PointerPublishFailure>
 where
     T: RecordTransport + Clone + 'static,
@@ -1255,24 +1270,21 @@ where
         scheduler,
         profile,
         &InlineRecordRequest {
-            name,
+            observed,
             signer,
             value: block,
-            min_current_sequence: Some(observed),
         },
     )
     .await
-    .map_err(|error| match error {
-        PublishError::Register(_) => PointerPublishFailure::RegistryFull,
-        PublishError::EmptyHeadCid
-        | PublishError::EmptyInlineValue
-        | PublishError::RecordTooLarge { .. }
-        | PublishError::SequenceExhausted => PointerPublishFailure::Rejected,
-        _ => PointerPublishFailure::NotLanded,
+    .map_err(|error| match error.verdict() {
+        PublishVerdict::RegistryRefused => PointerPublishFailure::RegistryFull,
+        PublishVerdict::Refused => PointerPublishFailure::Rejected,
+        PublishVerdict::NotLanded => PointerPublishFailure::NotLanded,
     })?;
     match receipt.outcome {
         PublishOutcome::Published { sequence } => {
-            floor::advance_sequence_on_unseal(floors, name.as_str().as_bytes(), sequence)
+            let name = observed.name().as_str().as_bytes();
+            floor::advance_sequence_on_unseal(floors, name, sequence)
                 .await
                 .map_err(|_| PointerPublishFailure::NotLanded)?;
             Ok(receipt.record_bytes)
@@ -2157,6 +2169,8 @@ where
             write_epoch,
             over_sequence,
         } = self.gated_write_plane(scope, anchor).await?;
+        let observed =
+            root_observed(&name, &root, over_sequence).map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
             envelope,
             section,
@@ -2165,15 +2179,11 @@ where
             read_scope_seed,
             write_scope_seed,
         } = root;
-        // This build authors exactly `ENVELOPE_V`, so re-sealing a newer
-        // client's root under its own `v` would mint structures whose AAD this
-        // build can never reproduce (`sync/drain.rs` guards the same downgrade).
-        //
         // The root gate binds `envelope.scope` but not `envelope.id`, and every
         // AAD a re-seal of this target authors binds the id — so a root whose
         // record claims another node would be re-sealed under a key no reader
         // re-derives (the write wave imposes the same binding).
-        if envelope.v != ENVELOPE_V || envelope.id != scope.scope_id {
+        if envelope.id != scope.scope_id {
             return Err(ResolveFailure::Rejected);
         }
         let Some(write_scope_seed) = write_scope_seed else {
@@ -2199,16 +2209,13 @@ where
             carried_history_links: section.history_links,
             carried_ascent_link: section.ascent_link.is_some(),
         };
-        self.gated.park(
-            name,
-            RepublishBase {
-                read_body,
-                unknown: envelope.unknown,
-                epoch_tag_unknown: envelope.epoch_tag_unknown,
-                write_scope_seed: Some(write_scope_seed),
-                min_current_sequence: over_sequence,
-            },
-        );
+        self.gated.park(RepublishBase {
+            read_body,
+            unknown: envelope.unknown,
+            epoch_tag_unknown: envelope.epoch_tag_unknown,
+            write_scope_seed: Some(write_scope_seed),
+            observed,
+        });
         Ok(target)
     }
 }
@@ -2269,49 +2276,6 @@ where
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
 {
-    /// The three durable-floor mirrors of gate rejects this build would itself
-    /// make on the record about to be signed — release-active, because a signed
-    /// record cannot be unpublished (security rule 8):
-    ///
-    /// - the read epoch must not sit below the durable revocation floor (stage 5);
-    /// - the write epoch must not sit below the durable write floor, which the
-    ///   owner-write-blob's AAD binds — below it the root publishes write-plane
-    ///   dead, and floors are monotonic, so it can never be rotated back;
-    /// - the re-sealed grant set's cut epoch must not sit below the durable
-    ///   cut-epoch floor, the bar stage 2 holds every commitment to
-    ///   ([`refuse_stale_cut_epoch`](cipherbox_core::seal::refuse_stale_cut_epoch)).
-    ///   The engine is a single writer, so another leg may raise that floor from
-    ///   the owner's fresh cut while this pass parks its re-seal; signing then
-    ///   would overwrite the post-cut record at a higher sequence with a set
-    ///   this build's own stage 2 refuses for ever.
-    ///
-    /// Runs **after** this pass's gated read of the scope root, which may itself
-    /// advance the read-epoch floor: measured before it, the floor comparison
-    /// would miss a cut minted below the epoch that read just adopted.
-    async fn check_publishable(
-        &self,
-        record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
-        let scope_id = &record.scope_id;
-        let read_floor = floor::read_epoch_floor(self.floors, scope_id)
-            .await
-            .map_err(|_| RotationPublishError::NotPublished)?
-            .unwrap_or(0);
-        let write_floor = floor::write_epoch_floor(self.floors, scope_id)
-            .await
-            .map_err(|_| RotationPublishError::NotPublished)?
-            .unwrap_or(0);
-        if record.read_epoch < read_floor || record.write_epoch < write_floor {
-            return Err(RotationPublishError::Rejected);
-        }
-        refuse_below_cut_floor(self.floors, scope_id, &record.section.commitment)
-            .await
-            .map_err(|error| match error {
-                GateError::Rejected(_) => RotationPublishError::Rejected,
-                GateError::Seam(_) => RotationPublishError::NotPublished,
-            })
-    }
-
     /// Author `record`'s envelope over `current` — the record it replaces — dry
     /// run it, and CAS-publish it register-first at `name`.
     ///
@@ -2327,11 +2291,10 @@ where
         override_seed: &[u8; SECRET_LEN],
         current: RepublishBase,
     ) -> Result<RepublishBase, RotationPublishError> {
-        // `check_publishable`'s floor read must still hold when this function
-        // signs the record ([`floor::WriteEpochLease`]).
+        // The write floor the signature clears must still hold when the record
+        // lands ([`floor::WriteEpochLease`]).
         let _write_lease = floor::acquire_write_epoch_lease(&record.scope_id)
             .ok_or(RotationPublishError::NotPublished)?;
-        self.check_publishable(record).await?;
 
         let node_seed = kdf::node_seed(override_seed, &record.scope_id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
@@ -2363,6 +2326,7 @@ where
             node_id: record.scope_id,
             scope_id: record.scope_id,
             epoch: record.read_epoch,
+            write_epoch: Some(record.write_epoch),
         };
         let preflighted = preflight(&binding, &read_key, &head)
             .map_err(|_| RotationPublishError::NotPublished)?;
@@ -2375,26 +2339,23 @@ where
             self.scheduler,
             self.profile,
             &RecordPublishRequest {
-                name,
+                observed: &current.observed,
                 signer: &signer,
                 head: &preflighted,
                 content_cids: Vec::new(),
-                min_current_sequence: current.min_current_sequence,
             },
         )
         .await
         .map_err(record_publish_verdict)?;
 
         match receipt.outcome {
-            // The CAS sequence a republish takes is the durable floor plus one,
-            // and the floor only moves when a **read** adopts. A second publish
-            // at this name in the same pass would therefore re-CAS at the
-            // sequence this one spent, so the bound rides in the base instead —
-            // pass-local, because raising the floor here would make this
-            // device's own next resolve read its record as current rather than
-            // adopt the epoch it just cut (`net/resolve.rs`).
+            // The floor only moves when a **read** adopts, so a second publish at
+            // this name in the same pass clears the sequence this one spent
+            // through the base — pass-local, because raising the floor here would
+            // make this device's own next resolve read its record as current
+            // rather than adopt the epoch it just cut (`net/resolve.rs`).
             PublishOutcome::Published { sequence } => Ok(RepublishBase {
-                min_current_sequence: Some(sequence),
+                observed: current.observed.clone().clearing(sequence),
                 ..current
             }),
             PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
@@ -2445,11 +2406,13 @@ where
         // rather than making the pass read the record twice ([`GatedRoots`]).
         let current = match self.gated.take(&name) {
             Some(parked) => parked,
-            None => RepublishBase::from(
+            None => RepublishBase::over(
                 self.gated_root(record.scope_id, &name)
                     .await
                     .map_err(|verdict| publish_verdict(verdict.into()))?,
-            ),
+                &name,
+            )
+            .map_err(|_| RotationPublishError::Rejected)?,
         };
         let published = self
             .root_publish()
@@ -2457,7 +2420,7 @@ where
             .await?;
         // Only on a landed publish: a race the record plane refused leaves the
         // slot empty, so the next publish re-resolves.
-        self.gated.park(name, published);
+        self.gated.park(published);
         Ok(())
     }
 }
@@ -2499,7 +2462,12 @@ where
             // A read grant cuts no write scope, so the promoted root keeps
             // signing under the write seed of the scope it is leaving.
             write_scope_seed: Some(source.write_scope_seed.clone()),
-            min_current_sequence: None,
+            // The record the promotion replaces, where the node keeps its name.
+            observed: if node.ipns_name == name.as_str().as_bytes() {
+                Observed::record(&name, current.sequence)
+            } else {
+                Observed::unread(&name)
+            },
         };
         floor::seed_scope_root_write_epoch(self.floors, &record.scope_id, record.write_epoch)
             .await
@@ -2754,6 +2722,8 @@ where
             .gated_root(granted)
             .await
             .map_err(ResolveFailure::from)?;
+        let observed = root_observed(&granted.ipns_name, &gated, None)
+            .map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
             envelope,
             section,
@@ -2762,12 +2732,6 @@ where
             read_scope_seed,
             write_scope_seed,
         } = gated;
-        // This build authors exactly `ENVELOPE_V`, so re-sealing a newer client's
-        // root under its own `v` would mint structures whose AAD this build can
-        // never reproduce (`sync/drain.rs` guards the same downgrade).
-        if envelope.v != ENVELOPE_V {
-            return Err(ResolveFailure::Rejected);
-        }
         // A read-only grant conveys no write scope seed, so this device can sign
         // no record at this name — a permanent capability verdict, never a stall.
         let Some(write_scope_seed) = write_scope_seed else {
@@ -2833,16 +2797,13 @@ where
             pointer_read_key,
             pseudonym,
         };
-        self.gated.park(
-            granted.ipns_name.clone(),
-            RepublishBase {
-                read_body,
-                unknown: envelope.unknown,
-                epoch_tag_unknown: envelope.epoch_tag_unknown,
-                write_scope_seed: Some(write_scope_seed),
-                min_current_sequence: None,
-            },
-        );
+        self.gated.park(RepublishBase {
+            read_body,
+            unknown: envelope.unknown,
+            epoch_tag_unknown: envelope.epoch_tag_unknown,
+            write_scope_seed: Some(write_scope_seed),
+            observed,
+        });
         Ok(plan)
     }
 
@@ -3130,9 +3091,7 @@ where
         sequence: u64,
         envelope: Envelope,
     ) -> Result<SweptNode, SweepResolveFailure> {
-        if envelope.v != ENVELOPE_V {
-            return Err(SweepResolveFailure::VersionSkew);
-        }
+        refuse_foreign_version(envelope.v).map_err(|_| SweepResolveFailure::VersionSkew)?;
         if envelope.id != child.node_id || envelope.scope != source.scope_id {
             return Err(SweepResolveFailure::Rejected);
         }
@@ -3172,9 +3131,7 @@ where
         sequence: u64,
         envelope: &Envelope,
     ) -> Result<ReadBody, SweepResolveFailure> {
-        if envelope.v != ENVELOPE_V {
-            return Err(SweepResolveFailure::VersionSkew);
-        }
+        refuse_foreign_version(envelope.v).map_err(|_| SweepResolveFailure::VersionSkew)?;
         if envelope.id != node.node_id {
             return Err(SweepResolveFailure::Rejected);
         }
@@ -3235,13 +3192,15 @@ where
         // after an AAD-confirmed unseal (`net/child.rs`), and nothing else on
         // this path raises it — so without this a rolled-back record stays
         // admissible for as long as the node goes unbrowsed. The bytes are cached
-        // first ([`keep_newest_last_known_good`]).
-        keep_newest_last_known_good(self.snapshot_cache, name, record_bytes)
-            .await
-            .map_err(|_| SweepResolveFailure::Unavailable)?;
-        floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)
-            .await
-            .map_err(|_| SweepResolveFailure::Unavailable)?;
+        // first ([`keep_then_commit`]).
+        keep_then_commit(
+            self.snapshot_cache,
+            name,
+            record_bytes,
+            floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence),
+        )
+        .await
+        .map_err(|_| SweepResolveFailure::Unavailable)?;
         Ok(read_body)
     }
 }
@@ -3276,9 +3235,8 @@ where
             .gated_root(scope.scope_id, &name)
             .await
             .map_err(SweepResolveFailure::from)?;
-        if root.envelope.v != ENVELOPE_V {
-            return Err(SweepResolveFailure::VersionSkew);
-        }
+        let observed = root_observed(&name, &root, over_sequence)
+            .map_err(|_| SweepResolveFailure::VersionSkew)?;
         self.open_write_seed_on_access(&mut root, scope.scope_id)
             .await
             .map_err(SweepResolveFailure::from)?;
@@ -3316,16 +3274,13 @@ where
         });
         // The index repair republishes this root, and runs off this read rather
         // than gating the same record twice ([`GatedRoots`]).
-        self.gated.park(
-            name,
-            RepublishBase {
-                read_body,
-                unknown: envelope.unknown,
-                epoch_tag_unknown: envelope.epoch_tag_unknown,
-                write_scope_seed: Some(write_scope_seed),
-                min_current_sequence: over_sequence,
-            },
-        );
+        self.gated.park(RepublishBase {
+            read_body,
+            unknown: envelope.unknown,
+            epoch_tag_unknown: envelope.epoch_tag_unknown,
+            write_scope_seed: Some(write_scope_seed),
+            observed,
+        });
         Ok(SweptScope {
             current_read_epoch: read_epoch,
             children,
@@ -3444,6 +3399,7 @@ where
             node_id: node.node_id,
             scope_id: seal.scope_id,
             epoch: seal.read_epoch,
+            write_epoch: None,
         };
         let preflighted = preflight(&binding, seal.read_key, &head)
             .map_err(|_| RotationPublishError::NotPublished)?;
@@ -3455,14 +3411,11 @@ where
             self.scheduler,
             self.profile,
             &RecordPublishRequest {
-                name,
+                // The interior read the sweep carried the node's sequence from.
+                observed: &Observed::record(name, node.sequence),
                 signer: &signer,
                 head: &preflighted,
                 content_cids: Vec::new(),
-                // The record the read came from is the CAS lower bound, named
-                // here rather than left to the durable floor alone, exactly as
-                // the pointer publish and revival treat their own ungated names.
-                min_current_sequence: Some(node.sequence),
             },
         )
         .await
@@ -3497,7 +3450,7 @@ where
         // Release-active (security rule 8): a node is only ever sealed at the
         // epoch of the scope root this pass gated, since any other value signs
         // under a key no reader re-derives. The durable floor that same epoch
-        // must clear is read at the signature ([`EpochBar`]).
+        // must clear is read at the signature ([`PublishBar`]).
         if node.read_epoch != source.read_epoch {
             return Err(RotationPublishError::Rejected);
         }
@@ -3691,9 +3644,7 @@ where
         )
         .await
         .map_err(ResolveFailure::from)?;
-        if gated.envelope.v != ENVELOPE_V {
-            return Err(ResolveFailure::Rejected);
-        }
+        refuse_foreign_version(gated.envelope.v).map_err(|_| ResolveFailure::Rejected)?;
         let GatedWriteBody {
             body: write_body,
             epoch: write_epoch,
@@ -4146,14 +4097,17 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
 fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => WritePublishError::Rejected,
-        RecordPublishError::Publish(PublishError::Register(_)) => WritePublishError::RegistryFull,
-        RecordPublishError::Publish(
-            PublishError::EmptyHeadCid
-            | PublishError::EpochBelowFloor { .. }
-            | PublishError::RecordTooLarge { .. }
-            | PublishError::SequenceExhausted,
-        ) => WritePublishError::Rejected,
-        _ => WritePublishError::NotLanded,
+        RecordPublishError::Upload(_) => WritePublishError::NotLanded,
+        RecordPublishError::Publish(error) => wave_publish_verdict(error),
+    }
+}
+
+/// [`publish_record_verdict`] for a failure of the publish pipeline itself.
+fn wave_publish_verdict(error: PublishError) -> WritePublishError {
+    match error.verdict() {
+        PublishVerdict::RegistryRefused => WritePublishError::RegistryFull,
+        PublishVerdict::Refused => WritePublishError::Rejected,
+        PublishVerdict::NotLanded => WritePublishError::NotLanded,
     }
 }
 
@@ -4244,10 +4198,11 @@ where
         .await
         .map_err(|verdict| wave_read_verdict(verdict.into()))?;
         let envelope = gated.envelope;
+        refuse_foreign_version(envelope.v).map_err(|_| WritePublishError::Rejected)?;
         // The root gate binds `envelope.scope` but not `envelope.id`, and every
         // AAD this republish authors binds the id — so a root whose record claims
         // another node would be re-sealed under a key no reader re-derives.
-        if envelope.v != ENVELOPE_V || envelope.id != self.scope_id {
+        if envelope.id != self.scope_id {
             return Err(WritePublishError::Rejected);
         }
         let read_scope_seed = gated.read_scope_seed;
@@ -4406,7 +4361,8 @@ where
         )
         .await
         .map_err(ResolveFailure::from)?;
-        if gated.envelope.v != ENVELOPE_V || gated.envelope.id != self.scope_id {
+        refuse_foreign_version(gated.envelope.v).map_err(|_| ResolveFailure::Rejected)?;
+        if gated.envelope.id != self.scope_id {
             return Err(ResolveFailure::Rejected);
         }
         Ok(gated)
@@ -4783,17 +4739,30 @@ where
             root,
         } = source;
         rewrite_child_names(&mut read_body, &node.child_names)?;
+        // Only the root arm re-seals a write plane, so only it needs the floor
+        // held still ([`floor::WriteEpochLease`]).
+        let _write_lease = root
+            .as_ref()
+            .map(|_| {
+                floor::acquire_write_epoch_lease(&self.scope_id).ok_or(WritePublishError::NotLanded)
+            })
+            .transpose()?;
         // `read_epoch` is the enumeration's envelope epoch, carried across the
         // whole subtree since a name wave cuts no read key — so a read rotation
-        // adopted mid-wave leaves every record below the live floor. The
-        // stage-5 mirror, strict `<` like `check_publishable`.
-        let read_floor = floor::read_epoch_floor(self.floors, &self.scope_id)
+        // adopted mid-wave leaves every record below the live floor. A root's
+        // write epoch is the floor as the enumeration saw it: the whole interior
+        // wave has run since, and a floor above it means another device's
+        // re-point superseded the record this wave carries forward. Refused here,
+        // ahead of the carry below, and again at the signature.
+        let bar = PublishBar {
+            scope_id: self.scope_id,
+            read_epoch,
+            write_epoch: root.as_ref().map(|plane| plane.write_epoch),
+            cut_epoch: root.as_ref().map(|_| self.authorized_commitment.cut_epoch),
+        };
+        bar.refuse_below(self.floors)
             .await
-            .map_err(|_| WritePublishError::NotLanded)?
-            .unwrap_or(0);
-        if read_epoch < read_floor {
-            return Err(WritePublishError::Rejected);
-        }
+            .map_err(wave_publish_verdict)?;
 
         let nonce = fresh_nonce(&mut *self.entropy.borrow_mut())
             .map_err(|_| WritePublishError::NotLanded)?;
@@ -4807,14 +4776,6 @@ where
             carried_unknown: unknown,
             carried_epoch_tag_unknown: epoch_tag_unknown,
         };
-        // Only the root arm re-seals a write plane, so only it needs the floor
-        // held still ([`floor::WriteEpochLease`]).
-        let _write_lease = root
-            .as_ref()
-            .map(|_| {
-                floor::acquire_write_epoch_lease(&self.scope_id).ok_or(WritePublishError::NotLanded)
-            })
-            .transpose()?;
         let head = match root {
             Some(plane) => {
                 let fresh = node
@@ -4831,26 +4792,6 @@ where
                 if node.new_name != derive_write_name(fresh.as_bytes(), &node.node_id) {
                     return Err(WritePublishError::Rejected);
                 }
-                // `plane.write_epoch` is the floor as the enumeration saw it, and
-                // the whole interior wave has run since. The floor is monotonic
-                // and rises on any pointer consult, so a floor above that
-                // snapshot means another device's re-point superseded the record
-                // this wave is carrying forward — and sealing against the
-                // snapshot would publish a section at or below the live floor,
-                // a write plane `open_write_body` could never reopen.
-                let write_floor = floor::write_epoch_floor(self.floors, &self.scope_id)
-                    .await
-                    .map_err(|_| WritePublishError::NotLanded)?
-                    .ok_or(WritePublishError::NotLanded)?;
-                if write_floor > plane.write_epoch {
-                    return Err(WritePublishError::Rejected);
-                }
-                refuse_below_cut_floor(self.floors, &self.scope_id, self.authorized_commitment)
-                    .await
-                    .map_err(|error| match error {
-                        GateError::Rejected(_) => WritePublishError::Rejected,
-                        GateError::Seam(_) => WritePublishError::NotLanded,
-                    })?;
                 let section = self.reseal_root(node, &plane, fresh.as_bytes(), read_epoch)?;
                 author_scope_root_with_section(
                     authoring,
@@ -4874,6 +4815,7 @@ where
             node_id: node.node_id,
             scope_id: self.scope_id,
             epoch: read_epoch,
+            write_epoch: bar.write_epoch,
         };
         // A preflight refusal is this build's own verdict on the bytes it just
         // authored: re-authoring the same inputs reaches it again (rule 6).
@@ -4915,11 +4857,11 @@ where
             self.scheduler,
             self.profile,
             &RecordPublishRequest {
-                name: &node.new_name,
+                // The wave moves the node to a name it has not read.
+                observed: &Observed::unread(&node.new_name),
                 signer: &node.signer,
                 head: &preflighted,
                 content_cids,
-                min_current_sequence: None,
             },
         )
         .await
@@ -13804,7 +13746,7 @@ mod tests {
     /// A floor store that raises one scope's read-epoch floor from *inside* a
     /// publish window: the raise lands on the per-name sequence-floor read the
     /// publish makes immediately before it signs, so a bar read any earlier than
-    /// the signature misses it ([`EpochBar`]).
+    /// the signature misses it ([`PublishBar`]).
     struct RaisingFloors {
         inner: InMemoryFloorStore,
         /// The name whose sequence-floor read fires the raise.
