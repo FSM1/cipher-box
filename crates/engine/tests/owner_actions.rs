@@ -1698,26 +1698,34 @@ fn dual_linked_at(
         .find(|keep| (keep.0 < inner.0) == keep_below)
         .expect("a folder id on the asked side of the inner folder's");
     let deep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, keep, "deep");
-    concurrent_add(
-        &fx.world,
-        &fx.blocks,
-        inner,
-        &read_key_of(inner),
-        SCOPE,
-        ChildRef {
-            id: deep.0,
-            name: "deep".to_owned(),
-            ipns_name: write_name(deep).as_str().as_bytes().to_vec(),
-            kind: CoreNodeKind::Folder,
-            link_counter: inner_counter,
-            unknown: PreservedFields::new(),
-        },
-    );
-    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) })).expect("the focus moves");
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    dual_link(fx, inner, deep, inner_counter);
     share(fx);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     (keep, deep, inner)
+}
+
+/// Another writer links `deep` from `holder` at `counter`, and the owner
+/// focuses `holder` and refreshes.
+fn dual_link(fx: &mut GrantScenario, holder: NodeId, deep: NodeId, counter: u64) {
+    let mut link = named_child(deep, "deep", &write_name(deep));
+    link.link_counter = counter;
+    concurrent_add(
+        &fx.world,
+        &fx.blocks,
+        holder,
+        &read_key_of(holder),
+        SCOPE,
+        link,
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(holder) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+}
+
+/// Whether the record at `node`'s write name opens under `read_key`.
+fn opens_under(fx: &GrantScenario, node: NodeId, read_key: &[u8; 32]) -> bool {
+    published_seal(&fx.world, &fx.blocks, &write_name(node), read_key)
+        .2
+        .is_some()
 }
 
 /// A `share` for [`dual_linked_at`]: a direct grant at `permission`.
@@ -1762,10 +1770,8 @@ fn assert_held_in_the_vault_scope(fx: &GrantScenario, keep: NodeId, deep: NodeId
         write_name(deep),
         "{case}: the vault's folder names the node at the name it held"
     );
-    let head = published_head(&fx.world, &fx.blocks, &write_name(deep)).expect("deep is published");
-    let envelope = decode_envelope(&head).expect("the head block decodes");
     assert!(
-        open_read_body(&envelope, &read_key_of(deep)).is_ok(),
+        opens_under(fx, deep, &read_key_of(deep)),
         "{case}: and the node there seals in the vault's own scope"
     );
 }
@@ -1787,11 +1793,8 @@ fn assert_grant_and_delete_follow_the_link_rank(inner_counter: u64) {
 
         let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
         if inner_wins(inner_counter, keep_below) {
-            let head = published_head(&fx.world, &fx.blocks, &write_name(deep))
-                .expect("deep is published");
-            let envelope = decode_envelope(&head).expect("the head block decodes");
             assert!(
-                open_read_body(&envelope, &read_key_under(&override_seed, deep)).is_ok(),
+                opens_under(&fx, deep, &read_key_under(&override_seed, deep)),
                 "{case}: deep moved into the granted scope"
             );
         } else {
@@ -1942,27 +1945,9 @@ fn assert_a_relinked_ref_refuses_then_moves(via_root: bool) {
     let (keep, deep, holder) = if via_root {
         let keep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "keep");
         let deep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, keep, "deep");
-        concurrent_add(
-            &fx.world,
-            &fx.blocks,
-            fx.folder,
-            &read_key_of(fx.folder),
-            SCOPE,
-            ChildRef {
-                id: deep.0,
-                name: "deep".to_owned(),
-                ipns_name: write_name(deep).as_str().as_bytes().to_vec(),
-                kind: CoreNodeKind::Folder,
-                link_counter: 0,
-                unknown: PreservedFields::new(),
-            },
-        );
-        block_on(fx.engine.command(Command::SetFocus {
-            node: Some(fx.folder),
-        }))
-        .expect("the focus moves");
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-        (keep, deep, fx.folder)
+        let folder = fx.folder;
+        dual_link(&mut fx, folder, deep, 0);
+        (keep, deep, folder)
     } else {
         dual_linked_at(&mut fx, 0, true, |_| {})
     };
@@ -2012,10 +1997,8 @@ fn assert_a_relinked_ref_refuses_then_moves(via_root: bool) {
         "{case}: a retry after a refresh succeeds"
     );
     let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
-    let head = published_head(&fx.world, &fx.blocks, &write_name(deep)).expect("deep is published");
-    let envelope = decode_envelope(&head).expect("the head block decodes");
     assert!(
-        open_read_body(&envelope, &read_key_under(&override_seed, deep)).is_ok(),
+        opens_under(&fx, deep, &read_key_under(&override_seed, deep)),
         "{case}: and the node moves into the granted scope"
     );
 }

@@ -3954,9 +3954,16 @@ fn subtree_child_scopes(
 /// that cycles or ends short proves nothing, so its node stays inside.
 fn held_outside(rendered: &Snapshot, node: NodeId) -> Vec<HeldNode> {
     let inside = |id: NodeId| id == node || rendered.is_descendant_of(id, node);
+    // A child with one link from inside is inside, so only a dual-linked child
+    // pays for the ancestor walks.
+    let mut link_count: BTreeMap<NodeId, u32> = BTreeMap::new();
+    for link in rendered.links() {
+        *link_count.entry(link.child).or_default() += 1;
+    }
     let mut held: Vec<NodeId> = rendered
         .links()
         .iter()
+        .filter(|link| link_count[&link.child] > 1)
         .filter(|link| inside(link.parent) && !inside(link.child))
         .filter(|link| rendered.is_descendant_of(link.child, rendered.root))
         .map(|link| link.child)

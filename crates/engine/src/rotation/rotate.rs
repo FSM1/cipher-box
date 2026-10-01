@@ -135,7 +135,7 @@ impl core::fmt::Display for RotationPublishError {
                 f.write_str("rotation record rejected by adoption gate")
             }
             RotationPublishError::NotConverged { .. } => {
-                f.write_str("rotation publish met a ref the snapshot did not rank")
+                f.write_str("rotation publish met a held ref that no longer loses the link rank")
             }
         }
     }

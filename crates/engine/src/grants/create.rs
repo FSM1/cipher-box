@@ -1208,11 +1208,7 @@ where
         .promote_scope_root(&parent_ref, &folder, &grantee_record, grantee.held_outside)
         .await
         .map_err(|error| match error {
-            RotationPublishError::NotConverged { node_id } => {
-                CreateGrantError::SubtreeNotConverged {
-                    unconverged: vec![node_id],
-                }
-            }
+            RotationPublishError::NotConverged { node_id } => not_converged(node_id),
             error => CreateGrantError::Publish(error),
         })?;
 
@@ -1509,6 +1505,13 @@ pub(crate) fn drop_held_refs(
     Ok(())
 }
 
+/// The refusal for a held ref that [`drop_held_refs`] found re-linked.
+fn not_converged(node_id: [u8; 16]) -> CreateGrantError {
+    CreateGrantError::SubtreeNotConverged {
+        unconverged: vec![node_id],
+    }
+}
+
 /// Whether `published` commits exactly the row `minted` mints: the recipient,
 /// the permission, the masked key and the writer pseudonym, not the blinded tag
 /// alone. Preserved unknown fields are ignored — a published entry may carry
@@ -1576,11 +1579,8 @@ where
                 .await
             {
                 Ok(MovingChild::Pending(mut node)) => {
-                    drop_held_refs(&mut node.read_body, child.node_id, held_outside).map_err(
-                        |node_id| CreateGrantError::SubtreeNotConverged {
-                            unconverged: vec![node_id],
-                        },
-                    )?;
+                    drop_held_refs(&mut node.read_body, child.node_id, held_outside)
+                        .map_err(not_converged)?;
                     // Release-active (security rule 8). The read admits any
                     // record at or below the scope's epoch, so a record that
                     // regressed since the pass would travel into the grantee's
