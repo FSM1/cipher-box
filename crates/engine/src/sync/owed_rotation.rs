@@ -229,8 +229,9 @@ impl<'a, St> OwedRotation<'a, St> {
 }
 
 impl<St: StagingStore> OwedRotation<'_, St> {
-    /// The record, read from the store the first time. A blob this identity
-    /// does not open reads as no record, as every bookkeeping kind does.
+    /// The record, read from the store the first time. A stored blob that does
+    /// not open fails the read and stays as it is: a write over it would drop
+    /// the work it holds (ADR 0020 Consequence 4).
     pub async fn load(&self) -> SeamResult<OwedRecord> {
         self.read(OwedRecord::clone).await
     }
@@ -265,9 +266,11 @@ impl<St: StagingStore> OwedRotation<'_, St> {
             .staging
             .staged_bytes(&owed_rotation_key(self.enc_secret))
             .await?;
-        let record = stored
-            .and_then(|blob| open_owed_record(self.seal, &blob))
-            .unwrap_or_default();
+        let record = match stored {
+            None => OwedRecord::default(),
+            Some(blob) => open_owed_record(self.seal, &blob)
+                .ok_or_else(|| SeamError::new("the owed rotation record does not open"))?,
+        };
         // A command may have written the cell during the read.
         let mut cell = self.cell.record.borrow_mut();
         Ok(view(cell.get_or_insert(record)))

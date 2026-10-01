@@ -10375,6 +10375,46 @@ fn a_queued_crossing_of_a_folder_with_an_owed_move_waits_for_the_move() {
     assert_eq!(fx.owed_scopes(), vec![], "the owed move landed");
 }
 
+/// An owed rotation record this build cannot open is left as it is, and a
+/// command that would owe work refuses before its first publish rather than
+/// write a fresh record over it.
+#[test]
+fn an_owed_record_that_does_not_open_is_never_written_over() {
+    let fx = GrantScenario::new();
+    let key = owed_rotation_key(&kdf::enc_subkey(&SECRET));
+    let unreadable = b"not an owed rotation record".to_vec();
+    block_on(
+        fx.owner_device
+            .staging_store
+            .put_staged_bytes(&key, &unreadable),
+    )
+    .expect("stage the bytes");
+    let root_before = sequence_at(&fx.world, &write_name(ROOT));
+
+    let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &fresh, &mut tasks);
+    assert!(
+        block_on(fresh.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        }))
+        .is_err(),
+        "the grant refuses"
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(ROOT)),
+        root_before,
+        "before any publish"
+    );
+    assert_eq!(
+        block_on(fx.owner_device.staging_store.staged_bytes(&key)),
+        Ok(Some(unreadable)),
+        "and the stored record is untouched"
+    );
+}
+
 /// A record at the folder's name with no grant section does not prove a
 /// promotion never ran: a parent-scope writer can publish one. The interior
 /// move stays owed rather than being dropped.
@@ -11594,6 +11634,37 @@ fn a_grant_retried_after_a_failed_vouch_vouches_the_contact() {
         "the vouch after the publish fails"
     );
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    block_on(book.forget_link_grant(&recipient, &fx.folder.0)).expect("the cut lands");
+    assert!(
+        block_on(book.contacts())
+            .expect("load")
+            .iter()
+            .any(|contact| contact.identity_pk().to_sec1() == recipient),
+        "the vouched contact outlives the link's cut"
+    );
+}
+
+/// A grant whose handover stalls after its root landed still vouches for a
+/// link-sourced recipient, so the link's cut does not collect the contact its
+/// owed delivery is for.
+#[test]
+fn a_grant_whose_handover_stalls_vouches_the_contact() {
+    let mut fx = GrantScenario::new();
+    let recipient = recipient_identity().verifying_key().to_sec1();
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let staging = fx.owner_device.staging_store.clone();
+    let book = StagingContactStore::new(&staging, &enc_subkey, &entropy);
+    block_on(book.forget(&recipient)).expect("the hand import is dropped");
+    block_on(book.record_from_link(
+        &contact_code(&RECIPIENT_SECRET),
+        &committed_link_at(0x33, [0x33; 32]),
+        &fx.folder.0,
+    ))
+    .expect("the recipient records from a link");
+
+    fx.stall_the_owed_move();
 
     block_on(book.forget_link_grant(&recipient, &fx.folder.0)).expect("the cut lands");
     assert!(

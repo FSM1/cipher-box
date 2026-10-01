@@ -4285,6 +4285,8 @@ enum PendingShare<'a> {
     SharePointer(GrantRecipient<'a>),
     /// The bearer capability an invite link hands its host.
     Fragment(MintedInviteLink),
+    /// A personal grant whose handover stalled: its delivery is owed.
+    Owed,
 }
 
 /// The host-facing names a scope mint's refusals carry. One rule, one name per
@@ -8055,12 +8057,12 @@ where {
                 // The root landed, so a stalled handover leaves the move owed,
                 // as a link's does below.
                 if let Some(stalled) = granted.handover.err() {
-                    self.state.minted_scope_roots.borrow_mut().insert(node);
-                    pass.stop_owed(node, owed_steps, OwedStop::of_grant(&stalled))
+                    pass.stop_owed(node, owed_steps.clone(), OwedStop::of_grant(&stalled))
                         .await;
-                    return Ok(CommandOutcome::Done);
+                    (PendingShare::Owed, granted.read_scope)
+                } else {
+                    (PendingShare::SharePointer(recipient), granted.read_scope)
                 }
-                (PendingShare::SharePointer(recipient), granted.read_scope)
             }
             ScopeShare::InviteLink {
                 expires_at,
@@ -8151,6 +8153,7 @@ where {
         let recipient = match pending {
             PendingShare::SharePointer(recipient) => recipient,
             PendingShare::Fragment(minted) => return Ok(CommandOutcome::InviteLinkMinted(minted)),
+            PendingShare::Owed => return Ok(CommandOutcome::Done),
         };
         // The interior move landed; the write-scope cut and the delivery stay
         // owed until each lands.

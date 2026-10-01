@@ -1029,7 +1029,9 @@ command writes an entry to the owner-local `owed-rotation` record: the scope
 id, the cut epoch, and the steps still owed in command order (a read cut, a
 write cut, an interior move, the delivery of a write grant). The entry holds no
 seed; a re-drive recovers an in-flight write seed from the published records.
-A refused write stops the command with `Err` before any publish. The entry
+A refused write stops the command with `Err` before any publish. A stored
+record that does not open is never written over: every write refuses, and the
+renewal walk renews nothing, until it opens. The entry
 advances as each step lands, and clears after the cut-epoch floor record, the
 write-epoch floor raise and the index re-point. Each sync pass re-drives every
 entry after the drain, and the first pass of a session does so before the

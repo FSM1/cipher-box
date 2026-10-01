@@ -440,8 +440,7 @@ where
         Some(doomed)
     }
 
-    /// The scopes this owner's owed rotation record names. A blob this
-    /// identity does not open reads as no record.
+    /// The scopes this owner's owed rotation record names.
     async fn owed_scopes(&self) -> SeamResult<BTreeSet<[u8; 16]>> {
         let scopes = OwedRotation::new(self.staging, self.seal, self.enc_secret, self.owed)
             .scopes()
