@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.9.2](https://github.com/FSM1/cipher-box/compare/v2.9.1...v2.9.2) (2026-10-01)
+
+
+### Bug Fixes
+
+* **api:** refuse an identity token whose exp is past the token lifetime ([#2173](https://github.com/FSM1/cipher-box/issues/2173)) ([f049cfb](https://github.com/FSM1/cipher-box/commit/f049cfb0f41982066010f2cff264bf32c680848b))
+
 ## [2.9.1](https://github.com/FSM1/cipher-box/compare/v2.9.0...v2.9.1) (2026-10-01)
 
 
