@@ -124,7 +124,7 @@ pub use net::{
     resolve, revive,
 };
 pub use profile::SyncTimingProfile;
-pub use record_plane::{BinIndexHoldCheck, DefaultsReason};
+pub use record_plane::{BinIndexHoldCheck, DefaultsReason, LapsedHead, Unopened};
 pub use rotation::{
     ChildIndexResolver, CommittedSet, CutRotationReport, CutRotator, EagerSet, EnumerationError,
     GrantCutPlan, PrevEpochSeed, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,

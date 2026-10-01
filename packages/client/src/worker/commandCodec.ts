@@ -191,7 +191,10 @@ const SETTINGS_HOLD_CHECKS: Record<SettingsHoldCheck, true> = {
   'byo-credential-repointed': true,
   'byo-provider-missing': true,
   'byo-no-external-ingress': true,
-  'settings-unavailable': true,
+  'stranded-mint': true,
+  'revision-rolled-back': true,
+  expired: true,
+  unreadable: true,
 };
 
 const BIN_INDEX_HOLD_CHECKS: Record<BinIndexHoldCheck, true> = {

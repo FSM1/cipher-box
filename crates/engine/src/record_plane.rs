@@ -73,12 +73,23 @@ pub enum DefaultsReason {
     },
     /// The record's client-signed EOL has lapsed, so it is no longer
     /// authoritative about the member's current configuration.
-    Expired,
+    Expired {
+        /// The sequence the lapsed record carried.
+        sequence: u64,
+        /// What its head block showed of its release. It only restricts a
+        /// save; the load still refuses the record.
+        head: LapsedHead,
+    },
     /// The load did not finish inside the profile's budget.
     TimedOut,
     /// A record was found but yielded no usable body: it will not open under
     /// the plane's key, or its body is malformed or invalid.
-    Unreadable,
+    Unreadable {
+        /// The sequence the record carried.
+        sequence: u64,
+        /// Why its head block yielded no body.
+        cause: Unopened,
+    },
     /// The durable sequence floor could not be read, so no record could be
     /// held to its rollback bar. Host I/O, not a verdict on any record.
     FloorUnreadable,
@@ -129,9 +140,9 @@ impl DefaultsReason {
             Self::StrandedMint => "stranded-mint",
             Self::RolledBack { .. } => "rolled-back",
             Self::RevisionRolledBack { .. } => "revision-rolled-back",
-            Self::Expired => "expired",
+            Self::Expired { .. } => "expired",
             Self::TimedOut => "timed-out",
-            Self::Unreadable => "unreadable",
+            Self::Unreadable { .. } => "unreadable",
             Self::FloorUnreadable => "floor-unreadable",
         }
     }
@@ -160,13 +171,13 @@ impl DefaultsReason {
     #[must_use]
     pub(crate) fn split(self) -> LoadSplit {
         match self {
-            Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => {
+            Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable { .. } => {
                 LoadSplit::Verdict
             }
             Self::StrandedMint => LoadSplit::StrandedMint,
             Self::UnprovenFirstRun => LoadSplit::Held(BinIndexHoldCheck::UnprovenFirstRun),
             Self::Suppressed => LoadSplit::Held(BinIndexHoldCheck::Suppressed),
-            Self::Expired => LoadSplit::Held(BinIndexHoldCheck::Expired),
+            Self::Expired { .. } => LoadSplit::Held(BinIndexHoldCheck::Expired),
             Self::TimedOut => LoadSplit::Held(BinIndexHoldCheck::TimedOut),
             Self::FloorUnreadable => LoadSplit::Held(BinIndexHoldCheck::FloorUnreadable),
         }
@@ -201,6 +212,28 @@ pub(crate) fn unresolved_reason(
         (None, Some(_)) => DefaultsReason::StrandedMint,
         (None, None) => DefaultsReason::UnprovenFirstRun,
     }
+}
+
+/// [`unresolved_reason`] over the marks `floors` holds now, beside the sequence
+/// floor `durable` the caller already read. A mark the host cannot read is
+/// [`DefaultsReason::FloorUnreadable`], never an absent one.
+pub(crate) async fn unresolved_marks<F: FloorStore>(
+    floors: &F,
+    durable: Option<u64>,
+    mint_key: &[u8],
+    adopted_key: &[u8],
+    refused_key: Option<&[u8]>,
+) -> DefaultsReason {
+    let (Ok(minted), Ok(adopted)) = (
+        floor::sequence_floor(floors, mint_key).await,
+        floor::sequence_floor(floors, adopted_key).await,
+    ) else {
+        return DefaultsReason::FloorUnreadable;
+    };
+    let Ok(minted) = live_mint(floors, minted, refused_key).await else {
+        return DefaultsReason::FloorUnreadable;
+    };
+    unresolved_reason(durable, minted, adopted)
 }
 
 /// The mint counter as a mark: `None` once a stated refusal of every endpoint
@@ -275,6 +308,33 @@ pub(crate) struct RecordPlane<'a> {
     pub eol: EolRule,
 }
 
+/// Why a head block yielded no body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unopened {
+    /// The clear header does not decode at a version this build knows, so the
+    /// release is unknown.
+    Undecodable,
+    /// The header decodes at this build's version, and the seal does not open
+    /// under the plane's key.
+    Unsealed,
+    /// The block opened, and its body is malformed or invalid.
+    Malformed,
+    /// A newer release wrote the block: its header names a later version, or
+    /// its body a key or a variant outside this build's schema.
+    NewerRelease,
+}
+
+/// The head block of a lapsed record, fetched only to learn its release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LapsedHead {
+    /// This release opened the body.
+    Opened,
+    /// The block came back and yielded no body.
+    Unopened(Unopened),
+    /// The block did not come back, so its release is unknown.
+    Unavailable,
+}
+
 /// A head block this plane opened: the body the caller wanted, and the revision
 /// the floor law arbitrates a same-sequence fork on.
 pub(crate) struct OpenedBody<B> {
@@ -320,7 +380,7 @@ pub(crate) async fn load_record<T, H, F, Sn, Sch, B>(
     scheduler: &Sch,
     budget: Duration,
     plane: &RecordPlane<'_>,
-    open: impl Fn(&[u8]) -> Option<OpenedBody<B>>,
+    open: impl Fn(&[u8]) -> Result<OpenedBody<B>, Unopened>,
 ) -> RecordRead<B>
 where
     T: RecordTransport,
@@ -354,7 +414,7 @@ where
     };
     // A rollback takes this arm like every other reason: pinning last-known-good
     // is what the record plane already owes a gate failure (blueprint/engine.md).
-    let load = match cached.and_then(|block| open(&block)) {
+    let load = match cached.and_then(|block| open(&block).ok()) {
         Some(opened) => RecordLoad::Stale {
             body: opened.body,
             reason,
@@ -378,7 +438,7 @@ async fn resolve_record<T, H, F, Sn, B>(
     snapshots: &Sn,
     cached: &mut Option<Vec<u8>>,
     plane: &RecordPlane<'_>,
-    open: impl Fn(&[u8]) -> Option<OpenedBody<B>>,
+    open: impl Fn(&[u8]) -> Result<OpenedBody<B>, Unopened>,
 ) -> Result<(B, Option<HeldRecord>), DefaultsReason>
 where
     T: RecordTransport,
@@ -402,34 +462,39 @@ where
         // attempt it marks ([`DefaultsReason::StrandedMint`]). The adopted
         // revision is raised by a separate, non-atomic store write, so it can
         // outlive a lost one.
-        let (Ok(minted), Ok(adopted)) = (
-            floor::sequence_floor(floors, &plane.mint_key).await,
-            floor::sequence_floor(floors, &plane.adopted_key).await,
-        ) else {
-            return Err(DefaultsReason::FloorUnreadable);
-        };
-        let Ok(minted) = live_mint(floors, minted, plane.refused_key.as_deref()).await else {
-            return Err(DefaultsReason::FloorUnreadable);
-        };
-        return Err(unresolved_reason(durable, minted, adopted));
+        return Err(unresolved_marks(
+            floors,
+            durable,
+            &plane.mint_key,
+            &plane.adopted_key,
+            plane.refused_key.as_deref(),
+        )
+        .await);
     };
-    if let EolRule::RefuseAt(now) = plane.eol
-        && is_expired(now, &verified.validity)
-    {
-        return Err(DefaultsReason::Expired);
-    }
+    let lapsed = matches!(plane.eol, EolRule::RefuseAt(now) if is_expired(now, &verified.validity));
     let sequence = verified.sequence;
     let floor = durable.unwrap_or(0);
-    if sequence < floor {
+    if !lapsed && sequence < floor {
         return Err(DefaultsReason::RolledBack { floor, sequence });
     }
 
+    let fetched = fetch_head_block(gateway, http, name, &record_bytes, None).await;
+    if lapsed {
+        let head = match &fetched {
+            Ok((_, block)) => open(block).map_or_else(LapsedHead::Unopened, |_| LapsedHead::Opened),
+            Err(_) => LapsedHead::Unavailable,
+        };
+        return Err(DefaultsReason::Expired { sequence, head });
+    }
     // The record verified under a name only this account can sign for, so a
     // head block that will not come back is a withheld record.
-    let Ok((_, block)) = fetch_head_block(gateway, http, name, &record_bytes, None).await else {
+    let Ok((_, block)) = fetched else {
         return Err(DefaultsReason::Suppressed);
     };
-    let opened = open(&block).ok_or(DefaultsReason::Unreadable)?;
+    let opened = open(&block).map_err(|unopened| DefaultsReason::Unreadable {
+        sequence,
+        cause: unopened,
+    })?;
     let Ok(adopted) = floor::sequence_floor(floors, &plane.adopted_key).await else {
         return Err(DefaultsReason::FloorUnreadable);
     };

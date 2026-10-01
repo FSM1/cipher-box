@@ -37,7 +37,7 @@ use crate::net::record_publish::{
 use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{
-    DefaultsReason, EolRule, OpenedBody, RecordLoad, RecordPlane, live_mint, load_record,
+    DefaultsReason, EolRule, OpenedBody, RecordLoad, RecordPlane, Unopened, live_mint, load_record,
     prefixed_key,
 };
 use crate::seams::{
@@ -502,8 +502,9 @@ where
         profile.settings_load_budget,
         &plane,
         |block| {
-            let index = open_bin_index(keys.seal_key.as_bytes(), block).ok()?;
-            Some(OpenedBody {
+            let index =
+                open_bin_index(keys.seal_key.as_bytes(), block).map_err(|_| Unopened::Malformed)?;
+            Ok(OpenedBody {
                 revision: index.revision,
                 body: index,
             })
@@ -553,7 +554,10 @@ mod tests {
                 revision: 2,
             },
             DefaultsReason::TimedOut,
-            DefaultsReason::Unreadable,
+            DefaultsReason::Unreadable {
+                sequence: 2,
+                cause: Unopened::Malformed,
+            },
             DefaultsReason::FloorUnreadable,
         ] {
             assert_eq!(

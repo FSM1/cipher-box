@@ -25,7 +25,7 @@ use cipherbox_core::codec::{Map, Value, decode, encode};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{open_settings_record, seal_settings_record};
+use cipherbox_core::seal::{SETTINGS_RECORD_V, open_settings_record, seal_settings_record};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::hash::hash;
 use cipherbox_core::suite::secret::SECRET_LEN;
@@ -50,7 +50,8 @@ use crate::net::record_publish::{
 use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{
-    DefaultsReason, EolRule, OpenedBody, RecordLoad, RecordPlane, load_record, prefixed_key,
+    DefaultsReason, EolRule, LapsedHead, OpenedBody, RecordLoad, RecordPlane, Unopened,
+    load_record, prefixed_key, unresolved_marks,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SnapshotCache,
@@ -448,10 +449,8 @@ impl PlacementRefusal {
     }
 
     /// The hold this refusal takes, if a member action is its exit at all.
-    /// Editing the settings clears a deterministic refusal. A stranded mint
-    /// clears only on a save that lands or a record that resolves, never on a
-    /// later tick alone. Every other degraded load can clear on a later tick,
-    /// so it holds nothing.
+    /// Editing the settings clears a deterministic refusal. An unavailable
+    /// record holds only when a save is its exit ([`DefaultsReason::save_exit`]).
     ///
     /// The one place the placement half of the split is decided, and the
     /// hold's check name with it, so a hold cannot be taken on terms its
@@ -461,24 +460,102 @@ impl PlacementRefusal {
         let check = match self {
             Self::NoProvider => SettingsHoldCheck::ByoProviderMissing,
             Self::NoExternalIngress(_) => SettingsHoldCheck::ByoNoExternalIngress,
-            Self::SettingsUnavailable(DefaultsReason::StrandedMint) => {
-                SettingsHoldCheck::SettingsUnavailable
+            Self::SettingsUnavailable(reason) => {
+                if !matches!(reason.save_exit(), SaveExit::Clears { .. }) {
+                    return None;
+                }
+                match reason {
+                    DefaultsReason::StrandedMint => SettingsHoldCheck::StrandedMint,
+                    DefaultsReason::RevisionRolledBack { .. } => {
+                        SettingsHoldCheck::RevisionRolledBack
+                    }
+                    DefaultsReason::Expired { .. } => SettingsHoldCheck::Expired,
+                    DefaultsReason::Unreadable { .. } => SettingsHoldCheck::Unreadable,
+                    DefaultsReason::UnprovenFirstRun
+                    | DefaultsReason::Suppressed
+                    | DefaultsReason::RolledBack { .. }
+                    | DefaultsReason::TimedOut
+                    | DefaultsReason::FloorUnreadable => return None,
+                }
             }
-            Self::SettingsUnavailable(
-                DefaultsReason::UnprovenFirstRun
-                | DefaultsReason::Suppressed
-                | DefaultsReason::RolledBack { .. }
-                | DefaultsReason::RevisionRolledBack { .. }
-                | DefaultsReason::Expired
-                | DefaultsReason::TimedOut
-                | DefaultsReason::Unreadable
-                | DefaultsReason::FloorUnreadable,
-            ) => return None,
         };
         Some(SettingsHold {
             refusal: SettingsRefusal::Placement(self),
             check,
         })
+    }
+}
+
+/// What a settings save does over a load that degraded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveExit {
+    /// A later tick can clear the reason, and a save signs above the sequence
+    /// floor alone.
+    FloorOnly,
+    /// Only a save that lands, or a record that resolves, clears the reason. A
+    /// save signs above `observed`, the sequence of the record the load
+    /// verified under this account's own name, as well as above the floor.
+    Clears {
+        /// The verified record's sequence, when the load read one.
+        observed: Option<u64>,
+    },
+    /// A newer release wrote the record, or a lapsed record's release is
+    /// unknown, so no save of this build may replace it.
+    Refused,
+}
+
+impl DefaultsReason {
+    /// The one place a settings save's relation to this reason is decided
+    /// (ADR 0062 D4).
+    #[must_use]
+    pub fn save_exit(self) -> SaveExit {
+        match self {
+            Self::StrandedMint | Self::RevisionRolledBack { .. } => {
+                SaveExit::Clears { observed: None }
+            }
+            Self::Expired {
+                sequence,
+                head: LapsedHead::Opened,
+            } => SaveExit::Clears {
+                observed: Some(sequence),
+            },
+            Self::Expired {
+                head: LapsedHead::Unavailable,
+                ..
+            } => SaveExit::Refused,
+            Self::Expired {
+                sequence,
+                head: LapsedHead::Unopened(cause),
+            }
+            | Self::Unreadable { sequence, cause } => cause.save_exit(sequence),
+            Self::UnprovenFirstRun
+            | Self::Suppressed
+            | Self::RolledBack { .. }
+            | Self::TimedOut
+            | Self::FloorUnreadable => SaveExit::FloorOnly,
+        }
+    }
+
+    /// The sequence of the record this reason verified, when a save clears it.
+    fn observed(self) -> Option<u64> {
+        match self.save_exit() {
+            SaveExit::Clears { observed } => observed,
+            SaveExit::FloorOnly | SaveExit::Refused => None,
+        }
+    }
+}
+
+impl Unopened {
+    /// The exit of a record at `sequence` whose head yielded no body, lapsed or
+    /// not: a known release clears with a save above it, and a newer or an
+    /// unknown one refuses the save.
+    fn save_exit(self, sequence: u64) -> SaveExit {
+        match self {
+            Self::Unsealed | Self::Malformed => SaveExit::Clears {
+                observed: Some(sequence),
+            },
+            Self::Undecodable | Self::NewerRelease => SaveExit::Refused,
+        }
     }
 }
 
@@ -590,8 +667,15 @@ pub enum SettingsHoldCheck {
     ByoProviderMissing,
     /// `byo-no-external-ingress`.
     ByoNoExternalIngress,
-    /// `settings-unavailable`: the stranded mint, whose exit is a settings save.
-    SettingsUnavailable,
+    /// `stranded-mint`: a save on this device may have minted and did not land.
+    StrandedMint,
+    /// `revision-rolled-back`: the record is older than the revision this
+    /// device adopted.
+    RevisionRolledBack,
+    /// `expired`: the record lapsed and was not renewed.
+    Expired,
+    /// `unreadable`: the record does not open on this device.
+    Unreadable,
 }
 
 /// Where a session's placement decision came from. An assumed default
@@ -601,12 +685,23 @@ pub enum SettingsHoldCheck {
 /// load").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlacementSource {
-    /// The member's own settings record — published, or this device's
-    /// last-known-good copy of it.
-    Member,
+    /// The member's own settings record: published (`None`), or this device's
+    /// last-known-good copy of it, kept over the reason the published record
+    /// was not used.
+    Member(Option<DefaultsReason>),
     /// The documented default, standing in for a record no endpoint served,
     /// carrying the reason the load degraded.
     Assumed(DefaultsReason),
+}
+
+impl PlacementSource {
+    /// Why the load did not use the published record, if it did not.
+    fn degraded(self) -> Option<DefaultsReason> {
+        match self {
+            Self::Member(reason) => reason,
+            Self::Assumed(reason) => Some(reason),
+        }
+    }
 }
 
 /// The session's placement decision and where it came from.
@@ -619,11 +714,11 @@ pub struct SessionPlacement {
 }
 
 impl SessionPlacement {
-    /// A placement the member's own settings established.
+    /// A placement the member's own published settings established.
     pub fn member(decision: PlacementDecision) -> Self {
         Self {
             decision,
-            source: PlacementSource::Member,
+            source: PlacementSource::Member(None),
         }
     }
 }
@@ -636,9 +731,11 @@ impl SessionPlacement {
 /// "Vault settings load", which also states the residual that arm carries).
 pub fn decide_placement(load: &SettingsLoad) -> SessionPlacement {
     match load {
-        SettingsLoad::Resolved(settings) | SettingsLoad::Stale { settings, .. } => {
-            SessionPlacement::member(placement_of(settings))
-        }
+        SettingsLoad::Resolved(settings) => SessionPlacement::member(placement_of(settings)),
+        SettingsLoad::Stale { settings, reason } => SessionPlacement {
+            decision: placement_of(settings),
+            source: PlacementSource::Member(Some(*reason)),
+        },
         SettingsLoad::Defaults(reason) => SessionPlacement {
             decision: match reason {
                 DefaultsReason::UnprovenFirstRun => Ok(Placement::Hosted),
@@ -659,9 +756,52 @@ pub fn decide_placement(load: &SettingsLoad) -> SessionPlacement {
 /// widening blueprint/engine.md "Vault settings load" exists to prevent.
 /// A re-decide is therefore never a second route to a placement the load itself
 /// would refuse at start.
+///
+/// Two exceptions hold no member choice to widen. A session refused because
+/// its load timed out or could not read a floor re-decides by the rule a start
+/// applies. A session over a record a save clears takes the newer one a
+/// re-load verifies, so a save signs above the latest sequence
+/// ([`sign_above`]).
 #[must_use]
-pub fn redecide_placement(load: &SettingsLoad) -> Option<SessionPlacement> {
-    matches!(load, SettingsLoad::Resolved(_)).then(|| decide_placement(load))
+pub fn redecide_placement(
+    held: Option<PlacementSource>,
+    load: &SettingsLoad,
+) -> Option<SessionPlacement> {
+    let unsettled = matches!(
+        held,
+        Some(PlacementSource::Assumed(
+            DefaultsReason::FloorUnreadable
+                | DefaultsReason::TimedOut
+                | DefaultsReason::Expired {
+                    head: LapsedHead::Unavailable,
+                    ..
+                }
+        ))
+    );
+    let loaded = match load {
+        SettingsLoad::Resolved(_) => None,
+        SettingsLoad::Stale { reason, .. } | SettingsLoad::Defaults(reason) => Some(*reason),
+    };
+    let newer_verified = matches!(
+        (
+            held.and_then(PlacementSource::degraded).and_then(DefaultsReason::observed),
+            loaded.and_then(DefaultsReason::observed),
+        ),
+        (Some(held), Some(loaded)) if loaded > held
+    );
+    (unsettled || newer_verified || loaded.is_none()).then(|| decide_placement(load))
+}
+
+/// The sequence a settings save signs above ([`DefaultsReason::save_exit`]),
+/// or the refusal of a save this build may not make.
+pub fn sign_above(held: Option<&SessionPlacement>) -> Result<Option<u64>, PlacementRefusal> {
+    let Some(reason) = held.and_then(|held| held.source.degraded()) else {
+        return Ok(None);
+    };
+    match reason.save_exit() {
+        SaveExit::Refused => Err(PlacementRefusal::SettingsUnavailable(reason)),
+        SaveExit::Clears { .. } | SaveExit::FloorOnly => Ok(reason.observed()),
+    }
 }
 
 /// The byte destinations `settings` name, in the two places that must agree:
@@ -708,6 +848,9 @@ pub enum SettingsPublishError {
     Unconfirmed,
     /// The confirmed publish could not be recorded durably.
     Floor(SeamError),
+    /// The store failed inside the revision mint, so whether the mint counter
+    /// rose is unknown.
+    Mint(SeamError),
     /// The durable revision counter did not advance, so this publish would mint
     /// a body revision the reader refuses (AGENTS.md rule 8).
     Revision,
@@ -801,9 +944,36 @@ async fn next_revision<F: FloorStore>(
     )
     .await
     .map_err(|error| match error {
-        RevisionMintError::Store(error) => SettingsPublishError::Floor(error),
+        RevisionMintError::Store(error) => SettingsPublishError::Mint(error),
         RevisionMintError::Stalled => SettingsPublishError::Revision,
     })
+}
+
+/// The reason a session holds after a save at `name` failed with `error`. A
+/// failure inside the mint leaves the counter unknown, which is a stranded
+/// mint; any other failure reads the marks by the rule a start applies.
+pub(crate) async fn reason_after_failed_save<F: FloorStore>(
+    floors: &F,
+    name: &IpnsName,
+    error: &SettingsPublishError,
+) -> DefaultsReason {
+    if matches!(
+        error,
+        SettingsPublishError::Mint(_) | SettingsPublishError::Revision
+    ) {
+        return DefaultsReason::StrandedMint;
+    }
+    let Ok(durable) = floor::sequence_floor(floors, name.as_str().as_bytes()).await else {
+        return DefaultsReason::FloorUnreadable;
+    };
+    unresolved_marks(
+        floors,
+        durable,
+        &revision_mint_key(name),
+        &revision_adopted_key(name),
+        None,
+    )
+    .await
 }
 
 /// Seal `settings` and publish them at [`settings_name`] through the shared
@@ -827,6 +997,46 @@ pub async fn publish_settings<T, H, C, F, Sn, Sch>(
     orphans: &OrphanHeads,
     login_secret: &[u8],
     settings: &VaultSettings,
+) -> Result<HeldRecord, SettingsPublishError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sn: SnapshotCache,
+    Sch: Scheduler + Clone + 'static,
+{
+    publish_settings_above(
+        transport,
+        api,
+        floors,
+        snapshots,
+        scheduler,
+        profile,
+        entropy,
+        orphans,
+        login_secret,
+        settings,
+        None,
+    )
+    .await
+}
+
+/// [`publish_settings`], signing above `observed` as well as above the
+/// sequence floor ([`sign_above`]).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn publish_settings_above<T, H, C, F, Sn, Sch>(
+    transport: &T,
+    api: &ApiClient<H, C>,
+    floors: &F,
+    snapshots: &Sn,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    entropy: &mut dyn Entropy,
+    orphans: &OrphanHeads,
+    login_secret: &[u8],
+    settings: &VaultSettings,
+    observed: Option<u64>,
 ) -> Result<HeldRecord, SettingsPublishError>
 where
     T: RecordTransport + Clone + 'static,
@@ -863,7 +1073,10 @@ where
         scheduler,
         profile,
         &RecordPublishRequest {
-            observed: &Observed::unread(&name),
+            observed: &observed.map_or_else(
+                || Observed::unread(&name),
+                |sequence| Observed::record(&name, sequence),
+            ),
             signer: &signer,
             head: &head,
             content_cids: Vec::new(),
@@ -1044,8 +1257,20 @@ fn settings_cache_key(name: &IpnsName) -> Vec<u8> {
 }
 
 /// Open a settings head block: one seal open and one body grammar.
-fn open_settings_head(enc_secret: &X25519Secret, block: &[u8]) -> Option<SettingsBody> {
-    decode_settings_body(&open_settings_record(enc_secret, block).ok()?).ok()
+fn open_settings_head(enc_secret: &X25519Secret, block: &[u8]) -> Result<SettingsBody, Unopened> {
+    let body = open_settings_record(enc_secret, block).map_err(|error| match error {
+        CodecError::Trust(_) => Unopened::Unsealed,
+        CodecError::Malformed(Malformed::UnsupportedRecordVersion { version })
+            if version > SETTINGS_RECORD_V =>
+        {
+            Unopened::NewerRelease
+        }
+        CodecError::Malformed(_) => Unopened::Undecodable,
+    })?;
+    decode_settings_body(&body).map_err(|error| match error {
+        BodyError::UnknownField { .. } | BodyError::UnknownVariant { .. } => Unopened::NewerRelease,
+        _ => Unopened::Malformed,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1737,9 +1962,15 @@ mod tests {
                 floor: 4,
                 revision: 2,
             },
-            DefaultsReason::Expired,
+            DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Opened,
+            },
             DefaultsReason::TimedOut,
-            DefaultsReason::Unreadable,
+            DefaultsReason::Unreadable {
+                sequence: 3,
+                cause: Unopened::Malformed,
+            },
             DefaultsReason::FloorUnreadable,
         ] {
             assert_eq!(
@@ -1758,36 +1989,203 @@ mod tests {
     /// hosted store nor halts a session that is placing correctly.
     #[test]
     fn only_a_resolved_record_re_decides_a_running_sessions_placement() {
+        let member = Some(PlacementSource::Member(None));
         assert_eq!(
-            redecide_placement(&SettingsLoad::Resolved(placed(
-                PinMode::External,
-                Some(kubo())
-            )))
+            redecide_placement(
+                member,
+                &SettingsLoad::Resolved(placed(PinMode::External, Some(kubo())))
+            )
             .expect("a resolved record re-decides")
             .decision
             .unwrap(),
             Placement::External(kubo())
         );
         assert!(
-            redecide_placement(&SettingsLoad::Stale {
-                settings: placed(PinMode::Hosted, None),
-                reason: DefaultsReason::Suppressed,
-            })
+            redecide_placement(
+                member,
+                &SettingsLoad::Stale {
+                    settings: placed(PinMode::Hosted, None),
+                    reason: DefaultsReason::Suppressed,
+                }
+            )
             .is_none(),
             "a stale copy is not evidence that the member changed anything"
         );
         for reason in [
             DefaultsReason::UnprovenFirstRun,
             DefaultsReason::Suppressed,
-            DefaultsReason::Expired,
+            DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Opened,
+            },
             DefaultsReason::TimedOut,
-            DefaultsReason::Unreadable,
+            DefaultsReason::Unreadable {
+                sequence: 3,
+                cause: Unopened::Malformed,
+            },
             DefaultsReason::FloorUnreadable,
         ] {
+            for held in [
+                member,
+                Some(PlacementSource::Assumed(DefaultsReason::UnprovenFirstRun)),
+            ] {
+                assert!(
+                    redecide_placement(held, &SettingsLoad::Defaults(reason)).is_none(),
+                    "{reason:?} must not re-decide a running session"
+                );
+            }
+        }
+    }
+
+    /// A session whose decision rests on a floor it could not read holds no
+    /// member choice, so a re-load decides it by the rule a start applies.
+    #[test]
+    fn a_session_resting_on_an_unread_floor_re_decides_from_any_load() {
+        let unread = Some(PlacementSource::Assumed(DefaultsReason::FloorUnreadable));
+        let decided = redecide_placement(
+            unread,
+            &SettingsLoad::Defaults(DefaultsReason::StrandedMint),
+        )
+        .expect("the marks read now decide the session");
+        // A re-check that timed out is no decision either, so the next one
+        // still decides: an account with no record then reaches its first run.
+        let timed_out = Some(PlacementSource::Assumed(DefaultsReason::TimedOut));
+        assert_eq!(
+            redecide_placement(
+                timed_out,
+                &SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun)
+            )
+            .expect("a session that timed out re-decides")
+            .decision,
+            Ok(Placement::Hosted)
+        );
+        assert_eq!(
+            decided.decision,
+            Err(PlacementRefusal::SettingsUnavailable(
+                DefaultsReason::StrandedMint
+            )),
+        );
+        assert_eq!(
+            decided.source,
+            PlacementSource::Assumed(DefaultsReason::StrandedMint)
+        );
+    }
+
+    /// A session refused over a verified record takes only a newer one, so a
+    /// save signs above the latest sequence.
+    #[test]
+    fn a_refusal_over_a_verified_record_follows_only_a_newer_one() {
+        let held = Some(PlacementSource::Assumed(DefaultsReason::Expired {
+            sequence: 3,
+            head: LapsedHead::Opened,
+        }));
+        let newer = DefaultsReason::Unreadable {
+            sequence: 5,
+            cause: Unopened::Malformed,
+        };
+        assert_eq!(
+            redecide_placement(held, &SettingsLoad::Defaults(newer))
+                .expect("a newer verified record re-decides")
+                .source,
+            PlacementSource::Assumed(newer)
+        );
+        for same_or_none in [
+            DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Opened,
+            },
+            DefaultsReason::Suppressed,
+        ] {
             assert!(
-                redecide_placement(&SettingsLoad::Defaults(reason)).is_none(),
-                "{reason:?} must not re-decide a running session"
+                redecide_placement(held, &SettingsLoad::Defaults(same_or_none)).is_none(),
+                "{same_or_none:?}"
             );
+        }
+
+        // A copy this device kept over a lapsed record follows a newer one too.
+        let stale = Some(PlacementSource::Member(Some(DefaultsReason::Expired {
+            sequence: 3,
+            head: LapsedHead::Opened,
+        })));
+        let lapsed = DefaultsReason::Expired {
+            sequence: 5,
+            head: LapsedHead::Opened,
+        };
+        assert_eq!(
+            redecide_placement(
+                stale,
+                &SettingsLoad::Stale {
+                    settings: placed(PinMode::Hosted, None),
+                    reason: lapsed,
+                }
+            )
+            .expect("a newer verified record re-decides")
+            .source,
+            PlacementSource::Member(Some(lapsed))
+        );
+
+        // A newer release's body is no save's to replace, so no newer record
+        // unlocks the save over it.
+        let newer_release = Some(PlacementSource::Assumed(DefaultsReason::Unreadable {
+            sequence: 3,
+            cause: Unopened::NewerRelease,
+        }));
+        assert!(redecide_placement(newer_release, &SettingsLoad::Defaults(lapsed)).is_none());
+    }
+
+    /// A save signs above the record a lapsed or unreadable load verified, and
+    /// refuses to replace a body a newer release wrote.
+    #[test]
+    fn a_save_signs_above_only_a_record_this_build_may_replace() {
+        let assumed = |reason| decide_placement(&SettingsLoad::Defaults(reason));
+        assert_eq!(
+            sign_above(Some(&assumed(DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Opened,
+            }))),
+            Ok(Some(3))
+        );
+        assert_eq!(
+            sign_above(Some(&assumed(DefaultsReason::Unreadable {
+                sequence: 3,
+                cause: Unopened::Malformed,
+            }))),
+            Ok(Some(3))
+        );
+        let newer = DefaultsReason::Unreadable {
+            sequence: 3,
+            cause: Unopened::NewerRelease,
+        };
+        assert_eq!(
+            sign_above(Some(&assumed(newer))),
+            Err(PlacementRefusal::SettingsUnavailable(newer))
+        );
+        for held in [
+            None,
+            Some(SessionPlacement::member(Ok(Placement::Hosted))),
+            Some(assumed(DefaultsReason::StrandedMint)),
+        ] {
+            assert_eq!(sign_above(held.as_ref()), Ok(None), "{held:?}");
+        }
+    }
+
+    /// ADR 0062 D4: a lapsed and a live record whose head yields no body for the
+    /// same cause give the same save exit.
+    #[test]
+    fn a_lapsed_and_a_live_record_with_one_cause_give_one_save_exit() {
+        for (cause, exit) in [
+            (Unopened::Unsealed, SaveExit::Clears { observed: Some(3) }),
+            (Unopened::Malformed, SaveExit::Clears { observed: Some(3) }),
+            (Unopened::Undecodable, SaveExit::Refused),
+            (Unopened::NewerRelease, SaveExit::Refused),
+        ] {
+            let lapsed = DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Unopened(cause),
+            };
+            let live = DefaultsReason::Unreadable { sequence: 3, cause };
+            assert_eq!(lapsed.save_exit(), exit, "{cause:?}");
+            assert_eq!(live.save_exit(), exit, "{cause:?}");
         }
     }
 
@@ -1796,21 +2194,36 @@ mod tests {
     #[test]
     fn only_a_settings_fixable_refusal_takes_a_hold() {
         let mut names = BTreeSet::new();
-        let stranded = PlacementRefusal::SettingsUnavailable(DefaultsReason::StrandedMint);
         for refusal in [
             PlacementRefusal::NoProvider,
             PlacementRefusal::NoExternalIngress(ByoKind::Pinata),
-            stranded,
+            PlacementRefusal::SettingsUnavailable(DefaultsReason::StrandedMint),
+            PlacementRefusal::SettingsUnavailable(DefaultsReason::RevisionRolledBack {
+                floor: 4,
+                revision: 2,
+            }),
+            PlacementRefusal::SettingsUnavailable(DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Opened,
+            }),
+            PlacementRefusal::SettingsUnavailable(DefaultsReason::Unreadable {
+                sequence: 3,
+                cause: Unopened::Malformed,
+            }),
         ] {
             assert_eq!(
                 refusal.holds().map(|hold| hold.refusal()),
                 Some(SettingsRefusal::Placement(refusal)),
-                "{}",
-                refusal.check(),
+                "{refusal:?}",
             );
-            assert!(names.insert(refusal.check()), "{}", refusal.check());
+            names.insert(refusal.check());
             assert_eq!(SettingsRefusal::Placement(refusal).check(), refusal.check());
         }
+        assert_eq!(
+            names.len(),
+            PlacementRefusal::CHECKS.len(),
+            "each placement rule holds under its own name"
+        );
         // Every other degraded load takes no hold.
         for reason in [
             DefaultsReason::UnprovenFirstRun,
@@ -1819,13 +2232,11 @@ mod tests {
                 floor: 4,
                 sequence: 2,
             },
-            DefaultsReason::RevisionRolledBack {
-                floor: 4,
-                revision: 2,
-            },
-            DefaultsReason::Expired,
             DefaultsReason::TimedOut,
-            DefaultsReason::Unreadable,
+            DefaultsReason::Unreadable {
+                sequence: 3,
+                cause: Unopened::NewerRelease,
+            },
             DefaultsReason::FloorUnreadable,
         ] {
             assert_eq!(
@@ -1881,7 +2292,7 @@ mod tests {
         );
         assert_eq!(
             decide_placement(&SettingsLoad::Resolved(placed(PinMode::Hosted, None))).source,
-            PlacementSource::Member,
+            PlacementSource::Member(None),
         );
         assert_eq!(
             decide_placement(&SettingsLoad::Stale {
@@ -1889,7 +2300,7 @@ mod tests {
                 reason: DefaultsReason::Suppressed,
             })
             .source,
-            PlacementSource::Member,
+            PlacementSource::Member(Some(DefaultsReason::Suppressed)),
             "a last-known-good copy is still the member's own choice",
         );
     }

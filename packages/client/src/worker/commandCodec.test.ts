@@ -131,7 +131,13 @@ describe('readSnapshot', () => {
   });
 
   it('reads a held head by its reason', () => {
-    for (const check of ['byo-provider-missing', 'settings-unavailable']) {
+    for (const check of [
+      'byo-provider-missing',
+      'stranded-mint',
+      'revision-rolled-back',
+      'expired',
+      'unreadable',
+    ]) {
       const view = skewed<SnapshotView>({
         ...baseView(),
         queueHold: { reason: 'settings', opId: 13n, node: new Uint8Array(16), check },

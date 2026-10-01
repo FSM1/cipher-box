@@ -14,9 +14,10 @@ use cipherbox_engine::facade::{
 };
 use cipherbox_engine::seams::OpId;
 use cipherbox_engine::{
-    AuthMethod, AuthMethodKind, BinIndexHoldCheck, ByoKind, DefaultsReason, PendingApprovalView,
-    PinMode, PlacementRefusal, ProviderError, ReclaimStall, ReclaimStallReason, RegisteredDevice,
-    ResolutionClass, RetentionPolicy, SettingsHold, SettingsOrigin, VaultSettingsSummary,
+    AuthMethod, AuthMethodKind, BinIndexHoldCheck, ByoKind, DefaultsReason, LapsedHead,
+    PendingApprovalView, PinMode, PlacementRefusal, ProviderError, ReclaimStall,
+    ReclaimStallReason, RegisteredDevice, ResolutionClass, RetentionPolicy, SettingsHold,
+    SettingsOrigin, Unopened, VaultSettingsSummary,
 };
 use cipherbox_wasm::boundary::encode_view;
 use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
@@ -249,7 +250,6 @@ fn a_hold_check_crosses_as_the_check_name_of_its_refusal() {
     let placement = [
         PlacementRefusal::NoProvider,
         PlacementRefusal::NoExternalIngress(ByoKind::Psa),
-        PlacementRefusal::SettingsUnavailable(DefaultsReason::StrandedMint),
     ]
     .map(|refusal| refusal.holds().unwrap());
     for hold in byo.into_iter().chain(placement) {
@@ -259,13 +259,45 @@ fn a_hold_check_crosses_as_the_check_name_of_its_refusal() {
             "{hold:?}"
         );
     }
+    // An unavailable settings record crosses under the load's reason, without
+    // the figures it carries.
+    for reason in [
+        DefaultsReason::StrandedMint,
+        DefaultsReason::RevisionRolledBack {
+            floor: 4,
+            revision: 2,
+        },
+        DefaultsReason::Expired {
+            sequence: 3,
+            head: LapsedHead::Opened,
+        },
+        DefaultsReason::Unreadable {
+            sequence: 3,
+            cause: Unopened::Malformed,
+        },
+    ] {
+        let hold = PlacementRefusal::SettingsUnavailable(reason)
+            .holds()
+            .unwrap();
+        assert_eq!(
+            check(QueueHoldReason::Settings(hold)),
+            JsValue::from_str(reason.check()),
+            "{reason:?}"
+        );
+    }
     for (held, reason) in [
         (
             BinIndexHoldCheck::UnprovenFirstRun,
             DefaultsReason::UnprovenFirstRun,
         ),
         (BinIndexHoldCheck::Suppressed, DefaultsReason::Suppressed),
-        (BinIndexHoldCheck::Expired, DefaultsReason::Expired),
+        (
+            BinIndexHoldCheck::Expired,
+            DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Opened,
+            },
+        ),
         (BinIndexHoldCheck::TimedOut, DefaultsReason::TimedOut),
         (
             BinIndexHoldCheck::FloorUnreadable,

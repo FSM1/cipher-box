@@ -35,16 +35,44 @@ describe('the queue hold notice', () => {
     render(
       <QueueHoldNotice
         view={listing({
-          queueHold: { reason: 'settings', opId: 8n, node: NODE, check: 'settings-unavailable' },
+          queueHold: { reason: 'settings', opId: 8n, node: NODE, check: 'stranded-mint' },
         })}
       />
     );
 
     const notice = screen.getByTestId('queue-hold-notice');
     expect(notice.textContent).toContain('"child-0" waits on your settings');
+    expect(notice.textContent).toContain('the last settings save on this device did not finish');
     expect(notice.textContent).toContain(
       'enter your settings again, with your storage provider and its access token, and save them'
     );
+  });
+
+  it('names a rolled-back, a lapsed and an unreadable settings record each by its own cause', () => {
+    const causes = {
+      'revision-rolled-back': 'older than the one this device already used',
+      expired: 'your settings record is out of date and was not renewed',
+      unreadable: 'your settings record does not open on this device',
+    } as const;
+    for (const [check, cause] of Object.entries(causes)) {
+      const { unmount } = render(
+        <QueueHoldNotice
+          view={listing({
+            queueHold: {
+              reason: 'settings',
+              opId: 10n,
+              node: NODE,
+              check: check as keyof typeof causes,
+            },
+          })}
+        />
+      );
+      const notice = screen.getByTestId('queue-hold-notice');
+      expect(notice.textContent).toContain(cause);
+      expect(notice.textContent).not.toContain('did not finish');
+      expect(notice.textContent).toContain('save them');
+      unmount();
+    }
   });
 
   it('names why the bin index did not resolve, and clears when the hold clears', () => {

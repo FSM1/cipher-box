@@ -7571,6 +7571,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
     use crate::net::record_publish::PreflightError;
+    use crate::record_plane::{LapsedHead, Unopened};
     use crate::seams::SeamError;
     use crate::settings::{PlacementRefusal, SettingsRefusal};
     use crate::sync::model::NodeMeta;
@@ -8261,7 +8262,10 @@ mod tests {
                 floor: 4,
                 revision: 2,
             },
-            DefaultsReason::Unreadable,
+            DefaultsReason::Unreadable {
+                sequence: 2,
+                cause: Unopened::Malformed,
+            },
         ] {
             assert_eq!(halt_for_bin_load(reason), Halt::Attempt, "{reason:?}");
         }
@@ -8271,7 +8275,13 @@ mod tests {
                 BinIndexHoldCheck::UnprovenFirstRun,
             ),
             (DefaultsReason::Suppressed, BinIndexHoldCheck::Suppressed),
-            (DefaultsReason::Expired, BinIndexHoldCheck::Expired),
+            (
+                DefaultsReason::Expired {
+                    sequence: 2,
+                    head: LapsedHead::Opened,
+                },
+                BinIndexHoldCheck::Expired,
+            ),
             (DefaultsReason::TimedOut, BinIndexHoldCheck::TimedOut),
             (
                 DefaultsReason::FloorUnreadable,

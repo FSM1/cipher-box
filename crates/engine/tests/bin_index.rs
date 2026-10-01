@@ -35,7 +35,7 @@ use cipherbox_engine::testkit::fakes::{
 use cipherbox_engine::testkit::{FailingEntropy, FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinIndexRead, DefaultsReason, Gateway,
-    GatewayConfig, HeldRecord, HeldValue, OrphanHeads, SessionBearer, SyncTimingProfile,
+    GatewayConfig, HeldRecord, HeldValue, OrphanHeads, SessionBearer, SyncTimingProfile, Unopened,
     load_bin_index, publish_bin_index,
 };
 use cipherbox_engine::{HeldKey, HeldRecords, observed_at};
@@ -297,7 +297,10 @@ fn a_second_account_cannot_open_the_first_accounts_bin() {
 
     assert_eq!(
         load(&world, &device, &blocks, &keys()),
-        BinIndexLoad::Empty(DefaultsReason::Unreadable),
+        BinIndexLoad::Empty(DefaultsReason::Unreadable {
+            sequence: 1,
+            cause: Unopened::Malformed,
+        }),
         "a body under a foreign key is refused, and named as unreadable",
     );
 }

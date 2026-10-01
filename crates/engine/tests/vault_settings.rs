@@ -36,10 +36,10 @@ use cipherbox_engine::testkit::{
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, ContentProfile, DEFAULT_BIN_RETENTION_DAYS,
     DEFAULT_KEEP_LATEST_VERSIONS, DefaultsReason, Engine, EngineError, Event, EventStream, Gateway,
-    GatewayConfig, LoginSecret, MAX_BIN_RETENTION_DAYS, NodeId, OrphanHeads, PlacementRefusal,
-    ProviderError, RetentionPolicy, SessionBearer, SettingsLoad, SettingsPublishError,
-    SettingsRead, StoragePolicy, SyncTimingProfile, VaultSettings, WriteTarget, load_settings,
-    publish_settings, settings_name,
+    GatewayConfig, LapsedHead, LoginSecret, MAX_BIN_RETENTION_DAYS, NodeId, OrphanHeads,
+    PlacementRefusal, ProviderError, RetentionPolicy, SessionBearer, SettingsLoad,
+    SettingsPublishError, SettingsRead, StoragePolicy, SyncTimingProfile, Unopened, VaultSettings,
+    WriteTarget, load_settings, publish_settings, settings_name,
 };
 use cipherbox_engine::{HeldKey, HeldRecords, observed_at};
 use cipherbox_engine::{HeldRecord, HeldValue};
@@ -385,7 +385,10 @@ fn a_second_account_cannot_open_the_first_accounts_settings() {
     let other = world.device(b"shared-device-second-account");
     assert_eq!(
         load(&world, &other, &blocks, &OTHER_SECRET),
-        SettingsLoad::Defaults(DefaultsReason::Unreadable),
+        SettingsLoad::Defaults(DefaultsReason::Unreadable {
+            sequence: 1,
+            cause: Unopened::Unsealed,
+        }),
         "a record sealed to another enc-subkey never opens",
     );
     // The control: those same bytes are readable by the account they belong to,
@@ -757,7 +760,13 @@ fn a_lapsed_settings_record_is_never_offered_for_renewal() {
     .expect("raise");
 
     let read = read(&world, &device, &blocks, &SECRET);
-    assert_eq!(read.load, SettingsLoad::Defaults(DefaultsReason::Expired));
+    assert_eq!(
+        read.load,
+        SettingsLoad::Defaults(DefaultsReason::Expired {
+            sequence: 1,
+            head: LapsedHead::Opened,
+        })
+    );
     assert!(
         read.renewable.is_none(),
         "a record the lapse refused is not this session's to re-sign",
@@ -976,7 +985,10 @@ fn a_record_this_build_cannot_read_prefers_the_cached_copy() {
         load(&world, &bob, &blocks, &SECRET),
         SettingsLoad::Stale {
             settings: external_only(),
-            reason: DefaultsReason::Unreadable,
+            reason: DefaultsReason::Unreadable {
+                sequence: 2,
+                cause: Unopened::NewerRelease,
+            },
         },
         "the unreadable record is refused and the device's own copy stands in",
     );
@@ -1317,7 +1329,14 @@ fn a_body_carrying_a_refused_endpoint_is_rejected_on_the_way_back_in() {
         let SettingsLoad::Stale { settings, reason } = degraded else {
             panic!("{endpoint}: the refused body degrades to last-known-good, got {degraded:?}");
         };
-        assert_eq!(reason, DefaultsReason::Unreadable, "{endpoint}");
+        assert_eq!(
+            reason,
+            DefaultsReason::Unreadable {
+                sequence,
+                cause: Unopened::Malformed,
+            },
+            "{endpoint}"
+        );
         assert_eq!(
             settings
                 .byo
@@ -1521,7 +1540,14 @@ fn a_wire_bin_retention_the_reader_refuses_never_reaches_the_caller() {
         let SettingsLoad::Stale { settings, reason } = degraded else {
             panic!("{days:?}: the refused body degrades to last-known-good, got {degraded:?}");
         };
-        assert_eq!(reason, DefaultsReason::Unreadable, "{days:?}");
+        assert_eq!(
+            reason,
+            DefaultsReason::Unreadable {
+                sequence,
+                cause: Unopened::Malformed,
+            },
+            "{days:?}"
+        );
         assert_eq!(
             settings.bin_retention_days, DEFAULT_BIN_RETENTION_DAYS,
             "{days:?}: the cached copy's retention stands, not the refused one",
@@ -1571,7 +1597,10 @@ fn a_lapsed_eol_is_not_authoritative_and_degrades_to_last_known_good() {
         load(&world, &device, &blocks, &SECRET),
         SettingsLoad::Stale {
             settings: hand_encoded_settings("https://kubo.example"),
-            reason: DefaultsReason::Expired,
+            reason: DefaultsReason::Expired {
+                sequence: 2,
+                head: LapsedHead::Opened,
+            },
         },
         "a lapsed record never replaces the copy this device authenticated",
     );
@@ -1594,7 +1623,10 @@ fn a_lapsed_eol_on_a_cold_device_reports_expiry_rather_than_applying_the_record(
     );
     assert_eq!(
         load(&world, &device, &blocks, &SECRET),
-        SettingsLoad::Defaults(DefaultsReason::Expired),
+        SettingsLoad::Defaults(DefaultsReason::Expired {
+            sequence: 1,
+            head: LapsedHead::Opened,
+        }),
     );
 }
 
@@ -2661,4 +2693,45 @@ fn a_settings_body_from_a_newer_release_accuses_nobody_at_start() {
 
     let (_engine, mut events, _tasks) = boot_resolving(&world, &device, &blocks);
     assert!(!accused(&mut events));
+}
+
+/// A revision rollback with no last-known-good copy refuses placement, and the
+/// exit the queue hold names for it is a save: the publish signs above the
+/// sequence floor and mints above the adopted revision, so it clears both bars.
+#[test]
+fn a_save_lands_over_a_revision_rollback_this_device_holds_no_copy_past() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    device.snapshot_cache.fail_puts();
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body_at("https://kubo.example", 5),
+        1,
+    );
+    assert!(matches!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(_)
+    ));
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body_at("https://attacker.example", 4),
+        1,
+    );
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Defaults(DefaultsReason::RevisionRolledBack {
+            floor: 5,
+            revision: 4,
+        }),
+    );
+
+    publish(&world, &device, &blocks, &SECRET, &configured());
+
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(configured()),
+    );
 }
