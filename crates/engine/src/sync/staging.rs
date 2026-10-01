@@ -44,6 +44,7 @@ use crate::sync::BookkeepingSeal;
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX};
 use crate::sync::op::Op;
+use crate::sync::owed_rotation::OWED_ROTATION_PREFIX;
 use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{
     RecordClass, RecordReader, RecordSeal, encode_op_record, record_content_root_cid,
@@ -59,7 +60,8 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// doomed-name journal entry, a
 /// received-shares list, a contact book, or the
 /// notices of its versionless dead letters, the scope roots that still owe a
-/// scope-exit cut, the conversion record, or the renewal walk's cursor. All
+/// scope-exit cut, the conversion record, the renewal walk's cursor, or the
+/// owed rotation record. All
 /// are per-owner, so their whole prefixes are referenced — an entry this
 /// session cannot read belongs to the identity that still needs it.
 ///
@@ -78,6 +80,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(SCOPE_EXIT_DEBT_PREFIX)
         || key.starts_with(CONVERSION_RECORD_PREFIX)
         || key.starts_with(RENEWAL_CURSOR_PREFIX)
+        || key.starts_with(OWED_ROTATION_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.
@@ -1507,6 +1510,7 @@ mod tests {
                 SCOPE_EXIT_DEBT_PREFIX,
                 CONVERSION_RECORD_PREFIX,
                 RENEWAL_CURSOR_PREFIX,
+                OWED_ROTATION_PREFIX,
             ] {
                 store
                     .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())

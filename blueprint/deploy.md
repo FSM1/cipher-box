@@ -154,7 +154,8 @@ A release orphan-sweeps every staging key whose prefix it does not know. So a ne
 record lands in two steps: one release adds its prefix to the bookkeeping list
 (`is_bookkeeping`), and a later release writes the first entry. A one-release rollback then keeps
 the record ([ADR 0020](../decisions/0020-the-durable-op-queue-reads-the-previous-release.md),
-ADR 0063).
+ADR 0063). The `owed-rotation` prefix (`cbx/or/`) enters the list one release before the engine
+writes its first entry.
 
 ## Staging pipeline
 
