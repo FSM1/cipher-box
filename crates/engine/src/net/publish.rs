@@ -290,9 +290,10 @@ pub enum PublishError {
     /// ([`PutOutcome::Refused`](super::fanout::PutOutcome::Refused)), so the
     /// record did not leave through any of them.
     AllEndpointsRefused,
-    /// The durable sequence floor could not be read. A floor-read failure is a
-    /// fail-closed trust event, never "no floor": publish stops rather than mint
-    /// a sequence from assumed-empty state (blueprint/engine.md floor law).
+    /// A durable sequence or epoch floor could not be read. A floor-read
+    /// failure is a fail-closed trust event, never "no floor": publish stops
+    /// rather than mint a sequence from assumed-empty state (blueprint/engine.md
+    /// floor law).
     FloorRead(SeamError),
     /// The request carried an empty head CID, which would sign `/ipfs/` — a
     /// value the decode side ([`head_cid_from_value`]) always rejects. Refused
@@ -377,7 +378,7 @@ impl core::fmt::Display for PublishError {
             Self::Register(_) => f.write_str("register-first publish failed"),
             Self::AllEndpointsFailed => f.write_str("all record endpoints failed"),
             Self::AllEndpointsRefused => f.write_str("every record endpoint refused the record"),
-            Self::FloorRead(_) => f.write_str("sequence floor read failed"),
+            Self::FloorRead(_) => f.write_str("durable floor read failed"),
             Self::EmptyHeadCid => f.write_str("empty head CID (never published)"),
             Self::EmptyInlineValue => f.write_str("empty inline value (never published)"),
             Self::RecordTooLarge { size, limit } => write!(

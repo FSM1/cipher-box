@@ -398,7 +398,9 @@ write-epoch floors before `reseal_root` re-signs the carried commitment. The gra
 check. `grants/invite.rs::check_publishable` is an earlier structural check (the grant-set
 ceiling, repeated tags, and ledger-commitment agreement), not a floor check. The rule that a
 rotation reads every floor again before it seals belongs to ADR 0041, and this ADR does not state
-it. The gap is FSM1/cipher-box#2016.
+it. The gap is FSM1/cipher-box#2016. Closed on 2026-09-27 by FSM1/cipher-box#2063: the root arm
+of the write wave reads the cut-epoch floor too, through `PublishBar::refuse_below` and again at
+the `SignatureGate` (ADR 0041 E1).
 
 **E5 — The revocation floor keys name the recipient in the clear.** `revocation_floor_key`,
 `grant_floor_key`, `revocation_cut_epoch_key` and `cleared_floor_key` in
