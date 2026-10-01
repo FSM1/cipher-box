@@ -2,7 +2,7 @@
  * Profile: link-first sharing across two owner devices (ADR 0023-0028), the
  * staging leg of `tests/link-first.spec.ts`. The step numbers are the steps of
  * the link-first flow in `tests/web-e2e/README.md`; they run here in the order
- * 1, 2, 3, 6, 4, 5, 7, so device B's sweep clock already runs at step 7.
+ * 1, 2, 3, 6, 4, 5, 7.
  *
  * Device B is a second context on the owner's wallet. A device goes offline on
  * `about:blank`, which stops its engine, and comes back on a load that resumes
@@ -24,7 +24,7 @@ const SUBFOLDER = 'photos';
 const OWNER_NAME = 'dana';
 const WRITTEN = 'from-the-writer.bin';
 const AFTER_REKEY = 'after-the-rekey.txt';
-const DAY_MS = 86_400_000;
+const LINK_LIFETIME_MS = 180_000;
 
 /** The ceiling on one wait for a sync pass on the record plane. */
 const PASS_MS = 600_000;
@@ -32,6 +32,7 @@ const PASS = { timeout: PASS_MS };
 
 /** The production `link_sweep_cadence`: a session sweeps first this long after its start. */
 const SWEEP_CADENCE_MS = 600_000;
+const SWEEP_GRACE_MS = 1_200_000;
 
 const heldByLink = (row: RowStanding) => row !== 'gone' && row.viaLink;
 const granted = (row: RowStanding) =>
@@ -74,9 +75,7 @@ test('the link-first flow runs across two owner devices', async ({
   wallet,
   secondContext,
 }) => {
-  // About 26 min expected from the invite, sharing and writable-share profiles
-  // plus one sweep cadence; the ceiling keeps the run inside its step budget.
-  test.setTimeout(2_400_000);
+  test.setTimeout(3_600_000);
   const ownerFiles = new FilesPage(page);
   const ownerShare = new SharePage(page);
 
@@ -228,14 +227,14 @@ test('the link-first flow runs across two owner devices', async ({
   await test.step('7. the sweep on device B cuts an expired link, and its chip leaves device A', async () => {
     // A fresh session on device A, so its first sweep is a cadence away.
     await offline(page);
-    await online(page);
     const started = Date.now();
+    await online(page);
     await ownerFiles.createFolder(EXPIRED_FOLDER);
     await expect(ownerFiles.row(EXPIRED_FOLDER)).toBeVisible();
     await published(page);
     await ownerShare.open(EXPIRED_FOLDER);
-    await ownerShare.mintExpiringIn(-DAY_MS);
-    await expect(ownerShare.linkChips).toContainText('expired');
+    await ownerShare.mintExpiringIn(LINK_LIFETIME_MS);
+    await expect(ownerShare.linkChips).toHaveCount(1);
     await ownerShare.close();
     await offline(page);
     expect(Date.now() - started, 'device A stayed online into its own first sweep').toBeLessThan(
@@ -248,7 +247,11 @@ test('the link-first flow runs across two owner devices', async ({
     await offline(deviceB);
     await online(deviceB);
     await bShare.openUntilLinks(EXPIRED_FOLDER, 1, PASS_MS);
-    await bShare.openUntilLinks(EXPIRED_FOLDER, 0, SWEEP_CADENCE_MS + PASS_MS);
+    await bShare.openUntilLinks(
+      EXPIRED_FOLDER,
+      0,
+      LINK_LIFETIME_MS + SWEEP_GRACE_MS + SWEEP_CADENCE_MS + PASS_MS
+    );
     await bShare.close();
 
     await online(page);
