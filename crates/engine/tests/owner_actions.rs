@@ -12616,6 +12616,46 @@ fn a_write_grantees_delete_reaches_the_owners_bin_by_owner_capture() {
     assert_eq!(entry.origin_parent, fx.folder.0);
 }
 
+/// A received share holds no scope the grantee's own vault owes work at, so
+/// the grantee's own owed record, even one that does not open, does not stop
+/// a delete inside the share.
+#[test]
+fn a_grantees_delete_in_a_share_does_not_read_its_own_owed_record() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let doomed = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "doomed",
+    );
+    let key = owed_rotation_key(&kdf::enc_subkey(&RECIPIENT_SECRET));
+    block_on(
+        fx.recipient_device
+            .staging_store
+            .put_staged_bytes(&key, b"not an owed rotation record"),
+    )
+    .expect("stage the bytes");
+    let (mut grantee, _grantee_events, mut grantee_tasks) = recipient_session(&fx);
+    for _ in 0..4 {
+        fx.world.scheduler.advance(grantee.profile().stale_after);
+        poll_tasks_until_parked(&mut grantee_tasks);
+    }
+    assert!(
+        block_on(grantee.received_shares())
+            .expect("the list reads")
+            .iter()
+            .any(|share| share.scope == fx.folder),
+        "the grantee accepted the share"
+    );
+
+    block_on(grantee.command(Command::Delete { node: doomed })).expect("the delete journals");
+}
+
 /// Stop the owner's session, then start it on a later device once the walk
 /// window has opened, and let the walk run. The later session stays alive in
 /// the returned device, engine and tasks.

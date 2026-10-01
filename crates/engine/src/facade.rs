@@ -6719,7 +6719,10 @@ where {
                 // node by owner capture (CONTEXT.md), and a grantee never
                 // writes a bin.
                 let home = self.write_home(&rendered, node, TargetRole::Node)?;
-                refuse_an_owed_move_under(&rendered, node, &self.owed_moves().await?)?;
+                // A received share holds no scope this vault owes work at.
+                if home == WriteHome::Vault {
+                    refuse_an_owed_move_under(&rendered, node, &self.owed_moves().await?)?;
+                }
                 let to_bin = home == WriteHome::Vault && self.bin_retention_days() > 0;
                 // Both anchors snapshot the target's own sequence for the
                 // conditional-delete rebase rule.
