@@ -123,9 +123,9 @@ use crate::record_plane::DefaultsReason;
 use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
     MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure,
-    Retryable, RevokeError, RevokedCommittedSet, RotateError, RotationPublishError,
-    ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys, SweepOutcome,
-    SweepResolveFailure, SweepRun, SweepTaskFactory, WalkedReadEpochs, WriteHistory,
+    Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
+    RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys,
+    SweepOutcome, SweepResolveFailure, SweepRun, SweepTaskFactory, WalkedReadEpochs, WriteHistory,
     WriteRevokeKind, bounded, cut_for_write_scope, derive_write_name, record_grant_floor,
     reseal_at_current_epoch, reseal_scope_root, revoke_grants, revoke_write_grant, rotate_on_cut,
     run_sweep, run_sweep_job,
@@ -2780,6 +2780,17 @@ impl EngineError {
         match err {
             RotateError::Reseal(ResealError::Entropy(e)) => EngineError::from_entropy(e),
             other => EngineError::from_rotation(other),
+        }
+    }
+
+    /// [`from_rotation`](EngineError::from_rotation), with an unreadable node
+    /// ([`ResolveFailure::Unreadable`]) reported as a target this build cannot
+    /// act on.
+    fn from_cut_rotation(err: RotateOnCutError) -> Self {
+        if err.is_unreadable() {
+            EngineError::UnsupportedTarget { check: err.check() }
+        } else {
+            EngineError::from_rotation(err)
         }
     }
 
@@ -14155,6 +14166,40 @@ mod tests {
         };
         let debug = format!("{command:?}");
         assert_eq!(debug, "Command(create)", "payloads must never leak");
+    }
+
+    /// Only the wave's unreachable lagging node leaves the trust axis: an
+    /// owner-key refusal, also classed "capability", stays a verdict no retry
+    /// clears.
+    #[test]
+    fn a_cut_maps_only_an_unreadable_node_off_the_trust_axis() {
+        use crate::rotation::{WritePublishError, WriteRotateError};
+        let resolve = WriteRotateError::Resolve {
+            node_id: [0x11; 16],
+            reason: ResolveFailure::Unreadable,
+        };
+        let republish = WriteRotateError::Publish {
+            stage: "republish",
+            node_id: [0x11; 16],
+            error: WritePublishError::Unreadable,
+        };
+        for unreadable in [resolve, republish] {
+            let mapped = EngineError::from_cut_rotation(RotateOnCutError::Write(unreadable));
+            assert!(
+                matches!(mapped, EngineError::UnsupportedTarget { .. }),
+                "{mapped:?}"
+            );
+        }
+        let owner_key_refusal =
+            RotateOnCutError::Read(crate::rotation::CascadeError::OwnerSubkeyMissing {
+                scope_id: [0x11; 16],
+            });
+        assert_eq!(owner_key_refusal.class(), "capability");
+        let mapped = EngineError::from_cut_rotation(owner_key_refusal);
+        assert!(
+            matches!(mapped, EngineError::TrustViolation { .. }),
+            "{mapped:?}"
+        );
     }
 
     #[test]

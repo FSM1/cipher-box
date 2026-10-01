@@ -177,6 +177,7 @@ impl From<ResolveFailure> for SweepResolveFailure {
             ResolveFailure::Unavailable => Self::Unavailable,
             ResolveFailure::Rejected => Self::Rejected,
             ResolveFailure::ConflictingChildLabel => Self::ConflictingChildLabel,
+            ResolveFailure::Unreadable => Self::Unreadable,
         }
     }
 }

@@ -339,9 +339,17 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
 }
 
 /// The gated scope root's epoch and carried history links.
-struct LaggingAnchor {
-    epoch: u64,
-    history_links: Vec<SignedSealed>,
+pub(crate) struct LaggingAnchor {
+    pub(crate) epoch: u64,
+    pub(crate) history_links: Vec<SignedSealed>,
+}
+
+/// What [`open_under_anchor`] found.
+pub(crate) enum LaggingRead {
+    /// The record opened, with the envelope its preserved fields ride in.
+    Opened(Adopted, Box<Envelope>),
+    /// The anchor proves no seed for the record's epoch.
+    Unreachable(&'static str),
 }
 
 /// What [`resolve_child_record`] found.
@@ -467,7 +475,7 @@ where
 
 /// The record's epoch when the gate refused it for lagging the read-epoch
 /// floor alone.
-fn lagging_epoch(reason: &RejectionReason) -> Option<u64> {
+pub(crate) fn lagging_epoch(reason: &RejectionReason) -> Option<u64> {
     match reason {
         RejectionReason::EpochBelowFloor { epoch, .. } => Some(*epoch),
         _ => None,
@@ -505,7 +513,7 @@ where
         None => None,
     }
     .ok_or_else(|| lagging_unreachable(record_epoch, "no gated scope root is held"))?;
-    open_under_anchor(
+    let read = open_under_anchor(
         snapshot_cache,
         adopter,
         name,
@@ -513,18 +521,35 @@ where
         record_bytes,
         record_epoch,
     )
-    .await
+    .await;
+    child_lagging_verdict(read, record_epoch)
 }
 
-/// [`read_lagging`] once the anchor is in hand.
-async fn open_under_anchor<S, H, F>(
+/// [`open_under_anchor`]'s outcome on the child resolve's axis: an
+/// unreachable epoch or a seam failure is availability.
+fn child_lagging_verdict(
+    read: Result<LaggingRead, GateError>,
+    record_epoch: u64,
+) -> Result<Adopted, ChildResolveError> {
+    match read {
+        Ok(LaggingRead::Opened(adopted, _)) => Ok(adopted),
+        Ok(LaggingRead::Unreachable(why)) => Err(lagging_unreachable(record_epoch, why)),
+        Err(GateError::Seam(e)) => Err(ChildResolveError::Unavailable(e.message().to_owned())),
+        Err(rejected) => Err(ChildResolveError::Gate(rejected)),
+    }
+}
+
+/// [`read_lagging`] once the anchor is in hand: open the record under the seed
+/// the anchor's ratchet reaches for its epoch, then raise its sequence floor as
+/// an adopt does.
+pub(crate) async fn open_under_anchor<S, H, F>(
     snapshot_cache: &S,
     adopter: &ChildAdopter<'_, H, F>,
     name: &IpnsName,
     anchor: &LaggingAnchor,
     record_bytes: &[u8],
     record_epoch: u64,
-) -> Result<Adopted, ChildResolveError>
+) -> Result<LaggingRead, GateError>
 where
     S: SnapshotCache,
     H: Http,
@@ -533,23 +558,24 @@ where
     // Only a walk that opens a link binds the held seed to the anchor's epoch,
     // so an anchor that is not strictly newer than the record proves nothing.
     if record_epoch >= anchor.epoch {
-        return Err(lagging_unreachable(
-            record_epoch,
+        return Ok(LaggingRead::Unreachable(
             "the gated scope root is not newer than the record",
         ));
     }
-    let seed = lagging_read_seed(
+    let Ok(epoch_seed) = lagging_read_seed(
         adopter.scope_id,
         &adopter.scope_read_seed,
         anchor.epoch,
         &anchor.history_links,
         record_epoch,
-    )
-    .map_err(|_| lagging_unreachable(record_epoch, "no held history link reaches the epoch"))?;
-    let (adopted, _) = adopter
-        .open_interior_under(name, record_bytes, &seed)
-        .await
-        .map_err(ChildResolveError::Gate)?;
+    ) else {
+        return Ok(LaggingRead::Unreachable(
+            "no held history link reaches the epoch",
+        ));
+    };
+    let (adopted, envelope) = adopter
+        .open_interior_under(name, record_bytes, &epoch_seed)
+        .await?;
     keep_then_commit(
         snapshot_cache,
         name,
@@ -561,8 +587,8 @@ where
         ),
     )
     .await
-    .map_err(|e| ChildResolveError::Unavailable(e.message().to_owned()))?;
-    Ok(adopted)
+    .map_err(GateError::Seam)?;
+    Ok(LaggingRead::Opened(adopted, Box::new(envelope)))
 }
 
 fn lagging_unreachable(record_epoch: u64, why: &str) -> ChildResolveError {
@@ -1422,14 +1448,15 @@ mod tests {
         let gw = gateway();
         let http = ScriptedHttp::default();
         let adopter = adopter(&gw, &http, floors, published, NODE);
-        block_on(open_under_anchor(
+        let read = block_on(open_under_anchor(
             cache,
             &adopter,
             &published.name,
             anchor,
             &published.record_bytes,
             epoch,
-        ))
+        ));
+        child_lagging_verdict(read, epoch)
     }
 
     /// The trust verdict a lagging read earned, or a panic naming what it

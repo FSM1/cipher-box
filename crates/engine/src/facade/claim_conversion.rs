@@ -395,7 +395,7 @@ where
         };
         let report = rotate_on_cut(&rotator, node, cut)
             .await
-            .map_err(EngineError::from_rotation)?;
+            .map_err(EngineError::from_cut_rotation)?;
         record_cut_epoch_floor(
             self.floors,
             &target.scope.scope_id,

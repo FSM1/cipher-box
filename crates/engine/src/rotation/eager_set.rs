@@ -77,6 +77,10 @@ pub enum ResolveFailure {
     /// parent indexes (engine.md #38 D6). The accept-freshest alternative would
     /// need a core schema change.
     ConflictingChildLabel,
+    /// The descendant lags an epoch no held history link reaches: a capability
+    /// limit of this reader, not a verdict on the record, and no retry clears
+    /// it (ADR 0021 D5).
+    Unreadable,
 }
 
 impl ResolveFailure {
@@ -85,6 +89,7 @@ impl ResolveFailure {
         match self {
             Self::Rejected => "trust",
             Self::Unavailable | Self::ConflictingChildLabel => "availability",
+            Self::Unreadable => "capability",
         }
     }
 }
@@ -96,6 +101,9 @@ impl core::fmt::Display for ResolveFailure {
             ResolveFailure::Unavailable => f.write_str("descendant record unavailable"),
             ResolveFailure::ConflictingChildLabel => {
                 f.write_str("descendant scope_id reached with conflicting ipns_name labels")
+            }
+            ResolveFailure::Unreadable => {
+                f.write_str("descendant epoch beyond the scope's ratchet")
             }
         }
     }

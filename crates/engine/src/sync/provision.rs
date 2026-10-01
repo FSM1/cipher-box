@@ -335,7 +335,7 @@ impl ProvisionError {
             // same stall whether it fails at this module's own draw or inside
             // the section re-seal; every other re-seal arm is a refusal.
             Self::Reseal(ResealError::Entropy(_)) => true,
-            Self::Publish { error, .. } => *error != WritePublishError::Rejected,
+            Self::Publish { error, .. } => error.is_retryable(),
             Self::Commitment(_)
             | Self::Reseal(_)
             | Self::Author(_)

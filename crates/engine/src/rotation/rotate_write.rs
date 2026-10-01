@@ -309,6 +309,8 @@ pub enum WritePublishError {
     /// for and gave no capability to publish on. Re-running reaches the same
     /// verdict.
     Rejected,
+    /// [`ResolveFailure::Unreadable`], met on the publish arm.
+    Unreadable,
 }
 
 /// The class label a re-point seal failure carries. `PointerError` serves the
@@ -330,6 +332,15 @@ impl WritePublishError {
         match self {
             Self::NotLanded | Self::LostRace | Self::RegistryFull => "availability",
             Self::Rejected => "trust",
+            Self::Unreadable => "capability",
+        }
+    }
+
+    /// Whether a retry could land it: only availability, never a verdict.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::NotLanded | Self::LostRace | Self::RegistryFull => true,
+            Self::Rejected | Self::Unreadable => false,
         }
     }
 }
@@ -341,6 +352,7 @@ impl core::fmt::Display for WritePublishError {
             WritePublishError::LostRace => f.write_str("write-plane publish lost the CAS race"),
             WritePublishError::RegistryFull => f.write_str("name registry rejected register-first"),
             WritePublishError::Rejected => f.write_str("write-plane publish refused fail-closed"),
+            WritePublishError::Unreadable => f.write_str("node epoch beyond this scope's ratchet"),
         }
     }
 }
@@ -565,10 +577,24 @@ impl WriteRotateError {
             | WriteRotateError::ResumedSeedNotAtItsRoot
             | WriteRotateError::ResumedWaveAtAnotherEpoch => false,
             WriteRotateError::Entropy(_) => true,
-            WriteRotateError::Publish { error, .. } => *error != WritePublishError::Rejected,
+            WriteRotateError::Publish { error, .. } => error.is_retryable(),
             WriteRotateError::Resolve { reason, .. } => *reason == ResolveFailure::Unavailable,
             WriteRotateError::Repoint(e) => matches!(e, PointerError::Entropy(_)),
         }
+    }
+
+    /// Whether the wave met [`ResolveFailure::Unreadable`] on either arm.
+    pub fn is_unreadable(&self) -> bool {
+        matches!(
+            self,
+            WriteRotateError::Resolve {
+                reason: ResolveFailure::Unreadable,
+                ..
+            } | WriteRotateError::Publish {
+                error: WritePublishError::Unreadable,
+                ..
+            }
+        )
     }
 }
 

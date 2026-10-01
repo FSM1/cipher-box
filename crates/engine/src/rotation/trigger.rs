@@ -741,6 +741,11 @@ impl RotateOnCutError {
             RotateOnCutError::WriteOnlyCutWithdrawsRead => false,
         }
     }
+
+    /// [`WriteRotateError::is_unreadable`] on the write plane.
+    pub fn is_unreadable(&self) -> bool {
+        matches!(self, RotateOnCutError::Write(e) if e.is_unreadable())
+    }
 }
 
 /// Drive `cut` through the planes it demands at `scope_root`, which MUST be the
