@@ -431,16 +431,16 @@ impl RecordTransport for InMemoryRecordStore {
         if self.get_failing_key(routing_key) {
             return Err(SeamError::new(format!("get refused for {routing_key}")));
         }
-        if let Some(record) = self.swapped(routing_key) {
-            return Ok(record);
-        }
-        let record = self
-            .inner
-            .lock()
-            .expect("lock")
-            .get(endpoint)
-            .map(|records| records.get(routing_key).cloned())
-            .ok_or_else(|| SeamError::new(format!("unknown endpoint: {}", endpoint.0)))?;
+        let record = match self.swapped(routing_key) {
+            Some(record) => record,
+            None => self
+                .inner
+                .lock()
+                .expect("lock")
+                .get(endpoint)
+                .map(|records| records.get(routing_key).cloned())
+                .ok_or_else(|| SeamError::new(format!("unknown endpoint: {}", endpoint.0)))?,
+        };
         match record {
             Some(bytes) if bytes.len() > max_bytes => Err(SeamError::new(format!(
                 "record over cap: {} > {max_bytes}",
@@ -604,6 +604,19 @@ mod tests {
         let missing = EndpointId::new("nope");
         assert!(block_on(store.get_record(&missing, "k", 1024, None)).is_err());
         assert!(block_on(store.put_record(&missing, "k", b"r")).is_err());
+    }
+
+    /// A served record keeps the read's cap, as a stored one does.
+    #[test]
+    fn a_served_record_over_the_cap_is_refused() {
+        let endpoint = EndpointId::new("a");
+        let store = InMemoryRecordStore::new(vec![endpoint.clone()]);
+        store.serve_gets_for_after("name", 0, 2, Some(vec![0; 8]));
+        assert!(block_on(store.get_record(&endpoint, "name", 4, None)).is_err());
+        assert_eq!(
+            block_on(store.get_record(&endpoint, "name", 8, None)).unwrap(),
+            Some(vec![0; 8])
+        );
     }
 
     #[test]
