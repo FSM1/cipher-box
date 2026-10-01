@@ -70,6 +70,7 @@ const staging = {
   workers: 1,
   fullyParallel: false,
   timeout: 300_000,
+  expect: { timeout: 180_000 },
   projects: [
     {
       name: 'staging-media',

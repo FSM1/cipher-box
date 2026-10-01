@@ -280,10 +280,8 @@ export class SharePage {
   }
 
   /**
-   * Mints a link whose deadline falls `inMs` after the click, which may be
-   * negative. The dialog offers whole days, so the tab's `Date.now` runs back
-   * by its shortest lifetime less `inMs` for the mint. The engine reads its own
-   * clock in its worker, which does not move.
+   * The dialog offers whole days, so only the page clock is offset to mint a
+   * link expiring `inMs` after the click. The engine worker keeps real time.
    */
   async mintExpiringIn(inMs: number, terms: Omit<LinkTerms, 'lifetime'> = {}): Promise<URL> {
     const choice = this.page.getByLabel('link expires');

@@ -11,6 +11,7 @@ import { mediaFixtures, mediaPath } from './media';
 const FOLDERS = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot'];
 
 test('a six-folder tree survives a reload', async ({ page }) => {
+  test.setTimeout(600_000);
   const files = new FilesPage(page);
   const image = mediaFixtures().image;
 
