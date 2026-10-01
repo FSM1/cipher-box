@@ -1,7 +1,8 @@
 # ADR 0052 — The stage-3 section predicate lives in core behind a verified-commitment witness
 
-- **Status:** Accepted on 2026-09-26; the `blueprint/core.md` and `blueprint/engine.md` reword lands in the code PR
+- **Status:** Accepted on 2026-09-26
 - **Date:** 2026-09-26
+- **Implemented by:** FSM1/cipher-box#2135 (closes FSM1/cipher-box#1131)
 - **Relates to:**
   [core: move the adoption gate's stage-3 section authentication into crates/core behind a verified-commitment witness (#1131)](https://github.com/FSM1/cipher-box/issues/1131)
   (the owner decision of 2026-08-20 in its comment),
@@ -121,7 +122,8 @@ returns a trust verdict that nothing anchored.
    new module, the KAT manifest and `examples/kat_gen.rs`) and the engine gate, `net/author.rs`,
    `net/rotation.rs`, `rotation/reseal.rs`, `rotation/rotate_write.rs`, `rotation/trigger.rs`, the
    engine KAT generator, and the engine gate tests. The move changes no wire format and no KDF
-   edge, so no KAT vector changes its bytes.
+   edge. The section-signer vectors regenerate under the core generator with new bytes; their
+   verdicts do not change.
 5. **The blueprint reword lands in the code PR.** The reword follows acceptance of this ADR, in the
    same PR as the move, so the blueprint and the code cross the boundary together.
 6. **`crates/core` defines which entries are write-capable.** This is the accepted cost of the

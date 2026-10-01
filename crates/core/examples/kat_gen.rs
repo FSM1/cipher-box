@@ -74,7 +74,7 @@ use cipherbox_core::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{
     ContactCode, FINGERPRINT_BYTES, FINGERPRINT_DOMAIN, identity_fingerprint, import_contact_code,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
+use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ecies::{
     ENC_LEN as ECIES_ENC_LEN, KEY_CONTEXT as ECIES_KEY_CONTEXT,
     NONCE_CONTEXT as ECIES_NONCE_CONTEXT, ecies_open, ecies_public_key, ecies_recipient_is_a_point,
@@ -661,6 +661,11 @@ struct GrantSection {
     grant_set_reject: RejectSection,
     section_accept: FileCount,
     section_reject: RejectSection,
+    /// The owner identity (SEC1) every section-signer vector's commitment
+    /// verifies under, so stage 3 owns each verdict.
+    section_signer_owner_identity_pk: String,
+    section_signer_accept: FileCount,
+    section_signer_reject: RejectSection,
 }
 
 /// A write-body accept vector: the canonical plaintext plus the two list counts
@@ -746,6 +751,15 @@ struct SectionAcceptVector {
     grant_blob_count: usize,
     history_link_count: usize,
     has_ascent_link: bool,
+}
+
+/// A scope-root head block whose grant section stage 3 accepts: every
+/// structure verifies under one committed pseudonym.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SectionSignerAcceptVector {
+    name: String,
+    hex: String,
 }
 
 /// A per-structure HPKE seal KAT: a fixed-ephemeral seal of a grant/owner-blob
@@ -1455,6 +1469,14 @@ fn main() {
     );
     write_pretty(&grant_dir.join("section_accept.json"), &g.section_accept);
     write_pretty(&grant_dir.join("section_reject.json"), &g.section_reject);
+    write_pretty(
+        &grant_dir.join("section_signer_accept.json"),
+        &g.section_signer_accept,
+    );
+    write_pretty(
+        &grant_dir.join("section_signer_reject.json"),
+        &g.section_signer_reject,
+    );
 
     let content_seal = build_content_seal();
     let content_seal_reject = build_content_seal_reject();
@@ -2920,6 +2942,11 @@ fn build_grant_section(g: &GrantVectors) -> GrantSection {
         },
         section_accept: file_count("section_accept", g.section_accept.len()),
         section_reject: reject("section_reject", &g.section_reject),
+        section_signer_owner_identity_pk: hexstr(
+            &section_signer_owner_identity().verifying_key().to_sec1(),
+        ),
+        section_signer_accept: file_count("section_signer_accept", g.section_signer_accept.len()),
+        section_signer_reject: reject("section_signer_reject", &g.section_signer_reject),
     }
 }
 
@@ -5863,12 +5890,16 @@ struct GrantVectors {
     grant_set_reject: Vec<GrantSetRejectVector>,
     section_accept: Vec<SectionAcceptVector>,
     section_reject: Vec<RejectVector>,
+    section_signer_accept: Vec<SectionSignerAcceptVector>,
+    section_signer_reject: Vec<RejectVector>,
 }
 
 impl GrantVectors {
     fn total(&self) -> usize {
         self.section_accept.len()
             + self.section_reject.len()
+            + self.section_signer_accept.len()
+            + self.section_signer_reject.len()
             + self.write_body_accept.len()
             + self.write_body_reject.len()
             + self.recipient_binding_accept.len()
@@ -5914,7 +5945,10 @@ fn grant_ctx(struct_tag: u8) -> AadContext {
 }
 
 fn build_grant_vectors() -> GrantVectors {
+    let (section_signer_accept, section_signer_reject) = build_section_signer_vectors();
     GrantVectors {
+        section_signer_accept,
+        section_signer_reject,
         write_body_accept: build_write_body_accept(),
         write_body_reject: build_write_body_reject(),
         recipient_binding_accept: build_recipient_binding_accept(),
@@ -6810,6 +6844,198 @@ fn build_grant_section_reject() -> Vec<RejectVector> {
 }
 
 // --- Grant blob (HPKE) ------------------------------------------------------
+
+// --- Section signer (stage 3: one section, one signer) ----------------------
+
+/// The owner identity every section-signer commitment verifies under.
+fn section_signer_owner_identity() -> EcdsaSigner {
+    EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid identity scalar")
+}
+
+/// Stage 3's **one section, one signer** rule frozen over whole scope-root head
+/// blocks (blueprint/core.md "One section, one signer").
+///
+/// Every vector shares one commitment naming two write-capable pseudonyms: the
+/// accept family shows the pin bounds how many signers a section has, not which
+/// pseudonym may sign, and every reject's structure signatures are each valid
+/// under a committed pseudonym, so only the pin refuses them. Stage 3 opens no
+/// structure, so the sealed bytes are fixed fillers.
+fn build_section_signer_vectors() -> (Vec<SectionSignerAcceptVector>, Vec<RejectVector>) {
+    let p = seal_probe();
+    let owner_identity = section_signer_owner_identity();
+    let owner = ed_signer(0x5a);
+    let grantee = ed_signer(0x55);
+    let grantee_tag = [0x66; 32];
+
+    let sign_as = |signer: &Ed25519Signer, tag: u8, recipient: Option<[u8; 32]>, bytes: &[u8]| {
+        let input = StructureSigInput::over_ciphertext(p.scope, p.epoch, tag, recipient, bytes);
+        sign_structure(signer, &input).to_bytes()
+    };
+    let signed_by = |signer: &Ed25519Signer, mut s: seal::GrantSection| {
+        s.owner_blob.signature = sign_as(
+            signer,
+            STRUCT_TAG_OWNER_BLOB,
+            None,
+            &s.owner_blob.ciphertext,
+        );
+        if let Some(b) = s.owner_write_blob.as_mut() {
+            b.signature = sign_as(signer, STRUCT_TAG_OWNER_WRITE_BLOB, None, &b.ciphertext);
+        }
+        for b in &mut s.grant_blobs {
+            b.signature = sign_as(signer, STRUCT_TAG_GRANT_BLOB, Some(b.tag), &b.ciphertext);
+        }
+        for l in &mut s.history_links {
+            l.signature = sign_as(signer, STRUCT_TAG_HISTORY_LINK, None, &l.sealed);
+        }
+        s.write_body.signature = sign_as(signer, STRUCT_TAG_WRITE_BODY, None, &s.write_body.sealed);
+        if let Some(a) = s.ascent_link.as_mut() {
+            let body = a.sig_body();
+            a.signature = sign_as(signer, STRUCT_TAG_ASCENT_LINK, None, &body);
+        }
+        s
+    };
+
+    // One commitment for every vector, naming the owner's pseudonym and a write
+    // grantee's, so the committed set is never a one-element set a pin could
+    // satisfy vacuously. Every structure kind is present, so the walk covers each.
+    let commitment = GrantSetCommitment {
+        ipns_name: b"section-signer-scope-root".to_vec(),
+        owner_pseudonym_pk: owner.verifying_key().to_bytes(),
+        cut_epoch: 0,
+        entries: vec![GrantSetEntry::new(
+            &[0x66; 32],
+            grantee_tag,
+            [0x67; 32],
+            Permission::Write,
+            grantee.verifying_key().to_bytes(),
+        )],
+        unknown: PreservedFields::new(),
+    };
+    let unsigned = seal::GrantSection {
+        commitment_sig: sign_grant_set(&owner_identity, &commitment)
+            .expect("commitment signs")
+            .to_compact(),
+        commitment,
+        grant_blobs: Vec::new(),
+        owner_blob: SignedOwnerBlob {
+            enc: [0x20; 32],
+            ciphertext: vec![0x21, 0x22],
+            signature: [0; 64],
+            unknown: PreservedFields::new(),
+        },
+        owner_write_blob: Some(seal::SignedOwnerWriteBlob {
+            enc: [0x24; 32],
+            ciphertext: vec![0x25, 0x26],
+            signature: [0; 64],
+            unknown: PreservedFields::new(),
+        }),
+        ascent_link: Some(SignedAscentLink {
+            ascent_public: [0x30; 32],
+            enc: [0x31; 32],
+            ciphertext: vec![0x32, 0x33],
+            signature: [0; 64],
+            unknown: PreservedFields::new(),
+        }),
+        history_links: vec![SignedSealed {
+            sealed: vec![0x40, 0x41, 0x42],
+            signature: [0; 64],
+            unknown: PreservedFields::new(),
+        }],
+        write_body: SignedSealed {
+            sealed: vec![0x50, 0x51, 0x52],
+            signature: [0; 64],
+            unknown: PreservedFields::new(),
+        },
+        unknown: PreservedFields::new(),
+    };
+    let by_owner = signed_by(&owner, unsigned.clone());
+    let by_grantee = signed_by(&grantee, unsigned);
+
+    // Reject: the owner's section with the write body re-signed by the grantee —
+    // the shape that used to force the full trial-verify product.
+    let mut two_signers = by_owner.clone();
+    two_signers.write_body.signature = sign_as(
+        &grantee,
+        STRUCT_TAG_WRITE_BODY,
+        None,
+        &two_signers.write_body.sealed,
+    );
+
+    // Reject: a structure splice. The grant blob is verbatim another committed
+    // writer's work at this scope and epoch, so its signature recomputes
+    // identically here — the integrity hole the pin closes, and the only vector
+    // that exercises the `recipientTag` arm of the signed input.
+    let mut spliced = by_owner.clone();
+    let ciphertext = b"a grant blob lifted from another committed writer".to_vec();
+    spliced.grant_blobs.push(SignedGrantBlob {
+        tag: grantee_tag,
+        enc: [0x7d; 32],
+        signature: sign_as(
+            &grantee,
+            STRUCT_TAG_GRANT_BLOB,
+            Some(grantee_tag),
+            &ciphertext,
+        ),
+        ciphertext,
+        unknown: PreservedFields::new(),
+    });
+
+    let body = sample_folder();
+    let head_block = |section: &seal::GrantSection| {
+        let mut envelope = seal_read_body(&p.key, &p.nonce, p.v, p.id, p.scope, p.epoch, &body)
+            .expect("sample folder seals");
+        seal::set_grant_section(
+            &mut envelope,
+            seal::encode_grant_section(section).expect("section encodes"),
+        );
+        encode_envelope(&envelope).expect("envelope encodes")
+    };
+    // Stages 2 then 3 over the frozen bytes, exactly as the core KAT suite runs
+    // them, so a generator run is itself a self-check.
+    let owner_pk = owner_identity.verifying_key();
+    let stage_three = |bytes: &[u8]| -> Result<(), CodecError> {
+        let envelope = decode_envelope(bytes)?;
+        let section = seal::decode_grant_section(
+            seal::grant_section_bytes(&envelope).expect("a head block carries its section"),
+        )?;
+        let sig = EcdsaSignature::from_compact(&section.commitment_sig).expect("compact sig");
+        let attested = verify_grant_set(&owner_pk, &section.commitment, &sig)
+            .expect("every vector passes stage 2, so stage 3 owns the verdict");
+        seal::authenticate_section_structures(&attested, &section, envelope.scope, envelope.epoch)
+    };
+
+    let accept = [
+        ("single-signer-owner-pseudonym", by_owner),
+        ("single-signer-committed-grantee", by_grantee),
+    ]
+    .iter()
+    .map(|(name, section)| {
+        let bytes = head_block(section);
+        stage_three(&bytes).unwrap_or_else(|e| panic!("{name}: must authenticate: {e}"));
+        SectionSignerAcceptVector {
+            name: name.to_string(),
+            hex: hexstr(&bytes),
+        }
+    })
+    .collect();
+    let reject = [
+        ("two-committed-signers", two_signers),
+        ("spliced-structure-from-another-committed-signer", spliced),
+    ]
+    .iter()
+    .map(|(name, section)| {
+        let bytes = head_block(section);
+        let error = stage_three(&bytes).expect_err("two committed signers must fail closed");
+        RejectVector {
+            name: name.to_string(),
+            hex: hexstr(&bytes),
+            check: error.check().to_string(),
+            class: error.class().to_string(),
+        }
+    })
+    .collect();
+    (accept, reject)
+}
 
 fn build_grant_blob_accept() -> Vec<HpkeStructureVector> {
     let recipient_scalar: [u8; 32] = std::array::from_fn(|i| (0x30 + i) as u8);

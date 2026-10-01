@@ -19,7 +19,8 @@
 //! it carries no unknown-field tolerance. Verification is per-structure and
 //! pure; the whole-record fail-closed policy over these verdicts (a missing or
 //! invalid signature is a whole-record trust violation) is the engine's adoption
-//! gate, which composes [`verify_structure`].
+//! gate, which runs [`super::section_auth`]'s stage-3 predicate over
+//! [`verify_structure`].
 
 use crate::codec::{Map, Value, encode_fixed_depth};
 use crate::error::{CodecError, TrustViolation};

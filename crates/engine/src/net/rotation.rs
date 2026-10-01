@@ -31,6 +31,7 @@ use cipherbox_core::seal::{
     STRUCT_TAG_WRITE_HISTORY_LINK, SignedOwnerWriteBlob, SignedSealed, Version, WriteBody,
     decode_envelope, decode_write_body, has_grant_section, open_grant_blob,
     open_owner_history_link, open_read_body, sign_grant_set, sign_recipient_binding, unseal,
+    write_body_signer,
 };
 use cipherbox_core::suite::ecdsa::{
     EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
@@ -70,7 +71,6 @@ use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{
     Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor, refuse_below_cut_floor,
-    write_body_signer,
 };
 use crate::grants::child_index::canonicalize;
 use crate::grants::create::ScopePointerVoucher;
@@ -2180,7 +2180,7 @@ where
             return Err(ResolveFailure::Unavailable);
         };
 
-        let signer = write_body_signer(&section, &envelope);
+        let signer = write_body_signer(&section, envelope.scope, envelope.epoch);
         let target = CascadeTarget {
             v: envelope.v,
             current_read_epoch: envelope.epoch,
@@ -4274,7 +4274,7 @@ where
             write_epoch,
         )
         .map_err(wave_read_verdict)?;
-        let signer = write_body_signer(&gated.section, &envelope);
+        let signer = write_body_signer(&gated.section, envelope.scope, envelope.epoch);
         Ok(WaveSource {
             read_body: gated.read_body,
             read_epoch: envelope.epoch,

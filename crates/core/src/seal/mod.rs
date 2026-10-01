@@ -19,6 +19,7 @@ pub mod grant;
 pub mod op_record;
 pub mod owner_local;
 pub mod section;
+pub mod section_auth;
 pub mod settings_record;
 pub mod structure;
 pub mod write_body;
@@ -52,7 +53,7 @@ pub use envelope::{
 pub use grant::{
     AscentLink, GrantBlobPayload, GrantSetBindingError, GrantSetCommitment, GrantSetEntry,
     GrantSetEntryKind, HistoryLinkPayload, OverrideSeedPayload, OwnerWriteBlobPayload, Permission,
-    decode_ascent_link, decode_grant_blob_payload, decode_grant_set_commitment,
+    VerifiedGrantSet, decode_ascent_link, decode_grant_blob_payload, decode_grant_set_commitment,
     decode_history_link_payload, decode_override_seed_payload, decode_owner_write_blob_payload,
     encode_ascent_link, encode_grant_blob_payload, encode_grant_set_commitment,
     encode_history_link_payload, encode_override_seed_payload, encode_owner_write_blob_payload,
@@ -73,6 +74,10 @@ pub use section::{
     GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantSection, MAX_GRANT_BLOBS, MAX_GRANT_SECTION_BYTES,
     MAX_HISTORY_LINKS, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob,
     SignedSealed, decode_grant_section, encode_grant_section, is_grant_section_over_bound,
+};
+pub use section_auth::{
+    authenticate_section_structures, committed_write_pseudonyms, for_each_structure,
+    is_committed_write_pseudonym, write_body_signer,
 };
 pub use settings_record::{
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, SettingsRecordHeader, open_settings_record,
