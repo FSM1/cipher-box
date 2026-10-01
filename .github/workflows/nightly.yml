@@ -175,7 +175,11 @@ jobs:
       contents: read
       issues: write
     uses: ./.github/workflows/staging-soak.yml
-    secrets: inherit
+    secrets:
+      SOAK_OWNER_WALLET_KEY: ${{ secrets.SOAK_OWNER_WALLET_KEY }}
+      SOAK_GRANTEE_WALLET_KEY: ${{ secrets.SOAK_GRANTEE_WALLET_KEY }}
+      SOAK_GRANTEE_LOGIN_SECRET: ${{ secrets.SOAK_GRANTEE_LOGIN_SECRET }}
+      STAGING_GRAFANA_READ_TOKEN: ${{ secrets.STAGING_GRAFANA_READ_TOKEN }}
     with:
       ref: ${{ needs.staging-soak-tag.outputs.tag }}
 

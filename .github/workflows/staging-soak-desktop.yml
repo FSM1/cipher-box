@@ -7,6 +7,9 @@ name: Staging Soak Desktop Leg
 
 on:
   workflow_call:
+    secrets:
+      SOAK_GRANTEE_LOGIN_SECRET:
+        required: false
     inputs:
       os:
         description: 'The runner image'
