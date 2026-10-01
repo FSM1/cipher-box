@@ -23,7 +23,7 @@ function folderView(overrides: Partial<SnapshotDescriptor> = {}): SnapshotDescri
     ancestors: [],
     deadLetters: [],
     queueHold: null,
-    retainedRecords: 0,
+    retainedRecords: 0n,
     staleness: 'fresh',
     ...overrides,
   };

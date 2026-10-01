@@ -141,7 +141,7 @@ describe('LocalTransport', () => {
     const result: SnapshotDescriptor = {
       ...emptySnapshot(folder),
       deadLetters: [{ opId: 1n, reason: 'targetGone' }],
-      retainedRecords: 0,
+      retainedRecords: 0n,
       staleness: 'stale',
     };
     worker.emit({ type: 'response', id: message.id, ok: true, result });

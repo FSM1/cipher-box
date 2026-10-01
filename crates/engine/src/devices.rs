@@ -333,6 +333,8 @@ pub fn approval_response_payload(
 /// The comparison value travels with them because deriving it is the engine's
 /// job, not the screen's.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub struct PendingApprovalView {
     /// The rendezvous id.
     pub request_id: String,

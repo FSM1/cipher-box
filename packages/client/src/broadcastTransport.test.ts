@@ -630,7 +630,7 @@ describe('broadcast transport ↔ leader relay', () => {
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
       deadLetters: [{ opId: 7n, reason: 'suffixExhausted' }],
       queueHold: null,
-      retainedRecords: 0,
+      retainedRecords: 0n,
       staleness: 'reconciling',
     };
     engine.respondSnapshot = () => Promise.resolve(view);

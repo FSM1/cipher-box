@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { byoSettings, fakeWasmEnums, TEST_ACCOUNT_ID } from '../testkit.js';
+import { byoSettings, emptySnapshot, TEST_ACCOUNT_ID } from '../testkit.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm } from './engineWasm.js';
 import { MAX_FRAGMENT_CHARS } from './protocol.js';
@@ -54,19 +54,6 @@ function recordingWasm(): { wasm: EngineWasm; constructed: Constructed[] } {
   return { wasm, constructed };
 }
 
-const emptyView = {
-  root: new Uint8Array(16),
-  folder: new Uint8Array(16),
-  folderName: '',
-  permission: fakeWasmEnums.ViewPermission.Write,
-  receivedShare: false,
-  children: [],
-  ancestors: [],
-  deadLetters: [],
-  retainedRecords: 0,
-  staleness: fakeWasmEnums.ViewStaleness.Fresh,
-};
-
 /**
  * A host over a wasm whose every call succeeds and records its arguments, so
  * only the host's own field checks can refuse a request.
@@ -87,14 +74,15 @@ async function permissiveHost(): Promise<{ host: EngineHost; calls: unknown[][] 
       return Promise.resolve(result);
     };
   const wasm = {
-    ...fakeWasmEnums,
     EngineHandle: class {
       start = record('start');
       pushChunk = record('pushChunk');
       beginWrite = record('beginWrite');
-      snapshot = record('snapshot', emptyView);
+      snapshot = record('snapshot', emptySnapshot());
       previewInviteLink = record('previewInviteLink', {
         scope: new Uint8Array([9]),
+        names: null,
+        permission: null,
         state: 'revoked',
         joined: false,
         listing: [],
@@ -411,7 +399,6 @@ function commandingHost(
   answer: (command: CommandDescriptor) => Promise<CommandOutcomeDescriptor>
 ): Promise<EngineHost> {
   const wasm = {
-    ...fakeWasmEnums,
     EngineHandle: class {
       start(): Promise<void> {
         return Promise.resolve();
@@ -508,14 +495,13 @@ const PENDING_ROW = {
 function deviceReadHost(): Promise<{ host: EngineHost; challenged: string[] }> {
   const challenged: string[] = [];
   const wasm = {
-    ...fakeWasmEnums,
     EngineHandle: class {
       start(): Promise<void> {
         return Promise.resolve();
       }
 
       devices(): Promise<unknown[]> {
-        return Promise.resolve([DEVICE_ROW, { ...DEVICE_ROW, id: '9a2b-uuid', label: undefined }]);
+        return Promise.resolve([DEVICE_ROW, { ...DEVICE_ROW, id: '9a2b-uuid', label: null }]);
       }
 
       pendingApprovals(): Promise<unknown[]> {
@@ -551,7 +537,6 @@ function rendezvousWasm(): { wasm: EngineWasm; calls: unknown[][]; freed: () => 
       return answer();
     };
   const wasm = {
-    ...fakeWasmEnums,
     EngineHandle: class {
       start(): Promise<void> {
         return Promise.resolve();
@@ -583,7 +568,7 @@ const scalarBytes = (): Uint8Array => new Uint8Array(32).fill(5);
 const factorKeyBytes = (): Uint8Array => new Uint8Array(32).fill(6);
 
 describe('EngineHost device reads', () => {
-  it('reads the registry rows through, and an absent label as null', async () => {
+  it('reads the registry rows through, an unlabelled one included', async () => {
     const { host } = await deviceReadHost();
 
     await expect(host.read({ kind: 'devices' })).resolves.toEqual([
@@ -621,7 +606,6 @@ describe('EngineHost device reads', () => {
 function fingerprintWasm(): { wasm: EngineWasm; keys: Uint8Array[] } {
   const keys: Uint8Array[] = [];
   const wasm = {
-    ...fakeWasmEnums,
     EngineHandle: class {
       start(): Promise<void> {
         return Promise.resolve();

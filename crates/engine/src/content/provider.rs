@@ -44,7 +44,10 @@ const METADATA: [IpAddr; 3] = [
 /// Where a version's bytes are pinned (#34 D1). Every mode still registers with
 /// the API for union-liveness accounting; only the byte destination differs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    derive(serde::Deserialize, serde::Serialize, tsify::Tsify)
+)]
 #[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum PinMode {
     /// CipherBox's hosted pin store (the default). Quota is authoritative.
@@ -59,7 +62,10 @@ pub enum PinMode {
 /// The kind of member-supplied IPFS provider, which fixes the reachability
 /// probe (their APIs differ).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    derive(serde::Deserialize, serde::Serialize, tsify::Tsify)
+)]
 #[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum ByoKind {
     /// A Kubo RPC endpoint (`/api/v0`).

@@ -1,5 +1,5 @@
 //! The one decode of a facade command from its JS value, and the one encode of
-//! what it answers and of each event. All are the engine's own types, typed for
+//! what it answers, of each event and of each view. All are the engine's own types, typed for
 //! TS by tsify (blueprint/web-client.md "WASM packaging and the type boundary").
 //!
 //! Serde buffers an internally tagged value whole before it picks the variant,
@@ -92,6 +92,12 @@ pub fn encode_event(event: &Event) -> Result<Ts<Event>, JsError> {
         .serialize(&SERIALIZER)
         .map(Ts::new_unchecked)
         .map_err(|_| JsError::new("the event does not encode"))
+}
+
+/// Encodes one view, or one list of view rows.
+pub fn encode_view<T: Serialize + ?Sized>(view: &T) -> Result<JsValue, JsError> {
+    view.serialize(&SERIALIZER)
+        .map_err(|_| JsError::new("the view does not encode"))
 }
 
 fn decode(command: &JsValue) -> Result<Command, JsError> {

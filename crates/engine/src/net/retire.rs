@@ -850,8 +850,15 @@ pub struct ReclaimPass {
 /// is pending — a stall a host cannot tell from an empty ledger
 /// (blueprint/engine.md "never a silent failure").
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub struct ReclaimStall {
     /// The node owing the debt.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "serde_bytes::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub node: [u8; 16],
     /// The doomed version's root `contentCid`.
     pub target: String,
@@ -862,6 +869,8 @@ pub struct ReclaimStall {
 /// Why a debt did not settle. Public-plane classification only — node ids and
 /// content addresses, never key material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum ReclaimStallReason {
     /// The owing node's currently published record, or a version it names,
     /// could not be established this pass, so nothing may be named against it.

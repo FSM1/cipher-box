@@ -52,7 +52,7 @@ export function heldBytes(state: SnapshotState, opId: bigint | null): bigint | n
 
 /** Durable queue entries this session cannot read but whose bytes it is charged for. */
 export function retainedRecords(state: SnapshotState): number {
-  return state.view?.retainedRecords ?? 0;
+  return Number(state.view?.retainedRecords ?? 0n);
 }
 
 export interface SnapshotStore {

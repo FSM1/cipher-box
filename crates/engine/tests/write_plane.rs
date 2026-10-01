@@ -6235,7 +6235,7 @@ fn the_bin_read_names_the_origin_folder_of_two_entries_that_share_a_name() {
         .iter()
         .inspect(|row| assert_eq!(row.origin_name, "notes.txt"))
         .map(|row| match &row.origin_folder {
-            BinOrigin::Folder(name) => name.clone(),
+            BinOrigin::Folder { name } => name.clone(),
             other => panic!("a folder the vault holds must read as itself, not {other:?}"),
         })
         .collect();

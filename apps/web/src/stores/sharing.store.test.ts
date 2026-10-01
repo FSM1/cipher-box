@@ -189,7 +189,7 @@ describe('invite links', () => {
       permission: 'read',
       expiresAt: 1_700_000_000_000n,
       expired: false,
-      admissionCap: 5,
+      admissionCap: 5n,
       pendingClaims: 0,
       contactBudgetFull: false,
       refusedClaims: 0,

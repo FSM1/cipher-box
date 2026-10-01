@@ -30,17 +30,14 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 use zeroize::Zeroizing;
 
-use crate::boundary::{decode_command, encode_event, encode_outcome};
+use crate::boundary::{decode_command, encode_event, encode_outcome, encode_view};
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
     JsFloorStoreSeam, JsHttpSeam, JsRecordTransportSeam, JsSchedulerSeam, JsSnapshotCacheSeam,
     JsStagingStoreSeam, RecordTransportAdapter, SchedulerAdapter, SnapshotCacheAdapter,
     StagingStoreAdapter,
 };
-use crate::{
-    AuthMethod, BinView, InvitePreview, NodeId, OpenedStream, PendingApproval, ReceivedShareRow,
-    RegisteredDevice, SharingView, SnapshotView, VaultStorageView, VersionEntry,
-};
+use crate::{NodeId, OpenedStream};
 
 /// The largest integer a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
 const MAX_SAFE_SIZE: u64 = (1u64 << 53) - 1;
@@ -326,6 +323,7 @@ impl EngineHandle {
     /// engine's own current root when `folder` is absent — a host asks for the
     /// root, it never names one (blueprint/web-client.md "UI state law").
     /// Resolves with the view; rejects with the engine error.
+    #[wasm_bindgen(unchecked_return_type = "Promise<SnapshotView>")]
     pub fn snapshot(&self, folder: Option<NodeId>) -> Promise {
         let engine = self.engine.clone();
         let folder = folder.map(|node| node.facade());
@@ -333,7 +331,7 @@ impl EngineHandle {
             let engine = engine.read().await;
             let folder = folder.unwrap_or_else(|| engine.root());
             let view = engine.snapshot(folder).await.map_err(engine_error)?;
-            Ok(SnapshotView::from_facade(view).into())
+            Ok(encode_view(&view)?)
         })
     }
 
@@ -341,6 +339,7 @@ impl EngineHandle {
     /// contact book, and the grants `scopeRoot`'s own record commits — of the
     /// engine's current root when `scopeRoot` is absent, as `snapshot` does.
     /// Resolves with the view; rejects with the engine error.
+    #[wasm_bindgen(unchecked_return_type = "Promise<SharingView>")]
     pub fn sharing(&self, scope_root: Option<NodeId>) -> Promise {
         let engine = self.engine.clone();
         let scope_root = scope_root.map(|node| node.facade());
@@ -348,14 +347,14 @@ impl EngineHandle {
             let engine = engine.read().await;
             let scope_root = scope_root.unwrap_or_else(|| engine.root());
             let view = engine.sharing(scope_root).await.map_err(engine_error)?;
-            Ok(SharingView::from_facade(view).into())
+            Ok(encode_view(&view)?)
         })
     }
 
     /// Reads this vault's accepted shares for a `/shared` route: the durable
     /// received-share list, each row carrying the engine's own resolution
     /// verdict. Resolves with the rows; rejects with the engine error.
-    #[wasm_bindgen(js_name = receivedShares)]
+    #[wasm_bindgen(js_name = receivedShares, unchecked_return_type = "Promise<ReceivedShareRow[]>")]
     pub fn received_shares(&self) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
@@ -365,19 +364,14 @@ impl EngineHandle {
                 .received_shares()
                 .await
                 .map_err(engine_error)?;
-            Ok(rows
-                .into_iter()
-                .map(ReceivedShareRow::from_facade)
-                .map(JsValue::from)
-                .collect::<js_sys::Array>()
-                .into())
+            Ok(encode_view(&rows)?)
         })
     }
 
     /// Previews the invite link `fragment` names before the join (ADR 0028
     /// D3). Posts nothing and persists nothing. Resolves with an
     /// `InvitePreview`; rejects with the engine error.
-    #[wasm_bindgen(js_name = previewInviteLink)]
+    #[wasm_bindgen(js_name = previewInviteLink, unchecked_return_type = "Promise<InvitePreview>")]
     pub fn preview_invite_link(&self, fragment: String) -> Promise {
         let engine = self.engine.clone();
         let fragment = Zeroizing::new(fragment);
@@ -388,22 +382,23 @@ impl EngineHandle {
                 .preview_invite_link(&fragment)
                 .await
                 .map_err(engine_error)?;
-            Ok(InvitePreview::from_facade(preview).into())
+            Ok(encode_view(&preview)?)
         })
     }
 
     /// Reads the owner's bin for a `/bin` route: one key-free row per
     /// soft-deleted node, plus the rung the index load reached. Resolves with
     /// the view; rejects with the engine error.
+    #[wasm_bindgen(unchecked_return_type = "Promise<BinView>")]
     pub fn bin(&self) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
             let view = engine.read().await.bin().await.map_err(engine_error)?;
-            Ok(BinView::from_facade(view).into())
+            Ok(encode_view(&view)?)
         })
     }
 
-    #[wasm_bindgen(js_name = vaultStorage)]
+    #[wasm_bindgen(js_name = vaultStorage, unchecked_return_type = "Promise<VaultStorageView>")]
     pub fn vault_storage(&self) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
@@ -413,11 +408,11 @@ impl EngineHandle {
                 .vault_storage()
                 .await
                 .map_err(engine_error)?;
-            Ok(VaultStorageView::from_facade(view).into())
+            Ok(encode_view(&view)?)
         })
     }
 
-    #[wasm_bindgen(js_name = authMethods)]
+    #[wasm_bindgen(js_name = authMethods, unchecked_return_type = "Promise<AuthMethod[]>")]
     pub fn auth_methods(&self) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
@@ -427,28 +422,18 @@ impl EngineHandle {
                 .auth_methods()
                 .await
                 .map_err(engine_error)?;
-            Ok(rows
-                .into_iter()
-                .map(AuthMethod::from_facade)
-                .map(JsValue::from)
-                .collect::<js_sys::Array>()
-                .into())
+            Ok(encode_view(&rows)?)
         })
     }
 
     /// The device identity keys registered to this account. Resolves with an
     /// array of `RegisteredDevice`.
-    #[wasm_bindgen(js_name = devices)]
+    #[wasm_bindgen(js_name = devices, unchecked_return_type = "Promise<RegisteredDevice[]>")]
     pub fn devices(&self) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
             let rows = engine.read().await.devices().await.map_err(engine_error)?;
-            Ok(rows
-                .into_iter()
-                .map(RegisteredDevice::from_facade)
-                .map(JsValue::from)
-                .collect::<js_sys::Array>()
-                .into())
+            Ok(encode_view(&rows)?)
         })
     }
 
@@ -470,7 +455,7 @@ impl EngineHandle {
 
     /// What this account is asked to approve. Resolves with an array of
     /// `PendingApproval`, each carrying its comparison value.
-    #[wasm_bindgen(js_name = pendingApprovals)]
+    #[wasm_bindgen(js_name = pendingApprovals, unchecked_return_type = "Promise<PendingApprovalView[]>")]
     pub fn pending_approvals(&self) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
@@ -480,12 +465,7 @@ impl EngineHandle {
                 .pending_approvals()
                 .await
                 .map_err(engine_error)?;
-            Ok(rows
-                .into_iter()
-                .map(PendingApproval::from_facade)
-                .map(JsValue::from)
-                .collect::<js_sys::Array>()
-                .into())
+            Ok(encode_view(&rows)?)
         })
     }
 
@@ -531,7 +511,7 @@ impl EngineHandle {
     /// Lists one file's prior versions, newest first. The head is the file's
     /// current content and is not in the list. Resolves with an array of
     /// `VersionEntry`; rejects with the engine error.
-    #[wasm_bindgen(js_name = fileVersions)]
+    #[wasm_bindgen(js_name = fileVersions, unchecked_return_type = "Promise<VersionEntry[]>")]
     pub fn file_versions(&self, node: &NodeId) -> Promise {
         let engine = self.engine.clone();
         let node = node.facade();
@@ -542,12 +522,7 @@ impl EngineHandle {
                 .file_versions(node)
                 .await
                 .map_err(engine_error)?;
-            Ok(rows
-                .into_iter()
-                .map(VersionEntry::from_facade)
-                .map(JsValue::from)
-                .collect::<js_sys::Array>()
-                .into())
+            Ok(encode_view(&rows)?)
         })
     }
 
@@ -958,12 +933,13 @@ mod tests {
     #[wasm_bindgen_test]
     fn a_sharing_view_crosses_with_its_mint_verdict_and_link_standing() {
         let view = |state| {
-            JsValue::from(SharingView::from_facade(facade::SharingView {
+            encode_view(&facade::SharingView {
                 scope: EngineNodeId([0x5c; 16]),
                 contacts: Vec::new(),
                 own_contact_code: own_code(),
                 state,
-            }))
+            })
+            .expect("a sharing view encodes")
         };
         let shared = |grant_refusal, invite_link_refusal, invite_links, epochs| {
             view(Some(facade::ScopeSharing {
@@ -1029,7 +1005,8 @@ mod tests {
             ),
             u64::MAX.to_string(),
         );
-        let read_epoch = field(&live, "readEpoch");
+        let epochs = field(&live, "epochs");
+        let read_epoch = field(&epochs, "readEpoch");
         assert_eq!(read_epoch.js_typeof(), JsValue::from_str("bigint"));
         assert_eq!(
             String::from(
@@ -1041,19 +1018,18 @@ mod tests {
             u64::MAX.to_string(),
         );
         assert_eq!(
-            field(&live, "writeEpoch"),
+            field(&epochs, "writeEpoch"),
             JsValue::from(BigInt::from(3u64))
         );
 
         let mintable = field(&shared(None, None, Vec::new(), None), "state");
         assert!(
-            field(&mintable, "grantRefusal").is_undefined(),
+            field(&mintable, "grantRefusal").is_null(),
             "an accepted grant carries no refusal, never an empty string"
         );
-        assert!(field(&mintable, "inviteLinkRefusal").is_undefined());
+        assert!(field(&mintable, "inviteLinkRefusal").is_null());
         assert!(
-            field(&mintable, "readEpoch").is_undefined()
-                && field(&mintable, "writeEpoch").is_undefined(),
+            field(&mintable, "epochs").is_null(),
             "a node that is not a scope root carries no epochs"
         );
         assert_eq!(
@@ -1074,13 +1050,13 @@ mod tests {
             ),
             "state",
         );
-        assert!(field(&link_only, "grantRefusal").is_undefined());
+        assert!(field(&link_only, "grantRefusal").is_null());
         assert_eq!(
             field(&link_only, "inviteLinkRefusal"),
             JsValue::from_str("invite-target-is-the-vault-root")
         );
         assert!(
-            field(&view(None), "state").is_undefined(),
+            field(&view(None), "state").is_null(),
             "a read that could not reach the scope root withholds every field"
         );
 

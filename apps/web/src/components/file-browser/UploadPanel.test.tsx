@@ -172,7 +172,7 @@ describe('the upload panel', () => {
     expect(screen.queryByTestId('upload-retained')).toBeNull();
 
     await act(async () => {
-      engine.publish({ ...view(), retainedRecords: 2 });
+      engine.publish({ ...view(), retainedRecords: 2n });
     });
 
     await waitFor(() =>

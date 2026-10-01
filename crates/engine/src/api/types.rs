@@ -192,6 +192,11 @@ pub struct LoginOutcome {
 /// One login method on the account, as `/auth/methods` serves it. Display form
 /// only: the identifier hash never crosses.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(
+    feature = "wasm",
+    derive(Serialize, tsify::Tsify),
+    tsify(missing_as_null)
+)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthMethod {
     /// The row id, which [`ApiClient::unlink_auth_method`](super::ApiClient::unlink_auth_method)
@@ -200,17 +205,16 @@ pub struct AuthMethod {
     /// Which login surface this row admits.
     pub kind: AuthMethodKind,
     /// A truncated, human-readable form of the identifier, when there is one.
-    #[serde(default)]
     pub identifier_display: Option<String>,
     /// When the row was created, ISO 8601.
     pub created_at: String,
     /// When the row last logged in, ISO 8601, or absent if it never has.
-    #[serde(default)]
     pub last_used_at: Option<String>,
 }
 
 /// Which login surface an [`AuthMethod`] admits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(Serialize, tsify::Tsify))]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMethodKind {
     /// The account identity key (challenge-signature login).
@@ -412,6 +416,11 @@ pub(crate) struct PendingApprovalList {
 /// One device identity key on the account registry. The label is context a
 /// device chose, never evidence: only the key is proved.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(
+    feature = "wasm",
+    derive(Serialize, tsify::Tsify),
+    tsify(missing_as_null)
+)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisteredDevice {
     /// The row id, which [`ApiClient::revoke_device`](super::ApiClient::revoke_device) names.
@@ -419,7 +428,6 @@ pub struct RegisteredDevice {
     /// The raw Ed25519 device identity public key, lowercase hex.
     pub public_key: String,
     /// The display label the device offered, when it offered one.
-    #[serde(default)]
     pub label: Option<String>,
     /// When the key was registered, ISO 8601.
     pub created_at: String,

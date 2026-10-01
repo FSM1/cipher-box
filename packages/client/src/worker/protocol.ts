@@ -16,20 +16,64 @@
 import { isBuffer } from '../buffers.js';
 import type {
   ApprovalDecision,
+  AuthMethod,
+  AuthMethodKind,
+  BinOrigin,
+  BinRow,
+  BinView,
+  BlockProgress,
+  Breadcrumb,
   ByoIpfsConfig,
   ByoKind,
   Command,
   CommandOutcome,
+  DeadLetter,
   DeadLetterReason,
   Event,
+  InvitePreview,
+  LinkPreviewState,
   OpPhase,
+  PendingApprovalView,
+  PendingClass,
   Permission,
   PinMode,
+  PreviewEntry,
+  QueueHold,
+  QuotaView,
+  ReceivedShareRow,
+  ReclaimStall,
+  ReclaimStallReason,
+  RegisteredDevice,
+  ResolutionClass,
+  ScopeEpochs,
+  ScopeSharing,
+  SettingsOrigin,
+  SharingContact,
+  SharingGrant,
+  SharingInviteLink,
+  SharingView,
+  SnapshotChild,
+  SnapshotView,
   Staleness,
   VaultSettings,
+  VaultSettingsSummary,
+  VaultStorageView,
+  VersionEntry,
 } from '../../wasm/cipherbox_wasm.js';
 
-export type { ApprovalDecision, ByoKind, DeadLetterReason, Permission, PinMode, Staleness };
+export type {
+  ApprovalDecision,
+  AuthMethodKind,
+  BlockProgress,
+  ByoKind,
+  DeadLetterReason,
+  PendingClass,
+  Permission,
+  PinMode,
+  ReclaimStallReason,
+  SettingsOrigin,
+  Staleness,
+};
 
 /**
  * The most fragment characters any hop carries. A guard, not the contract — the
@@ -49,20 +93,11 @@ export type NodeKind = Extract<Command, { kind: 'create' }>['nodeKind'];
  */
 export type OpProgressPhase = OpPhase;
 
-/** One ancestor step in a snapshot's breadcrumb trail, as data. */
-export interface BreadcrumbDescriptor {
-  id: Uint8Array;
-  name: string;
-}
+/** One ancestor step in a snapshot's breadcrumb trail: the engine `Breadcrumb`. */
+export type BreadcrumbDescriptor = Breadcrumb;
 
-/** What the op queue holds for a node (mirrors the facade `PendingClass`). */
-export type PendingClass = 'none' | 'metadata' | 'content';
-
-/** A terminal dead-lettered op and its reason, as data. */
-export interface DeadLetterDescriptor {
-  opId: bigint;
-  reason: DeadLetterReason;
-}
+/** A terminal dead-lettered op and its reason: the engine `DeadLetter`. */
+export type DeadLetterDescriptor = DeadLetter;
 
 /**
  * The rule that refused the member's own settings, as the engine's stable check
@@ -97,284 +132,83 @@ export const BIN_INDEX_HOLD_CHECKS = [
 
 export type BinIndexHoldCheck = (typeof BIN_INDEX_HOLD_CHECKS)[number];
 
-/** The held op and the node it targets, which every hold reason carries. */
-interface HeldQueueHead {
-  opId: bigint;
-  node: Uint8Array;
-}
-
 /** The queue head held over the account quota. */
-export interface QuotaHoldDescriptor extends HeldQueueHead {
-  reason: 'quota';
-  neededBytes: bigint;
-}
+export type QuotaHoldDescriptor = Extract<QueueHold, { reason: 'quota' }>;
 
 /**
  * The queue head held over the member's own settings. The check names the rule,
  * never the endpoint or the bearer those settings carry.
  */
-export interface SettingsHoldDescriptor extends HeldQueueHead {
-  reason: 'settings';
+export type SettingsHoldDescriptor = Extract<QueueHold, { reason: 'settings' }> & {
   check: SettingsHoldCheck;
-}
+};
 
 /** The queue head held over the owner's bin index. */
-export interface BinIndexHoldDescriptor extends HeldQueueHead {
-  reason: 'bin-index';
+export type BinIndexHoldDescriptor = Extract<QueueHold, { reason: 'bin-index' }> & {
   check: BinIndexHoldCheck;
-}
+};
 
 /**
- * The one held queue head, as data (mirrors the facade `QueueHold`). One head
- * is held for one reason, so a host dispatches on `reason` rather than reading
- * parallel fields.
+ * The one held queue head: the engine `QueueHold`, with each check narrowed to
+ * the names this build renders. A host dispatches on `reason`.
  */
 export type QueueHoldDescriptor =
   | QuotaHoldDescriptor
   | SettingsHoldDescriptor
   | BinIndexHoldDescriptor;
 
-/**
- * One direct child in a snapshot, as data. `size`/`mtime`/`contentVersion` are
- * `null` until projected.
- */
-export interface SnapshotChildDescriptor {
-  id: Uint8Array;
-  name: string;
-  kind: NodeKind;
-  size: bigint | null;
-  mtime: bigint | null;
-  pending: PendingClass;
-  deadLetter: boolean;
-  contentVersion: bigint | null;
-  /** The head version's content root CID; `null` until projected. */
-  contentCid: Uint8Array | null;
-  /**
-   * Invite claims that wait for `convertInviteClaims` at this scope root. Zero
-   * on a device that holds no record of the link they claim.
-   */
-  pendingInviteClaims: number;
-  /** The node's `ipnsName`; `null` until a read projects one. */
-  ipnsName: string | null;
-}
+/** One direct child in a snapshot: the engine `SnapshotChild`. */
+export type SnapshotChildDescriptor = SnapshotChild;
 
-/**
- * A key-free folder snapshot, as data (mirrors the facade `SnapshotView`).
- * A wire projection of view state the engine owns, not the forbidden
- * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
- */
-export interface SnapshotDescriptor {
-  root: Uint8Array;
-  folder: Uint8Array;
-  /** The listed folder's own name, empty at the root. */
-  folderName: string;
-  /**
-   * What this vault may do now in the scope the listed folder belongs to. Every
-   * scope of this vault's own is `write`. A received share is `write` only under
-   * a write grant the engine has proved, and `read` otherwise. A host refuses a
-   * write at the gesture on this, rather than leaving the drain to refuse it.
-   */
-  permission: Permission;
-  /**
-   * Whether the listed folder stands in a scope another vault granted this one.
-   * A write there stays inside that scope, so a host offers no share, version
-   * restore or version delete where this reads true.
-   */
-  receivedShare: boolean;
-  children: SnapshotChildDescriptor[];
-  ancestors: BreadcrumbDescriptor[];
-  deadLetters: DeadLetterDescriptor[];
-  /** The drain's held queue head, or `null` when nothing is held. */
+/** A key-free folder snapshot: the engine `SnapshotView`, its hold narrowed. */
+export type SnapshotDescriptor = Omit<SnapshotView, 'queueHold'> & {
   queueHold: QueueHoldDescriptor | null;
-  /**
-   * Durable queue entries this session holds but cannot read — another
-   * identity's, or written by a newer build. They occupy staged bytes against
-   * the same device budget, so a host reports them rather than leaving an
-   * over-budget rejection unexplained on a vault that looks empty.
-   */
-  retainedRecords: number;
-  staleness: Staleness;
-}
+};
 
-/** One contact the vault's book holds, as data (mirrors `SharingContact`). */
-export interface SharingContactDescriptor {
-  identityPublicKey: Uint8Array;
-  /** The last grantee name this device saw for the peer: a pre-fill, never an authority. */
-  cachedName: string | null;
-}
+/** One contact the vault's book holds: the engine `SharingContact`. */
+export type SharingContactDescriptor = SharingContact;
 
 /** Who chose a grantee name on the owner-signed row. */
-export type GranteeNameSource = 'owner' | 'claimant';
+export type GranteeNameSource = NonNullable<SharingGrant['granteeName']>['source'];
 
-/** One grant a scope's ledger commits, as data (mirrors `SharingGrant`). */
-export interface SharingGrantDescriptor {
-  /** Joins the row to a contact by identity key. */
-  recipientIdentityPublicKey: Uint8Array;
-  permission: Permission;
-  /** The name on the owner-attested row; `null` where the row carries none. */
-  granteeName: { name: string; source: GranteeNameSource } | null;
-  /** The `SharingInviteLinkDescriptor.tag` of the link that admitted this grantee; `null` for a direct grant or a row the owner does not attest. */
-  viaLink: Uint8Array | null;
-}
+/** One grant a scope's ledger commits: the engine `SharingGrant`. */
+export type SharingGrantDescriptor = SharingGrant;
 
-/**
- * One invite link this owner's commitment carries at a scope, as data (mirrors
- * `SharingInviteLink`). Never the capability: the engine hands out a link's
- * fragment once, at the mint.
- */
-export interface SharingInviteLinkDescriptor {
-  /** The link entry's blinded tag, which `revokeInviteLink` names to cut this link. */
-  tag: Uint8Array;
-  /** What a conversion grants a claimant of this link. */
-  permission: Permission;
-  /** The owner-signed Unix-millis deadline. */
-  expiresAt: bigint;
-  /** The deadline has passed, as the engine's own clock reads it. */
-  expired: boolean;
-  /** The owner-signed admission cap. */
-  admissionCap: number;
-  /** Invite claims this link signed that wait for `convertInviteClaims`. */
-  pendingClaims: number;
-  /** This link's claims hold its whole contact share, so none converts until a revoke. */
-  contactBudgetFull: boolean;
-  /** Invite claims this link refused at a cap: its admission cap or the grant set was full. */
-  refusedClaims: number;
-}
+/** One invite link a scope's commitment carries: the engine `SharingInviteLink`. */
+export type SharingInviteLinkDescriptor = SharingInviteLink;
 
-/** What one scope's own record says, as data (mirrors `ScopeSharing`). */
-export interface ScopeSharingDescriptor {
-  grants: SharingGrantDescriptor[];
-  /**
-   * The refusal a contact grant here would report, or `null` where none of the
-   * grounds this read consults stands in the way — a command may still refuse on
-   * one it does not, so this narrows what a host offers rather than promising a
-   * command will be accepted. The engine's own check name either way, so the
-   * host re-derives no rule of its own.
-   */
-  grantRefusal: string | null;
-  /** The refusal an invite-link mint here would report, or `null`. */
-  inviteLinkRefusal: string | null;
-  /** Every invite link this owner's commitment carries here, expired ones included. */
-  inviteLinks: SharingInviteLinkDescriptor[];
-  /** The epochs the scope root's published record sits at; `null` where the node is no scope root. */
-  epochs: ScopeEpochsDescriptor | null;
-}
+/** What one scope's own record says: the engine `ScopeSharing`. */
+export type ScopeSharingDescriptor = ScopeSharing;
 
-/** The read and write epoch of one scope root's published record (mirrors `ScopeEpochs`). */
-export interface ScopeEpochsDescriptor {
-  readEpoch: bigint;
-  writeEpoch: bigint;
-}
+/** The read and write epoch of one scope root's record: the engine `ScopeEpochs`. */
+export type ScopeEpochsDescriptor = ScopeEpochs;
 
-/**
- * One scope's sharing state, as data (mirrors the facade `SharingView`).
- * A wire projection of view state the engine owns, not the forbidden
- * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
- */
-export interface SharingDescriptor {
-  scope: Uint8Array;
-  /** This vault's whole contact book, re-verified from each stored code. */
-  contacts: SharingContactDescriptor[];
-  /** This member's own contact code, for a peer to import. Public material. */
-  ownContactCode: Uint8Array;
-  /** `null` when the read could not reach the scope root — see `SharingView`. */
-  state: ScopeSharingDescriptor | null;
-}
+/** One scope's sharing state: the engine `SharingView`. */
+export type SharingDescriptor = SharingView;
 
-/**
- * The engine's verdict on a received share's latest resolve (mirrors
- * `ResolutionClass`). Only the engine reaches one — a host renders it.
- */
-export type ReceivedShareResolution =
-  | 'granted'
-  | 'revocation-signal'
-  | 'expired'
-  | 'unresolvable'
-  | 'epoch-lag';
+/** The engine's verdict on a received share's latest resolve. A host renders it. */
+export type ReceivedShareResolution = ResolutionClass;
 
-/**
- * One share this vault accepted, as data (mirrors `ReceivedShareRow`).
- * A wire projection of view state the engine owns, not the forbidden
- * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
- */
-export interface ReceivedShareDescriptor {
-  /** The shared scope — this row's stable identity, and what a browse opens. */
-  scope: Uint8Array;
-  /** Joins the row to a contact by identity key. */
-  sharerIdentityPublicKey: Uint8Array;
-  displayName: string;
-  permission: Permission;
-  /** `null` when no pass has resolved this share yet — never "still granted". */
-  resolution: ReceivedShareResolution | null;
-  /** The share reads through the link it was joined by, so a revocation signal is the link's revoke. */
-  viaLink: boolean;
-}
+/** One share this vault accepted: the engine `ReceivedShareRow`. */
+export type ReceivedShareDescriptor = ReceivedShareRow;
 
-/** Where an invite link stands, as its preview read it (mirrors `LinkPreviewState`). */
-export type InvitePreviewState = 'live' | 'expired' | 'revoked' | 'unresolvable';
+/** Where an invite link stands, as its preview read it. */
+export type InvitePreviewState = LinkPreviewState;
 
 /** One direct child of a previewed folder: a name and a kind, nothing else. */
-export interface InvitePreviewEntryDescriptor {
-  name: string;
-  kind: NodeKind;
-}
+export type InvitePreviewEntryDescriptor = PreviewEntry;
 
-/**
- * What the invite page shows before the join (mirrors `InvitePreview`). The
- * preview posts nothing and persists nothing.
- */
-export interface InvitePreviewDescriptor {
-  /** The folder the join bookmarks: what a host opens once the account joined. */
-  scope: Uint8Array;
-  /** `null` when the owner signature over the names does not verify; the link still works. */
-  names: { ownerName: string; folderName: string } | null;
-  /** The permission conversion grants, or `null` when no link entry was read. */
-  permission: Permission | null;
-  state: InvitePreviewState;
-  /** This account already joined the folder: a host offers "open folder", not "join". */
-  joined: boolean;
-  /** Empty unless `state` is `'live'`. */
-  listing: InvitePreviewEntryDescriptor[];
-}
+/** What the invite page shows before the join: the engine `InvitePreview`. */
+export type InvitePreviewDescriptor = InvitePreview;
 
-/**
- * Where a bin row's origin folder stands in the vault (mirrors the facade
- * `BinOrigin`). `'gone'` is the state a default restore refuses on, so a host
- * names it rather than showing a folder that is not there.
- */
-export type BinOriginDescriptor =
-  | { kind: 'root' }
-  | { kind: 'folder'; name: string }
-  | { kind: 'gone' };
+/** Where a bin row's origin folder stands in the vault: the engine `BinOrigin`. */
+export type BinOriginDescriptor = BinOrigin;
 
-/** One soft-deleted node, as data (mirrors the facade `BinRow`). */
-export interface BinRowDescriptor {
-  node: Uint8Array;
-  kind: NodeKind;
-  /** The folder the node was unlinked from, where a restore puts it back. */
-  originParent: Uint8Array;
-  originName: string;
-  /** That folder as a member reads it, rather than as a node id. */
-  originFolder: BinOriginDescriptor;
-  /** Deletion time in Unix millis; a host renders expiry from it. */
-  deletedAt: bigint;
-  scope: Uint8Array;
-}
+/** One soft-deleted node: the engine `BinRow`. */
+export type BinRowDescriptor = BinRow;
 
-/**
- * The `/bin` route's whole read, as data (mirrors the facade `BinView`).
- * A wire projection of view state the engine owns, not the forbidden
- * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
- */
-export interface BinDescriptor {
-  entries: BinRowDescriptor[];
-  /**
-   * `'defaults'` means this device established no bin index, so an empty
-   * `entries` is the fallback and not a read: a surface must render that apart
-   * from a bin it read.
-   */
-  origin: SettingsOrigin;
-}
+/** The `/bin` route's whole read: the engine `BinView`. */
+export type BinDescriptor = BinView;
 
 /** The `accessToken` value that keeps the bearer the engine already holds. */
 export const KEEP_STORED_BEARER = 'keep' satisfies ByoIpfsConfig['accessToken'];
@@ -390,101 +224,26 @@ export type ByoIpfsConfigDescriptor = ByoIpfsConfig;
 /** The member's placement, provider and retention choice. */
 export type VaultSettingsDescriptor = VaultSettings;
 
-/** Whose choice a settings summary reports (mirrors the facade `SettingsOrigin`). */
-export type SettingsOrigin = 'resolved' | 'stale' | 'defaults';
+/** The member's settings as a host may see them: the engine `VaultSettingsSummary`. */
+export type VaultSettingsSummaryDescriptor = VaultSettingsSummary;
 
-/**
- * The member's settings as a host may see them, as data. The provider
- * credential is absent by construction — the wasm boundary exists to keep it
- * uncrossable.
- */
-export interface VaultSettingsSummaryDescriptor {
-  pinMode: PinMode;
-  byoEndpoint: string | null;
-  byoKind: ByoKind | null;
-  /** Whether a provider bearer is stored. The bearer itself never crosses. */
-  byoCredentialStored: boolean;
-  /** `null` keeps every version within quota. */
-  keepLatestVersions: number | null;
-  /** Days a soft-deleted node stays in the bin; `0` keeps the hard delete. */
-  binRetentionDays: number;
-  origin: SettingsOrigin;
-}
+/** One debt a reclaim pass left owed: the engine `ReclaimStall`. */
+export type ReclaimStallDescriptor = ReclaimStall;
 
-/** Why a reclaim debt did not settle (mirrors the facade `ReclaimStallReason`). */
-export type ReclaimStallReason = 'nodeUnreadable' | 'targetStillLive' | 'targetUnexpandable';
+/** The account's hosted-storage figures: the engine `QuotaView`. */
+export type QuotaDescriptor = QuotaView;
 
-/** One debt a reclaim pass left owed, as data (mirrors `ReclaimStall`). */
-export interface ReclaimStallDescriptor {
-  node: Uint8Array;
-  /** The doomed version's root `contentCid`. */
-  target: string;
-  reason: ReclaimStallReason;
-}
+/** The storage pane's whole read: the engine `VaultStorageView`. */
+export type VaultStorageDescriptor = VaultStorageView;
 
-/** The account's hosted-storage figures, as data (mirrors the facade `QuotaView`). */
-export interface QuotaDescriptor {
-  usedBytes: number;
-  limitBytes: number;
-  /** True where the figure is a hint rather than a ceiling. */
-  advisory: boolean;
-}
+/** One login method on the account, in display form: the engine `AuthMethod`. */
+export type AuthMethodDescriptor = AuthMethod;
 
-/**
- * The storage pane's whole read, as data (mirrors the facade `VaultStorageView`).
- * A wire projection of view state the engine owns, not the forbidden
- * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
- */
-export interface VaultStorageDescriptor {
-  settings: VaultSettingsSummaryDescriptor;
-  /** `null` when the quota probe did not answer. */
-  quota: QuotaDescriptor | null;
-  pendingReclaimBytes: number;
-  /**
-   * True when `pendingReclaimBytes` is a floor on the debt rather than its
-   * total: the last reclaim pass read a bounded window of the retire ledger.
-   */
-  pendingReclaimIsPartial: boolean;
-  reclaimStalls: ReclaimStallDescriptor[];
-}
+/** One device identity key on the account registry: the engine `RegisteredDevice`. */
+export type RegisteredDeviceDescriptor = RegisteredDevice;
 
-/** What established a login method (mirrors the facade `AuthMethodKind`). */
-export type AuthMethodKind = 'identity' | 'wallet' | 'test' | 'unknown';
-
-/**
- * One login method on the account, as data (mirrors the facade `AuthMethod`).
- * Display form only: the identifier hash never crosses.
- */
-export interface AuthMethodDescriptor {
-  id: string;
-  kind: AuthMethodKind;
-  identifierDisplay: string | null;
-  createdAt: string;
-  lastUsedAt: string | null;
-}
-
-/**
- * One device identity key on the account registry, as data (mirrors the facade
- * `RegisteredDevice`). The label is context the device chose, never evidence
- * (ADR 0009 D4).
- */
-export interface RegisteredDeviceDescriptor {
-  id: string;
-  publicKey: string;
-  label: string | null;
-  createdAt: string;
-  lastSeenAt: string;
-}
-
-/** One rendezvous this account is asked to approve, as data. */
-export interface PendingApprovalDescriptor {
-  requestId: string;
-  requesterDevicePublicKey: string;
-  ephemeralPublicKey: string;
-  comparisonValue: string;
-  createdAt: string;
-  expiresAt: string;
-}
+/** One rendezvous this account is asked to approve: the engine `PendingApprovalView`. */
+export type PendingApprovalDescriptor = PendingApprovalView;
 
 /**
  * One step of the device-approval rendezvous (ADR 0009). Every step is a pure
@@ -631,18 +390,8 @@ export type SiweIntent = 'login' | 'link';
  * union, so a new read costs one member and one [`ReadResults`] entry rather
  * than a hand-threaded method at each layer of the rail.
  */
-/**
- * One prior version of a file. Every field comes from the file's sealed
- * read-body; the content key that rides beside them there never crosses this
- * boundary. `contentCid` is the identifier every version call takes.
- */
-export interface VersionEntryDescriptor {
-  contentCid: Uint8Array;
-  /** The version's plaintext size in bytes. */
-  size: bigint;
-  /** When the version was written, Unix millis. */
-  modifiedAt: bigint;
-}
+/** One prior version of a file: the engine `VersionEntry`. */
+export type VersionEntryDescriptor = VersionEntry;
 
 export type ReadDescriptor =
   | { kind: 'snapshot'; folder: Uint8Array | null }

@@ -1,8 +1,7 @@
 /**
- * Translates between the plain-data wire protocol and the wasm-bindgen facade
- * types, inside the engine worker realm: the checkers for the request fields a
- * read or a write handle carries, the readers that turn a view's key-free
- * getters into a descriptor, and the fail-closed read of an event. No
+ * The worker's side of the WASM seam, inside the engine worker realm: the
+ * checkers for the request fields a read or a write handle carries, and the
+ * fail-closed read of each enum value in an event or a view. No
  * interpretation, no crypto — the engine below the facade owns all of that.
  */
 
@@ -15,46 +14,26 @@ import type {
   ByoKind,
   DeadLetterReason,
   EventDescriptor,
+  GranteeNameSource,
   InvitePreviewDescriptor,
   InvitePreviewState,
   NodeKind,
   OpProgressPhase,
-  PendingApprovalDescriptor,
   PendingClass,
   Permission,
   PinMode,
+  QueueHoldDescriptor,
   ReceivedShareDescriptor,
   ReceivedShareResolution,
   ReclaimStallReason,
-  RegisteredDeviceDescriptor,
-  VersionEntryDescriptor,
   SettingsOrigin,
   SharingDescriptor,
-  SharingInviteLinkDescriptor,
-  SharingGrantDescriptor,
-  QueueHoldDescriptor,
   SnapshotDescriptor,
   Staleness,
   VaultStorageDescriptor,
 } from './protocol.js';
-import type {
-  EngineWasm,
-  WasmAuthMethod,
-  WasmBinRow,
-  WasmBinView,
-  WasmInvitePreview,
-  WasmNodeId,
-  WasmPendingApproval,
-  WasmQueueHold,
-  WasmReceivedShareRow,
-  WasmRegisteredDevice,
-  WasmVersionEntry,
-  WasmSharingInviteLink,
-  WasmSharingGrant,
-  WasmSharingView,
-  WasmSnapshotView,
-  WasmVaultStorageView,
-} from './engineWasm.js';
+import type { QueueHold, SnapshotView } from '../../wasm/cipherbox_wasm.js';
+import type { EngineWasm, WasmNodeId } from './engineWasm.js';
 
 /**
  * A request crosses a realm boundary as plain data, so its fields arrive
@@ -133,127 +112,6 @@ export function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNod
   return wasm.NodeId.fromBytes(bytes(value, field));
 }
 
-function staleness(wasm: EngineWasm, level: number): Staleness {
-  switch (level) {
-    case wasm.ViewStaleness.Fresh:
-      return 'fresh';
-    case wasm.ViewStaleness.Reconciling:
-      return 'reconciling';
-    case wasm.ViewStaleness.Stale:
-      return 'stale';
-    case wasm.ViewStaleness.Offline:
-      return 'offline';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch, not a
-      // safe-to-ignore state (the event pump turns this throw into a fatal).
-      throw new Error(`unknown WASM staleness value: ${level}`);
-  }
-}
-
-function pendingClass(wasm: EngineWasm, pending: number): PendingClass {
-  switch (pending) {
-    case wasm.PendingClass.None:
-      return 'none';
-    case wasm.PendingClass.Metadata:
-      return 'metadata';
-    case wasm.PendingClass.Content:
-      return 'content';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch.
-      throw new Error(`unknown WASM pending class value: ${pending}`);
-  }
-}
-
-function deadLetterReason(wasm: EngineWasm, reason: number): DeadLetterReason {
-  switch (reason) {
-    case wasm.ViewDeadLetterReason.TargetGone:
-      return 'targetGone';
-    case wasm.ViewDeadLetterReason.DestinationGone:
-      return 'destinationGone';
-    case wasm.ViewDeadLetterReason.DestinationInsideTarget:
-      return 'destinationInsideTarget';
-    case wasm.ViewDeadLetterReason.SuffixExhausted:
-      return 'suffixExhausted';
-    case wasm.ViewDeadLetterReason.Undecodable:
-      return 'undecodable';
-    case wasm.ViewDeadLetterReason.PayloadRefused:
-      return 'payloadRefused';
-    case wasm.ViewDeadLetterReason.AttemptsExhausted:
-      return 'attemptsExhausted';
-    case wasm.ViewDeadLetterReason.ContentUnrecoverable:
-      return 'contentUnrecoverable';
-    case wasm.ViewDeadLetterReason.BaseSuperseded:
-      return 'baseSuperseded';
-    case wasm.ViewDeadLetterReason.HeadTooLarge:
-      return 'headTooLarge';
-    case wasm.ViewDeadLetterReason.PreservationRefused:
-      return 'preservationRefused';
-    case wasm.ViewDeadLetterReason.AlreadyPublished:
-      return 'alreadyPublished';
-    case wasm.ViewDeadLetterReason.TargetStillLinked:
-      return 'targetStillLinked';
-    case wasm.ViewDeadLetterReason.ScopeRootNotResealable:
-      return 'scopeRootNotResealable';
-    case wasm.ViewDeadLetterReason.BinIndexFull:
-      return 'binIndexFull';
-    case wasm.ViewDeadLetterReason.CrossingUnauthorable:
-      return 'crossingUnauthorable';
-    case wasm.ViewDeadLetterReason.BinIndexStrandedMint:
-      return 'binIndexStrandedMint';
-    case wasm.ViewDeadLetterReason.TargetLinkedAcrossScopes:
-      return 'targetLinkedAcrossScopes';
-    case wasm.ViewDeadLetterReason.GraftedScopeVaultSurface:
-      return 'graftedScopeVaultSurface';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch, not a
-      // dead letter safe to report without its reason.
-      throw new Error(`unknown WASM dead letter reason value: ${reason}`);
-  }
-}
-
-/**
- * Reads the held queue head, refusing a reason or a check name this build does
- * not know. A hold whose cause cannot be named would render as an unexplained
- * stall, which is the state the hold exists to remove.
- */
-function queueHold(hold: WasmQueueHold | undefined): QueueHoldDescriptor | null {
-  if (hold === undefined) return null;
-  const head = { opId: hold.opId, node: hold.node };
-  switch (hold.reason) {
-    case 'quota':
-      if (hold.neededBytes === undefined) {
-        throw new Error('WASM quota hold carries no byte count');
-      }
-      return { ...head, reason: 'quota', neededBytes: hold.neededBytes };
-    case 'settings':
-      return { ...head, reason: 'settings', check: holdCheck(hold, SETTINGS_HOLD_CHECKS) };
-    case 'bin-index':
-      return { ...head, reason: 'bin-index', check: holdCheck(hold, BIN_INDEX_HOLD_CHECKS) };
-    default:
-      throw new Error(`unknown WASM queue hold reason: ${hold.reason}`);
-  }
-}
-
-function holdCheck<TCheck extends string>(hold: WasmQueueHold, checks: readonly TCheck[]): TCheck {
-  const check = checks.find((known) => known === hold.check);
-  if (check === undefined) {
-    throw new Error(`unknown WASM ${hold.reason} hold check: ${hold.check}`);
-  }
-  return check;
-}
-
-function nodeKindFrom(wasm: EngineWasm, kind: number): NodeKind {
-  switch (kind) {
-    case wasm.NodeKind.File:
-      return 'file';
-    case wasm.NodeKind.Folder:
-      return 'folder';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch.
-      throw new Error(`unknown WASM node kind value: ${kind}`);
-  }
-}
-
 const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   snapshotUpdated: true,
   stalenessChanged: true,
@@ -314,17 +172,79 @@ const DEAD_LETTER_REASONS: Record<DeadLetterReason, true> = {
   graftedScopeVaultSurface: true,
 };
 
+const NODE_KINDS: Record<NodeKind, true> = { file: true, folder: true };
+
+const PENDING_CLASSES: Record<PendingClass, true> = { none: true, metadata: true, content: true };
+
+const PERMISSIONS: Record<Permission, true> = { read: true, write: true };
+
+const GRANTEE_NAME_SOURCES: Record<GranteeNameSource, true> = { owner: true, claimant: true };
+
+const RESOLUTIONS: Record<ReceivedShareResolution, true> = {
+  granted: true,
+  'revocation-signal': true,
+  unresolvable: true,
+  'epoch-lag': true,
+  expired: true,
+};
+
+const PREVIEW_STATES: Record<InvitePreviewState, true> = {
+  live: true,
+  expired: true,
+  revoked: true,
+  unresolvable: true,
+};
+
+const BIN_ORIGIN_KINDS: Record<BinOriginDescriptor['kind'], true> = {
+  root: true,
+  folder: true,
+  gone: true,
+};
+
+const SETTINGS_ORIGINS: Record<SettingsOrigin, true> = {
+  resolved: true,
+  stale: true,
+  defaults: true,
+};
+
+const PIN_MODES: Record<PinMode, true> = { hosted: true, external: true, dual: true };
+
+const BYO_KINDS: Record<ByoKind, true> = { kubo: true, psa: true, pinata: true };
+
+const STALL_REASONS: Record<ReclaimStallReason, true> = {
+  nodeUnreadable: true,
+  targetStillLive: true,
+  targetUnexpandable: true,
+};
+
+const AUTH_METHOD_KINDS: Record<AuthMethodKind, true> = {
+  identity: true,
+  wallet: true,
+  test: true,
+  unknown: true,
+};
+
+/**
+ * Refuses a value this build does not know. An unknown value means a JS/WASM
+ * version mismatch, never a state safe to render as a guess: a guessed
+ * permission would misreport who can write, a guessed verdict would paint a
+ * revoked share as granted. The event pump turns the throw into a fatal; a
+ * read rejects.
+ */
 function known(values: Record<string, true>, value: unknown, what: string): void {
   if (typeof value !== 'string' || !Object.hasOwn(values, value)) {
     throw new Error(`unknown WASM ${what}: ${String(value)}`);
   }
 }
 
+/** As [`known`], with `null` passing for a value the engine did not project. */
+function knownOrNull(values: Record<string, true>, value: unknown, what: string): void {
+  if (value !== null) known(values, value, what);
+}
+
 /**
  * Passes an engine event through once its kind and each enum value in it are
- * ones this build knows. An unknown value means a JS/WASM version mismatch, not
- * a safe-to-ignore event, so the read fails closed (the event pump turns the
- * throw into a fatal).
+ * ones this build knows.
  */
 export function readEvent(event: EventDescriptor): EventDescriptor {
   known(EVENT_KINDS, event.kind, 'event kind');
@@ -334,401 +254,108 @@ export function readEvent(event: EventDescriptor): EventDescriptor {
   return event;
 }
 
-/** Reads a wasm-bindgen `SnapshotView`'s key-free getters into a descriptor. */
-export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): SnapshotDescriptor {
-  return {
-    root: view.root,
-    folder: view.folder,
-    folderName: view.folderName,
-    permission: permissionFrom(wasm, view.permission),
-    receivedShare: view.receivedShare,
-    children: view.children.map((child) => ({
-      id: child.id,
-      name: child.name,
-      kind: nodeKindFrom(wasm, child.kind),
-      size: child.size ?? null,
-      mtime: child.mtime ?? null,
-      pending: pendingClass(wasm, child.pending),
-      deadLetter: child.deadLetter,
-      contentVersion: child.contentVersion ?? null,
-      contentCid: child.contentCid ?? null,
-      pendingInviteClaims: child.pendingInviteClaims,
-      ipnsName: child.ipnsName ?? null,
-    })),
-    ancestors: view.ancestors.map((ancestor) => ({ id: ancestor.id, name: ancestor.name })),
-    deadLetters: view.deadLetters.map((dead) => ({
-      opId: dead.opId,
-      reason: deadLetterReason(wasm, dead.reason),
-    })),
-    queueHold: queueHold(view.queueHold),
-    retainedRecords: view.retainedRecords,
-    staleness: staleness(wasm, view.staleness),
-  };
-}
-
-function pinModeFrom(wasm: EngineWasm, mode: number): PinMode {
-  switch (mode) {
-    case wasm.ViewPinMode.Hosted:
-      return 'hosted';
-    case wasm.ViewPinMode.External:
-      return 'external';
-    case wasm.ViewPinMode.Dual:
-      return 'dual';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch, and a
-      // guessed mode would misreport where this vault's bytes land.
-      throw new Error(`unknown WASM pin mode value: ${mode}`);
-  }
-}
-
-function byoKindFrom(wasm: EngineWasm, kind: number | undefined): ByoKind | null {
-  switch (kind) {
-    case undefined:
-      return null;
-    case wasm.ViewByoKind.Kubo:
-      return 'kubo';
-    case wasm.ViewByoKind.Psa:
-      return 'psa';
-    case wasm.ViewByoKind.Pinata:
-      return 'pinata';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch.
-      throw new Error(`unknown WASM provider kind value: ${kind}`);
-  }
-}
-
-function settingsOriginFrom(wasm: EngineWasm, origin: number): SettingsOrigin {
-  switch (origin) {
-    case wasm.SettingsOrigin.Resolved:
-      return 'resolved';
-    case wasm.SettingsOrigin.Stale:
-      return 'stale';
-    case wasm.SettingsOrigin.Defaults:
-      return 'defaults';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch, and a
-      // guessed origin would present the documented defaults as the member's
-      // own choice.
-      throw new Error(`unknown WASM settings origin value: ${origin}`);
-  }
-}
-
-function stallReasonFrom(wasm: EngineWasm, reason: number): ReclaimStallReason {
-  switch (reason) {
-    case wasm.ReclaimStallReason.NodeUnreadable:
-      return 'nodeUnreadable';
-    case wasm.ReclaimStallReason.TargetStillLive:
-      return 'targetStillLive';
-    case wasm.ReclaimStallReason.TargetUnexpandable:
-      return 'targetUnexpandable';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch, and a
-      // stall reported without its reason is the silent failure the ledger
-      // exists to surface.
-      throw new Error(`unknown WASM reclaim stall reason value: ${reason}`);
-  }
-}
-
-function authMethodKindFrom(wasm: EngineWasm, kind: number): AuthMethodKind {
-  switch (kind) {
-    case wasm.AuthMethodKind.Identity:
-      return 'identity';
-    case wasm.AuthMethodKind.Wallet:
-      return 'wallet';
-    case wasm.AuthMethodKind.Test:
-      return 'test';
-    case wasm.AuthMethodKind.Unknown:
-      return 'unknown';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch. The
-      // engine already spells a kind this build does not know as `Unknown`.
-      throw new Error(`unknown WASM auth method kind value: ${kind}`);
-  }
-}
-
-function binOriginFrom(wasm: EngineWasm, row: WasmBinRow): BinOriginDescriptor {
-  switch (row.originFolderKind) {
-    case wasm.BinOriginKind.Root:
-      return { kind: 'root' };
-    case wasm.BinOriginKind.Folder:
-      return { kind: 'folder', name: row.originFolderName };
-    case wasm.BinOriginKind.Gone:
-      return { kind: 'gone' };
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch, and
-      // guessing would name a folder the engine did not.
-      throw new Error(`unknown WASM bin origin kind value: ${row.originFolderKind}`);
-  }
-}
-
-/** Reads a wasm-bindgen `BinView`'s key-free getters into a descriptor. */
-export function readBin(wasm: EngineWasm, view: WasmBinView): BinDescriptor {
-  return {
-    entries: view.entries.map((row) => ({
-      node: row.node,
-      kind: nodeKindFrom(wasm, row.kind),
-      originParent: row.originParent,
-      originName: row.originName,
-      originFolder: binOriginFrom(wasm, row),
-      deletedAt: row.deletedAt,
-      scope: row.scope,
-    })),
-    origin: settingsOriginFrom(wasm, view.origin),
-  };
-}
-
 /**
- * Reads a wasm-bindgen `VaultStorageView`'s getters into a descriptor.
- *
- * The `u64` figures narrow to JS numbers here: they are display quantities the
- * chrome does arithmetic on, and no storage figure reaches the safe-integer
- * ceiling.
+ * Passes the held queue head through once its reason and its check name are
+ * ones this build knows. A hold whose cause cannot be named would render as an
+ * unexplained stall, which is the state the hold exists to remove.
  */
-export function readVaultStorage(
-  wasm: EngineWasm,
-  view: WasmVaultStorageView
-): VaultStorageDescriptor {
-  const settings = view.settings;
-  const quota = view.quota;
-  return {
-    settings: {
-      pinMode: pinModeFrom(wasm, settings.pinMode),
-      byoEndpoint: settings.byoEndpoint ?? null,
-      byoKind: byoKindFrom(wasm, settings.byoKind),
-      byoCredentialStored: settings.byoCredentialStored,
-      keepLatestVersions: settings.keepLatestVersions ?? null,
-      binRetentionDays: settings.binRetentionDays,
-      origin: settingsOriginFrom(wasm, settings.origin),
-    },
-    quota:
-      quota === undefined
-        ? null
-        : {
-            usedBytes: Number(quota.usedBytes),
-            limitBytes: Number(quota.limitBytes),
-            advisory: quota.advisory,
-          },
-    pendingReclaimBytes: Number(view.pendingReclaimBytes),
-    pendingReclaimIsPartial: view.pendingReclaimIsPartial,
-    reclaimStalls: view.reclaimStalls.map((stall) => ({
-      node: stall.node,
-      target: stall.target,
-      reason: stallReasonFrom(wasm, stall.reason),
-    })),
-  };
+function readQueueHold(hold: QueueHold | null): QueueHoldDescriptor | null {
+  if (hold === null) return null;
+  switch (hold.reason) {
+    case 'quota':
+      return hold;
+    case 'settings':
+      return { ...hold, check: holdCheck(hold, SETTINGS_HOLD_CHECKS) };
+    case 'bin-index':
+      return { ...hold, check: holdCheck(hold, BIN_INDEX_HOLD_CHECKS) };
+    default:
+      throw new Error(`unknown WASM queue hold reason: ${(hold as { reason: unknown }).reason}`);
+  }
 }
 
-/** Reads the wasm-bindgen `AuthMethod` rows into descriptors. */
-export function readAuthMethods(
-  wasm: EngineWasm,
-  rows: readonly WasmAuthMethod[]
-): AuthMethodDescriptor[] {
-  return rows.map((row) => ({
-    id: row.id,
-    kind: authMethodKindFrom(wasm, row.kind),
-    identifierDisplay: row.identifierDisplay ?? null,
-    createdAt: row.createdAt,
-    lastUsedAt: row.lastUsedAt ?? null,
-  }));
+function holdCheck<TCheck extends string>(
+  hold: { reason: string; check: string },
+  checks: readonly TCheck[]
+): TCheck {
+  const check = checks.find((name) => name === hold.check);
+  if (check === undefined) {
+    throw new Error(`unknown WASM ${hold.reason} hold check: ${hold.check}`);
+  }
+  return check;
 }
 
-/** Reads the wasm-bindgen `RegisteredDevice` rows into descriptors. */
-export function readDevices(rows: readonly WasmRegisteredDevice[]): RegisteredDeviceDescriptor[] {
-  return rows.map((row) => ({
-    id: row.id,
-    publicKey: row.publicKey,
-    label: row.label ?? null,
-    createdAt: row.createdAt,
-    lastSeenAt: row.lastSeenAt,
-  }));
+/** Passes a snapshot through once each enum value in it is one this build knows. */
+export function readSnapshot(view: SnapshotView): SnapshotDescriptor {
+  known(PERMISSIONS, view.permission, 'permission');
+  known(STALENESS, view.staleness, 'staleness');
+  for (const child of view.children) {
+    known(NODE_KINDS, child.kind, 'node kind');
+    known(PENDING_CLASSES, child.pending, 'pending class');
+  }
+  for (const dead of view.deadLetters) {
+    known(DEAD_LETTER_REASONS, dead.reason, 'dead letter reason');
+  }
+  return { ...view, queueHold: readQueueHold(view.queueHold) };
 }
 
-/**
- * Reads the wasm-bindgen `VersionEntry` rows into descriptors.
- *
- * Each row is an owned pointer into WASM memory, so every row is released here,
- * including the rows a mid-list throw never reaches.
- */
-export function readFileVersions(rows: readonly WasmVersionEntry[]): VersionEntryDescriptor[] {
-  try {
-    return rows.map((row) => ({
-      contentCid: row.contentCid,
-      size: row.size,
-      modifiedAt: row.modifiedAt,
-    }));
-  } finally {
-    for (const row of rows) {
-      row.free();
+/** Passes a sharing view through once each enum value in it is one this build knows. */
+export function readSharing(view: SharingDescriptor): SharingDescriptor {
+  for (const grant of view.state?.grants ?? []) {
+    known(PERMISSIONS, grant.permission, 'permission');
+    if (grant.granteeName !== null) {
+      known(GRANTEE_NAME_SOURCES, grant.granteeName.source, 'grantee name source');
     }
   }
-}
-
-/** Reads the wasm-bindgen `PendingApproval` rows into descriptors. */
-export function readPendingApprovals(
-  rows: readonly WasmPendingApproval[]
-): PendingApprovalDescriptor[] {
-  return rows.map((row) => ({
-    requestId: row.requestId,
-    requesterDevicePublicKey: row.requesterDevicePublicKey,
-    ephemeralPublicKey: row.ephemeralPublicKey,
-    comparisonValue: row.comparisonValue,
-    createdAt: row.createdAt,
-    expiresAt: row.expiresAt,
-  }));
-}
-
-export function permissionFrom(wasm: EngineWasm, permission: number): Permission {
-  switch (permission) {
-    case wasm.ViewPermission.Read:
-      return 'read';
-    case wasm.ViewPermission.Write:
-      return 'write';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch, and a
-      // guessed permission would misreport who can write to a scope.
-      throw new Error(`unknown WASM permission value: ${permission}`);
+  for (const link of view.state?.inviteLinks ?? []) {
+    known(PERMISSIONS, link.permission, 'permission');
   }
+  return view;
 }
 
-/**
- * The verdicts `ResolutionClass::name` produces, and nothing else: an
- * unmapped string is a JS/WASM version mismatch, and guessing one would paint a
- * revoked share as still granted.
- */
-function resolution(name: string | undefined): ReceivedShareResolution | null {
-  switch (name) {
-    case undefined:
-      return null;
-    case 'granted':
-    case 'revocation-signal':
-    case 'expired':
-    case 'unresolvable':
-    case 'epoch-lag':
-      return name;
-    default:
-      throw new Error(`unknown WASM resolution class: ${name}`);
+/** Passes the received shares through once each verdict is one this build knows. */
+export function readReceivedShares(rows: ReceivedShareDescriptor[]): ReceivedShareDescriptor[] {
+  for (const row of rows) {
+    known(PERMISSIONS, row.permission, 'permission');
+    knownOrNull(RESOLUTIONS, row.resolution, 'resolution class');
   }
+  return rows;
 }
 
-/**
- * Fails closed on a source this build does not know: it is a JS/WASM version
- * mismatch, and a guessed source would misreport who chose the name.
- */
-function granteeName(grant: WasmSharingGrant): SharingGrantDescriptor['granteeName'] {
-  const named = grant.granteeName;
-  if (named === undefined) return null;
-  const { name, source } = named;
-  if (source === 'owner' || source === 'claimant') return { name, source };
-  throw new Error(`unknown WASM grantee name source: ${source}`);
-}
-
-/** Reads a wasm-bindgen `ReceivedShareRow`'s getters into a descriptor. */
-export function readReceivedShare(
-  wasm: EngineWasm,
-  row: WasmReceivedShareRow
-): ReceivedShareDescriptor {
-  return {
-    scope: row.scope,
-    sharerIdentityPublicKey: row.sharerIdentityPublicKey,
-    displayName: row.displayName,
-    permission: permissionFrom(wasm, row.permission),
-    resolution: resolution(row.resolution),
-    viaLink: row.viaLink,
-  };
-}
-
-/**
- * The states `LinkPreviewState::name` produces, and nothing else: an unmapped
- * string is a JS/WASM version mismatch, and guessing one could offer "join" on
- * a revoked link.
- */
-function previewState(name: string): InvitePreviewState {
-  switch (name) {
-    case 'live':
-    case 'expired':
-    case 'revoked':
-    case 'unresolvable':
-      return name;
-    default:
-      throw new Error(`unknown WASM invite preview state: ${name}`);
+/** Passes an invite preview through once its state and kinds are ones this build knows. */
+export function readInvitePreview(preview: InvitePreviewDescriptor): InvitePreviewDescriptor {
+  knownOrNull(PERMISSIONS, preview.permission, 'permission');
+  known(PREVIEW_STATES, preview.state, 'invite preview state');
+  for (const entry of preview.listing) {
+    known(NODE_KINDS, entry.kind, 'node kind');
   }
+  return preview;
 }
 
-/**
- * Reads a wasm-bindgen `InvitePreview`'s getters into a descriptor. The names
- * cross together or not at all: one without the other is a version mismatch.
- */
-export function readInvitePreview(
-  wasm: EngineWasm,
-  preview: WasmInvitePreview
-): InvitePreviewDescriptor {
-  const { ownerName, folderName, permission } = preview;
-  if ((ownerName === undefined) !== (folderName === undefined)) {
-    throw new Error('WASM invite preview carries one name without the other');
+/** Passes a bin view through once each enum value in it is one this build knows. */
+export function readBin(view: BinDescriptor): BinDescriptor {
+  known(SETTINGS_ORIGINS, view.origin, 'settings origin');
+  for (const row of view.entries) {
+    known(NODE_KINDS, row.kind, 'node kind');
+    known(BIN_ORIGIN_KINDS, row.originFolder.kind, 'bin origin kind');
   }
-  return {
-    scope: preview.scope,
-    names: ownerName === undefined || folderName === undefined ? null : { ownerName, folderName },
-    permission: permission === undefined ? null : permissionFrom(wasm, permission),
-    state: previewState(preview.state),
-    joined: preview.joined,
-    listing: preview.listing.map((entry) => ({
-      name: entry.name,
-      kind: nodeKindFrom(wasm, entry.kind),
-    })),
-  };
+  return view;
 }
 
-function readInviteLink(
-  wasm: EngineWasm,
-  link: WasmSharingInviteLink
-): SharingInviteLinkDescriptor {
-  return {
-    tag: link.tag,
-    permission: permissionFrom(wasm, link.permission),
-    expiresAt: link.expiresAt,
-    expired: link.expired,
-    admissionCap: Number(link.admissionCap),
-    pendingClaims: link.pendingClaims,
-    contactBudgetFull: link.contactBudgetFull,
-    refusedClaims: link.refusedClaims,
-  };
+/** Passes a storage view through once each enum value in it is one this build knows. */
+export function readVaultStorage(view: VaultStorageDescriptor): VaultStorageDescriptor {
+  known(PIN_MODES, view.settings.pinMode, 'pin mode');
+  knownOrNull(BYO_KINDS, view.settings.byoKind, 'provider kind');
+  known(SETTINGS_ORIGINS, view.settings.origin, 'settings origin');
+  for (const stall of view.reclaimStalls) {
+    known(STALL_REASONS, stall.reason, 'reclaim stall reason');
+  }
+  return view;
 }
 
-/**
- * Reads a wasm-bindgen `SharingView`'s key-free getters into a descriptor.
- *
- * Every getter is read once into a local: each read mints a fresh JS wrapper
- * over a fresh boxed Rust struct, which nothing here frees.
- */
-export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDescriptor {
-  const state = view.state;
-  const readEpoch = state?.readEpoch;
-  const writeEpoch = state?.writeEpoch;
-  return {
-    scope: view.scope,
-    contacts: view.contacts.map((contact) => ({
-      identityPublicKey: contact.identityPublicKey,
-      cachedName: contact.cachedName ?? null,
-    })),
-    ownContactCode: view.ownContactCode,
-    state:
-      state === undefined
-        ? null
-        : {
-            grants: state.grants.map((grant) => ({
-              recipientIdentityPublicKey: grant.recipientIdentityPublicKey,
-              permission: permissionFrom(wasm, grant.permission),
-              granteeName: granteeName(grant),
-              viaLink: grant.viaLink ?? null,
-            })),
-            grantRefusal: state.grantRefusal ?? null,
-            inviteLinkRefusal: state.inviteLinkRefusal ?? null,
-            inviteLinks: state.inviteLinks.map((link) => readInviteLink(wasm, link)),
-            epochs:
-              readEpoch === undefined || writeEpoch === undefined
-                ? null
-                : { readEpoch, writeEpoch },
-          },
-  };
+/** Passes the login methods through once each kind is one this build knows. */
+export function readAuthMethods(rows: AuthMethodDescriptor[]): AuthMethodDescriptor[] {
+  for (const row of rows) {
+    known(AUTH_METHOD_KINDS, row.kind, 'auth method kind');
+  }
+  return rows;
 }

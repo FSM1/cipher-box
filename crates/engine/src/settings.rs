@@ -174,6 +174,12 @@ pub fn resolve_kept_bearer(
 /// The member's settings as a host may see them: everything but the provider
 /// credential, which the wasm boundary exists to keep uncrossable.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(missing_as_null)
+)]
 pub struct VaultSettingsSummary {
     /// Where a version's bytes are pinned.
     pub pin_mode: PinMode,
@@ -184,6 +190,14 @@ pub struct VaultSettingsSummary {
     /// Whether a provider bearer is stored. The bearer itself never crosses.
     pub byo_credential_stored: bool,
     /// The content-version retention policy.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(
+            rename = "keepLatestVersions",
+            serialize_with = "crate::wire::keep_latest_versions::serialize"
+        ),
+        tsify(type = "number | null")
+    )]
     pub retention: RetentionPolicy,
     /// How long a soft-deleted node stays in the bin index. `0` keeps the hard
     /// delete.
@@ -195,6 +209,8 @@ pub struct VaultSettingsSummary {
 /// Which rung a record-plane load reached, for the summary or the view it
 /// produced (blueprint/engine.md "Vault settings load").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum SettingsOrigin {
     /// The published record opened and validated.
     Resolved,
