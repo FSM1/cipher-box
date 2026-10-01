@@ -1,5 +1,5 @@
 import { EngineRequestError } from '@cipherbox/client';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createSnapshotStore,
   heldBytes,
@@ -86,6 +86,20 @@ describe('snapshotStore', () => {
     engine.pulls[0].resolve(focused);
     await flush();
     expect(store.getSnapshot().view).toBe(focused);
+  });
+
+  it('sends the engine focus before the cross-tab hint forces a pass', () => {
+    const engine = fakeEngine();
+    const setFocus = vi.spyOn(engine.client.facade, 'setFocus');
+    const reportFocus = vi.spyOn(engine.client, 'reportFocus');
+    const store = createSnapshotStore(engine.client);
+
+    store.setFocus(new Uint8Array(16).fill(7));
+
+    // The relay forces a pass at once; the engine must already hold the new focus.
+    expect(setFocus.mock.invocationCallOrder[0]).toBeLessThan(
+      reportFocus.mock.invocationCallOrder[0]
+    );
   });
 
   it('surfaces a rejected focus change and pulls nothing', async () => {

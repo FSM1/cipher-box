@@ -122,6 +122,20 @@ impl FocusWindow {
                 .filter(|node| Some(*node) != self.open_folder),
         )
     }
+
+    /// [`Self::folders_in_view`] with `root` in navigation's slot when no folder
+    /// is open: a host that names no folder has the root open.
+    pub fn folders_in_view_or_root(&self, root: NodeId) -> Vec<NodeId> {
+        let open = self.open_folder.unwrap_or(root);
+        core::iter::once(open)
+            .chain(
+                self.touched_folders
+                    .keys()
+                    .copied()
+                    .filter(|node| *node != open),
+            )
+            .collect()
+    }
 }
 
 /// One target a tick refreshes.
@@ -966,6 +980,23 @@ mod tests {
         assert_eq!(
             focus_set(&snap, &FocusWindow::default()),
             vec![FocusTarget::VaultPointer, FocusTarget::MailboxPoll]
+        );
+    }
+
+    #[test]
+    fn a_window_with_no_open_folder_holds_the_root_in_view() {
+        let root = id(0);
+        let touched = touched_at(&[(id(2), 0), (root, 0)]);
+        assert_eq!(touched.folders_in_view_or_root(root), vec![root, id(2)]);
+
+        let open = FocusWindow {
+            open_folder: Some(id(1)),
+            ..touched
+        };
+        assert_eq!(
+            open.folders_in_view_or_root(root),
+            vec![id(1), root, id(2)],
+            "an open folder keeps navigation's slot",
         );
     }
 

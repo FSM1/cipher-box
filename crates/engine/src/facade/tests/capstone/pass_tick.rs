@@ -125,7 +125,8 @@ fn the_tick_drops_the_refresh_stamps_the_threshold_expired() {
             .keys()
             .copied()
             .collect::<Vec<NodeId>>(),
-        vec![fresh],
+        // The root is in view, so this pass stamps the row it lists.
+        vec![NodeId(CHILD_ID), fresh],
         "one pass holds only the stamps of the last window",
     );
 }

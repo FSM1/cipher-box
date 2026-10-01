@@ -343,6 +343,9 @@ pub(crate) struct SessionState {
     /// Whether the last boundary walk proved every scope root it named. Until
     /// one has, a scope root can be missing from the known set.
     pub(crate) scope_roots_walked: Rc<Cell<bool>>,
+    /// Whether a boundary walk has run this session, whatever its verdict.
+    /// Until one has, every folder reads as part of the vault's own scope.
+    pub(crate) boundary_walk_ran: Rc<Cell<bool>>,
     /// The read epoch the same walk proved each of them at, which no seed cache
     /// carries ([`crate::rotation::scope_material`]). Replaced per walk, unlike
     /// the set above.
@@ -495,6 +498,7 @@ impl SessionState {
             unproved_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
             boundary_walk_rejected: Rc::new(Cell::new(false)),
             scope_roots_walked: Rc::new(Cell::new(false)),
+            boundary_walk_ran: Rc::new(Cell::new(false)),
             walked_read_epochs: Rc::new(RefCell::new(WalkedReadEpochs::new())),
             current_root_name: Rc::new(RefCell::new(None)),
             focus: Rc::new(RefCell::new(FocusWindow::default())),

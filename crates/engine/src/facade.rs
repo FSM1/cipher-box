@@ -69,7 +69,7 @@ use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::accept::JoinStanding;
 use crate::grants::create::MINT_EPOCH;
-use crate::grants::grafted::floor_view;
+use crate::grants::grafted::{floor_view, is_own_scope};
 use crate::grants::inbox::{OwnedClaim, owned_claims};
 use crate::grants::link_read::{
     JoinRead, JoinSeams, LinkReadRefusal, LinkReader, PreviewRead, join_read,
@@ -105,11 +105,11 @@ use crate::net::retire::{ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, MovedScopeSeed, RotationAncestry, SweptScopeState};
 use crate::net::{
-    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldKey, HeldRecord,
-    HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
-    PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
-    RETIRE_LEDGER_PREFIX, RecordAccelerator, RecordPointerFetch, RootAdopter,
-    ScopePointerEnrolment, ScopePointerMint, VaultProvisionNet, drop_superseded,
+    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, FolderRefreshReport,
+    GraftedLeg, HeldKey, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
+    OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishError,
+    PublishOutcome, RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX, RecordAccelerator, RecordPointerFetch,
+    RootAdopter, ScopePointerEnrolment, ScopePointerMint, VaultProvisionNet, drop_superseded,
     enrol_owned_scope_pointers, eol_renew_pass, keyless_re_put, observed_at, resolve_child,
     run_liveness_loop,
 };
@@ -180,7 +180,7 @@ use crate::sync::staleness::{Connectivity, classify, next_boundary};
 use crate::sync::tick::{
     FocusFile, ResolveMode, TickControl, elapsed_at_least, focus_folders_due, focus_scope_roots,
     nodes_in_scope, on_access_refresh_due, queue_focus_file, queue_unprojected_children,
-    run_tick_loop, run_with_boundaries, scope_root_record_name, settle_focus_leg,
+    run_tick_loop, run_with_boundaries, scope_root_of, scope_root_record_name, settle_focus_leg,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -4527,6 +4527,10 @@ struct LiveStreams {
 /// that name from [`SessionState::current_root_name`] on every pass.
 type TickLoopSpawner = Box<dyn FnOnce()>;
 
+/// The tick pass's boundary walk, run from a navigation that lands before the
+/// first pass ([`TickPass::walk_boundaries`]).
+type BoundaryWalk = Rc<dyn Fn() -> Pin<Box<dyn Future<Output = ()>>>>;
+
 /// One [`run_sweep`] over a scope root, the ancestor seed its gate proves under,
 /// and a pass cap.
 type Sweeper = Rc<
@@ -4628,6 +4632,8 @@ pub struct Engine<T: SeamTypes> {
     /// Built at [`start`](Self::start), where the seam bounds its task needs
     /// hold, and waiting for a root name to poll.
     tick_loop_spawner: RefCell<Option<TickLoopSpawner>>,
+    /// Built beside the tick loop spawner, over the same pass.
+    boundary_walk: RefCell<Option<BoundaryWalk>>,
     /// The one shared API client, built and logged in at [`start`](Self::start)
     /// and handed to the liveness loop so the access JWT is shared across
     /// publish/renew (no redundant 401→refresh). `None` until then.
@@ -4682,6 +4688,7 @@ impl<T: SeamTypes> Engine<T> {
                 manual_refresh: ManualRefresh::default(),
                 session: None,
                 tick_loop_spawner: RefCell::new(None),
+                boundary_walk: RefCell::new(None),
                 api: None,
                 started: false,
                 forgotten: false,
@@ -5056,6 +5063,9 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut spawner) = self.tick_loop_spawner.try_borrow_mut() {
             *spawner = None;
         }
+        if let Ok(mut walk) = self.boundary_walk.try_borrow_mut() {
+            *walk = None;
+        }
         if let Ok(mut sweep_tasks) = self.state.sweep_tasks.try_borrow_mut() {
             *sweep_tasks = None;
         }
@@ -5087,6 +5097,7 @@ impl<T: SeamTypes> Engine<T> {
         }
         self.state.boundary_walk_rejected.set(false);
         self.state.scope_roots_walked.set(false);
+        self.state.boundary_walk_ran.set(false);
         if let Ok(mut epochs) = self.state.walked_read_epochs.try_borrow_mut() {
             epochs.clear();
         }
@@ -5937,7 +5948,19 @@ where {
         let root_id = self.state.snapshot.borrow().root.0;
 
         let manual = self.manual_refresh.clone();
-        let pass = TickPass::new(seams, secrets, alive, manual, owner_identity, root_id);
+        let pass = Rc::new(TickPass::new(
+            seams,
+            secrets,
+            alive,
+            manual,
+            owner_identity,
+            root_id,
+        ));
+        let (walk_pass, walk_state) = (pass.clone(), state.clone());
+        *self.boundary_walk.borrow_mut() = Some(Rc::new(move || {
+            let (pass, state) = (walk_pass.clone(), walk_state.clone());
+            Box::pin(async move { pass.walk_boundaries(&state).await })
+        }));
 
         Some(Box::new(move || {
             pass.manual.arm();
@@ -8651,12 +8674,21 @@ where {
     }
 
     /// Refresh the focus window's folders that are past the on-access staleness
-    /// threshold, then the files `folder` lists no size for.
+    /// threshold, then the files `folder` (the root when `None`) lists no size for.
     ///
     /// The folder leg runs first, so a row it lists joins the file leg of the
     /// same navigation and paints its size within one resolve round trip rather
     /// than a poll cadence later.
     async fn refresh_focus_on_access(&self, now: UnixMillis, folder: Option<NodeId>) {
+        // Until a walk names the scope roots, a shared folder reads as the
+        // vault's own scope, and its record fails the gate under the vault's
+        // seed.
+        if !self.state.boundary_walk_ran.get() {
+            let walk = self.boundary_walk.borrow().clone();
+            if let Some(walk) = walk {
+                walk().await;
+            }
+        }
         // One root read: the seed the legs run under and the scope they filter
         // to must name the same scope across the await below.
         let root = self.state.snapshot.borrow().root;
@@ -8704,21 +8736,75 @@ where {
         {
             settle(&due, leg.run(&due).await);
         }
-        if let Some(folder) = folder {
-            self.queue_focus_file_children(folder);
-        }
-        if let Some(leg) = &leg {
-            let files = self.scoped_to(root, self.queued_focus_files());
-            if !files.is_empty() {
-                settle(&files, leg.run_files(&files).await);
-                // The tick leg's rule: a row leaves the queue only once a pass
-                // has attempted it.
-                self.state
-                    .focus
-                    .borrow_mut()
-                    .open_files
-                    .retain(|row| !files.contains(&row.node));
+        self.queue_focus_file_children(folder.unwrap_or(root));
+        self.navigation_file_legs(now, &settle).await;
+    }
+
+    /// The on-access file leg, one per scope the queued rows belong to, as the
+    /// tick runs it: a leg holds one scope's read material ([`nodes_in_scope`]).
+    /// A scope this session holds no seed or floors for keeps its rows queued
+    /// for the tick.
+    async fn navigation_file_legs(
+        &self,
+        now: UnixMillis,
+        settle: &impl Fn(&[NodeId], FolderRefreshReport),
+    ) {
+        let root = self.state.snapshot.borrow().root;
+        let proved = self.state.descendant_scope_roots.borrow().clone();
+        let unproved = self.state.unproved_scope_roots.borrow().clone();
+        let mut by_scope: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        {
+            let base = self.state.snapshot.borrow();
+            let scope_roots = focus_scope_roots(&proved, &unproved);
+            for node in self.queued_focus_files() {
+                by_scope
+                    .entry(scope_root_of(&base, node, &scope_roots))
+                    .or_default()
+                    .push(node);
             }
+        }
+        let bookmarked = self.state.bookmarked_scope_roots.borrow().clone();
+        for (scope, files) in by_scope {
+            if unproved.contains(&scope) {
+                continue;
+            }
+            let Some(scope_read_seed) = self.scope_read_seed(&scope.0).await else {
+                continue;
+            };
+            let Some(floors) = self.scope_floors(&scope.0) else {
+                continue;
+            };
+            let scope_root_name = scope_root_record_name(
+                &self.state.snapshot.borrow(),
+                self.state.current_root_name.borrow().as_ref(),
+                &scope.0,
+            );
+            let leg = FolderRefresh {
+                transport: &self.record_transport,
+                snapshot_cache: &self.seams.snapshot_cache,
+                http: &self.seams.http,
+                floors: &floors,
+                gateway: &self.gateway,
+                base: &self.state.snapshot,
+                events: &self.events,
+                scope_id: scope.0,
+                scope_read_seed: &scope_read_seed,
+                scope_root_name: scope_root_name.as_ref(),
+                plane: (!is_own_scope(&root.0, &proved, &scope.0)).then_some(GraftedLeg {
+                    scope_roots: &bookmarked,
+                    claims: &self.state.grafted_claims,
+                }),
+                mode: ResolveMode::CacheFirst,
+                observed_at: now.0,
+            };
+            settle(&files, leg.run_files(&files).await);
+            // The tick leg's rule: a row leaves the queue only once a pass has
+            // attempted it.
+            self.state
+                .focus
+                .borrow_mut()
+                .open_files
+                .retain(|row| !files.contains(&row.node));
         }
     }
 
@@ -18803,22 +18889,18 @@ mod focus_access_tests {
         );
     }
 
-    /// A record in a shared scope unseals only under that scope's own read
-    /// material, so the navigation leg leaves it to the tick's leg for that
-    /// scope. The row beside it in the vault's own scope proves the leg ran.
-    #[test]
-    fn the_navigation_file_leg_leaves_a_shared_scopes_rows_to_that_scope() {
-        let engine = started_engine();
-        let shared_root = NodeId([9; 16]);
-        let shared_file = file_id(1);
-        let own_file = file_id(2);
+    /// [`FOLDER`] under the root as a scope root of its own, holding
+    /// `file_id(1)`, beside `file_id(2)` in the vault's own scope. Both rows are
+    /// queued.
+    fn shared_scope_beside_own_row(engine: &Engine<FakeSeamTypes>) -> (NodeId, NodeId) {
+        let (shared_file, own_file) = (file_id(1), file_id(2));
         {
             let mut base = engine.state.snapshot.borrow_mut();
             let root = base.root;
-            base.upsert_node(NodeMeta::new(shared_root, "shared", NodeKind::Folder));
-            base.link(root, shared_root, 1);
+            base.upsert_node(NodeMeta::new(FOLDER, "shared", NodeKind::Folder));
+            base.link(root, FOLDER, 1);
             base.upsert_node(NodeMeta::new(shared_file, "theirs.bin", NodeKind::File));
-            base.link(shared_root, shared_file, 1);
+            base.link(FOLDER, shared_file, 1);
             base.upsert_node(NodeMeta::new(own_file, "mine.bin", NodeKind::File));
             base.link(root, own_file, 1);
         }
@@ -18826,12 +18908,22 @@ mod focus_access_tests {
             .state
             .descendant_scope_roots
             .borrow_mut()
-            .insert(shared_root);
+            .insert(FOLDER);
         engine.note_focus_file(shared_file);
         engine.note_focus_file(own_file);
+        (shared_file, own_file)
+    }
+
+    /// A record in a shared scope unseals only under that scope's own read
+    /// material, so a scope with no seed held keeps its rows for the tick. The
+    /// row beside it in the vault's own scope proves the leg ran.
+    #[test]
+    fn the_navigation_file_leg_leaves_a_seedless_scopes_rows_queued() {
+        let engine = started_engine();
+        let (shared_file, own_file) = shared_scope_beside_own_row(&engine);
 
         let now = engine.seams.scheduler.now();
-        block_on(engine.refresh_focus_on_access(now, Some(shared_root)));
+        block_on(engine.refresh_focus_on_access(now, Some(FOLDER)));
 
         let stamped = engine.state.focus_refreshed.borrow();
         assert!(
@@ -18846,6 +18938,39 @@ mod focus_access_tests {
             engine.queued_focus_files(),
             vec![shared_file],
             "it stays queued for the tick's leg for that scope"
+        );
+    }
+
+    /// A shared scope whose seed is held runs a leg of its own. The vault's
+    /// seed is withheld, so only that scope's seed can have attempted its row.
+    #[test]
+    fn the_navigation_file_leg_reads_a_shared_scopes_rows_under_its_own_seed() {
+        let engine = started_engine();
+        let (shared_file, own_file) = shared_scope_beside_own_row(&engine);
+        let root = engine.state.snapshot.borrow().root;
+        engine.state.scope_read_seeds.borrow_mut().remove(&root.0);
+        deposit_seed(
+            &engine.state.scope_read_seeds,
+            FOLDER.0,
+            Zeroizing::new([6u8; 32]),
+            Some(0),
+        );
+
+        let now = engine.seams.scheduler.now();
+        block_on(engine.refresh_focus_on_access(now, Some(FOLDER)));
+
+        assert!(
+            engine
+                .state
+                .focus_refreshed
+                .borrow()
+                .contains_key(&shared_file),
+            "the shared scope's row was attempted on its own scope's leg"
+        );
+        assert_eq!(
+            engine.queued_focus_files(),
+            vec![own_file],
+            "the vault's row waits for the vault's seed"
         );
     }
 

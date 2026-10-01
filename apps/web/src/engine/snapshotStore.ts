@@ -165,11 +165,12 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
 
   const assertFocus = (): void => {
     if (disposed) return;
-    client.reportFocus(focus);
     const id = ++generation;
+    // The engine runs commands in arrival order: the relay's forced pass must see this focus.
     client.facade.setFocus(focus).then(() => {
       if (id === generation) pull();
     }, failIfCurrent(id));
+    client.reportFocus(focus);
   };
 
   const unsubscribe = client.facade.subscribe((event) => {

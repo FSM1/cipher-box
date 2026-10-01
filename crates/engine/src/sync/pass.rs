@@ -217,6 +217,17 @@ where
         }
     }
 
+    /// The root adopt and the scope walk alone, for a navigation that lands
+    /// before the first pass.
+    pub(crate) async fn walk_boundaries(&self, state: &SessionState) {
+        let Some(pass) = self.loop_gate(state, TickCause::Poll) else {
+            return;
+        };
+        let (floors_before, _) = self.refresh_floors(state, &pass).await;
+        let _ = self.adopt_root(state, &pass, &floors_before).await;
+        self.walk_scopes(state, &pass).await;
+    }
+
     /// The loop gate: the pass's own copy of every secret it runs under, or
     /// `None` once the session is gone.
     fn loop_gate(&self, state: &SessionState, cause: TickCause) -> Option<Pass> {
@@ -469,6 +480,7 @@ where
 
     /// The scope walk below the vault root, and the boundaries it proved.
     async fn walk_scopes(&self, state: &SessionState, pass: &Pass) -> Vec<DescendantScopeRoot> {
+        state.boundary_walk_ran.set(true);
         // The held record is the root this pass reconciled, so the
         // walk needs no second read of either plane to start.
         let held_root = state
@@ -582,7 +594,8 @@ where
         // no folder target of its own, because that root resolves on
         // its pointer leg. Its scope still needs a pass, so the rows
         // it lists reach the file leg below.
-        for folder in state.focus.borrow().folders_in_view() {
+        let root = state.snapshot.borrow().root;
+        for folder in state.focus.borrow().folders_in_view_or_root(root) {
             by_scope
                 .entry(scope_root_of(
                     &state.snapshot.borrow(),
@@ -672,7 +685,7 @@ where
                     &base_now,
                     &focus_scope_ids,
                     scope_root,
-                    state.focus.borrow().folders_in_view().collect(),
+                    state.focus.borrow().folders_in_view_or_root(root),
                 );
                 for folder in in_view.into_iter().rev() {
                     queue_unprojected_children(
