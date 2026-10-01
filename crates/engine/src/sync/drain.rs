@@ -4310,7 +4310,7 @@ where
             }
             let (loaded, already_moved) = self.load_doomed(from, to, anchor, node).await?;
             let LoadedNode {
-                name,
+                observed,
                 envelope_unknown,
                 epoch_tag_unknown,
                 body,
@@ -4343,7 +4343,7 @@ where
                     scope,
                     to,
                     node,
-                    Observed::unread(&name),
+                    observed,
                     false,
                     &body,
                     content_cids,
@@ -5046,12 +5046,13 @@ where
                 ReadBody::Folder { .. } => Vec::new(),
             };
             let name = dest.end.write_name(&node.0);
+            let observed = self.destination_observed(&name).await?;
             let published = self
                 .publish_node(
                     scope,
                     dest,
                     node,
-                    Observed::unread(&name),
+                    observed,
                     false,
                     &body,
                     content_cids,
@@ -5070,6 +5071,17 @@ where
             resealed.held.push((node.0, published.held));
         }
         Ok(resealed)
+    }
+
+    /// What `name` serves now, as the basis a crossing's publish there signs
+    /// above. Record-verified only: the name can hold a record another scope
+    /// sealed, which no gate of the destination end opens.
+    async fn destination_observed(&self, name: &IpnsName) -> Result<Observed, Halt> {
+        match fanout_get_classified(&self.seams.transport, name).await {
+            FanoutRecord::Found(record, _) => Ok(Observed::record(name, record.sequence)),
+            FanoutRecord::Absent => Ok(Observed::unread(name)),
+            FanoutRecord::Unavailable(_) => Err(Halt::Unclassified),
+        }
     }
 
     /// One node of the moved subtree, opened under the end it still belongs to.

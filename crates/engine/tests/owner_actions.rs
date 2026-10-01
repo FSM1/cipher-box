@@ -3915,18 +3915,34 @@ fn a_second_end_the_record_plane_moved_past_publishes_nothing() {
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     converge_into_granted_scope(&fx, holiday);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let granted_root = write_name(fx.folder);
+    let walked = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], granted_root.as_str());
+    let (mut other, _other_events, _other_tasks) = fx.second_owner_device();
     assert_eq!(
-        block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
+        block_on(other.command(Command::RotateNow { node: fx.folder })),
         Ok(CommandOutcome::Done),
-        "the walked material is now one cut behind the record it was read from"
+        "another device cuts the granted scope"
     );
 
     let album_sequence = sequence_at(&fx.world, &write_name(album));
+    let holiday_sequence = sequence_at(&fx.world, &write_name(holiday));
     block_on(fx.engine.command(Command::Relink {
         node: holiday,
         new_parent: album,
     }))
     .expect("a move out of the granted scope journals its crossing");
+    // The walk's fan-out GET, one per endpoint, still reads the record it proved
+    // last tick, so the second end it hands the pass is one cut behind the
+    // record the end proof reads.
+    fx.world.record_store.serve_gets_for_after(
+        granted_root.as_str(),
+        0,
+        fx.world.record_store.endpoints().len(),
+        walked,
+    );
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     assert_eq!(
@@ -3935,10 +3951,66 @@ fn a_second_end_the_record_plane_moved_past_publishes_nothing() {
         "the superseded end held the op rather than publishing under it"
     );
     assert_eq!(
-        sequence_at(&fx.world, &write_name(album)),
-        album_sequence,
-        "and the destination folder never republished, so the halt came before \
-         the first authoring"
+        (
+            sequence_at(&fx.world, &write_name(album)),
+            sequence_at(&fx.world, &write_name(holiday)),
+        ),
+        (album_sequence, holiday_sequence),
+        "and neither the moved folder nor its destination republished, so the \
+         halt came before the first authoring"
+    );
+}
+
+/// A crossing re-seals each node at a name whose record can sit above this
+/// device's sequence floor: a rotation's sweep publishes without adopting. The
+/// publish signs above what the name serves, so the move lands rather than
+/// losing the CAS race.
+#[test]
+fn a_crossing_publishes_above_the_record_a_rotation_left_at_the_destination() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, holiday);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done),
+        "the cut re-seals the granted subtree at the name the crossing publishes at"
+    );
+    let served = sequence_at(&fx.world, &write_name(holiday));
+
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("a move out of the granted scope journals its crossing");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "both legs published"
+    );
+    assert!(
+        sequence_at(&fx.world, &write_name(holiday)) > served,
+        "the re-seal signed above the record the name served"
+    );
+    let (scope, _, opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(holiday),
+        &read_key_of(holiday),
+    );
+    assert_eq!(
+        (scope, opened.is_some()),
+        (ROOT.0, true),
+        "and the folder now reads in the destination scope"
     );
 }
 
