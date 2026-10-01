@@ -972,7 +972,7 @@ unchanged read key at its unchanged read epoch; without it they reach the new
 root and stop ([ADR 0004](../decisions/0004-read-body-child-names-on-the-name-wave.md)).
 A node that lags the root's read epoch is the exception: the wave opens it under
 the root's ratchet and re-seals it at the root's epoch under the current read
-key, so the move also carries the lazy wave (ADR 0064 D2).
+key, so the move also carries the lazy wave (ADR 0064).
 The republish is therefore **not** byte-stable, and the wave touches read-plane
 _metadata_ while re-keying only a lagging node — the **read** override seed and
 `minReadEpoch` still carry verbatim, and the read-epoch floor never moves.

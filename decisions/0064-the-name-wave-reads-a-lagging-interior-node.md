@@ -1,6 +1,6 @@
-# ADR 0064 — The name wave reads a lagging interior node, and re-seals it forward at the root's epoch
+# ADR 0064 — The name wave reads a lagging interior node
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-01
 - **Date:** 2026-10-01
 - **Relates to:** FSM1/cipher-box#2123 (a write revoke on a folder with any child fails),
   FSM1/cipher-box#2153, FSM1/cipher-box#2157 (the revokee can block its own revocation),
@@ -32,25 +32,15 @@ record carries no grant section, the read moves no read-epoch floor, the sequenc
 bar, and the epoch is one that the anchor's ratchet reaches and is below the anchor's epoch. Every
 other refusal still stops the wave.
 
-**D2 — The name wave re-seals a lagging node forward, at the root's epoch and under the current
-read key.** The moved copy leaves the epoch-lag predicate, so the name wave carries the lazy wave
-for each node that it moves. A node that does not lag keeps its epoch and its read key. The read
-override seed and `minReadEpoch` carry verbatim, and the read-epoch floor does not move.
-
 ## Alternatives considered
 
-- **Re-seal a lagging node at its own epoch and read key.** This is the scope that
-  FSM1/cipher-box#2123 proposed. It cannot run. The publish path refuses a seal below the
-  read-epoch floor (`PublishError::EpochBelowFloor`, ADR 0041). The retire of the old names needs
-  the lowest moved epoch at or above that floor (ADR 0041). The moved copy would also lag at its
-  new name, so each reader must take the lagging read there again.
-- **Refuse every lagging child.** This is the behavior on main. Each write revoke over a non-empty
-  folder fails, because its own read cut makes every child lag. Each write grant or downgrade
-  after a read rotation fails until a sweep converges the scope.
 - **Sweep the scope to convergence before the write cut.** Each node then publishes twice, once
   for the sweep and once for the wave. The sweep isolates a node that it cannot reach and goes on,
   so it does not prove convergence, and a node that lags again between the two passes still stops
   the wave.
+- **Cut the write plane before the read plane in `rotate_on_cut`.** Then no child lags during a
+  revoke. But a write grant or a downgrade after a read rotation still meets lagging nodes, so
+  this fixes only part of the problem.
 
 ## Consequences
 
@@ -58,8 +48,10 @@ override seed and `minReadEpoch` carry verbatim, and the read-epoch floor does n
    name wave's read of a lagging interior node (D1), and "All three paths" becomes "All four paths".
 2. `blueprint/engine.md` "Adoption gate and floors" stage 5: "the three readers" becomes "the four
    readers".
-3. `blueprint/engine.md` "rotateScopeWrite": a lagging node is re-sealed at the root's epoch under
-   the current read key (D2); the read override seed, `minReadEpoch` and the floor still carry.
+3. `blueprint/engine.md` "rotateScopeWrite": the wave re-seals a lagging node at the root's epoch
+   under the current read key, because the publish path refuses a seal below the read-epoch floor
+   (ADR 0041). A node that does not lag keeps its epoch and its read key. The read override seed
+   and `minReadEpoch` carry verbatim, and the read-epoch floor does not move.
 4. `CONTEXT.md` "Adoption gate": "one of the three sanctioned lagging readers" becomes "one of the
    four".
 5. `blueprint/testing.md` rotation matrix: a write revoke over a nested subtree, a downgrade just
