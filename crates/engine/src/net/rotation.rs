@@ -12999,12 +12999,20 @@ mod tests {
     fn staged_swept_scope(
         node_epoch: u64,
     ) -> (Harness<InMemoryRecordStore>, ChildScopeRef, [u8; 16]) {
+        staged_swept_scope_at(node_epoch, 1)
+    }
+
+    /// [`staged_swept_scope`] with the node's record at `sequence`.
+    fn staged_swept_scope_at(
+        node_epoch: u64,
+        sequence: u64,
+    ) -> (Harness<InMemoryRecordStore>, ChildScopeRef, [u8; 16]) {
         let node_id = [0x01; 16];
         let (node_name, node_block) = interior_record(node_id, node_epoch, Vec::new());
         let root = swept_root(vec![body_ref(node_id, &node_name)], &[]);
         let harness = Harness::plain();
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-        harness.stage_node(node_id, &node_name, &node_block);
+        harness.stage_node_at(node_id, &node_name, &node_block, sequence);
         (harness, child_ref(SCOPE, &root), node_id)
     }
 
@@ -13656,24 +13664,51 @@ mod tests {
         drop(lease);
     }
 
-    /// A promotion signs one above the record it read and changed, so a relink
-    /// that lands after that read loses it the CAS instead of being overwritten.
+    /// A floor store that keeps no sequence-floor raise, so a publish has only
+    /// the CAS basis its caller passes.
+    struct UnkeptSequenceFloors {
+        inner: InMemoryFloorStore,
+    }
+
+    impl FloorStore for UnkeptSequenceFloors {
+        async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.epoch_floor(key).await
+        }
+
+        async fn raise_epoch_floor(&self, key: &[u8], epoch: u64) -> SeamResult<u64> {
+            self.inner.raise_epoch_floor(key, epoch).await
+        }
+
+        async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.sequence_floor(ipns_name).await
+        }
+
+        async fn raise_sequence_floor(&self, _ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+            Ok(sequence)
+        }
+
+        async fn clear(&self) -> SeamResult<()> {
+            self.inner.clear().await
+        }
+    }
+
+    /// A promotion signs one above the sequence of the record it read, with no
+    /// help from the sequence floor.
     #[test]
     fn a_promotion_lands_above_the_record_it_read() {
-        let node_id = [0x01; 16];
-        let (node_name, node_block) = interior_record(node_id, OWNER_ROOT_EPOCH, Vec::new());
-        let root = swept_root(vec![body_ref(node_id, &node_name)], &[]);
-        let harness = Harness::plain();
-        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-        harness.stage_node_at(node_id, &node_name, &node_block, 7);
-        let net = harness.net(&[]);
-        let scope = child_ref(SCOPE, &root);
+        let (harness, scope, node_id) = staged_swept_scope_at(OWNER_ROOT_EPOCH, 7);
+        let floors = UnkeptSequenceFloors {
+            inner: harness.floors.clone(),
+        };
+        let net = net_over(&harness, &floors);
         let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
         let node = swept.children[0].clone();
+        assert_eq!(node.node_id, node_id);
+        let name = scope_name(&node.ipns_name).expect("a valid name");
 
         block_on(net.promote_scope_root(&scope, &node, &promoted(&node), &[]))
             .expect("the promotion lands");
-        assert_eq!(sequence_at(&harness, &node_name), Some(8));
+        assert_eq!(sequence_at(&harness, &name), Some(8));
     }
 
     /// The node id of the folder a grant promotes to a scope root — the scope
