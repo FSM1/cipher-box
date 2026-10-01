@@ -63,7 +63,11 @@ bearer credential. A device revives it only when its floor equals the recovered 
 (`Strictness::AtFloor`), and the load then sets the EOL rule aside for that one record. Any other
 device takes the ADR 0034 ladder. Its first settings save with no floor takes the sequence of the
 verified recovery record as `min_current_sequence`, so the save does not publish at sequence 1 and
-an older device does not report `RolledBack` for good.
+an older device does not report `RolledBack` for good. The same rule holds when the load reports
+`Expired` or `Unreadable` for a served record that verified under the account's own settings key:
+the save signs above the sequence of that record, and the floor rises only on a confirm. When a
+newer release wrote the body, the load holds nothing and the save is refused, so an older client
+does not overwrite that body.
 
 **D5 — A device with no floor revives a name from the corroborated recovery record, and the user
 sees it.** The shell shows a "restored from the server copy" state for such a vault. When another

@@ -391,6 +391,11 @@ its degraded outcome applies a different policy rather than showing stale data.
   reason. The encode side needs no matching guard: the EOL is `now + 90 days`
   off the injected clock, so a publish structurally cannot mint an
   already-expired record.
+- **A save signs above a lapsed or unreadable record.** When the load reports
+  `Expired` or `Unreadable` for a record that verified under the account's own
+  settings key, a save signs above that record's sequence, and the floor rises
+  only on a confirm. A body that a newer release wrote refuses the save
+  (ADR 0062 D4).
 - **A settings load enrols the record it read in the session's renewal set**
   (ADR 0034 D9), so a session that only reads keeps the name alive. It enrols
   only a record that cleared the whole floor law, the lapsed-EOL refusal
