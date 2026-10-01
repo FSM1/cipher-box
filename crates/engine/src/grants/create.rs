@@ -245,9 +245,7 @@ pub enum CreateGrantError {
     Converge(SweepError),
     /// The subtree could not be proven epoch-converged: convergence work was
     /// dropped on a lost CAS race, so the grant is refused rather than minted
-    /// over a possibly-lagging subtree. Also a held node's ref that was
-    /// re-linked since the owner's snapshot ([`drop_held_refs`]); past the root
-    /// publish, a retry after a refresh resumes the move.
+    /// over a possibly-lagging subtree.
     SubtreeNotConverged {
         /// The interior nodes left unproven this pass — dropped on a lost CAS
         /// race, or unreadable at the epoch their record claims.
@@ -350,6 +348,16 @@ pub enum CreateGrantError {
         /// The node whose record left the proved epoch.
         node_id: [u8; 16],
     },
+    /// A held node's ref no longer loses to the winner the owner's snapshot
+    /// ranked: another device re-linked it since ([`drop_held_refs`]). A
+    /// refresh clears it. Past the root publish, the grantee root stays and a
+    /// retry after a refresh resumes the move.
+    HeldRefRelinked {
+        /// The node the ref names.
+        node_id: [u8; 16],
+        /// Whether the grantee root had published when the refusal came.
+        root_published: bool,
+    },
     /// Re-sealing an interior node of the granted folder under the fresh
     /// derivation failed, or its CAS publish lost the race. Post-publish: same
     /// partial-commit surface as `InteriorResolve`, re-drivable the same way,
@@ -420,6 +428,7 @@ impl CreateGrantError {
         "interior-resolve-failed",
         "interior-not-converged",
         "interior-epoch-regressed",
+        "held-ref-relinked",
         "interior-publish-failed",
         "descendant-mint-failed",
         "descendant-publish-failed",
@@ -455,7 +464,7 @@ impl CreateGrantError {
             | Self::DescendantPublish { error, .. }
             | Self::ParentPublish(error)
             | Self::VouchScope(error) => error.class(),
-            Self::Mailbox(_) => "availability",
+            Self::Mailbox(_) | Self::HeldRefRelinked { .. } => "availability",
             Self::UnusableRecipientKey
             | Self::RecipientIsTheOwner
             | Self::DisplayNameTooLong(_) => "capability",
@@ -483,6 +492,7 @@ impl CreateGrantError {
             Self::InteriorResolve { .. } => "interior-resolve-failed",
             Self::InteriorNotConverged { .. } => "interior-not-converged",
             Self::InteriorEpochRegressed { .. } => "interior-epoch-regressed",
+            Self::HeldRefRelinked { .. } => "held-ref-relinked",
             Self::InteriorPublish { .. } => "interior-publish-failed",
             Self::DescendantMint { .. } => "descendant-mint-failed",
             Self::DescendantPublish { .. } => "descendant-publish-failed",
@@ -1004,18 +1014,25 @@ where
     }
     // The pass runs on the scope this command already proved current, so the
     // parent name is resolved once here and not again inside the pass.
-    let swept = converge_subtree(resolver, publisher, &parent_ref, parent_scope, &folder)
-        .await
-        .map_err(CreateGrantError::Converge)?;
+    // A held node stays outside, so it is not the grant's to prove; the publish
+    // walk drops its ref only while that ref still loses ([`drop_held_refs`]).
+    let held_ids: Vec<[u8; 16]> = grantee.held_outside.iter().map(|held| held.id).collect();
+    let swept = converge_subtree(
+        resolver,
+        publisher,
+        &parent_ref,
+        parent_scope,
+        &folder,
+        &held_ids,
+    )
+    .await
+    .map_err(CreateGrantError::Converge)?;
     // A node the pass could not read is as unproven as one whose convergence
     // publish lost the race: either way the grantee could descend into a node
-    // still sealed at an epoch its fresh seed does not reach. A held node stays
-    // outside, so it is not the grant's to prove; the publish walk drops its ref
-    // only while that ref still loses ([`drop_held_refs`]).
-    let mut unconverged = swept.dropped_lost_race.clone();
-    unconverged.extend(swept.unreachable_nodes());
-    unconverged.retain(|node| !grantee.held_outside.iter().any(|held| held.id == *node));
-    if !unconverged.is_empty() {
+    // still sealed at an epoch its fresh seed does not reach.
+    if !swept.dropped_lost_race.is_empty() || !swept.unreachable.is_empty() {
+        let mut unconverged = swept.dropped_lost_race.clone();
+        unconverged.extend(swept.unreachable_nodes());
         unconverged.sort_unstable();
         return Err(CreateGrantError::SubtreeNotConverged { unconverged });
     }
@@ -1214,7 +1231,10 @@ where
         .promote_scope_root(&parent_ref, &folder, &grantee_record, grantee.held_outside)
         .await
         .map_err(|error| match error {
-            RotationPublishError::NotConverged { node_id } => not_converged(node_id),
+            RotationPublishError::NotConverged { node_id } => CreateGrantError::HeldRefRelinked {
+                node_id,
+                root_published: false,
+            },
             error => CreateGrantError::Publish(error),
         })?;
 
@@ -1490,7 +1510,9 @@ pub struct HeldNode {
 /// still lose to the winning link the snapshot ranked, so dropping it is the
 /// observed repair of that dual-link (blueprint/engine.md rebase table,
 /// "Dual-link"). A ref that no longer loses was re-linked since the snapshot;
-/// dropping it would unlink a live node, so its id is the `Err`.
+/// dropping it would unlink a live node, so its id is the `Err`. Known limit:
+/// the winner's own ref is taken from the snapshot, not re-read from its
+/// parent, which lies outside the grant.
 pub(crate) fn drop_held_refs(
     body: &mut ReadBody,
     parent: [u8; 16],
@@ -1500,7 +1522,7 @@ pub(crate) fn drop_held_refs(
         return Ok(());
     };
     for child in children.iter() {
-        if let Some(held) = held_outside.iter().find(|held| held.id == child.id) {
+        if let Some(held) = held_entry(held_outside, child.id) {
             let published = Link {
                 parent: NodeId(parent),
                 child: NodeId(child.id),
@@ -1516,15 +1538,13 @@ pub(crate) fn drop_held_refs(
             }
         }
     }
-    children.retain(|child| !held_outside.iter().any(|held| held.id == child.id));
+    children.retain(|child| held_entry(held_outside, child.id).is_none());
     Ok(())
 }
 
-/// The refusal for a held ref that [`drop_held_refs`] found re-linked.
-fn not_converged(node_id: [u8; 16]) -> CreateGrantError {
-    CreateGrantError::SubtreeNotConverged {
-        unconverged: vec![node_id],
-    }
+/// The entry `held_outside` holds for `id`, if the grant leaves it outside.
+fn held_entry(held_outside: &[HeldNode], id: [u8; 16]) -> Option<&HeldNode> {
+    held_outside.iter().find(|held| held.id == id)
 }
 
 /// Whether `published` commits exactly the row `minted` mints: the recipient,
@@ -1578,7 +1598,7 @@ where
         for child in &frontier {
             if !visited.insert(child.node_id)
                 || bounds.stop_at.contains(&child.node_id)
-                || held_outside.iter().any(|held| held.id == child.node_id)
+                || held_entry(held_outside, child.node_id).is_some()
             {
                 continue;
             }
@@ -1594,8 +1614,12 @@ where
                 .await
             {
                 Ok(MovingChild::Pending(mut node)) => {
-                    drop_held_refs(&mut node.read_body, child.node_id, held_outside)
-                        .map_err(not_converged)?;
+                    drop_held_refs(&mut node.read_body, child.node_id, held_outside).map_err(
+                        |node_id| CreateGrantError::HeldRefRelinked {
+                            node_id,
+                            root_published: true,
+                        },
+                    )?;
                     // Release-active (security rule 8). The read admits any
                     // record at or below the scope's epoch, so a record that
                     // regressed since the pass would travel into the grantee's

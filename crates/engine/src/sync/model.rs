@@ -340,8 +340,7 @@ impl Snapshot {
         self.links_ranked(child).into_iter().next()
     }
 
-    /// Every link to `child`, winner first, under the one dual-link tiebreak
-    /// (highest counter, then lowest parent id).
+    /// Every link to `child`, winner first, under [`link_rank`].
     ///
     /// A caller that acts on the whole set — a delete unlinks from every parent
     /// — orders it here rather than spelling the comparator again, or the head

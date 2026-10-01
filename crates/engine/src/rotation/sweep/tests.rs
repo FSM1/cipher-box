@@ -437,6 +437,7 @@ fn converge_subtree_walks_only_the_named_node_and_below() {
         &scope_ref(0x00),
         block_on(net.resolve_scope(&scope_ref(0x00))).expect("the scope resolves"),
         &node_ref(0x01),
+        &[],
     ))
     .expect("the subtree converges");
     assert_eq!(outcome.converged, vec![id(0x03)]);
@@ -454,9 +455,31 @@ fn converge_subtree_measures_the_named_node_itself() {
         &scope_ref(0x00),
         block_on(net.resolve_scope(&scope_ref(0x00))).expect("the scope resolves"),
         &node_ref(0x01),
+        &[],
     ))
     .expect("converges");
     assert_eq!(outcome.converged, vec![id(0x01)]);
+}
+
+#[test]
+fn converge_subtree_neither_reads_nor_descends_into_a_stopped_node() {
+    let net = FakeNet::new(5, &[0x01])
+        .node(0x01, 5, &[0x02])
+        .node(0x02, 1, &[0x03])
+        .node(0x03, 1, &[]);
+    let outcome = block_on(converge_subtree(
+        &net,
+        &net,
+        &scope_ref(0x00),
+        block_on(net.resolve_scope(&scope_ref(0x00))).expect("the scope resolves"),
+        &node_ref(0x01),
+        &[id(0x02)],
+    ))
+    .expect("converges");
+    assert_eq!(outcome.already_converged, vec![id(0x01)]);
+    assert!(outcome.converged.is_empty());
+    assert_eq!(net.publishes(0x02), 0);
+    assert_eq!(net.publishes(0x03), 0);
 }
 
 // --- Fail-closed completeness ---

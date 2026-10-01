@@ -1937,8 +1937,8 @@ fn a_write_link_conversion_leaves_a_held_node_in_the_vault_scope() {
 /// Another device moves the held node into the granted folder after this
 /// device last refreshed: it raises the inside ref above the outside one and
 /// drops the outside ref. The grant must not drop the ref that is now the
-/// winner. The interior move and the root promotion both refuse with the same
-/// not-converged result, never a trust violation, and a retry after a refresh
+/// winner. The interior move and the root promotion both refuse with
+/// `held-ref-relinked`, never a trust violation, and a retry after a refresh
 /// moves the node into the granted scope.
 fn assert_a_relinked_ref_refuses_then_moves(via_root: bool) {
     let mut fx = GrantScenario::new();
@@ -1973,12 +1973,21 @@ fn assert_a_relinked_ref_refuses_then_moves(via_root: bool) {
         |children| children.retain(|child| child.id != deep.0),
     );
 
+    // Before the root publish nothing is left behind, so a refresh and a retry
+    // recover; after it, the stalled move is a partial commit a retry resumes.
+    let expected = if via_root {
+        EngineError::Seam {
+            message: "grant creation failed: held-ref-relinked".to_owned(),
+        }
+    } else {
+        EngineError::PartialCommit {
+            check: "held-ref-relinked",
+        }
+    };
     assert_eq!(
         fx.grant_folder_to_recipient(),
-        Err(EngineError::MalformedInput {
-            check: "subtree-not-converged"
-        }),
-        "{case}: the grant refuses the move as not converged"
+        Err(expected),
+        "{case}: the grant refuses the move, never as a trust violation"
     );
     if !via_root {
         assert_eq!(
@@ -2013,11 +2022,11 @@ fn a_promotion_refuses_to_drop_a_ref_relinked_since_its_snapshot() {
     assert_a_relinked_ref_refuses_then_moves(true);
 }
 
-/// A held node that lives in another granted scope seals under that scope's
-/// keys. The grant over a folder that holds the losing ref still succeeds,
-/// drops the ref, and leaves the node in its own scope.
-#[test]
-fn a_grant_beside_a_held_node_of_another_scope_succeeds() {
+/// A held node of another granted scope seals under that scope's keys, and a
+/// held scope root is a boundary the grant does not plan. The grant over a
+/// folder that holds a losing ref to either still succeeds, drops the ref, and
+/// leaves the node in its own scope.
+fn assert_a_grant_beside_a_held_node_of_another_scope(held_is_the_scope_root: bool) {
     let mut fx = GrantScenario::new();
     let shared = fx.folder;
     let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
@@ -2028,25 +2037,10 @@ fn a_grant_beside_a_held_node_of_another_scope_succeeds() {
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let (other_seed, _) = scope_material_of(&fx.world, &fx.blocks, other);
 
+    let held = if held_is_the_scope_root { other } else { deep };
     let inner =
         create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "box");
-    concurrent_add(
-        &fx.world,
-        &fx.blocks,
-        inner,
-        &read_key_of(inner),
-        SCOPE,
-        ChildRef {
-            id: deep.0,
-            name: "deep".to_owned(),
-            ipns_name: write_name(deep).as_str().as_bytes().to_vec(),
-            kind: CoreNodeKind::Folder,
-            link_counter: 0,
-            unknown: PreservedFields::new(),
-        },
-    );
-    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) })).expect("the focus moves");
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    dual_link(&mut fx, inner, held, 0);
 
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
@@ -2060,12 +2054,24 @@ fn a_grant_beside_a_held_node_of_another_scope_succeeds() {
         Vec::<String>::new(),
         "the grant dropped the losing ref"
     );
-    let head = published_head(&fx.world, &fx.blocks, &write_name(deep)).expect("deep is published");
-    let envelope = decode_envelope(&head).expect("the head block decodes");
     assert!(
-        open_read_body(&envelope, &read_key_under(&other_seed, deep)).is_ok(),
+        published_grant_section(&fx.world, &fx.blocks, other).is_some(),
+        "the other scope root still stands"
+    );
+    assert!(
+        opens_under(&fx, deep, &read_key_under(&other_seed, deep)),
         "the node stays sealed in its own scope"
     );
+}
+
+#[test]
+fn a_grant_beside_a_held_node_of_another_scope_succeeds() {
+    assert_a_grant_beside_a_held_node_of_another_scope(false);
+}
+
+#[test]
+fn a_grant_beside_a_held_scope_root_succeeds() {
+    assert_a_grant_beside_a_held_node_of_another_scope(true);
 }
 
 /// The grantee reads the granted folder of a held node with no trust
@@ -2882,12 +2888,16 @@ fn concurrent_edit(
     };
     edit(&mut children);
     let sequence = sequence_at(world, &name) + 1;
+    // One key seals every record of this folder, so each sequence takes its own
+    // nonce.
+    let mut nonce = [0x77; 24];
+    nonce[..8].copy_from_slice(&sequence.to_le_bytes());
     let authored = author_child_envelope(EnvelopeAuthoring {
         node_id: folder.0,
         scope_id,
         epoch: envelope.epoch,
         read_key,
-        nonce: &[0x77 ^ sequence.to_le_bytes()[0]; 24],
+        nonce: &nonce,
         body: &ReadBody::Folder {
             created_at,
             modified_at,

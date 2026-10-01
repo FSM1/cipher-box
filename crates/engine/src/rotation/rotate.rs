@@ -102,8 +102,8 @@ pub enum RotationPublishError {
     /// is never retried as if it were a flaky endpoint.
     Rejected,
     /// A promotion met a ref the grant must drop that no longer loses the link
-    /// rank: the caller's snapshot is stale. Nothing was published, and a
-    /// refresh clears it.
+    /// rank: the caller's snapshot is stale. Nothing was published. A refresh
+    /// clears it, and a re-run without one does not, so it is not retryable.
     NotConverged {
         /// The node the ref names.
         node_id: [u8; 16],

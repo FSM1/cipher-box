@@ -453,6 +453,10 @@ fn the_create_check_surface_matches_the_variants_in_order() {
         },
         CreateGrantError::InteriorNotConverged { node_id },
         CreateGrantError::InteriorEpochRegressed { node_id },
+        CreateGrantError::HeldRefRelinked {
+            node_id,
+            root_published: false,
+        },
         CreateGrantError::InteriorPublish {
             node_id,
             error: RotationPublishError::NotPublished,

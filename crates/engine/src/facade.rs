@@ -2614,6 +2614,7 @@ impl EngineError {
             CreateGrantError::InteriorPublish { error, .. }
             | CreateGrantError::DescendantPublish { error, .. }
             | CreateGrantError::ParentPublish(error) => *error != RotationPublishError::Rejected,
+            CreateGrantError::HeldRefRelinked { root_published, .. } => *root_published,
             CreateGrantError::Converge(_)
             | CreateGrantError::SubtreeNotConverged { .. }
             | CreateGrantError::SubtreeBoundaryDiverged { .. }
@@ -2654,6 +2655,10 @@ impl EngineError {
                 message: e.to_string(),
             },
             CreateGrantError::Publish(e) if e.is_retryable() => EngineError::Seam {
+                message: e.to_string(),
+            },
+            // A stale view of an honest re-link: a refresh clears it.
+            e @ CreateGrantError::HeldRefRelinked { .. } => EngineError::Seam {
                 message: e.to_string(),
             },
             CreateGrantError::Resume(reason) if reason != ResolveFailure::Rejected => {
