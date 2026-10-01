@@ -132,8 +132,8 @@ scenario fails the meta-test):
   cycle's first keep-back at most; a scope root or child with no record and
   a 4xx registration or an acknowledged sequence that does not open move
   the cursor at once and emit `renewalFailed`; a 401 after the refresh keeps
-  the cursor back; a doomed-name journal that does not list renews and stores
-  nothing and emits `renewalFailed`; a journal entry that does not read or
+  the cursor back; a doomed-name journal that does not list, or a cursor that
+  does not read, renews and stores nothing and emits `renewalFailed`; a journal entry that does not read or
   open stops only its own scope root, and `tests/owner_actions.rs` shows that
   another owned scope still renews; unit tests in
   `net::renewal_walk` fix the window edge at exactly one day, a keep-back

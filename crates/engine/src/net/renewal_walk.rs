@@ -64,6 +64,8 @@ pub const KEEP_BACK_WINDOW: Duration = Duration::from_secs(DAY);
 
 /// Why the walk renews no name under an owned scope root this pass.
 const JOURNAL_UNREADABLE: &str = "the doomed-name journal does not list or open, so the renewal walk renews nothing under this scope root";
+/// Why the walk renews nothing this pass.
+const CURSOR_UNREAD: &str = "the renewal cursor does not read, so the renewal walk renews nothing";
 /// Why the walk does not renew a name the endpoints agree holds no record.
 const NO_RECORD: &str = "the name holds no record the renewal walk can renew";
 /// Why the walk does not renew a name whose acknowledged sequence is unreadable.
@@ -308,7 +310,11 @@ where
     ) -> WalkReport {
         let store = CursorStore::new(self.staging, self.seal, self.enc_secret);
         let now = self.scheduler.now();
-        let stored = store.load().await.ok().flatten();
+        // A store that does not answer says nothing about the stored cursor,
+        // which a new cycle would overwrite.
+        let Ok(stored) = store.load().await else {
+            return stalled(scopes, CURSOR_UNREAD);
+        };
         let held = stored.as_ref().is_some_and(|cursor| {
             cursor.root.is_none()
                 && cursor.cycle_start <= now
@@ -319,13 +325,7 @@ where
         }
         let owner_tag = owner_tag(self.enc_secret);
         let Some(doomed) = self.doomed_names(&owner_tag).await else {
-            return WalkReport {
-                failed: scopes
-                    .iter()
-                    .map(|scope| (scope.name.as_str().to_owned(), JOURNAL_UNREADABLE))
-                    .collect(),
-                ..WalkReport::default()
-            };
+            return stalled(scopes, JOURNAL_UNREADABLE);
         };
         let report = WalkReport {
             failed: scopes
@@ -881,6 +881,17 @@ where
             },
             Some(&due.admitted),
         );
+    }
+}
+
+/// A pass that renews nothing, and reports `detail` for each owned scope root.
+fn stalled(scopes: &[WalkScope], detail: &'static str) -> WalkReport {
+    WalkReport {
+        failed: scopes
+            .iter()
+            .map(|scope| (scope.name.as_str().to_owned(), detail))
+            .collect(),
+        ..WalkReport::default()
     }
 }
 

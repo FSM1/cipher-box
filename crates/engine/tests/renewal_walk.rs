@@ -16,7 +16,9 @@ use cipherbox_core::seal::{
 use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::eol::{eol_from, renewal_eol_from};
 use cipherbox_engine::net::renewal_walk::WALK_BUDGET;
-use cipherbox_engine::net::renewal_walk::cursor::{CursorStore, MAX_CURSOR_PATH, RenewalCursor};
+use cipherbox_engine::net::renewal_walk::cursor::{
+    CursorStore, MAX_CURSOR_PATH, RENEWAL_CURSOR_PREFIX, RenewalCursor,
+};
 use cipherbox_engine::net::retire::{NODE_TOMBSTONE_PREFIX, StagingRetireLedger};
 use cipherbox_engine::seams::{
     BoxedTask, HttpMethod, HttpRequest, HttpResponse, RecordTransport, Scheduler, SnapshotCache,
@@ -1118,4 +1120,35 @@ fn a_401_after_the_refresh_keeps_the_cursor_for_the_next_pass() {
     world.scheduler.advance(HOUR);
     tick(&world, &engine, &mut tasks);
     assert_renewed_at_start(&world, &name, &before, started, "the file");
+}
+
+/// A cursor that does not read says nothing about the stored cursor: the pass
+/// renews nothing, keeps the stored cursor and reports the stall.
+#[test]
+fn a_cursor_that_does_not_read_skips_the_pass_and_keeps_the_cursor() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    a_file_left_for_65_days(&world, &blocks);
+    let device = world.device(b"a later session");
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    tick(&world, &engine, &mut tasks);
+    let closed = stored_cursor(&device).expect("the first pass stored its cursor");
+    assert_eq!(closed.root, None, "the first pass closed its cycle");
+
+    device
+        .staging_store
+        .inner()
+        .fail_staged_reads_under(RENEWAL_CURSOR_PREFIX);
+    world.scheduler.advance(HOUR);
+    tick(&world, &engine, &mut tasks);
+    device.staging_store.inner().heal_staged_reads();
+    assert_eq!(
+        stored_cursor(&device),
+        Some(closed),
+        "the pass keeps the stored cursor"
+    );
+    assert!(
+        renewal_failed(&mut events, write_name(ROOT).as_str(), "renewal cursor"),
+        "the stall is reported"
+    );
 }
