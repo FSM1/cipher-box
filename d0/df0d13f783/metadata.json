@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "d0df0d13f783",
+  "strategy": "manual-commit",
+  "branch": "fix/staging-e2e-expiry-and-navigation",
+  "checkpoints_count": 627,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d0/df0d13f783/0/metadata.json",
+      "transcript": "/d0/df0d13f783/0/full.jsonl",
+      "compact_transcript": "/d0/df0d13f783/0/transcript.jsonl",
+      "content_hash": "/d0/df0d13f783/0/content_hash.txt",
+      "prompt": "/d0/df0d13f783/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4268,
+    "cache_creation_tokens": 4304565,
+    "cache_read_tokens": 546426071,
+    "output_tokens": 1088417,
+    "api_call_count": 2050
+  }
+}

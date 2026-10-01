@@ -1,0 +1,157 @@
+<task-notification>
+<task-id>bd0kbf4k1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/bd0kbf4k1.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the CodeRabbit slot for PR 2092, leg 1" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9b6387342a8f0387</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a9b6387342a8f0387.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane D soak skeleton 2073" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The soak summary now fails closed, and CI passed. The new head is `4775dc86940e6baf67a4a6ee97816f7443d4ab5d`, on top of `a13f3b5be`.
+
+- **Automatic fixture:** after each test, it records a failed line with the new code `unrecorded-failure` and the test title. It does this when the test status is not the expected status and no check recorded a failure.
+- **Empty results:** when the results file is missing or empty, the summary says that the soak failed.
+- **Lint:** the fixture needs one lint suppression, because Playwright requires the empty pattern `({}, use, testInfo)`.
+
+Gates: `pnpm lint`, `pnpm typecheck` and `pnpm lint:tracker-refs` pass. All 86 web-e2e tests pass, and 2 of them are new.
+
+CI: 27 check-runs succeeded. The path filter skipped three.</result>
+<usage><subagent_tokens>205842</subagent_tokens><tool_uses>7</tool_uses><duration_ms>568375</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9b6387342a8f0387</worktreePath><worktreeBranch>worktree-agent-a9b6387342a8f0387</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a639faec57c12f507</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a639faec57c12f507.output</output-file>
+<status>completed</status>
+<summary>Agent "Standards review PR 2102 delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The commit is clean against the documented standards: no hard violations and 2 judgement calls. Head `4775dc869` against fixed point `a13f3b5be`, one commit.
+
+**Standards checked:**
+- The new comments are short and give the reason, not a description of the code. They have no tracker references and no absence-justifying prose (AGENTS.md Code Style).
+- The new reason `'unrecorded-failure'` is a key in the `SOAK_REASONS` object, with no TS `enum` (the user's string-literal rule).
+- The new `unrecordedFailure` tests in `summary.test.ts` are part of the `staging/soak/**/*.test.ts` include in `tests/web-e2e/vitest.config.ts`. `ci-web.yml:80` runs that suite, so blueprint/testing.md law 1 holds.
+- I checked the fail-closed logic and it holds:
+  - Playwright sets up an auto fixture with no dependencies before `owner` and `grantee`, and tears it down after them. A sign-in failure in `owner` goes through `check()`, so it increments the counter.
+  - `testInfo.status` is final when the teardown of `failClosed` runs, which includes a timeout.
+  - A worker runs one test at a time, so the before/after count of recorded failures is correct.
+
+**Judgement calls:**
+
+1. `tests/web-e2e/staging/soak/fixtures.ts:33`: the lint suppression.
+   - Hunk: `// eslint-disable-next-line no-empty-pattern -- Playwright reads the fixture list from this pattern.`
+   - The suppression is valid. Playwright rejects a first parameter that is not an object destructuring pattern. If the fixture destructures a real fixture such as `page`, it changes the teardown order, so that shape is worse.
+   - A shape without the suppression exists. ESLint 9.39.2 supports the rule option `allowObjectPatternsAsParameters`, which permits `({}) =&gt;` as a parameter only. An override in `eslint.config.js` for `tests/web-e2e/**` would be `'no-empty-pattern': ['error', { allowObjectPatternsAsParameters: true }]`.
+   - This is the first use in the repo, and the change would edit a shared config file for one line. I recommend that you keep the inline suppression. Move to the config override only when a second Playwright fixture or hook needs `{}`.
+
+2. `tests/web-e2e/staging/soak/summary.ts:65-70`: possible Primitive Obsession and Data Clumps.
+   - Hunk: `status: string | undefined, expectedStatus: string`
+   - A Playwright status is a closed union. Here it is a `string`, and three of the four parameters are always taken together from `testInfo`.
+   - Fix: take `test: Pick&lt;TestInfo, 'title' | 'status' | 'expectedStatus'&gt;`. Use a type-only import from `@playwright/test`, which the compiler removes, so `summary.ts` stays pure for vitest.
+
+Hard violations: 0. Judgement calls: 2.
+
+Files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9b6387342a8f0387/tests/web-e2e/staging/soak/fixtures.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9b6387342a8f0387/tests/web-e2e/staging/soak/summary.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9b6387342a8f0387/eslint.config.js`</result>
+<usage><subagent_tokens>63791</subagent_tokens><tool_uses>9</tool_uses><duration_ms>83459</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>acedcea8c0ab1a03c</task-id>
+<tool-use-id>toolu_01N3m6oTrZRtBivtDWKG4NWp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/acedcea8c0ab1a03c.output</output-file>
+<status>completed</status>
+<summary>Agent "Spec review PR 2102 delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The diff at head `4775dc869` covers the spec order for most cases. It leaves open two cases that I checked in the code (kind (c)). The 86 web-e2e unit tests pass.
+
+**How each case behaves** (checked against Playwright 1.61.1, `lib/worker/workerProcessEntry.js`):
+- **Fixture setup error:** covered. `failClosed` is an auto fixture with no dependencies, so it is set up before `page` and `owner` and torn down after them. A setup error goes through `_failWithError`, which sets `status = 'failed'`. Teardown then writes the `unrecorded-failure` line.
+- **Sign-in failure:** covered. `signInAs` runs inside `check()`, which records the line.
+- **Test timeout:** covered. `status` becomes `timedOut`, and teardown runs in a new after-hooks slot.
+- **Missing, empty or facts-only results file:** covered. The writer prints "The soak failed: no check recorded a result."
+
+**Finding 1, kind (c), medium.** Spec: "the summary must fail closed."
+- File: `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9b6387342a8f0387/tests/web-e2e/staging/soak/fixtures.ts:32-45`.
+- Scenario: the worker process crashes during the grantee test (an OOM or a native crash). No teardown runs, so that test writes no line. The owner test already wrote three passed lines, so the summary says "All 3 soak checks passed."
+
+**Finding 2, kind (c), low.** Spec: same line.
+- File: same range.
+- Scenario: the test times out and the teardown of `page` or `grantee` hangs for the full 600 s after-hooks slot. `teardown()` then skips `failClosed` because `isTimeExhaustedFor` is true, and the `finally` block deletes the instance, so the worker cleanup does not try again. That test writes no line.
+
+**Recommended fix for both findings:** make `failClosed` write a `started` record at setup and an `ended` record at teardown. `renderSummary` then counts each `started` record that has no `ended` record as a failed check.
+
+**Not a live gap:** a `beforeAll` hook runs before the test-scoped fixtures. A `beforeAll` failure would therefore write no line. `ledger.spec.ts` has no `beforeAll` today.
+
+**Note:** a missing or empty file leaves the writer's exit code at 0, but a parse error sets it to 1. The spec asks only for printed output, so this is not a finding.
+
+Kind (a): 0. Kind (b): 0. Kind (c): 2.</result>
+<usage><subagent_tokens>75479</subagent_tokens><tool_uses>13</tool_uses><duration_ms>146047</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a76349ca0240ceb12</task-id>
+<tool-use-id>toolu_01H1z6Y56B6q5fp4LNca4T2E</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a76349ca0240ceb12.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane F engine 2014 2013" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>CI on the new head is still running. One check was still running at the last poll, and no check has failed so far. I will send the report when the wait ends.</result>
+<usage><subagent_tokens>302891</subagent_tokens><tool_uses>19</tool_uses><duration_ms>751321</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a76349ca0240ceb12</worktreePath><worktreeBranch>worktree-agent-a76349ca0240ceb12</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a76349ca0240ceb12</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a76349ca0240ceb12.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane F engine 2014 2013" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I pushed all the fixes in one commit. The new head is `ba1ae755ab4856332d5d5096fd7c22800aaa36c0`. CI finished with no failures: all 36 checks passed or skipped.
+
+1. The rollback now removes `first..=id`. I confirmed the fault: the rename lands, then the directory sync fails. I did not add a test, because I cannot cause that fault without a new injection point. A permission fault also makes the marker write fail, and that write comes first.
+2. The unit table has a restore row. `stamped_by` has a bin delete, a restore, and a content write, which stamps the file alone.
+3. ADR 0045 is edited in place. The D5 line names `Op::authored_nodes`, one line replaces E2 and E3, and the two Gate lines name the new tests. Consequence 8 still says the two issues track the work. I kept it because you said to keep the other text.
+4. The metadata test now stamps a parent folder from a rename.
+5. `stamped_modified_at` has no fallback now. All five call sites use the op's time. A folder outside the set now halts with `Halt::Unclassified`.
+
+Gates (all pass):
+- `cargo fmt --all`, clippy and the wasm32 check
+- `cargo test -p cipherbox-engine`: 2813 tests
+- `cargo test -p cipherbox-desktop-seams`: 73 tests, 4 ignored
+- `pnpm lint:md` and `pnpm lint:tracker-refs`
+
+The attribution grep found nothing. I did not request a review, and the PR is still a draft.</result>
+<usage><subagent_tokens>303719</subagent_tokens><tool_uses>20</tool_uses><duration_ms>840516</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a76349ca0240ceb12</worktreePath><worktreeBranch>worktree-agent-a76349ca0240ceb12</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bqwslibe6</task-id>
+<tool-use-id>toolu_01EkrgR8qeBsHQ7QexAB6re8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/bqwslibe6.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the CodeRabbit slot for PR 2092, leg 2" completed (exit code 0)</summary>
+</task-notification>
