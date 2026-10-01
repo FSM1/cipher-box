@@ -11,7 +11,8 @@
   [ADR 0026](./0026-a-scope-root-takes-many-grants.md) D1, and
   [ADR 0061](./0061-a-renewal-walk-over-every-owned-scope-renews-each-name-through-the-adoption-gate.md),
   FSM1/cipher-box#1923, FSM1/cipher-box#2123, FSM1/cipher-box#2124, FSM1/cipher-box#2134
-- **Implemented by:** not landed
+- **Implemented by:** FSM1/cipher-box#2159 (the staging prefix, consequence 7) and FSM1/cipher-box#2165
+  (D1 to D5, consequences 1 to 6 and 8)
 - **Amends:** ADR 0061 D3 step 2 (the names the walk skips)
 
 ## Context
