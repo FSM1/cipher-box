@@ -62,15 +62,16 @@ override seed and `minReadEpoch` carry verbatim, and the read-epoch floor does n
    the current read key (D2); the read override seed, `minReadEpoch` and the floor still carry.
 4. `CONTEXT.md` "Adoption gate": "one of the three sanctioned lagging readers" becomes "one of the
    four".
-5. `blueprint/testing.md` rotation matrix: a write revoke over a nested subtree, and a downgrade
-   just after a manual read rotation, move each lagging node; a lagging child that does not open
-   is a trust violation (`crates/engine/tests/owner_actions.rs`).
+5. `blueprint/testing.md` rotation matrix: a write revoke over a nested subtree, a downgrade just
+   after a manual read rotation, and a write grant just after a read revoke move each lagging
+   node; a lagging grandchild that does not open under the ratchet's seed is a trust violation;
+   a child whose epoch no held link reaches is reported unreachable, not as a trust violation.
 6. The `Strictness::AtOrAboveFloor` doc (`gate/floor.rs`) names four takers; FSM1/cipher-box#2153
    makes that edit.
 7. ADR 0012 D2 carries an "Amended by ADR 0064 D1" sentence.
-8. An epoch that no held history link reaches takes the unreachable class of the sweep
-   (ADR 0021 D5), not a trust verdict. The wave cannot move such a node, so the wave stops, and
-   the rotation is owed (ADR 0063).
+8. An epoch that no held history link reaches takes the unreachable class of ADR 0021 D5: it is
+   not a trust verdict, and a retry does not clear it. The wave cannot move such a node, so the
+   wave stops. The owed record of ADR 0063 finishes the rotation when that record lands.
 9. Accepted residual: a revokee who holds an older epoch seed can seal a lagging record that the
    wave opens and moves into the new tree under the new key. The sweep and the drain (ADR 0012 E1,
    ADR 0021 E2) and the name wave over a current-epoch record already give that exposure.
