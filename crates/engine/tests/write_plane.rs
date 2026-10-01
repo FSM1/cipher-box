@@ -14438,6 +14438,10 @@ fn a_save_over_a_kept_copy_signs_above_the_lapsed_record() {
         })),
         Ok(CommandOutcome::Done),
     );
+    assert!(
+        sequence_at(&world, &settings_name(&SECRET)) > 3,
+        "the save serves above the lapsed record",
+    );
 }
 
 // ---------------------------------------------------------------------------
