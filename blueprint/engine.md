@@ -1027,7 +1027,7 @@ primitive on a timer.
 Before its first publish (a cut set publish, or a promotion publish), an owner
 command writes an entry to the owner-local `owed-rotation` record: the scope
 id, the cut epoch, and the steps still owed in command order (a read cut, a
-write cut, an interior move, the delivery of a write grant). The entry holds no
+write cut, an interior move, the delivery of a grant). The entry holds no
 seed; a re-drive recovers an in-flight write seed from the published records.
 A refused write stops the command with `Err` before any publish. A stored
 record that does not open is never written over: every write refuses until it
@@ -1160,7 +1160,7 @@ surviving committed grants uniformly in the republish it already does.
   a source-scope node into a stalled resume; the resume admits it, and the
   writer gains no capability, because the ascent link and the source name key
   already let it author in the granted scope. A stalled interior move,
-  write-scope cut or write-grant delivery is owed rotation work, which the sync
+  write-scope cut or grant delivery is owed rotation work, which the sync
   pass re-drives through the resume path (ADR 0063 D1, D3). An **append**, on an existing
   scope root: one more row and grant blob, the commitment re-signed, and the root published
   once at the current epoch — no new seed, no re-seal of the subtree, no
