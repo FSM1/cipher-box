@@ -105,7 +105,12 @@ export class FilesPage {
   /** Walks the trail back to the vault root. */
   async toRoot(): Promise<void> {
     await this.page.getByRole('button', { name: 'root', exact: true }).click();
-    await expect(this.breadcrumbs.locator('[aria-current="page"]')).toHaveText('root');
+    await this.at('root');
+  }
+
+  /** Waits until the trail names `name` as the current folder. */
+  async at(name: string): Promise<void> {
+    await expect(this.breadcrumbs.locator('[aria-current="page"]')).toHaveText(name);
   }
 
   /**
@@ -116,7 +121,7 @@ export class FilesPage {
    */
   async open(name: string): Promise<void> {
     await this.row(name).dblclick();
-    await expect(this.breadcrumbs.locator('[aria-current="page"]')).toHaveText(name);
+    await this.at(name);
   }
 
   /**

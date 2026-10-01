@@ -1,5 +1,5 @@
 import { EngineRequestError } from '@cipherbox/client';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createSnapshotStore,
   heldBytes,
@@ -88,6 +88,19 @@ describe('snapshotStore', () => {
     expect(store.getSnapshot().view).toBe(focused);
   });
 
+  it('sends the engine focus before the cross-tab hint forces a pass', () => {
+    const engine = fakeEngine();
+    const setFocus = vi.spyOn(engine.client.facade, 'setFocus');
+    const reportFocus = vi.spyOn(engine.client, 'reportFocus');
+    const store = createSnapshotStore(engine.client);
+
+    store.setFocus(new Uint8Array(16).fill(7));
+
+    expect(setFocus.mock.invocationCallOrder[0]).toBeLessThan(
+      reportFocus.mock.invocationCallOrder[0]
+    );
+  });
+
   it('surfaces a rejected focus change and pulls nothing', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);
@@ -113,6 +126,19 @@ describe('snapshotStore', () => {
     expect(engine.focus).toHaveLength(1);
     expect(engine.reported).toHaveLength(1);
     expect(engine.pulls).toHaveLength(1);
+  });
+
+  it('asserts the first focus even when it names the root', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+
+    store.setFocus(null);
+    engine.ackFocus();
+    await flush();
+    store.setFocus(null);
+
+    expect(engine.focus).toEqual([null]);
+    expect(engine.reported).toEqual([null]);
   });
 
   it('coalesces an event burst into one re-pull', async () => {

@@ -17,6 +17,9 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 - folder create, rename, move and delete, each ending on a drained queue that
   carries no dead letter — so a write that never published fails the gate
 - an upload and the file read back off the network, asserted byte for byte
+- a cold start of a second owner device paints every file row's size and
+  modified date with no manual refresh: at the root, in a subfolder opened
+  first, and in a folder the owner shared by a link
 - signing out returns the tab to the front door
 - the settings route opens from the sidebar and names the signed-in account
 - a session end — a sign-out or a forget-this-device — reaches every tab of the
@@ -135,6 +138,7 @@ them.
 
    ```sh
    export VITE_ENVIRONMENT=ci VITE_API_URL=http://localhost:3000 \
+     VITE_GOOGLE_CLIENT_ID=web-e2e-google-client-id \
      VITE_ROUTING_ENDPOINTS=http://localhost:3001 \
      VITE_READ_ACCELERATOR_URL=http://127.0.0.1:8080
    pnpm --filter @cipherbox/web run build:wasm

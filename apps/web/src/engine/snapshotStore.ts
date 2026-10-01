@@ -99,7 +99,9 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
   const listeners = new Set<() => void>();
   let state: SnapshotState = IDLE;
   let staleness: Staleness = 'reconciling';
-  let focus: Uint8Array | null = null;
+  // `undefined` until the first `setFocus`, which reaches the engine even when it
+  // names the root: a cold start at the root has sent no focus yet.
+  let focus: Uint8Array | null | undefined = undefined;
   // Any newer intent — a landed pull or a focus change — supersedes whatever is
   // in flight, so an older folder's late answer never lands over a newer one.
   let generation = 0;
@@ -146,7 +148,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     const id = ++generation;
     const seq = stalenessSeq;
     void client.facade
-      .snapshot(focus)
+      .snapshot(focus ?? null)
       .then((view) => {
         if (id !== generation) return;
         commit({
@@ -165,11 +167,13 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
 
   const assertFocus = (): void => {
     if (disposed) return;
-    client.reportFocus(focus);
     const id = ++generation;
-    client.facade.setFocus(focus).then(() => {
+    // The engine runs commands in arrival order: the relay's forced pass must see this focus.
+    const node = focus ?? null;
+    client.facade.setFocus(node).then(() => {
       if (id === generation) pull();
     }, failIfCurrent(id));
+    client.reportFocus(node);
   };
 
   const unsubscribe = client.facade.subscribe((event) => {
@@ -196,7 +200,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     getSnapshot: () => state,
     getStaleness: () => staleness,
     setFocus(node) {
-      if (sameNode(focus, node)) return;
+      if (focus !== undefined && sameNode(focus, node)) return;
       focus = node;
       assertFocus();
     },

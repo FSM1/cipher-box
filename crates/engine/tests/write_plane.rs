@@ -28,6 +28,8 @@ use cipherbox_core::seal::{
     sign_grant_set,
 };
 use cipherbox_core::suite::aead::{NONCE_LEN, TAG_LEN};
+use cipherbox_core::suite::contact::ContactCode;
+use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
@@ -83,10 +85,10 @@ use cipherbox_engine::{
     CommittedSet, ContentProfile, DEFAULT_BIN_RETENTION_DAYS, DeadLetter, DeadLetterReason,
     DefaultsReason, Engine, EngineError, Entropy, EntropyError, Event, EventStream, GatewayConfig,
     LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
-    OpKind, OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, QueueHold,
-    QueueHoldReason, RecordReader, RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity,
-    StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget, decode_queue, load_bin_index,
-    publish_bin_index, reseal_scope_root, stage_op,
+    OpKind, OpPhase, OverBudgetCause, Permission, Placement, PlacementRefusal, PrevEpochSeed,
+    QueueHold, QueueHoldReason, RecordReader, RecordSeal, ResealSeeds, ScopeCrossing,
+    ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget, decode_queue,
+    load_bin_index, publish_bin_index, reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -7869,7 +7871,7 @@ fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
 }
 
 /// Device A creates `photos/2026`, then a second device that never authored it
-/// cold-boots onto the same network.
+/// cold-boots onto the same network and runs its first pass.
 struct DeepCreate {
     world: FakeWorld,
     blocks: Blocks,
@@ -7909,7 +7911,9 @@ fn deep_create_seen_by_a_second_device() -> DeepCreate {
     let deep = child_id(&engine_a, photos, "2026");
 
     let bob = world.device(b"alice-second-device");
-    let (engine_b, events_b, tasks_b) = boot(&world, &blocks, &bob, 7);
+    let (engine_b, events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    // A navigation reads nothing until a pass has walked the scope boundaries.
+    tick(&world, &engine_b, &mut tasks_b);
     DeepCreate {
         world,
         blocks,
@@ -13993,6 +13997,230 @@ fn a_set_focus_command_paints_the_folders_unprojected_rows() {
         engine_b.queued_focus_files().is_empty(),
         "the pass attempted the row, so it leaves the queue"
     );
+}
+
+/// The contact a grant cuts for: a second account, so the grant mints a real
+/// scope root rather than a self-share.
+const RECIPIENT_SECRET: [u8; 32] = [0x5B; 32];
+
+/// One folder the owner wrote, and the one file in it.
+#[derive(Clone, Copy)]
+struct OwnedFolder {
+    name: &'static str,
+    id: NodeId,
+    file: NodeId,
+}
+
+/// The owner's two folders, `plain` and `shared`, each holding one file of
+/// `served`, with `shared` granted to a second account so the grant mints a
+/// scope root of its own.
+fn plain_and_shared_folders(world: &FakeWorld, blocks: &Blocks, served: &[u8]) -> [OwnedFolder; 2] {
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_a, _events_a, mut tasks_a) = boot(world, blocks, &tab, 42);
+    let folders = ["plain", "shared"].map(|name| {
+        block_on(engine_a.command(Command::Create {
+            parent: ROOT,
+            name: name.to_owned(),
+            kind: NodeKind::Folder,
+        }))
+        .expect("the folder create commits");
+        tick(world, &engine_a, &mut tasks_a);
+        let folder = child_id(&engine_a, ROOT, name);
+        let file_name = format!("{name}.bin");
+        write_file(
+            &mut engine_a,
+            WriteTarget::NewFile {
+                parent: folder,
+                name: file_name.clone(),
+            },
+            served,
+        )
+        .expect("the write commits");
+        tick(world, &engine_a, &mut tasks_a);
+        OwnedFolder {
+            name,
+            id: folder,
+            file: child_id(&engine_a, folder, &file_name),
+        }
+    });
+    let recipient = EcdsaSigner::from_scalar(&RECIPIENT_SECRET).expect("a valid identity scalar");
+    let contact_code =
+        ContactCode::create(&recipient, kdf::enc_subkey(&RECIPIENT_SECRET).public()).encode();
+    block_on(engine_a.command(Command::ImportContact { contact_code }))
+        .expect("the recipient's code imports");
+    assert_eq!(
+        block_on(engine_a.command(Command::Grant {
+            node: folders[1].id,
+            recipient_identity_public_key: recipient.verifying_key().to_sec1().to_vec(),
+            permission: Permission::Write,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done),
+        "the grant cuts the folder into a scope root of its own"
+    );
+    for _ in 0..4 {
+        tick(world, &engine_a, &mut tasks_a);
+    }
+    folders
+}
+
+/// A folder the owner shared is a scope root of its own, so its rows unseal
+/// only under that scope's read seed. After a pass that read only the window
+/// the user left, the navigation is the only leg left to paint the rows. It
+/// paints an unshared folder's rows at once, and a shared one's alike.
+#[test]
+fn a_set_focus_command_paints_the_rows_of_a_folder_the_owner_shared() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let served: Vec<u8> = (0..77u8).collect();
+    let folders = plain_and_shared_folders(&world, &blocks, &served);
+
+    // A cold session at the vault root, where the forced pass walks the
+    // boundary and lists both folders.
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    command_while_ticking(
+        &mut engine_b,
+        Command::SetFocus { node: None },
+        &mut tasks_b,
+    )
+    .expect("the root window opens");
+    command_while_ticking(&mut engine_b, Command::ManualRefresh, &mut tasks_b)
+        .expect("the forced pass lands");
+
+    for OwnedFolder {
+        name,
+        id: folder,
+        file,
+    } in folders
+    {
+        // A pass over the window the user leaves, then the focus move.
+        command_while_ticking(&mut engine_b, Command::ManualRefresh, &mut tasks_b)
+            .expect("the forced pass lands");
+        command_while_ticking(
+            &mut engine_b,
+            Command::SetFocus { node: Some(folder) },
+            &mut tasks_b,
+        )
+        .expect("the window opens");
+        let view = block_on(engine_b.view()).expect("a rendered view");
+        assert_eq!(
+            view.children(folder)
+                .into_iter()
+                .map(|child| child.id)
+                .collect::<Vec<_>>(),
+            [file],
+            "the {name} folder lists its row"
+        );
+        assert_eq!(
+            view.attrs(file).and_then(|attrs| attrs.size),
+            Some(served.len() as u64),
+            "the navigation paints the {name} folder's row, before any poll tick runs"
+        );
+    }
+}
+
+/// A host may send its first focus before the session's first pass has walked
+/// the scope boundaries. The navigation reads nothing until a walk lands, so
+/// it accuses no honest owner, and the first pass paints the shared folder's
+/// row under its own scope's seed.
+#[test]
+fn a_focus_before_the_first_pass_accuses_nobody_over_a_shared_folder() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let served: Vec<u8> = (0..77u8).collect();
+    let [_, shared] = plain_and_shared_folders(&world, &blocks, &served);
+
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, mut events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    let _ = events_so_far(&mut events_b);
+    block_on(engine_b.command(Command::SetFocus {
+        node: Some(shared.id),
+    }))
+    .expect("the window opens");
+    assert!(accused_nobody(&mut events_b), "the navigation read nothing");
+    let size = |engine: &Engine<FakeSeamTypes>| {
+        block_on(engine.view())
+            .unwrap()
+            .attrs(shared.file)
+            .and_then(|attrs| attrs.size)
+    };
+    assert_eq!(size(&engine_b), None, "the row waits for the first pass");
+
+    tick(&world, &engine_b, &mut tasks_b);
+    assert!(accused_nobody(&mut events_b));
+    assert_eq!(
+        size(&engine_b),
+        Some(served.len() as u64),
+        "the first pass paints the shared folder's row"
+    );
+}
+
+/// A walk that could not read the vault's scope index names no boundary, so a
+/// navigation after it still reads nothing: the shared folder would read as
+/// the vault's own scope.
+#[test]
+fn a_failed_boundary_walk_leaves_the_navigation_waiting() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let served: Vec<u8> = (0..77u8).collect();
+    let [_, shared] = plain_and_shared_folders(&world, &blocks, &served);
+
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, mut events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    world.record_store.fail_get_for(write_name(ROOT).as_str());
+    tick(&world, &engine_b, &mut tasks_b);
+    let _ = events_so_far(&mut events_b);
+
+    block_on(engine_b.command(Command::SetFocus {
+        node: Some(shared.id),
+    }))
+    .expect("the window opens");
+    assert!(accused_nobody(&mut events_b), "the navigation read nothing");
+    assert_eq!(
+        block_on(engine_b.view())
+            .unwrap()
+            .attrs(shared.file)
+            .and_then(|attrs| attrs.size),
+        None,
+        "the row waits for a walk that lands"
+    );
+}
+
+/// Once the first pass has landed its walk, a navigation into a plain folder
+/// paints its row itself, with no pass between.
+#[test]
+fn a_navigation_after_the_first_pass_paints_a_plain_folders_row() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let served: Vec<u8> = (0..77u8).collect();
+    let [plain, _] = plain_and_shared_folders(&world, &blocks, &served);
+
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, mut events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    tick(&world, &engine_b, &mut tasks_b);
+    let size = |engine: &Engine<FakeSeamTypes>| {
+        block_on(engine.view())
+            .unwrap()
+            .attrs(plain.file)
+            .and_then(|attrs| attrs.size)
+    };
+    assert_eq!(size(&engine_b), None, "no pass has read the folder");
+
+    block_on(engine_b.command(Command::SetFocus {
+        node: Some(plain.id),
+    }))
+    .expect("the window opens");
+    assert_eq!(
+        size(&engine_b),
+        Some(served.len() as u64),
+        "the navigation paints the row"
+    );
+    assert!(accused_nobody(&mut events_b));
 }
 
 /// Re-opening a folder inside the staleness threshold renders the state already
