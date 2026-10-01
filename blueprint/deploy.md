@@ -148,6 +148,14 @@ bundle (ADR 0051). The Apple Developer Program enrolment is not planned for
 v2.0.0. The macOS install note for v2.0.0 must tell a member to use System
 Settings > Privacy & Security > Open Anyway on first launch.
 
+### A new durable staging prefix
+
+A release orphan-sweeps every staging key whose prefix it does not know. So a new durable staging
+record lands in two steps: one release adds its prefix to the bookkeeping list
+(`is_bookkeeping`), and a later release writes the first entry. A one-release rollback then keeps
+the record ([ADR 0020](../decisions/0020-the-durable-op-queue-reads-the-previous-release.md),
+ADR 0063).
+
 ## Staging pipeline
 
 ### Release-tag gating (the v1 shape, simplified)
