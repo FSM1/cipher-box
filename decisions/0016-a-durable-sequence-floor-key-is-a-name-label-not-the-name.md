@@ -79,7 +79,8 @@ the bind refuses, as today.
 
 **D5 — The key shape changes with no migration.** This is the same term the epoch prefix took
 under the greenfield rule: a device that holds pre-cutover floors reads none of them back and
-re-seeds from the record plane. The cutover note records it.
+re-seeds from the record plane. The cutover note records it. When the epoch arm took the label,
+both hosts deleted the old epoch arm one time at the upgrade; the sequence arm stays.
 
 **D6 — The engine test that pins the residual now pins its closure.** The doc block on
 `SharerScopedFloorStore` drops the residual sentence #1567 added. A test asserts that no durable
@@ -138,7 +139,7 @@ That is the same exposure the epoch namespace keeps after #1567.
 
 **E3 — A pre-cutover store holds raw names until it is forgotten.** D5 forgets rather than
 upgrades, so a device that skips the cutover keeps the old keys in place. The cutover note
-carries that.
+carries that. The epoch arm's old keys do not stay: see ADR 0032 E5.
 
 **E4 — One seed now keys two kinds of label.** The contexts differ, so a contact label and a name
 label never collide, and a compromise of the seed exposes both labels together. They were

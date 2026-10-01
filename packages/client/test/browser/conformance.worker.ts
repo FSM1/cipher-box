@@ -329,6 +329,12 @@ async function runFloorStoreUpgradeBehavioral(): Promise<void> {
   if ((await new IdbFloorStore(name).epochFloor(epochKey)) !== 2) {
     throw new Error('floorStoreUpgrade: a reopen at version 2 cleared the epoch store again');
   }
+
+  // Both floor-store connections must give way to a newer version rather than
+  // block it; the open rejects on a block.
+  const newer = await openDatabase(name, 3, () => undefined);
+  newer.close();
+  await deleteDatabase(name);
 }
 
 /** Account switching preserves owner-local bytes over real IndexedDB and OPFS. */

@@ -51,7 +51,17 @@ export function openDatabase(
     // `transaction` is the version-change transaction for the whole event.
     request.onupgradeneeded = (event) =>
       onUpgrade(request.result, event.oldVersion, request.transaction as IDBTransaction);
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      // Give way to a newer schema, or a worker that takes over at failover is
+      // blocked by a connection its predecessor has not closed yet. A delete
+      // (`newVersion` null) still blocks: an erase or a reclaim must not take a
+      // store an engine holds open.
+      db.onversionchange = (event) => {
+        if (event.newVersion !== null) db.close();
+      };
+      resolve(db);
+    };
     request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'));
     request.onblocked = () => reject(new Error(`IndexedDB open blocked for "${name}"`));
   });
