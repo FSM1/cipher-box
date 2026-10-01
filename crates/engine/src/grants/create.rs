@@ -748,8 +748,7 @@ pub(crate) const MINT_EPOCH: u64 = 1;
 /// the name wave over the minted scope, which the caller runs once this returns,
 /// and then [`post_share_pointer`] (blueprint/engine.md "Grant creation").
 ///
-/// The outer `Err` leaves no grantee root on the network; a stop after the
-/// root landed is [`PromotedGrant::handover`].
+/// The two sides of the answer are [`PromotedGrant`]'s.
 pub async fn create_grant<E, N, V>(
     entropy: &mut E,
     net: &N,
@@ -1132,8 +1131,9 @@ where
 }
 
 /// A grantee scope whose root has landed, and the handover that ran after it.
-/// An `Err` in [`Self::handover`] is a stop past the root's publish, so the
-/// interior move and every step after it are owed (ADR 0063 D2).
+/// The `Err` of a function that answers this leaves no grantee root on the
+/// network. An `Err` in [`Self::handover`] is a stop past the root's publish,
+/// so the interior move and every step after it are owed (ADR 0063 D2).
 pub struct PromotedGrant {
     /// The promoted scope's read material, known once its root landed.
     pub read_scope: GrantedReadScope,
@@ -1151,10 +1151,9 @@ pub struct PromotedGrant {
 /// appended to a scope the owner has already been rotating (#25 D6). `row` must
 /// be minted at [`GranteeScopePlan::ipns_name`]; the mint binds the same bytes.
 ///
-/// Fail-closed **through the grantee publish**: the outer `Err` leaves no
-/// grantee root on the network. A folder a stalled attempt already promoted is
-/// [`resume_grantee_scope`]'s to finish, and [`converge_grant_subtree`] is what
-/// tells the two apart.
+/// Fail-closed **through the grantee publish** ([`PromotedGrant`]). A folder a
+/// stalled attempt already promoted is [`resume_grantee_scope`]'s to finish,
+/// and [`converge_grant_subtree`] is what tells the two apart.
 pub async fn mint_grantee_scope<E, N, V>(
     entropy: &mut E,
     net: &N,
@@ -1324,7 +1323,7 @@ where
 ///
 /// The published root must be the one `entry`'s own plan minted. Both halves
 /// of that proof are release-active, ahead of everything the shared tail
-/// publishes, and refuse in the outer `Err`.
+/// publishes, and refuse in the outer `Err` ([`PromotedGrant`]).
 pub async fn resume_grantee_scope<E, N>(
     entropy: &mut E,
     net: &N,

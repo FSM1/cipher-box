@@ -4057,6 +4057,8 @@ fn parent_scope_plan<'a>(
         seeds: ResealSeeds {
             override_seed: &current.override_seed,
             read_epoch: current.current_read_epoch,
+            // A metadata-only re-seal at the same epoch: no read-plane cut and
+            // no history link.
             prev: None,
             write_scope_seed: &current.write_scope_seed,
             write_epoch: current.write_epoch,
@@ -7343,11 +7345,7 @@ where {
         let pass = self.conversion_pass(session, api, &keys);
         // The recipient being revoked is owed no share pointer any more.
         pass.cancel_owed_delivery(node, &identity_pk).await?;
-        let sites = EngineSites {
-            engine: self,
-            session,
-            api,
-        };
+        let sites = self.sites(session, api);
         let redriven = pass.redrive_scope(&sites, node).await?;
         let still_owed = redriven == Redriven::StillOwed;
         let book = self
@@ -7356,7 +7354,13 @@ where {
             .await
             .map_err(EngineError::from_contact_store)?;
         let contact_enc_pks = sole_enc_subkeys(&book, &identity_pk);
-        let converted = self.convert_before_link_cut(session, api, node).await;
+        // Under owed work the cut below refuses before it reads `converted`,
+        // so no claim converts ahead of the refusal.
+        let converted = if still_owed {
+            Ok(())
+        } else {
+            self.convert_before_link_cut(session, api, node).await
+        };
         let pointers = self.scope_pointer_index(session);
         let held = RefCell::new(None);
         let admitting = RefCell::new(Vec::new());
@@ -7534,10 +7538,7 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let keys = self.pass_keys(session)?;
-        let vault_pointer_signer = self
-            .vault_pointer_index
-            .get()
-            .map(|index| session.vault_pointer_signer(index));
+        let vault_pointer_signer = self.vault_pointer_signer(session);
         let report = self
             .conversion_pass(session, api, &keys)
             .rotate_cut(
@@ -7567,10 +7568,7 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let keys = self.pass_keys(session)?;
-        let vault_pointer_signer = self
-            .vault_pointer_index
-            .get()
-            .map(|index| session.vault_pointer_signer(index));
+        let vault_pointer_signer = self.vault_pointer_signer(session);
         let pass = self.conversion_pass(session, api, &keys);
         let _hold = pass.hold_owed(node)?;
         let Some(report) = pass
@@ -7753,11 +7751,7 @@ where {
             }
             ScopeShare::InviteLink { .. } => None,
         };
-        let sites = EngineSites {
-            engine: self,
-            session,
-            api,
-        };
+        let sites = self.sites(session, api);
         match (pass.redrive_scope(&sites, node).await?, owed_delivery) {
             (Redriven::Finished, Some(recipient)) => {
                 self.contact_store(session)
@@ -7767,8 +7761,16 @@ where {
                 return Ok(CommandOutcome::Done);
             }
             // The same share over a move the re-drive cannot prove: the share
-            // runs again, and the mint resumes against a root that landed.
-            (Redriven::StillOwed, Some(_)) => pass.clear_owed_move(node).await?,
+            // runs again, and the mint resumes against a root that landed. A
+            // re-run that is refused leaves the move owed.
+            (Redriven::StillOwed, Some(_)) => {
+                let owed = pass.take_owed_move(node).await?;
+                let rerun = Box::pin(self.share_scope(node, share, permission)).await;
+                if rerun.is_err() {
+                    let _ = pass.owe(node, owed).await;
+                }
+                return rerun;
+            }
             (Redriven::StillOwed, None) => return Err(EngineError::rotation_work_owed()),
             (Redriven::NoEntry | Redriven::Finished | Redriven::Dropped, _) => {}
         }
@@ -8382,25 +8384,25 @@ where {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let pass_keys = self.pass_keys(session)?;
         let pass = self.conversion_pass(session, api, &pass_keys);
-        let sites = EngineSites {
-            engine: self,
-            session,
-            api,
-        };
+        let sites = self.sites(session, api);
         let redriven = pass.redrive_scope(&sites, node).await?;
         let keys = OwnerActionKeys::new(session);
-        let gated = self
-            .settled_owner_scope(&keys, node, PERMISSION_CHANGE_TARGET)
-            .await?;
         if redriven == Redriven::StillOwed {
+            // No settling cut: the wave the scope owes is the entry's to run.
+            let gated = self
+                .gated_owner_scope(&keys, node, PERMISSION_CHANGE_TARGET)
+                .await?;
             let changed = held_grantee(session, &gated.target, &gated.current, &identity_pk)?
                 .is_some_and(|held| held.permission == CommittedPermission::from(permission));
             return if changed {
-                pass.owed_cut_stands(node).await
+                pass.require_owed_cut(node).await
             } else {
                 Err(EngineError::rotation_work_owed())
             };
         }
+        let gated = self
+            .settled_owner_scope(&keys, node, PERMISSION_CHANGE_TARGET)
+            .await?;
         let applied = self
             .apply_permission(
                 node,
@@ -8490,6 +8492,12 @@ where {
         let identity_pk = recipient_identity(recipient_identity_public_key)?;
         refuse_the_owner(session, &identity_pk)?;
         let grantee_name = owner_grantee_name(name)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let pass_keys = self.pass_keys(session)?;
+        let pass = self.conversion_pass(session, api, &pass_keys);
+        if pass.redrive_scope(&self.sites(session, api), node).await? == Redriven::StillOwed {
+            return Err(EngineError::rotation_work_owed());
+        }
         let keys = OwnerActionKeys::new(session);
         let mut gated = self.settled_owner_scope(&keys, node, check).await?;
         self.edit_scope_set(&mut gated, |authority, scope| {
@@ -8528,6 +8536,20 @@ where {
             current,
             net,
         })
+    }
+
+    /// The scope root `node` names, gated, as it stands.
+    async fn gated_owner_scope<'a>(
+        &'a self,
+        keys: &'a OwnerActionKeys<'a>,
+        node: NodeId,
+        check: &'static str,
+    ) -> Result<GatedScope<'a, T>, EngineError> {
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let target = self
+            .owner_scope(node, api, keys.rotation(), check, UnindexedScope::Refuse)
+            .await?;
+        self.resolve_owned_scope(keys, target, check).await
     }
 
     /// The scope root `node` names, gated and settled ([`Self::settled_scope`]).
@@ -9041,11 +9063,7 @@ where {
         items: Vec<OwnedClaim>,
         node: NodeId,
     ) -> PassOutcome {
-        let sites = EngineSites {
-            engine: self,
-            session,
-            api,
-        };
+        let sites = self.sites(session, api);
         let keys = match self.pass_keys(session) {
             Ok(keys) => keys,
             Err(e) => return PassOutcome::unheld(e),
@@ -9085,6 +9103,26 @@ where {
     }
 
     /// The owner material a conversion pass holds for its duration.
+    /// The owner sites a command's conversion pass places scopes through.
+    fn sites<'a>(
+        &'a self,
+        session: &'a SessionIdentity,
+        api: &'a Rc<ApiClient<T::Http, T::CredentialStore>>,
+    ) -> EngineSites<'a, T> {
+        EngineSites {
+            engine: self,
+            session,
+            api,
+        }
+    }
+
+    /// The signer of the vault pointer this session publishes at, once known.
+    fn vault_pointer_signer(&self, session: &SessionIdentity) -> Option<Ed25519Signer> {
+        self.vault_pointer_index
+            .get()
+            .map(|index| session.vault_pointer_signer(index))
+    }
+
     fn pass_keys<'a>(&self, session: &'a SessionIdentity) -> Result<PassKeys<'a>, EngineError> {
         Ok(PassKeys {
             owner_identity: session.owner_identity(),

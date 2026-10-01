@@ -886,6 +886,19 @@ where
         node: NodeId,
         target: &OwnerScope,
     ) -> Result<Option<OwnerScope>, EngineError> {
+        Ok(self
+            .vouched_root(node)
+            .await?
+            .filter(|root| root.as_str().as_bytes() != target.scope.ipns_name.as_slice())
+            .map(|root| OwnerScope {
+                scope: ChildScopeRef::new(node.0, root.as_str().as_bytes().to_vec()),
+                parent_node_seed: target.parent_node_seed.clone(),
+                vouched: true,
+            }))
+    }
+
+    /// The root the owner-signed scope pointer at `node` names, if any.
+    pub(super) async fn vouched_root(&self, node: NodeId) -> Result<Option<IpnsName>, EngineError> {
         let rejected = || EngineError::TrustViolation {
             message: "scope pointer unauthenticated, or vouched below the write-epoch floor"
                 .to_owned(),
@@ -895,7 +908,7 @@ where
             self.scheduler.now(),
             self.profile.pointer_consult_interval,
         );
-        let vouched = match recent {
+        Ok(match recent {
             Some(OnAccessMiss::Absent) => None,
             Some(OnAccessMiss::Vouched(root)) => Some(*root),
             Some(OnAccessMiss::Rejected) => return Err(rejected()),
@@ -913,14 +926,7 @@ where
                 PointerConsultError::Rejected => rejected(),
             })?
             .map(|consulted| consulted.current_root),
-        };
-        Ok(vouched
-            .filter(|root| root.as_str().as_bytes() != target.scope.ipns_name.as_slice())
-            .map(|root| OwnerScope {
-                scope: ChildScopeRef::new(node.0, root.as_str().as_bytes().to_vec()),
-                parent_node_seed: target.parent_node_seed.clone(),
-                vouched: true,
-            }))
+        })
     }
 
     /// Publish `parent` with its index naming `moved` for the child `node`.

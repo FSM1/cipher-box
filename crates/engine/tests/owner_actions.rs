@@ -2693,6 +2693,26 @@ fn publish_value_at(world: &FakeWorld, node: NodeId, value: &[u8]) {
     }
 }
 
+/// Publish `value` at the name `write_scope_seed` derives for `node`, one
+/// sequence past what stands: the record a writer holding that seed can land.
+fn publish_value_under(world: &FakeWorld, write_scope_seed: &[u8; 32], node: NodeId, value: &[u8]) {
+    let name = derive_write_name(write_scope_seed, &node.0);
+    let signer = kdf::ipns_keypair(kdf::write_seed(write_scope_seed, &node.0).as_bytes());
+    let record = IpnsRecord::create_v2(
+        &signer,
+        value,
+        sequence_at(world, &name) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+}
+
 /// Two folders of the vault's own scope, for a relocation that crosses nothing
 /// while the session names every boundary below the root.
 fn two_root_folders(fx: &mut GrantScenario) -> (NodeId, NodeId) {
@@ -10085,6 +10105,193 @@ fn a_revoke_run_again_over_its_owed_wave_finishes_it() {
 
     assert_the_revoke_finished(&fx, &revokee_seed);
     assert!(fx.owed_scopes().is_empty(), "and nothing is owed");
+}
+
+/// ADR 0063 D5: once the pass has finished the owed revoke, the same revoke
+/// finds no entry and no grant, and says so.
+#[test]
+fn a_revoke_after_the_pass_finished_it_is_refused_as_not_granted() {
+    let mut fx = GrantScenario::new();
+    let _ = strand_a_write_revoke(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Err(EngineError::MalformedInput {
+            check: "rot-revoke-not-granted",
+        })
+    );
+}
+
+/// The parent's index is writer-authored, so a parent writer that drops the
+/// owed scope from it does not drop the owed cut: the pass places the scope
+/// from its owner-signed pointer, finishes the cut, and indexes it again.
+#[test]
+fn an_owed_cut_whose_parent_index_omits_the_scope_is_finished_from_its_pointer() {
+    let mut fx = GrantScenario::new();
+    let unindexed_root = published_value(&fx.world, &write_name(ROOT));
+    let revokee_seed = strand_a_write_revoke(&mut fx);
+    publish_value_at(&fx.world, ROOT, &unindexed_root);
+    let _ = events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        abandoned(&mut fx._events),
+        vec![],
+        "the entry is not dropped"
+    );
+    assert_the_revoke_finished(&fx, &revokee_seed);
+}
+
+/// A downgrade whose wave stops still holds the gate at the cut it published,
+/// so the downgraded writer's replay of the root before the cut does not read
+/// as a cut that never landed, and the owed wave is not dropped.
+#[test]
+fn a_replayed_pre_cut_root_does_not_drop_an_owed_downgrade() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let granted = fx.granted_scope_repoint();
+    let section = published_grant_section_at(&fx.world, &fx.blocks, &granted.current_root)
+        .expect("the granted root");
+    let writer_seed = grantee_write_scope_seed(&section, &granted.current_root, &fx.folder.0, 1);
+    let pre_cut = published_value(&fx.world, &granted.current_root);
+    fx.world
+        .scheduler
+        .advance(fx.engine.profile().pointer_consult_interval * 2);
+    fx.world
+        .record_store
+        .fail_get_for(folder_pointer(&fx).as_str());
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::ChangePermission {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                permission: Permission::Read,
+            }
+        ),
+        Ok(CommandOutcome::Done),
+        "the cut set is published, so the wave that stops is owed"
+    );
+    fx.world
+        .record_store
+        .heal_get_for(folder_pointer(&fx).as_str());
+    publish_value_under(&fx.world, &writer_seed, fx.folder, &pre_cut);
+    let _ = events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let events = events_so_far(&mut fx._events);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::RotationWorkAbandoned { .. })),
+        "the replay does not drop the owed wave"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::RotationWorkOwed { scope_root, .. } if *scope_root == fx.folder
+        )),
+        "the wave stays owed"
+    );
+}
+
+/// An entry left standing behind a wave that landed and an index that names
+/// the moved root is finished by the next pass, which takes the owner-signed
+/// pointer naming that root as the vouch, rather than owed on every pass.
+#[test]
+fn an_entry_that_outlives_its_landed_wave_is_cleared_by_the_next_pass() {
+    let mut fx = GrantScenario::new();
+    let revokee_seed = strand_a_write_revoke(&mut fx);
+    let enc = kdf::enc_subkey(&SECRET);
+    fx.owner_device
+        .staging_store
+        .inner()
+        .interrupt_staged_removal_after(&owed_rotation_key(&enc), 0);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_the_revoke_finished(&fx, &revokee_seed);
+
+    let _ = fx.owed_scopes();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.owed_scopes(), vec![], "nothing is owed on a later pass");
+}
+
+/// ADR 0063 D5: a permission change over a write mint whose wave is still owed
+/// is refused, retryably, and publishes nothing: the owed entry, not the
+/// change, runs the wave.
+#[test]
+fn a_permission_change_over_an_owed_wave_publishes_nothing() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    let stalled = write_name(fx.folder);
+    fx.world
+        .scheduler
+        .advance(fx.engine.profile().pointer_consult_interval * 2);
+    fx.world
+        .record_store
+        .fail_get_for(folder_pointer(&fx).as_str());
+    let before = sequence_at(&fx.world, &stalled);
+    let folder = fx.folder;
+
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::ChangePermission {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                permission: Permission::Read,
+            }
+        ),
+        work_owed()
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &stalled),
+        before,
+        "no cut is published behind the owed entry"
+    );
+}
+
+/// A rename over a scope with owed work is refused, retryably, while the
+/// re-drive cannot finish it.
+#[test]
+fn a_rename_over_owed_work_is_refused() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    fx.world
+        .scheduler
+        .advance(fx.engine.profile().pointer_consult_interval * 2);
+    fx.world
+        .record_store
+        .fail_get_for(folder_pointer(&fx).as_str());
+    let folder = fx.folder;
+
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::RenameGrantee {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                name: "Robin".to_owned(),
+            }
+        ),
+        work_owed()
+    );
 }
 
 /// ADR 0063 D3: a promoted write scope whose write-scope cut did not run is

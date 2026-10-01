@@ -139,10 +139,14 @@ pub const ROTATION_WORK_OWED: &str = "rotation-work-owed";
 
 /// The session's copy of the record, `None` until the first read loads it,
 /// and the scopes a command or the pass is driving now.
+///
+/// `writer` serializes every write from its load to its cell update: a hold is
+/// per scope, so two writes to different scopes run together.
 #[derive(Default)]
 pub struct OwedCell {
     record: RefCell<Option<OwedRecord>>,
     held: RefCell<BTreeSet<NodeId>>,
+    writer: futures_util::lock::Mutex<()>,
 }
 
 impl OwedCell {
@@ -183,10 +187,27 @@ pub fn owed_rotation_key(enc_secret: &X25519Secret) -> Vec<u8> {
 
 /// The record over one session's cell and stores.
 pub struct OwedRotation<'a, St> {
-    pub(crate) staging: &'a St,
-    pub(crate) seal: BookkeepingSeal<'a>,
-    pub(crate) enc_secret: &'a X25519Secret,
-    pub(crate) cell: &'a OwedCell,
+    staging: &'a St,
+    seal: BookkeepingSeal<'a>,
+    enc_secret: &'a X25519Secret,
+    cell: &'a OwedCell,
+}
+
+impl<'a, St> OwedRotation<'a, St> {
+    /// The record `cell` holds for the identity `enc_secret` names.
+    pub(crate) fn new(
+        staging: &'a St,
+        seal: BookkeepingSeal<'a>,
+        enc_secret: &'a X25519Secret,
+        cell: &'a OwedCell,
+    ) -> Self {
+        Self {
+            staging,
+            seal,
+            enc_secret,
+            cell,
+        }
+    }
 }
 
 impl<St: StagingStore> OwedRotation<'_, St> {
@@ -225,25 +246,28 @@ impl<St: StagingStore> OwedRotation<'_, St> {
 
     /// Write `entry` at `scope`, durably. Refused while an entry stands there.
     pub async fn owe(&self, scope: NodeId, entry: OwedEntry) -> Result<(), OwedRecordError> {
-        let mut record = self.load().await.map_err(OwedRecordError::Store)?;
-        if record.contains_key(&scope) {
-            return Err(OwedRecordError::Standing);
-        }
-        if record.len() >= MAX_OWED_ENTRIES {
-            return Err(OwedRecordError::Full);
-        }
-        record.insert(scope, entry);
-        self.store(record).await
+        self.write(|record| {
+            if record.contains_key(&scope) {
+                return Err(OwedRecordError::Standing);
+            }
+            if record.len() >= MAX_OWED_ENTRIES {
+                return Err(OwedRecordError::Full);
+            }
+            record.insert(scope, entry);
+            Ok(true)
+        })
+        .await
     }
 
     /// Replace the steps of the entry at `scope` with `steps`, if it stands.
     pub async fn leave(&self, scope: NodeId, steps: Vec<OwedStep>) -> Result<(), OwedRecordError> {
-        let mut record = self.load().await.map_err(OwedRecordError::Store)?;
-        let Some(entry) = record.get_mut(&scope) else {
-            return Ok(());
-        };
-        entry.steps = steps;
-        self.store(record).await
+        self.write(|record| {
+            Ok(record
+                .get_mut(&scope)
+                .map(|entry| entry.steps = steps)
+                .is_some())
+        })
+        .await
     }
 
     /// Drop the delivery to `recipient` from the entry at `scope`, and the
@@ -253,43 +277,58 @@ impl<St: StagingStore> OwedRotation<'_, St> {
         scope: NodeId,
         recipient: &[u8; IDENTITY_PUBLIC_LEN],
     ) -> Result<(), OwedRecordError> {
-        let mut record = self.load().await.map_err(OwedRecordError::Store)?;
-        let Some(entry) = record.get_mut(&scope) else {
-            return Ok(());
-        };
-        let before = entry.steps.len();
-        entry.steps.retain(|step| {
-            !matches!(step, OwedStep::DeliverGrant { recipient_identity_pk, .. }
-                if recipient_identity_pk == recipient)
-        });
-        if entry.steps.len() == before {
-            return Ok(());
-        }
-        if entry.steps.is_empty() && entry.cut_epoch == 0 {
-            record.remove(&scope);
-        }
-        self.store(record).await
+        self.write(|record| {
+            let Some(entry) = record.get_mut(&scope) else {
+                return Ok(false);
+            };
+            let before = entry.steps.len();
+            entry.steps.retain(|step| {
+                !matches!(step, OwedStep::DeliverGrant { recipient_identity_pk, .. }
+                    if recipient_identity_pk == recipient)
+            });
+            if entry.steps.len() == before {
+                return Ok(false);
+            }
+            if entry.steps.is_empty() && entry.cut_epoch == 0 {
+                record.remove(&scope);
+            }
+            Ok(true)
+        })
+        .await
     }
 
     /// Drop every step before `step` from the entry at `scope`: `step` and the
     /// ones after it are still owed.
     pub async fn advance_to(&self, scope: NodeId, step: &OwedStep) -> Result<(), OwedRecordError> {
-        let mut record = self.load().await.map_err(OwedRecordError::Store)?;
-        let Some(entry) = record.get_mut(&scope) else {
-            return Ok(());
-        };
         let rank = step.tag();
-        entry.steps.retain(|owed| owed.tag() >= rank);
-        self.store(record).await
+        self.write(|record| {
+            Ok(record
+                .get_mut(&scope)
+                .map(|entry| entry.steps.retain(|owed| owed.tag() >= rank))
+                .is_some())
+        })
+        .await
     }
 
     /// Remove the entry at `scope`: its last step and its post-steps landed.
     pub async fn clear(&self, scope: NodeId) -> Result<(), OwedRecordError> {
+        self.write(|record| Ok(record.remove(&scope).is_some()))
+            .await
+    }
+
+    /// Apply `edit` to the record under the cell's writer, and store the
+    /// result when `edit` reports a change.
+    async fn write(
+        &self,
+        edit: impl FnOnce(&mut OwedRecord) -> Result<bool, OwedRecordError>,
+    ) -> Result<(), OwedRecordError> {
+        let _writer = self.cell.writer.lock().await;
         let mut record = self.load().await.map_err(OwedRecordError::Store)?;
-        if record.remove(&scope).is_none() {
-            return Ok(());
+        if edit(&mut record)? {
+            self.store(record).await
+        } else {
+            Ok(())
         }
-        self.store(record).await
     }
 
     /// Write `record` through, then set the cell to it, so the cell never
@@ -495,6 +534,91 @@ mod tests {
             cell.hold(node(1)).is_some(),
             "the scope is free once dropped"
         );
+    }
+
+    /// A staging store whose staged writes yield once, so two record writes
+    /// interleave as a command and the tick do.
+    struct YieldingStore(InMemoryStagingStore);
+
+    async fn yield_once() {
+        let mut yielded = false;
+        core::future::poll_fn(move |cx| {
+            if yielded {
+                return core::task::Poll::Ready(());
+            }
+            yielded = true;
+            cx.waker().wake_by_ref();
+            core::task::Poll::Pending
+        })
+        .await;
+    }
+
+    impl StagingStore for YieldingStore {
+        async fn enqueue_op(&self, op: &[u8]) -> SeamResult<crate::seams::OpId> {
+            self.0.enqueue_op(op).await
+        }
+        async fn enqueue_ops(&self, ops: &[Vec<u8>]) -> SeamResult<Vec<crate::seams::OpId>> {
+            self.0.enqueue_ops(ops).await
+        }
+        async fn queued_ops(&self) -> SeamResult<Vec<(crate::seams::OpId, Vec<u8>)>> {
+            self.0.queued_ops().await
+        }
+        async fn remove_op(&self, op_id: crate::seams::OpId) -> SeamResult<()> {
+            self.0.remove_op(op_id).await
+        }
+        async fn put_staged_bytes(&self, key: &[u8], bytes: &[u8]) -> SeamResult<()> {
+            yield_once().await;
+            self.0.put_staged_bytes(key, bytes).await
+        }
+        async fn staged_bytes(&self, key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
+            self.0.staged_bytes(key).await
+        }
+        async fn remove_staged_bytes(&self, key: &[u8]) -> SeamResult<()> {
+            yield_once().await;
+            self.0.remove_staged_bytes(key).await
+        }
+        async fn staged_keys(&self) -> SeamResult<Vec<Vec<u8>>> {
+            self.0.staged_keys().await
+        }
+        async fn staged_bytes_total(&self) -> SeamResult<u64> {
+            self.0.staged_bytes_total().await
+        }
+        async fn clear(&self) -> SeamResult<()> {
+            self.0.clear().await
+        }
+    }
+
+    /// Two writes to different scopes that run together both land, in the
+    /// cell and in the store a later session reads.
+    #[test]
+    fn writes_to_two_scopes_that_interleave_both_land() {
+        let entropy = RefCell::new(SeededEntropy::new(7));
+        let mine = secret(9);
+        let store = YieldingStore(InMemoryStagingStore::default());
+        let cell = OwedCell::default();
+        let owed = OwedRotation {
+            staging: &store,
+            seal: BookkeepingSeal::new(&mine, &entropy),
+            enc_secret: &mine,
+            cell: &cell,
+        };
+        block_on(owed.owe(node(1), revoke())).expect("the first entry lands");
+
+        let (owe, clear) = block_on(futures_util::future::join(
+            owed.owe(node(2), write_grant()),
+            owed.clear(node(1)),
+        ));
+        owe.expect("the second entry lands");
+        clear.expect("the first entry clears");
+
+        let expected = OwedRecord::from([(node(2), write_grant())]);
+        assert_eq!(block_on(owed.load()).expect("the record reads"), expected);
+        let next_cell = OwedCell::default();
+        let next = OwedRotation {
+            cell: &next_cell,
+            ..owed
+        };
+        assert_eq!(block_on(next.load()).expect("the record reads"), expected);
     }
 
     /// What one session sealed is what the next one re-drives.
