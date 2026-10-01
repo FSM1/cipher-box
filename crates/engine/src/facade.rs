@@ -13874,20 +13874,22 @@ mod tests {
             error: WritePublishError::Unreadable,
         };
         for unreadable in [resolve, republish] {
-            assert!(matches!(
-                EngineError::from_cut_rotation(RotateOnCutError::Write(unreadable)),
-                EngineError::UnsupportedTarget { .. }
-            ));
+            let mapped = EngineError::from_cut_rotation(RotateOnCutError::Write(unreadable));
+            assert!(
+                matches!(mapped, EngineError::UnsupportedTarget { .. }),
+                "{mapped:?}"
+            );
         }
         let owner_key_refusal =
             RotateOnCutError::Read(crate::rotation::CascadeError::OwnerSubkeyMissing {
                 scope_id: [0x11; 16],
             });
         assert_eq!(owner_key_refusal.class(), "capability");
-        assert!(matches!(
-            EngineError::from_cut_rotation(owner_key_refusal),
-            EngineError::TrustViolation { .. }
-        ));
+        let mapped = EngineError::from_cut_rotation(owner_key_refusal);
+        assert!(
+            matches!(mapped, EngineError::TrustViolation { .. }),
+            "{mapped:?}"
+        );
     }
 
     #[test]

@@ -1495,12 +1495,16 @@ fn a_write_revoke_reports_a_child_beyond_the_ratchet_as_an_unsupported_target() 
     let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
     plant_unopenable_node(&fx, &revokee_seed, child, 0);
 
-    assert!(matches!(
-        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
-        Err(EngineError::UnsupportedTarget {
-            check: "rot-write-resolve-failed"
-        })
-    ));
+    let result = fx.revoke_person(&recipient_identity().verifying_key().to_sec1());
+    assert!(
+        matches!(
+            result,
+            Err(EngineError::UnsupportedTarget {
+                check: "rot-write-resolve-failed"
+            })
+        ),
+        "{result:?}"
+    );
 }
 
 /// A read revoke leaves the subtree lagging, so the write grant that follows
