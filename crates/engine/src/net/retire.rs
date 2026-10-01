@@ -97,7 +97,8 @@ pub fn orphaned_head(error: &RecordPublishError) -> bool {
             // refuses, and no record naming it reached the transport.
             PublishError::Register(_)
             | PublishError::FloorRead(_)
-            | PublishError::EpochBelowFloor { .. }
+            | PublishError::BelowBar { .. }
+            | PublishError::ForeignVersion { .. }
             | PublishError::RecordTooLarge { .. }
             | PublishError::SequenceExhausted
             | PublishError::MarkUnrecorded(_) => true,

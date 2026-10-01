@@ -5,22 +5,25 @@
 //!
 //! Register-first is built into the pipeline, not left to callers (#28 D5):
 //! the API registration precedes the record PUT and publish blocks on it, so
-//! an unregistered name never reaches the transport (fail-closed). Core signs
-//! (first publish embeds sequence 1; a CAS publish embeds the exact expected
-//! sequence = durable floor + 1), then a parallel PUT fans out to every
-//! endpoint — success is the first ack, the rest retry in the background — and
-//! a confirm-by-re-resolve detects a lost CAS race for the caller to rebase.
+//! an unregistered name never reaches the transport (fail-closed). Every
+//! signature goes through one produce-side gate ([`SignatureGate`]): it reads
+//! the durable floors last, refuses a record below its [`PublishBar`], and
+//! signs strictly above both the durable sequence floor and the [`Observed`]
+//! record the author built on. A parallel PUT then fans out to every endpoint
+//! — success is the first ack, the rest retry in the background — and a
+//! confirm-by-re-resolve detects a lost CAS race for the caller to rebase.
 
 use core::time::Duration;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
+use super::author::ENVELOPE_V;
 use super::eol;
 use super::fanout::{MAX_RECORD_BYTES, fanout_get_tied, fanout_put};
 use super::register::register;
 use crate::api::{ApiClient, ApiError, NameRegistration};
-use crate::gate::floor;
+use crate::gate::{floor, read_cut_epoch_floor};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
     CredentialStore, EndpointId, FloorStore, Http, RecordTransport, Scheduler, SeamError,
@@ -35,29 +38,166 @@ const IPFS_PREFIX: &str = "/ipfs/";
 /// not a durability guarantee.
 const MAX_REPUT_ATTEMPTS: u32 = 3;
 
-/// The durable read-epoch bar one record must clear at its signature: the scope
-/// whose read-epoch (revocation) floor bars it, and the read epoch the record
-/// binds.
+/// The durable epoch floors one record must clear at its signature.
 ///
-/// A record sealed below its scope's read-epoch floor is one the adoption gate's
-/// epoch stage refuses for good, and a signed record cannot be unpublished
-/// (AGENTS.md rule 8). The floor is therefore read inside [`publish`], as the
-/// last durable read before the record is signed and with no await between the
-/// two — an authoring arm's own floor read goes stale while the head block
-/// uploads and the registration lands.
+/// A record below any of them is one the adoption gate refuses for good, and a
+/// signed record cannot be unpublished (AGENTS.md rule 8). The floors are read
+/// by the [`SignatureGate`], as the last durable reads before the signature and
+/// with no await between the two — an author's own floor read goes stale while
+/// the head block uploads and the registration lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EpochBar {
-    /// The scope whose read-epoch floor bars the record.
+pub struct PublishBar {
+    /// The scope whose floors bar the record.
     pub scope_id: [u8; 16],
-    /// The read epoch the record binds.
-    pub epoch: u64,
+    /// The read epoch the record binds, held to the read-epoch (revocation)
+    /// floor (gate stage 5).
+    pub read_epoch: u64,
+    /// For a scope root, the write epoch its owner-write-blob binds, held to
+    /// the write-epoch floor: below it the root publishes write-plane dead.
+    pub write_epoch: Option<u64>,
+    /// For a scope root, its grant-set commitment's cut epoch, held to the
+    /// cut-epoch floor gate stage 2 holds every commitment to.
+    pub cut_epoch: Option<u64>,
 }
 
-/// One publish request: the name and its node signing key, the head (metadata)
-/// CID to point at, and the content CIDs to register for pinning.
+impl PublishBar {
+    /// Read this bar's floors and refuse a record below any of them — for an
+    /// author that must refuse before a step it cannot undo. The signature
+    /// still runs the same check ([`SignatureGate`]).
+    pub(crate) async fn refuse_below<F: FloorStore>(&self, floors: &F) -> Result<(), PublishError> {
+        let at = self.read_floors(floors).await?;
+        self.refuse(at)
+    }
+
+    /// The read-, write- and cut-epoch floors this bar is held to, zero where
+    /// none was raised. A read failure is fail-closed, never "no floor".
+    async fn read_floors<F: FloorStore>(&self, floors: &F) -> Result<[u64; 3], PublishError> {
+        let read = floor::read_epoch_floor(floors, &self.scope_id)
+            .await
+            .map_err(PublishError::FloorRead)?
+            .unwrap_or(0);
+        let write = if self.write_epoch.is_some() {
+            floor::write_epoch_floor(floors, &self.scope_id)
+                .await
+                .map_err(PublishError::FloorRead)?
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let cut = if self.cut_epoch.is_some() {
+            read_cut_epoch_floor(floors, &self.scope_id)
+                .await
+                .map_err(PublishError::FloorRead)?
+        } else {
+            0
+        };
+        Ok([read, write, cut])
+    }
+
+    fn refuse(&self, [read, write, cut]: [u64; 3]) -> Result<(), PublishError> {
+        let axes = [
+            (BarFloor::Read, Some(self.read_epoch), read),
+            (BarFloor::Write, self.write_epoch, write),
+            (BarFloor::Cut, self.cut_epoch, cut),
+        ];
+        for (floor, epoch, at) in axes {
+            if let Some(epoch) = epoch
+                && epoch < at
+            {
+                return Err(PublishError::BelowBar { floor, at, epoch });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Which durable floor a [`PublishBar`] refusal met.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BarFloor {
+    /// The scope's read-epoch floor.
+    Read,
+    /// The scope's write-epoch floor.
+    Write,
+    /// The scope's cut-epoch floor.
+    Cut,
+}
+
+/// The record an author built its publish on: the name, and the sequence of
+/// the record it read there. [`publish`] signs strictly above it, so a second
+/// publish in one pass, or a publish over a record the floor has not adopted,
+/// cannot re-mint a sequence already spent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Observed {
+    name: IpnsName,
+    sequence: u64,
+}
+
+impl Observed {
+    /// No read at `name`, only for a body authored fresh or one its source read
+    /// version-checked. The name's own sequence floor still bars the sequence.
+    pub(crate) fn unread(name: &IpnsName) -> Self {
+        Self {
+            name: name.clone(),
+            sequence: 0,
+        }
+    }
+
+    /// A record-verified read of `name` at `sequence` that no gate opened —
+    /// the pointer plane, or a revival basis.
+    pub(crate) fn record(name: &IpnsName, sequence: u64) -> Self {
+        Self {
+            name: name.clone(),
+            sequence,
+        }
+    }
+
+    /// A gated read of `name` at `sequence`, whose envelope carries `version`.
+    ///
+    /// This build authors exactly [`ENVELOPE_V`], so re-sealing a newer
+    /// client's record under its own `v` would mint structures whose AAD this
+    /// build can never reproduce, and republishing it would downgrade `v` — the
+    /// rollback the read-body AAD defends against.
+    pub fn gated(name: &IpnsName, sequence: u64, version: u64) -> Result<Self, PublishError> {
+        refuse_foreign_version(version)?;
+        Ok(Self::record(name, sequence))
+    }
+
+    /// This observation, also clearing `sequence`: a record this device's own
+    /// PUT may have left at the name, or one a landed publish already spent.
+    #[must_use]
+    pub(crate) fn clearing(self, sequence: u64) -> Self {
+        Self {
+            sequence: self.sequence.max(sequence),
+            ..self
+        }
+    }
+
+    /// The name the record was read at, and the publish signs for.
+    pub fn name(&self) -> &IpnsName {
+        &self.name
+    }
+
+    /// The sequence the publish signs strictly above.
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+}
+
+/// [`Observed::gated`]'s version rule, for a read whose record carries its
+/// fields to a publish at another name, or to no publish.
+pub(crate) fn refuse_foreign_version(version: u64) -> Result<(), PublishError> {
+    if version != ENVELOPE_V {
+        return Err(PublishError::ForeignVersion { version });
+    }
+    Ok(())
+}
+
+/// One publish request: the observed name and its node signing key, the head
+/// (metadata) CID to point at, and the content CIDs to register for pinning.
 pub struct PublishRequest<'a> {
-    /// The IPNS name being published (its Ed25519 key is [`Self::signer`]'s).
-    pub name: &'a IpnsName,
+    /// The record the publish builds on, and the name it publishes under (its
+    /// Ed25519 key is [`Self::signer`]'s).
+    pub observed: &'a Observed,
     /// The node's Ed25519 signing key (derived in the key-lifecycle slice;
     /// injected here so this slice owns no key derivation).
     pub signer: &'a Ed25519Signer,
@@ -65,16 +205,10 @@ pub struct PublishRequest<'a> {
     pub head_cid: String,
     /// The content CIDs to register/pin under this name.
     pub content_cids: Vec<String>,
-    /// Raises the CAS expected-current sequence to at least this value before
-    /// the +1. Normal writes pass `None` and derive it from the durable floor;
-    /// revival passes the sequence recovered from the last-known record so the
-    /// re-minted record is strictly newer than what lapsed.
-    pub min_current_sequence: Option<u64>,
-    /// The read-epoch floor this record must clear at its signature, for the
-    /// record families that bind a scope epoch ([`EpochBar`]). `None` is a
-    /// family that binds none — the pointer plane, the vault settings record and
-    /// the bin index.
-    pub epoch_bar: Option<EpochBar>,
+    /// The floors this record must clear at its signature, for the record
+    /// families that bind a scope epoch. `None` is a family that binds none —
+    /// the pointer plane, the vault settings record and the bin index.
+    pub bar: Option<PublishBar>,
 }
 
 impl PublishRequest<'_> {
@@ -89,7 +223,7 @@ impl PublishRequest<'_> {
     /// bounds, so a version past the per-entry cap splits there.
     fn registration(&self) -> NameRegistration {
         NameRegistration {
-            ipns_name: self.name.as_str().to_owned(),
+            ipns_name: self.observed.name.as_str().to_owned(),
             head_cid: Some(self.head_cid.clone()),
             content_cids: self.content_cids.clone(),
         }
@@ -156,9 +290,10 @@ pub enum PublishError {
     /// ([`PutOutcome::Refused`](super::fanout::PutOutcome::Refused)), so the
     /// record did not leave through any of them.
     AllEndpointsRefused,
-    /// The durable sequence floor could not be read. A floor-read failure is a
-    /// fail-closed trust event, never "no floor": publish stops rather than mint
-    /// a sequence from assumed-empty state (blueprint/engine.md floor law).
+    /// A durable sequence or epoch floor could not be read. A floor-read
+    /// failure is a fail-closed trust event, never "no floor": publish stops
+    /// rather than mint a sequence from assumed-empty state (blueprint/engine.md
+    /// floor law).
     FloorRead(SeamError),
     /// The request carried an empty head CID, which would sign `/ipfs/` — a
     /// value the decode side ([`head_cid_from_value`]) always rejects. Refused
@@ -182,21 +317,95 @@ pub enum PublishError {
         /// The enforced ceiling ([`MAX_RECORD_BYTES`]).
         limit: usize,
     },
-    /// The record binds a read epoch below its scope's durable read-epoch floor
-    /// ([`EpochBar`]). Refused release-active at the signature, because the
-    /// adoption gate's epoch stage refuses such a record for good and a signed
-    /// record cannot be unpublished (security rule 8).
-    EpochBelowFloor {
-        /// The durable read-epoch floor in force at the signature.
-        floor: u64,
-        /// The read epoch the record binds.
+    /// The record sits below one of its scope's durable floors ([`PublishBar`]).
+    /// Refused release-active at the signature (security rule 8).
+    BelowBar {
+        /// The floor it met.
+        floor: BarFloor,
+        /// The durable floor in force at the signature.
+        at: u64,
+        /// The record's own epoch on that axis.
         epoch: u64,
+    },
+    /// The record built on carries an envelope version this build does not
+    /// author ([`Observed::gated`]).
+    ForeignVersion {
+        /// The version the record carried.
+        version: u64,
     },
     /// The durable floor sits at `u64::MAX`, so no sequence above it exists.
     SequenceExhausted,
     /// The durable mark the caller asked to raise ahead of the PUT could not
     /// be written, so nothing was PUT.
     MarkUnrecorded(SeamError),
+}
+
+/// A publish failure on rule 6's retryable-versus-trust axis
+/// ([`PublishError::verdict`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishVerdict {
+    /// The registry refused the register-first step.
+    RegistryRefused,
+    /// This build's own release-active refusal of the bytes it would sign: a
+    /// retry over the same inputs reaches it again.
+    Refused,
+    /// Nothing durable is proven; a retry may land.
+    NotLanded,
+}
+
+impl PublishError {
+    /// The one translation every author's own verdict folds from.
+    pub fn verdict(&self) -> PublishVerdict {
+        match self {
+            Self::Register(_) => PublishVerdict::RegistryRefused,
+            Self::EmptyHeadCid
+            | Self::EmptyInlineValue
+            | Self::RecordTooLarge { .. }
+            | Self::BelowBar { .. }
+            | Self::ForeignVersion { .. }
+            | Self::SequenceExhausted => PublishVerdict::Refused,
+            Self::AllEndpointsFailed
+            | Self::AllEndpointsRefused
+            | Self::FloorRead(_)
+            | Self::MarkUnrecorded(_) => PublishVerdict::NotLanded,
+        }
+    }
+}
+
+impl core::fmt::Display for PublishError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Register(_) => f.write_str("register-first publish failed"),
+            Self::AllEndpointsFailed => f.write_str("all record endpoints failed"),
+            Self::AllEndpointsRefused => f.write_str("every record endpoint refused the record"),
+            Self::FloorRead(_) => f.write_str("durable floor read failed"),
+            Self::EmptyHeadCid => f.write_str("empty head CID (never published)"),
+            Self::EmptyInlineValue => f.write_str("empty inline value (never published)"),
+            Self::RecordTooLarge { size, limit } => write!(
+                f,
+                "record of {size} bytes over the {limit}-byte cap (never published)"
+            ),
+            Self::BelowBar { floor, at, epoch } => {
+                let axis = match floor {
+                    BarFloor::Read => "read",
+                    BarFloor::Write => "write",
+                    BarFloor::Cut => "cut",
+                };
+                write!(
+                    f,
+                    "{axis} epoch {epoch} below the durable floor {at} (never published)"
+                )
+            }
+            Self::ForeignVersion { version } => write!(
+                f,
+                "envelope version {version} is not the one this build authors (never published)"
+            ),
+            Self::SequenceExhausted => {
+                f.write_str("no sequence above the durable floor (never published)")
+            }
+            Self::MarkUnrecorded(_) => f.write_str("durable mark write failed (never published)"),
+        }
+    }
 }
 
 /// A durable mark raised just before the record PUT leaves the engine, so it
@@ -210,16 +419,84 @@ pub(crate) struct PutMark<'a> {
     pub(crate) value: u64,
 }
 
-/// One record the pipeline is about to sign: the name it publishes under, its
-/// signer, the `Value` bytes, and the registration that must land first. The
-/// shape both entry points reduce to, so the publish laws are stated once.
+/// The durable floors one signature is checked against, read last before it.
+///
+/// [`Self::sign`] is synchronous, so no await can come between these reads and
+/// the signature: the one produce-side check every record passes (AGENTS.md
+/// rule 8).
+pub(crate) struct SignatureGate<'a> {
+    observed: &'a Observed,
+    bar: Option<(PublishBar, [u64; 3])>,
+    sequence_floor: Option<u64>,
+}
+
+impl<'a> SignatureGate<'a> {
+    /// Read the floors `observed`'s name and `bar` are checked against. A read
+    /// failure is fail-closed, never "no floor" (blueprint/engine.md floor law).
+    pub(crate) async fn read<F: FloorStore>(
+        floors: &F,
+        observed: &'a Observed,
+        bar: Option<PublishBar>,
+    ) -> Result<Self, PublishError> {
+        let sequence_floor = floor::sequence_floor(floors, observed.name.as_str().as_bytes())
+            .await
+            .map_err(PublishError::FloorRead)?;
+        let bar = match bar {
+            Some(bar) => Some((bar, bar.read_floors(floors).await?)),
+            None => None,
+        };
+        Ok(Self {
+            observed,
+            bar,
+            sequence_floor,
+        })
+    }
+
+    /// The durable sequence floor of the observed name, `None` where none was
+    /// ever raised.
+    pub(crate) fn sequence_floor(&self) -> Option<u64> {
+        self.sequence_floor
+    }
+
+    /// Refuse a record below its bar, then sign `value` strictly above both
+    /// the durable sequence floor and the observed sequence. Returns the
+    /// marshalled record and the sequence it carries.
+    pub(crate) fn sign(
+        &self,
+        signer: &Ed25519Signer,
+        value: &[u8],
+        ttl_nanos: u64,
+        eol: &str,
+    ) -> Result<(Vec<u8>, u64), PublishError> {
+        if let Some((bar, at)) = &self.bar {
+            bar.refuse(*at)?;
+        }
+        let sequence = self
+            .sequence_floor
+            .unwrap_or(0)
+            .max(self.observed.sequence)
+            .checked_add(1)
+            .ok_or(PublishError::SequenceExhausted)?;
+        let record_bytes = IpnsRecord::create_v2(signer, value, sequence, ttl_nanos, eol).marshal();
+        if record_bytes.len() > MAX_RECORD_BYTES {
+            return Err(PublishError::RecordTooLarge {
+                size: record_bytes.len(),
+                limit: MAX_RECORD_BYTES,
+            });
+        }
+        Ok((record_bytes, sequence))
+    }
+}
+
+/// One record the pipeline is about to sign: the observed name, its signer,
+/// the `Value` bytes, and the registration that must land first. The shape
+/// both entry points reduce to, so the publish laws are stated once.
 struct Publishable<'a> {
-    name: &'a IpnsName,
+    observed: &'a Observed,
     signer: &'a Ed25519Signer,
     value: Vec<u8>,
     registration: NameRegistration,
-    min_current_sequence: Option<u64>,
-    epoch_bar: Option<EpochBar>,
+    bar: Option<PublishBar>,
 }
 
 /// One record whose `Value` is the payload itself rather than an `/ipfs/` head
@@ -227,15 +504,13 @@ struct Publishable<'a> {
 /// [`RecordPointerFetch`](super::pointer_fetch::RecordPointerFetch) reads back
 /// verbatim.
 pub struct InlineRecordRequest<'a> {
-    /// The IPNS name being published (its Ed25519 key is [`Self::signer`]'s).
-    pub name: &'a IpnsName,
+    /// The record the publish builds on, and the name it publishes under (its
+    /// Ed25519 key is [`Self::signer`]'s).
+    pub observed: &'a Observed,
     /// The name's Ed25519 signing key.
     pub signer: &'a Ed25519Signer,
     /// The record `Value` bytes.
     pub value: &'a [u8],
-    /// Raises the CAS expected-current sequence, exactly as
-    /// [`PublishRequest::min_current_sequence`] does.
-    pub min_current_sequence: Option<u64>,
 }
 
 /// Publish an inline-value record. Same pipeline as [`publish`], same laws;
@@ -267,17 +542,16 @@ where
         scheduler,
         profile,
         Publishable {
-            name: request.name,
+            observed: request.observed,
             signer: request.signer,
             value: request.value.to_vec(),
             registration: NameRegistration {
-                ipns_name: request.name.as_str().to_owned(),
+                ipns_name: request.observed.name.as_str().to_owned(),
                 head_cid: None,
                 content_cids: Vec::new(),
             },
-            min_current_sequence: request.min_current_sequence,
             // The pointer plane binds no scope read epoch.
-            epoch_bar: None,
+            bar: None,
         },
         None,
     )
@@ -334,12 +608,11 @@ where
         scheduler,
         profile,
         Publishable {
-            name: request.name,
+            observed: request.observed,
             signer: request.signer,
             value: request.value(),
             registration: request.registration(),
-            min_current_sequence: request.min_current_sequence,
-            epoch_bar: request.epoch_bar,
+            bar: request.bar,
         },
         mark,
     )
@@ -368,48 +641,16 @@ where
         .await
         .map_err(PublishError::Register)?;
 
-    // CAS expected sequence: floor + 1 (first publish → 1, the "no floor" 0
-    // sentinel reserved). Revival raises the floor read to the recovered
-    // sequence so the re-mint is strictly newer than what lapsed. A floor-read
-    // failure is fail-closed — only a successful read with no floor defaults to
-    // 0 (blueprint/engine.md floor law).
-    let name_bytes = request.name.as_str().as_bytes();
-    let durable = floor::sequence_floor(floors, name_bytes)
-        .await
-        .map_err(PublishError::FloorRead)?
-        .unwrap_or(0);
-    let sequence = durable
-        .max(request.min_current_sequence.unwrap_or(0))
-        .checked_add(1)
-        .ok_or(PublishError::SequenceExhausted)?;
-
-    // The read-epoch bar ([`EpochBar`]), read last so no await separates it from
-    // the signature below.
-    if let Some(bar) = request.epoch_bar {
-        let read_floor = floor::read_epoch_floor(floors, &bar.scope_id)
-            .await
-            .map_err(PublishError::FloorRead)?
-            .unwrap_or(0);
-        if bar.epoch < read_floor {
-            return Err(PublishError::EpochBelowFloor {
-                floor: read_floor,
-                epoch: bar.epoch,
-            });
-        }
-    }
-
     // Core signs; the engine injects the explicit TTL (from the profile, never a
     // library default) and the 90-day client-signed EOL (from the injected clock).
     let ttl_nanos = u64::try_from(profile.record_ttl.as_nanos()).unwrap_or(u64::MAX);
-    let eol = eol::eol_from(scheduler.now());
-    let record_bytes =
-        IpnsRecord::create_v2(request.signer, &request.value, sequence, ttl_nanos, &eol).marshal();
-    if record_bytes.len() > MAX_RECORD_BYTES {
-        return Err(PublishError::RecordTooLarge {
-            size: record_bytes.len(),
-            limit: MAX_RECORD_BYTES,
-        });
-    }
+    let gate = SignatureGate::read(floors, request.observed, request.bar).await?;
+    let (record_bytes, sequence) = gate.sign(
+        request.signer,
+        &request.value,
+        ttl_nanos,
+        &eol::eol_from(scheduler.now()),
+    )?;
 
     if let Some(mark) = mark {
         let stored = floors
@@ -427,7 +668,7 @@ where
         transport,
         scheduler,
         profile,
-        request.name,
+        request.observed.name(),
         record_bytes,
         sequence,
     )

@@ -19,7 +19,9 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::fanout::{FanoutRecord, fanout_get_classified};
-use super::publish::{PublishError, PublishOutcome, PublishRequest, head_cid_from_value, publish};
+use super::publish::{
+    Observed, PublishError, PublishOutcome, PublishRequest, head_cid_from_value, publish,
+};
 use crate::api::{ApiClient, ApiError};
 use crate::gate::floor;
 use crate::profile::SyncTimingProfile;
@@ -124,16 +126,16 @@ where
     // The CID rides out of the same record as the sequence, so a corroborated
     // sequence can never re-mint superseded content.
     let head_cid = head_cid_from_value(&basis.value).ok_or(ReviveError::Unrecoverable)?;
+    // Strictly newer than what lapsed, even if this device's floor is stale.
+    let observed = Observed::record(request.name, basis.sequence);
     let publish_request = PublishRequest {
-        name: request.name,
+        observed: &observed,
         signer: request.signer,
         head_cid,
         content_cids: request.content_cids,
-        // Strictly newer than what lapsed, even if this device's floor is stale.
-        min_current_sequence: Some(basis.sequence),
         // A revival re-mints the lapsed record's own value, whose epoch was
         // barred at the publish that authored it.
-        epoch_bar: None,
+        bar: None,
     };
     publish(transport, api, floors, scheduler, profile, &publish_request)
         .await

@@ -29,6 +29,8 @@ use crate::api::{REGISTRY_BATCH_REFUSED, RetireEntry};
 use crate::content::DAG_ROOT_CODEC;
 use crate::grants::GrantRow;
 use crate::net::REGISTRY_BATCH_MAX;
+use crate::net::author::ENVELOPE_V;
+use crate::net::publish::Observed;
 use crate::seams::{HttpRequest, HttpResponse, RecordTransport, SeamError, SeamResult};
 use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 
@@ -56,6 +58,12 @@ pub const MEMBER_NODE: &str = "https://kubo.member.test";
 /// Shaped as the API issues one; only a scenario that logs in ever reads it.
 const LOGIN_CHALLENGE: &str =
     "cipherbox-login:v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// A publish basis at `name` with no record read there.
+#[must_use]
+pub fn fresh_observed(name: &IpnsName) -> Observed {
+    Observed::gated(name, 0, ENVELOPE_V).expect("this build's envelope version")
+}
 
 /// The name label this account keys a durable floor under
 /// ([`OwnerScopedFloorStore`](crate::seams::OwnerScopedFloorStore)), with the

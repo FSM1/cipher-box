@@ -100,6 +100,7 @@ use crate::name::{NameError, is_emittable, validate_name};
 use crate::net::VaultPointerVoucher;
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
+use crate::net::publish::refuse_foreign_version;
 use crate::net::record_publish::RecordPublishError;
 use crate::net::renewal_walk::{
     BinRoot, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards, WalkScope,
@@ -110,9 +111,9 @@ use crate::net::rotation::{GatedRoots, MovedScopeSeed, RotationAncestry, SweptSc
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, FolderRefreshReport,
     GraftedLeg, HeldKey, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
-    OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishError,
-    PublishOutcome, RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX, RecordAccelerator, RecordPointerFetch,
-    RootAdopter, ScopePointerEnrolment, ScopePointerMint, VaultProvisionNet, drop_superseded,
+    OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishOutcome,
+    RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX, RecordAccelerator, RecordPointerFetch, RootAdopter,
+    ScopePointerEnrolment, ScopePointerMint, VaultProvisionNet, drop_superseded,
     enrol_owned_scope_pointers, eol_renew_pass, keyless_re_put, observed_at, resolve_child,
     run_liveness_loop,
 };
@@ -3915,10 +3916,9 @@ impl ScopeShare<'_> {
 /// mint a grant nothing can open. A share of a node that already names a scope
 /// appends to it (ADR 0026 D1), so that is no ground.
 fn record_share_standing(envelope_version: u64) -> ShareStanding {
-    if envelope_version != ENVELOPE_V {
-        ShareStanding::EnvelopeVersion
-    } else {
-        ShareStanding::Accepted
+    match refuse_foreign_version(envelope_version) {
+        Ok(()) => ShareStanding::Accepted,
+        Err(_) => ShareStanding::EnvelopeVersion,
     }
 }
 
@@ -4043,28 +4043,7 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Ok(Some(PublishOutcome::Unconfirmed { sequence })) => {
                 format!("published sequence {sequence} but it did not resolve back")
             }
-            Err(PublishError::Register(_)) => "register-first publish failed".to_owned(),
-            Err(PublishError::AllEndpointsFailed) => "all record endpoints failed".to_owned(),
-            Err(PublishError::AllEndpointsRefused) => {
-                "every record endpoint refused the record".to_owned()
-            }
-            Err(PublishError::FloorRead(_)) => "sequence floor read failed".to_owned(),
-            Err(PublishError::EmptyHeadCid) => "empty head CID (never published)".to_owned(),
-            Err(PublishError::EmptyInlineValue) => {
-                "empty inline value (never published)".to_owned()
-            }
-            Err(PublishError::RecordTooLarge { size, limit }) => {
-                format!("record of {size} bytes over the {limit}-byte cap (never published)")
-            }
-            Err(PublishError::EpochBelowFloor { floor, epoch }) => {
-                format!("read epoch {epoch} below the durable floor {floor} (never published)")
-            }
-            Err(PublishError::SequenceExhausted) => {
-                "no sequence above the durable floor (never published)".to_owned()
-            }
-            Err(PublishError::MarkUnrecorded(_)) => {
-                "durable mark write failed (never published)".to_owned()
-            }
+            Err(error) => error.to_string(),
             // A no-renewal (comfortably ahead) or a clean republish is not a
             // failure — nothing to surface.
             Ok(Some(PublishOutcome::Published { .. })) | Ok(None) => continue,
@@ -11778,7 +11757,7 @@ mod tests {
 
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
-    use crate::net::HeldValue;
+    use crate::net::{HeldValue, PublishError};
     use serde_json::{Value, json};
 
     use cipherbox_core::ipns::IpnsRecord;

@@ -388,7 +388,7 @@ the other's set. The publish plane settles that race.
 **E4 — One owner publish path signs a commitment with no cut-floor read.** The cut-epoch bar
 of D6 depends on the reader's own floor, not on the bytes, so `net/author.rs::check_scope_root`
 has no copy of it. The owner re-seal publish does read the floor: under the write-epoch lease,
-`RootPublish::check_publishable` in `net/rotation.rs` refuses release-active when the re-sealed
+`RootPublish::run` in `net/rotation.rs` refuses release-active when the re-sealed
 commitment's `cutEpoch` is below the durable cut-epoch floor (FSM1/cipher-box#1750, 2026-09-05).
 One path signs a commitment and reads no cut-epoch floor: the root arm of the write wave
 (`WriteWaveNet::publish_moved` in `net/rotation.rs`), which reads only the read-epoch and
@@ -398,7 +398,9 @@ write-epoch floors before `reseal_root` re-signs the carried commitment. The gra
 check. `grants/invite.rs::check_publishable` is an earlier structural check (the grant-set
 ceiling, repeated tags, and ledger-commitment agreement), not a floor check. The rule that a
 rotation reads every floor again before it seals belongs to ADR 0041, and this ADR does not state
-it. The gap is FSM1/cipher-box#2016.
+it. The gap is FSM1/cipher-box#2016. Closed on 2026-09-27 by FSM1/cipher-box#2063: the root arm
+of the write wave reads the cut-epoch floor too, through `PublishBar::refuse_below` and again at
+the `SignatureGate` (ADR 0041 E1).
 
 **E5 — The revocation floor keys name the recipient in the clear.** `revocation_floor_key`,
 `grant_floor_key`, `revocation_cut_epoch_key` and `cleared_floor_key` in

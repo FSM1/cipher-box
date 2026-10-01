@@ -623,6 +623,7 @@ where
         node_id: scope_id,
         scope_id,
         epoch: GENESIS_EPOCH,
+        write_epoch: None,
     };
     let preflighted =
         preflight(&binding, read_key.as_bytes(), &head).map_err(ProvisionError::Preflight)?;

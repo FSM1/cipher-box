@@ -9,12 +9,11 @@ use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use crate::api::{ApiClient, ApiError};
 use crate::net::fanout::{FanoutRecord, VacancyRule, fanout_get_under, fanout_get_verify};
 use crate::net::publish::{
-    InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, publish_inline,
+    InlineRecordRequest, Observed, PublishOutcome, PublishReceipt, publish_inline,
 };
-use crate::net::record_publish::{
-    PreflightedHead, RecordPublishError, RecordPublishRequest, publish_record,
-};
+use crate::net::record_publish::{PreflightedHead, RecordPublishRequest, publish_record};
 use crate::net::resolve::Adopter;
+use crate::net::rotation::{publish_record_verdict, wave_publish_verdict};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::WritePublishError;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
@@ -37,23 +36,6 @@ pub struct VaultProvisionNet<'a, T, H: Http, C: CredentialStore, F, Sch, Ad> {
     pub profile: &'a SyncTimingProfile,
     /// The name the registry confirmed unregistered ([`VacancyRule`]).
     pub first_run_name: Option<&'a IpnsName>,
-}
-
-/// Carry a publish failure onto rule 6's axis: only this build's own
-/// release-active refusals and a mis-echoed CID are verdicts a retry repeats.
-fn publish_verdict(error: PublishError) -> WritePublishError {
-    match error {
-        PublishError::Register(_) => WritePublishError::RegistryFull,
-        PublishError::EmptyHeadCid
-        | PublishError::EmptyInlineValue
-        | PublishError::EpochBelowFloor { .. }
-        | PublishError::RecordTooLarge { .. }
-        | PublishError::SequenceExhausted => WritePublishError::Rejected,
-        PublishError::AllEndpointsFailed
-        | PublishError::AllEndpointsRefused
-        | PublishError::FloorRead(_)
-        | PublishError::MarkUnrecorded(_) => WritePublishError::NotLanded,
-    }
 }
 
 /// Whether a publish durably landed. The per-name sequence floor is left alone:
@@ -133,21 +115,14 @@ where
             self.scheduler,
             self.profile,
             &RecordPublishRequest {
-                name,
+                observed: &Observed::unread(name),
                 signer,
                 head,
                 content_cids: Vec::new(),
-                min_current_sequence: None,
             },
         )
         .await
-        .map_err(|error| match error {
-            // A CID the API echoes back wrong is deterministic on the bytes this
-            // run built: re-uploading them reaches the same answer.
-            RecordPublishError::HeadCidMismatch { .. } => WritePublishError::Rejected,
-            RecordPublishError::Upload(_) => WritePublishError::NotLanded,
-            RecordPublishError::Publish(e) => publish_verdict(e),
-        })?;
+        .map_err(publish_record_verdict)?;
         landed(outcome)
     }
 
@@ -164,14 +139,13 @@ where
             self.scheduler,
             self.profile,
             &InlineRecordRequest {
-                name,
+                observed: &Observed::unread(name),
                 signer,
                 value: block,
-                min_current_sequence: None,
             },
         )
         .await
-        .map_err(publish_verdict)?;
+        .map_err(wave_publish_verdict)?;
         landed(outcome)
     }
 }
