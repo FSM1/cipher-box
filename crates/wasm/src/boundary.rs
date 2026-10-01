@@ -96,8 +96,8 @@ pub fn encode_event(event: &Event) -> Result<Ts<Event>, JsError> {
 }
 
 /// Decodes the intent a SIWE nonce is minted for.
-pub fn decode_siwe_intent(intent: &JsValue) -> Result<SiweIntent, JsError> {
-    serde_wasm_bindgen::from_value(intent.clone()).map_err(|_| JsError::new("unknown siwe intent"))
+pub fn decode_siwe_intent(intent: JsValue) -> Result<SiweIntent, JsError> {
+    serde_wasm_bindgen::from_value(intent).map_err(|_| JsError::new("unknown siwe intent"))
 }
 
 /// Encodes one view, or one list of view rows.

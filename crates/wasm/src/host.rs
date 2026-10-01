@@ -477,7 +477,7 @@ impl EngineHandle {
     /// names no pool.
     #[wasm_bindgen(js_name = siweChallenge)]
     pub fn siwe_challenge(&self, intent: Ts<SiweIntent>) -> Promise {
-        let intent = match decode_siwe_intent(&intent.js_value()) {
+        let intent = match decode_siwe_intent(intent.js_value()) {
             Ok(intent) => intent,
             Err(refusal) => return Promise::reject(&refusal.into()),
         };

@@ -419,17 +419,17 @@ fn a_sharing_row_crosses_the_grantee_name_with_its_source() {
     assert_eq!(field(&name, "source"), JsValue::from_str("claimant"));
     assert_eq!(bytes(field(&named, "viaLink")), vec![0x44; 32]);
 
-    let unnamed = crossed(&SharingGrant {
+    let owner_named = crossed(&SharingGrant {
         recipient_identity_public_key: vec![2; 33],
         permission: Permission::Read,
         grantee_name: Some(("Bo".into(), NameSource::Owner)),
         via_link: None,
     });
     assert_eq!(
-        field(&field(&unnamed, "granteeName"), "source"),
+        field(&field(&owner_named, "granteeName"), "source"),
         JsValue::from_str("owner")
     );
-    assert!(field(&unnamed, "viaLink").is_null());
+    assert!(field(&owner_named, "viaLink").is_null());
 
     let contact = crossed(&SharingContact {
         identity_public_key: vec![2; 33],

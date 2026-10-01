@@ -5,7 +5,7 @@
 //! encode have their own files (`commands.rs`, `events.rs`, `views.rs`).
 //!
 //! The whole file is gated to the browser target; native `cargo test` for this
-//! crate runs the host conversion tests in `src/lib.rs` instead.
+//! crate runs the node id test in `src/lib.rs` instead.
 #![cfg(all(target_family = "wasm", target_os = "unknown"))]
 
 use cipherbox_wasm::NodeId;

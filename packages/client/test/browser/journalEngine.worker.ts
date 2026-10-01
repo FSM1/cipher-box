@@ -51,10 +51,10 @@ class JournalHost extends StubEngineHost {
   private readonly waiters: Array<(event: EventDescriptor) => void> = [];
   private nextHandle = 1n;
   // Op ids are a separate id space from write handles; keep them disjoint so a
-  // client that conflates the two cannot pass against this fake. They start at
-  // a random 18-digit value each run: the leak scan looks for an op id's
-  // decimal text, and no UUID group (12 characters at most) can contain it.
-  private nextOpId = 10n ** 17n + BigInt(crypto.getRandomValues(new Uint32Array(1))[0]!) * 1000n;
+  // client that conflates the two cannot pass against this fake. They have 18
+  // digits: the leak scan looks for an op id's decimal text, and no UUID group
+  // (12 characters at most) can contain it.
+  private nextOpId = 10n ** 17n;
   private readonly open = new Map<bigint, { size: number; received: number }>();
 
   start(): Promise<void> {

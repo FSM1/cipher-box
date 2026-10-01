@@ -599,11 +599,11 @@ fn a_retention_the_engine_would_refuse_is_refused() {
 #[wasm_bindgen_test]
 fn a_siwe_intent_decodes_by_its_name_and_refuses_any_other() {
     assert_eq!(
-        decode_siwe_intent(&JsValue::from_str("login")).ok(),
+        decode_siwe_intent(JsValue::from_str("login")).ok(),
         Some(SiweIntent::Login)
     );
     assert_eq!(
-        decode_siwe_intent(&JsValue::from_str("link")).ok(),
+        decode_siwe_intent(JsValue::from_str("link")).ok(),
         Some(SiweIntent::Link)
     );
     for refused in [
@@ -612,6 +612,6 @@ fn a_siwe_intent_decodes_by_its_name_and_refuses_any_other() {
         JsValue::from_f64(0.0),
         JsValue::UNDEFINED,
     ] {
-        assert!(decode_siwe_intent(&refused).is_err());
+        assert!(decode_siwe_intent(refused).is_err());
     }
 }

@@ -34,7 +34,6 @@ import type {
   Staleness,
   VaultStorageDescriptor,
 } from './protocol.js';
-import type { QueueHold, SnapshotView } from '../../wasm/cipherbox_wasm.js';
 import type { EngineWasm, WasmNodeId } from './engineWasm.js';
 
 /**
@@ -278,12 +277,12 @@ export function readEvent(event: EventDescriptor): EventDescriptor {
 }
 
 /**
- * Passes the held queue head through once its reason and its check name are
- * ones this build knows. A hold whose cause cannot be named would render as an
- * unexplained stall, which is the state the hold exists to remove.
+ * Refuses a held queue head whose reason or check name this build does not
+ * know. A hold whose cause cannot be named would render as an unexplained
+ * stall, which is the state the hold exists to remove.
  */
-function readQueueHold(hold: QueueHold | null): QueueHoldDescriptor | null {
-  if (hold === null) return null;
+function checkQueueHold(hold: QueueHoldDescriptor | null): void {
+  if (hold === null) return;
   switch (hold.reason) {
     case 'quota':
       break;
@@ -296,11 +295,10 @@ function readQueueHold(hold: QueueHold | null): QueueHoldDescriptor | null {
     default:
       throw new Error(`unknown WASM queue hold reason: ${(hold as { reason: unknown }).reason}`);
   }
-  return hold;
 }
 
 /** Passes a snapshot through once each enum value in it is one this build knows. */
-export function readSnapshot(view: SnapshotView): SnapshotDescriptor {
+export function readSnapshot(view: SnapshotDescriptor): SnapshotDescriptor {
   known(PERMISSIONS, view.permission, 'permission');
   known(STALENESS, view.staleness, 'staleness');
   for (const child of view.children) {
@@ -310,7 +308,8 @@ export function readSnapshot(view: SnapshotView): SnapshotDescriptor {
   for (const dead of view.deadLetters) {
     known(DEAD_LETTER_REASONS, dead.reason, 'dead letter reason');
   }
-  return { ...view, queueHold: readQueueHold(view.queueHold) };
+  checkQueueHold(view.queueHold);
+  return view;
 }
 
 /** Passes a sharing view through once each enum value in it is one this build knows. */

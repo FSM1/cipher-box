@@ -147,12 +147,9 @@ impl DefaultsReason {
         }
     }
 
-    /// Whether the load refused bytes the plane actually served, rather than
-    /// failing to reach it (blueprint/engine.md "Bin index record"). A caller
-    /// that retries on availability must not retry on a verdict.
-    #[must_use]
     /// The name a host renders a bin index hold under, or `None` for a reason
     /// the drain charges or dead-letters rather than holds.
+    #[must_use]
     pub fn hold_check(self) -> Option<BinIndexHoldCheck> {
         match self {
             Self::UnprovenFirstRun => Some(BinIndexHoldCheck::UnprovenFirstRun),
@@ -167,6 +164,10 @@ impl DefaultsReason {
         }
     }
 
+    /// Whether the load refused bytes the plane actually served, rather than
+    /// failing to reach it (blueprint/engine.md "Bin index record"). A caller
+    /// that retries on availability must not retry on a verdict.
+    #[must_use]
     pub(crate) fn is_verdict(self) -> bool {
         match self {
             Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => true,
