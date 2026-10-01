@@ -19,7 +19,8 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 - an upload and the file read back off the network, asserted byte for byte
 - a cold start of a second owner device paints every file row's size and
   modified date with no manual refresh: at the root, in a subfolder opened
-  first, and in a folder the owner shared by a link
+  first, and in a folder the owner shared by a link; a first route two folders
+  down shows that folder and its trail
 - signing out returns the tab to the front door
 - the settings route opens from the sidebar and names the signed-in account
 - a session end — a sign-out or a forget-this-device — reaches every tab of the

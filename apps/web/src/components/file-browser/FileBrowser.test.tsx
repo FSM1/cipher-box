@@ -25,8 +25,9 @@ function draw(client: ReturnType<typeof fakeEngine>['client']) {
 async function listedThenFailed(failure: Error) {
   const engine = fakeEngine();
   draw(engine.client);
-
+  // The mount's focus refresh has landed, so what the pull answers is a verdict.
   await act(async () => {
+    engine.ackFocus();
     engine.emit({ kind: 'snapshotUpdated' });
   });
   await act(async () => {

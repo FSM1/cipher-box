@@ -591,7 +591,7 @@ where
                     walked.unproved,
                 );
                 descendants = walked.proved;
-                state.boundary_walk_landed.set(true);
+                state.land_boundary_walk();
             }
             state
                 .scope_roots_walked
@@ -603,7 +603,7 @@ where
             match failure {
                 None => state.boundary_walk_rejected.set(false),
                 Some(rejected @ WalkFailure::Rejected { .. }) => {
-                    state.boundary_walk_rejected.set(true);
+                    state.reject_boundary_walk();
                     emit_trust_violation(&self.seams.events, name.as_str(), rejected);
                 }
                 Some(WalkFailure::Unavailable) => {}

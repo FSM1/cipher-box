@@ -450,10 +450,11 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
         let due = |key: &BookmarkKey| {
             self.mode == ResolveMode::NoCache
-                || verdicts
-                    .borrow()
-                    .get(key)
-                    .is_none_or(|held| on_access_refresh_due(now, held.at, profile))
+                || on_access_refresh_due(
+                    now,
+                    verdicts.borrow().get(key).map(|held| held.at),
+                    profile,
+                )
         };
         // One budget, spent least recently refreshed first, so capped passes
         // reach every bookmark in turn. A held bookmark spends one resolve on

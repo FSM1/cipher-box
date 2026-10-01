@@ -102,7 +102,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
   // `undefined` until the first `setFocus`, which reaches the engine even when it
   // names the root: a cold start at the root has sent no focus yet.
   let focus: Uint8Array | null | undefined = undefined;
-  // Any newer intent — a landed pull or a focus change — supersedes whatever is
+  // Any newer intent — a new pull, or `supersedePulls` — supersedes whatever is
   // in flight, so an older folder's late answer never lands over a newer one.
   let generation = 0;
   // `stalenessChanged` is edge-triggered while a descriptor's rung is computed
@@ -111,13 +111,19 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
   let stalenessSeq = 0;
   // At most one pull in flight: the engine emits `snapshotUpdated` per op stage,
   // so an N-file upload would otherwise cost N queue-scan round trips for one
-  // final view.
-  let inFlight = false;
+  // final view. Holds the in-flight pull's generation, so a focus change can
+  // supersede it rather than wait it out.
+  let inFlight: number | null = null;
   let coalesced = false;
   // The provider disposes this store and its client together, and a logout
   // rebuild does so with the tab still live — so a continuation still holding an
   // older intent must not reach a closed facade.
   let disposed = false;
+  // Counts focus changes alone, since every pull bumps `generation`. While the
+  // latest one's `setFocus` runs, the engine may still be listing its way down
+  // to a folder a reload routed to, so `unknownNode` is not yet a verdict.
+  let focusSeq = 0;
+  let locating = false;
 
   const commit = (next: Commit): void => {
     const view = next.view === undefined ? state.view : next.view;
@@ -130,35 +136,50 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     for (const listener of listeners) listener();
   };
 
-  // A failure only lands if no newer intent has superseded the call that raised
-  // it; every async leg reports through this one continuation.
+  // A failure only lands if no newer intent has superseded the call that raised it.
   const failIfCurrent =
     (id: number) =>
     (error: unknown): void => {
       if (id === generation) commit({ error: describe(error) });
     };
 
+  // Drops the pull in flight and any re-pull it owes, so their late answer
+  // never lands over a newer intent.
+  const supersedePulls = (): void => {
+    generation += 1;
+    inFlight = null;
+    coalesced = false;
+  };
+
   const pull = (): void => {
     if (disposed) return;
-    if (inFlight) {
+    if (inFlight !== null) {
       coalesced = true;
       return;
     }
-    inFlight = true;
     const id = ++generation;
+    inFlight = id;
     const seq = stalenessSeq;
     void client.facade
       .snapshot(focus ?? null)
-      .then((view) => {
-        if (id !== generation) return;
-        commit({
-          view,
-          error: null,
-          staleness: seq === stalenessSeq ? view.staleness : undefined,
-        });
-      }, failIfCurrent(id))
+      .then(
+        (view) => {
+          if (id !== generation) return;
+          commit({
+            view,
+            error: null,
+            staleness: seq === stalenessSeq ? view.staleness : undefined,
+          });
+        },
+        (error: unknown) => {
+          if (id !== generation) return;
+          const described = describe(error);
+          commit({ error: locating && described.code === 'unknownNode' ? null : described });
+        }
+      )
       .finally(() => {
-        inFlight = false;
+        if (inFlight !== id) return;
+        inFlight = null;
         if (!coalesced) return;
         coalesced = false;
         pull();
@@ -167,13 +188,28 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
 
   const assertFocus = (): void => {
     if (disposed) return;
-    const id = ++generation;
+    const id = ++focusSeq;
+    locating = true;
     // The engine runs commands in arrival order: the relay's forced pass must see this focus.
     const node = focus ?? null;
-    client.facade.setFocus(node).then(() => {
-      if (id === generation) pull();
-    }, failIfCurrent(id));
+    client.facade.setFocus(node).then(
+      () => {
+        if (id !== focusSeq) return;
+        locating = false;
+        pull();
+      },
+      (error: unknown) => {
+        if (id !== focusSeq) return;
+        locating = false;
+        supersedePulls();
+        commit({ error: describe(error) });
+      }
+    );
     client.reportFocus(node);
+    // Cache-first: what the engine already holds paints now, and the focus
+    // refresh repaints behind it. A pull of the folder left behind is superseded.
+    supersedePulls();
+    pull();
   };
 
   const unsubscribe = client.facade.subscribe((event) => {
@@ -218,6 +254,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       disposed = true;
       // Supersede every in-flight intent, so a late answer commits nothing.
       generation += 1;
+      focusSeq += 1;
       unsubscribe();
       listeners.clear();
       // A warning names the scope it came from; it must not outlive its engine.

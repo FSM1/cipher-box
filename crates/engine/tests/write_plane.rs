@@ -7954,6 +7954,14 @@ struct DeepCreate {
 }
 
 fn deep_create_seen_by_a_second_device() -> DeepCreate {
+    let mut created = deep_create_on_a_cold_second_device();
+    // A navigation reads nothing until a pass has walked the scope boundaries.
+    tick(&created.world, &created.engine_b, &mut created.tasks_b);
+    created
+}
+
+/// The same, with device B booted and no pass run yet: a reload's first route.
+fn deep_create_on_a_cold_second_device() -> DeepCreate {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -7979,9 +7987,7 @@ fn deep_create_seen_by_a_second_device() -> DeepCreate {
     let deep = child_id(&engine_a, photos, "2026");
 
     let bob = world.device(b"alice-second-device");
-    let (engine_b, events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
-    // A navigation reads nothing until a pass has walked the scope boundaries.
-    tick(&world, &engine_b, &mut tasks_b);
+    let (engine_b, events_b, tasks_b) = boot(&world, &blocks, &bob, 7);
     DeepCreate {
         world,
         blocks,
@@ -8075,6 +8081,195 @@ fn a_second_device_lists_below_the_scope_root_once_it_focuses_there() {
         view.children[0].id, deep,
         "and under the node id device A published it with"
     );
+}
+
+/// The trail a device's view of `folder` names, nearest first.
+fn trail(engine: &Engine<FakeSeamTypes>, folder: NodeId) -> Vec<NodeId> {
+    block_on(engine.snapshot(folder))
+        .expect("a folder view")
+        .ancestors
+        .iter()
+        .map(|crumb| crumb.id)
+        .collect()
+}
+
+/// A reload can route straight to a folder below the root's own children,
+/// which the cold-start base does not hold. The navigation lists its way down
+/// to it, so the folder and its trail render with no walk from the root.
+#[test]
+fn a_focus_on_a_folder_no_listing_reached_lists_its_way_down() {
+    let DeepCreate {
+        mut engine_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    assert!(
+        matches!(
+            block_on(engine_b.snapshot(deep)),
+            Err(EngineError::UnknownNode)
+        ),
+        "the cold-start base lifts the root's direct children only"
+    );
+
+    block_on(engine_b.command(Command::SetFocus { node: Some(deep) })).unwrap();
+
+    assert_eq!(trail(&engine_b, deep), [photos, ROOT]);
+}
+
+/// A reload's first route lands before the first pass has walked the scope
+/// boundaries, which name the seed each level reads under. The navigation
+/// waits for a pass to land the walk, then lists its way down.
+#[test]
+fn a_focus_before_the_first_pass_lists_its_way_down_once_the_walk_lands() {
+    let DeepCreate {
+        mut engine_b,
+        mut tasks_b,
+        mut events_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_on_a_cold_second_device();
+
+    command_while_ticking(
+        &mut engine_b,
+        Command::SetFocus { node: Some(deep) },
+        &mut tasks_b,
+    )
+    .expect("the window opens");
+
+    assert_eq!(trail(&engine_b, deep), [photos, ROOT]);
+    assert!(
+        accused_nobody(&mut events_b),
+        "every level read under its own seed"
+    );
+}
+
+/// The name device B's root listing names `folder` by.
+fn listed_name(engine: &Engine<FakeSeamTypes>, folder: NodeId) -> String {
+    block_on(engine.snapshot(ROOT))
+        .unwrap()
+        .children
+        .into_iter()
+        .find(|child| child.id == folder)
+        .and_then(|child| child.ipns_name)
+        .expect("the root lists the folder by name")
+}
+
+/// A route to an id the vault does not hold (a deleted folder in a bookmark)
+/// lists the vault once inside the on-access threshold, and again once it has
+/// passed.
+#[test]
+fn a_route_to_an_id_the_vault_lacks_lists_the_vault_once_per_threshold() {
+    let DeepCreate {
+        world,
+        mut engine_b,
+        photos,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    let photos_name = listed_name(&engine_b, photos);
+    let gone = NodeId([0xEE; 16]);
+    let route = |engine: &mut Engine<FakeSeamTypes>| {
+        block_on(engine.command(Command::SetFocus { node: Some(gone) })).unwrap();
+    };
+
+    route(&mut engine_b);
+    let listed = world.record_store.get_count(&photos_name);
+    assert!(listed > 0, "the first route lists the vault");
+
+    world
+        .scheduler
+        .advance(SyncTimingProfile::CI.stale_after / 2);
+    route(&mut engine_b);
+    assert_eq!(
+        world.record_store.get_count(&photos_name),
+        listed,
+        "inside the threshold the miss stands"
+    );
+
+    world.scheduler.advance(SyncTimingProfile::CI.stale_after);
+    route(&mut engine_b);
+    assert!(
+        world.record_store.get_count(&photos_name) > listed,
+        "past it the route lists the vault again"
+    );
+}
+
+/// A walk a leg could not finish proves nothing about the target, so it
+/// records no miss: the next route, at once, lists its way down to it.
+#[test]
+fn a_walk_a_leg_could_not_finish_records_no_miss() {
+    let DeepCreate {
+        world,
+        mut engine_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    let photos_name = listed_name(&engine_b, photos);
+
+    world.record_store.fail_get_for(&photos_name);
+    block_on(engine_b.command(Command::SetFocus { node: Some(deep) })).unwrap();
+    assert!(
+        matches!(
+            block_on(engine_b.snapshot(deep)),
+            Err(EngineError::UnknownNode)
+        ),
+        "the failed leg left the target unlisted"
+    );
+
+    world.record_store.heal_get_for(&photos_name);
+    block_on(engine_b.command(Command::SetFocus { node: Some(deep) })).unwrap();
+
+    assert_eq!(trail(&engine_b, deep), [photos, ROOT]);
+}
+
+/// A rejected leg outranks an unreachable one in the merged verdict, yet the
+/// unreachable folder is still unread: the walk records no miss, and the next
+/// route lists the vault again at once.
+#[test]
+fn a_walk_with_an_unread_leg_records_no_miss_whatever_else_a_level_rejects() {
+    let DeepCreate {
+        world,
+        blocks,
+        mut engine_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    let unreachable = NodeId([0x31; 16]);
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        child_ref(unreachable.0, "2027", CoreNodeKind::Folder),
+    );
+    world
+        .record_store
+        .fail_get_for(write_name(unreachable).as_str());
+    plant_record(
+        &world.record_store,
+        &blocks,
+        deep,
+        Planted {
+            node_id: deep.0,
+            scope_id: [0xF0; 16],
+            read_key: read_key_of(deep),
+            body: &planted_body(),
+        },
+    );
+    let gone = NodeId([0xEE; 16]);
+    let deep_name = write_name(deep);
+    let route = |engine: &mut Engine<FakeSeamTypes>| {
+        block_on(engine.command(Command::SetFocus { node: Some(gone) })).unwrap();
+    };
+
+    route(&mut engine_b);
+    let listed = world.record_store.get_count(deep_name.as_str());
+    assert!(listed > 0, "the walk reached the level that rejects");
+
+    route(&mut engine_b);
+    assert!(world.record_store.get_count(deep_name.as_str()) > listed);
 }
 
 /// The focus refresh is fail-closed on every binding the child gate holds. Each

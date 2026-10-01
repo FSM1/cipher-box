@@ -68,7 +68,7 @@ describe('snapshotStore', () => {
     expect(store.getSnapshot().view?.root).toEqual(adopted);
   });
 
-  it('sets the engine focus window and the cross-tab hint before pulling', async () => {
+  it('paints the held view at once, and pulls again once the focus refresh lands', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);
     const folder = new Uint8Array(16).fill(7);
@@ -76,16 +76,59 @@ describe('snapshotStore', () => {
     store.setFocus(folder);
     expect(engine.focus).toEqual([folder]);
     expect(engine.reported).toEqual([folder]);
-    expect(engine.pulls).toHaveLength(0);
+    expect(engine.pulls[0].folder).toBe(folder);
+
+    const held = view(folder);
+    engine.pulls[0].resolve(held);
+    await flush();
+    expect(store.getSnapshot().view).toBe(held);
 
     engine.ackFocus();
     await flush();
-    expect(engine.pulls[0].folder).toBe(folder);
-
-    const focused = view(folder);
-    engine.pulls[0].resolve(focused);
+    const refreshed = view(folder, 'reconciling');
+    engine.pulls[1].resolve(refreshed);
     await flush();
-    expect(store.getSnapshot().view).toBe(focused);
+    expect(store.getSnapshot().view).toBe(refreshed);
+  });
+
+  it('renders a folder it already listed while the focus refresh is still out', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    const folder = new Uint8Array(16).fill(7);
+    store.setFocus(folder);
+    engine.pulls[0].resolve(view(folder));
+    engine.ackFocus();
+    await flush();
+    engine.pulls[1].resolve(view(folder));
+    await flush();
+
+    // Back to the root: its focus refresh stays out, as one stuck on the
+    // record plane does after a reload.
+    store.setFocus(null);
+    const root = view();
+    engine.pulls[2].resolve(root);
+    await flush();
+
+    expect(engine.pulls[2].folder).toBeNull();
+    expect(store.getSnapshot()).toEqual({ view: root, error: null });
+  });
+
+  it('holds an unknown folder as unanswered until its focus refresh lands', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    const unknown = () => new EngineRequestError('unknown node', 'unknownNode');
+
+    store.setFocus(new Uint8Array(16).fill(7));
+    engine.pulls[0].reject(unknown());
+    await flush();
+    // The refresh may still list its way down to it, so this is no verdict.
+    expect(store.getSnapshot()).toEqual({ view: null, error: null });
+
+    engine.ackFocus();
+    await flush();
+    engine.pulls[1].reject(unknown());
+    await flush();
+    expect(store.getSnapshot().error).toEqual({ message: 'unknown node', code: 'unknownNode' });
   });
 
   it('sends the engine focus before the cross-tab hint forces a pass', () => {
@@ -101,7 +144,7 @@ describe('snapshotStore', () => {
     );
   });
 
-  it('surfaces a rejected focus change and pulls nothing', async () => {
+  it('surfaces a rejected focus change and pulls nothing more', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);
 
@@ -110,7 +153,21 @@ describe('snapshotStore', () => {
     await flush();
 
     expect(store.getSnapshot()).toEqual({ view: null, error: { message: 'focus denied' } });
-    expect(engine.pulls).toHaveLength(0);
+    expect(engine.pulls).toHaveLength(1);
+  });
+
+  it('keeps a rejected focus change over the cached view that answers after it', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    const folder = new Uint8Array(16).fill(7);
+
+    store.setFocus(folder);
+    engine.rejectFocus(new Error('focus denied'));
+    await flush();
+    engine.pulls[0].resolve(view(folder));
+    await flush();
+
+    expect(store.getSnapshot().error).toEqual({ message: 'focus denied' });
   });
 
   it('ignores a focus change to the folder already focused', async () => {
@@ -333,13 +390,13 @@ describe('the focus window', () => {
     engine.ackFocus();
     await flush();
 
-    expect(engine.pulls).toEqual([]);
+    expect(engine.pulls).toHaveLength(1);
 
     // Nor may a later consumer call reopen one.
     store.refresh();
     store.refocus();
     await flush();
-    expect(engine.pulls).toEqual([]);
+    expect(engine.pulls).toHaveLength(1);
     expect(engine.focus).toEqual([FOLDER]);
   });
 });

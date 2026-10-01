@@ -66,11 +66,12 @@ test('signing out returns the tab to the front door', async ({ page }) => {
 });
 
 /**
- * The whole accepted key set: Core Kit's own store, which is the only one this
- * app hands out (`apps/web/src/auth/coreKit.ts`), and the log level `loglevel`
- * writes on import, one key per named logger the torus dependencies build.
+ * The whole accepted key set: Core Kit's own store and the sealed account
+ * address beside it, the only two this app hands out
+ * (`apps/web/src/auth/coreKit.ts`), and the log level `loglevel` writes on
+ * import, one key per named logger the torus dependencies build.
  */
-const ALLOWED_STORAGE_KEY = /^(?:loglevel(?::[\w.-]+)?|corekit_store)$/;
+const ALLOWED_STORAGE_KEY = /^(?:loglevel(?::[\w.-]+)?|corekit_store|cipherbox_account_email)$/;
 
 /**
  * This build carries no Web3Auth credentials, so Core Kit never constructs and

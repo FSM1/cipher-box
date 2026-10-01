@@ -6,7 +6,9 @@
 //! realm). The single engine sits behind an async RwLock: `start`/`command`
 //! take the write lock and serialize, while the reads (`snapshot`, `sharing`,
 //! `siweChallenge`, `download`) share the read lock — a long download never
-//! blocks a snapshot. `nextEvent`
+//! blocks a snapshot. A focus change and a manual refresh take the read lock
+//! alone, so a snapshot reads the cached view beside their network legs.
+//! `nextEvent`
 //! reads the independent event stream and runs concurrently with a command.
 //!
 //! Key material lives only in this worker's WASM linear memory: the login
@@ -211,9 +213,29 @@ impl EngineHandle {
         };
         let engine = self.engine.clone();
         future_to_promise(async move {
-            let mut engine = engine.write().await;
-            let facade_command = focus_names_the_root(facade_command, engine.root());
-            let outcome = engine.command(facade_command).await.map_err(engine_error)?;
+            let outcome = match facade_command {
+                facade::Command::SetFocus { node } => {
+                    let engine = engine.read().await;
+                    let folder = focused_folder(node, engine.root());
+                    engine
+                        .set_focus(Some(folder))
+                        .await
+                        .map(|()| facade::CommandOutcome::Done)
+                }
+                facade::Command::ManualRefresh => {
+                    let filed = engine.read().await.file_forced_pass();
+                    match filed {
+                        Ok(Some(pass)) => {
+                            pass.landed().await.map(|()| facade::CommandOutcome::Done)
+                        }
+                        // No loop to file with: the refresh is the mint the command runs.
+                        Ok(None) => engine.write().await.command(facade_command).await,
+                        Err(error) => Err(error),
+                    }
+                }
+                command => engine.write().await.command(command).await,
+            }
+            .map_err(engine_error)?;
             Ok(encode_outcome(&outcome)?.into())
         })
     }
@@ -701,11 +723,8 @@ fn engine_error(error: EngineError) -> JsValue {
 /// A focus on no folder focuses the engine's current root, as `snapshot` reads
 /// it: a host asks for the root, it never names one (blueprint/web-client.md
 /// "UI state law").
-fn focus_names_the_root(command: facade::Command, root: facade::NodeId) -> facade::Command {
-    match command {
-        facade::Command::SetFocus { node: None } => facade::Command::SetFocus { node: Some(root) },
-        command => command,
-    }
+fn focused_folder(node: Option<facade::NodeId>, root: facade::NodeId) -> facade::NodeId {
+    node.unwrap_or(root)
 }
 
 #[cfg(test)]
@@ -1100,13 +1119,10 @@ mod tests {
     fn a_focus_on_no_folder_focuses_the_engine_root() {
         let root = EngineNodeId([4; 16]);
         let folder = EngineNodeId([5; 16]);
+        assert_eq!(focused_folder(None, root), root);
         assert_eq!(
-            focus_names_the_root(facade::Command::SetFocus { node: None }, root),
-            facade::Command::SetFocus { node: Some(root) }
-        );
-        assert_eq!(
-            focus_names_the_root(facade::Command::SetFocus { node: Some(folder) }, root),
-            facade::Command::SetFocus { node: Some(folder) },
+            focused_folder(Some(folder), root),
+            folder,
             "a named folder stays the focus"
         );
     }

@@ -368,11 +368,7 @@ pub fn focus_folders_due(
 ) -> Vec<NodeId> {
     focus_folders(snapshot, focus)
         .into_iter()
-        .filter(|folder| {
-            last_refreshed
-                .get(folder)
-                .is_none_or(|last| on_access_refresh_due(now, *last, profile))
-        })
+        .filter(|folder| on_access_refresh_due(now, last_refreshed.get(folder).copied(), profile))
         .collect()
 }
 
@@ -386,7 +382,7 @@ pub fn expire_focus_stamps(
     now: UnixMillis,
     profile: &SyncTimingProfile,
 ) {
-    stamps.retain(|_, last| !on_access_refresh_due(now, *last, profile));
+    stamps.retain(|_, last| !on_access_refresh_due(now, Some(*last), profile));
 }
 
 /// Drop every operation-stream folder whose traffic went quiet past the
@@ -405,14 +401,15 @@ pub fn expire_touched_folders(
 }
 
 /// Whether a cached folder outside the focus window is due for an on-access
-/// refresh: it was last refreshed longer ago than the staleness threshold. No
-/// background churn — this fires only when the folder is actually accessed.
+/// refresh: no leg has refreshed it, or it was last refreshed longer ago than
+/// the staleness threshold. No background churn — this fires only when the
+/// folder is actually accessed.
 pub fn on_access_refresh_due(
     now: UnixMillis,
-    last_refreshed: UnixMillis,
+    last_refreshed: Option<UnixMillis>,
     profile: &SyncTimingProfile,
 ) -> bool {
-    elapsed_at_least(now, last_refreshed, profile.stale_after)
+    last_refreshed.is_none_or(|last| elapsed_at_least(now, last, profile.stale_after))
 }
 
 /// A tick loop's control signal.
@@ -605,7 +602,7 @@ pub(crate) fn queue_focus_file(
     row: FocusFile,
 ) {
     let resolved = focus_refreshed.borrow().get(&row.node).copied();
-    if resolved.is_some_and(|last| !on_access_refresh_due(now, last, profile)) {
+    if !on_access_refresh_due(now, resolved, profile) {
         return;
     }
     let mut focus = focus.borrow_mut();
@@ -692,7 +689,7 @@ mod tests {
             expire_focus_stamps(&mut stamps, UnixMillis(now), &profile);
             assert_eq!(stamps.contains_key(&walked), still_held);
             assert_eq!(
-                on_access_refresh_due(UnixMillis(now), UnixMillis(1_000), &profile),
+                on_access_refresh_due(UnixMillis(now), Some(UnixMillis(1_000)), &profile),
                 !still_held,
                 "an evicted stamp reads as due, which is what it already meant",
             );
@@ -980,10 +977,15 @@ mod tests {
         let p = SyncTimingProfile::PRODUCTION; // stale_after 90 s
         assert!(!on_access_refresh_due(
             UnixMillis(89_000),
-            UnixMillis(0),
+            Some(UnixMillis(0)),
             &p
         ));
-        assert!(on_access_refresh_due(UnixMillis(90_000), UnixMillis(0), &p));
+        assert!(on_access_refresh_due(
+            UnixMillis(90_000),
+            Some(UnixMillis(0)),
+            &p
+        ));
+        assert!(on_access_refresh_due(UnixMillis(0), None, &p));
     }
 
     #[test]

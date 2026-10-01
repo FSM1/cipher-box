@@ -109,6 +109,13 @@ export interface RecoveryEnrollment {
 }
 
 /**
+ * The sealed slot that keeps the signed-in address across a reload: the email
+ * alone, never a token, bound to the subject it labels and cleared with the
+ * session store.
+ */
+const ACCOUNT_EMAIL_KEY = 'cipherbox_account_email';
+
+/**
  * How many factors an account with no policy carries. Past that count one has
  * been enrolled, whatever kind it is.
  */
@@ -168,6 +175,7 @@ class Web3AuthSession implements WebCoreKitSession {
       if (await this.storeIsCorrupt()) await this.clearStore();
       throw failure;
     }
+    if (this.isLoggedIn()) this.signedInEmail = await this.keptEmail();
   }
 
   isLoggedIn(): boolean {
@@ -183,6 +191,7 @@ class Web3AuthSession implements WebCoreKitSession {
     this.signedInEmail = credential.email;
     this.signedInSubject = credential.verifierId;
     this.signedInToken = credential.token;
+    await this.keepEmail(credential.verifierId, credential.email);
     if (!this.isLoggedIn()) await this.useStoredDeviceFactor();
     if (this.isLoggedIn()) {
       await this.coreKit.commitChanges();
@@ -477,14 +486,47 @@ class Web3AuthSession implements WebCoreKitSession {
   }
 
   /**
+   * Seals the address beside the session it labels. Best-effort: it is display
+   * chrome, and a refused write costs only the label after a reload.
+   */
+  private async keepEmail(subject: string, email: string | null): Promise<void> {
+    try {
+      if (email === null) await this.store.removeItem(ACCOUNT_EMAIL_KEY);
+      else await this.store.setItem(ACCOUNT_EMAIL_KEY, JSON.stringify({ subject, email }));
+    } catch {
+      // Display chrome only.
+    }
+  }
+
+  /** The kept address, if it labels the subject this session restored. */
+  private async keptEmail(): Promise<string | null> {
+    let kept: { subject?: unknown; email?: unknown } | null;
+    try {
+      const raw = await this.store.getItem(ACCOUNT_EMAIL_KEY);
+      if (raw === null) return null;
+      kept = JSON.parse(raw) as typeof kept;
+    } catch {
+      return null;
+    }
+    const subject = this.subject();
+    return subject !== null && kept?.subject === subject && typeof kept.email === 'string'
+      ? kept.email
+      : null;
+  }
+
+  /**
    * The SDK's own logout blanks its session id in place and leaves the rest of
    * its store standing — a device factor share among it, once MFA is reachable.
    * So every path that leaves this device without a usable session clears it
    * here, whether the session ended, was refused, or was never readable, and
    * takes the wrapping key with it.
    */
-  private clearStore(): Promise<void> {
-    return this.store.purge(this.coreKit._storageKey);
+  private async clearStore(): Promise<void> {
+    try {
+      await this.store.removeItem(ACCOUNT_EMAIL_KEY);
+    } finally {
+      await this.store.purge(this.coreKit._storageKey);
+    }
   }
 
   /**
