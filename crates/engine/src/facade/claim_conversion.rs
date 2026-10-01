@@ -141,9 +141,6 @@ pub(crate) trait ConversionSites {
 
     /// The folder label the claimant's share pointer carries.
     async fn folder_name(&self, node: NodeId) -> Result<String, EngineError>;
-
-    /// The nodes a write-scope cut at `node` leaves in place ([`held_outside`]).
-    async fn held_outside(&self, node: NodeId) -> Result<Vec<[u8; 16]>, EngineError>;
 }
 
 /// What a write-scope cut needs beyond the conversion itself (ADR 0024 D4).
@@ -362,7 +359,7 @@ where
     /// write grantee republishes until its next resolve here.
     ///
     /// `vault_pointer_signer` re-points the vault pointer when a write wave
-    /// moves the vault root. A write wave leaves `held_outside` where it is.
+    /// moves the vault root.
     pub(super) async fn rotate_cut(
         &self,
         node: NodeId,
@@ -370,7 +367,6 @@ where
         scope_root_name: &IpnsName,
         cut: &RevokedCommittedSet,
         vault_pointer_signer: Option<&Ed25519Signer>,
-        held_outside: &[[u8; 16]],
     ) -> Result<CutRotationReport, EngineError> {
         let sweep = self.cut.sweep;
         let rotator = OwnerCutNet {
@@ -395,7 +391,6 @@ where
             scope_id: target.scope.scope_id,
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.cut.vault_root.0,
-            held_outside,
             sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
         };
         let report = rotate_on_cut(&rotator, node, cut)
@@ -835,9 +830,8 @@ where
         })
         .map_err(EngineError::from_revoke)?;
         // The vault root takes no link, so no conversion cuts it.
-        let held_outside = sites.held_outside(node).await?;
         let report = self
-            .rotate_cut(node, target, &scope_root_name, &cut, None, &held_outside)
+            .rotate_cut(node, target, &scope_root_name, &cut, None)
             .await?;
         let write = report.write.ok_or_else(|| EngineError::Seam {
             message: "the write-scope cut ran no write wave".to_owned(),
@@ -1063,10 +1057,6 @@ impl<T: SeamTypes> ConversionSites for EngineSites<'_, T> {
         let rendered = self.engine.render().await?;
         share_display_name(&rendered, node)
     }
-
-    async fn held_outside(&self, node: NodeId) -> Result<Vec<[u8; 16]>, EngineError> {
-        Ok(held_outside(&*self.engine.render().await?, node))
-    }
 }
 
 /// The tick's sites: the boundaries its own walk proved this pass.
@@ -1127,10 +1117,6 @@ impl ConversionSites for TickSites<'_> {
 
     async fn folder_name(&self, node: NodeId) -> Result<String, EngineError> {
         share_display_name(&self.boundaries.base.borrow(), node)
-    }
-
-    async fn held_outside(&self, node: NodeId) -> Result<Vec<[u8; 16]>, EngineError> {
-        Ok(held_outside(&self.boundaries.base.borrow(), node))
     }
 }
 

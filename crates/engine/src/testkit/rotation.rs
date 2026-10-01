@@ -695,7 +695,6 @@ fn write_rotate_family() -> RejectFamily {
             min_read_epoch: CURRENT_READ_EPOCH,
             current_root_name: name,
             is_vault_anchor: false,
-            held_outside: &[],
         };
         block_on(rotate_scope_write(
             &mut SeededEntropy::new(ENTROPY_SEED),

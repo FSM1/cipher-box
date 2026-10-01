@@ -1431,6 +1431,7 @@ impl ScopeRootPromoter for LocalNet {
         _parent: &ChildScopeRef,
         _node: &NodeRef,
         _record: &ResealedScopeRoot,
+        _held_outside: &[[u8; 16]],
     ) -> Result<Vec<NodeRef>, RotationPublishError> {
         Ok(Vec::new())
     }

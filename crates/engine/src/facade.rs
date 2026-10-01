@@ -3949,14 +3949,16 @@ fn subtree_child_scopes(
     Ok(inside)
 }
 
-/// The nodes a folder inside `node` links whose winning link names a parent
-/// outside it ([`GranteeScopePlan::held_outside`]).
+/// The nodes a folder inside `node` links whose winning chain reaches the vault
+/// root without passing `node` ([`GranteeScopePlan::held_outside`]). A chain
+/// that cycles or ends short proves nothing, so its node stays inside.
 fn held_outside(rendered: &Snapshot, node: NodeId) -> Vec<[u8; 16]> {
+    let inside = |id: NodeId| id == node || rendered.is_descendant_of(id, node);
     let mut held: Vec<[u8; 16]> = rendered
         .links()
         .iter()
-        .filter(|link| link.parent == node || rendered.is_descendant_of(link.parent, node))
-        .filter(|link| !rendered.is_descendant_of(link.child, node))
+        .filter(|link| inside(link.parent) && !inside(link.child))
+        .filter(|link| rendered.is_descendant_of(link.child, rendered.root))
         .map(|link| link.child.0)
         .collect();
     held.sort_unstable();
@@ -7134,7 +7136,6 @@ where {
             .vault_pointer_index
             .get()
             .map(|index| session.vault_pointer_signer(index));
-        let held_outside = held_outside(&*self.render().await?, node);
         let report = self
             .conversion_pass(session, api, &keys)
             .rotate_cut(
@@ -7143,7 +7144,6 @@ where {
                 scope_root_name,
                 cut,
                 vault_pointer_signer.as_ref(),
-                &held_outside,
             )
             .await?;
         if let Some(write) = report.write.as_ref() {
@@ -7319,7 +7319,7 @@ where {
         // this label, so a link minted past it would be one nobody can claim.
         let display_name = share_display_name(&rendered, node)?;
         let subtree = subtree_child_scopes(&rendered, node, &current.direct_child_scope_index)?;
-        let held_outside = held_outside(&rendered, node);
+        let held = held_outside(&rendered, node);
 
         let pointer_read_key = session.pointer_read_key(&node.0);
         let pseudonym_signer = session.owner_writer_pseudonym_signer(&node.0);
@@ -7343,7 +7343,7 @@ where {
             write_cut: granted_write_scope_seed.as_deref(),
             pointer_read_key: pointer_read_key.as_bytes(),
             subtree_child_index: &subtree,
-            held_outside: &held_outside,
+            held_outside: &held,
         };
         let owner = OwnerGrantKeys {
             enc_secret: session.enc_subkey(),
@@ -11425,6 +11425,40 @@ mod tests {
             sole_holder(&contacts, &[8; SECRET_LEN]).map(|contact| contact.identity_pk.clone()),
             Some(vec![3; IDENTITY_PUBLIC_LEN])
         );
+    }
+
+    /// A link that loses the rank to a folder outside the grant is held. A
+    /// cycle or a self ref that outranks a node's inside link proves no chain
+    /// to the vault root, so the node stays inside.
+    #[test]
+    fn only_a_winning_chain_to_the_vault_root_holds_a_node_outside() {
+        let (root, granted, a, x, f, keep) = (
+            NodeId([1; 16]),
+            NodeId([2; 16]),
+            NodeId([3; 16]),
+            NodeId([4; 16]),
+            NodeId([5; 16]),
+            NodeId([6; 16]),
+        );
+        let tree = || {
+            let mut snap = Snapshot::new(root);
+            for (parent, child) in [(root, granted), (granted, a), (a, x), (x, f), (root, keep)] {
+                snap.link(parent, child, 1);
+            }
+            snap
+        };
+
+        let mut held = tree();
+        held.link(keep, x, 2);
+        assert_eq!(held_outside(&held, granted), vec![x.0]);
+
+        let mut cycle = tree();
+        cycle.link(x, a, 5);
+        assert!(held_outside(&cycle, granted).is_empty());
+
+        let mut self_ref = tree();
+        self_ref.link(a, a, 5);
+        assert!(held_outside(&self_ref, granted).is_empty());
     }
 
     /// The proved-descendant set decides the own-plane floor namespace, so the

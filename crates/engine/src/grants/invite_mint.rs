@@ -505,6 +505,7 @@ mod tests {
             _parent: &ChildScopeRef,
             _node: &NodeRef,
             record: &ResealedScopeRoot,
+            _held_outside: &[[u8; 16]],
         ) -> Result<Vec<NodeRef>, RotationPublishError> {
             self.publish_scope_root(record).await?;
             Ok(self

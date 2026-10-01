@@ -74,7 +74,7 @@ use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor};
 use crate::grants::child_index::canonicalize;
-use crate::grants::create::ScopePointerVoucher;
+use crate::grants::create::{ScopePointerVoucher, drop_held_refs};
 use crate::grants::{
     GrantResumeResolver, InteriorRecord, InteriorResealer, MovingChild, PromotedScopeRoot,
     ScopeRootPromoter, UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row,
@@ -2458,6 +2458,7 @@ where
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
+        held_outside: &[[u8; 16]],
     ) -> Result<Vec<NodeRef>, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         // The interior move this promotion heads seals under the same seed.
@@ -2468,11 +2469,12 @@ where
         // A node that already answers as a scope root is not a promotion, and
         // one whose record does not gate is refused rather than republished
         // under a body this pass invented ([`ScopeRootPromoter`]).
-        let current = match self.resolve_child(parent, node).await {
+        let mut current = match self.resolve_child(parent, node).await {
             Ok(SweptChild::Interior(current)) => current,
             Ok(SweptChild::ScopeRoot(_)) => return Err(RotationPublishError::Rejected),
             Err(failure) => return Err(promote_verdict(failure)),
         };
+        drop_held_refs(&mut current.read_body, held_outside);
         let children = body_children(&current.read_body);
         let base = RepublishBase {
             read_body: current.read_body,
@@ -12169,7 +12171,6 @@ mod tests {
             min_read_epoch: OWNER_ROOT_EPOCH,
             current_root_name: &root.name,
             is_vault_anchor: true,
-            held_outside: &[],
         }
     }
 
@@ -13643,7 +13644,7 @@ mod tests {
 
         let lease = floor::acquire_write_epoch_lease(&node_id).expect("the scope starts free");
         assert_eq!(
-            block_on(net.promote_scope_root(&scope, &node, &record)),
+            block_on(net.promote_scope_root(&scope, &node, &record, &[])),
             Err(RotationPublishError::NotPublished),
         );
         assert_eq!(

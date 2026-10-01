@@ -372,10 +372,6 @@ pub struct RotateScopeWritePlan<'a> {
     /// Whether this scope is the vault anchor — the scope the session's indexed
     /// vault pointer names ([`RepointChannel::VaultPointer`]).
     pub is_vault_anchor: bool,
-    /// The nodes a folder of the scope links whose winning link
-    /// ([`Snapshot::links_ranked`](crate::sync::model::Snapshot::links_ranked))
-    /// names a parent outside it. The wave leaves each one at the name it holds.
-    pub held_outside: &'a [[u8; 16]],
 }
 
 /// A completed write rotation. Holding one is proof the whole subtree was
@@ -696,7 +692,7 @@ where
     // 4) Enumerate the subtree from published records. BFS yields the root first,
     //    then level order; the wave processes descendants child-first (reversed) and
     //    the root last.
-    let bfs = collect_subtree(resolver, scope_id, resumed_root.as_ref(), plan.held_outside).await?;
+    let bfs = collect_subtree(resolver, scope_id, resumed_root.as_ref()).await?;
     let (root, descendants) = bfs
         .split_first()
         .expect("collect_subtree always yields at least the root");
@@ -884,13 +880,11 @@ fn repoint_stage(channel: RepointChannel) -> &'static str {
 /// BFS the write scope's subtree from `root_id` via the resolver: root first, then
 /// level order. A `node_id`-keyed visited set terminates diamonds/cycles fail-
 /// closed (a tree has none, but the walk never loops). An unresolvable node aborts
-/// — a partial subtree is never a complete wave. A child in `held_outside` drops
-/// out of its parent's children, so the wave neither moves nor renames it.
+/// — a partial subtree is never a complete wave.
 async fn collect_subtree<R: WriteSubtreeResolver>(
     resolver: &R,
     root_id: [u8; 16],
     resumed: Option<&ResumedRoot>,
-    held_outside: &[[u8; 16]],
 ) -> Result<Vec<WriteScopeNode>, WriteRotateError> {
     let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
     let mut order: Vec<WriteScopeNode> = Vec::new();
@@ -900,15 +894,13 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
     queue.push_back(root_id);
 
     while let Some(id) = queue.pop_front() {
-        let mut node = resolver
+        let node = resolver
             .resolve_node(&id, resumed)
             .await
             .map_err(|reason| WriteRotateError::Resolve {
                 node_id: id,
                 reason,
             })?;
-        node.child_node_ids
-            .retain(|child| !held_outside.contains(child));
         for child in &node.child_node_ids {
             if visited.insert(*child) {
                 queue.push_back(*child);

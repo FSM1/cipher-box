@@ -385,7 +385,6 @@ fn plan<'a>(
         min_read_epoch: 7,
         current_root_name: current_root,
         is_vault_anchor: true,
-        held_outside: &[],
     }
 }
 
@@ -728,7 +727,6 @@ fn a_scope_below_the_anchor_publishes_the_scope_pointer_alone() {
             &publisher,
             &RotateScopeWritePlan {
                 is_vault_anchor: false,
-                held_outside: &[],
                 ..plan(&owner, &c, &sig, &current_root)
             },
         )

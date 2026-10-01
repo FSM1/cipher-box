@@ -93,7 +93,8 @@ pub struct GranteeScopePlan<'a> {
     /// The nodes a folder inside the grant links whose winning link
     /// ([`Snapshot::links_ranked`](crate::sync::model::Snapshot::links_ranked))
     /// names a parent outside it. Readers resolve each one under that parent,
-    /// so the interior re-seal leaves it in the scope it holds.
+    /// so the grant leaves it in the scope it holds and drops the losing ref
+    /// ([`drop_held_refs`]).
     pub held_outside: &'a [[u8; 16]],
 }
 
@@ -537,12 +538,14 @@ pub trait ScopeRootPromoter {
     /// Returns the children of the body it promoted. That body is the new scope
     /// root's, so its children are the interior the fresh scope now owns: taking
     /// them from the publish rather than from a read of the caller's own binds
-    /// the re-seal to the record this call made current.
+    /// the re-seal to the record this call made current. The promoted body
+    /// drops its refs to `held_outside` ([`drop_held_refs`]).
     async fn promote_scope_root(
         &self,
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
+        held_outside: &[[u8; 16]],
     ) -> Result<Vec<NodeRef>, RotationPublishError>;
 }
 
@@ -642,8 +645,7 @@ struct InteriorBounds {
     source: ChildScopeRef,
     /// The read epoch that scope was gated at.
     source_read_epoch: u64,
-    /// The nodes the walk stops at: the descendant scope roots, and the nodes
-    /// [`GranteeScopePlan::held_outside`] names.
+    /// The descendant scope roots the walk stops at.
     stop_at: BTreeSet<[u8; 16]>,
     /// Which of the nodes the walk meets it may move.
     admits: InteriorAdmission,
@@ -1201,7 +1203,7 @@ where
     // (dest-first). A folder becoming a scope root is a promotion, not a
     // republish ([`ScopeRootPromoter`]).
     let promoted_children = net
-        .promote_scope_root(&parent_ref, &folder, &grantee_record)
+        .promote_scope_root(&parent_ref, &folder, &grantee_record, grantee.held_outside)
         .await
         .map_err(CreateGrantError::Publish)?;
 
@@ -1337,15 +1339,22 @@ where
         record: grantee_record,
         override_seed,
         frontier,
-        mut bounds,
+        bounds,
     } = root;
-    bounds.stop_at.extend(grantee.held_outside);
 
     // Re-seal the folder's interior nodes into the scope that now owns them.
     // Their records still seal under the read key of the scope the folder left,
     // which no reader of the fresh scope derives and no epoch-1 history link
     // walks back to (blueprint/engine.md "subtree swept in").
-    reseal_granted_interior(net, net, &grantee_record, frontier, &bounds).await?;
+    reseal_granted_interior(
+        net,
+        net,
+        &grantee_record,
+        frontier,
+        &bounds,
+        grantee.held_outside,
+    )
+    .await?;
 
     // Re-key the reparented direct children so each ascent link re-seals under
     // the fresh grantee derivation (see `GranteeScopePlan::subtree_child_index`;
@@ -1454,6 +1463,15 @@ where
     })
 }
 
+/// Drop `body`'s refs to `held_outside`. Each is the losing link of a node the
+/// grant leaves outside, so dropping it is the observed repair of that
+/// dual-link (blueprint/engine.md rebase table, "Dual-link").
+pub(crate) fn drop_held_refs(body: &mut ReadBody, held_outside: &[[u8; 16]]) {
+    if let ReadBody::Folder { children, .. } = body {
+        children.retain(|child| !held_outside.contains(&child.id));
+    }
+}
+
 /// Whether `published` commits exactly the row `minted` mints: the recipient,
 /// the permission, the masked key and the writer pseudonym, not the blinded tag
 /// alone. Preserved unknown fields are ignored — a published entry may carry
@@ -1492,6 +1510,7 @@ async fn reseal_granted_interior<R, P>(
     root: &ResealedScopeRoot,
     frontier: Vec<NodeRef>,
     bounds: &InteriorBounds,
+    held_outside: &[[u8; 16]],
 ) -> Result<(), CreateGrantError>
 where
     R: SweepResolver + GrantResumeResolver,
@@ -1502,7 +1521,10 @@ where
     while !frontier.is_empty() {
         let mut next = Vec::new();
         for child in &frontier {
-            if !visited.insert(child.node_id) || bounds.stop_at.contains(&child.node_id) {
+            if !visited.insert(child.node_id)
+                || bounds.stop_at.contains(&child.node_id)
+                || held_outside.contains(&child.node_id)
+            {
                 continue;
             }
             if let InteriorAdmission::Measured(measured) = &bounds.admits
@@ -1516,7 +1538,8 @@ where
                 .resolve_moving_child(&bounds.source, root, child)
                 .await
             {
-                Ok(MovingChild::Pending(node)) => {
+                Ok(MovingChild::Pending(mut node)) => {
+                    drop_held_refs(&mut node.read_body, held_outside);
                     // Release-active (security rule 8). The read admits any
                     // record at or below the scope's epoch, so a record that
                     // regressed since the pass would travel into the grantee's
@@ -2290,6 +2313,7 @@ mod tests {
             parent: &ChildScopeRef,
             _node: &NodeRef,
             record: &ResealedScopeRoot,
+            _held_outside: &[[u8; 16]],
         ) -> Result<Vec<NodeRef>, RotationPublishError> {
             if parent.ipns_name != self.current_parent_name() {
                 return Err(RotationPublishError::Rejected);

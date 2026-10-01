@@ -88,8 +88,6 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     /// repoint-regression check scopes its read-epoch stage to. Distinct from
     /// [`scope_id`](Self::scope_id) whenever the cut is anchored below the root.
     pub session_root_scope_id: [u8; 16],
-    /// The write wave's [`RotateScopeWritePlan::held_outside`].
-    pub held_outside: &'a [[u8; 16]],
     /// Builds the lazy-wave sweep task the read cascade enqueues once its cut is
     /// durable. Nullary: a cut is anchored at one scope root, and the task needs
     /// the name and ancestor seed that scope was read under, not just its id.
@@ -405,7 +403,6 @@ where
                     min_read_epoch,
                     current_root_name: self.scope_root_name,
                     is_vault_anchor,
-                    held_outside: self.held_outside,
                 },
             )
             .await
