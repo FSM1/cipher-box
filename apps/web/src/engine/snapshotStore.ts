@@ -102,7 +102,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
   // `undefined` until the first `setFocus`, which reaches the engine even when it
   // names the root: a cold start at the root has sent no focus yet.
   let focus: Uint8Array | null | undefined = undefined;
-  // Any newer intent — a landed pull or a focus change — supersedes whatever is
+  // Any newer intent — a new pull, or `supersedePulls` — supersedes whatever is
   // in flight, so an older folder's late answer never lands over a newer one.
   let generation = 0;
   // `stalenessChanged` is edge-triggered while a descriptor's rung is computed
