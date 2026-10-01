@@ -7,7 +7,8 @@
 //! inbox — what another device would see — never on a command's return alone.
 
 use core::cell::RefCell;
-use core::task::{Context, Waker};
+use core::pin::pin;
+use core::task::{Context, Poll, Waker};
 use core::time::Duration;
 
 use cipherbox_core::hex::lower as hex_lower;
@@ -45,6 +46,7 @@ use cipherbox_engine::grants::{
     StagingReceivedShareStore, import_contact, mint_grant_row, mint_invite_grant,
     post_invite_claim, recipient_blinded_tag, row_is_owner_attested,
 };
+use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::eol::eol_from;
 use cipherbox_engine::rotation::{
@@ -56,6 +58,7 @@ use cipherbox_engine::seams::{
 };
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::op::ScopeCrossing;
+use cipherbox_engine::sync::owed_rotation::OWED_ROTATION_PREFIX;
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
 use cipherbox_engine::sync::{
     BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, doomed_journal_key, owner_tag,
@@ -627,10 +630,12 @@ impl GrantScenario {
         self.world
             .record_store
             .fail_put_for(write_name(ROOT).as_str());
-        assert!(
-            self.grant_folder_to_recipient().is_err(),
-            "the parent index update fails, so the mint reports the partial commit"
+        assert_eq!(
+            self.grant_folder_to_recipient(),
+            Ok(CommandOutcome::Done),
+            "the parent index update fails after the promotion, so the move is owed"
         );
+        assert_eq!(self.owed_scopes(), vec![self.folder]);
         self.world
             .record_store
             .heal_put_for(write_name(ROOT).as_str());
@@ -647,11 +652,19 @@ impl GrantScenario {
     /// the next one — which is the read this fails.
     fn strand_the_owed_wave(&mut self) {
         self.with_a_failing_cut(|fx| {
-            assert!(
-                fx.grant_folder_at(Permission::Write).is_err(),
-                "the write-scope cut fails, so the share never reaches its delivery"
+            assert_eq!(
+                fx.grant_folder_at(Permission::Write),
+                Ok(CommandOutcome::Done),
+                "the write-scope cut fails after the promotion, so it and the delivery are owed"
             );
         });
+        assert_eq!(self.owed_scopes(), vec![self.folder]);
+    }
+
+    /// The scope roots the engine has reported owed rotation work at since the
+    /// last read of the stream.
+    fn owed_scopes(&mut self) -> Vec<NodeId> {
+        owed_scopes(&mut self._events)
     }
 
     /// Run `share` with this folder's cut-epoch bar unreadable past the two
@@ -1273,21 +1286,22 @@ fn a_cut_whose_floor_raise_fails_still_refuses_the_next_owner_action() {
         vec![recipient_row_at_root(CorePermission::Write)],
     );
     let alice = world.device(b"alice");
-    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+    let (mut engine, mut events, _tasks) = boot_owner(&world, &blocks, &alice);
     import_recipient(&mut engine);
     alice
         .floor_store
         .fail_floor_raises_for(&floor_label(&write_epoch_floor_key(&SCOPE)));
 
-    assert!(
+    assert_eq!(
         block_on(engine.command(Command::ChangePermission {
             node: ROOT,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
             permission: Permission::Read,
-        }))
-        .is_err(),
-        "the cut reports the floor it could not raise"
+        })),
+        Ok(CommandOutcome::Done),
+        "the cut set is published, so the floor it could not raise is owed"
     );
+    assert_eq!(owed_scopes(&mut events), vec![ROOT], "and reported owed");
     assert_ne!(
         scope_repoint(&world, &SCOPE).current_root,
         seeded_root,
@@ -2619,6 +2633,19 @@ fn events_so_far(events: &mut EventStream) -> Vec<Event> {
         out.push(event);
     }
     out
+}
+
+/// The scope roots the stream reports owed rotation work at, once each.
+fn owed_scopes(events: &mut EventStream) -> Vec<NodeId> {
+    let mut scopes: Vec<NodeId> = events_so_far(events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::RotationWorkOwed { scope_root, .. } => Some(scope_root),
+            _ => None,
+        })
+        .collect();
+    scopes.dedup();
+    scopes
 }
 
 /// How many abuse events the stream holds.
@@ -4266,12 +4293,12 @@ fn stranded_override_seed(section: &GrantSection, node: NodeId) -> Zeroizing<[u8
         .expect("the owner blob yields the scope's override seed")
 }
 
-/// A live scope root the index lost commits the grant that minted it. A share
-/// of the same folder to another recipient is refused there rather than
-/// resumed, so no second recipient is grafted onto a scope whose committed set
-/// holds nothing for them.
+/// A live scope root the index lost commits the grant that minted it, and the
+/// move it stalled in is owed. A share of the same folder to another recipient
+/// finishes that grant first (ADR 0063 D5), so the second recipient is
+/// appended to a scope that stands rather than grafted onto a stalled one.
 #[test]
-fn a_share_to_another_recipient_over_a_scope_the_index_lost_is_refused() {
+fn a_share_to_another_recipient_over_a_scope_the_index_lost_finishes_it_then_appends() {
     let mut fx = GrantScenario::new();
     let stranded = fx.strand_the_grantee_scope();
 
@@ -4292,16 +4319,23 @@ fn a_share_to_another_recipient_over_a_scope_the_index_lost_is_refused() {
                 grantee_name: None,
             })
         ),
-        Err(EngineError::UnsupportedTarget {
-            check: "resume-not-this-grant"
-        }),
+        Ok(CommandOutcome::Done),
+    );
+    let section =
+        published_grant_section(&fx.world, &fx.blocks, fx.folder).expect("the scope still answers");
+    assert!(
+        stranded_override_seed(&section, fx.folder) == stranded_override_seed(&stranded, fx.folder),
+        "the first grant finished against the root it promoted"
     );
     assert_eq!(
-        published_grant_section(&fx.world, &fx.blocks, fx.folder)
-            .expect("the stranded scope still answers")
-            .commitment,
-        stranded.commitment,
-        "and the first grantee's scope is untouched"
+        section.commitment.entries.len(),
+        2,
+        "and the second recipient is appended to it"
+    );
+    assert_eq!(
+        delivered_share_pointer(&fx.recipient_device).scope_root_name,
+        write_name(fx.folder).as_str().as_bytes(),
+        "the first grant's owed delivery landed"
     );
 }
 
@@ -4317,9 +4351,10 @@ fn a_share_below_a_scope_root_the_index_lost_is_refused() {
     fx.world
         .record_store
         .fail_put_for(write_name(ROOT).as_str());
-    assert!(
-        fx.grant_folder_to_recipient().is_err(),
-        "the parent index update fails, so the scope goes live unnamed"
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Ok(CommandOutcome::Done),
+        "the parent index update fails, so the scope goes live unnamed and its move is owed"
     );
     fx.world
         .record_store
@@ -4349,9 +4384,10 @@ fn an_unindexed_scope_probe_does_not_read_a_refused_pointer_as_no_scope() {
     fx.world
         .record_store
         .fail_put_for(write_name(ROOT).as_str());
-    assert!(
-        fx.grant_folder_to_recipient().is_err(),
-        "the parent index update fails, so the scope goes live unnamed"
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Ok(CommandOutcome::Done),
+        "the parent index update fails, so the scope goes live unnamed and its move is owed"
     );
     fx.world
         .record_store
@@ -4545,11 +4581,11 @@ fn a_stalled_grant_re_drives_into_the_scope_the_first_attempt_promoted() {
     fx.world
         .record_store
         .fail_put_for(write_name(stalled).as_str());
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     assert_eq!(
-        fx.grant_folder_to_recipient(),
-        Err(EngineError::PartialCommit {
-            check: "interior-publish-failed",
-        }),
+        fx.owed_scopes(),
+        vec![fx.folder],
+        "the interior move is owed"
     );
     let promoted = published_grant_section(&fx.world, &fx.blocks, fx.folder)
         .expect("the folder answers as a scope root the stall did not undo");
@@ -4610,10 +4646,12 @@ fn a_grant_that_stalls_twice_is_still_re_drivable() {
         .record_store
         .fail_put_for(write_name(stalled).as_str());
     for drive in 1..=2 {
-        assert!(
-            fx.grant_folder_to_recipient().is_err(),
-            "drive {drive} stalls in the interior move"
+        assert_eq!(
+            fx.grant_folder_to_recipient(),
+            Ok(CommandOutcome::Done),
+            "drive {drive} stalls in the interior move, which stays owed"
         );
+        assert_eq!(fx.owed_scopes(), vec![fx.folder]);
     }
     let promoted = published_grant_section(&fx.world, &fx.blocks, fx.folder)
         .expect("the folder answers as a scope root both stalls left standing");
@@ -4681,14 +4719,10 @@ fn an_interior_node_that_cannot_publish_posts_no_share_pointer() {
         .record_store
         .fail_put_for(write_name(inner).as_str());
 
-    // The promoted root is already on the network and the move it stalled in is
-    // re-drivable, which is what the partial-commit class reports.
-    assert_eq!(
-        fx.grant_folder_to_recipient(),
-        Err(EngineError::PartialCommit {
-            check: "interior-publish-failed",
-        }),
-    );
+    // The promoted root is already on the network, so the move it stalled in
+    // and the delivery after it are owed (ADR 0063 D5).
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(fx.owed_scopes(), vec![fx.folder]);
     assert!(
         inbox(&fx.recipient_device).is_empty(),
         "and no share pointer names a scope whose interior the grantee cannot open"
@@ -9510,6 +9544,385 @@ fn a_stalled_link_mint_leaves_the_owner_reading_the_folder() {
     );
 }
 
+/// A link mint whose interior move stalls files the parent's sweep, and that
+/// sweep names the promoted root in the parent index. A later share of the
+/// folder then appends a row to that root, and the interior move must still
+/// finish, or no reader of the granted scope opens the interior.
+#[test]
+fn a_share_after_the_parent_sweep_heals_the_index_finishes_the_stalled_interior_move() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    block_on(fx.engine.command(Command::Create {
+        parent: inner,
+        name: "notes.txt".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a metadata create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    fx.world
+        .record_store
+        .fail_put_for(write_name(inner).as_str());
+    fx.mint_link();
+    fx.world
+        .record_store
+        .heal_put_for(write_name(inner).as_str());
+    settle_filed_sweeps(&fx);
+    assert!(
+        block_on(fx.engine.sharing(fx.folder))
+            .expect("a sharing read")
+            .state
+            .is_some(),
+        "the parent sweep named the promoted root in the index"
+    );
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let lists_the_file = |engine: &Engine<FakeSeamTypes>| {
+        block_on(engine.view())
+            .expect("a rendered view")
+            .children(inner)
+            .iter()
+            .any(|child| child.name == "notes.txt")
+    };
+    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        lists_the_file(&fx.engine),
+        "the owner reads the interior folder"
+    );
+
+    let (mut grantee, _grantee_events, mut grantee_tasks) = recipient_session(&fx);
+    settle(&fx, &grantee, &mut grantee_tasks);
+    block_on(grantee.command(Command::SetFocus { node: Some(inner) })).expect("the focus moves");
+    settle(&fx, &grantee, &mut grantee_tasks);
+    assert!(
+        lists_the_file(&grantee),
+        "the grantee reads the interior folder"
+    );
+
+    let head = published_head(&fx.world, &fx.blocks, &write_name(inner))
+        .expect("the interior node is published");
+    assert_eq!(
+        decode_envelope(&head).expect("the head decodes").scope,
+        fx.folder.0,
+        "the interior node belongs to the granted scope"
+    );
+}
+
+/// The write-epoch floor reads a write revoke makes before its read cascade
+/// publishes the cut set. Every read after them fails, so the wave stops.
+const READS_BEFORE_THE_WAVE: u64 = 5;
+
+/// A write grant, then a revoke whose write wave stops after the read cascade
+/// published the cut set. Returns the revokee's write scope seed.
+fn strand_a_write_revoke(fx: &mut GrantScenario) -> [u8; 32] {
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let granted = fx.granted_scope_repoint();
+    let section = published_grant_section_at(&fx.world, &fx.blocks, &granted.current_root)
+        .expect("the granted root");
+    let revokee_seed = grantee_write_scope_seed(&section, &granted.current_root, &fx.folder.0, 1);
+    let _ = fx.owed_scopes();
+
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_after(&write_epoch_floor_key(&fx.folder.0), READS_BEFORE_THE_WAVE);
+    assert_eq!(
+        command_across_retries(
+            fx,
+            Command::Revoke {
+                node: fx.folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+            }
+        ),
+        Ok(CommandOutcome::Done),
+        "the cut set is published, so the wave that stops is owed, not refused"
+    );
+    fx.owner_device.floor_store.heal_floors();
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "and reported owed");
+    assert_eq!(
+        fx.granted_scope_repoint().current_root,
+        granted.current_root,
+        "the wave did not move the scope"
+    );
+    revokee_seed
+}
+
+/// Drive `command` to its end, moving virtual time on by one poll cadence each
+/// time it sleeps between attempts.
+fn command_across_retries(
+    fx: &mut GrantScenario,
+    command: Command,
+) -> Result<CommandOutcome, EngineError> {
+    let cadence = fx.engine.profile().poll_cadence;
+    let scheduler = fx.world.scheduler.clone();
+    let mut future = pin!(fx.engine.command(command));
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..64 {
+        if let Poll::Ready(outcome) = future.as_mut().poll(&mut cx) {
+            return outcome;
+        }
+        scheduler.advance(cadence);
+    }
+    panic!("the command never settled");
+}
+
+/// The revoke's cut is done: the scope moved one write epoch, the revokee's
+/// seed derives no name it answers at, and the moved root commits no row for
+/// them.
+fn assert_the_revoke_finished(fx: &GrantScenario, revokee_seed: &[u8; 32]) {
+    let after = fx.granted_scope_repoint();
+    assert_eq!(after.write_epoch, 3, "one wave past the grant's");
+    assert_ne!(
+        derive_write_name(revokee_seed, &fx.folder.0),
+        after.current_root,
+        "the revokee's seed no longer derives the scope's root"
+    );
+    assert_eq!(fx.committed_permission(&after.current_root), None);
+}
+
+/// ADR 0063 D3: a revoke whose write wave stops after the cut set publishes
+/// is owed work, and the next sync pass finishes it with no command.
+#[test]
+fn a_revoke_whose_write_wave_stops_is_finished_by_the_next_pass() {
+    let mut fx = GrantScenario::new();
+    let revokee_seed = strand_a_write_revoke(&mut fx);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_the_revoke_finished(&fx, &revokee_seed);
+    assert!(fx.owed_scopes().is_empty(), "and nothing is owed");
+}
+
+/// ADR 0063 D5: the same revoke run again re-drives the owed work. The row is
+/// already cut, so the command finishes what it owes and is not refused as a
+/// revoke of a grant nobody holds.
+#[test]
+fn a_revoke_run_again_over_its_owed_wave_finishes_it() {
+    let mut fx = GrantScenario::new();
+    let revokee_seed = strand_a_write_revoke(&mut fx);
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_the_revoke_finished(&fx, &revokee_seed);
+    assert!(fx.owed_scopes().is_empty(), "and nothing is owed");
+}
+
+/// ADR 0063 D3: a promoted write scope whose write-scope cut did not run is
+/// finished by the next sync pass, which also delivers the pointer it owed.
+#[test]
+fn a_promoted_scope_whose_write_cut_did_not_run_is_finished_by_the_pass() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    let stalled = write_name(fx.folder);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved, stalled, "the pass ran the owed write cut");
+    assert_eq!(fx.granted_blob_carries_write_seed(&moved), Some(true));
+    assert_eq!(
+        delivered_share_pointer(&fx.recipient_device).scope_root_name,
+        moved.as_str().as_bytes(),
+        "and delivered the pointer at the moved root"
+    );
+}
+
+/// ADR 0063 D2 and D3: the entry is durable, so a session started later on the
+/// same device finishes the owed work at its first pass.
+#[test]
+fn a_session_started_later_on_the_same_device_finishes_the_owed_work() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    let stalled = write_name(fx.folder);
+
+    let (fresh, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &fresh, &mut tasks);
+
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved, stalled, "the first pass ran the owed write cut");
+    assert_eq!(
+        delivered_share_pointer(&fx.recipient_device).scope_root_name,
+        moved.as_str().as_bytes(),
+    );
+    assert!(owed_scopes(&mut events).is_empty(), "and nothing is owed");
+}
+
+/// ADR 0063 D1: the delivery of a write grant is owed work of its own. A
+/// pointer the mailbox refuses leaves the grant owed, and the pass delivers it
+/// once the mailbox takes it.
+#[test]
+fn a_write_grant_whose_delivery_fails_is_delivered_by_the_pass() {
+    let mut fx = GrantScenario::new();
+    let recipient = recipient_identity().verifying_key().to_sec1();
+    fx.world.mailbox_hub.forget_recipient(&recipient);
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the delivery is owed");
+    assert!(inbox(&fx.recipient_device).is_empty());
+
+    fx.world.mailbox_hub.remember_recipient(&recipient);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_eq!(
+        delivered_share_pointer(&fx.recipient_device).scope_root_name,
+        moved.as_str().as_bytes(),
+        "the pass delivered the pointer at the root the cut moved to"
+    );
+    assert!(fx.owed_scopes().is_empty(), "and nothing is owed");
+}
+
+/// ADR 0063 D2: an entry that cannot be made durable refuses the command
+/// before its first publish, and leaves nothing owed.
+#[test]
+fn an_entry_that_is_not_durable_refuses_the_grant_before_any_publish() {
+    let mut fx = GrantScenario::new();
+    fx.owner_device
+        .staging_store
+        .inner()
+        .interrupt_staged_write_family_after(OWED_ROTATION_PREFIX, 0);
+
+    assert!(
+        fx.grant_folder_at(Permission::Write).is_err(),
+        "the grant is refused"
+    );
+    assert_eq!(
+        published_grant_section(&fx.world, &fx.blocks, fx.folder),
+        None,
+        "before anything publishes"
+    );
+    assert!(fx.owed_scopes().is_empty(), "and nothing is owed");
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        published_grant_section(&fx.world, &fx.blocks, fx.folder),
+        None,
+        "and no pass publishes it later"
+    );
+}
+
+/// ADR 0063 D2: the same refusal for a cut. The revoke publishes nothing, and
+/// the recipient keeps the row.
+#[test]
+fn an_entry_that_is_not_durable_refuses_the_revoke_before_any_publish() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let before = fx.granted_scope_repoint();
+    fx.owner_device
+        .staging_store
+        .inner()
+        .interrupt_staged_write_family_after(OWED_ROTATION_PREFIX, 0);
+
+    assert!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1())
+            .is_err(),
+        "the revoke is refused"
+    );
+    let after = fx.granted_scope_repoint();
+    assert_eq!(after.current_root, before.current_root, "nothing moved");
+    assert_eq!(
+        fx.committed_permission(&after.current_root),
+        Some(CorePermission::Write),
+        "and the row stands"
+    );
+    assert!(fx.owed_scopes().is_empty(), "and nothing is owed");
+}
+
+/// ADR 0063 D4: the renewal walk renews no name of a scope with owed work,
+/// and still renews the names of every other scope.
+#[test]
+fn the_renewal_walk_skips_a_scope_with_owed_work() {
+    let mut fx = GrantScenario::new();
+    let recipient = recipient_identity().verifying_key().to_sec1();
+    fx.world.mailbox_hub.forget_recipient(&recipient);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the delivery is owed");
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let inner_before = sequence_at(&fx.world, &write_name(inner));
+    let outer_before = sequence_at(&fx.world, &write_name(outer));
+    let folder = fx.folder;
+
+    let (world, mut events, _later) = restart_later_on_the_same_device(fx);
+
+    assert_eq!(
+        sequence_at(&world, &write_name(outer)),
+        outer_before + 1,
+        "the vault root's scope renews"
+    );
+    assert_eq!(
+        sequence_at(&world, &write_name(inner)),
+        inner_before,
+        "the owed scope does not"
+    );
+    assert_eq!(
+        owed_scopes(&mut events),
+        vec![folder],
+        "the later session still reports the scope owed"
+    );
+}
+
+/// ADR 0063 consequence 8: a device that holds no owed entry meets a scope
+/// root whose name the write seed it holds does not derive. The walk tells
+/// the owner the write cut did not finish.
+#[test]
+fn the_walk_reports_a_write_cut_that_did_not_finish() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    let folder = fx.folder;
+
+    let (world, mut events, (_device, later, mut tasks)) = restart_later(fx);
+    // The later device's first boundary walk opens no write blob of the
+    // scope yet, so the walk pass after the next one reports it.
+    world.scheduler.advance(RE_PUT_INTERVAL);
+    tick(&world, &later, &mut tasks);
+
+    let mut unfinished: Vec<NodeId> = events_so_far(&mut events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::WriteCutUnfinished { scope_root } => Some(scope_root),
+            _ => None,
+        })
+        .collect();
+    unfinished.dedup();
+    assert_eq!(
+        unfinished,
+        vec![folder],
+        "the walk reports the unfinished write cut at its scope root"
+    );
+}
+
 /// A fragment is bearer key material a host hands over unread, so anything that
 /// is not one is a fail-closed refusal that reaches no mailbox — never a partial
 /// reconstruction of an identity nobody committed.
@@ -10864,14 +11277,46 @@ fn restart_later_with(
         _tasks,
         ..
     } = fx;
-    drop((engine, _tasks));
+    let device = world.device(b"the owner's later device");
+    prepare(&device);
+    start_later_on(world, &blocks, device, (engine, _tasks))
+}
+
+/// [`restart_later`], on the owner's own device, so what it staged carries.
+fn restart_later_on_the_same_device(
+    fx: GrantScenario,
+) -> (
+    FakeWorld,
+    EventStream,
+    (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>),
+) {
+    let GrantScenario {
+        world,
+        blocks,
+        owner_device,
+        engine,
+        _tasks,
+        ..
+    } = fx;
+    start_later_on(world, &blocks, owner_device, (engine, _tasks))
+}
+
+fn start_later_on(
+    world: FakeWorld,
+    blocks: &Blocks,
+    device: FakeDevice,
+    stopped: (Engine<FakeSeamTypes>, Vec<BoxedTask>),
+) -> (
+    FakeWorld,
+    EventStream,
+    (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>),
+) {
+    drop(stopped);
     drop(world.scheduler.take_spawned_tasks());
     world
         .scheduler
         .advance(Duration::from_secs(65 * 24 * 60 * 60));
-    let device = world.device(b"the owner's later device");
-    prepare(&device);
-    let (engine, events, mut tasks) = boot_owner(&world, &blocks, &device);
+    let (engine, events, mut tasks) = boot_owner(&world, blocks, &device);
     for _ in 0..3 {
         tick(&world, &engine, &mut tasks);
     }

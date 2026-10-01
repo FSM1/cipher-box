@@ -97,5 +97,5 @@ pub use trigger::{
     CutRotationReport, CutRotator, GrantCutPlan, RevokeError, RevokedCommittedSet,
     RotateOnCutError, RotateOnExit, RotationPlanes, RotationTrigger, ScopeExitReport,
     ScopeExitRotator, WriteRevokeKind, consume_scope_exit_triggers, cut_for_write_scope,
-    revoke_grants, revoke_read_grant, revoke_write_grant, rotate_on_cut,
+    owed_read_cut, revoke_grants, revoke_read_grant, revoke_write_grant, rotate_on_cut,
 };

@@ -618,6 +618,20 @@ pub fn cut_for_write_scope(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSe
     })
 }
 
+/// The read cut an owed rotation entry still owes over the set the owner
+/// already published (ADR 0063 D3). The cut set is on the network, so the set
+/// is verified rather than re-signed, as [`cut_for_write_scope`] does. The
+/// recipients it withholds come from the durable revocation floor the first
+/// attempt raised before its root publish.
+pub fn owed_read_cut(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSet, RevokeError> {
+    let mut cut = cut_for_write_scope(plan)?;
+    cut.planes = RotationPlanes {
+        read: true,
+        write: false,
+    };
+    Ok(cut)
+}
+
 /// The rotation edge a committed-set cut is driven over: one arm per plane.
 ///
 /// The pure driver ([`rotate_on_cut`]) owns which planes fire and in what order;

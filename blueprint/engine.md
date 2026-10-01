@@ -191,8 +191,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   one, because the drain owes a publish there. An acknowledged mark that never
   clears stops the renewal of that name. The walk renews no name in a scope
   that has an owed rotation entry (ADR 0063 D4). When it meets an owned scope
-  root whose name its write seed does not derive, it emits an event, so every
-  owner device shows a write cut that did not finish.
+  root whose name its write seed does not derive, it emits
+  `writeCutUnfinished`, so every owner device shows a write cut that did not
+  finish.
 - **Revival**: after a >EOL lapse, a key-holding session fetches cached bytes
   from the authenticated recovery endpoint and extracts the last-known CID —
   or recovers it from the pin set's name→CID mapping — then mints a fresh

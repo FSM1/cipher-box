@@ -53,6 +53,7 @@ use crate::settings::{SessionPlacement, VaultSettingsSummary};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{BookkeepingCursors, DrainCells, QueueHold};
 use crate::sync::model::Snapshot;
+use crate::sync::owed_rotation::OwedCell;
 use crate::sync::project::UnlinkedChild;
 use crate::sync::rebase::QueueScanMemo;
 use crate::sync::render::BaseSnapshot;
@@ -426,6 +427,15 @@ pub(crate) struct SessionState {
     pub(crate) pending_invite_claims: Rc<RefCell<ClaimCounts>>,
     /// Set while a conversion pass runs (`ConversionPass::running`).
     pub(crate) conversion_running: Rc<Cell<bool>>,
+    /// This session's copy of the owed rotation record (ADR 0063 D1), which
+    /// commands and the tick write through.
+    pub(crate) owed_rotation: Rc<OwedCell>,
+    /// Whether a pass of this session has re-driven the owed rotation work,
+    /// which the renewal walk waits for (ADR 0063 D3).
+    pub(crate) owed_rotation_driven: Rc<Cell<bool>>,
+    /// The scope roots the last boundary walk met with a write cut that did
+    /// not finish, which the renewal walk reports.
+    pub(crate) unfinished_write_cuts: Rc<RefCell<BTreeSet<[u8; 16]>>>,
     /// Retained dead-lettered ops. Feeds
     /// [`SnapshotView`](crate::facade::SnapshotView)'s dead-letter surface (#33
     /// D6: dead letters are retained, never silent).
@@ -561,6 +571,9 @@ impl SessionState {
             minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
             pending_invite_claims: Rc::new(RefCell::new(ClaimCounts::default())),
             conversion_running: Rc::new(Cell::new(false)),
+            owed_rotation: Rc::new(OwedCell::default()),
+            owed_rotation_driven: Rc::new(Cell::new(false)),
+            unfinished_write_cuts: Rc::new(RefCell::new(BTreeSet::new())),
             dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
             queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
             queue_hold: Rc::new(RefCell::new(None)),

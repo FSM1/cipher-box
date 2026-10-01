@@ -61,6 +61,7 @@ pub use create::{
     MintNet, MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, PromotedSubtree,
     ScopePointerVoucher, ScopeRootPromoter, converge_grant_subtree, create_grant,
     mint_grantee_scope, post_share_pointer, post_share_pointer_at, resume_grantee_scope,
+    resume_owed_interior_move,
 };
 pub use cut_set::{
     GranteeCut, LinkSources, RevokedPerson, committed_grantee, expired_links, grantee_cut_set,

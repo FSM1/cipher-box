@@ -144,6 +144,7 @@ mod tests {
                 seed: Zeroizing::new([n; SECRET_LEN]),
                 epoch: 1,
             }),
+            write_cut_unfinished: false,
         }
     }
 

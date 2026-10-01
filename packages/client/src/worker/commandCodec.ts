@@ -128,6 +128,8 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   vaultUnprovisioned: true,
   vaultSettingsChanged: true,
   scopeExitCutOwed: true,
+  rotationWorkOwed: true,
+  writeCutUnfinished: true,
   granteeJoined: true,
   opProgress: true,
 };

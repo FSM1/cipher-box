@@ -585,6 +585,12 @@ where
                 );
                 hold_captures(&state.observed_unlinks, departed);
                 install_walked_read_epochs(&state.walked_read_epochs, &walked.proved);
+                *state.unfinished_write_cuts.borrow_mut() = walked
+                    .proved
+                    .iter()
+                    .filter(|scope| scope.write_cut_unfinished)
+                    .map(|scope| scope.scope_id)
+                    .collect();
                 install_unproved_scopes(
                     &state.unproved_scope_roots,
                     walked.proved.iter().map(|s| NodeId(s.scope_id)),
@@ -1196,12 +1202,15 @@ where
             scope_roots_walked: &state.scope_roots_walked,
             counts: &state.pending_invite_claims,
             running: &state.conversion_running,
+            owed: &state.owed_rotation,
         };
         let sites = TickSites {
             boundaries,
             root_name: &root_name,
             walked: state.scope_roots_walked.get(),
         };
+        conversion.redrive_owed(&sites).await;
+        state.owed_rotation_driven.set(true);
         let converted = conversion
             .run(&sites, &pointers, claims.unwrap_or_default(), None)
             .await
@@ -1970,6 +1979,7 @@ mod tests {
                 },
                 read_scope_seed: Zeroizing::new(READ_SCOPE_SEED),
                 write,
+                write_cut_unfinished: false,
             }
         }
 

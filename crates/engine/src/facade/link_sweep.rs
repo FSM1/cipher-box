@@ -261,10 +261,17 @@ where
         )?;
         let node = NodeId(target.scope.scope_id);
         let report = self
-            .rotate_cut(node, target, &scope_root_name, &cut, None)
+            .rotate_owed_cut(
+                node,
+                target,
+                &scope_root_name,
+                &cut,
+                None,
+                current.write_epoch,
+            )
             .await?;
         let rekeyed = report
-            .read
+            .and_then(|report| report.read)
             .map(|read| {
                 read.rekeyed
                     .iter()
