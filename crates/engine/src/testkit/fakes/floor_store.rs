@@ -39,8 +39,8 @@ impl Inner {
     /// [`OwnerScopedFloorStore`](crate::seams::OwnerScopedFloorStore), and an
     /// injector names the floor, not the identity holding it. Exact past that,
     /// so a fault injected for one name cannot fire for another that ends in it.
-    /// A sequence floor is stored under its name label, so an injector names
-    /// that label ([`sequence_floor_label`](crate::testkit::account::sequence_floor_label)).
+    /// A floor is stored under its name label, so an injector names that label
+    /// ([`floor_label`](crate::testkit::account::floor_label)).
     /// The whole key matches too, for a unit test that drives this store bare.
     fn refuse(&self, key: &[u8]) -> Option<SeamError> {
         injected(&self.failing, key)

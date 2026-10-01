@@ -408,7 +408,12 @@ A reader of local storage sees which encryption subkeys the owner cut or granted
 The `/granted/` shape covers every converted claimant. The crypto gate on FSM1/cipher-box#1594
 raised this in a comment on FSM1/cipher-box#1591, and FSM1/cipher-box#1604 closed
 FSM1/cipher-box#1591 without a fix. FSM1/cipher-box#2009 now tracks it. D10 blinds the sharer
-prefix, not this one.
+prefix, not this one. Closed on 2026-10-01 by FSM1/cipher-box#2141: the owner view labels the
+epoch namespace too (ADR 0016 D3), and both hosts delete the old epoch floors once at the
+upgrade, so these keys hold no raw subkey. The cost is a replay gap the owner accepted because v2
+runs only on staging: an upgraded device loses its revocation marker and cut-epoch floor, so it can
+adopt a replayed root that carries a pre-cut commitment, and its next re-key at that scope can wrap
+the new seed to a removed recipient again.
 
 **E6 — A committed writer can still plant an ascent public half.** D9 makes the swap
 attributable, not impossible. An owner cut repairs it.

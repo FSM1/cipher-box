@@ -49,6 +49,8 @@ pub struct FileFloorStore {
 const INTENT_TAG_EPOCH: u8 = 0;
 /// Intent-record tag for a sequence-namespace raise.
 const INTENT_TAG_SEQUENCE: u8 = 1;
+/// Present once `epoch/` holds only name-labelled keys.
+const EPOCH_LABELLED_MARKER: &str = "epoch-labelled";
 
 impl FileFloorStore {
     /// Opens (creating if absent) a floor store rooted at `dir`. Reopening
@@ -70,7 +72,25 @@ impl FileFloorStore {
             write_lock: Arc::new(Mutex::new(())),
         };
         store.replay_intents()?;
+        store.drop_unlabelled_epoch_floors(dir)?;
         Ok(store)
+    }
+
+    /// Empties `epoch/` once, after the replay so a leftover intent cannot
+    /// rewrite an old key behind the sweep. A store written before the epoch
+    /// keys took their name label holds keys the engine no longer reads, some
+    /// naming a recipient subkey in the clear (ADR 0016 D3); `seq/` kept its
+    /// shape. The marker is written only after the sweep lands.
+    fn drop_unlabelled_epoch_floors(&self, dir: &Path) -> SeamResult<()> {
+        let marker = dir.join(EPOCH_LABELLED_MARKER);
+        if read_file_opt(&marker)
+            .map_err(|err| seam_err("floor_store read epoch marker", &err))?
+            .is_some()
+        {
+            return Ok(());
+        }
+        empty_dir(&self.epoch_dir).map_err(|err| seam_err("floor_store drop epoch", &err))?;
+        atomic_write(&marker, &[]).map_err(|err| seam_err("floor_store write epoch marker", &err))
     }
 
     fn read_floor(&self, dir: &Path, key: &[u8], op: &str) -> SeamResult<Option<u64>> {
@@ -306,6 +326,50 @@ mod tests {
             block_on(reopened.epoch_floor(b"scope")).unwrap(),
             None,
             "the replay must have nothing left to re-raise"
+        );
+    }
+
+    /// A store the previous release left — an old-shape epoch floor, a sequence
+    /// floor, and a crashed batch naming another old epoch key — opens with no
+    /// epoch floor and its sequence floor kept, and a later reopen sweeps nothing.
+    #[test]
+    fn the_first_open_drops_old_epoch_floors_once_and_keeps_sequence_floors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("floors");
+        ensure_dir(&path.join("epoch")).unwrap();
+        ensure_dir(&path.join("seq")).unwrap();
+        ensure_dir(&path.join("intent")).unwrap();
+        atomic_write(
+            &path.join("epoch").join(to_hex(b"old-scope/revoked/")),
+            &3u64.to_le_bytes(),
+        )
+        .unwrap();
+        atomic_write(
+            &path.join("seq").join(to_hex(b"labelled-name")),
+            &9u64.to_le_bytes(),
+        )
+        .unwrap();
+        atomic_write(
+            &path.join("intent").join("crashed"),
+            &encode_intent(&[FloorRaise::epoch(b"old-scope/granted/".to_vec(), 4)]).unwrap(),
+        )
+        .unwrap();
+
+        let store = FileFloorStore::open(&path).unwrap();
+        for key in [&b"old-scope/revoked/"[..], b"old-scope/granted/"] {
+            assert_eq!(block_on(store.epoch_floor(key)).unwrap(), None);
+        }
+        assert_eq!(
+            block_on(store.sequence_floor(b"labelled-name")).unwrap(),
+            Some(9)
+        );
+
+        block_on(store.raise_epoch_floor(b"new-scope", 5)).unwrap();
+        let reopened = FileFloorStore::open(&path).unwrap();
+        assert_eq!(
+            block_on(reopened.epoch_floor(b"new-scope")).unwrap(),
+            Some(5),
+            "the sweep runs once, not on every open"
         );
     }
 

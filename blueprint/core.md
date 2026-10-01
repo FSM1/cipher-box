@@ -714,7 +714,7 @@ their suite entry in the KAT manifest (ADR 0015 D3).
 | genesis-write-scope-seed | login secret                                                    | the genesis writeScopeSeed                      |
 | contact-label-seed       | login secret                                                    | contactLabelSeed (device-only)                  |
 | contact-label            | contactLabelSeed, contact identityPk                            | a local label for a contact identity            |
-| name-label               | contactLabelSeed, sequence-namespace key                        | a local label for a durable sequence key        |
+| name-label               | contactLabelSeed, floor-store key                               | a local label for a durable floor key           |
 | committed-recipient-mask | pointerReadKey, blinded tag                                     | the commitment's recipient mask                 |
 
 `committed-recipient-mask` is what lets the owner sign a grant's recipient into
@@ -728,8 +728,9 @@ The contact-label pair is the one edge whose output never reaches the wire
 label keys durable device-local state that would otherwise name a contact in the
 clear, and the seed is the account's alone, so no observer who holds the identity
 key can recompute it. `name-label` is the seed's second consumer, on the same
-terms: it labels the durable sequence-floor key, which would otherwise name in
-the clear every record this device bars replay on (ADR 0016). Its message is the
+terms: it labels every durable floor key, which would otherwise name in the
+clear every record this device bars replay on and every recipient the owner cut
+or granted at a scope (ADR 0016 D3). Its message is the
 whole store key rather than a fixed-width id — the catalog's one variable-length
 `keyed_hash` message, sound because the context stays fixed and `keyed_hash` is
 a pseudorandom function over a message of any length.

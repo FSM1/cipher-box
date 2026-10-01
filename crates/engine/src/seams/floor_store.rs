@@ -147,12 +147,12 @@ impl FloorRaise {
 /// scope id is the anchored all-zero id16 for **every** account, so the root
 /// scope's floors are exactly where two identities would land on one key.
 ///
-/// Every sequence-namespace key takes the account's [`kdf::name_label`] before
-/// the tag, so the durable key is `ownerTag(32) ‖ nameLabel(32)` and names no
-/// record a reader of local storage could resolve (ADR 0016).
-/// The label is account-wide, not per-contact, so one name still keeps
-/// one sequence ratchet whichever view raises it. The epoch namespace keeps its
-/// plain key: a scope id is sealed body content, not a public name.
+/// Every key in both namespaces takes the account's [`kdf::name_label`] before
+/// the tag, so the durable key is `ownerTag(32) ‖ nameLabel(32)`. A sequence
+/// key then names no record, and an epoch key names no recipient the owner cut
+/// or granted, to a reader of local storage (ADR 0016 D3). The label is
+/// account-wide, not per-contact, so one name still keeps one sequence ratchet
+/// whichever view raises it.
 ///
 /// The tag and the label seed are bound once, from the session the engine
 /// derives at [`start`](crate::facade::Engine::start). Every read and every
@@ -172,7 +172,7 @@ pub struct OwnerScopedFloorStore<F> {
 }
 
 /// What one session's bind gives the view: the identity every key hangs under,
-/// and the seed every sequence key labels under. The seed zeroizes on drop, so
+/// and the seed every key labels under. The seed zeroizes on drop, so
 /// a rebind wipes the session it replaces.
 struct BoundIdentity {
     tag: [u8; OWNER_TAG_LEN],
@@ -204,46 +204,38 @@ impl<F> OwnerScopedFloorStore<F> {
         });
     }
 
-    /// `key` under the bound identity, or a refusal when none is bound. A
-    /// sequence key takes its name label first, so what the store holds is
-    /// fixed-width in both namespaces and opaque in the sequence one.
-    fn scoped(&self, namespace: FloorNamespace, key: &[u8]) -> SeamResult<Vec<u8>> {
+    /// `key`'s name label under the bound identity, or a refusal when none is
+    /// bound.
+    fn scoped(&self, key: &[u8]) -> SeamResult<Vec<u8>> {
         let bound = self.bound.borrow();
         let Some(bound) = bound.as_ref() else {
             return Err(SeamError::new("floor_store: no identity is bound"));
         };
-        Ok(match namespace {
-            FloorNamespace::Epoch => prefixed(&bound.tag, key),
-            FloorNamespace::Sequence => prefixed(
-                &bound.tag,
-                &kdf::name_label(bound.label_seed.as_bytes(), key),
-            ),
-        })
+        Ok(prefixed(
+            &bound.tag,
+            &kdf::name_label(bound.label_seed.as_bytes(), key),
+        ))
     }
 }
 
 impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
     async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
-        self.inner
-            .epoch_floor(&self.scoped(FloorNamespace::Epoch, scope_id)?)
-            .await
+        self.inner.epoch_floor(&self.scoped(scope_id)?).await
     }
 
     async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
         self.inner
-            .raise_epoch_floor(&self.scoped(FloorNamespace::Epoch, scope_id)?, epoch)
+            .raise_epoch_floor(&self.scoped(scope_id)?, epoch)
             .await
     }
 
     async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
-        self.inner
-            .sequence_floor(&self.scoped(FloorNamespace::Sequence, ipns_name)?)
-            .await
+        self.inner.sequence_floor(&self.scoped(ipns_name)?).await
     }
 
     async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
         self.inner
-            .raise_sequence_floor(&self.scoped(FloorNamespace::Sequence, ipns_name)?, sequence)
+            .raise_sequence_floor(&self.scoped(ipns_name)?, sequence)
             .await
     }
 
@@ -255,7 +247,7 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
             .map(|raise| {
                 Ok(FloorRaise {
                     namespace: raise.namespace,
-                    key: self.scoped(raise.namespace, &raise.key)?,
+                    key: self.scoped(&raise.key)?,
                     value: raise.value,
                 })
             })

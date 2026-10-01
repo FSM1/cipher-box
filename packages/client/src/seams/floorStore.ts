@@ -32,9 +32,15 @@ export class IdbFloorStore implements FloorStoreSeam {
   private readonly open: () => Promise<IDBDatabase>;
 
   constructor(dbName = 'cipherbox-floors') {
-    this.open = memoizedDatabase(dbName, 1, (db) => {
-      db.createObjectStore(EPOCH_STORE);
-      db.createObjectStore(SEQUENCE_STORE);
+    this.open = memoizedDatabase(dbName, 2, (db, oldVersion, upgrade) => {
+      if (oldVersion < 1) {
+        db.createObjectStore(EPOCH_STORE);
+        db.createObjectStore(SEQUENCE_STORE);
+        return;
+      }
+      // Version 1 held epoch keys the engine no longer writes, some naming a
+      // recipient subkey in the clear (ADR 0016 D3); sequence keys kept their shape.
+      if (oldVersion < 2) upgrade.objectStore(EPOCH_STORE).clear();
     });
   }
 

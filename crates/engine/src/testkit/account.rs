@@ -57,12 +57,12 @@ pub const MEMBER_NODE: &str = "https://kubo.member.test";
 const LOGIN_CHALLENGE: &str =
     "cipherbox-login:v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-/// The name label this account keys a durable sequence floor under
+/// The name label this account keys a durable floor under
 /// ([`OwnerScopedFloorStore`](crate::seams::OwnerScopedFloorStore)), with the
 /// owner tag stripped — what a floor-fault injector names, since the store
-/// holds no raw `ipnsName`.
+/// holds no raw key.
 #[must_use]
-pub fn sequence_floor_label(name: &[u8]) -> [u8; 32] {
+pub fn floor_label(name: &[u8]) -> [u8; 32] {
     kdf::name_label(kdf::contact_label_seed(&SECRET).as_bytes(), name)
 }
 

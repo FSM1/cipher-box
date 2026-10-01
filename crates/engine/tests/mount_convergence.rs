@@ -28,8 +28,8 @@ use cipherbox_engine::seams::{BoxedTask, FloorStore, OpId, RecordTransport, Stag
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::testkit::account::{
-    Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, owner_identity,
-    serve_http,
+    Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, floor_label,
+    owner_identity, serve_http,
 };
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
@@ -843,7 +843,7 @@ fn a_start_whose_floor_read_fails_surfaces_it_and_a_later_cut_vouches() {
     let mount = world.device(b"mounted-desktop");
     mount
         .floor_store
-        .fail_epoch_floor_reads_after(&SCOPE, CATCH_UP_FLOOR_READ);
+        .fail_epoch_floor_reads_after(&floor_label(&SCOPE), CATCH_UP_FLOOR_READ);
     let (mut second, mut events, _tasks) = boot(&world, &blocks, &mount, 7);
     mount.floor_store.heal_floors();
     assert!(

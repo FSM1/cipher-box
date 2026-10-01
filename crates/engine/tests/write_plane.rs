@@ -71,9 +71,8 @@ use cipherbox_engine::sync::{
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
-    bin_index_mark_keys, owner_identity, owner_pointer_read_key, owner_pseudonym,
-    registry_batch_refused, seed_account, seed_account_published_after_put, sequence_floor_label,
-    serve_http,
+    bin_index_mark_keys, floor_label, owner_identity, owner_pointer_read_key, owner_pseudonym,
+    registry_batch_refused, seed_account, seed_account_published_after_put, serve_http,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{
@@ -6654,9 +6653,7 @@ fn a_restore_retried_over_a_destination_that_already_names_it_publishes_one_ref(
     // The destination publishes, and only its self-adopt fails.
     alice
         .floor_store
-        .fail_floor_raises_for(&sequence_floor_label(
-            write_name(folder).as_str().as_bytes(),
-        ));
+        .fail_floor_raises_for(&floor_label(write_name(folder).as_str().as_bytes()));
     block_on(engine.command(Command::Restore {
         node: doomed,
         into: Some(folder),
@@ -10251,7 +10248,7 @@ fn a_create_whose_parent_publish_never_ran_leaves_the_mark_down() {
     let child = child_id(&engine, ROOT, "photo.bin");
     alice
         .floor_store
-        .fail_floor_raises_for(&sequence_floor_label(write_name(child).as_str().as_bytes()));
+        .fail_floor_raises_for(&floor_label(write_name(child).as_str().as_bytes()));
     tick(&world, &engine, &mut tasks);
 
     assert_eq!(
@@ -10281,7 +10278,7 @@ fn assert_a_failed_root_adopt_still_marks(
 ) {
     device
         .floor_store
-        .fail_floor_raises_for(&sequence_floor_label(root_name.as_str().as_bytes()));
+        .fail_floor_raises_for(&floor_label(root_name.as_str().as_bytes()));
     let before = published(&world.record_store, ROOT).0;
     tick(world, engine, tasks);
 

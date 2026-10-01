@@ -26,16 +26,20 @@ export function transactionDone(tx: IDBTransaction): Promise<void> {
   });
 }
 
+/** Declares or migrates a database's object stores; see {@link openDatabase}. */
+export type UpgradeHook = (db: IDBDatabase, oldVersion: number, upgrade: IDBTransaction) => void;
+
 /**
  * Opens (creating on first use) an IndexedDB database, running `onUpgrade` to
- * declare its object stores. Every call returns a fresh connection over the
- * same durable backing — which is exactly the conformance kits' "reopen"
- * factory contract.
+ * declare its object stores, or to migrate them from `oldVersion` (0 on
+ * create) inside the version-change transaction `upgrade`. Every call returns a
+ * fresh connection over the same durable backing — which is exactly the
+ * conformance kits' "reopen" factory contract.
  */
 export function openDatabase(
   name: string,
   version: number,
-  onUpgrade: (db: IDBDatabase) => void
+  onUpgrade: UpgradeHook
 ): Promise<IDBDatabase> {
   if (typeof indexedDB === 'undefined') {
     // No fallback tier by design: an unavailable IndexedDB is an
@@ -43,11 +47,33 @@ export function openDatabase(
     return Promise.reject(new Error('IndexedDB is unavailable in this realm'));
   }
   return new Promise((resolve, reject) => {
+    let blocked = false;
     const request = indexedDB.open(name, version);
-    request.onupgradeneeded = () => onUpgrade(request.result);
-    request.onsuccess = () => resolve(request.result);
+    // `transaction` is the version-change transaction for the whole event.
+    request.onupgradeneeded = (event) =>
+      onUpgrade(request.result, event.oldVersion, request.transaction as IDBTransaction);
+    request.onsuccess = () => {
+      const db = request.result;
+      // A blocked open stays pending and can still succeed; nobody holds that
+      // connection, and left open it would block a later delete.
+      if (blocked) {
+        db.close();
+        return;
+      }
+      // Give way to a newer schema, or a worker that takes over at failover is
+      // blocked by a connection its predecessor has not closed yet. A delete
+      // (`newVersion` null) still blocks: an erase or a reclaim must not take a
+      // store an engine holds open.
+      db.onversionchange = (event) => {
+        if (event.newVersion !== null) db.close();
+      };
+      resolve(db);
+    };
     request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'));
-    request.onblocked = () => reject(new Error(`IndexedDB open blocked for "${name}"`));
+    request.onblocked = () => {
+      blocked = true;
+      reject(new Error(`IndexedDB open blocked for "${name}"`));
+    };
   });
 }
 
@@ -61,7 +87,7 @@ export function openDatabase(
 export function memoizedDatabase(
   name: string,
   version: number,
-  onUpgrade: (db: IDBDatabase) => void
+  onUpgrade: UpgradeHook
 ): () => Promise<IDBDatabase> {
   let opening: Promise<IDBDatabase> | null = null;
   return () =>
