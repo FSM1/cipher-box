@@ -51,14 +51,12 @@ after its other steps land, so a share that returned `Ok` under D5 still reaches
 failure keeps the entry and sends `Event::RotationWorkOwed` with the scope root, a key-material-free
 check, and whether a retry can clear it.
 
-**D4 — The renewal walk renews no name in a scope that has an owed entry.** Such a scope has names
-under a seed that a revoked writer still holds, or names that no current seed derives. The finished
-work republishes every name of the scope at a fresh EOL, and that is the renewal of the scope. While
-the owed record of the device does not open, the walk renews every name and the engine sends the
-signal at each pass. It never signs a name under a seed that does not derive that name (ADR 0061
-D4). The cause is local (storage, a bug, a rollback), and a revoked writer already holds the seed of
-each name from before the cut, so a renewal gives no new access. A stop of all renewal lapses the
-whole vault.
+**D4 — The renewal walk renews no name in a scope that has an owed entry.** Such a scope has names under a
+seed that a revoked writer still holds, or names that no current seed derives. The finished work republishes
+every name of the scope at a fresh EOL, and that is the renewal of the scope. While the owed record of the
+device does not open, the walk renews every name, and its report names the unread record for each scope at
+each pass. It still signs no name under a seed that does not derive it (ADR 0061 D4): the cause is local,
+and a revoked writer already holds each seed from before the cut, so the renewal gives no new access.
 
 **D5 — After its first publish, a command whose step stops returns `Ok`, and the work is owed.**
 The published cut cannot be taken back, so `Err` would state that the command did not run. The
