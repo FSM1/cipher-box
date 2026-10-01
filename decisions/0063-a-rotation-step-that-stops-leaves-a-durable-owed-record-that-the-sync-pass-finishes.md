@@ -1,6 +1,6 @@
 # ADR 0063 — A rotation step that stops leaves a durable owed record, and the sync pass finishes it
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-01
 - **Date:** 2026-10-01
 - **Relates to:** `blueprint/engine.md` "Rotation primitives" (rotateScopeWrite, Triggers),
   "Grants and ledger" and "Host seams", `blueprint/core.md` owner-local kind registry, the
@@ -79,8 +79,8 @@ command on the same scope while its entry stands re-drives the entry. It does no
 - **Return `Err` when a step stops.** The host then shows a failure for a cut that is published,
   and a retry of a revoke finds no grant row.
 - **Renew a promoted scope under the enclosing scope's write seed (FSM1/cipher-box#2124).** The
-  walk then signs under a seed that does not derive the scope root's name. ADR 0061 D4, as
-  FSM1/cipher-box#2112 rewrites it, refuses that.
+  walk then signs under a seed that does not derive the scope root's name, which ADR 0061 D4
+  refuses.
 - **Finish a stranded interior move in `append_share`, in the granted-scope sweep, or by a parent
   sweep that does not repair the index** (FSM1/cipher-box#2134 options 1, 3 and 4). The first
   waits for a second share. The second widens what the granted-scope sweep admits. The third
@@ -99,7 +99,7 @@ command on the same scope while its entry stands re-drives the entry. It does no
    reject for each ordered pair.
 4. `CONTEXT.md` adds the term "Owed rotation work", and "Forgery window" states the bound of
    consequence 2.
-5. ADR 0061 D3 step 2 carries an "Amended by ADR 0063 D4" sentence at acceptance.
+5. ADR 0061 D3 step 2 carries an "Amended by ADR 0063 D4" sentence.
 6. `blueprint/engine.md` "Sharing residuals" states the cost of a local record: only the device
    that holds the entry re-drives the work. On another owner device, a revoked writer keeps the
    old write seed until the first device runs a pass, and an owner action runs a write-scope cut

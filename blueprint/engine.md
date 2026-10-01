@@ -77,7 +77,7 @@ by the decomposition (FSM1/cipher-box-next#28 D3) and the rotation design's mand
 | **RecordTransport** | Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes against a configured endpoint set; a rejected PUT reports its HTTP status | `fetch`                                      | `reqwest`     |
 | **Http**            | Plain HTTP for the API client, trustless gateway, and BYO providers                                                                            | `fetch`                                      | `reqwest`     |
 | **Scheduler**       | Timers, background task execution, wall clock (ADR 0044)                                                                                       | Worker timers                                | Tokio         |
-| **StagingStore**    | Durable op queue + staged upload bytes (storage-policy budget); the `renewal-cursor` (ADR 0061 D2)                                             | IndexedDB + OPFS                             | Local journal |
+| **StagingStore**    | Durable op queue + staged upload bytes (storage-policy budget); the `renewal-cursor` (ADR 0061 D2); the `owed-rotation` record (ADR 0063 D1)   | IndexedDB + OPFS                             | Local journal |
 | **SnapshotCache**   | Durable last-known-good record/metadata cache backing cache-first reads                                                                        | IndexedDB                                    | Local store   |
 | **CredentialStore** | Refresh-token persistence                                                                                                                      | No-op (HTTP-only cookie rides the Http seam) | OS keychain   |
 
@@ -189,7 +189,10 @@ bytes (FSM1/cipher-box-next#28 D2).
   a grant section on any other child outside the bin is a `TrustViolation`.
   The walk also skips a name whose acknowledged sequence is above the admitted
   one, because the drain owes a publish there. An acknowledged mark that never
-  clears stops the renewal of that name.
+  clears stops the renewal of that name. The walk renews no name in a scope
+  that has an owed rotation entry (ADR 0063 D4). When it meets an owned scope
+  root whose name its write seed does not derive, it emits an event, so every
+  owner device shows a write cut that did not finish.
 - **Revival**: after a >EOL lapse, a key-holding session fetches cached bytes
   from the authenticated recovery endpoint and extracts the last-known CID —
   or recovers it from the pin set's name→CID mapping — then mints a fresh
@@ -984,7 +987,7 @@ seal is drawn per channel rather than copied: a fresh nonce makes each block
 unique, so identical bytes at two names would join the account-level
 vault-pointer name to a scope-pointer name every grantee of that scope holds. Neither channel is
 best-effort: the scope pointer flips first, the vault pointer second, and a wave
-that does not land both stays incomplete and resumable rather than leaving the
+that does not land both stays owed (below) rather than leaving the
 cold-start anchor naming a root the scope has moved off. Inventory swap rides the
 normal paths: wave publishes enroll new names via register-first; interior old
 names batch-retire at completion; the old root lingers until the migration window
@@ -1006,6 +1009,21 @@ Non-triggers: intra-scope rename/move, content writes, adding a grant to an
 existing scope root. Scheduled hygiene is deferred, designed-for — the same
 primitive on a timer.
 
+**Owed rotation work**
+([ADR 0063](../decisions/0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)).
+Before its first publish (a cut set publish, or a promotion publish), an owner
+command writes an entry to the owner-local `owed-rotation` record: the scope
+id, the cut epoch, and the steps still owed in command order (a read cut, a
+write cut, an interior move, the delivery of a write grant). The entry holds no
+seed; a re-drive recovers an in-flight write seed from the published records.
+A refused write stops the command with `Err` before any publish. The entry
+advances as each step lands, and clears after the cut-epoch floor record, the
+write-epoch floor raise and the index re-point. Each sync pass re-drives every
+entry after the drain, and the first pass of a session does so before the
+renewal walk. After its first publish, a command whose step stops returns
+`Ok`; the engine emits `rotationWorkOwed` at once and on each pass while the
+entry stands, and the same command on that scope re-drives the entry.
+
 The **expired-link sweep**
 ([ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)
 D2) runs in owner sessions on a cadence slower than the 30 s tick. It walks
@@ -1020,7 +1038,9 @@ rebases and signs above.
 
 ### Residuals (as amended by FSM1/cipher-box-next#38)
 
-- Write-grantee survivors: the forgery window stays wave-bounded.
+- Write-grantee survivors: the forgery window stays wave-bounded. A wave that
+  stops stays owed, so the bound is the next sync pass on the device that
+  started the cut (ADR 0063).
 - Read-only survivors: a revokee can pin their view for at most ~one
   pointer-consult interval after the re-point publish — "bounded by wave
   duration" was wrong and is retired.
@@ -1114,7 +1134,9 @@ surviving committed grants uniformly in the republish it already does.
   to the recipient's mailbox. A committed writer of the parent scope can splice
   a source-scope node into a stalled resume; the resume admits it, and the
   writer gains no capability, because the ascent link and the source name key
-  already let it author in the granted scope. An **append**, on an existing
+  already let it author in the granted scope. A stalled interior move,
+  write-scope cut or write-grant delivery is owed rotation work, which the sync
+  pass re-drives through the resume path (ADR 0063 D1, D3). An **append**, on an existing
   scope root: one more row and grant blob, the commitment re-signed, and the root published
   once at the current epoch — no new seed, no re-seal of the subtree, no
   converge step; the new grantee reads the whole history of the scope (D6). A
@@ -1291,7 +1313,7 @@ surviving committed grants uniformly in the republish it already does.
 
 ### Sharing residuals
 
-Accepted by ADRs 0023 to 0028:
+Accepted by ADRs 0023 to 0028 and ADR 0063:
 
 - A link holder, or anyone with the URL, unmasks every committed recipient key
   (`CONTEXT.md` "Grant ledger", ADR 0024 E4).
@@ -1330,6 +1352,12 @@ Accepted by ADRs 0023 to 0028:
 - The invite secret rests in the grantee's received-shares list until the
   personal blob lands, or for the link lifetime when conversion refuses
   (ADR 0024 E1).
+- Owed rotation work is local: only the device that holds the entry re-drives
+  it. On another owner device, a revoked writer keeps the old write seed until
+  the first device runs a pass; an owner action there runs a write-scope cut
+  from the published state. A lost first device leaves a revoke and an interior
+  move owed for ever. No manual "rotate write keys now" action exists yet
+  (ADR 0063 consequence 6).
 
 ## Mailbox logic
 
