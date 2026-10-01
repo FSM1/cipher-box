@@ -47,12 +47,19 @@ export function openDatabase(
     return Promise.reject(new Error('IndexedDB is unavailable in this realm'));
   }
   return new Promise((resolve, reject) => {
+    let blocked = false;
     const request = indexedDB.open(name, version);
     // `transaction` is the version-change transaction for the whole event.
     request.onupgradeneeded = (event) =>
       onUpgrade(request.result, event.oldVersion, request.transaction as IDBTransaction);
     request.onsuccess = () => {
       const db = request.result;
+      // A blocked open stays pending and can still succeed; nobody holds that
+      // connection, and left open it would block a later delete.
+      if (blocked) {
+        db.close();
+        return;
+      }
       // Give way to a newer schema, or a worker that takes over at failover is
       // blocked by a connection its predecessor has not closed yet. A delete
       // (`newVersion` null) still blocks: an erase or a reclaim must not take a
@@ -63,7 +70,10 @@ export function openDatabase(
       resolve(db);
     };
     request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'));
-    request.onblocked = () => reject(new Error(`IndexedDB open blocked for "${name}"`));
+    request.onblocked = () => {
+      blocked = true;
+      reject(new Error(`IndexedDB open blocked for "${name}"`));
+    };
   });
 }
 

@@ -337,6 +337,30 @@ async function runFloorStoreUpgradeBehavioral(): Promise<void> {
   await deleteDatabase(name);
 }
 
+/**
+ * An open that reports blocked and then succeeds once the holder closes leaves
+ * no connection behind: a later delete of the same database is not blocked.
+ */
+async function runBlockedOpenBehavioral(): Promise<void> {
+  const name = `blocked-open-${Date.now()}`;
+  // A holder that, unlike `openDatabase`, never gives way to a newer version.
+  const holder = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(name, 1);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error('holder open failed'));
+  });
+  const refused = await openDatabase(name, 2, () => undefined).then(
+    () => false,
+    () => true
+  );
+  if (!refused) {
+    throw new Error('blockedOpen: an open past a held connection did not report blocked');
+  }
+  holder.close();
+  // Queued behind the late upgrade, so it runs after that connection settles.
+  await deleteDatabase(name);
+}
+
 /** Account switching preserves owner-local bytes over real IndexedDB and OPFS. */
 async function runStoreReclaimBehavioral(): Promise<void> {
   const config = {
@@ -589,6 +613,10 @@ async function run(seam: string): Promise<void> {
     }
     case 'floorStoreUpgrade': {
       await runFloorStoreUpgradeBehavioral();
+      return;
+    }
+    case 'blockedOpen': {
+      await runBlockedOpenBehavioral();
       return;
     }
     case 'storeReclaim': {

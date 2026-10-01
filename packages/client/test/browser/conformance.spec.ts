@@ -68,6 +68,12 @@ test.describe('browser seam conformance', () => {
     expect(outcome.ok).toBe(true);
   });
 
+  test('a blocked open that later succeeds leaves no connection open', async ({ page }) => {
+    const outcome = await runSeam(page, 'blockedOpen');
+    expect(outcome.error ?? '', 'blocked open behavioral failure').toBe('');
+    expect(outcome.ok).toBe(true);
+  });
+
   test('account switching reclaims snapshots and preserves owner-local bookkeeping', async ({
     page,
   }) => {
