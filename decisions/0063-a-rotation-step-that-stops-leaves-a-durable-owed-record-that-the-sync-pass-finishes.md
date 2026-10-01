@@ -32,11 +32,10 @@ one durable local owed-work record, which the engine retries from the sync pass 
 record for each identity, under the owner-scoped staging key, as the scope-exit debt has. Each entry
 keys on the scope id. It holds the cut epoch of the published cut that it finishes, and the steps
 still owed, in the order that the command runs them: a read cut, a write cut, an interior move (with
-the scope that the folder left), and the delivery of a write grant after its write-scope cut. An
-entry holds no seed and no key. A re-drive recovers an in-flight write seed from the published
-records (`recover_wave`), and refuses a resume that targets another write epoch. A re-drive that
-finds a step already landed clears it and cuts nothing again. The scope-exit debt stays its own
-kind.
+the scope that the folder left), and the delivery of a grant. An entry holds no seed and no key. A
+re-drive recovers an in-flight write seed from the published records (`recover_wave`), and refuses a
+resume that targets another write epoch. A re-drive that finds a step already landed clears it and
+cuts nothing again. The scope-exit debt stays its own kind.
 
 **D2 — The entry is durable before the first publish that can leave work owed, and it clears
 only after the last step.** The first publish is the cut set publish of a revoke or a downgrade,
@@ -47,14 +46,19 @@ lands. When the staging store refuses the entry, the command stops with `Err` be
 **D3 — Each sync pass re-drives every owed entry after the drain, and the first pass of a session
 does this before the renewal walk.** The re-drive runs the steps still owed, then the post-steps of
 D2. The interior move re-drives through the resume path of a grant (`resume_grantee_scope`) against
-the promoted root, so an append (ADR 0026 D1) stays an append. The delivery of a write grant
-re-drives after its cut lands, so a share that returned `Ok` under D5 still reaches its recipient. A
+the promoted root, so an append (ADR 0026 D1) stays an append. The delivery of a grant re-drives
+after its other steps land, so a share that returned `Ok` under D5 still reaches its recipient. A
 failure keeps the entry and sends `Event::RotationWorkOwed` with the scope root, a key-material-free
 check, and whether a retry can clear it.
 
 **D4 — The renewal walk renews no name in a scope that has an owed entry.** Such a scope has names
 under a seed that a revoked writer still holds, or names that no current seed derives. The finished
-work republishes every name of the scope at a fresh EOL, and that is the renewal of the scope.
+work republishes every name of the scope at a fresh EOL, and that is the renewal of the scope. While
+the owed record of the device does not open, the walk renews every name and the engine sends the
+signal at each pass. It never signs a name under a seed that does not derive that name (ADR 0061
+D4). The cause is local (storage, a bug, a rollback), and a revoked writer already holds the seed of
+each name from before the cut, so a renewal gives no new access. A stop of all renewal lapses the
+whole vault.
 
 **D5 — After its first publish, a command whose step stops returns `Ok`, and the work is owed.**
 The published cut cannot be taken back, so `Err` would state that the command did not run. The
