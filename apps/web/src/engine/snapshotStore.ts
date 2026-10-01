@@ -143,6 +143,14 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       if (id === generation) commit({ error: describe(error) });
     };
 
+  // Drops the pull in flight and any re-pull it owes, so their late answer
+  // never lands over a newer intent.
+  const supersedePulls = (): void => {
+    generation += 1;
+    inFlight = null;
+    coalesced = false;
+  };
+
   const pull = (): void => {
     if (disposed) return;
     if (inFlight !== null) {
@@ -193,14 +201,14 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       (error: unknown) => {
         if (id !== focusSeq) return;
         locating = false;
+        supersedePulls();
         commit({ error: describe(error) });
       }
     );
     client.reportFocus(node);
     // Cache-first: what the engine already holds paints now, and the focus
     // refresh repaints behind it. A pull of the folder left behind is superseded.
-    inFlight = null;
-    coalesced = false;
+    supersedePulls();
     pull();
   };
 

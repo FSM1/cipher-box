@@ -156,6 +156,20 @@ describe('snapshotStore', () => {
     expect(engine.pulls).toHaveLength(1);
   });
 
+  it('keeps a rejected focus change over the cached view that answers after it', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    const folder = new Uint8Array(16).fill(7);
+
+    store.setFocus(folder);
+    engine.rejectFocus(new Error('focus denied'));
+    await flush();
+    engine.pulls[0].resolve(view(folder));
+    await flush();
+
+    expect(store.getSnapshot().error).toEqual({ message: 'focus denied' });
+  });
+
   it('ignores a focus change to the folder already focused', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);
