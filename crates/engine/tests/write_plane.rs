@@ -82,14 +82,15 @@ use cipherbox_engine::testkit::{
     poll_tasks_once, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
-    ApiBaseUrl, ApiClient, BinIndexKeys, BinIndexLoad, BlockProgress, Command, CommandOutcome,
-    CommittedSet, ContentProfile, DEFAULT_BIN_RETENTION_DAYS, DeadLetter, DeadLetterReason,
-    DefaultsReason, Engine, EngineError, Entropy, EntropyError, Event, EventStream, GatewayConfig,
-    LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
-    OpKind, OpPhase, OverBudgetCause, Permission, Placement, PlacementRefusal, PrevEpochSeed,
-    QueueHold, QueueHoldReason, RecordReader, RecordSeal, ResealSeeds, ScopeCrossing,
-    ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget, decode_queue,
-    load_bin_index, publish_bin_index, reseal_scope_root, stage_op,
+    ApiBaseUrl, ApiClient, BinIndexHoldCheck, BinIndexKeys, BinIndexLoad, BlockProgress, Command,
+    CommandOutcome, CommittedSet, ContentProfile, DEFAULT_BIN_RETENTION_DAYS, DeadLetter,
+    DeadLetterReason, DefaultsReason, Engine, EngineError, Entropy, EntropyError, Event,
+    EventStream, GatewayConfig, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
+    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpKind, OpPhase, OverBudgetCause, Permission,
+    Placement, PlacementRefusal, PrevEpochSeed, QueueHold, QueueHoldReason, RecordReader,
+    RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
+    WriteHistory, WriteTarget, decode_queue, load_bin_index, publish_bin_index, reseal_scope_root,
+    stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -118,24 +119,24 @@ fn settings_hold(view: &SnapshotView) -> Option<(QueueHold, SettingsRefusal)> {
     match view.queue_hold {
         Some(
             hold @ QueueHold {
-                reason: QueueHoldReason::Settings(refusal),
+                reason: QueueHoldReason::Settings(settings),
                 ..
             },
-        ) => Some((hold, refusal)),
+        ) => Some((hold, settings.refusal())),
         _ => None,
     }
 }
 
 /// The held queue head when the owner's bin index is what holds it, with the
-/// reason the load did not establish the index.
-fn bin_index_hold(view: &SnapshotView) -> Option<(QueueHold, DefaultsReason)> {
+/// load outcome it waits on.
+fn bin_index_hold(view: &SnapshotView) -> Option<(QueueHold, BinIndexHoldCheck)> {
     match view.queue_hold {
         Some(
             hold @ QueueHold {
-                reason: QueueHoldReason::BinIndex(reason),
+                reason: QueueHoldReason::BinIndex(check),
                 ..
             },
-        ) => Some((hold, reason)),
+        ) => Some((hold, check)),
         _ => None,
     }
 }
@@ -5906,10 +5907,10 @@ fn a_withheld_bin_index_reports_a_named_hold_that_clears_when_it_resolves() {
     tick(&world, &engine, &mut tasks);
 
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
-    let (hold, reason) =
+    let (hold, check) =
         bin_index_hold(&view).expect("a bin index the pass cannot read holds the head");
     assert_eq!(hold.node, second);
-    assert_eq!(reason.check(), "suppressed");
+    assert_eq!(check, BinIndexHoldCheck::Suppressed);
     assert!(
         view.dead_letters.is_empty(),
         "a withheld record is not a failed op"
@@ -6234,7 +6235,7 @@ fn the_bin_read_names_the_origin_folder_of_two_entries_that_share_a_name() {
         .iter()
         .inspect(|row| assert_eq!(row.origin_name, "notes.txt"))
         .map(|row| match &row.origin_folder {
-            BinOrigin::Folder(name) => name.clone(),
+            BinOrigin::Folder { name } => name.clone(),
             other => panic!("a folder the vault holds must read as itself, not {other:?}"),
         })
         .collect();

@@ -42,7 +42,7 @@ export function view(
     ancestors: [],
     deadLetters: [],
     queueHold: null,
-    retainedRecords: 0,
+    retainedRecords: 0n,
     staleness,
   };
 }

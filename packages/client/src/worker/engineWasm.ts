@@ -3,64 +3,31 @@
  * uses it.
  *
  * The wasm-bindgen `.d.ts` is the real boundary contract; a command, its
- * outcome and an event are typed from it. The rest of this interface names the
- * handle and view surface the worker drives, which the generated module
+ * outcome, an event and a view are typed from it. The rest of this interface
+ * names the handle surface the worker drives, which the generated module
  * satisfies structurally at wiring time.
  */
 
-import type { Command, CommandOutcome, Event, NodeId } from '../../wasm/cipherbox_wasm.js';
+import type {
+  AuthMethod,
+  BinView,
+  Command,
+  CommandOutcome,
+  Event,
+  InvitePreview,
+  NodeId,
+  PendingApprovalView,
+  ReceivedShareRow,
+  RegisteredDevice,
+  SharingView,
+  SnapshotView,
+  VaultStorageView,
+  VersionEntry,
+} from '../../wasm/cipherbox_wasm.js';
 import type { SiweIntent } from './protocol.js';
 
 /** wasm-bindgen `NodeId` handle. */
 export type WasmNodeId = NodeId;
-
-/** wasm-bindgen `Breadcrumb` — one ancestor step in a snapshot view. */
-export interface WasmBreadcrumb {
-  readonly id: Uint8Array;
-  readonly name: string;
-}
-
-/** wasm-bindgen `SnapshotChild` — one direct child in a snapshot view. */
-/** One prior version of a file, as `fileVersions` resolves it. */
-export interface WasmVersionEntry {
-  readonly contentCid: Uint8Array;
-  readonly size: bigint;
-  readonly modifiedAt: bigint;
-  free(): void;
-}
-
-export interface WasmSnapshotChild {
-  readonly id: Uint8Array;
-  readonly name: string;
-  readonly kind: number;
-  readonly size?: bigint;
-  readonly mtime?: bigint;
-  readonly pending: number;
-  readonly deadLetter: boolean;
-  readonly contentVersion?: bigint;
-  readonly contentCid?: Uint8Array;
-  readonly pendingInviteClaims: number;
-  readonly ipnsName?: string;
-}
-
-/** wasm-bindgen `DeadLetter` — one retained dead-lettered op and its reason. */
-export interface WasmDeadLetter {
-  readonly opId: bigint;
-  readonly reason: number;
-}
-
-/**
- * wasm-bindgen `QueueHold` — the held queue head and the reason it is held.
- * Each reason carries exactly one figure, so the other is `undefined`:
- * `neededBytes` on a quota hold, `check` on the two the host renders by name.
- */
-export interface WasmQueueHold {
-  readonly opId: bigint;
-  readonly node: Uint8Array;
-  readonly reason: string;
-  readonly neededBytes?: bigint;
-  readonly check?: string;
-}
 
 /**
  * wasm-bindgen `OpenedStream` — a read stream and the size of its pinned
@@ -71,182 +38,6 @@ export interface WasmOpenedStream {
   readonly handle: bigint;
   readonly size: number;
   free(): void;
-}
-
-/** wasm-bindgen `SnapshotView` — a key-free folder snapshot for a UI paint. */
-export interface WasmSnapshotView {
-  readonly root: Uint8Array;
-  readonly folder: Uint8Array;
-  readonly folderName: string;
-  readonly permission: number;
-  readonly receivedShare: boolean;
-  readonly children: WasmSnapshotChild[];
-  readonly ancestors: WasmBreadcrumb[];
-  readonly deadLetters: readonly WasmDeadLetter[];
-  readonly queueHold?: WasmQueueHold;
-  readonly retainedRecords: number;
-  readonly staleness: number;
-}
-
-/** wasm-bindgen `SharingContact` — one contact the vault's book holds. */
-export interface WasmSharingContact {
-  readonly identityPublicKey: Uint8Array;
-  readonly cachedName: string | undefined;
-}
-
-/** wasm-bindgen `GranteeName` — a row's grantee name and who chose it. */
-export interface WasmGranteeName {
-  readonly name: string;
-  /** `"owner"` or `"claimant"`. */
-  readonly source: string;
-}
-
-/** wasm-bindgen `SharingGrant` — one grant a scope's ledger commits. */
-export interface WasmSharingGrant {
-  readonly recipientIdentityPublicKey: Uint8Array;
-  readonly permission: number;
-  readonly granteeName: WasmGranteeName | undefined;
-  readonly viaLink: Uint8Array | undefined;
-}
-
-/** wasm-bindgen `SharingInviteLink` — one link a scope's commitment carries. */
-export interface WasmSharingInviteLink {
-  readonly tag: Uint8Array;
-  readonly permission: number;
-  readonly expiresAt: bigint;
-  readonly expired: boolean;
-  readonly admissionCap: bigint;
-  readonly pendingClaims: number;
-  readonly contactBudgetFull: boolean;
-  readonly refusedClaims: number;
-}
-
-/** wasm-bindgen `ScopeSharing` — what one scope's own record says. */
-export interface WasmScopeSharing {
-  readonly grants: readonly WasmSharingGrant[];
-  readonly grantRefusal?: string;
-  readonly inviteLinkRefusal?: string;
-  readonly inviteLinks: readonly WasmSharingInviteLink[];
-  readonly readEpoch?: bigint;
-  readonly writeEpoch?: bigint;
-}
-
-/** wasm-bindgen `SharingView` — a key-free read of one scope's sharing state. */
-export interface WasmSharingView {
-  readonly scope: Uint8Array;
-  readonly contacts: readonly WasmSharingContact[];
-  readonly ownContactCode: Uint8Array;
-  readonly state?: WasmScopeSharing;
-}
-
-/** wasm-bindgen `ReceivedShareRow` — one share this vault accepted. */
-export interface WasmReceivedShareRow {
-  readonly scope: Uint8Array;
-  readonly sharerIdentityPublicKey: Uint8Array;
-  readonly displayName: string;
-  readonly permission: number;
-  readonly resolution?: string;
-  readonly viaLink: boolean;
-}
-
-/** wasm-bindgen `PreviewEntry` — one direct child of a previewed folder. */
-export interface WasmPreviewEntry {
-  readonly name: string;
-  readonly kind: number;
-}
-
-/** wasm-bindgen `InvitePreview` — what the invite page shows before the join. */
-export interface WasmInvitePreview {
-  readonly scope: Uint8Array;
-  readonly ownerName?: string;
-  readonly folderName?: string;
-  readonly permission?: number;
-  readonly state: string;
-  readonly joined: boolean;
-  readonly listing: readonly WasmPreviewEntry[];
-}
-
-/** wasm-bindgen `BinRow` — one soft-deleted node, key-free by construction. */
-export interface WasmBinRow {
-  readonly node: Uint8Array;
-  readonly kind: number;
-  readonly originParent: Uint8Array;
-  readonly originName: string;
-  readonly originFolderKind: number;
-  readonly originFolderName: string;
-  readonly deletedAt: bigint;
-  readonly scope: Uint8Array;
-}
-
-/** wasm-bindgen `BinView` — the `/bin` route's whole read. */
-export interface WasmBinView {
-  readonly entries: readonly WasmBinRow[];
-  readonly origin: number;
-}
-
-/**
- * wasm-bindgen `VaultSettingsSummary` — the member's settings minus the provider
- * credential, which has no getter anywhere on the boundary.
- */
-export interface WasmVaultSettingsSummary {
-  readonly pinMode: number;
-  readonly byoEndpoint?: string;
-  readonly byoKind?: number;
-  readonly byoCredentialStored: boolean;
-  readonly keepLatestVersions?: number;
-  readonly binRetentionDays: number;
-  readonly origin: number;
-}
-
-/** wasm-bindgen `QuotaView` — the account's hosted-storage figures. */
-export interface WasmQuotaView {
-  readonly usedBytes: bigint;
-  readonly limitBytes: bigint;
-  readonly advisory: boolean;
-}
-
-/** wasm-bindgen `ReclaimStall` — one debt a reclaim pass left owed. */
-export interface WasmReclaimStall {
-  readonly node: Uint8Array;
-  readonly target: string;
-  readonly reason: number;
-}
-
-/** wasm-bindgen `VaultStorageView` — the storage pane's whole read. */
-export interface WasmVaultStorageView {
-  readonly settings: WasmVaultSettingsSummary;
-  readonly quota?: WasmQuotaView;
-  readonly pendingReclaimBytes: bigint;
-  readonly pendingReclaimIsPartial: boolean;
-  readonly reclaimStalls: readonly WasmReclaimStall[];
-}
-
-/** wasm-bindgen `AuthMethod` — one login method, in display form. */
-export interface WasmAuthMethod {
-  readonly id: string;
-  readonly kind: number;
-  readonly identifierDisplay?: string;
-  readonly createdAt: string;
-  readonly lastUsedAt?: string;
-}
-
-/** wasm-bindgen `RegisteredDevice` — one device identity key on the registry. */
-export interface WasmRegisteredDevice {
-  readonly id: string;
-  readonly publicKey: string;
-  readonly label?: string;
-  readonly createdAt: string;
-  readonly lastSeenAt: string;
-}
-
-/** wasm-bindgen `PendingApproval` — one rendezvous awaiting an answer. */
-export interface WasmPendingApproval {
-  readonly requestId: string;
-  readonly requesterDevicePublicKey: string;
-  readonly ephemeralPublicKey: string;
-  readonly comparisonValue: string;
-  readonly createdAt: string;
-  readonly expiresAt: string;
 }
 
 /** wasm-bindgen `DeviceRendezvous` — what a requester offers and must sign. */
@@ -282,19 +73,19 @@ export interface WasmEngineHandle {
   pushChunk(handle: bigint, chunk: Uint8Array): Promise<unknown>;
   commitWrite(handle: bigint): Promise<bigint>;
   abortWrite(handle: bigint): Promise<unknown>;
-  snapshot(folder?: WasmNodeId): Promise<WasmSnapshotView>;
-  sharing(scopeRoot?: WasmNodeId): Promise<WasmSharingView>;
-  receivedShares(): Promise<readonly WasmReceivedShareRow[]>;
-  previewInviteLink(fragment: string): Promise<WasmInvitePreview>;
-  bin(): Promise<WasmBinView>;
-  vaultStorage(): Promise<WasmVaultStorageView>;
-  authMethods(): Promise<readonly WasmAuthMethod[]>;
-  devices(): Promise<readonly WasmRegisteredDevice[]>;
+  snapshot(folder?: WasmNodeId): Promise<SnapshotView>;
+  sharing(scopeRoot?: WasmNodeId): Promise<SharingView>;
+  receivedShares(): Promise<ReceivedShareRow[]>;
+  previewInviteLink(fragment: string): Promise<InvitePreview>;
+  bin(): Promise<BinView>;
+  vaultStorage(): Promise<VaultStorageView>;
+  authMethods(): Promise<AuthMethod[]>;
+  devices(): Promise<RegisteredDevice[]>;
   deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array>;
-  pendingApprovals(): Promise<readonly WasmPendingApproval[]>;
+  pendingApprovals(): Promise<PendingApprovalView[]>;
   siweChallenge(intent: SiweIntent): Promise<string>;
   download(node: WasmNodeId): Promise<Uint8Array>;
-  fileVersions(node: WasmNodeId): Promise<readonly WasmVersionEntry[]>;
+  fileVersions(node: WasmNodeId): Promise<VersionEntry[]>;
   downloadVersion(node: WasmNodeId, contentCid: Uint8Array): Promise<Uint8Array>;
   openContentStream(node: WasmNodeId): Promise<WasmOpenedStream>;
   /** `offset`/`length` cross as plain JS numbers (the seam's `f64` convention). */
@@ -342,61 +133,4 @@ export interface EngineWasm {
   ): Uint8Array;
   /** Throws on bytes that are not a compressed secp256k1 identity key. */
   identityFingerprint(identityPublicKey: Uint8Array): string;
-  NodeKind: { readonly File: number; readonly Folder: number };
-  PendingClass: {
-    readonly None: number;
-    readonly Metadata: number;
-    readonly Content: number;
-  };
-  ViewPermission: { readonly Read: number; readonly Write: number };
-  ViewPinMode: { readonly Hosted: number; readonly External: number; readonly Dual: number };
-  ViewByoKind: { readonly Kubo: number; readonly Psa: number; readonly Pinata: number };
-  SettingsOrigin: {
-    readonly Resolved: number;
-    readonly Stale: number;
-    readonly Defaults: number;
-  };
-  BinOriginKind: {
-    readonly Root: number;
-    readonly Folder: number;
-    readonly Gone: number;
-  };
-  ReclaimStallReason: {
-    readonly NodeUnreadable: number;
-    readonly TargetStillLive: number;
-    readonly TargetUnexpandable: number;
-  };
-  AuthMethodKind: {
-    readonly Identity: number;
-    readonly Wallet: number;
-    readonly Test: number;
-    readonly Unknown: number;
-  };
-  ViewStaleness: {
-    readonly Fresh: number;
-    readonly Reconciling: number;
-    readonly Stale: number;
-    readonly Offline: number;
-  };
-  ViewDeadLetterReason: {
-    readonly TargetGone: number;
-    readonly DestinationGone: number;
-    readonly DestinationInsideTarget: number;
-    readonly SuffixExhausted: number;
-    readonly Undecodable: number;
-    readonly PayloadRefused: number;
-    readonly AttemptsExhausted: number;
-    readonly ContentUnrecoverable: number;
-    readonly BaseSuperseded: number;
-    readonly HeadTooLarge: number;
-    readonly PreservationRefused: number;
-    readonly AlreadyPublished: number;
-    readonly TargetStillLinked: number;
-    readonly ScopeRootNotResealable: number;
-    readonly BinIndexFull: number;
-    readonly CrossingUnauthorable: number;
-    readonly BinIndexStrandedMint: number;
-    readonly TargetLinkedAcrossScopes: number;
-    readonly GraftedScopeVaultSurface: number;
-  };
 }

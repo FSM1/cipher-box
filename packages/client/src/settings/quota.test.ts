@@ -43,7 +43,7 @@ const STALL: ReclaimStallDescriptor = {
 function storage(overrides: {
   pinMode?: PinMode;
   quota?: VaultStorageDescriptor['quota'];
-  pendingReclaimBytes?: number;
+  pendingReclaimBytes?: bigint;
   pendingReclaimIsPartial?: boolean;
   reclaimStalls?: ReclaimStallDescriptor[];
 }): VaultStorageDescriptor {
@@ -52,9 +52,9 @@ function storage(overrides: {
     settings: summary({ pinMode }),
     quota:
       overrides.quota === undefined
-        ? { usedBytes: 512, limitBytes: 2048, advisory: pinMode !== 'hosted' }
+        ? { usedBytes: 512n, limitBytes: 2048n, advisory: pinMode !== 'hosted' }
         : overrides.quota,
-    pendingReclaimBytes: overrides.pendingReclaimBytes ?? 0,
+    pendingReclaimBytes: overrides.pendingReclaimBytes ?? 0n,
     pendingReclaimIsPartial: overrides.pendingReclaimIsPartial ?? false,
     reclaimStalls: overrides.reclaimStalls ?? [],
   };
@@ -75,7 +75,7 @@ describe('quotaChrome', () => {
   });
 
   it('shows nothing pending once the ledger has drained', () => {
-    const chrome = quotaChrome(storage({ pendingReclaimBytes: 0, reclaimStalls: [] }));
+    const chrome = quotaChrome(storage({ pendingReclaimBytes: 0n, reclaimStalls: [] }));
 
     expect(chrome.pendingReclaimBytes).toBeNull();
     expect(chrome.reclaimStalled).toBe(false);
@@ -83,13 +83,13 @@ describe('quotaChrome', () => {
   });
 
   it('carries a pending figure the pass still owes', () => {
-    expect(quotaChrome(storage({ pendingReclaimBytes: 4096 })).pendingReclaimBytes).toBe(4096);
+    expect(quotaChrome(storage({ pendingReclaimBytes: 4096n })).pendingReclaimBytes).toBe(4096);
   });
 
   // The point of the read: a debt priced at nothing leaves the figure reading
   // drained while the ledger never empties.
   it('still reports a stall when the debt it left prices at zero', () => {
-    const chrome = quotaChrome(storage({ pendingReclaimBytes: 0, reclaimStalls: [STALL] }));
+    const chrome = quotaChrome(storage({ pendingReclaimBytes: 0n, reclaimStalls: [STALL] }));
 
     expect(chrome.reclaimStalled).toBe(true);
     expect(chrome.pendingReclaimBytes).toBe(0);
@@ -100,7 +100,7 @@ describe('quotaChrome', () => {
   // zero it reports is not a drained ledger.
   it('holds the figure on screen when the pass priced only a window', () => {
     const chrome = quotaChrome(
-      storage({ pendingReclaimBytes: 0, reclaimStalls: [], pendingReclaimIsPartial: true })
+      storage({ pendingReclaimBytes: 0n, reclaimStalls: [], pendingReclaimIsPartial: true })
     );
 
     expect(chrome.pendingReclaimBytes).toBe(0);
@@ -116,7 +116,7 @@ describe('quotaChrome', () => {
 
   it('reports no percentage against a limit of nothing', () => {
     const chrome = quotaChrome(
-      storage({ quota: { usedBytes: 900, limitBytes: 0, advisory: false } })
+      storage({ quota: { usedBytes: 900n, limitBytes: 0n, advisory: false } })
     );
 
     expect(chrome.usage).toEqual({ usedBytes: 900, limitBytes: 0, percent: 0 });

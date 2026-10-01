@@ -31,12 +31,9 @@ import {
   nodeId,
   readAuthMethods,
   readBin,
-  readDevices,
-  readFileVersions,
   readEvent,
   readInvitePreview,
-  readPendingApprovals,
-  readReceivedShare,
+  readReceivedShares,
   readSharing,
   readSnapshot,
   readVaultStorage,
@@ -336,39 +333,36 @@ export class EngineHost implements EngineHostLike {
     switch (read.kind) {
       case 'snapshot':
         return readSnapshot(
-          this.wasm,
           await this.handle.snapshot(
             read.folder === null ? undefined : nodeId(this.wasm, read.folder, 'folder')
           )
         );
       case 'sharing':
         return readSharing(
-          this.wasm,
           await this.handle.sharing(
             read.scope === null ? undefined : nodeId(this.wasm, read.scope, 'scope')
           )
         );
       case 'receivedShares':
-        return (await this.handle.receivedShares()).map((row) => readReceivedShare(this.wasm, row));
+        return readReceivedShares(await this.handle.receivedShares());
       case 'invitePreview':
         return readInvitePreview(
-          this.wasm,
           await this.handle.previewInviteLink(fragment(read.fragment, 'fragment'))
         );
       case 'bin':
-        return readBin(this.wasm, await this.handle.bin());
+        return readBin(await this.handle.bin());
       case 'vaultStorage':
-        return readVaultStorage(this.wasm, await this.handle.vaultStorage());
+        return readVaultStorage(await this.handle.vaultStorage());
       case 'authMethods':
-        return readAuthMethods(this.wasm, await this.handle.authMethods());
+        return readAuthMethods(await this.handle.authMethods());
       case 'devices':
-        return readDevices(await this.handle.devices());
+        return this.handle.devices();
       case 'deviceRegistrationChallenge':
         return this.handle.deviceRegistrationChallenge(
           text(read.devicePublicKey, 'devicePublicKey')
         );
       case 'pendingApprovals':
-        return readPendingApprovals(await this.handle.pendingApprovals());
+        return this.handle.pendingApprovals();
       case 'deviceRendezvous':
         return runRendezvous(this.wasm, read.step);
       case 'identityFingerprint':
@@ -378,9 +372,7 @@ export class EngineHost implements EngineHostLike {
       case 'download':
         return ownedBuffer(await this.handle.download(nodeId(this.wasm, read.node, 'node')));
       case 'fileVersions':
-        return readFileVersions(
-          await this.handle.fileVersions(nodeId(this.wasm, read.node, 'node'))
-        );
+        return this.handle.fileVersions(nodeId(this.wasm, read.node, 'node'));
       case 'downloadVersion':
         return ownedBuffer(
           await this.handle.downloadVersion(

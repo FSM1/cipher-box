@@ -481,7 +481,7 @@ describe("the drain's over-budget hold", () => {
 
 describe('retained queue entries', () => {
   it('reports the entries this session is charged for but cannot read', () => {
-    expect(retainedRecords({ view: { ...view(), retainedRecords: 3 }, error: null })).toBe(3);
+    expect(retainedRecords({ view: { ...view(), retainedRecords: 3n }, error: null })).toBe(3);
   });
 
   it('reports none until a snapshot has landed', () => {

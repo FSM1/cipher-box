@@ -41,44 +41,6 @@ import type {
   WriteTarget,
 } from './worker/protocol.js';
 
-/**
- * The wasm-bindgen mirror-enum value tables (as `crates/wasm` exports them),
- * shared by the codec and worker test stubs.
- */
-export const fakeWasmEnums = {
-  NodeKind: { File: 0, Folder: 1 },
-  PendingClass: { None: 0, Metadata: 1, Content: 2 },
-  ViewPermission: { Read: 0, Write: 1 },
-  ViewPinMode: { Hosted: 0, External: 1, Dual: 2 },
-  ViewByoKind: { Kubo: 0, Psa: 1, Pinata: 2 },
-  SettingsOrigin: { Resolved: 0, Stale: 1, Defaults: 2 },
-  BinOriginKind: { Root: 0, Folder: 1, Gone: 2 },
-  ReclaimStallReason: { NodeUnreadable: 0, TargetStillLive: 1, TargetUnexpandable: 2 },
-  AuthMethodKind: { Identity: 0, Wallet: 1, Test: 2, Unknown: 3 },
-  ViewStaleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
-  ViewDeadLetterReason: {
-    TargetGone: 0,
-    DestinationGone: 1,
-    DestinationInsideTarget: 2,
-    SuffixExhausted: 3,
-    Undecodable: 4,
-    PayloadRefused: 5,
-    AttemptsExhausted: 6,
-    ContentUnrecoverable: 7,
-    BaseSuperseded: 8,
-    HeadTooLarge: 9,
-    PreservationRefused: 10,
-    AlreadyPublished: 11,
-    TargetStillLinked: 12,
-    ScopeRootNotResealable: 13,
-    BinIndexFull: 14,
-    CrossingUnauthorable: 15,
-    BinIndexStrandedMint: 16,
-    TargetLinkedAcrossScopes: 17,
-    GraftedScopeVaultSurface: 18,
-  },
-} as const;
-
 /** A nonce inside the EIP-4361 class the engine enforces. */
 export const FAKE_SIWE_NONCE = 'nonce123456789ab';
 
@@ -111,7 +73,7 @@ export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): Snapshot
     ancestors: [],
     deadLetters: [],
     queueHold: null,
-    retainedRecords: 0,
+    retainedRecords: 0n,
     staleness: 'fresh',
   };
 }
@@ -149,8 +111,8 @@ export function emptyVaultStorage(): VaultStorageDescriptor {
       binRetentionDays: 30,
       origin: 'resolved',
     },
-    quota: { usedBytes: 0, limitBytes: 0, advisory: false },
-    pendingReclaimBytes: 0,
+    quota: { usedBytes: 0n, limitBytes: 0n, advisory: false },
+    pendingReclaimBytes: 0n,
     pendingReclaimIsPartial: false,
     reclaimStalls: [],
   };

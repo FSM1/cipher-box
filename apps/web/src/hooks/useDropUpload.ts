@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EngineRequestError } from '@cipherbox/client';
-import type { EventDescriptor } from '@cipherbox/client';
+import type { BlockProgress, EventDescriptor } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { useEngine } from '../providers/EngineProvider';
 
@@ -335,7 +335,7 @@ function rowUpdate(event: EventDescriptor): RowUpdate | null {
   }
 }
 
-function fraction(progress: Extract<EventDescriptor, { kind: 'opProgress' }>['progress']): number {
+function fraction(progress: BlockProgress | null): number {
   const total = progress?.total ?? 0;
   return total > 0 ? Math.min((progress?.confirmed ?? 0) / total, 1) : 0;
 }

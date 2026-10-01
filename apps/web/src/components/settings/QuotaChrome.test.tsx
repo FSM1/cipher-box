@@ -21,7 +21,7 @@ describe('the quota chrome', () => {
   it('marks the figure advisory where bytes land off the hosted store', () => {
     render(
       <QuotaChrome
-        storage={storage({ quota: { usedBytes: 1024, limitBytes: 4096, advisory: true } })}
+        storage={storage({ quota: { usedBytes: 1024n, limitBytes: 4096n, advisory: true } })}
       />
     );
 
@@ -32,7 +32,7 @@ describe('the quota chrome', () => {
     render(
       <QuotaChrome
         storage={storage({
-          pendingReclaimBytes: 0,
+          pendingReclaimBytes: 0n,
           reclaimStalls: [
             {
               node: new Uint8Array(16).fill(3),
@@ -54,7 +54,7 @@ describe('the quota chrome', () => {
   it('says a figure the pass priced off one window of the ledger is a floor', () => {
     render(
       <QuotaChrome
-        storage={storage({ pendingReclaimBytes: 4096, pendingReclaimIsPartial: true })}
+        storage={storage({ pendingReclaimBytes: 4096n, pendingReclaimIsPartial: true })}
       />
     );
 

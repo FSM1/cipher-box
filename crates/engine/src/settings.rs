@@ -174,6 +174,12 @@ pub fn resolve_kept_bearer(
 /// The member's settings as a host may see them: everything but the provider
 /// credential, which the wasm boundary exists to keep uncrossable.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(missing_as_null)
+)]
 pub struct VaultSettingsSummary {
     /// Where a version's bytes are pinned.
     pub pin_mode: PinMode,
@@ -184,6 +190,14 @@ pub struct VaultSettingsSummary {
     /// Whether a provider bearer is stored. The bearer itself never crosses.
     pub byo_credential_stored: bool,
     /// The content-version retention policy.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(
+            rename = "keepLatestVersions",
+            serialize_with = "crate::wire::keep_latest_versions::serialize"
+        ),
+        tsify(type = "number | null")
+    )]
     pub retention: RetentionPolicy,
     /// How long a soft-deleted node stays in the bin index. `0` keeps the hard
     /// delete.
@@ -195,6 +209,8 @@ pub struct VaultSettingsSummary {
 /// Which rung a record-plane load reached, for the summary or the view it
 /// produced (blueprint/engine.md "Vault settings load").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum SettingsOrigin {
     /// The published record opened and validated.
     Resolved,
@@ -437,17 +453,32 @@ impl PlacementRefusal {
     /// later tick alone. Every other degraded load can clear on a later tick,
     /// so it holds nothing.
     ///
-    /// The one place the split is decided, so a hold cannot be taken on terms
-    /// its release check does not recognise.
-    pub fn holds(self) -> Option<SettingsRefusal> {
-        match self {
-            Self::NoProvider
-            | Self::NoExternalIngress(_)
-            | Self::SettingsUnavailable(DefaultsReason::StrandedMint) => {
-                Some(SettingsRefusal::Placement(self))
+    /// The one place the placement half of the split is decided, and the
+    /// hold's check name with it, so a hold cannot be taken on terms its
+    /// release check or a host does not recognise. [`SettingsHold::byo`]
+    /// decides the provider half.
+    pub fn holds(self) -> Option<SettingsHold> {
+        let check = match self {
+            Self::NoProvider => SettingsHoldCheck::ByoProviderMissing,
+            Self::NoExternalIngress(_) => SettingsHoldCheck::ByoNoExternalIngress,
+            Self::SettingsUnavailable(DefaultsReason::StrandedMint) => {
+                SettingsHoldCheck::SettingsUnavailable
             }
-            Self::SettingsUnavailable(_) => None,
-        }
+            Self::SettingsUnavailable(
+                DefaultsReason::UnprovenFirstRun
+                | DefaultsReason::Suppressed
+                | DefaultsReason::RolledBack { .. }
+                | DefaultsReason::RevisionRolledBack { .. }
+                | DefaultsReason::Expired
+                | DefaultsReason::TimedOut
+                | DefaultsReason::Unreadable
+                | DefaultsReason::FloorUnreadable,
+            ) => return None,
+        };
+        Some(SettingsHold {
+            refusal: SettingsRefusal::Placement(self),
+            check,
+        })
     }
 }
 
@@ -455,8 +486,6 @@ impl PlacementRefusal {
 /// request is built and repeats verbatim until its exit
 /// ([`PlacementRefusal::holds`]), which is what makes one hold rather than an
 /// attempt.
-/// Built through [`PlacementRefusal::holds`] and
-/// [`ProviderError::is_deterministic`], never by hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsRefusal {
     /// [`validate_byo_config`](crate::content::validate_byo_config) refused the
@@ -488,6 +517,81 @@ impl SettingsRefusal {
             Self::Placement(refusal) => refusal.class(),
         }
     }
+}
+
+/// A settings hold: the refusal, and the name a host renders it under, set
+/// together where the hold is taken. Built through [`PlacementRefusal::holds`]
+/// and [`SettingsHold::byo`], never by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingsHold {
+    refusal: SettingsRefusal,
+    check: SettingsHoldCheck,
+}
+
+impl SettingsHold {
+    /// The refusal, whose recurrence is the hold's exit test.
+    pub fn refusal(self) -> SettingsRefusal {
+        self.refusal
+    }
+
+    /// The rule a host renders.
+    pub fn check(self) -> SettingsHoldCheck {
+        self.check
+    }
+
+    /// The hold a provider error takes, or `None` for an answer from the
+    /// provider, which a later attempt may change. A policy verdict on the
+    /// member's own config is reached before any request is built and again by
+    /// every retry, so it holds.
+    pub fn byo(error: ProviderError) -> Option<Self> {
+        let check = match error {
+            ProviderError::InvalidEndpoint => SettingsHoldCheck::ByoEndpointInvalid,
+            ProviderError::InsecureTransport => SettingsHoldCheck::ByoEndpointInsecure,
+            ProviderError::BlockedAddress => SettingsHoldCheck::ByoEndpointBlocked,
+            ProviderError::InvalidCredential => SettingsHoldCheck::ByoCredentialInvalid,
+            ProviderError::UnresolvedCredential => SettingsHoldCheck::ByoCredentialUnresolved,
+            ProviderError::NoStoredCredential => SettingsHoldCheck::ByoCredentialNotStored,
+            ProviderError::RepointedCredential => SettingsHoldCheck::ByoCredentialRepointed,
+            ProviderError::Unreachable
+            | ProviderError::NoVerdict
+            | ProviderError::Rejected { .. }
+            | ProviderError::MalformedBlockAddress
+            | ProviderError::AddressMismatch => return None,
+        };
+        Some(Self {
+            refusal: SettingsRefusal::Byo(error),
+            check,
+        })
+    }
+}
+
+/// The rule a settings hold waits on, by the check name of the refusal it
+/// holds. One variant per refusal a hold can carry, so a host's table of
+/// notices is checked against this set at build time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "kebab-case"))]
+pub enum SettingsHoldCheck {
+    /// `byo-endpoint-invalid`.
+    ByoEndpointInvalid,
+    /// `byo-endpoint-insecure`.
+    ByoEndpointInsecure,
+    /// `byo-endpoint-blocked`.
+    ByoEndpointBlocked,
+    /// `byo-credential-invalid`.
+    ByoCredentialInvalid,
+    /// `byo-credential-unresolved`.
+    ByoCredentialUnresolved,
+    /// `byo-credential-not-stored`.
+    ByoCredentialNotStored,
+    /// `byo-credential-repointed`.
+    ByoCredentialRepointed,
+    /// `byo-provider-missing`.
+    ByoProviderMissing,
+    /// `byo-no-external-ingress`.
+    ByoNoExternalIngress,
+    /// `settings-unavailable`: the stranded mint, whose exit is a settings save.
+    SettingsUnavailable,
 }
 
 /// Where a session's placement decision came from. An assumed default
@@ -1699,7 +1803,7 @@ mod tests {
             stranded,
         ] {
             assert_eq!(
-                refusal.holds(),
+                refusal.holds().map(|hold| hold.refusal()),
                 Some(SettingsRefusal::Placement(refusal)),
                 "{}",
                 refusal.check(),
@@ -1747,8 +1851,16 @@ mod tests {
             ProviderError::InsecureTransport,
             ProviderError::BlockedAddress,
             ProviderError::InvalidCredential,
+            ProviderError::UnresolvedCredential,
+            ProviderError::NoStoredCredential,
+            ProviderError::RepointedCredential,
         ] {
-            assert!(policy.is_deterministic(), "{}", policy.check());
+            assert_eq!(
+                SettingsHold::byo(policy).map(|hold| hold.refusal()),
+                Some(SettingsRefusal::Byo(policy)),
+                "{}",
+                policy.check()
+            );
         }
         for answered in [
             ProviderError::Unreachable,
@@ -1757,7 +1869,7 @@ mod tests {
             ProviderError::MalformedBlockAddress,
             ProviderError::AddressMismatch,
         ] {
-            assert!(!answered.is_deterministic(), "{}", answered.check());
+            assert_eq!(SettingsHold::byo(answered), None, "{}", answered.check());
         }
     }
 

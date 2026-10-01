@@ -85,7 +85,7 @@ use crate::net::{
     fanout_get_verify, observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
-use crate::record_plane::DefaultsReason;
+use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
 use crate::rotation::{LaggingSeedMiss, ScopeExitRotator, derive_write_name, lagging_read_seed};
 use crate::seams::{
     CredentialStore, DebtOrigin, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
@@ -93,7 +93,7 @@ use crate::seams::{
     UnixMillis,
 };
 use crate::session::SessionIdentity;
-use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
+use crate::settings::{Destinations, Placement, PlacementDecision, SettingsHold};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::cancel::UploadCancels;
@@ -214,10 +214,10 @@ fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
 /// and on a single-device account nothing is left to publish it — so the op
 /// dead-letters with the state named rather than waiting for ever.
 fn halt_for_bin_load(reason: DefaultsReason) -> Halt {
-    match reason {
-        DefaultsReason::StrandedMint => Halt::Permanent(DeadLetterReason::BinIndexStrandedMint),
-        _ if reason.is_verdict() => Halt::Attempt,
-        _ => Halt::HeldByBinIndex(reason),
+    match reason.split() {
+        LoadSplit::Verdict => Halt::Attempt,
+        LoadSplit::StrandedMint => Halt::Permanent(DeadLetterReason::BinIndexStrandedMint),
+        LoadSplit::Held(check) => Halt::HeldByBinIndex(check),
     }
 }
 
@@ -438,7 +438,7 @@ enum Halt {
     /// The member's own settings were refused before any request was built.
     /// Not a failure of the op — it holds the head and its staging reservation
     /// until those settings change ([`QueueHoldReason::Settings`]).
-    HeldBySettings(SettingsRefusal),
+    HeldBySettings(SettingsHold),
     /// Over the account quota. Not a failure of the op — it holds the head and
     /// its staging reservation until a quota probe reports room.
     Blocked {
@@ -450,7 +450,7 @@ enum Halt {
     /// is availability rather than a verdict on bytes it served. Not a failure
     /// of the op — it holds the head and its staging reservation until the
     /// record resolves ([`QueueHoldReason::BinIndex`]).
-    HeldByBinIndex(DefaultsReason),
+    HeldByBinIndex(BinIndexHoldCheck),
     /// The user cancelled the upload. The facade has already undone it, so the
     /// valve does nothing but stop the pass.
     Cancelled,
@@ -693,29 +693,18 @@ pub enum QueueHoldReason {
     /// The member's own settings were refused before any request was built, so
     /// every retry reaches the same verdict and charging one would spend the
     /// version's budget and then release its staged blocks. The exit is the
-    /// one its [`SettingsRefusal`] names.
+    /// one its [`SettingsRefusal`](crate::settings::SettingsRefusal) names.
     ///
-    /// Render it through [`SettingsRefusal::check`], which names the rule and
-    /// never the endpoint or the bearer the settings carry.
-    Settings(SettingsRefusal),
+    /// The hold's check names the rule and never the endpoint or the bearer
+    /// the settings carry.
+    Settings(SettingsHold),
     /// The bin index plane did not establish the current index. The exit is a
     /// load that establishes it.
     ///
     /// Reported, because a party who withholds the record — or one head block
     /// of it — otherwise stops every queued operation for the account with no
     /// cause the member can see (blueprint/engine.md "Bin index record").
-    BinIndex(DefaultsReason),
-}
-
-impl QueueHoldReason {
-    /// The stable name a host dispatches on.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Quota { .. } => "quota",
-            Self::Settings(_) => "settings",
-            Self::BinIndex(_) => "bin-index",
-        }
-    }
+    BinIndex(BinIndexHoldCheck),
 }
 
 /// The queue head is held over rather than failed: it keeps its place and its
@@ -2244,11 +2233,11 @@ where
             Halt::Blocked { needed_bytes } => {
                 self.hold_head(op_id, op, QueueHoldReason::Quota { needed_bytes });
             }
-            Halt::HeldBySettings(refusal) => {
-                self.hold_head(op_id, op, QueueHoldReason::Settings(refusal));
+            Halt::HeldBySettings(hold) => {
+                self.hold_head(op_id, op, QueueHoldReason::Settings(hold));
             }
-            Halt::HeldByBinIndex(reason) => {
-                self.hold_head(op_id, op, QueueHoldReason::BinIndex(reason));
+            Halt::HeldByBinIndex(check) => {
+                self.hold_head(op_id, op, QueueHoldReason::BinIndex(check));
             }
         }
     }
@@ -2267,8 +2256,8 @@ where
                         return false;
                     }
                 }
-                QueueHoldReason::Settings(refusal) => {
-                    if settings_refusal(self.inputs.placement) == Some(refusal) {
+                QueueHoldReason::Settings(hold) => {
+                    if settings_hold(self.inputs.placement) == Some(hold) {
                         return false;
                     }
                 }
@@ -2291,7 +2280,7 @@ where
             // the member cannot act on. An outage is not a verdict: it keeps
             // the head where it is rather than spending the unattributed budget
             // on a placement no pass can decide.
-            return settings_refusal(self.inputs.placement).is_some();
+            return settings_hold(self.inputs.placement).is_some();
         };
         // Only the hosted leg is quota-gated, so no answer the quota endpoint
         // could give bears on a hold under a placement without one — and an
@@ -7327,8 +7316,8 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
 /// A policy verdict is neither: it is deterministic, so it holds the op rather
 /// than charging it ([`QueueHoldReason::Settings`]).
 fn classify_placement(error: ProviderError) -> Halt {
-    if error.is_deterministic() {
-        return Halt::HeldBySettings(SettingsRefusal::Byo(error));
+    if let Some(hold) = SettingsHold::byo(error) {
+        return Halt::HeldBySettings(hold);
     }
     match error {
         ProviderError::Unreachable => Halt::Unclassified,
@@ -7343,12 +7332,11 @@ fn classify_placement(error: ProviderError) -> Halt {
 ///
 /// Only the external-only leg can hold an op on its config: a dual write's
 /// mirror is best-effort and never fails the op.
-fn settings_refusal(placement: &PlacementDecision) -> Option<SettingsRefusal> {
+fn settings_hold(placement: &PlacementDecision) -> Option<SettingsHold> {
     match placement {
         Ok(Placement::External(config)) => validate_byo_config(config)
             .err()
-            .filter(ProviderError::is_deterministic)
-            .map(SettingsRefusal::Byo),
+            .and_then(SettingsHold::byo),
         Ok(_) => None,
         Err(refusal) => refusal.holds(),
     }
@@ -7584,7 +7572,7 @@ mod tests {
 
     use crate::net::record_publish::PreflightError;
     use crate::seams::SeamError;
-    use crate::settings::PlacementRefusal;
+    use crate::settings::{PlacementRefusal, SettingsRefusal};
     use crate::sync::model::NodeMeta;
 
     const SOURCE_ROOT: NodeId = NodeId([1; 16]);
@@ -8277,15 +8265,22 @@ mod tests {
         ] {
             assert_eq!(halt_for_bin_load(reason), Halt::Attempt, "{reason:?}");
         }
-        for reason in [
-            DefaultsReason::UnprovenFirstRun,
-            DefaultsReason::Suppressed,
-            DefaultsReason::TimedOut,
-            DefaultsReason::FloorUnreadable,
+        for (reason, check) in [
+            (
+                DefaultsReason::UnprovenFirstRun,
+                BinIndexHoldCheck::UnprovenFirstRun,
+            ),
+            (DefaultsReason::Suppressed, BinIndexHoldCheck::Suppressed),
+            (DefaultsReason::Expired, BinIndexHoldCheck::Expired),
+            (DefaultsReason::TimedOut, BinIndexHoldCheck::TimedOut),
+            (
+                DefaultsReason::FloorUnreadable,
+                BinIndexHoldCheck::FloorUnreadable,
+            ),
         ] {
             assert_eq!(
                 halt_for_bin_load(reason),
-                Halt::HeldByBinIndex(reason),
+                Halt::HeldByBinIndex(check),
                 "{reason:?}",
             );
             assert_eq!(
@@ -8450,9 +8445,11 @@ mod tests {
             ProviderError::BlockedAddress,
             ProviderError::InvalidCredential,
         ] {
-            assert_eq!(
-                classify_placement(settings),
-                Halt::HeldBySettings(SettingsRefusal::Byo(settings)),
+            assert!(
+                matches!(
+                    classify_placement(settings),
+                    Halt::HeldBySettings(hold) if hold.refusal() == SettingsRefusal::Byo(settings)
+                ),
                 "{}",
                 settings.check(),
             );
@@ -8465,11 +8462,11 @@ mod tests {
     fn a_settings_hold_lets_go_only_once_the_placement_stops_refusing() {
         let refused = byo("file:///etc/passwd");
         assert_eq!(
-            settings_refusal(&Ok(Placement::External(refused.clone()))),
+            settings_hold(&Ok(Placement::External(refused.clone()))).map(|hold| hold.refusal()),
             Some(SettingsRefusal::Byo(ProviderError::InvalidEndpoint)),
         );
         assert_eq!(
-            settings_refusal(&Err(PlacementRefusal::NoProvider)),
+            settings_hold(&Err(PlacementRefusal::NoProvider)).map(|hold| hold.refusal()),
             Some(SettingsRefusal::Placement(PlacementRefusal::NoProvider)),
         );
         for admitted in [
@@ -8483,7 +8480,7 @@ mod tests {
                 DefaultsReason::Suppressed,
             )),
         ] {
-            assert_eq!(settings_refusal(&admitted), None);
+            assert_eq!(settings_hold(&admitted), None);
         }
     }
 
@@ -9320,7 +9317,7 @@ mod tests {
         let held = QueueHold {
             op_id: OpId(1),
             node,
-            reason: QueueHoldReason::BinIndex(DefaultsReason::Suppressed),
+            reason: QueueHoldReason::BinIndex(BinIndexHoldCheck::Suppressed),
         };
 
         for (case, halted, halt) in [

@@ -34,7 +34,7 @@ const MINTED: SharingInviteLinkDescriptor = {
   permission: 'read',
   expiresAt: DEADLINE,
   expired: false,
-  admissionCap: 5,
+  admissionCap: 5n,
   pendingClaims: 0,
   contactBudgetFull: false,
   refusedClaims: 0,

@@ -68,6 +68,7 @@ export type {
   PendingClass,
   Staleness,
   OpProgressPhase,
+  BlockProgress,
   DeadLetterReason,
   DeadLetterDescriptor,
   SettingsHoldCheck,

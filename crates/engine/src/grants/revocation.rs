@@ -23,6 +23,8 @@
 /// a class: a share no resolve has reached yet is "not yet known", and painting
 /// that as `Granted` would show a revoked share as live.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "kebab-case"))]
 pub enum ResolutionClass {
     /// A fresh owner-signed record resolved and your blob is present — still
     /// granted, no revocation.

@@ -27,9 +27,14 @@ export interface QuotaChrome {
   stalls: ReclaimStallDescriptor[];
 }
 
+/**
+ * The `u64` figures narrow to JS numbers here: they are display quantities the
+ * chrome does arithmetic on, and no storage figure reaches the safe-integer
+ * ceiling.
+ */
 export function quotaChrome(view: VaultStorageDescriptor): QuotaChrome {
   const stalls = view.reclaimStalls;
-  const owed = view.pendingReclaimBytes;
+  const owed = Number(view.pendingReclaimBytes);
   return {
     usage: usageOf(view.quota),
     // The engine decides this off the vaulted mode; re-deriving it from
@@ -48,10 +53,12 @@ export function quotaChrome(view: VaultStorageDescriptor): QuotaChrome {
 
 function usageOf(quota: QuotaDescriptor | null): QuotaChrome['usage'] {
   if (quota === null) return null;
+  const usedBytes = Number(quota.usedBytes);
+  const limitBytes = Number(quota.limitBytes);
   return {
-    usedBytes: quota.usedBytes,
-    limitBytes: quota.limitBytes,
-    percent: quota.limitBytes === 0 ? 0 : Math.round((quota.usedBytes / quota.limitBytes) * 100),
+    usedBytes,
+    limitBytes,
+    percent: limitBytes === 0 ? 0 : Math.round((usedBytes / limitBytes) * 100),
   };
 }
 

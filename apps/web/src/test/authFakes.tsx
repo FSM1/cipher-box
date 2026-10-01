@@ -204,8 +204,8 @@ export const FAKE_VAULT_STORAGE: VaultStorageDescriptor = {
     binRetentionDays: 30,
     origin: 'resolved',
   },
-  quota: { usedBytes: 1024, limitBytes: 4096, advisory: false },
-  pendingReclaimBytes: 0,
+  quota: { usedBytes: 1024n, limitBytes: 4096n, advisory: false },
+  pendingReclaimBytes: 0n,
   pendingReclaimIsPartial: false,
   reclaimStalls: [],
 };

@@ -42,7 +42,7 @@ function inviteLink(seed: number, expiresAt: bigint): SharingInviteLinkDescripto
     permission: 'read',
     expiresAt,
     expired: false,
-    admissionCap: 5,
+    admissionCap: 5n,
     pendingClaims: 0,
     contactBudgetFull: false,
     refusedClaims: 0,

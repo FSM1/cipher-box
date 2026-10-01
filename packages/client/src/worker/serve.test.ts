@@ -1,12 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  emptySnapshot,
-  FAKE_SIWE_NONCE,
-  fakeWasmEnums,
-  StubEngineHost,
-  TEST_ACCOUNT_ID,
-} from '../testkit.js';
+import { emptySnapshot, FAKE_SIWE_NONCE, StubEngineHost, TEST_ACCOUNT_ID } from '../testkit.js';
 import { LocalTransport, type EngineWorkerLike } from '../transport.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm, WasmEngineHandle } from './engineWasm.js';
@@ -78,7 +72,7 @@ const SNAPSHOT: SnapshotDescriptor = {
   ...emptySnapshot(new Uint8Array(16).fill(2)),
   root: new Uint8Array(16).fill(1),
   deadLetters: [{ opId: 3n, reason: 'destinationGone' }],
-  retainedRecords: 0,
+  retainedRecords: 0n,
 };
 
 const BIN: BinDescriptor = {
@@ -527,7 +521,6 @@ describe('serveEngine event pump over the real EngineHost', () => {
         return handle;
       },
       NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
-      ...fakeWasmEnums,
     } as unknown as EngineWasm;
 
     const { scope, worker, toUi } = loopback();

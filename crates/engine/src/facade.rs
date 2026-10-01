@@ -281,6 +281,8 @@ pub enum NodeKind {
 /// and refuses a cross-intent spend, so a signature the host collects under one
 /// prompt can never serve the other operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum SiweIntent {
     /// A wallet sign-in.
     Login,
@@ -292,6 +294,8 @@ pub enum SiweIntent {
 /// write outranks a queued metadata mutation. The variant order **is** the rank
 /// (a node with both queued reports `Content`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum PendingClass {
     /// No queued op targets the node.
     #[default]
@@ -345,8 +349,15 @@ pub struct StatFs {
 
 /// One ancestor step in a [`SnapshotView`]'s breadcrumb trail.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub struct Breadcrumb {
     /// Stable node id.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_id::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub id: NodeId,
     /// Display name, as entered (empty for the root).
     pub name: String,
@@ -364,12 +375,28 @@ impl fmt::Debug for Breadcrumb {
 /// One direct child in a [`SnapshotView`], projected key-free from the
 /// rendered view plus the op-queue/dead-letter bookkeeping.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(large_number_types_as_bigints, missing_as_null)
+)]
 pub struct SnapshotChild {
     /// Stable node id.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_id::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub id: NodeId,
     /// Display name, as entered.
     pub name: String,
     /// File or folder.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_kind::serialize"),
+        tsify(type = "NodeKind")
+    )]
     pub kind: NodeKind,
     /// Plaintext content size in bytes, once the content plane projects it.
     pub size: Option<u64>,
@@ -383,6 +410,11 @@ pub struct SnapshotChild {
     pub content_version: Option<u64>,
     /// The head version's content root CID, `None` until projected — what a
     /// caller hands back on [`WriteTarget::Version::expected_version`].
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "serde_bytes::serialize"),
+        tsify(type = "Uint8Array | null")
+    )]
     pub content_cid: Option<Vec<u8>>,
     /// Invite claims this owner device acked at this scope root and has not
     /// converted yet (ADR 0023 D5).
@@ -403,8 +435,19 @@ const UNKNOWN_VERSION: &str = "version-is-not-in-the-files-history";
 /// `content_cid` is the identifier: a history carries no other, and an index
 /// into it moves under a concurrent write.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(large_number_types_as_bigints)
+)]
 pub struct VersionEntry {
     /// The version's content root CID, and the name every version command takes.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "serde_bytes::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub content_cid: Vec<u8>,
     /// The version's plaintext size in bytes.
     pub size: u64,
@@ -502,9 +545,20 @@ impl OverBudgetCause {
 /// rather than from anything a host hands back
 /// ([`recipient_contact`](Engine::recipient_contact)).
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(missing_as_null)
+)]
 pub struct SharingContact {
     /// The peer's secp256k1 identity key, compressed SEC1 — the grant ledger's
     /// recipient label and the address their mailbox answers at.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "serde_bytes::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub identity_public_key: Vec<u8>,
     /// The last grantee name this device saw for the peer, which pre-fills a
     /// name the owner gives them on another folder. A device-local cache and no
@@ -534,19 +588,40 @@ impl fmt::Debug for SharingContact {
 /// owner-signed grant ledger — the engine's truth, not a record of what this
 /// session happened to issue.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(missing_as_null)
+)]
 pub struct SharingGrant {
     /// The recipient's secp256k1 identity key, which joins the row to a
     /// [`SharingContact`]. All-zero for a row whose recipient the owner's own
     /// binding signature does not vouch for, which joins to no contact.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "serde_bytes::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub recipient_identity_public_key: Vec<u8>,
     /// The permission the scope root commits for this recipient.
     pub permission: Permission,
     /// The grantee name on the owner-attested row, and who chose it
     /// (ADR 0027 D3). `None` for a row with no name or no owner attestation.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::grantee_name"),
+        tsify(type = "GranteeName | null")
+    )]
     pub grantee_name: Option<(String, NameSource)>,
     /// The tag of the link that admitted this grantee, as
     /// [`SharingInviteLink::tag`] names it (ADR 0023 D2). `None` for a direct
     /// grant or a row with no owner attestation.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "serde_bytes::serialize"),
+        tsify(type = "Uint8Array | null")
+    )]
     pub via_link: Option<Vec<u8>>,
 }
 
@@ -574,9 +649,20 @@ impl fmt::Debug for SharingGrant {
 /// renders it in the link half of a share dialog. Nothing here is key
 /// material: the link's own bytes are in its fragment alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(large_number_types_as_bigints)
+)]
 pub struct SharingInviteLink {
     /// The link entry's blinded tag — what [`Command::RevokeInviteLink`] names
     /// to cut this link.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "serde_bytes::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub tag: Vec<u8>,
     /// The permission conversion grants a claimant of this link.
     pub permission: Permission,
@@ -601,6 +687,12 @@ pub struct SharingInviteLink {
 
 /// What one scope's own record says about sharing, when this read reached it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(missing_as_null)
+)]
 pub struct ScopeSharing {
     /// The grants the scope root's ledger commits, ordered as it commits them.
     /// Empty for a node that is not a scope root: nothing is granted there.
@@ -623,6 +715,12 @@ pub struct ScopeSharing {
 
 /// The read and write epoch one scope root's published record carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(large_number_types_as_bigints)
+)]
 pub struct ScopeEpochs {
     /// Steps at every read-plane rotation of the scope.
     pub read_epoch: u64,
@@ -636,8 +734,19 @@ pub struct ScopeEpochs {
 /// [`SnapshotView`], and the read that lets a UI stop mirroring its own command
 /// outcomes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(missing_as_null)
+)]
 pub struct SharingView {
     /// The scope root this read is for.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_id::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub scope: NodeId,
     /// Every contact this vault has imported, ordered as the book stores them.
     pub contacts: Vec<SharingContact>,
@@ -646,6 +755,11 @@ pub struct SharingView {
     /// the exchange the other direction already serves
     /// ([`Command::ImportContact`]). Public material, signed under the
     /// session's own identity key — it derives nothing and unwraps nothing.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "serde_bytes::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub own_contact_code: Vec<u8>,
     /// `None` where this read could not reach the scope root — absence a host
     /// must not paint as "shared with nobody".
@@ -660,15 +774,31 @@ pub struct SharingView {
 /// on the share, so [`resolution`](Self::resolution) is what says whether it
 /// still stands.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(missing_as_null)
+)]
 pub struct ReceivedShareRow {
     /// The shared scope's id. The sharer authors it, so it identifies this row
     /// only together with [`sharer_identity_public_key`](Self::sharer_identity_public_key):
     /// two sharers may each grant one id, and a host must key a row on the pair.
     /// The scope root's `ipnsName` is deliberately not projected: a write
     /// rotation moves it, and the durable list seals it.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_id::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub scope: NodeId,
     /// The sharer's identity key as the accepted bookmark holds it, which the
     /// accept flow bound to a verified contact before writing.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "serde_bytes::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub sharer_identity_public_key: Vec<u8>,
     /// The display label the share was accepted under. Empty for a link-held
     /// share whose names did not verify, which the host labels itself.
@@ -702,6 +832,8 @@ impl fmt::Debug for ReceivedShareRow {
 
 /// Where an invite link stands, as its preview read it (ADR 0028 D5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum LinkPreviewState {
     /// The owner-signed set commits the link, and its deadline stands.
     Live,
@@ -728,6 +860,8 @@ impl LinkPreviewState {
 /// The owner name and the folder name, under a verified owner signature
 /// (ADR 0027 D5).
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub struct PreviewNames {
     /// The owner's name, as the owner gave it. May be empty.
     pub owner_name: String,
@@ -747,10 +881,17 @@ impl fmt::Debug for PreviewNames {
 /// One direct child of a previewed folder: a name and a kind, and nothing
 /// that costs a read of the child (ADR 0028 D2).
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub struct PreviewEntry {
     /// The child's name.
     pub name: String,
     /// The child's kind.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_kind::serialize"),
+        tsify(type = "NodeKind")
+    )]
     pub kind: NodeKind,
 }
 
@@ -765,8 +906,19 @@ impl fmt::Debug for PreviewEntry {
 
 /// What the invite page shows before the join (ADR 0028 D2, D5).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(missing_as_null)
+)]
 pub struct InvitePreview {
     /// The folder the join bookmarks, so a host can open it once joined.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_id::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub scope: NodeId,
     /// The names, only when the owner signature over them verifies. A link
     /// with a bad signature shows none, and still works.
@@ -857,6 +1009,8 @@ fn link_read_refused(refusal: LinkReadRefusal) -> EngineError {
 /// The `/bin` route's whole read: the owner's soft-deleted nodes, and where
 /// the index they came from stands on the load ladder.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub struct BinView {
     /// One row per soft-deleted node.
     pub entries: Vec<BinRow>,
@@ -875,12 +1029,33 @@ pub struct BinView {
 /// the engine, and the key is the access the entry holds on the owner's behalf.
 /// Neither is a host's to hold (CONTEXT.md "Bin entry").
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(large_number_types_as_bigints)
+)]
 pub struct BinRow {
     /// The soft-deleted node. A restore and a purge both name it.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_id::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub node: NodeId,
     /// The node's immutable kind.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_kind::serialize"),
+        tsify(type = "NodeKind")
+    )]
     pub kind: NodeKind,
     /// The folder the node was unlinked from — a restore's default destination.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_id::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub origin_parent: NodeId,
     /// The name the node carried in that folder.
     pub origin_name: String,
@@ -891,6 +1066,11 @@ pub struct BinRow {
     /// this and the owner's `bin_retention_days`.
     pub deleted_at: u64,
     /// The scope the node belonged to at the delete.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_id::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub scope: NodeId,
 }
 
@@ -910,11 +1090,16 @@ impl fmt::Debug for BinRow {
 
 /// Where a bin row's origin folder stands in the rendered vault.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(tag = "kind", rename_all = "camelCase"))]
 pub enum BinOrigin {
     /// The vault root, which carries no name of its own.
     Root,
     /// A folder the vault still holds, under the name it carries there.
-    Folder(String),
+    Folder {
+        /// The folder's name.
+        name: String,
+    },
     /// No folder of that id stands in the vault, so a default restore refuses
     /// with [`EngineError::RestoreTargetGone`].
     Gone,
@@ -924,9 +1109,9 @@ impl fmt::Debug for BinOrigin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Root => f.write_str("Root"),
-            Self::Folder(name) => f
-                .debug_tuple("Folder")
-                .field(&RedactedText::of(name))
+            Self::Folder { name } => f
+                .debug_struct("Folder")
+                .field("name", &RedactedText::of(name))
                 .finish(),
             Self::Gone => f.write_str("Gone"),
         }
@@ -936,6 +1121,12 @@ impl fmt::Debug for BinOrigin {
 /// The storage pane's whole read: the member's own settings minus the provider
 /// credential, the account quota, and what a published prune still owes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(large_number_types_as_bigints, missing_as_null)
+)]
 pub struct VaultStorageView {
     /// The settings this session loaded, redacted.
     pub settings: VaultSettingsSummary,
@@ -954,6 +1145,12 @@ pub struct VaultStorageView {
 
 /// The account quota as the storage pane renders it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(large_number_types_as_bigints)
+)]
 pub struct QuotaView {
     /// Bytes counted against the account.
     pub used_bytes: u64,
@@ -970,6 +1167,8 @@ pub struct QuotaView {
 /// the whole surface: "the folder this was going into no longer exists" and
 /// "this queued change is corrupt" call for different user actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub struct DeadLetter {
     /// The dead-lettered op.
     pub op_id: OpId,
@@ -1003,10 +1202,26 @@ pub struct SessionStatus {
 /// breadcrumb trail, the retained dead letters, and the staleness rung — one
 /// internally-consistent read of the rendered view (state law).
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(rename_all = "camelCase"),
+    tsify(large_number_types_as_bigints, missing_as_null)
+)]
 pub struct SnapshotView {
     /// The rendered root node id.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_id::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub root: NodeId,
     /// The folder this view lists.
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::node_id::serialize"),
+        tsify(type = "Uint8Array")
+    )]
     pub folder: NodeId,
     /// That folder's own name, empty at the root. A host cannot recover it from
     /// `ancestors` (which starts at the parent) and must not cache a name across
@@ -1031,6 +1246,11 @@ pub struct SnapshotView {
     /// See [`SessionStatus::dead_letters`].
     pub dead_letters: Vec<DeadLetter>,
     /// See [`SessionStatus::queue_hold`].
+    #[cfg_attr(
+        feature = "wasm",
+        serde(serialize_with = "crate::wire::queue_hold"),
+        tsify(type = "QueueHold | null")
+    )]
     pub queue_hold: Option<QueueHold>,
     /// See [`SessionStatus::retained_records`].
     pub retained_records: usize,
@@ -1058,7 +1278,10 @@ impl fmt::Debug for SnapshotView {
 
 /// Grant permission level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    derive(serde::Deserialize, serde::Serialize, tsify::Tsify)
+)]
 #[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum Permission {
     /// Read grant: read seed only.
@@ -1285,7 +1508,7 @@ pub enum Command {
         #[cfg_attr(
             feature = "wasm",
             serde(rename = "nodeKind", with = "crate::wire::node_kind"),
-            tsify(type = "\"file\" | \"folder\"")
+            tsify(type = "NodeKind")
         )]
         kind: NodeKind,
     },
@@ -3375,7 +3598,9 @@ fn origin_folder(rendered: &Snapshot, parent: NodeId) -> BinOrigin {
     match rendered.node(parent) {
         // The rendered name, not the stored one: a bin row must name the origin
         // folder the way a host navigating there would read it.
-        Some(_) => BinOrigin::Folder(rendered_name(rendered, parent)),
+        Some(_) => BinOrigin::Folder {
+            name: rendered_name(rendered, parent),
+        },
         None => BinOrigin::Gone,
     }
 }
@@ -13467,11 +13692,15 @@ mod tests {
         assert_eq!(origin_folder(&rendered, root), BinOrigin::Root);
         assert_eq!(
             origin_folder(&rendered, planted),
-            BinOrigin::Folder("reports".to_owned())
+            BinOrigin::Folder {
+                name: "reports".to_owned()
+            }
         );
         assert_eq!(
             origin_folder(&rendered, shadowed),
-            BinOrigin::Folder("reports (1)".to_owned()),
+            BinOrigin::Folder {
+                name: "reports (1)".to_owned()
+            },
             "the row names the folder the listing named"
         );
         assert_eq!(
@@ -14382,9 +14611,12 @@ mod tests {
         let hold = QueueHold {
             op_id: OpId(1),
             node: root,
-            reason: QueueHoldReason::Settings(crate::settings::SettingsRefusal::Byo(
-                crate::content::ProviderError::InsecureTransport,
-            )),
+            reason: QueueHoldReason::Settings(
+                crate::settings::SettingsHold::byo(
+                    crate::content::ProviderError::InsecureTransport,
+                )
+                .unwrap(),
+            ),
         };
         *engine.state.queue_hold.borrow_mut() = Some(hold);
 
