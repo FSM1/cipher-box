@@ -17278,7 +17278,7 @@ fn a_refused_tied_record_read_does_not_stall_a_head_op_that_landed() {
         key.as_str(),
         TIED_READ_AFTER,
         endpoints,
-        transplant,
+        Some(transplant),
     );
     let _ = events_so_far(&mut split.events);
     tick(&split.world, &split.engine, &mut split.tasks);

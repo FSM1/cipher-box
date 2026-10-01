@@ -5,7 +5,7 @@
 
 pub mod cursor;
 
-use core::cell::{Cell, RefCell};
+use core::cell::RefCell;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,7 +28,7 @@ use super::publish::{PublishError, PublishOutcome, head_cid_from_value, put_and_
 use super::register::register;
 use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger};
 use super::rotation::{AdmittedScopeRoot, ScopeRootAdmission, admit_owned_scope_root, scope_name};
-use crate::api::{ApiClient, NameRegistration};
+use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::bin_index::BinIndexKeys;
 use crate::content::Gateway;
 use crate::gate::{GateError, GateStage, floor};
@@ -54,9 +54,12 @@ pub const WALK_WINDOW: Duration = Duration::from_secs(60 * DAY);
 /// A new cycle begins no sooner than this after the previous one began.
 pub const CYCLE_HOLD: Duration = Duration::from_secs(7 * DAY);
 
-/// How many passes in a row a session keeps the stored cursor after a passing
-/// failure, so a root that stays unavailable does not stall the walk.
-pub const KEEP_BACK_PASSES: u32 = 3;
+/// How long a run of passes that meet a transient failure keeps the cursor
+/// back (ADR 0061 D2). A pass in the run stores the cursor it began from, so
+/// the next pass repeats its range; the first pass past the window stores where
+/// it stopped, so a root that stays unavailable does not stall the walk. A
+/// permanent failure moves the cursor on at once.
+pub const KEEP_BACK_WINDOW: Duration = Duration::from_secs(DAY);
 
 /// The most poll cadences the liveness loop waits for the session's first
 /// boundary walk before it skips the renewal walk for that pass. A walk that
@@ -93,8 +96,6 @@ pub(crate) struct WalkGuards<'a> {
     pub(crate) orphan_heads: &'a OrphanHeads,
     /// The renewal set, whose entry for a renewed name follows the renewal.
     pub(crate) held: &'a RefCell<HeldRecords>,
-    /// The passes in a row that kept the stored cursor ([`KEEP_BACK_PASSES`]).
-    pub(crate) kept_back: &'a Cell<u32>,
 }
 
 /// The seams and keys one walk pass runs over.
@@ -122,6 +123,8 @@ pub(crate) struct WalkReport {
     pub(crate) renewals: Vec<EolRenewResult>,
     /// The names whose record the adoption gate refused.
     pub(crate) rejected: Vec<String>,
+    /// The owned scope roots that hold no record the walk can renew.
+    pub(crate) gone: Vec<String>,
 }
 
 /// A scope's material as this pass admitted its root.
@@ -212,9 +215,9 @@ struct Pass<'s> {
     /// cycle is reachable, and the walk enters each folder once for each pass.
     descended: BTreeSet<[u8; 16]>,
     due: Vec<Due>,
-    /// The names a delete doomed, or `None` when the journal did not read.
-    doomed: Option<BTreeSet<String>>,
-    /// A scope root or a registration failed for a reason that can pass.
+    /// The names a delete doomed.
+    doomed: BTreeSet<String>,
+    /// A visit met a transient failure ([`KEEP_BACK_WINDOW`]).
     kept_back: bool,
     owner_tag: [u8; 32],
     scopes: &'s [WalkScope],
@@ -295,6 +298,10 @@ where
         if held {
             return WalkReport::default();
         }
+        let owner_tag = owner_tag(self.enc_secret);
+        let Some(doomed) = self.doomed_names(&owner_tag).await else {
+            return WalkReport::default();
+        };
         let mut pass = Pass {
             cursor: stored.unwrap_or_else(|| RenewalCursor::starting(now)),
             report: WalkReport::default(),
@@ -307,9 +314,9 @@ where
                 .collect(),
             descended: BTreeSet::new(),
             due: Vec::new(),
-            doomed: None,
+            doomed,
             kept_back: false,
-            owner_tag: owner_tag(self.enc_secret),
+            owner_tag,
             scopes,
             bins,
         };
@@ -317,10 +324,7 @@ where
             pass.cursor = RenewalCursor::starting(now);
             pass.cursor.root = pass.roots().first().copied();
         }
-        pass.doomed = self.doomed_names(&pass.owner_tag).await;
-        if pass.doomed.is_none() {
-            return pass.report;
-        }
+        let origin = pass.cursor.clone();
 
         while let Some(root) = pass.cursor.root {
             if !still_running() || pass.budget_spent() {
@@ -336,17 +340,22 @@ where
             }
         }
         self.flush(&mut pass).await;
-        // A pass that met a passing failure keeps the stored cursor, so the next
-        // pass repeats its range rather than closing the cycle past it.
-        let kept_back = self.guards.kept_back;
-        if pass.kept_back && kept_back.get() < KEEP_BACK_PASSES {
-            kept_back.set(kept_back.get() + 1);
+        let since = origin.kept_back_since.unwrap_or(now);
+        let cursor = if pass.kept_back && !now.reached(Some(since.saturating_add(KEEP_BACK_WINDOW)))
+        {
+            RenewalCursor {
+                kept_back_since: Some(since),
+                ..origin
+            }
         } else {
-            kept_back.set(0);
-            // A cursor that does not store only costs work: the next pass
-            // starts the cycle again.
-            let _ = store.save(&pass.cursor).await;
-        }
+            RenewalCursor {
+                kept_back_since: None,
+                ..pass.cursor
+            }
+        };
+        // A cursor that does not store only costs work: the next pass starts
+        // the cycle again.
+        let _ = store.save(&cursor).await;
         pass.report
     }
 
@@ -416,6 +425,10 @@ where
                         }
                         Err(ScopeRootAdmission::Unavailable) => {
                             pass.kept_back = true;
+                            None
+                        }
+                        Err(ScopeRootAdmission::Gone) => {
+                            pass.report.gone.push(scope.name.as_str().to_owned());
                             None
                         }
                     }
@@ -647,7 +660,12 @@ where
                 pass.report.rejected.push(name.as_str().to_owned());
                 None
             }
-            Err(_) => None,
+            Err(
+                ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
+            ) => {
+                pass.kept_back = true;
+                None
+            }
         }
     }
 
@@ -683,10 +701,7 @@ where
             return;
         };
         let key = name.as_str();
-        if pass
-            .doomed
-            .as_ref()
-            .is_none_or(|doomed| doomed.contains(key))
+        if pass.doomed.contains(key)
             || self
                 .guards
                 .orphan_heads
@@ -698,13 +713,22 @@ where
             return;
         }
         let ledger = StagingRetireLedger::new(self.staging, self.seal);
-        if !matches!(ledger.tombstoned(&pass.owner_tag, node_id).await, Ok(false)) {
-            return;
+        match ledger.tombstoned(&pass.owner_tag, node_id).await {
+            Ok(false) => {}
+            Ok(true) => return,
+            Err(_) => {
+                pass.kept_back = true;
+                return;
+            }
         }
         match ledger.acknowledged(&pass.owner_tag, node_id, key).await {
             Ok(Acknowledged::Nothing) => {}
             Ok(Acknowledged::At(acked)) if acked <= sequence => {}
-            _ => return,
+            Ok(Acknowledged::At(_) | Acknowledged::Unreadable) => return,
+            Err(_) => {
+                pass.kept_back = true;
+                return;
+            }
         }
         pass.due.push(Due {
             node_id,
@@ -731,7 +755,7 @@ where
                 })
                 .collect();
             if let Err(error) = register(self.api, &registrations).await {
-                pass.kept_back = true;
+                pass.kept_back |= transient_registration(&error);
                 pass.report
                     .renewals
                     .extend(batch.iter().map(|due| EolRenewResult {
@@ -742,6 +766,7 @@ where
             }
             for due in batch {
                 if let Some(outcome) = self.renew(due).await {
+                    pass.kept_back |= transient_renewal(&outcome);
                     pass.report.renewals.push(EolRenewResult {
                         routing_key: due.name.as_str().to_owned(),
                         outcome,
@@ -756,7 +781,8 @@ where
     async fn renew(&self, due: &Due) -> Option<Result<Option<PublishOutcome>, PublishError>> {
         match fanout_get_classified(self.transport, &due.name).await {
             FanoutRecord::Found(_, live) if live == due.admitted => {}
-            _ => return None,
+            FanoutRecord::Unavailable(_) => return Some(Err(PublishError::AllEndpointsFailed)),
+            FanoutRecord::Found(..) | FanoutRecord::Absent => return None,
         }
         let floor = match floor::sequence_floor(self.floors, due.name.as_str().as_bytes()).await {
             Ok(floor) => floor,
@@ -825,6 +851,43 @@ where
 /// Store where the walk stops: the path of folders down to the deepest one it
 /// is listing, capped at the depth-cap folder, whose subtree a later pass
 /// starts again.
+/// Whether a refused registration can pass: the API was not reached, or it
+/// answered 429 or 5xx.
+fn transient_registration(error: &ApiError) -> bool {
+    match error {
+        ApiError::Transport(_) => true,
+        ApiError::Status { status, .. } => *status == 429 || *status >= 500,
+        ApiError::Unauthorized
+        | ApiError::Forbidden
+        | ApiError::Decode(_)
+        | ApiError::MalformedContentCid => false,
+    }
+}
+
+/// Whether a renewal's outcome can pass on a later pass.
+fn transient_renewal(outcome: &Result<Option<PublishOutcome>, PublishError>) -> bool {
+    match outcome {
+        Ok(Some(PublishOutcome::Unconfirmed { .. })) => true,
+        Ok(None | Some(PublishOutcome::Published { .. } | PublishOutcome::LostRace { .. })) => {
+            false
+        }
+        Err(PublishError::Register(error)) => transient_registration(error),
+        Err(
+            PublishError::AllEndpointsFailed
+            | PublishError::FloorRead(_)
+            | PublishError::MarkUnrecorded(_),
+        ) => true,
+        Err(
+            PublishError::AllEndpointsRefused
+            | PublishError::EmptyHeadCid
+            | PublishError::EmptyInlineValue
+            | PublishError::RecordTooLarge { .. }
+            | PublishError::EpochBelowFloor { .. }
+            | PublishError::SequenceExhausted,
+        ) => false,
+    }
+}
+
 fn park(cursor: &mut RenewalCursor, frames: &[Frame]) {
     cursor.path = frames
         .iter()

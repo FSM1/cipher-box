@@ -30,8 +30,10 @@ const CURSOR_V1: u8 = 1;
 
 const ID_LEN: usize = 16;
 
-/// `v ‖ cycle start ‖ root`.
-const HEADER_LEN: usize = 1 + 8 + ROOT_LEN;
+/// `v ‖ cycle start ‖ kept back since ‖ root`.
+const HEADER_LEN: usize = 1 + 8 + KEPT_BACK_LEN + ROOT_LEN;
+/// `present ‖ millis`.
+const KEPT_BACK_LEN: usize = 1 + 8;
 /// `class ‖ scope id ‖ node id`.
 const ROOT_LEN: usize = 1 + 2 * ID_LEN;
 /// `count ‖ ids`.
@@ -80,6 +82,10 @@ pub struct DeferredRoot {
 pub struct RenewalCursor {
     /// When the current (or last) cycle began.
     pub cycle_start: UnixMillis,
+    /// When the first pass in an unbroken run of passes that met a transient
+    /// failure kept this cursor back, so the run ends one window after it
+    /// began, across sessions.
+    pub kept_back_since: Option<UnixMillis>,
     /// The root the walk is in, or `None` once the cycle finished.
     pub root: Option<WalkRoot>,
     /// The folder node ids from the root down to the deepest folder the walk
@@ -96,6 +102,7 @@ impl RenewalCursor {
     pub fn starting(now: UnixMillis) -> Self {
         Self {
             cycle_start: now,
+            kept_back_since: None,
             root: None,
             path: Vec::new(),
             last_child: None,
@@ -131,6 +138,16 @@ pub fn encode_cursor(cursor: &RenewalCursor) -> Result<Vec<u8>, CursorCodecError
     let mut out = Vec::with_capacity(CURSOR_BODY_LEN);
     out.push(CURSOR_V1);
     out.extend_from_slice(&cursor.cycle_start.0.to_be_bytes());
+    match cursor.kept_back_since {
+        Some(since) => {
+            out.push(1);
+            out.extend_from_slice(&since.0.to_be_bytes());
+        }
+        None => {
+            out.push(0);
+            pad(&mut out, 8);
+        }
+    }
     let (class, scope_id, node_id) = match cursor.root {
         None => (0u8, [0; ID_LEN], [0; ID_LEN]),
         Some(WalkRoot::Scope(scope_id)) => (1, scope_id, [0; ID_LEN]),
@@ -179,6 +196,14 @@ pub fn decode_cursor(bytes: &[u8]) -> Result<RenewalCursor, CursorCodecError> {
         return Err(CursorCodecError::UnsupportedVersion);
     }
     let cycle_start = UnixMillis(u64::from_be_bytes(reader.array()));
+    let kept_back_since = match reader.byte() {
+        0 => {
+            reader.zeros(8)?;
+            None
+        }
+        1 => Some(UnixMillis(u64::from_be_bytes(reader.array()))),
+        _ => return Err(CursorCodecError::Malformed),
+    };
     let class = reader.byte();
     let scope_id: [u8; ID_LEN] = reader.array();
     let node_id: [u8; ID_LEN] = reader.array();
@@ -221,6 +246,7 @@ pub fn decode_cursor(bytes: &[u8]) -> Result<RenewalCursor, CursorCodecError> {
     reader.zeros((MAX_DEFERRED_ROOTS - deferred_len) * DEFERRED_ENTRY_LEN)?;
     Ok(RenewalCursor {
         cycle_start,
+        kept_back_since,
         root,
         path,
         last_child,
@@ -312,6 +338,7 @@ mod tests {
     fn full() -> RenewalCursor {
         RenewalCursor {
             cycle_start: UnixMillis(1_234_567),
+            kept_back_since: Some(UnixMillis(7_654_321)),
             root: Some(WalkRoot::Deferred {
                 scope_id: [3; 16],
                 node_id: [4; 16],
@@ -342,6 +369,8 @@ mod tests {
     fn committed_v1_body() -> Vec<u8> {
         let mut body = vec![1];
         body.extend_from_slice(&[0, 0, 0, 0, 0, 0x12, 0xd6, 0x87]);
+        body.push(1);
+        body.extend_from_slice(&[0, 0, 0, 0, 0, 0x74, 0xcb, 0xb1]);
         body.push(3);
         body.extend_from_slice(&[3; 16]);
         body.extend_from_slice(&[4; 16]);
@@ -355,7 +384,7 @@ mod tests {
         body.extend_from_slice(&[5; 16]);
         body.extend_from_slice(&[6; 16]);
         body.extend_from_slice(&name(1).public_key().to_bytes());
-        body.resize(17_470, 0);
+        body.resize(17_479, 0);
         body
     }
 
@@ -367,6 +396,7 @@ mod tests {
             cursor,
             RenewalCursor {
                 cycle_start: UnixMillis(1_234_567),
+                kept_back_since: Some(UnixMillis(7_654_321)),
                 root: Some(WalkRoot::Deferred {
                     scope_id: [3; 16],
                     node_id: [4; 16],
@@ -430,6 +460,12 @@ mod tests {
             decode_cursor(&body[..body.len() - 1]),
             Err(CursorCodecError::WrongLength)
         );
+        let mut flag = body.clone();
+        flag[9] = 2;
+        assert_eq!(decode_cursor(&flag), Err(CursorCodecError::Malformed));
+        let mut stray = body.clone();
+        stray[10] = 1;
+        assert_eq!(decode_cursor(&stray), Err(CursorCodecError::Malformed));
         let mut future = body;
         future[0] = CURSOR_V1 + 1;
         assert_eq!(

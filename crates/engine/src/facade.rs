@@ -5647,7 +5647,6 @@ where {
             let scope_tree_walked = Cell::new(false);
             let next_maintenance = Cell::new(Some(scheduler.now()));
             let walk_waits = Cell::new(0u32);
-            let walk_kept_back = Cell::new(0u32);
             run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
                 if !alive.get() {
                     return LivenessControl::Stop;
@@ -5758,7 +5757,6 @@ where {
                             publishing: &publishing,
                             orphan_heads: &orphan_heads,
                             held: &held,
-                            kept_back: &walk_kept_back,
                         },
                     };
                     // A scope this session minted holds seeds before the next
@@ -5780,6 +5778,12 @@ where {
                             routing_key,
                             "the renewal walk's adoption gate refused the record",
                         );
+                    }
+                    for routing_key in report.gone {
+                        let _ = events.unbounded_send(Event::RenewalFailed {
+                            routing_key,
+                            detail: "the scope root holds no record the walk can renew".to_owned(),
+                        });
                     }
                 }
                 LivenessControl::Continue

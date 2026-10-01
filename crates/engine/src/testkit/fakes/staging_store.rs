@@ -11,6 +11,7 @@ struct Inner {
     ops: Vec<(OpId, Vec<u8>)>,
     staged: BTreeMap<Vec<u8>, Vec<u8>>,
     fail_queued_ops: bool,
+    fail_staged_keys: bool,
     fail_remove_op: bool,
     enqueue_budget: Option<u64>,
     staged_write_budget: Option<Arm>,
@@ -29,6 +30,7 @@ impl Default for Inner {
             ops: Vec::new(),
             staged: BTreeMap::new(),
             fail_queued_ops: false,
+            fail_staged_keys: false,
             fail_remove_op: false,
             enqueue_budget: None,
             staged_write_budget: None,
@@ -64,6 +66,18 @@ impl InMemoryStagingStore {
     /// precondition guard runs before the staging read.
     pub fn fail_queued_ops(&self) {
         self.inner.lock().expect("lock").fail_queued_ops = true;
+    }
+
+    /// Makes `staged_keys` return a seam error until
+    /// [`heal_staged_keys`](Self::heal_staged_keys).
+    pub fn fail_staged_keys(&self) {
+        self.inner.lock().expect("lock").fail_staged_keys = true;
+    }
+
+    /// Lists the staged keys again after
+    /// [`fail_staged_keys`](Self::fail_staged_keys).
+    pub fn heal_staged_keys(&self) {
+        self.inner.lock().expect("lock").fail_staged_keys = false;
     }
 
     /// Makes `remove_op` return a seam error without dropping the record, so
@@ -293,6 +307,9 @@ impl StagingStore for InMemoryStagingStore {
     async fn staged_keys(&self) -> SeamResult<Vec<Vec<u8>>> {
         let mut inner = self.inner.lock().expect("lock");
         inner.key_listings += 1;
+        if inner.fail_staged_keys {
+            return Err(SeamError::new("injected staged_keys failure"));
+        }
         Ok(inner.staged.keys().cloned().collect())
     }
 

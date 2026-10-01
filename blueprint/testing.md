@@ -127,8 +127,10 @@ scenario fails the meta-test):
   names; a bin entry, a deferred depth-64 folder and a node that lags a cut
   renew; a pass that parks below an ancestor resumes at that ancestor's next
   sibling; a link cycle ends in the pass that meets it; an unavailable scope
-  root or a refused registration keeps the cursor for the next pass, at most
-  three passes in a row; a publish during the
+  root, a 503 registration or a failed PUT keeps the cursor for the next
+  pass, across sessions, until one day after the first keep-back; a scope
+  root with no record moves the cursor at once and emits `renewalFailed`; a
+  doomed-name journal that does not list renews and stores nothing; a publish during the
   registration wait makes the walk refuse; at one
   sequence the later EOL wins in the resolve and in the last-known-good
   keeper. `tests/owner_actions.rs` covers a nested owned scope and a node a stopped

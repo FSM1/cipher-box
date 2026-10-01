@@ -1742,8 +1742,11 @@ pub(crate) struct AdmittedScopeRoot {
 pub(crate) enum ScopeRootAdmission {
     /// The gate refused the record: a trust violation.
     Rejected,
-    /// No record could be read: availability.
+    /// No record could be read now: availability, which can pass.
     Unavailable,
+    /// The endpoints agree the name holds no record, or the record sits below
+    /// its scope's own floor after a rotation: no later read admits it.
+    Gone,
 }
 
 /// Gate the owned scope root `scope_id` at `name` through the root adopter,
@@ -1772,17 +1775,18 @@ where
         Some(seed) => adopter.under_parent_node_seed(seed.clone()),
         None => adopter,
     };
-    let Some((_, record_bytes)) = fanout_get_verify(transport, name).await else {
-        return Err(ScopeRootAdmission::Unavailable);
+    let record_bytes = match fanout_get_classified(transport, name).await {
+        FanoutRecord::Found(_, record_bytes) => record_bytes,
+        FanoutRecord::Absent => return Err(ScopeRootAdmission::Gone),
+        FanoutRecord::Unavailable(_) => return Err(ScopeRootAdmission::Unavailable),
     };
     let gated = gated_root_cached(&adopter, snapshot_cache, name, &record_bytes, None)
         .await
         .map_err(|verdict| match verdict {
+            RootGateVerdict::Unavailable => ScopeRootAdmission::Unavailable,
             // A rotation publishes before it raises the floor, so a root below
             // its own floor is a stale name, as for `walk_verdict`.
-            RootGateVerdict::Unavailable | RootGateVerdict::Superseded => {
-                ScopeRootAdmission::Unavailable
-            }
+            RootGateVerdict::Superseded => ScopeRootAdmission::Gone,
             RootGateVerdict::Rejected | RootGateVerdict::NotResealable => {
                 ScopeRootAdmission::Rejected
             }
@@ -13433,7 +13437,7 @@ mod tests {
     /// sits below the scope's own floor, which is a stale name, not a trust
     /// violation.
     #[test]
-    fn the_walk_reads_a_scope_root_below_its_own_floor_as_unavailable() {
+    fn the_walk_reads_a_scope_root_below_its_own_floor_as_gone() {
         let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
         block_on(harness.floors.raise_epoch_floor(&SCOPE, SWEPT_EPOCH + 3))
             .expect("raise the floor past the record");
@@ -13452,7 +13456,7 @@ mod tests {
             None,
             &name,
         ));
-        assert!(matches!(admitted, Err(ScopeRootAdmission::Unavailable)));
+        assert!(matches!(admitted, Err(ScopeRootAdmission::Gone)));
     }
 
     #[test]

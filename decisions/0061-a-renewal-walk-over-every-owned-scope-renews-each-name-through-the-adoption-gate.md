@@ -32,7 +32,8 @@ subtree), and each deferred root of D2. The walk stops at a scope-root boundary 
 scope as its own. A visit renews a name whose EOL is inside the walk window.
 
 **D2 — The walk is depth-first in node-id order, and its cursor is the path of node ids from the
-root.** The cursor holds a version byte, the cycle start, the current root, the folder node ids on
+root.** The cursor holds a version byte, the cycle start, the time the walk first kept the cursor
+back after a transient failure (or none), the current root, the folder node ids on
 the path (64 at most), the last child visited at the deepest level, and the deferred roots (256 at
 most, each a scope id, a node id and a name). A resume re-reads each folder on the path from its
 parent's current body, and continues at the deepest folder still on the path. The walk
@@ -40,7 +41,9 @@ does not descend below a folder at depth 64: it adds that folder as a deferred r
 later with a new path. A deferred name that went stale fails the signer bind, and the next cycle
 finds that folder again. When the set is full, the walk descends below depth 64 in memory and
 finishes that subtree in the same pass, with no per-pass budget. The cursor stays at the depth-64
-folder, so the encode never fails, and a pass that ends inside the subtree starts it again. The cursor seals on the owner-local structure under the new kind
+folder, so the encode never fails, and a pass that ends inside the subtree starts it again. A pass
+that meets a transient failure stores the cursor it began from until one day after that first
+keep-back time, then stores where it stopped and clears the time. The cursor seals on the owner-local structure under the new kind
 `renewal-cursor` (discriminator `0x09`). This is not a KDF edge: the seal is HPKE auth mode to the
 owner's own enc subkey, and the kind is a discriminator in the AAD and the `info`. The body is
 padded to the caps, so the sealed length shows nothing. The decode and the encode enforce both

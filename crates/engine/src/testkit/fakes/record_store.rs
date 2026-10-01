@@ -20,8 +20,8 @@ type EndpointRecords = HashMap<String, Vec<u8>>;
 type DeferredRecords = HashMap<String, Vec<(String, Vec<u8>, Option<EndpointId>)>>;
 
 /// For each routing key: the GETs still to answer from the store, the GETs then
-/// to answer with the record, and the record.
-type SwappedRecords = HashMap<String, (usize, usize, Vec<u8>)>;
+/// to answer with the record (`None` for no record), and the record.
+type SwappedRecords = HashMap<String, (usize, usize, Option<Vec<u8>>)>;
 
 /// In-memory fake of the `/routing/v1` endpoint set: one map of opaque
 /// record bytes per configured endpoint, holding the **highest sequence** at
@@ -323,14 +323,15 @@ impl InMemoryRecordStore {
     }
 
     /// Answer the `count` GETs under `routing_key` that come after `answered`
-    /// more of them with `record`, then answer from the store again, so one
-    /// read of a name sees other bytes between two that do not.
+    /// more of them with `record` (`None` serves no record), then answer from
+    /// the store again, so one read of a name sees other bytes between two that
+    /// do not.
     pub fn serve_gets_for_after(
         &self,
         routing_key: &str,
         answered: usize,
         count: usize,
-        record: Vec<u8>,
+        record: Option<Vec<u8>>,
     ) {
         self.swapped_keys
             .lock()
@@ -340,7 +341,7 @@ impl InMemoryRecordStore {
 
     /// The bytes [`serve_gets_for_after`](Self::serve_gets_for_after) answers
     /// this GET under `routing_key` with, if any.
-    fn swapped(&self, routing_key: &str) -> Option<Vec<u8>> {
+    fn swapped(&self, routing_key: &str) -> Option<Option<Vec<u8>>> {
         let mut keys = self.swapped_keys.lock().expect("lock");
         let (answered, count, record) = keys.get_mut(routing_key)?;
         if let Some(left) = answered.checked_sub(1) {
@@ -431,7 +432,7 @@ impl RecordTransport for InMemoryRecordStore {
             return Err(SeamError::new(format!("get refused for {routing_key}")));
         }
         if let Some(record) = self.swapped(routing_key) {
-            return Ok(Some(record));
+            return Ok(record);
         }
         let record = self
             .inner

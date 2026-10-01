@@ -161,9 +161,13 @@ bytes (FSM1/cipher-box-next#28 D2).
   one began. A visit signs only under the write seed that derives its scope
   root's name, so a node a stopped name wave left at an older name lapses.
   The walk enters each folder once for each pass, so a link cycle ends.
-  A pass that meets an owned scope root that does not resolve or a refused
-  registration keeps the stored cursor, so the next pass repeats its range;
-  a session does so at most three passes in a row. A pass whose doomed-name
+  A pass that meets a transient failure (a transport error, a 429 or 5xx,
+  an unavailable read, a failed PUT or a store error) keeps the stored
+  cursor, so the next pass repeats its range. The cursor records when the
+  first such pass began the run, and the first pass one day later stores
+  where it stopped, across sessions. A permanent failure (no record, a
+  superseded root, a 4xx refusal, a decode error) moves the cursor on at
+  once and emits `renewalFailed`. A pass whose doomed-name
   journal does not list renews nothing and stores nothing.
   A move can put a subtree behind the cursor for one cycle, so two
   visits of one name are at most `2 max(T, 7 days) + T` apart, where T is the
