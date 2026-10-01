@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "baf27ca0f283",
+  "strategy": "manual-commit",
+  "branch": "fix/cold-start-file-rows-paint",
+  "checkpoints_count": 9,
+  "files_touched": [
+    "apps/web/src/engine/snapshotStore.test.ts",
+    "apps/web/src/engine/snapshotStore.ts",
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/facade/tests/capstone/pass_tick.rs",
+    "crates/engine/src/session.rs",
+    "crates/engine/src/sync/pass.rs",
+    "crates/engine/src/sync/tick.rs",
+    "crates/engine/tests/write_plane.rs",
+    "tests/web-e2e/README.md",
+    "tests/web-e2e/tests/cold-start-listing.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ba/f27ca0f283/0/metadata.json",
+      "transcript": "/ba/f27ca0f283/0/full.jsonl",
+      "compact_transcript": "/ba/f27ca0f283/0/transcript.jsonl",
+      "content_hash": "/ba/f27ca0f283/0/content_hash.txt",
+      "prompt": "/ba/f27ca0f283/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1212,
+    "cache_creation_tokens": 226606,
+    "cache_read_tokens": 8131787,
+    "output_tokens": 63998,
+    "api_call_count": 50
+  }
+}

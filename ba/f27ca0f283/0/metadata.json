@@ -1,0 +1,233 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "baf27ca0f283",
+  "session_id": "cc94825a-d06d-4b5e-a54b-a1b4a14dba58",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-01T00:40:30.747618Z",
+  "branch": "fix/cold-start-file-rows-paint",
+  "checkpoints_count": 9,
+  "save_step_count": 8,
+  "files_touched": [
+    "apps/web/src/engine/snapshotStore.test.ts",
+    "apps/web/src/engine/snapshotStore.ts",
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/facade/tests/capstone/pass_tick.rs",
+    "crates/engine/src/session.rs",
+    "crates/engine/src/sync/pass.rs",
+    "crates/engine/src/sync/tick.rs",
+    "crates/engine/tests/write_plane.rs",
+    "tests/web-e2e/README.md",
+    "tests/web-e2e/tests/cold-start-listing.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "e77930b08e18",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1212,
+    "cache_creation_tokens": 226606,
+    "cache_read_tokens": 8131787,
+    "output_tokens": 63998,
+    "api_call_count": 50
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Fix a regression where file sizes and modified dates show '...' on cold start in the CipherBox web app, and add web e2e/smoke coverage so this class of bug is caught.",
+    "outcome": "Found and fixed three engine/web defects (root focus gap, shared-folder navigation file leg, pre-walk focus false abuse warning), added a cold-start-listing e2e spec and Rust/TS tests, and committed on a fix branch. The final smoke-slice run had not reported yet.",
+    "learnings": {
+      "repo": [
+        "The web sends focus null for the vault root (/files); the engine reads SetFocus{node:None} as 'no folder open', so root file rows were never queued for the file leg. Every Rust test used Some(ROOT), which masked it.",
+        "snapshotStore.setFocus dedups against its initial null, so facade.setFocus is never called on a fresh load at /files.",
+        "The engine runs commands serially; the web's assertFocus called reportFocus (which triggers a forced manualRefresh) before facade.setFocus, so the forced pass ran with the old focus.",
+        "The navigation file leg used to skip rows in a shared folder's own scope; those rows waited for the 30s poll tick. It now runs one file leg per scope using that scope's own seed and floors.",
+        "A SetFocus before the first boundary walk read a shared folder under the root seed and raised a false AttributableAbuse. Fixed by running the pass's walk_boundaries inline once, gated by SessionState::boundary_walk_ran.",
+        "The sync rung is stamped from the root leg only, so the status bar can show 'synced' while the file leg fails every tick.",
+        "Web e2e smoke is every spec not tagged @full; an untagged test joins Web E2E Smoke automatically, which blocks PRs. No prior web e2e spec asserted size or modified cells.",
+        "Helpers for cold-start tests: Device.open creates a fresh BrowserContext, FilesPage.cells(name) reads size and modified, freshLogin() mints a login. sharing.ts mint() signs in a new account, so it can't be reused with an existing login."
+      ],
+      "code": [
+        {
+          "path": "crates/engine/src/sync/pass.rs",
+          "line": 669,
+          "end_line": 686,
+          "finding": "refresh_focus loops queue_unprojected_children over folders_in_view(), which was empty when open_folder was None. The fix adds FocusWindow::folders_in_view_or_root."
+        },
+        {
+          "path": "apps/web/src/engine/snapshotStore.ts",
+          "line": 199,
+          "finding": "setFocus returns early when the node is unchanged. The initial null focus therefore never reaches the engine."
+        },
+        {
+          "path": "apps/web/src/vault/listing.ts",
+          "line": 13,
+          "end_line": 90,
+          "finding": "UNRESOLVED = '...' is rendered by projectedSize/projectedDate when child.size or mtime is null."
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "line": 8659,
+          "end_line": 8723,
+          "finding": "refresh_focus_on_access holds the on-access folder leg and file leg. It now calls navigation_file_legs per scope and walks boundaries first if none has run."
+        }
+      ],
+      "workflow": null
+    },
+    "friction": [
+      "The assistant's response was stopped once by a safety classifier mid-investigation.",
+      "The engine lane first returned an interim 'waiting on test run' result and had to be waited on again.",
+      "The first fix changed the behaviour of three existing Rust tests and one capstone test, which had to be adjusted.",
+      "Two attempted guards for the pre-walk abuse bug broke six plain-folder cold-start tests before the inline-walk approach was chosen.",
+      "The mintLink step in the new shared-folder spec has a 180s timeout, longer than the 120s per-test budget.",
+      "The 130s delay seen on staging for the shared-folder rows was not reproduced locally."
+    ],
+    "open_items": [
+      "The full local smoke slice run was launched in the background and its result was not seen before the commit.",
+      "Whether the false-abuse alternative (not reporting navigation gate rejections as abuse before the walk) needs a trust-reporting and crypto-privacy review; the inline walk was chosen instead.",
+      "The public Engine::focus_folders() still excludes the root.",
+      "The shared-folder spec's mint timeout (180s) risks exceeding the 120s test timeout, and it assumes the drained probe folder orders the scope-cut publish.",
+      "The branch has not been pushed and no PR was opened.",
+      "The web-e2e README coverage bullet was added by the assistant, and the walk lane reported that edit as not its own.",
+      "The ~130s remaining delay on staging for shared-folder rows is unexplained."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-01T00:40:14.808622Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 571,
+    "human_modified": 201,
+    "human_removed": 0,
+    "total_committed": 571,
+    "total_lines_changed": 772,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 20,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".husky/_/commit-msg": 4,
+        ".husky/_/post-commit": 4,
+        ".husky/_/post-rewrite": 4,
+        ".husky/_/pre-push": 5,
+        ".husky/_/prepare-commit-msg": 3
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 20,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 118,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 47,
+      "user_lines_removed": 7,
+      "agent_lines_added": 153,
+      "agent_lines_removed": 5,
+      "user_added_per_file": {
+        "crates/engine/src/facade.rs": 1,
+        "crates/engine/src/facade/tests/capstone/pass_tick.rs": 2,
+        "crates/engine/tests/write_plane.rs": 44
+      },
+      "user_removed_per_file": {
+        "crates/engine/src/facade.rs": 1,
+        "crates/engine/src/facade/tests/capstone/pass_tick.rs": 1,
+        "crates/engine/tests/write_plane.rs": 5
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 200,
+      "agent_lines_removed": 12
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 140,
+      "user_lines_removed": 31,
+      "agent_lines_added": 307,
+      "agent_lines_removed": 17,
+      "user_added_per_file": {
+        "apps/web/src/engine/snapshotStore.test.ts": 15,
+        "crates/engine/src/facade.rs": 74,
+        "tests/web-e2e/tests/cold-start-listing.spec.ts": 51
+      },
+      "user_removed_per_file": {
+        "apps/web/src/engine/snapshotStore.test.ts": 1,
+        "crates/engine/src/facade.rs": 18,
+        "tests/web-e2e/tests/cold-start-listing.spec.ts": 12
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 199,
+      "user_lines_removed": 53,
+      "agent_lines_added": 395,
+      "agent_lines_removed": 35,
+      "user_added_per_file": {
+        "crates/engine/src/facade.rs": 78,
+        "crates/engine/src/session.rs": 6,
+        "crates/engine/src/sync/pass.rs": 1,
+        "crates/engine/tests/write_plane.rs": 63,
+        "tests/web-e2e/tests/cold-start-listing.spec.ts": 51
+      },
+      "user_removed_per_file": {
+        "crates/engine/src/facade.rs": 25,
+        "crates/engine/tests/write_plane.rs": 16,
+        "tests/web-e2e/tests/cold-start-listing.spec.ts": 12
+      }
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 62,
+      "user_lines_removed": 72,
+      "agent_lines_added": 520,
+      "agent_lines_removed": 59,
+      "user_added_per_file": {
+        "crates/engine/src/facade.rs": 11,
+        "tests/web-e2e/tests/cold-start-listing.spec.ts": 51
+      },
+      "user_removed_per_file": {
+        "crates/engine/src/facade.rs": 25,
+        "crates/engine/src/sync/pass.rs": 1,
+        "crates/engine/tests/write_plane.rs": 34,
+        "tests/web-e2e/tests/cold-start-listing.spec.ts": 12
+      }
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 162,
+      "user_lines_removed": 19,
+      "agent_lines_added": 470,
+      "agent_lines_removed": 49,
+      "user_added_per_file": {
+        "crates/engine/src/facade.rs": 33,
+        "crates/engine/src/session.rs": 4,
+        "crates/engine/src/sync/pass.rs": 12,
+        "crates/engine/tests/write_plane.rs": 62,
+        "tests/web-e2e/tests/cold-start-listing.spec.ts": 51
+      },
+      "user_removed_per_file": {
+        "crates/engine/src/facade.rs": 1,
+        "crates/engine/src/session.rs": 6,
+        "tests/web-e2e/tests/cold-start-listing.spec.ts": 12
+      }
+    }
+  ]
+}
