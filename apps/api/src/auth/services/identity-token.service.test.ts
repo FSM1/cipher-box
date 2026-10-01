@@ -164,8 +164,8 @@ describe('IdentityTokenService', () => {
     expect(verified.expiresAt).toEqual(new Date(exp * 1000));
   });
 
-  it.each(['1e999', '1e300'])(
-    'refuses a token whose expiry %s is no valid instant',
+  it.each(['1e999', '1e300', String(Date.UTC(200_000, 0, 1) / 1000)])(
+    'refuses a token whose expiry %s is no valid instant or is past the token lifetime',
     async (exp) => {
       const service = await bootedService({
         NODE_ENV: 'production',
@@ -177,6 +177,25 @@ describe('IdentityTokenService', () => {
       );
     }
   );
+
+  it.each([
+    { name: 'at the edge of the skew allowance', past: 360, accepted: true },
+    { name: 'one second past the skew allowance', past: 361, accepted: false },
+  ])('bounds the expiry $name', async ({ past, accepted }) => {
+    const clock = new FakeClock();
+    const service = await bootedService(
+      { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+      clock
+    );
+    const exp = String(Math.floor(clock.now().getTime() / 1000) + past);
+
+    const verified = service.verify(await identityTokenWithRawExp(encodedPem, exp));
+    if (accepted) {
+      await expect(verified).resolves.toBeDefined();
+    } else {
+      await expect(verified).rejects.toThrow('valid expiry');
+    }
+  });
 
   it('refuses a token whose expiry is past, even when it is not finite', async () => {
     const service = await bootedService({

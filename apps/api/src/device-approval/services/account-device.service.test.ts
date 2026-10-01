@@ -233,6 +233,20 @@ describe('AccountDeviceService', () => {
       expect(devices.rows).toHaveLength(0);
     });
 
+    it('refuses a token whose expiry is past the token lifetime with 401, before any spend', async () => {
+      const spend = await overRealTokens();
+
+      const farFuture = await identityTokenWithRawExp(
+        encodedPem,
+        String(Date.UTC(200_000, 0, 1) / 1000)
+      );
+      await expect(
+        service.register(account, registration(device, account, { identityToken: farFuture }))
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(spend).not.toHaveBeenCalled();
+      expect(devices.rows).toHaveLength(0);
+    });
+
     it('is idempotent per key: a re-registration updates rather than duplicates', async () => {
       const first = await service.register(
         account,
