@@ -15,9 +15,11 @@ use cipherbox_core::seal::{
 
 use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::eol::{eol_from, renewal_eol_from};
-use cipherbox_engine::net::renewal_walk::WALK_BUDGET;
 use cipherbox_engine::net::renewal_walk::cursor::{CursorStore, MAX_CURSOR_PATH};
-use cipherbox_engine::seams::{BoxedTask, HttpMethod, RecordTransport, Scheduler, UnixMillis};
+use cipherbox_engine::net::renewal_walk::{KEEP_BACK_PASSES, WALK_BUDGET};
+use cipherbox_engine::seams::{
+    BoxedTask, HttpMethod, HttpResponse, RecordTransport, Scheduler, UnixMillis,
+};
 use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, seed_account};
 use cipherbox_engine::testkit::{
@@ -590,4 +592,131 @@ fn a_link_cycle_ends_in_the_pass_that_meets_it() {
     .expect("the pass stored its cursor");
     assert_eq!(cursor.root, None, "the cycle finished in one pass");
     assert!(cursor.deferred.is_empty(), "the cycle defers no folder");
+}
+
+/// A registry that refuses the file's registration in the first pass makes that
+/// pass keep the stored cursor, so the next pass renews the file rather than
+/// the cycle closing past it.
+#[test]
+fn a_refused_registration_keeps_the_cursor_for_the_next_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![write_file(&world, engine, tasks, ROOT, "note.txt")]
+    });
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+
+    world.scheduler.advance(DAY * 65);
+    let started = world.scheduler.now();
+    let device = world.device(b"a later session");
+    let refusing = Arc::new(AtomicBool::new(true));
+    let refused = Arc::new(AtomicBool::new(false));
+    for _ in 0..4000 {
+        let (blocks, key) = (blocks.clone(), name.as_str().to_owned());
+        let (refusing, refused) = (refusing.clone(), refused.clone());
+        device.http.enqueue_derived(move |request| {
+            let registers_the_file = request.method == HttpMethod::Post
+                && request.url.ends_with("/registry/register")
+                && request
+                    .body
+                    .as_deref()
+                    .is_some_and(|body| body.windows(key.len()).any(|w| w == key.as_bytes()));
+            if registers_the_file && refusing.load(Ordering::SeqCst) {
+                refused.store(true, Ordering::SeqCst);
+                return Ok(HttpResponse {
+                    status: 503,
+                    headers: Vec::new(),
+                    body: b"{\"statusCode\":503,\"message\":\"unavailable\"}".to_vec(),
+                });
+            }
+            blocks.reply(request)
+        });
+    }
+    let (engine, _events, mut tasks) = boot_served(&world, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert!(
+        refused.load(Ordering::SeqCst),
+        "the registry refused the file"
+    );
+    assert_eq!(
+        record_at(&world, &name),
+        before,
+        "the first pass renews nothing"
+    );
+
+    refusing.store(false, Ordering::SeqCst);
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert_renewed_at_start(&world, &name, &before, started, "the file");
+}
+
+/// An owned scope root that does not resolve in the first pass makes that pass
+/// keep the stored cursor, so the next pass walks the scope.
+#[test]
+fn an_unavailable_scope_root_keeps_the_cursor_for_the_next_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![write_file(&world, engine, tasks, ROOT, "note.txt")]
+    });
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+
+    world.scheduler.advance(DAY * 65);
+    let started = world.scheduler.now();
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    tick(&world, &engine, &mut tasks);
+    let root = write_name(ROOT);
+    world.record_store.fail_get_for(root.as_str());
+    tick(&world, &engine, &mut tasks);
+    world.record_store.heal_get_for(root.as_str());
+    assert_eq!(
+        record_at(&world, &name),
+        before,
+        "the first pass renews nothing"
+    );
+
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert_renewed_at_start(&world, &name, &before, started, "the file");
+}
+
+/// A scope root that stays unavailable keeps the cursor back for at most
+/// `KEEP_BACK_PASSES` passes in a row; the pass after that stores the cursor.
+#[test]
+fn a_scope_root_that_stays_unavailable_does_not_stall_the_walk() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    written_then_left(&world, &blocks, |engine, tasks| {
+        vec![write_file(&world, engine, tasks, ROOT, "note.txt")]
+    });
+    world.scheduler.advance(DAY * 65);
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    tick(&world, &engine, &mut tasks);
+    world.record_store.fail_get_for(write_name(ROOT).as_str());
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(9));
+    let cursor = || {
+        block_on(
+            CursorStore::new(
+                &device.staging_store,
+                BookkeepingSeal::new(&enc, &entropy),
+                &enc,
+            )
+            .load(),
+        )
+        .expect("the store reads")
+    };
+    tick(&world, &engine, &mut tasks);
+    for _ in 1..KEEP_BACK_PASSES {
+        world.scheduler.advance(Duration::from_secs(60 * 60));
+        tick(&world, &engine, &mut tasks);
+    }
+    assert_eq!(cursor(), None, "each pass so far kept the cursor back");
+    world.scheduler.advance(Duration::from_secs(60 * 60));
+    tick(&world, &engine, &mut tasks);
+    assert!(cursor().is_some(), "the next pass stores its cursor");
 }

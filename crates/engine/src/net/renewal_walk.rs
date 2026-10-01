@@ -5,7 +5,7 @@
 
 pub mod cursor;
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -54,6 +54,10 @@ pub const WALK_WINDOW: Duration = Duration::from_secs(60 * DAY);
 /// A new cycle begins no sooner than this after the previous one began.
 pub const CYCLE_HOLD: Duration = Duration::from_secs(7 * DAY);
 
+/// How many passes in a row a session keeps the stored cursor after a passing
+/// failure, so a root that stays unavailable does not stall the walk.
+pub const KEEP_BACK_PASSES: u32 = 3;
+
 /// The most poll cadences the liveness loop waits for the session's first
 /// boundary walk before it skips the renewal walk for that pass. A walk that
 /// starts before the boundary walk names every owned scope root would close its
@@ -89,6 +93,8 @@ pub(crate) struct WalkGuards<'a> {
     pub(crate) orphan_heads: &'a OrphanHeads,
     /// The renewal set, whose entry for a renewed name follows the renewal.
     pub(crate) held: &'a RefCell<HeldRecords>,
+    /// The passes in a row that kept the stored cursor ([`KEEP_BACK_PASSES`]).
+    pub(crate) kept_back: &'a Cell<u32>,
 }
 
 /// The seams and keys one walk pass runs over.
@@ -208,6 +214,8 @@ struct Pass<'s> {
     due: Vec<Due>,
     /// The names a delete doomed, or `None` when the journal did not read.
     doomed: Option<BTreeSet<String>>,
+    /// A scope root or a registration failed for a reason that can pass.
+    kept_back: bool,
     owner_tag: [u8; 32],
     scopes: &'s [WalkScope],
     bins: &'s [BinRoot],
@@ -300,6 +308,7 @@ where
             descended: BTreeSet::new(),
             due: Vec::new(),
             doomed: None,
+            kept_back: false,
             owner_tag: owner_tag(self.enc_secret),
             scopes,
             bins,
@@ -309,6 +318,9 @@ where
             pass.cursor.root = pass.roots().first().copied();
         }
         pass.doomed = self.doomed_names(&pass.owner_tag).await;
+        if pass.doomed.is_none() {
+            return pass.report;
+        }
 
         while let Some(root) = pass.cursor.root {
             if !still_running() || pass.budget_spent() {
@@ -324,9 +336,17 @@ where
             }
         }
         self.flush(&mut pass).await;
-        // A cursor that does not store only costs work: the next pass starts
-        // the cycle again.
-        let _ = store.save(&pass.cursor).await;
+        // A pass that met a passing failure keeps the stored cursor, so the next
+        // pass repeats its range rather than closing the cycle past it.
+        let kept_back = self.guards.kept_back;
+        if pass.kept_back && kept_back.get() < KEEP_BACK_PASSES {
+            kept_back.set(kept_back.get() + 1);
+        } else {
+            kept_back.set(0);
+            // A cursor that does not store only costs work: the next pass
+            // starts the cycle again.
+            let _ = store.save(&pass.cursor).await;
+        }
         pass.report
     }
 
@@ -394,7 +414,10 @@ where
                             pass.report.rejected.push(scope.name.as_str().to_owned());
                             None
                         }
-                        Err(ScopeRootAdmission::Unavailable) => None,
+                        Err(ScopeRootAdmission::Unavailable) => {
+                            pass.kept_back = true;
+                            None
+                        }
                     }
                 }
                 None => None,
@@ -708,6 +731,7 @@ where
                 })
                 .collect();
             if let Err(error) = register(self.api, &registrations).await {
+                pass.kept_back = true;
                 pass.report
                     .renewals
                     .extend(batch.iter().map(|due| EolRenewResult {
