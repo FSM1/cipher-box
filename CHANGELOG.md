@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.9.0](https://github.com/FSM1/cipher-box/compare/v2.8.0...v2.9.0) (2026-10-01)
+
+
+### Features
+
+* **engine:** renew every owned name with a renewal walk ([#2112](https://github.com/FSM1/cipher-box/issues/2112)) ([1332e70](https://github.com/FSM1/cipher-box/commit/1332e706090ce495b4746025f19c8da9c9670786))
+
+
+### Bug Fixes
+
+* **ci:** unblock staging soak startup and cleanup ([#2167](https://github.com/FSM1/cipher-box/issues/2167)) ([dd77f27](https://github.com/FSM1/cipher-box/commit/dd77f275618972bb22bf32d734894b198bb66c90))
+* **engine:** blind the epoch-arm floor keys with the name-label edge ([#2141](https://github.com/FSM1/cipher-box/issues/2141)) ([4b0f241](https://github.com/FSM1/cipher-box/commit/4b0f2410e324e9cdccd20fabd4bb657fd89de3b7))
+* **engine:** keep the placement and the queue hold true after a settings save fails ([#2154](https://github.com/FSM1/cipher-box/issues/2154)) ([2a05a9a](https://github.com/FSM1/cipher-box/commit/2a05a9a02ec25aa42e7db586b0f86a5abeefc3fd))
+* **engine:** make the grant re-seal follow the link rank ([#2150](https://github.com/FSM1/cipher-box/issues/2150)) ([df8bfb8](https://github.com/FSM1/cipher-box/commit/df8bfb89a51ebb1c03cd611333963e703f5d5db6))
+* **engine:** paint the file rows of the root and of a shared folder on a cold start ([#2145](https://github.com/FSM1/cipher-box/issues/2145)) ([9b58558](https://github.com/FSM1/cipher-box/commit/9b5855820b9cf1d9a5b22a1fe5c1da7f6392beb2))
+* **engine:** read a lagging child in the write wave so a write revoke completes ([#2153](https://github.com/FSM1/cipher-box/issues/2153)) ([2207c46](https://github.com/FSM1/cipher-box/commit/2207c46367e575d8dc1c8ccbe52392e7c135bf59))
+* **engine:** sweep the by-value check surfaces and stop reserving the absent read cache ([#2137](https://github.com/FSM1/cipher-box/issues/2137)) ([7730bf6](https://github.com/FSM1/cipher-box/commit/7730bf6afc9a7267be6e162af4071034e59c0aa0))
+
 ## [2.8.0](https://github.com/FSM1/cipher-box/compare/v2.7.1...v2.8.0) (2026-09-30)
 
 
