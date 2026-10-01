@@ -2,6 +2,9 @@ import type { BinIndexHoldCheck, SettingsHoldCheck, SnapshotDescriptor } from '@
 import { sameNode } from '../../lib/nodeId';
 import { displayName } from '../../vault/displayName';
 
+const RESAVE =
+  'enter your settings again, with your storage provider and its access token, and save them';
+
 /** What the member has to change, in their words rather than the engine's. */
 const SETTINGS_CAUSES: Record<SettingsHoldCheck, string> = {
   'byo-endpoint-invalid': 'the address of your own storage provider is not a usable web address',
@@ -18,8 +21,10 @@ const SETTINGS_CAUSES: Record<SettingsHoldCheck, string> = {
     'your settings keep an access token stored for a different storage provider. enter the access token for this one and save',
   'byo-provider-missing': 'your settings send bytes to your own storage provider and name none',
   'byo-no-external-ingress': 'the storage provider your settings name cannot take uploads',
-  'settings-unavailable':
-    'the last settings save on this device did not finish. enter your settings again, with your storage provider and its access token, and save them',
+  'stranded-mint': `the last settings save on this device did not finish. ${RESAVE}`,
+  'revision-rolled-back': `the settings record that arrived is older than the one this device already used. ${RESAVE}`,
+  expired: `your settings record is out of date and was not renewed. ${RESAVE}`,
+  unreadable: `your settings record does not open on this device. ${RESAVE}`,
 };
 
 /** Why the bin index did not resolve. Every one of these can clear on its own. */

@@ -26,7 +26,7 @@ use cipherbox_engine::grants::{
     AbuseEvent, AuthorityViolation, CreateGrantError, GrantEditError, InviteError,
 };
 use cipherbox_engine::net::author::AuthorError;
-use cipherbox_engine::record_plane::DefaultsReason;
+use cipherbox_engine::record_plane::{DefaultsReason, LapsedHead, Unopened};
 use cipherbox_engine::rotation::{
     CascadeError, ResealError, ResolveFailure, RevokeError, RotateError, RotateOnCutError,
     RotationPublishError, SweepError, SweepResolveFailure, WriteRotateError,
@@ -530,9 +530,15 @@ fn the_defaults_check_surface_matches_the_variants_in_order() {
             floor: 5,
             revision: 4,
         },
-        DefaultsReason::Expired,
+        DefaultsReason::Expired {
+            sequence: 4,
+            head: LapsedHead::Opened,
+        },
         DefaultsReason::TimedOut,
-        DefaultsReason::Unreadable,
+        DefaultsReason::Unreadable {
+            sequence: 4,
+            cause: Unopened::Malformed,
+        },
         DefaultsReason::FloorUnreadable,
     ];
     let named = variants.map(DefaultsReason::check);

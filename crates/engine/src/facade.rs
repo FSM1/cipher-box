@@ -143,10 +143,11 @@ use crate::seams::{
 };
 use crate::session::{SessionIdentity, SessionSecrets, SessionState};
 use crate::settings::{
-    Placement, PlacementRefusal, PlacementSource, SessionPlacement, SettingsOrigin,
+    Placement, PlacementRefusal, PlacementSource, SessionPlacement, SettingsLoad, SettingsOrigin,
     SettingsPublishError, VaultSettings, VaultSettingsSummary, adopt_settings_summary,
-    bin_retention_days, decide_placement, load_settings, placement_of, publish_settings,
-    report_settings_verdict, resolve_kept_bearer, summarize_settings,
+    bin_retention_days, decide_placement, load_settings, placement_of, publish_settings_above,
+    reason_after_failed_save, report_settings_verdict, resolve_kept_bearer, settings_name,
+    sign_above, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
@@ -2749,7 +2750,9 @@ impl EngineError {
             SettingsPublishError::Unconfirmed => EngineError::Seam {
                 message: "the settings publish was not confirmed on re-resolve".to_owned(),
             },
-            SettingsPublishError::Floor(e) => EngineError::from_seam(e),
+            SettingsPublishError::Floor(e) | SettingsPublishError::Mint(e) => {
+                EngineError::from_seam(e)
+            }
             SettingsPublishError::Revision => EngineError::Seam {
                 message: "the durable settings revision counter did not advance".to_owned(),
             },
@@ -8854,7 +8857,9 @@ where {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let settings = &resolve_kept_bearer(settings, self.held_provider().as_ref())
             .map_err(|e| EngineError::from_settings_publish(SettingsPublishError::Byo(e)))?;
-        let held = publish_settings(
+        let observed = sign_above(self.state.placement.borrow().as_ref())
+            .map_err(|refusal| EngineError::NoPlacement { refusal })?;
+        let held = match publish_settings_above(
             &self.record_transport,
             api,
             &self.seams.floor_store,
@@ -8865,9 +8870,17 @@ where {
             &self.state.orphan_heads,
             session.login_secret(),
             settings,
+            observed,
         )
         .await
-        .map_err(EngineError::from_settings_publish)?;
+        {
+            Ok(held) => held,
+            Err(error) => {
+                let name = settings_name(session.login_secret());
+                self.redecide_assumed_placement(&name, &error).await;
+                return Err(EngineError::from_settings_publish(error));
+            }
+        };
         self.state
             .held_records
             .borrow_mut()
@@ -8883,6 +8896,23 @@ where {
         );
         self.state.byo_reconciled.set(false);
         Ok(())
+    }
+
+    /// Re-decide an unproven first run's placement after a save that did not
+    /// land ([`reason_after_failed_save`]): a save that may have minted refuses
+    /// the hosted default the session assumed.
+    async fn redecide_assumed_placement(&self, name: &IpnsName, error: &SettingsPublishError) {
+        let reason = reason_after_failed_save(&self.seams.floor_store, name, error).await;
+        let mut placement = self.state.placement.borrow_mut();
+        if let Some(
+            current @ SessionPlacement {
+                source: PlacementSource::Assumed(DefaultsReason::UnprovenFirstRun),
+                ..
+            },
+        ) = placement.as_mut()
+        {
+            *current = decide_placement(&SettingsLoad::Defaults(reason));
+        }
     }
 
     /// The scope's cached read seed, evicted first if the durable read-epoch
@@ -9361,7 +9391,7 @@ where {
             // while a transient failure stays retryable — the hosted ingress
             // rejects a BYO account, so an unreconciled flag fails every hosted
             // upload the session makes.
-            PlacementSource::Member => {
+            PlacementSource::Member(_) => {
                 if !self.state.byo_reconciled.get()
                     && quota.advisory == hosted_leg
                     && api.set_byo(!hosted_leg).await.is_ok()

@@ -85,12 +85,12 @@ use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BinIndexHoldCheck, BinIndexKeys, BinIndexLoad, BlockProgress, Command,
     CommandOutcome, CommittedSet, ContentProfile, DEFAULT_BIN_RETENTION_DAYS, DeadLetter,
     DeadLetterReason, DefaultsReason, Engine, EngineError, Entropy, EntropyError, Event,
-    EventStream, GatewayConfig, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
+    EventStream, GatewayConfig, LapsedHead, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
     MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpKind, OpPhase, OverBudgetCause, Permission,
     Placement, PlacementRefusal, PrevEpochSeed, QueueHold, QueueHoldReason, RecordReader,
     RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
-    WriteHistory, WriteTarget, decode_queue, load_bin_index, publish_bin_index, reseal_scope_root,
-    stage_op,
+    Unopened, WriteHistory, WriteTarget, decode_queue, load_bin_index, publish_bin_index,
+    reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -13481,6 +13481,18 @@ fn queue_a_write_and_leave(
 /// past that guard because the reader still has to decide what to do with one
 /// that arrives.
 fn seed_settings_naming_no_provider(world: &FakeWorld, blocks: &Blocks) {
+    seed_settings_record(
+        world,
+        blocks,
+        &hand_sealed_settings_body("external", 1),
+        1,
+        EOL,
+    );
+}
+
+/// A settings body with no provider at body `revision`, past every guard the
+/// publisher applies.
+fn hand_sealed_settings_body(pin_mode: &str, revision: u64) -> Vec<u8> {
     use cipherbox_core::codec::{Map, Value, encode};
 
     let mut m = Map::new();
@@ -13490,18 +13502,23 @@ fn seed_settings_naming_no_provider(world: &FakeWorld, blocks: &Blocks) {
     );
     m.insert("byo", Value::Null);
     m.insert("keepLatest", Value::Null);
-    m.insert("pinMode", Value::Text("external".to_owned()));
-    m.insert("revision", Value::Unsigned(1));
-    let body = encode(&Value::Map(m)).expect("the body encodes");
+    m.insert("pinMode", Value::Text(pin_mode.to_owned()));
+    m.insert("revision", Value::Unsigned(revision));
+    encode(&Value::Map(m)).expect("the body encodes")
+}
+
+/// Serve `body`, sealed to the account, at the settings name, `sequence` and
+/// `eol`.
+fn seed_settings_record(world: &FakeWorld, blocks: &Blocks, body: &[u8], sequence: u64, eol: &str) {
     let block =
-        seal_settings_record(&kdf::enc_subkey(&SECRET), &[0x5A; 32], &body).expect("the seal");
+        seal_settings_record(&kdf::enc_subkey(&SECRET), &[0x5A; 32], body).expect("the seal");
     let cid = blocks.put(block);
     let record = IpnsRecord::create_v2(
         &kdf::settings_ipns_keypair(&SECRET),
         format!("/ipfs/{cid}").as_bytes(),
-        1,
+        sequence,
         TTL_NANOS,
-        EOL,
+        eol,
     )
     .marshal();
     for endpoint in world.record_store.endpoints() {
@@ -13771,6 +13788,660 @@ fn a_settings_record_that_resolves_releases_a_stranded_mint_hold() {
     tick_past_the_settings_recheck(&world, &engine, &mut tasks);
 
     assert_the_held_write_published(&engine, &alice, photo);
+}
+
+/// A first run assumes the hosted default, and a save that minted and did not
+/// land leaves a stranded mint. The same session reads the marks again, so the
+/// queued write holds at once rather than going to a store the member may have
+/// just refused.
+#[test]
+fn a_failed_settings_save_holds_the_queued_write_in_the_same_session() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_photo(&mut engine, "photo.bin");
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    assert!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        }))
+        .is_err(),
+        "the save does not reach the network"
+    );
+    blocks.accept_uploads();
+    serve_http(&alice, &blocks, 400);
+    let hosted_before = uploaded_cids(&alice).len();
+    for _ in 0..PASSES_PAST_THE_BUDGET {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    assert_eq!(
+        uploaded_cids(&alice).len(),
+        hosted_before,
+        "no block went to the hosted store"
+    );
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    let (hold, refusal) = settings_hold(&view).expect("the pass names what it waits on");
+    assert_eq!(hold.op_id, op_id);
+    assert_eq!(refusal.check(), "settings-unavailable");
+    assert_eq!(
+        refusal,
+        SettingsRefusal::Placement(PlacementRefusal::SettingsUnavailable(
+            DefaultsReason::StrandedMint
+        )),
+    );
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert_the_held_write_published(&engine, &alice, photo);
+    let registered = registered_content_cids(&alice, &write_name(photo));
+    let hosted = uploaded_cids(&alice);
+    assert!(
+        registered
+            .iter()
+            .all(|cid| blocks.member_node_cids().contains(cid) && !hosted.contains(cid)),
+        "the write went to the placement the save named"
+    );
+}
+
+/// A save the engine refuses before it mints leaves no mark, so the session
+/// keeps the placement it had and the queued write publishes under it.
+#[test]
+fn a_settings_save_refused_before_the_mint_leaves_the_placement_as_it_was() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_photo(&mut engine, "photo.bin");
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    assert!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: VaultSettings {
+                byo: None,
+                ..external_settings()
+            },
+        }))
+        .is_err(),
+        "settings that name no provider are refused"
+    );
+    serve_http(&alice, &blocks, 400);
+    tick(&world, &engine, &mut tasks);
+
+    assert_the_held_write_published(&engine, &alice, photo);
+    let hosted = uploaded_cids(&alice);
+    assert!(
+        registered_content_cids(&alice, &write_name(photo))
+            .iter()
+            .all(|cid| hosted.contains(cid)),
+        "the write went to the hosted default the session held"
+    );
+}
+
+/// Queue a content write on `alice`, then leave her on a revision rollback she
+/// holds no copy past: two saves that landed with no cache write, and the
+/// losing fork of the second one served back at its sequence.
+fn queue_a_write_over_a_revision_rollback(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+) -> (OpId, NodeId, Vec<u8>) {
+    let queued = queue_a_write_and_leave(world, blocks, alice);
+    alice.snapshot_cache.fail_puts();
+    seed_settings(world, alice, blocks, PinMode::Hosted);
+    seed_settings(world, alice, blocks, PinMode::Hosted);
+    alice.snapshot_cache.heal_puts();
+    seed_settings_record(
+        world,
+        blocks,
+        &hand_sealed_settings_body("hosted", 1),
+        2,
+        EOL,
+    );
+    queued
+}
+
+/// No later tick clears a revision rollback, and a save does, so the queued
+/// write holds past the outage budget rather than going to a dead letter; the
+/// save that lands lets it go.
+#[test]
+fn a_revision_rollback_holds_the_queued_write_until_a_settings_save_lands() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (op_id, photo, root_cid) = queue_a_write_over_a_revision_rollback(&world, &blocks, &alice);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    for _ in 0..PASSES_PAST_THE_OUTAGE_BUDGET {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.dead_letters.is_empty(),
+        "a held head spends no budget: {:?}",
+        view.dead_letters,
+    );
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&root_cid),
+        "its staged version stays"
+    );
+    let (hold, refusal) = settings_hold(&view).expect("the pass names what it waits on");
+    assert_eq!(hold.op_id, op_id);
+    assert_eq!(
+        refusal,
+        SettingsRefusal::Placement(PlacementRefusal::SettingsUnavailable(
+            DefaultsReason::RevisionRolledBack {
+                floor: 2,
+                revision: 1,
+            }
+        )),
+    );
+
+    serve_http(&alice, &blocks, 400);
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert_the_held_write_published(&engine, &alice, photo);
+}
+
+/// A save that fails while the store will not answer leaves the session on an
+/// unread floor. The next settings re-check reads the marks by the rule a start
+/// applies, so the queued write holds rather than spending its budget.
+#[test]
+fn a_settings_recheck_reads_the_marks_again_after_an_unread_floor() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_photo(&mut engine, "photo.bin");
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    let floors = alice.floor_store.clone();
+    let name = settings_name(&SECRET);
+    blocks.refuse_upload(Box::new(move |_| {
+        floors.fail_sequence_floor_reads_for(&floor_label(name.as_str().as_bytes()));
+        Some(unreachable_upload())
+    }));
+    assert!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        }))
+        .is_err(),
+        "the save does not reach the network"
+    );
+    blocks.accept_uploads();
+    alice.floor_store.heal_floors();
+    serve_http(&alice, &blocks, 400);
+    for _ in 0..PASSES_PAST_THE_OUTAGE_BUDGET {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.dead_letters.is_empty(),
+        "a held head spends no budget: {:?}",
+        view.dead_letters,
+    );
+    let (hold, refusal) = settings_hold(&view).expect("the pass names what it waits on");
+    assert_eq!(hold.op_id, op_id);
+    assert_eq!(
+        refusal,
+        SettingsRefusal::Placement(PlacementRefusal::SettingsUnavailable(
+            DefaultsReason::StrandedMint
+        )),
+    );
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    tick(&world, &engine, &mut tasks);
+    assert_the_held_write_published(&engine, &alice, photo);
+}
+
+/// The store fails inside the revision mint, so whether the counter rose is
+/// unknown. The session refuses the hosted default as a stranded mint would,
+/// and the queued write holds.
+#[test]
+fn a_save_that_fails_inside_the_mint_holds_the_queued_write() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_photo(&mut engine, "photo.bin");
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    let mint_key = [
+        b"settings-revision-mint/".as_slice(),
+        settings_name(&SECRET).as_str().as_bytes(),
+    ]
+    .concat();
+    alice
+        .floor_store
+        .fail_floor_raises_for(&floor_label(&mint_key));
+    assert!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        }))
+        .is_err(),
+        "the mint does not complete"
+    );
+    alice.floor_store.heal_floors();
+    serve_http(&alice, &blocks, 400);
+    let hosted_before = uploaded_cids(&alice).len();
+    for _ in 0..PASSES_PAST_THE_BUDGET {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    assert_eq!(
+        uploaded_cids(&alice).len(),
+        hosted_before,
+        "no block went to the hosted store"
+    );
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    let (hold, refusal) = settings_hold(&view).expect("the pass names what it waits on");
+    assert_eq!(hold.op_id, op_id);
+    assert_eq!(
+        refusal,
+        SettingsRefusal::Placement(PlacementRefusal::SettingsUnavailable(
+            DefaultsReason::StrandedMint
+        )),
+    );
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    tick(&world, &engine, &mut tasks);
+    assert_the_held_write_published(&engine, &alice, photo);
+}
+
+/// A time past every lapsed EOL below.
+const NOW: UnixMillis = UnixMillis(1_772_000_000_000);
+const LAPSED_EOL: &str = "2020-01-01T00:00:00Z";
+
+/// A restarted engine over a settings record, with its loops, the queued
+/// write's target, and the settings refusal its head holds under, if any.
+type RestartedOverSettings = (
+    Engine<FakeSeamTypes>,
+    Vec<BoxedTask>,
+    NodeId,
+    Option<SettingsRefusal>,
+);
+
+/// The settings record a restart meets: its body at sequence 3, its EOL, and
+/// the block store its head block goes to.
+struct ServedSettings<'a> {
+    body: &'a [u8],
+    eol: &'a str,
+    head: &'a Blocks,
+}
+
+/// Queue a content write on a cold `alice`, serve `served`, and restart her
+/// past the outage budget with no dead letter.
+fn restart_over_a_settings_record(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+    served: ServedSettings<'_>,
+) -> RestartedOverSettings {
+    world.scheduler.advance_to(NOW);
+    let (op_id, photo, _) = queue_a_write_and_leave(world, blocks, alice);
+    seed_settings_record(world, served.head, served.body, 3, served.eol);
+    let (engine, _events, mut tasks) = boot(world, blocks, alice, 43);
+    for _ in 0..PASSES_PAST_THE_OUTAGE_BUDGET {
+        tick(world, &engine, &mut tasks);
+    }
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    let hold = settings_hold(&view);
+    if let Some((hold, _)) = hold {
+        assert_eq!(hold.op_id, op_id);
+        assert!(
+            view.dead_letters.is_empty(),
+            "a held head spends no budget: {:?}",
+            view.dead_letters,
+        );
+    }
+    (engine, tasks, photo, hold.map(|(_, refusal)| refusal))
+}
+
+/// Save `external_settings` and assert it lands, then the held write publishes.
+fn save_and_publish(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+    (engine, tasks, photo): (&mut Engine<FakeSeamTypes>, &mut [BoxedTask], NodeId),
+) {
+    serve_http(alice, blocks, 400);
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    tick(world, engine, tasks);
+    assert_the_held_write_published(engine, alice, photo);
+}
+
+/// A lapsed record this release wrote, its corrupt body, and an unreadable
+/// record each hold the queued write. A save signs above the record the load
+/// verified, so it lands and lets the write go.
+#[test]
+fn a_lapsed_or_unreadable_settings_record_holds_until_a_save_lands_over_it() {
+    let lapsed = hand_sealed_settings_body("hosted", 1);
+    let corrupt = b"not a settings body".as_slice();
+    for (body, eol, reason) in [
+        (
+            lapsed.as_slice(),
+            LAPSED_EOL,
+            DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Opened,
+            },
+        ),
+        (
+            corrupt,
+            LAPSED_EOL,
+            DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Unopened(Unopened::Malformed),
+            },
+        ),
+        (
+            corrupt,
+            EOL,
+            DefaultsReason::Unreadable {
+                sequence: 3,
+                cause: Unopened::Malformed,
+            },
+        ),
+    ] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        let served = ServedSettings {
+            body,
+            eol,
+            head: &blocks,
+        };
+        let (mut engine, mut tasks, photo, refusal) =
+            restart_over_a_settings_record(&world, &blocks, &alice, served);
+        assert_eq!(
+            refusal,
+            Some(SettingsRefusal::Placement(
+                PlacementRefusal::SettingsUnavailable(reason)
+            )),
+        );
+        save_and_publish(&world, &blocks, &alice, (&mut engine, &mut tasks, photo));
+    }
+}
+
+/// Another device saves and its record lapses during the session. The re-check
+/// verifies the newer record, so the save signs above it and lands, rather than
+/// above the record the start saw.
+#[test]
+fn a_save_signs_above_a_newer_lapsed_record_the_recheck_verified() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let body = hand_sealed_settings_body("hosted", 1);
+    let served = ServedSettings {
+        body: &body,
+        eol: LAPSED_EOL,
+        head: &blocks,
+    };
+    let (mut engine, mut tasks, photo, refusal) =
+        restart_over_a_settings_record(&world, &blocks, &alice, served);
+    assert_eq!(
+        refusal,
+        Some(SettingsRefusal::Placement(
+            PlacementRefusal::SettingsUnavailable(DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Opened,
+            })
+        )),
+    );
+
+    seed_settings_record(
+        &world,
+        &blocks,
+        &hand_sealed_settings_body("hosted", 2),
+        5,
+        LAPSED_EOL,
+    );
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+    save_and_publish(&world, &blocks, &alice, (&mut engine, &mut tasks, photo));
+}
+
+/// A body a newer release wrote is not this build's to replace: the queued
+/// write takes no hold, and a save is refused rather than signed over it.
+#[test]
+fn a_settings_body_from_a_newer_release_takes_no_hold_and_refuses_the_save() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let body = newer_release_body();
+    let served = ServedSettings {
+        body: &body,
+        eol: EOL,
+        head: &blocks,
+    };
+    let (mut engine, mut tasks, _, refusal) =
+        restart_over_a_settings_record(&world, &blocks, &alice, served);
+    assert_eq!(refusal, None, "no settings save is this hold's exit");
+
+    // A newer lapsed record the re-check verifies does not unlock the save.
+    seed_settings_record(
+        &world,
+        &blocks,
+        &hand_sealed_settings_body("hosted", 2),
+        5,
+        LAPSED_EOL,
+    );
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+    serve_http(&alice, &blocks, 400);
+    let newer = DefaultsReason::Unreadable {
+        sequence: 3,
+        cause: Unopened::NewerRelease,
+    };
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        })),
+        Err(EngineError::NoPlacement {
+            refusal: PlacementRefusal::SettingsUnavailable(newer),
+        }),
+    );
+}
+
+/// A settings body with a key outside this build's schema, as a newer release
+/// writes one.
+fn newer_release_body() -> Vec<u8> {
+    use cipherbox_core::codec::{Value, decode, encode};
+
+    let mut body = decode(&hand_sealed_settings_body("hosted", 1)).expect("the body decodes");
+    if let Value::Map(m) = &mut body {
+        m.insert("zFutureField", Value::Unsigned(1));
+    }
+    encode(&body).expect("the body encodes")
+}
+
+/// A lapsed record's head block names its release. A newer release's body, or
+/// a head that does not come back, leaves no save of this build free to
+/// replace it: the save is refused and no hold is taken.
+#[test]
+fn a_lapsed_record_of_a_newer_or_unknown_release_refuses_the_save() {
+    let newer = newer_release_body();
+    let ours = hand_sealed_settings_body("hosted", 1);
+    let unserved = Blocks::default();
+    for (body, served_head, head) in [
+        (
+            newer.as_slice(),
+            None,
+            LapsedHead::Unopened(Unopened::NewerRelease),
+        ),
+        (ours.as_slice(), Some(&unserved), LapsedHead::Unavailable),
+    ] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        let served = ServedSettings {
+            body,
+            eol: LAPSED_EOL,
+            head: served_head.unwrap_or(&blocks),
+        };
+        let (mut engine, _tasks, _, refusal) =
+            restart_over_a_settings_record(&world, &blocks, &alice, served);
+        assert_eq!(
+            refusal, None,
+            "{head:?}: no settings save is this hold's exit"
+        );
+
+        serve_http(&alice, &blocks, 400);
+        let lapsed = DefaultsReason::Expired { sequence: 3, head };
+        assert_eq!(
+            block_on(engine.command(Command::SaveVaultSettings {
+                settings: external_settings(),
+            })),
+            Err(EngineError::NoPlacement {
+                refusal: PlacementRefusal::SettingsUnavailable(lapsed),
+            }),
+        );
+    }
+}
+
+/// A lapsed head that did not come back is no verdict on its release, so the
+/// next re-check that fetches it decides again: the write holds, and a save
+/// lands.
+#[test]
+fn a_lapsed_head_that_comes_back_on_a_recheck_unlocks_the_save() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    world.scheduler.advance_to(NOW);
+    let alice = world.device(b"alice");
+    let (_, photo, _) = queue_a_write_and_leave(&world, &blocks, &alice);
+    let body = hand_sealed_settings_body("hosted", 1);
+    seed_settings_record(&world, &Blocks::default(), &body, 3, LAPSED_EOL);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    tick(&world, &engine, &mut tasks);
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert_eq!(
+        settings_hold(&view),
+        None,
+        "an unknown release takes no hold"
+    );
+
+    seed_settings_record(&world, &blocks, &body, 3, LAPSED_EOL);
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert_eq!(
+        settings_hold(&view).map(|(_, refusal)| refusal),
+        Some(SettingsRefusal::Placement(
+            PlacementRefusal::SettingsUnavailable(DefaultsReason::Expired {
+                sequence: 3,
+                head: LapsedHead::Opened,
+            })
+        )),
+    );
+    save_and_publish(&world, &blocks, &alice, (&mut engine, &mut tasks, photo));
+}
+
+/// A start that could not read its floor, and a re-check that then timed out,
+/// decide nothing. The next re-check that answers decides by the rule a start
+/// applies, so an account with no settings record reaches its first run and
+/// the queued write publishes.
+#[test]
+fn a_session_refused_on_an_unread_floor_or_a_timeout_re_decides_on_the_next_recheck() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (_, photo, _) = queue_a_write_and_leave(&world, &blocks, &alice);
+    let name = settings_name(&SECRET);
+    alice
+        .floor_store
+        .fail_sequence_floor_reads_for(&floor_label(name.as_str().as_bytes()));
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    alice.floor_store.heal_floors();
+
+    alice.record_store.stall_gets_for_after(name.as_str(), 0);
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+    for _ in 0..PASSES_PAST_THE_BUDGET {
+        tick(&world, &engine, &mut tasks);
+    }
+    alice.record_store.release_gets_for(name.as_str());
+    serve_http(&alice, &blocks, 400);
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    assert_the_held_write_published(&engine, &alice, photo);
+}
+
+/// A device that kept a copy of its settings meets a newer record that lapsed.
+/// The session places by the copy, and a save signs above the lapsed record,
+/// so it lands.
+#[test]
+fn a_save_over_a_kept_copy_signs_above_the_lapsed_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    world.scheduler.advance_to(NOW);
+    let alice = world.device(b"alice");
+    seed_settings_record(
+        &world,
+        &blocks,
+        &hand_sealed_settings_body("hosted", 1),
+        1,
+        EOL,
+    );
+    drop(boot(&world, &blocks, &alice, 42));
+    seed_settings_record(
+        &world,
+        &blocks,
+        &hand_sealed_settings_body("hosted", 2),
+        3,
+        LAPSED_EOL,
+    );
+
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 43);
+    serve_http(&alice, &blocks, 400);
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: external_settings(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(
+        sequence_at(&world, &settings_name(&SECRET)) > 3,
+        "the save serves above the lapsed record",
+    );
 }
 
 // ---------------------------------------------------------------------------

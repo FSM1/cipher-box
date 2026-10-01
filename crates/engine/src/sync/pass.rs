@@ -355,7 +355,8 @@ where
             }
             let load = read.enrol(&state.held_records, observed);
             report_settings_verdict(&self.seams.events, &load);
-            if let Some(decided) = redecide_placement(&load) {
+            let held = state.placement.borrow().as_ref().map(|held| held.source);
+            if let Some(decided) = redecide_placement(held, &load) {
                 *state.placement.borrow_mut() = Some(decided);
                 adopt_settings_summary(
                     summarize_settings(&load),
