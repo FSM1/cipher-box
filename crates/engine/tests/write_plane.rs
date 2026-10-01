@@ -8145,36 +8145,83 @@ fn a_focus_before_the_first_pass_lists_its_way_down_once_the_walk_lands() {
     );
 }
 
+/// The name device B's root listing names `folder` by.
+fn listed_name(engine: &Engine<FakeSeamTypes>, folder: NodeId) -> String {
+    block_on(engine.snapshot(ROOT))
+        .unwrap()
+        .children
+        .into_iter()
+        .find(|child| child.id == folder)
+        .and_then(|child| child.ipns_name)
+        .expect("the root lists the folder by name")
+}
+
 /// A route to an id the vault does not hold (a deleted folder in a bookmark)
-/// lists the vault once. A second route to it lists nothing while the base
-/// stands as that walk left it.
+/// lists the vault once inside the on-access threshold, and again once it has
+/// passed.
 #[test]
-fn a_route_to_an_id_the_vault_lacks_lists_the_vault_once() {
+fn a_route_to_an_id_the_vault_lacks_lists_the_vault_once_per_threshold() {
     let DeepCreate {
         world,
         mut engine_b,
         photos,
         ..
     } = deep_create_seen_by_a_second_device();
-    let photos_name = block_on(engine_b.snapshot(ROOT))
-        .unwrap()
-        .children
-        .into_iter()
-        .find(|child| child.id == photos)
-        .and_then(|child| child.ipns_name)
-        .expect("the root lists photos by name");
+    let photos_name = listed_name(&engine_b, photos);
     let gone = NodeId([0xEE; 16]);
+    let route = |engine: &mut Engine<FakeSeamTypes>| {
+        block_on(engine.command(Command::SetFocus { node: Some(gone) })).unwrap();
+    };
 
-    block_on(engine_b.command(Command::SetFocus { node: Some(gone) })).unwrap();
+    route(&mut engine_b);
     let listed = world.record_store.get_count(&photos_name);
     assert!(listed > 0, "the first route lists the vault");
 
     world
         .scheduler
-        .advance(core::time::Duration::from_secs(3600));
-    block_on(engine_b.command(Command::SetFocus { node: Some(gone) })).unwrap();
+        .advance(SyncTimingProfile::CI.stale_after / 2);
+    route(&mut engine_b);
+    assert_eq!(
+        world.record_store.get_count(&photos_name),
+        listed,
+        "inside the threshold the miss stands"
+    );
 
-    assert_eq!(world.record_store.get_count(&photos_name), listed);
+    world.scheduler.advance(SyncTimingProfile::CI.stale_after);
+    route(&mut engine_b);
+    assert!(
+        world.record_store.get_count(&photos_name) > listed,
+        "past it the route lists the vault again"
+    );
+}
+
+/// A walk a leg could not finish proves nothing about the target, so it
+/// records no miss: the next route, at once, lists its way down to it.
+#[test]
+fn a_walk_a_leg_could_not_finish_records_no_miss() {
+    let DeepCreate {
+        world,
+        mut engine_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    let photos_name = listed_name(&engine_b, photos);
+
+    world.record_store.fail_get_for(&photos_name);
+    block_on(engine_b.command(Command::SetFocus { node: Some(deep) })).unwrap();
+    assert!(
+        matches!(
+            block_on(engine_b.snapshot(deep)),
+            Err(EngineError::UnknownNode)
+        ),
+        "the failed leg left the target unlisted"
+    );
+
+    world.record_store.heal_get_for(&photos_name);
+    block_on(engine_b.command(Command::SetFocus { node: Some(deep) })).unwrap();
+
+    assert_eq!(trail(&engine_b, deep), [photos, ROOT]);
 }
 
 /// The focus refresh is fail-closed on every binding the child gate holds. Each

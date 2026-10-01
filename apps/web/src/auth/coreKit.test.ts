@@ -263,6 +263,17 @@ describe('the Core Kit store', () => {
     expect(keys.held).toBeNull();
   });
 
+  it('is cleared even when the address slot refuses its removal', async () => {
+    const created = session();
+    await store.setItem(STORE_KEY, SESSION);
+    vi.spyOn(store, 'removeItem').mockRejectedValueOnce(REFUSED);
+
+    await expect(created.logout()).rejects.toThrow(REFUSED);
+
+    expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
+    expect(keys.held).toBeNull();
+  });
+
   it('is cleared when the SDK refuses to log out, and the refusal still surfaces', async () => {
     const created = session();
     sdk.logoutError = REFUSED;

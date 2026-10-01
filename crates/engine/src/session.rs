@@ -354,10 +354,11 @@ pub(crate) struct SessionState {
     pub(crate) boundary_walk_landed: Rc<Cell<bool>>,
     /// Navigations waiting for that walk ([`Self::land_boundary_walk`]).
     pub(crate) boundary_walk_waiters: Rc<RefCell<Vec<oneshot::Sender<()>>>>,
-    /// The last target a navigation listed the vault for and did not find,
-    /// with the base's link count then: the walk is not repeated until the
-    /// base moves.
-    pub(crate) locate_miss: Rc<Cell<Option<(NodeId, usize)>>>,
+    /// The last target a navigation listed the whole vault for and did not
+    /// find, with when. Only a walk whose every leg answered records one, and
+    /// a route to that target lists nothing again until the stamp is past the
+    /// on-access threshold.
+    pub(crate) locate_miss: Rc<Cell<Option<(NodeId, UnixMillis)>>>,
     /// The read epoch the same walk proved each of them at, which no seed cache
     /// carries ([`crate::rotation::scope_material`]). Replaced per walk, unlike
     /// the set above.
@@ -493,6 +494,17 @@ impl SessionState {
     /// Latches the boundary walk landed and wakes every navigation waiting on it.
     pub(crate) fn land_boundary_walk(&self) {
         self.boundary_walk_landed.set(true);
+        self.wake_boundary_walk_waiters();
+    }
+
+    /// Latches the boundary walk rejected and wakes every navigation waiting
+    /// on it: no retry of that walk lands.
+    pub(crate) fn reject_boundary_walk(&self) {
+        self.boundary_walk_rejected.set(true);
+        self.wake_boundary_walk_waiters();
+    }
+
+    fn wake_boundary_walk_waiters(&self) {
         for waiter in self.boundary_walk_waiters.borrow_mut().drain(..) {
             let _ = waiter.send(());
         }

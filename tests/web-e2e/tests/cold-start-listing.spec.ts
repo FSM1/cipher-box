@@ -152,8 +152,7 @@ test('a cold start whose first route is a subfolder paints its file cells', asyn
   const deep = await seed(device, login, NESTED, nested);
 
   const { page, files } = await signedInUnsettled(device, login);
-  // No wait for the root to settle: the navigation lands as early as the sign-in
-  // allows. The engine suite pins the order where the focus lands before the first pass.
+  // The engine suite pins the order where the focus lands before the first pass.
   await visit(page, deep);
   await files.at(FOLDER);
   await test.step('subfolder cells', () => painted(files, DEEP_FILE));

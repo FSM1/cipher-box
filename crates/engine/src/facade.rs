@@ -174,7 +174,7 @@ pub use crate::sync::drain::{QueueHold, QueueHoldReason};
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
-use crate::sync::refresh::ManualRefresh;
+use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{
     DEAD_LETTER_NOTICES_PREFIX, DroppedVersionDebts, PreservedBounds, PreservedDeadLetter,
     StagedBlocks, read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
@@ -184,8 +184,8 @@ use crate::sync::staging::{
 use crate::sync::staleness::{Connectivity, classify, next_boundary};
 use crate::sync::tick::{
     FocusFile, ResolveMode, TickControl, elapsed_at_least, focus_folders_due, focus_scope_roots,
-    nodes_in_scope, queue_focus_file, queue_unprojected_children, refresh_due, run_tick_loop,
-    run_with_boundaries, scope_root_of, scope_root_record_name, settle_focus_leg,
+    nodes_in_scope, on_access_refresh_due, queue_focus_file, queue_unprojected_children,
+    run_tick_loop, run_with_boundaries, scope_root_of, scope_root_record_name, settle_focus_leg,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -4837,10 +4837,11 @@ pub const MAX_FOCUS_FOLDERS: usize = 8;
 /// single route can spend on the record plane.
 pub const MAX_LOCATE_FOLDERS: usize = 256;
 
-/// How long a route waits for the session's first boundary walk. The route
-/// holds the host's shared lock meanwhile, so the bound caps how long it can
-/// hold a write, and every read queued behind that write, off the engine.
-const LOCATE_WALK_WAIT: core::time::Duration = core::time::Duration::from_secs(10);
+/// How long one route may spend locating a folder, the wait for the first
+/// boundary walk included. The route holds the host's shared lock meanwhile, so
+/// the bound caps how long it can hold a write, and every read queued behind
+/// that write, off the engine.
+const LOCATE_BUDGET: core::time::Duration = core::time::Duration::from_secs(10);
 
 pub use crate::grants::MAX_CONTACT_CODE_BYTES;
 
@@ -5419,6 +5420,10 @@ impl<T: SeamTypes> Engine<T> {
         self.state.boundary_walk_rejected.set(false);
         self.state.scope_roots_walked.set(false);
         self.state.boundary_walk_landed.set(false);
+        self.state.locate_miss.set(None);
+        if let Ok(mut waiters) = self.state.boundary_walk_waiters.try_borrow_mut() {
+            waiters.clear();
+        }
         if let Ok(mut epochs) = self.state.walked_read_epochs.try_borrow_mut() {
             epochs.clear();
         }
@@ -9195,23 +9200,35 @@ where {
     }
 
     /// List the vault a level at a time, from the root down, until the base
-    /// holds `target`. The cold-start base holds the root's own children alone,
-    /// so a route that a reload restores can name a folder no listing reached.
+    /// holds `target`, within [`LOCATE_BUDGET`]. The cold-start base holds the
+    /// root's own children alone, so a route that a reload restores can name a
+    /// folder no listing reached.
     ///
     /// Each level reads under the scope the boundary walk names for it, so a
     /// navigation that lands before the first walk waits for one
-    /// ([`Self::boundary_walk_settled`]). A walk that missed is not repeated for
-    /// the same target until the base moves.
+    /// ([`Self::boundary_walk_settled`]). A miss is kept as
+    /// [`SessionState::locate_miss`] states.
     async fn locate_folder(&self, target: NodeId) {
+        let _ = crate::record_plane::within(
+            &self.seams.scheduler,
+            LOCATE_BUDGET,
+            self.list_down_to(target),
+        )
+        .await;
+    }
+
+    async fn list_down_to(&self, target: NodeId) {
         if self.state.snapshot.borrow().contains(target) || !self.boundary_walk_settled().await {
             return;
         }
-        let missed = (target, self.state.snapshot.borrow().links().len());
-        if self.state.locate_miss.get() == Some(missed) {
+        let now = self.seams.scheduler.now();
+        if self.state.locate_miss.get().is_some_and(|(missed, at)| {
+            missed == target && !on_access_refresh_due(now, Some(at), &self.profile)
+        }) {
             return;
         }
-        let now = self.seams.scheduler.now();
         let settle = self.settle_leg(now);
+        let mut answered = RefreshVerdict::Reconciled;
         let root = self.state.snapshot.borrow().root;
         let mut seen = BTreeSet::from([root]);
         let mut level = vec![root];
@@ -9228,31 +9245,26 @@ where {
                     .take(room)
                     .collect()
             };
-            // A folder a leg listed inside the staleness threshold already has
-            // its children in the base.
-            let unlisted = {
-                let stamps = self.state.focus_refreshed.borrow();
-                next.iter()
-                    .copied()
-                    .filter(|folder| refresh_due(stamps.get(folder).copied(), now, &self.profile))
-                    .collect()
-            };
-            self.navigation_legs(root, unlisted, NodeKind::Folder, now, &settle)
+            let (_, verdict) = self
+                .navigation_legs(root, next.clone(), NodeKind::Folder, now, &settle)
                 .await;
+            answered = answered.worst(verdict);
             level = next;
         }
-        let base = self.state.snapshot.borrow();
-        if !base.contains(target) {
-            self.state
-                .locate_miss
-                .set(Some((target, base.links().len())));
+        // A level a leg could not read may hold the target yet.
+        let complete = !matches!(
+            answered,
+            RefreshVerdict::Unreachable | RefreshVerdict::Overdue
+        );
+        if complete && !self.state.snapshot.borrow().contains(target) {
+            self.state.locate_miss.set(Some((target, now)));
         }
     }
 
-    /// Whether this session's boundary walk has landed, waiting up to
-    /// [`LOCATE_WALK_WAIT`] for the first one: the walk alone, never the rest of
-    /// the pass that carries it. Only a running sync loop lands a walk, and a
-    /// rejected walk refuses every retry alike, so neither is waited on.
+    /// Whether this session's boundary walk has landed, waiting for the first
+    /// one: the walk alone, never the rest of the pass that carries it. Only a
+    /// running sync loop lands a walk, and a rejected walk refuses every retry
+    /// alike, so neither is waited on.
     async fn boundary_walk_settled(&self) -> bool {
         if self.state.boundary_walk_landed.get() {
             return true;
@@ -9265,7 +9277,7 @@ where {
         let Ok(Some(_pass)) = self.file_forced_pass() else {
             return false;
         };
-        crate::record_plane::within(&self.seams.scheduler, LOCATE_WALK_WAIT, landing).await;
+        let _ = landing.await;
         self.state.boundary_walk_landed.get()
     }
 
@@ -9277,7 +9289,7 @@ where {
         now: UnixMillis,
         settle: &impl Fn(&[NodeId], FolderRefreshReport),
     ) {
-        let attempted = self
+        let (attempted, _) = self
             .navigation_legs(root, self.queued_focus_files(), NodeKind::File, now, settle)
             .await;
         self.state
@@ -9291,7 +9303,8 @@ where {
     /// it: a leg holds one scope's read material ([`nodes_in_scope`]). A scope
     /// this session holds no material for leaves its nodes for the tick, and a
     /// scope's own root, which resolves on its own leg, is never read here.
-    /// Answers the nodes a leg attempted.
+    /// Answers the nodes a leg attempted, and the worst verdict over them, a
+    /// scope left unread counted unreachable.
     async fn navigation_legs(
         &self,
         root: NodeId,
@@ -9299,13 +9312,14 @@ where {
         kind: NodeKind,
         now: UnixMillis,
         settle: &impl Fn(&[NodeId], FolderRefreshReport),
-    ) -> Vec<NodeId> {
+    ) -> (Vec<NodeId>, RefreshVerdict) {
         let mut attempted = Vec::new();
+        let mut verdict = RefreshVerdict::Reconciled;
         if nodes.is_empty() {
-            return attempted;
+            return (attempted, verdict);
         }
         let Some(session) = self.session.as_ref() else {
-            return attempted;
+            return (attempted, RefreshVerdict::Unreachable);
         };
         let proved = self.state.descendant_scope_roots.borrow().clone();
         let unproved = self.state.unproved_scope_roots.borrow().clone();
@@ -9335,6 +9349,7 @@ where {
         };
         for (scope, nodes) in by_scope {
             let Ok(material) = legs.material(scope, self.scope_read_seed(&scope.0)).await else {
+                verdict = verdict.worst(RefreshVerdict::Unreachable);
                 continue;
             };
             let leg = FolderRefresh {
@@ -9359,10 +9374,11 @@ where {
                 NodeKind::Folder => leg.run(&nodes).await,
                 NodeKind::File => leg.run_files(&nodes).await,
             };
+            verdict = verdict.worst(report.verdict);
             settle(&nodes, report);
             attempted.extend(nodes);
         }
-        attempted
+        (attempted, verdict)
     }
 
     // -----------------------------------------------------------------------
@@ -11635,7 +11651,7 @@ where {
             .get(&node)
             .copied()
             .max(hinted);
-        let stale = refresh_due(last, now, &self.profile);
+        let stale = on_access_refresh_due(now, last, &self.profile);
         if stale {
             self.focus_hinted.set(Some((node, now)));
             if is_file {
@@ -19309,7 +19325,7 @@ mod focus_access_tests {
         let mut route = Box::pin(engine.set_focus(Some(UNLISTED)));
         assert!(poll_once(route.as_mut()).is_pending());
 
-        clock.advance(LOCATE_WALK_WAIT);
+        clock.advance(LOCATE_BUDGET);
 
         assert_eq!(poll_once(route.as_mut()), core::task::Poll::Ready(Ok(())));
     }
@@ -19320,6 +19336,18 @@ mod focus_access_tests {
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
 
         let mut route = Box::pin(engine.set_focus(Some(UNLISTED)));
+
+        assert_eq!(poll_once(route.as_mut()), core::task::Poll::Ready(Ok(())));
+    }
+
+    #[test]
+    fn a_rejected_walk_wakes_the_route_that_waits_on_it() {
+        let (engine, _clock) = engine_before_the_walk();
+        let mut route = Box::pin(engine.set_focus(Some(UNLISTED)));
+        assert!(poll_once(route.as_mut()).is_pending());
+
+        // The pass's walk leg is refused; the route stops waiting at once.
+        engine.state.reject_boundary_walk();
 
         assert_eq!(poll_once(route.as_mut()), core::task::Poll::Ready(Ok(())));
     }
