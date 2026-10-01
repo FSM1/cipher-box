@@ -171,16 +171,16 @@ fn with_placeholder(
 }
 
 /// Decodes `command` with the empty placeholder at `key`, then takes the text
-/// at `key` into the zeroizing slot that `slot` names.
+/// at `key` into the zeroizing slot that `slot_of` names.
 fn decode_secret_text(
     command: &JsValue,
     key: &str,
     max_units: usize,
-    slot: fn(&mut Command) -> Option<&mut Zeroizing<String>>,
+    slot_of: fn(&mut Command) -> Option<&mut Zeroizing<String>>,
 ) -> Result<Command, JsError> {
     let secret = field(command, key);
     let mut decoded = decode(&with_placeholder(command, &[key], &"".into())?)?;
-    let slot = slot(&mut decoded).ok_or_else(refused)?;
+    let slot = slot_of(&mut decoded).ok_or_else(refused)?;
     *slot = take_text(&secret, max_units)?;
     Ok(decoded)
 }

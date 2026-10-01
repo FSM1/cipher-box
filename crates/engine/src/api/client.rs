@@ -721,8 +721,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         path: &str,
         body: &B,
     ) -> Result<HttpResponse, ApiError> {
-        // A body can carry a credential (an identity token), so the one
-        // serialized copy this client owns is wiped on drop.
+        // Wipe the master copy; each send moves its own copy to the Http seam.
         let body = Zeroizing::new(to_json(body));
         self.request_authed_with(
             method,
@@ -1724,6 +1723,40 @@ mod tests {
             ],
             "one refresh, then one retry of the same route"
         );
+    }
+
+    /// The retry after a 401 sends the body of the first send, for a JSON body
+    /// and for an upload.
+    #[test]
+    fn the_retry_after_a_401_sends_the_first_body() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        http.enqueue_response(json_response(401, json!({ "message": "expired" })));
+        http.enqueue_response(json_response(
+            200,
+            login_response("jwt-2", &"e".repeat(64), "gw-e"),
+        ));
+        http.enqueue_response(json_response(201, json!({ "id": "m1" })));
+        block_on(Mailbox::post(&client, &[0x02; 33], b"sealed", "idem")).expect("post");
+
+        let block = b"sealed-block".to_vec();
+        let cid = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
+        http.enqueue_response(json_response(401, json!({ "message": "expired" })));
+        http.enqueue_response(json_response(
+            200,
+            login_response("jwt-3", &"f".repeat(64), "gw-f"),
+        ));
+        http.enqueue_response(json_response(
+            201,
+            json!({ "cid": cid, "size": block.len() }),
+        ));
+        block_on(client.upload(&cid, &block)).expect("upload");
+
+        let requests = http.requests();
+        assert!(requests[2].body.is_some());
+        assert_eq!(requests[2].body, requests[4].body, "the JSON retry body");
+        assert_eq!(requests[5].body.as_deref(), Some(&block[..]));
+        assert_eq!(requests[5].body, requests[7].body, "the upload retry body");
     }
 
     /// Routing addresses the recipient's identity key as the API's lowercase-hex
