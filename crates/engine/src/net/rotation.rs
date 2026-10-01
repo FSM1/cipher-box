@@ -952,6 +952,10 @@ pub(crate) struct DescendantScopeRoot {
     /// [`crate::sync::drain::DrainScope`]). Such a scope still reads and
     /// renders.
     pub(crate) write: Result<ScopeWritePlane, WritePlaneDark>,
+    /// The root carries a write scope seed that does not derive the name it
+    /// answers at, and no write plane opened: a write cut that did not finish
+    /// (ADR 0063 consequence 8).
+    pub(crate) write_cut_unfinished: bool,
 }
 
 /// Why a proved scope root opened no write plane on this pass.
@@ -1412,6 +1416,11 @@ where
         let (write, grandchildren) = self
             .write_plane(&gated, &name, child.scope_id, RootAnchor::Descendant)
             .await;
+        let write_cut_unfinished = write.is_err()
+            && gated
+                .write_scope_seed
+                .as_ref()
+                .is_some_and(|seed| !seed_names(seed, &child.scope_id, Some(&name)));
         // A root this pass opened no write plane for read no index, and the
         // classified verdict for that rides `write`.
         let grandchildren = grandchildren.unwrap_or_default();
@@ -1427,6 +1436,7 @@ where
                 },
                 read_scope_seed: gated.read_scope_seed,
                 write,
+                write_cut_unfinished,
             },
             grandchildren,
         ))

@@ -37,11 +37,12 @@ use crate::gate::{GateError, GateStage};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
-    CredentialStore, FloorStore, Http, RecordTransport, RetireLedger, Scheduler, SnapshotCache,
-    StagingStore, UnixMillis,
+    CredentialStore, FloorStore, Http, RecordTransport, RetireLedger, Scheduler, SeamResult,
+    SnapshotCache, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::sync::doomed::{journalled_keys, open_reclamation};
+use crate::sync::owed_rotation::{OwedCell, OwedRotation};
 use crate::sync::tick::ResolveMode;
 use crate::sync::{BookkeepingSeal, owner_tag};
 
@@ -72,6 +73,9 @@ const CURSOR_UNREAD: &str = "the renewal cursor does not read, so the renewal wa
 const NO_RECORD: &str = "the name holds no record the renewal walk can renew";
 /// Why the walk does not renew a name whose acknowledged sequence is unreadable.
 const ACK_UNREADABLE: &str = "the retire ledger's acknowledged sequence does not open";
+/// Why the walk renews every name as if no scope had owed work this pass.
+const OWED_UNREAD: &str =
+    "the owed rotation record does not read, so the renewal walk renews as if no work were owed";
 
 /// The most poll cadences the liveness loop waits for the session's first
 /// boundary walk before it skips the renewal walk for that pass. A walk that
@@ -126,6 +130,11 @@ pub(crate) struct RenewalWalk<'a, T, H: Http, C: CredentialStore, F, S, St, Sch>
     pub(crate) seal: BookkeepingSeal<'a>,
     pub(crate) bin_keys: Option<&'a BinIndexKeys>,
     pub(crate) guards: WalkGuards<'a>,
+    /// The scope roots the boundary walk met with a write cut that did not
+    /// finish.
+    pub(crate) unfinished_write_cuts: &'a BTreeSet<[u8; 16]>,
+    /// The session's owed rotation record, the one the re-drive reads.
+    pub(crate) owed: &'a OwedCell,
 }
 
 /// What one pass did.
@@ -135,8 +144,12 @@ pub(crate) struct WalkReport {
     pub(crate) renewals: Vec<EolRenewResult>,
     /// The names whose record the adoption gate refused.
     pub(crate) rejected: Vec<String>,
-    /// The names the walk cannot renew, each with why.
+    /// The names the walk cannot renew, or renews without a record it does
+    /// not read, each with why.
     pub(crate) failed: Vec<(String, &'static str)>,
+    /// The owned scope roots with a write cut that did not finish and no owed
+    /// entry on this device (ADR 0063 consequence 8).
+    pub(crate) underived: Vec<[u8; 16]>,
 }
 
 /// A scope's material as this pass admitted its root.
@@ -242,6 +255,9 @@ struct Pass<'s> {
     doomed: Doomed,
     /// A visit met a transient failure ([`KEEP_BACK_WINDOW`]).
     kept_back: bool,
+    /// The scopes with an owed rotation entry, whose names the walk does not
+    /// renew (ADR 0063 D4).
+    owed: BTreeSet<[u8; 16]>,
     owner_tag: [u8; 32],
     scopes: &'s [WalkScope],
     bins: &'s [BinRoot],
@@ -322,19 +338,50 @@ where
                 && cursor.cycle_start <= now
                 && !now.reached(Some(cursor.cycle_start.saturating_add(CYCLE_HOLD)))
         });
+        // Reported on every pass, a held one too: the boundary walk can name
+        // an unfinished cut after the pass that closed the cycle.
+        let owed = self.owed_scopes().await;
+        let underived = owed
+            .as_ref()
+            .map(|owed| {
+                self.unfinished_write_cuts
+                    .difference(owed)
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
         if held {
-            return WalkReport::default();
+            return WalkReport {
+                underived,
+                ..WalkReport::default()
+            };
         }
         let owner_tag = owner_tag(self.enc_secret);
         let Some(doomed) = self.doomed_names(&owner_tag).await else {
             return stalled(scopes, JOURNAL_UNREADABLE);
         };
+        // A record that does not read skips no scope: a lapsed name loses the
+        // data under it, and `signer_for` signs only a name the current seed
+        // derives (ADR 0061 D4).
+        let (owed, owed_unread) = match owed {
+            Ok(owed) => (owed, false),
+            Err(_) => (BTreeSet::new(), true),
+        };
         let report = WalkReport {
             failed: scopes
                 .iter()
-                .filter(|scope| doomed.unreadable.contains(&scope.scope_id))
-                .map(|scope| (scope.name.as_str().to_owned(), JOURNAL_UNREADABLE))
+                .filter_map(|scope| {
+                    if doomed.unreadable.contains(&scope.scope_id) {
+                        Some(JOURNAL_UNREADABLE)
+                    } else if owed_unread {
+                        Some(OWED_UNREAD)
+                    } else {
+                        None
+                    }
+                    .map(|detail| (scope.name.as_str().to_owned(), detail))
+                })
                 .collect(),
+            underived,
             ..WalkReport::default()
         };
         let mut pass = Pass {
@@ -351,6 +398,7 @@ where
             due: Vec::new(),
             doomed,
             kept_back: false,
+            owed,
             owner_tag,
             scopes,
             bins,
@@ -405,6 +453,14 @@ where
         Some(doomed)
     }
 
+    /// The scopes this owner's owed rotation record names.
+    async fn owed_scopes(&self) -> SeamResult<BTreeSet<[u8; 16]>> {
+        let scopes = OwedRotation::new(self.staging, self.seal, self.enc_secret, self.owed)
+            .scopes()
+            .await?;
+        Ok(scopes.into_iter().map(|scope| scope.0).collect())
+    }
+
     /// Admit `scope_id`'s root once per pass.
     async fn material<'p>(
         &self,
@@ -413,6 +469,7 @@ where
     ) -> Option<&'p ScopeMaterial> {
         if !pass.materials.contains_key(&scope_id) {
             let material = match pass.scopes.iter().find(|scope| scope.scope_id == scope_id) {
+                Some(_) if pass.owed.contains(&scope_id) => None,
                 Some(scope) => {
                     pass.visits += 1;
                     match admit_owned_scope_root(
@@ -583,7 +640,10 @@ where
             }
             WalkRoot::Bin(node_id) => {
                 let keys = self.bin_keys?;
-                let bin = pass.bins.iter().find(|bin| bin.node_id == node_id)?;
+                let bin = pass
+                    .bins
+                    .iter()
+                    .find(|bin| bin.node_id == node_id && !pass.owed.contains(&bin.scope_id))?;
                 let (scope_id, name) = (bin.scope_id, bin.name.clone());
                 let plane = Plane {
                     scope_id,

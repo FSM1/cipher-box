@@ -27,7 +27,7 @@ use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher,
 
 use super::create::{
     CreateGrantError, GrantSubtree, GrantedReadScope, GranteeScopePlan, OwnerGrantKeys,
-    ParentScopePlan, converge_grant_subtree, promote_grantee_scope, resume_grantee_scope,
+    ParentScopePlan, converge_grant_subtree, mint_grantee_scope, resume_grantee_scope,
 };
 use super::invite::{EphemeralInvitee, InviteError, InviteFragment, LinkTerms, mint_invite_grant};
 
@@ -171,13 +171,14 @@ where
             };
             resume_grantee_scope(entropy, net, promoted, &link, owner)
                 .await
+                .and_then(|grant| grant.handover)
                 .map_err(InviteMintError::Create)?;
             return Err(InviteMintError::Create(
                 CreateGrantError::TargetIndexLostARoot,
             ));
         }
     };
-    let promoted = promote_grantee_scope(entropy, net, voucher, converged, &row, owner)
+    let promoted = mint_grantee_scope(entropy, net, voucher, converged, &row, owner)
         .await
         .map_err(InviteMintError::Create)?;
 

@@ -46,7 +46,8 @@ use crate::rotation::{
     AscentAuthority, CascadeResealResolver, CommittedSet, NodeRef, ResealError, ResealSeeds,
     ResealSite, ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity,
     ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptNode,
-    WriteHistory, converge_subtree, derive_write_name, reseal_at_current_epoch, reseal_scope_root,
+    SweptScope, WriteHistory, converge_subtree, derive_write_name, reseal_at_current_epoch,
+    reseal_scope_root,
 };
 use crate::seams::{Mailbox, SeamError};
 use crate::sync::model::{Link, link_rank};
@@ -746,6 +747,8 @@ pub(crate) const MINT_EPOCH: u64 = 1;
 /// owes [`GranteeScopePlan::write_cut`] by construction. It additionally owes
 /// the name wave over the minted scope, which the caller runs once this returns,
 /// and then [`post_share_pointer`] (blueprint/engine.md "Grant creation").
+///
+/// The two sides of the answer are [`PromotedGrant`]'s.
 pub async fn create_grant<E, N, V>(
     entropy: &mut E,
     net: &N,
@@ -754,7 +757,7 @@ pub async fn create_grant<E, N, V>(
     recipient: &GrantRecipient<'_>,
     owner: &OwnerGrantKeys<'_>,
     parent: &ParentScopePlan<'_>,
-) -> Result<CreateGrantOutcome, CreateGrantError>
+) -> Result<PromotedGrant, CreateGrantError>
 where
     E: Entropy,
     N: MintNet,
@@ -966,44 +969,10 @@ where
     R: SweepResolver + GrantResumeResolver,
     P: SweepPublisher,
 {
-    let ipns_name = grantee.ipns_name();
-    let folder = NodeRef {
-        node_id: grantee.scope_id,
-        ipns_name: ipns_name.as_str().as_bytes().to_vec(),
-    };
-    // The probe runs on the parent this resolve proved current, whose read seed
-    // is what the promotion's ascent link derives from. It runs ahead of the
-    // pass so a stalled move stays re-drivable: the pass would meet the promoted
-    // folder as a scope root the parent's index omits and repair the index for
-    // it, which is the mint's own last step to take.
-    let planned_ref =
-        ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec());
-    let (parent_ref, parent_scope) = resolve_scope_current(resolver, &planned_ref)
-        .await
-        .map_err(|reason| {
-            CreateGrantError::Converge(SweepError::Scope {
-                scope_id: parent.identity.scope_id,
-                reason,
-            })
-        })?;
-    // The tail re-seals the parent root from this plan's seeds and commitment,
-    // which were read from the root a re-point supersedes. The plan is stale as
-    // a whole, so the command refuses here rather than publishing under it.
-    if parent_ref.ipns_name != planned_ref.ipns_name {
-        return Err(CreateGrantError::ParentScopeSuperseded);
-    }
-    if let Some(promoted) = resolver
-        .promoted_root(&parent_ref, &folder)
-        .await
-        .map_err(CreateGrantError::Resume)?
-    {
-        return Ok(GrantSubtree::Promoted(PromotedSubtree {
-            grantee,
-            parent,
-            parent_ref,
-            source_read_epoch: parent_scope.current_read_epoch,
-            promoted: Box::new(promoted),
-        }));
+    let (parent_ref, parent_scope, folder, promoted) =
+        probe_promotion(resolver, grantee, parent).await?;
+    if let Some(promoted) = promoted {
+        return Ok(GrantSubtree::Promoted(promoted));
     }
     if resolver
         .holds_a_scope_root_floor(&folder)
@@ -1068,6 +1037,110 @@ where
     }))
 }
 
+/// The parent scope proved current, the folder's ref, and the root a stalled
+/// attempt already promoted at the folder, if any.
+///
+/// The probe runs on the parent this resolve proved current, whose read seed is
+/// what the promotion's ascent link derives from. It runs ahead of the
+/// convergence pass so a stalled move stays re-drivable: the pass would meet the
+/// promoted folder as a scope root the parent's index omits and repair the index
+/// for it, which is the mint's own last step to take.
+async fn probe_promotion<'a, R>(
+    resolver: &R,
+    grantee: &'a GranteeScopePlan<'a>,
+    parent: &'a ParentScopePlan<'a>,
+) -> Result<
+    (
+        ChildScopeRef,
+        SweptScope,
+        NodeRef,
+        Option<PromotedSubtree<'a>>,
+    ),
+    CreateGrantError,
+>
+where
+    R: SweepResolver + GrantResumeResolver,
+{
+    let folder = NodeRef {
+        node_id: grantee.scope_id,
+        ipns_name: grantee.ipns_name().as_str().as_bytes().to_vec(),
+    };
+    let planned_ref =
+        ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec());
+    let (parent_ref, parent_scope) = resolve_scope_current(resolver, &planned_ref)
+        .await
+        .map_err(|reason| {
+            CreateGrantError::Converge(SweepError::Scope {
+                scope_id: parent.identity.scope_id,
+                reason,
+            })
+        })?;
+    // The tail re-seals the parent root from this plan's seeds and commitment,
+    // which were read from the root a re-point supersedes. The plan is stale as
+    // a whole, so the command refuses here rather than publishing under it.
+    if parent_ref.ipns_name != planned_ref.ipns_name {
+        return Err(CreateGrantError::ParentScopeSuperseded);
+    }
+    let promoted = resolver
+        .promoted_root(&parent_ref, &folder)
+        .await
+        .map_err(CreateGrantError::Resume)?
+        .map(|promoted| PromotedSubtree {
+            grantee,
+            parent,
+            parent_ref: parent_ref.clone(),
+            source_read_epoch: parent_scope.current_read_epoch,
+            promoted: Box::new(promoted),
+        });
+    Ok((parent_ref, parent_scope, folder, promoted))
+}
+
+/// Finish the interior move an owed rotation entry names (ADR 0063 D3): the
+/// resume of [`resume_grantee_scope`] against the root already promoted at the
+/// folder, with no convergence pass and nothing minted. The entry holds no row,
+/// so the promoted root's own committed set stands for it. `Ok(None)` when no
+/// root was promoted, so no move is owed.
+pub async fn resume_owed_interior_move<E, N>(
+    entropy: &mut E,
+    net: &N,
+    grantee: &GranteeScopePlan<'_>,
+    parent: &ParentScopePlan<'_>,
+    owner: &OwnerGrantKeys<'_>,
+) -> Result<Option<CreateGrantOutcome>, CreateGrantError>
+where
+    E: Entropy,
+    N: MintNet,
+{
+    let (_, _, _, promoted) = probe_promotion(net, grantee, parent).await?;
+    let Some(promoted) = promoted else {
+        return Ok(None);
+    };
+    let entry = promoted
+        .promoted
+        .record
+        .section
+        .commitment
+        .entries
+        .first()
+        .cloned()
+        .ok_or(CreateGrantError::ResumeNotThisGrant)?;
+    resume_grantee_scope(entropy, net, promoted, &entry, owner)
+        .await?
+        .handover
+        .map(Some)
+}
+
+/// A grantee scope whose root has landed, and the handover that ran after it.
+/// The `Err` of a function that answers this leaves no grantee root on the
+/// network. An `Err` in [`Self::handover`] is a stop past the root's publish,
+/// so the interior move and every step after it are owed (ADR 0063 D2).
+pub struct PromotedGrant {
+    /// The promoted scope's read material, known once its root landed.
+    pub read_scope: GrantedReadScope,
+    /// The interior, descendant and parent publishes after the root.
+    pub handover: Result<CreateGrantOutcome, CreateGrantError>,
+}
+
 /// Mint the grantee scope `row` is committed at over the converged folder, then
 /// hand the folder to it: mint (epoch 1) → vouch → publish (grantee first) →
 /// the shared tail ([`hand_over_granted_folder`]).
@@ -1078,38 +1151,10 @@ where
 /// appended to a scope the owner has already been rotating (#25 D6). `row` must
 /// be minted at [`GranteeScopePlan::ipns_name`]; the mint binds the same bytes.
 ///
-/// Fail-closed **through the grantee publish**. A folder a stalled attempt
-/// already promoted is [`resume_grantee_scope`]'s to finish, and
-/// [`converge_grant_subtree`] is what tells the two apart.
+/// Fail-closed **through the grantee publish** ([`PromotedGrant`]). A folder a
+/// stalled attempt already promoted is [`resume_grantee_scope`]'s to finish,
+/// and [`converge_grant_subtree`] is what tells the two apart.
 pub async fn mint_grantee_scope<E, N, V>(
-    entropy: &mut E,
-    net: &N,
-    voucher: &V,
-    converged: ConvergedSubtree<'_>,
-    row: &GrantRow,
-    owner: &OwnerGrantKeys<'_>,
-) -> Result<CreateGrantOutcome, CreateGrantError>
-where
-    E: Entropy,
-    N: MintNet,
-    V: ScopePointerVoucher,
-{
-    promote_grantee_scope(entropy, net, voucher, converged, row, owner)
-        .await?
-        .handover
-}
-
-/// A grantee scope whose root has landed, and the handover that ran after it.
-pub(crate) struct PromotedGrant {
-    /// The promoted scope's read material, known once its root landed.
-    pub read_scope: GrantedReadScope,
-    /// The interior, descendant and parent publishes after the root.
-    pub handover: Result<CreateGrantOutcome, CreateGrantError>,
-}
-
-/// [`mint_grantee_scope`] with its two sides apart. The `Err` is fail-closed:
-/// no grantee root is on the network.
-pub(crate) async fn promote_grantee_scope<E, N, V>(
     entropy: &mut E,
     net: &N,
     voucher: &V,
@@ -1278,14 +1323,14 @@ where
 ///
 /// The published root must be the one `entry`'s own plan minted. Both halves
 /// of that proof are release-active, ahead of everything the shared tail
-/// publishes.
+/// publishes, and refuse in the outer `Err` ([`PromotedGrant`]).
 pub async fn resume_grantee_scope<E, N>(
     entropy: &mut E,
     net: &N,
     subtree: PromotedSubtree<'_>,
     entry: &GrantSetEntry,
     owner: &OwnerGrantKeys<'_>,
-) -> Result<CreateGrantOutcome, CreateGrantError>
+) -> Result<PromotedGrant, CreateGrantError>
 where
     E: Entropy,
     N: MintNet,
@@ -1318,7 +1363,11 @@ where
         return Err(CreateGrantError::ResumeNotThisGrant);
     }
 
-    hand_over_granted_folder(
+    let read_scope = GrantedReadScope {
+        seed: promoted.override_seed.clone(),
+        epoch: promoted.record.read_epoch,
+    };
+    let handover = hand_over_granted_folder(
         entropy,
         net,
         grantee,
@@ -1341,7 +1390,11 @@ where
         },
         entry.tag,
     )
-    .await
+    .await;
+    Ok(PromotedGrant {
+        read_scope,
+        handover,
+    })
 }
 
 /// Hand the granted folder to `root`, the scope root now published over it:
@@ -2556,7 +2609,8 @@ mod tests {
                 &owner,
                 &parent,
             )
-            .await?;
+            .await?
+            .handover?;
             post_share_pointer(
                 &mut entropy,
                 &recorder,
@@ -2732,7 +2786,8 @@ mod tests {
                     &owner,
                     &parent,
                 )
-                .await?;
+                .await?
+                .handover?;
                 post_share_pointer(
                     &mut entropy,
                     &mailbox,

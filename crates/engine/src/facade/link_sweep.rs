@@ -237,6 +237,21 @@ where
         now: UnixMillis,
         pending: &[[u8; IDENTITY_PUBLIC_LEN]],
     ) -> Result<(Vec<NodeId>, Vec<[u8; IDENTITY_PUBLIC_LEN]>), EngineError> {
+        // A scope with owed work, or one a command drives now, waits for the
+        // pass after that work lands.
+        let node = NodeId(target.scope.scope_id);
+        let Some(_hold) = self.owed.hold(node) else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        if self
+            .owed()
+            .entry(node)
+            .await
+            .map_err(EngineError::from_seam)?
+            .is_some()
+        {
+            return Ok((Vec::new(), Vec::new()));
+        }
         let current = self
             .net(target, PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
@@ -249,22 +264,21 @@ where
         }
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let cut = sweep_cut(
-            &GrantCutPlan {
-                commitment: &current.commitment,
-                commitment_sig: &current.commitment_sig,
-                grant_ledger: &current.grant_ledger,
-                scope_root_name: &scope_root_name,
-                owner_signer: self.identity,
-                pointer_read_key: &current.pointer_read_key,
-            },
+            &GrantCutPlan::over(&current, &scope_root_name, self.identity),
             &tags,
         )?;
-        let node = NodeId(target.scope.scope_id);
         let report = self
-            .rotate_cut(node, target, &scope_root_name, &cut, None)
+            .rotate_owed_cut(
+                node,
+                target,
+                &scope_root_name,
+                &cut,
+                None,
+                current.write_epoch,
+            )
             .await?;
         let rekeyed = report
-            .read
+            .and_then(|report| report.read)
             .map(|read| {
                 read.rekeyed
                     .iter()

@@ -191,8 +191,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   one, because the drain owes a publish there. An acknowledged mark that never
   clears stops the renewal of that name. The walk renews no name in a scope
   that has an owed rotation entry (ADR 0063 D4). When it meets an owned scope
-  root whose name its write seed does not derive, it emits an event, so every
-  owner device shows a write cut that did not finish.
+  root whose name its write seed does not derive, it emits
+  `writeCutUnfinished`, so every owner device shows a write cut that did not
+  finish.
 - **Revival**: after a >EOL lapse, a key-holding session fetches cached bytes
   from the authenticated recovery endpoint and extracts the last-known CID —
   or recovers it from the pin set's name→CID mapping — then mints a fresh
@@ -1026,15 +1027,27 @@ primitive on a timer.
 Before its first publish (a cut set publish, or a promotion publish), an owner
 command writes an entry to the owner-local `owed-rotation` record: the scope
 id, the cut epoch, and the steps still owed in command order (a read cut, a
-write cut, an interior move, the delivery of a write grant). The entry holds no
+write cut, an interior move, the delivery of a grant). The entry holds no
 seed; a re-drive recovers an in-flight write seed from the published records.
-A refused write stops the command with `Err` before any publish. The entry
+A refused write stops the command with `Err` before any publish. A stored
+record that does not open is never written over: every write refuses until it
+opens, and meanwhile the renewal walk renews as if no work were owed, signing
+only names the current seed derives, and reports the record on each pass. The entry
 advances as each step lands, and clears after the cut-epoch floor record, the
 write-epoch floor raise and the index re-point. Each sync pass re-drives every
 entry after the drain, and the first pass of a session does so before the
 renewal walk. After its first publish, a command whose step stops returns
 `Ok`; the engine emits `rotationWorkOwed` at once and on each pass while the
-entry stands, and the same command on that scope re-drives the entry.
+entry stands, with the class of the stop (`availability`, `capability` or
+`trust`), and the same command on that scope re-drives the entry. A re-drive
+that finds the work can never land, because the cut set never published or the
+recipient left the contact book, drops the entry and emits
+`rotationWorkAbandoned` once. A
+relocation into another scope, a delete, a purge, or a restore into another
+scope that takes a folder with an owed interior move out of the scope it
+left is refused, retryably, until the move lands; a crossing the queue
+already holds waits for it, uncharged. At the entry's own cut epoch the published state does not tell a read cascade that
+landed from one that did not, so a re-drive after a lost advance runs one more.
 
 The **expired-link sweep**
 ([ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)
@@ -1147,7 +1160,7 @@ surviving committed grants uniformly in the republish it already does.
   a source-scope node into a stalled resume; the resume admits it, and the
   writer gains no capability, because the ascent link and the source name key
   already let it author in the granted scope. A stalled interior move,
-  write-scope cut or write-grant delivery is owed rotation work, which the sync
+  write-scope cut or grant delivery is owed rotation work, which the sync
   pass re-drives through the resume path (ADR 0063 D1, D3). An **append**, on an existing
   scope root: one more row and grant blob, the commitment re-signed, and the root published
   once at the current epoch — no new seed, no re-seal of the subtree, no

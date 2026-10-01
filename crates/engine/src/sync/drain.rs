@@ -396,6 +396,10 @@ enum Halt {
     /// (CONTEXT.md "Epoch lag"). Charged nothing, and re-driven at the pass that
     /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
+    /// The op carries a folder whose interior move is owed (ADR 0063) out of
+    /// the scope the move re-seals it into. Charged nothing, and re-driven at
+    /// the pass after the one that lands the move.
+    OwedMove,
     /// The bin entry belongs to another scope; only the identity-owning pass charges its wait.
     OtherBinScope,
     /// The op's record reached the record plane and did not confirm. Charged
@@ -1238,6 +1242,9 @@ pub(crate) struct TickInputs<'a> {
     /// Shortening history retires bytes, so it acts only on a retention this
     /// device can show is the owner's — the same rule the bin's expiry follows.
     pub(crate) retention: RetentionPolicy,
+    /// The scopes this device owes an interior move at (ADR 0063), or `None`
+    /// when the owed record did not read.
+    pub(crate) owed_moves: Option<&'a [NodeId]>,
 }
 
 /// The passes one tick runs, by kind; `run_tick` fixes their order.
@@ -2128,7 +2135,7 @@ where
             self.release_hold();
         }
         match halt {
-            Halt::EpochLagged => {}
+            Halt::EpochLagged | Halt::OwedMove => {}
             Halt::OtherBinScope if !scope.charges_the_identity => {}
             // Its own budget, its own count: an outage must not spend the
             // attempt budget, and a spent attempt is what tells
@@ -4744,6 +4751,9 @@ where
         // publishing it as a plain ref move would carry the subtree out still
         // sealed where that grantee opens it.
         let crosses = source_plane.end.root != dest_plane.end.root;
+        if crosses {
+            self.hold_an_owed_move(target)?;
+        }
 
         // The dest gains the source's own ref, so id/ipnsName/kind and any
         // newer client's fields ride verbatim.
@@ -4876,6 +4886,22 @@ where
         // old records unreferenced, and retiring a name a live ref still points
         // at would leave that reference outliving its referent.
         self.commit_crossing(scope, &source_plane, resealed).await;
+        Ok(())
+    }
+
+    /// Hold a crossing that carries a folder whose interior move is owed, at
+    /// `target` or under it, until the move lands.
+    fn hold_an_owed_move(&self, target: NodeId) -> Result<(), Halt> {
+        let Some(owed_moves) = self.inputs.owed_moves else {
+            return Err(Halt::Unclassified);
+        };
+        let base = self.cells.base.borrow();
+        if owed_moves
+            .iter()
+            .any(|scope| *scope == target || base.is_descendant_of(*scope, target))
+        {
+            return Err(Halt::OwedMove);
+        }
         Ok(())
     }
 
@@ -7361,6 +7387,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         | Halt::OtherBinScope => None,
         Halt::Unclassified => Some("the upload did not complete"),
         Halt::EpochLagged => Some("this folder is still being re-keyed after a key change"),
+        Halt::OwedMove => Some("a sharing change on this folder is not finished yet"),
         Halt::Attempt | Halt::UploadAttempt | Halt::LostRace => {
             Some("the network refused it without a classification")
         }
@@ -9039,6 +9066,7 @@ mod tests {
                     bin_keys: &self.bin_keys,
                     bin_retention_days: self.bin_retention_days,
                     retention: RetentionPolicy::KeepAll,
+                    owed_moves: Some(&[]),
                 },
             )
         }

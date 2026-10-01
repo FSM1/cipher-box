@@ -20,8 +20,9 @@ use crate::grants::{
     link_of_sender, post_share_pointer_at,
 };
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys};
-use crate::rotation::{Boundaries, cut_for_write_scope};
+use crate::rotation::{Boundaries, RotateOnCutError, cut_for_write_scope};
 use crate::sync::BookkeepingSeal;
+use crate::sync::owed_rotation::OwedCell;
 
 /// The refusal a record change answers while a conversion pass runs.
 pub(super) const CONVERSION_RUNNING: &str = "a-conversion-pass-is-running";
@@ -141,6 +142,17 @@ pub(crate) trait ConversionSites {
 
     /// The folder label the claimant's share pointer carries.
     async fn folder_name(&self, node: NodeId) -> Result<String, EngineError>;
+
+    /// The nodes a grant of `node` leaves outside its scope
+    /// ([`GranteeScopePlan::held_outside`]).
+    async fn held_outside(&self, node: NodeId) -> Result<Vec<HeldNode>, EngineError>;
+
+    /// The scope roots of `index` that sit inside the folder `node`.
+    async fn child_scopes_inside(
+        &self,
+        node: NodeId,
+        index: &[ChildScopeRef],
+    ) -> Result<Vec<ChildScopeRef>, EngineError>;
 }
 
 /// What a write-scope cut needs beyond the conversion itself (ADR 0024 D4).
@@ -185,6 +197,8 @@ pub(crate) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, 
     /// one record, so a second writer that overlapped the first could write
     /// back a record that lacks the claims the first acked.
     pub(crate) running: &'a Cell<bool>,
+    /// The session's owed rotation record (ADR 0063 D1).
+    pub(crate) owed: &'a OwedCell,
 }
 
 /// Holds [`ConversionPass::running`] and clears it however the holder ends.
@@ -276,7 +290,7 @@ where
     S: SnapshotCache,
     St: StagingStore,
 {
-    fn seal(&self) -> BookkeepingSeal<'_> {
+    pub(super) fn seal(&self) -> BookkeepingSeal<'_> {
         BookkeepingSeal::new(self.enc_secret, self.entropy)
     }
 
@@ -368,6 +382,30 @@ where
         cut: &RevokedCommittedSet,
         vault_pointer_signer: Option<&Ed25519Signer>,
     ) -> Result<CutRotationReport, EngineError> {
+        let report = self
+            .rotate_planes(node, target, scope_root_name, cut, vault_pointer_signer)
+            .await
+            .map_err(EngineError::from_cut_rotation)?;
+        record_cut_epoch_floor(
+            self.floors,
+            &target.scope.scope_id,
+            cut.commitment.cut_epoch,
+        )
+        .await
+        .map_err(EngineError::from_seam)?;
+        Ok(report)
+    }
+
+    /// Drive `cut` at `node` through the planes it demands
+    /// ([`rotate_on_cut`] over the production [`OwnerCutNet`]).
+    pub(super) async fn rotate_planes(
+        &self,
+        node: NodeId,
+        target: &OwnerScope,
+        scope_root_name: &IpnsName,
+        cut: &RevokedCommittedSet,
+        vault_pointer_signer: Option<&Ed25519Signer>,
+    ) -> Result<CutRotationReport, RotateOnCutError> {
         let sweep = self.cut.sweep;
         let rotator = OwnerCutNet {
             transport: self.transport,
@@ -393,17 +431,7 @@ where
             session_root_scope_id: self.cut.vault_root.0,
             sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
         };
-        let report = rotate_on_cut(&rotator, node, cut)
-            .await
-            .map_err(EngineError::from_cut_rotation)?;
-        record_cut_epoch_floor(
-            self.floors,
-            &target.scope.scope_id,
-            cut.commitment.cut_epoch,
-        )
-        .await
-        .map_err(EngineError::from_seam)?;
-        Ok(report)
+        rotate_on_cut(&rotator, node, cut).await
     }
 
     /// Show the counts `record` holds, and repaint when they moved.
@@ -474,6 +502,23 @@ where
             }
         }
         for (node, claims) in folders {
+            // Owed rotation work at the scope lands first; its claims wait. The
+            // hold lasts across the conversion.
+            let Some(_hold) = self.owed.hold(node) else {
+                failure.get_or_insert(EngineError::rotation_work_owed());
+                continue;
+            };
+            match self.owed().entry(node).await {
+                Ok(None) => {}
+                Ok(Some(_)) => {
+                    failure.get_or_insert(EngineError::rotation_work_owed());
+                    continue;
+                }
+                Err(e) => {
+                    failure.get_or_insert(EngineError::from_seam(e));
+                    continue;
+                }
+            }
             if let Err(e) = self.convert_at(sites, node, &claims, &mut verdicts).await {
                 failure.get_or_insert(e);
             }
@@ -820,14 +865,11 @@ where
     ) -> Result<OwnerScope, EngineError> {
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let parent = sites.enclosing(node).await?;
-        let cut = cut_for_write_scope(&GrantCutPlan {
-            commitment: &current.commitment,
-            commitment_sig: &current.commitment_sig,
-            grant_ledger: &current.grant_ledger,
-            scope_root_name: &scope_root_name,
-            owner_signer: self.identity,
-            pointer_read_key: &current.pointer_read_key,
-        })
+        let cut = cut_for_write_scope(&GrantCutPlan::over(
+            current,
+            &scope_root_name,
+            self.identity,
+        ))
         .map_err(EngineError::from_revoke)?;
         // The vault root takes no link, so no conversion cuts it.
         let report = self
@@ -860,11 +902,24 @@ where
     /// The resolve that failed first may have consulted the pointer on access
     /// already; its recorded answer stands in for a second read
     /// ([`OnAccessMisses`]).
-    async fn moved_root(
+    pub(super) async fn moved_root(
         &self,
         node: NodeId,
         target: &OwnerScope,
     ) -> Result<Option<OwnerScope>, EngineError> {
+        Ok(self
+            .vouched_root(node)
+            .await?
+            .filter(|root| root.as_str().as_bytes() != target.scope.ipns_name.as_slice())
+            .map(|root| OwnerScope {
+                scope: ChildScopeRef::new(node.0, root.as_str().as_bytes().to_vec()),
+                parent_node_seed: target.parent_node_seed.clone(),
+                vouched: true,
+            }))
+    }
+
+    /// The root the owner-signed scope pointer at `node` names, if any.
+    pub(super) async fn vouched_root(&self, node: NodeId) -> Result<Option<IpnsName>, EngineError> {
         let rejected = || EngineError::TrustViolation {
             message: "scope pointer unauthenticated, or vouched below the write-epoch floor"
                 .to_owned(),
@@ -874,7 +929,7 @@ where
             self.scheduler.now(),
             self.profile.pointer_consult_interval,
         );
-        let vouched = match recent {
+        Ok(match recent {
             Some(OnAccessMiss::Absent) => None,
             Some(OnAccessMiss::Vouched(root)) => Some(*root),
             Some(OnAccessMiss::Rejected) => return Err(rejected()),
@@ -892,18 +947,11 @@ where
                 PointerConsultError::Rejected => rejected(),
             })?
             .map(|consulted| consulted.current_root),
-        };
-        Ok(vouched
-            .filter(|root| root.as_str().as_bytes() != target.scope.ipns_name.as_slice())
-            .map(|root| OwnerScope {
-                scope: ChildScopeRef::new(node.0, root.as_str().as_bytes().to_vec()),
-                parent_node_seed: target.parent_node_seed.clone(),
-                vouched: true,
-            }))
+        })
     }
 
     /// Publish `parent` with its index naming `moved` for the child `node`.
-    async fn repoint(
+    pub(super) async fn repoint(
         &self,
         parent: &OwnerScope,
         node: NodeId,
@@ -1057,6 +1105,18 @@ impl<T: SeamTypes> ConversionSites for EngineSites<'_, T> {
         let rendered = self.engine.render().await?;
         share_display_name(&rendered, node)
     }
+
+    async fn held_outside(&self, node: NodeId) -> Result<Vec<HeldNode>, EngineError> {
+        Ok(held_outside(&*self.engine.render().await?, node))
+    }
+
+    async fn child_scopes_inside(
+        &self,
+        node: NodeId,
+        index: &[ChildScopeRef],
+    ) -> Result<Vec<ChildScopeRef>, EngineError> {
+        subtree_child_scopes(&*self.engine.render().await?, node, index)
+    }
 }
 
 /// The tick's sites: the boundaries its own walk proved this pass.
@@ -1117,6 +1177,18 @@ impl ConversionSites for TickSites<'_> {
 
     async fn folder_name(&self, node: NodeId) -> Result<String, EngineError> {
         share_display_name(&self.boundaries.base.borrow(), node)
+    }
+
+    async fn held_outside(&self, node: NodeId) -> Result<Vec<HeldNode>, EngineError> {
+        Ok(held_outside(&self.boundaries.base.borrow(), node))
+    }
+
+    async fn child_scopes_inside(
+        &self,
+        node: NodeId,
+        index: &[ChildScopeRef],
+    ) -> Result<Vec<ChildScopeRef>, EngineError> {
+        subtree_child_scopes(&self.boundaries.base.borrow(), node, index)
     }
 }
 

@@ -50,6 +50,63 @@ describe('engine warnings', () => {
     expect(screen.getByTestId('status-indicator').dataset.staleness).toBe('reconciling');
   });
 
+  it('renders owed rotation work once per scope, however many passes report it', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+    const scopeRoot = new Uint8Array(16).fill(7);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'rotationWorkOwed',
+        scopeRoot,
+        detail: 'unavailable',
+        retryable: true,
+        class: 'availability',
+      });
+      engine.emit({
+        kind: 'rotationWorkOwed',
+        scopeRoot,
+        detail: 'unavailable',
+        retryable: true,
+        class: 'availability',
+      });
+    });
+
+    const notices = await screen.findAllByTestId('notification-notice');
+    expect(notices).toHaveLength(1);
+    expect(notices[0].textContent).toContain('not finished');
+    expect(notices[0].textContent).not.toContain('unavailable');
+  });
+
+  it('renders owed rotation work that was dropped as a warning without its detail', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'rotationWorkAbandoned',
+        scopeRoot: new Uint8Array(16).fill(8),
+        detail: 'owed-scope-not-indexed',
+      });
+    });
+
+    const notice = await screen.findByTestId('notification-notice');
+    expect(notice.textContent).toContain('could not be finished');
+    expect(notice.textContent).not.toContain('owed-scope-not-indexed');
+  });
+
+  it('renders a write cut another device has not finished as a warning', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'writeCutUnfinished', scopeRoot: new Uint8Array(16).fill(9) });
+    });
+
+    const notice = await screen.findByTestId('notification-notice');
+    expect(notice.textContent).toContain('another of your devices');
+  });
+
   it('collapses a scope that escalates on every tick', async () => {
     const engine = fakeEngine();
     draw(engine.client);

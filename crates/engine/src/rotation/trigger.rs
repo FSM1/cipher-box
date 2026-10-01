@@ -23,7 +23,7 @@ use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Public;
 
-use super::cascade::{CascadeError, CascadeOutcome};
+use super::cascade::{CascadeError, CascadeOutcome, CascadeTarget};
 use super::rotate::{RotateError, RotationOutcome};
 use super::rotate_write::{WriteRotateError, WriteRotationOutcome};
 use crate::facade::NodeId;
@@ -161,6 +161,24 @@ pub struct GrantCutPlan<'a> {
     /// The scope's stable pointer read key, which unmasks a committed entry's
     /// recipient (see [`GrantSetEntry`](cipherbox_core::seal::GrantSetEntry)).
     pub pointer_read_key: &'a [u8; SECRET_LEN],
+}
+
+impl<'a> GrantCutPlan<'a> {
+    /// The plan over the set `current` publishes at `scope_root_name`.
+    pub(crate) fn over(
+        current: &'a CascadeTarget,
+        scope_root_name: &'a IpnsName,
+        owner_signer: &'a EcdsaSigner,
+    ) -> Self {
+        Self {
+            commitment: &current.commitment,
+            commitment_sig: &current.commitment_sig,
+            grant_ledger: &current.grant_ledger,
+            scope_root_name,
+            owner_signer,
+            pointer_read_key: &current.pointer_read_key,
+        }
+    }
 }
 
 /// Which planes a committed-set cut must rotate before it is a real revocation.
@@ -616,6 +634,20 @@ pub fn cut_for_write_scope(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSe
             write: true,
         },
     })
+}
+
+/// The read cut an owed rotation entry still owes over the set the owner
+/// already published (ADR 0063 D3). The cut set is on the network, so the set
+/// is verified rather than re-signed, as [`cut_for_write_scope`] does. The
+/// recipients it withholds come from the durable revocation floor the first
+/// attempt raised before its root publish.
+pub fn owed_read_cut(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSet, RevokeError> {
+    let mut cut = cut_for_write_scope(plan)?;
+    cut.planes = RotationPlanes {
+        read: true,
+        write: false,
+    };
+    Ok(cut)
 }
 
 /// The rotation edge a committed-set cut is driven over: one arm per plane.

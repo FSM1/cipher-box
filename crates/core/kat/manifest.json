@@ -695,6 +695,11 @@
         "name": "renewal-cursor",
         "discriminator": 9,
         "hpkeInfo": "cipherbox/v2/owner-local/renewal-cursor"
+      },
+      {
+        "name": "owed-rotation",
+        "discriminator": 10,
+        "hpkeInfo": "cipherbox/v2/owner-local/owed-rotation"
       }
     ],
     "reserved": [
@@ -705,11 +710,11 @@
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 9
+      "count": 10
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 66,
+      "count": 82,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",

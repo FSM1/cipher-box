@@ -4,10 +4,12 @@
 //! leans on one fails there.
 
 use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::kdf;
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
+use cipherbox_engine::NodeId;
 use cipherbox_engine::SyncTimingProfile;
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::gate::{floor, record_cut_epoch_floor};
@@ -26,8 +28,14 @@ use cipherbox_engine::net::{
     BarFloor, Observed, PublishBar, PublishError, PublishOutcome, PublishRequest, publish,
 };
 use cipherbox_engine::seams::{FloorStore, HttpResponse, RecordTransport, UnixMillis};
+use cipherbox_engine::sync::BookkeepingSeal;
+use cipherbox_engine::sync::owed_rotation::{
+    MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
+};
+use cipherbox_engine::testkit::SeededEntropy;
 use cipherbox_engine::testkit::account::fresh_observed;
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, block_on};
+use core::cell::RefCell;
 
 fn pointer_name() -> IpnsName {
     IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5d; 32]).verifying_key())
@@ -264,4 +272,39 @@ fn an_observed_record_at_the_sequence_ceiling_is_refused() {
         Err(PublishError::SequenceExhausted),
     );
     assert!(nothing_reached_the_transport(&device, &name));
+}
+/// The decoder refuses an owed rotation record past its entry bound, and an
+/// entry whose steps are not in command order, so the encoder refuses both.
+#[test]
+fn an_owed_rotation_record_the_decoder_refuses_is_refused_at_encode() {
+    let enc = kdf::enc_subkey(&[0x31; 32]);
+    let entropy = RefCell::new(SeededEntropy::new(3));
+    let entry = |steps| OwedEntry {
+        cut_epoch: 1,
+        steps,
+    };
+
+    let full: OwedRecord = (0..=MAX_OWED_ENTRIES)
+        .map(|n| {
+            let mut scope = [0; 16];
+            scope[..8].copy_from_slice(&(n as u64).to_be_bytes());
+            (NodeId(scope), entry(vec![OwedStep::ReadCut]))
+        })
+        .collect();
+    assert_eq!(
+        seal_owed_record(BookkeepingSeal::new(&enc, &entropy), &full),
+        Err(OwedRecordError::Full)
+    );
+
+    let reversed = OwedRecord::from([(
+        NodeId([4; 16]),
+        entry(vec![
+            OwedStep::WriteCut { write_epoch: 2 },
+            OwedStep::ReadCut,
+        ]),
+    )]);
+    assert_eq!(
+        seal_owed_record(BookkeepingSeal::new(&enc, &entropy), &reversed),
+        Err(OwedRecordError::StepsOutOfOrder)
+    );
 }

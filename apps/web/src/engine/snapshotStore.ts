@@ -76,6 +76,22 @@ export interface SnapshotStore {
 const WITHHELD =
   'a shared folder stopped serving updates you are entitled to see - what it shows may be behind';
 
+/** A revoke, a permission change or a share stopped part of the way; each pass retries it. */
+const ROTATION_OWED =
+  'a change to who can open a shared folder is not finished yet - CipherBox keeps retrying it on this device';
+
+/** A revoke or permission change stopped on a record that failed verification; it cannot finish past it. */
+const ROTATION_TRUST_STOP =
+  'a change to who can open a shared folder did not complete because a record in that folder failed verification - CipherBox will not finish it while that record stands';
+
+/** Owed sharing work that can never finish was dropped; the change it made stands as it is. */
+const ROTATION_ABANDONED =
+  'a change to who can open a shared folder could not be finished and was stopped - check the folder sharing and try again';
+
+/** Another device started a write cut that has not finished; that device finishes it. */
+const WRITE_CUT_UNFINISHED =
+  'a shared folder has a write-access change that another of your devices has not finished - open CipherBox on that device';
+
 const IDLE: SnapshotState = { view: null, error: null };
 
 /** A store-shaped no-op for consumers mounted before the engine client exists. */
@@ -220,6 +236,16 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       commit({ staleness: event.staleness });
     } else if (event.kind === 'withheldUpdateEscalation') {
       notificationStore.warn(`withheld:${toHex(event.ipnsName)}`, WITHHELD);
+    } else if (event.kind === 'rotationWorkOwed') {
+      if (event.class === 'trust') {
+        notificationStore.warn(`owed-trust:${toHex(event.scopeRoot)}`, ROTATION_TRUST_STOP);
+      } else {
+        notificationStore.warn(`owed:${toHex(event.scopeRoot)}`, ROTATION_OWED);
+      }
+    } else if (event.kind === 'rotationWorkAbandoned') {
+      notificationStore.warn(`abandoned:${toHex(event.scopeRoot)}`, ROTATION_ABANDONED);
+    } else if (event.kind === 'writeCutUnfinished') {
+      notificationStore.warn(`unfinished:${toHex(event.scopeRoot)}`, WRITE_CUT_UNFINISHED);
     } else if (event.kind === 'attributableAbuse') {
       notificationStore.warn(
         `abuse:${event.description}`,
