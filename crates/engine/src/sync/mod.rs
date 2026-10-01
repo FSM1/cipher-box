@@ -25,6 +25,7 @@ pub(crate) mod drain;
 pub mod model;
 pub mod op;
 pub mod overlay;
+pub mod owed_rotation;
 pub(crate) mod pass;
 pub mod pointer;
 pub(crate) mod project;
