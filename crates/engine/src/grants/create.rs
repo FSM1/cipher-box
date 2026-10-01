@@ -28,6 +28,7 @@ use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as 
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
+use core::cmp::Ordering;
 use core::fmt;
 use zeroize::Zeroizing;
 
@@ -35,6 +36,7 @@ use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_ephemeral, fresh_
 use crate::grants::{SharePointer, TooLong};
 use cipherbox_core::payload::RepointObject;
 
+use crate::facade::NodeId;
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::contact::Contact;
 use crate::grants::{GrantRow, mint_grant_row, name_row};
@@ -47,6 +49,7 @@ use crate::rotation::{
     WriteHistory, converge_subtree, derive_write_name, reseal_at_current_epoch, reseal_scope_root,
 };
 use crate::seams::{Mailbox, SeamError};
+use crate::sync::model::{Link, link_rank};
 use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::IpnsName;
 use std::collections::BTreeSet;
@@ -1006,10 +1009,13 @@ where
         .map_err(CreateGrantError::Converge)?;
     // A node the pass could not read is as unproven as one whose convergence
     // publish lost the race: either way the grantee could descend into a node
-    // still sealed at an epoch its fresh seed does not reach.
-    if !swept.dropped_lost_race.is_empty() || !swept.unreachable.is_empty() {
-        let mut unconverged = swept.dropped_lost_race.clone();
-        unconverged.extend(swept.unreachable_nodes());
+    // still sealed at an epoch its fresh seed does not reach. A held node stays
+    // outside, so it is not the grant's to prove; the publish walk drops its ref
+    // only while that ref still loses ([`drop_held_refs`]).
+    let mut unconverged = swept.dropped_lost_race.clone();
+    unconverged.extend(swept.unreachable_nodes());
+    unconverged.retain(|node| !grantee.held_outside.iter().any(|held| held.id == *node));
+    if !unconverged.is_empty() {
         unconverged.sort_unstable();
         return Err(CreateGrantError::SubtreeNotConverged { unconverged });
     }
@@ -1495,8 +1501,17 @@ pub(crate) fn drop_held_refs(
     };
     for child in children.iter() {
         if let Some(held) = held_outside.iter().find(|held| held.id == child.id) {
-            let loses = (child.link_counter, held.winner_parent) < (held.winner_counter, parent);
-            if !loses {
+            let published = Link {
+                parent: NodeId(parent),
+                child: NodeId(child.id),
+                link_counter: child.link_counter,
+            };
+            let winner = Link {
+                parent: NodeId(held.winner_parent),
+                link_counter: held.winner_counter,
+                ..published
+            };
+            if link_rank(&winner, &published) != Ordering::Less {
                 return Err(child.id);
             }
         }

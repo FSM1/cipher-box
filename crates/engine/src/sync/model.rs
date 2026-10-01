@@ -126,6 +126,15 @@ pub struct Link {
     pub link_counter: u64,
 }
 
+/// The one dual-link tiebreak (highest counter, then lowest parent id): `Less`
+/// when `a` outranks `b`. A caller that compares two links to one child uses
+/// this rather than spelling the comparator again.
+pub fn link_rank(a: &Link, b: &Link) -> core::cmp::Ordering {
+    b.link_counter
+        .cmp(&a.link_counter)
+        .then(a.parent.cmp(&b.parent))
+}
+
 /// The last-known-good remote snapshot: gate-passing state, single owner
 /// (the state law's left operand, #33 D6).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -339,11 +348,7 @@ impl Snapshot {
     /// of its list stops being the parent readers resolve the child under.
     pub fn links_ranked(&self, child: NodeId) -> Vec<Link> {
         let mut links = self.links_to(child);
-        links.sort_by(|a, b| {
-            b.link_counter
-                .cmp(&a.link_counter)
-                .then(a.parent.cmp(&b.parent))
-        });
+        links.sort_by(link_rank);
         links
     }
 

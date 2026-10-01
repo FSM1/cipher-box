@@ -2013,6 +2013,61 @@ fn a_promotion_refuses_to_drop_a_ref_relinked_since_its_snapshot() {
     assert_a_relinked_ref_refuses_then_moves(true);
 }
 
+/// A held node that lives in another granted scope seals under that scope's
+/// keys. The grant over a folder that holds the losing ref still succeeds,
+/// drops the ref, and leaves the node in its own scope.
+#[test]
+fn a_grant_beside_a_held_node_of_another_scope_succeeds() {
+    let mut fx = GrantScenario::new();
+    let shared = fx.folder;
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    let deep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, other, "deep");
+    fx.folder = other;
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    fx.folder = shared;
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (other_seed, _) = scope_material_of(&fx.world, &fx.blocks, other);
+
+    let inner =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "box");
+    concurrent_add(
+        &fx.world,
+        &fx.blocks,
+        inner,
+        &read_key_of(inner),
+        SCOPE,
+        ChildRef {
+            id: deep.0,
+            name: "deep".to_owned(),
+            ipns_name: write_name(deep).as_str().as_bytes().to_vec(),
+            kind: CoreNodeKind::Folder,
+            link_counter: 0,
+            unknown: PreservedFields::new(),
+        },
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    assert_eq!(
+        published_child_names(
+            &fx.world,
+            &fx.blocks,
+            inner,
+            &read_key_under(&override_seed, inner)
+        ),
+        Vec::<String>::new(),
+        "the grant dropped the losing ref"
+    );
+    let head = published_head(&fx.world, &fx.blocks, &write_name(deep)).expect("deep is published");
+    let envelope = decode_envelope(&head).expect("the head block decodes");
+    assert!(
+        open_read_body(&envelope, &read_key_under(&other_seed, deep)).is_ok(),
+        "the node stays sealed in its own scope"
+    );
+}
+
 /// The grantee reads the granted folder of a held node with no trust
 /// violation, and the folder holds no ref the grantee could re-rank.
 #[test]
