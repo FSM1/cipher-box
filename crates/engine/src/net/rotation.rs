@@ -13656,6 +13656,26 @@ mod tests {
         drop(lease);
     }
 
+    /// A promotion signs one above the record it read and changed, so a relink
+    /// that lands after that read loses it the CAS instead of being overwritten.
+    #[test]
+    fn a_promotion_lands_above_the_record_it_read() {
+        let node_id = [0x01; 16];
+        let (node_name, node_block) = interior_record(node_id, OWNER_ROOT_EPOCH, Vec::new());
+        let root = swept_root(vec![body_ref(node_id, &node_name)], &[]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage_node_at(node_id, &node_name, &node_block, 7);
+        let net = harness.net(&[]);
+        let scope = child_ref(SCOPE, &root);
+        let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        let node = swept.children[0].clone();
+
+        block_on(net.promote_scope_root(&scope, &node, &promoted(&node), &[]))
+            .expect("the promotion lands");
+        assert_eq!(sequence_at(&harness, &node_name), Some(8));
+    }
+
     /// The node id of the folder a grant promotes to a scope root — the scope
     /// the interior nodes below it join.
     const GRANTED_FOLDER: [u8; 16] = [0x9c; 16];
