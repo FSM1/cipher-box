@@ -205,7 +205,7 @@ impl<F> OwnerScopedFloorStore<F> {
     }
 
     /// `key`'s name label under the bound identity, or a refusal when none is
-    /// bound. What the store holds is fixed-width and opaque in both namespaces.
+    /// bound.
     fn scoped(&self, key: &[u8]) -> SeamResult<Vec<u8>> {
         let bound = self.bound.borrow();
         let Some(bound) = bound.as_ref() else {

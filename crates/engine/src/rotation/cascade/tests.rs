@@ -876,18 +876,14 @@ fn no_durable_revocation_floor_key_names_the_recipient() {
     };
     use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 
+    let secret = [7u8; 32];
+    let label_seed = kdf::contact_label_seed(&secret);
     let store = InMemoryFloorStore::default();
     let owner = OwnerScopedFloorStore::new(store.clone());
-    owner.bind(
-        &kdf::enc_subkey(&[7u8; 32]),
-        &kdf::contact_label_seed(&[7u8; 32]),
-    );
+    owner.bind(&kdf::enc_subkey(&secret), &label_seed);
     let sharer = SharerScopedFloorStore::granted_by(
         &owner,
-        ContactLabel::of(
-            &kdf::contact_label_seed(&[7u8; 32]),
-            &[0x02; IDENTITY_PUBLIC_LEN],
-        ),
+        ContactLabel::of(&label_seed, &[0x02; IDENTITY_PUBLIC_LEN]),
     );
     let recipient = X25519Secret::from_scalar([0x6b; 32]).public();
     let subkey = recipient.to_bytes();
