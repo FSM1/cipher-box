@@ -259,6 +259,24 @@ impl<St: StagingStore> OwedRotation<'_, St> {
         .await
     }
 
+    /// Replace the entry at `scope` with `entry` when it is `standing`; refused
+    /// as [`OwedRecordError::Standing`] once another driver changed it.
+    pub async fn replace(
+        &self,
+        scope: NodeId,
+        standing: &OwedEntry,
+        entry: OwedEntry,
+    ) -> Result<(), OwedRecordError> {
+        self.write(|record| match record.get_mut(&scope) {
+            Some(current) if current == standing => {
+                *current = entry;
+                Ok(true)
+            }
+            _ => Err(OwedRecordError::Standing),
+        })
+        .await
+    }
+
     /// Replace the steps of the entry at `scope` with `steps`, if it stands.
     pub async fn leave(&self, scope: NodeId, steps: Vec<OwedStep>) -> Result<(), OwedRecordError> {
         self.write(|record| {
@@ -533,6 +551,31 @@ mod tests {
         assert!(
             cell.hold(node(1)).is_some(),
             "the scope is free once dropped"
+        );
+    }
+
+    /// A replace lands only over the entry its driver read, so a re-run never
+    /// writes over work another driver changed.
+    #[test]
+    fn a_replace_lands_only_over_the_entry_it_read() {
+        let entropy = RefCell::new(SeededEntropy::new(7));
+        let mine = secret(9);
+        let store = InMemoryStagingStore::default();
+        let cell = OwedCell::default();
+        let owed = OwedRotation::new(&store, BookkeepingSeal::new(&mine, &entropy), &mine, &cell);
+        block_on(owed.owe(node(1), write_grant())).expect("the entry lands");
+
+        assert_eq!(
+            block_on(owed.replace(node(1), &revoke(), revoke())),
+            Err(OwedRecordError::Standing),
+            "another entry stands"
+        );
+        block_on(owed.replace(node(1), &write_grant(), revoke())).expect("the replace lands");
+        assert_eq!(block_on(owed.entry(node(1))), Ok(Some(revoke())));
+        assert_eq!(
+            block_on(owed.replace(node(2), &revoke(), revoke())),
+            Err(OwedRecordError::Standing),
+            "and nothing stands at a cleared scope"
         );
     }
 

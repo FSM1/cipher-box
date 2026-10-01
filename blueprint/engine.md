@@ -1035,7 +1035,9 @@ write-epoch floor raise and the index re-point. Each sync pass re-drives every
 entry after the drain, and the first pass of a session does so before the
 renewal walk. After its first publish, a command whose step stops returns
 `Ok`; the engine emits `rotationWorkOwed` at once and on each pass while the
-entry stands, and the same command on that scope re-drives the entry. At the
+entry stands, and the same command on that scope re-drives the entry. A
+relocation that carries a folder with an owed interior move into another
+scope is refused, retryably, until the move lands. At the
 entry's own cut epoch the published state does not tell a read cascade that
 landed from one that did not, so a re-drive after a lost advance runs one more.
 

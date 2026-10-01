@@ -58,7 +58,8 @@ impl OwedStop {
         }
     }
 
-    /// A step a later pass may find able to land.
+    /// A step a later pass may find able to land. What stopped it is
+    /// writer-authored, so it is never grounds to drop the entry.
     fn pending(detail: &'static str) -> Self {
         Self {
             retryable: true,
@@ -97,12 +98,10 @@ const OWED_WAVE_AT_ANOTHER_EPOCH: &str = "owed-write-cut-at-another-write-epoch"
 const OWED_RECIPIENT_UNKNOWN: &str = "owed-grant-recipient-unknown";
 
 /// The check a re-drive reports for an interior move whose folder does not sit
-/// under the scope it left. The tree is writer-authored, so this is never
-/// grounds to drop the entry.
+/// under the scope it left.
 const OWED_MOVE_SOURCE_MOVED: &str = "owed-interior-move-source-moved";
 /// Neither the enclosing scope's index nor the owner-signed scope pointer names
-/// a root for the owed scope. The index is writer-authored, so this is never
-/// grounds to drop the entry.
+/// a root for the owed scope.
 const OWED_SCOPE_NOT_INDEXED: &str = "owed-scope-not-indexed";
 /// The published cut epoch is below the entry's, so its cut set never landed.
 const OWED_CUT_NEVER_LANDED: &str = "owed-cut-never-landed";
@@ -209,7 +208,8 @@ where
 
     /// Drive `cut` at `node` under an owed rotation entry (ADR 0063 D2, D5):
     /// the entry is durable before the first publish, and a step that stops
-    /// after it leaves the entry and answers `Ok(None)`. `write_epoch` is the
+    /// after it, fail-closed or not, leaves the entry, tells the host, and
+    /// answers `Ok(None)`. `write_epoch` is the
     /// write epoch of the record the cut was authorized against.
     ///
     /// A read-only cut clears its entry here. A cut that moves the write plane
@@ -263,13 +263,13 @@ where
                 .await;
                 self.stop_owed(node, write.into_iter().collect(), cut_stop(&error))
                     .await;
-                return stopped(error);
+                return Ok(None);
             }
             Err(error) => {
                 return match self.cut_set_published(target, cut).await {
                     Some(true) => {
                         self.stop_owed(node, steps, cut_stop(&error)).await;
-                        stopped(error)
+                        Ok(None)
                     }
                     Some(false) => {
                         let _ = self.owed().clear(node).await;
@@ -368,34 +368,36 @@ where
             .map_err(EngineError::from_owed_record)
     }
 
-    /// Clear and answer the entry at `scope` when it is a mint's that still
-    /// owes its interior move, so the same share runs again from the start.
-    pub(crate) async fn take_owed_move(&self, scope: NodeId) -> Result<OwedEntry, EngineError> {
-        let _hold = self.hold_owed(scope)?;
-        let owed = self.owed();
-        match owed.entry(scope).await.map_err(EngineError::from_seam)? {
-            Some(entry) if matches!(entry.steps.first(), Some(OwedStep::InteriorMove { .. })) => {
-                owed.clear(scope)
-                    .await
-                    .map_err(EngineError::from_owed_record)?;
-                Ok(entry)
-            }
-            _ => Err(EngineError::rotation_work_owed()),
-        }
-    }
-
-    /// Write `entry` back at `scope` under the hold, after a re-run of the
-    /// command that took it failed. An entry the re-run left there already owes
-    /// the same work.
-    pub(crate) async fn restore_owed(
+    /// Replace the entry `standing` at `scope` with `entry` in one write, so
+    /// owed work stands there throughout a re-run.
+    pub(crate) async fn replace_owed(
         &self,
         scope: NodeId,
+        standing: &OwedEntry,
         entry: OwedEntry,
     ) -> Result<(), EngineError> {
-        let _hold = self.hold_owed(scope)?;
-        match self.owed().owe(scope, entry).await {
-            Ok(()) | Err(OwedRecordError::Standing) => Ok(()),
-            Err(error) => Err(EngineError::from_owed_record(error)),
+        self.owed()
+            .replace(scope, standing, entry)
+            .await
+            .map_err(EngineError::from_owed_record)
+    }
+
+    /// Withdraw `entry`, which a command wrote at `scope` and stopped before
+    /// its first publish: clear it, or put back the entry `over` it replaced.
+    /// A write-back the store refuses is the command's answer, since the work
+    /// it held would otherwise be lost in silence.
+    pub(crate) async fn unowe(
+        &self,
+        scope: NodeId,
+        entry: &OwedEntry,
+        over: Option<OwedEntry>,
+    ) -> Result<(), EngineError> {
+        match over {
+            None => {
+                let _ = self.owed().clear(scope).await;
+                Ok(())
+            }
+            Some(over) => self.replace_owed(scope, entry, over).await,
         }
     }
 
@@ -781,21 +783,16 @@ struct OwedScope {
     pointer_placed: bool,
 }
 
-/// The answer of a command whose cut stopped after the cut set landed, with the
-/// work owed: `Ok(None)` for a stop a later pass may clear (ADR 0063 D5), and
-/// the verdict itself for a fail-closed one, which the host must see.
-fn stopped<T>(error: RotateOnCutError) -> Result<Option<T>, EngineError> {
-    if error.is_retryable() {
-        Ok(None)
-    } else {
-        Err(EngineError::from_cut_rotation(error))
-    }
-}
-
-/// The stop a plane rotation failure reports.
+/// The stop a plane rotation failure reports. The command answers `Ok` over
+/// it, so a trust verdict is named here or nowhere.
 fn cut_stop(error: &RotateOnCutError) -> OwedStop {
+    let detail = if error.is_retryable() || error.is_unreadable() {
+        error.check().to_owned()
+    } else {
+        format!("{}: trust-violation", error.check())
+    };
     OwedStop {
-        detail: error.check().to_owned(),
+        detail,
         retryable: error.is_retryable(),
         terminal: false,
     }

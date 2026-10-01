@@ -502,11 +502,22 @@ where
             }
         }
         for (node, claims) in folders {
-            // Owed rotation work at the scope lands first; its claims wait.
-            let hold = self.owed.hold(node);
-            if hold.is_none() || !matches!(self.owed().entry(node).await, Ok(None)) {
+            // Owed rotation work at the scope lands first; its claims wait. The
+            // hold lasts across the conversion.
+            let Some(_hold) = self.owed.hold(node) else {
                 failure.get_or_insert(EngineError::rotation_work_owed());
                 continue;
+            };
+            match self.owed().entry(node).await {
+                Ok(None) => {}
+                Ok(Some(_)) => {
+                    failure.get_or_insert(EngineError::rotation_work_owed());
+                    continue;
+                }
+                Err(e) => {
+                    failure.get_or_insert(EngineError::from_seam(e));
+                    continue;
+                }
             }
             if let Err(e) = self.convert_at(sites, node, &claims, &mut verdicts).await {
                 failure.get_or_insert(e);
