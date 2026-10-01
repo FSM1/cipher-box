@@ -698,9 +698,16 @@ fn author_verdict(refusal: AuthorError) -> RotationPublishError {
 fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => RotationPublishError::Rejected,
-        RecordPublishError::Publish(PublishError::RecordTooLarge { .. })
-        | RecordPublishError::Upload(_) => RotationPublishError::NotPublished,
-        RecordPublishError::Publish(error) => match error.verdict() {
+        RecordPublishError::Upload(_) => RotationPublishError::NotPublished,
+        RecordPublishError::Publish(error) => rotation_publish_verdict(error),
+    }
+}
+
+/// [`record_publish_verdict`] for a failure of the publish pipeline itself.
+fn rotation_publish_verdict(error: PublishError) -> RotationPublishError {
+    match error {
+        PublishError::RecordTooLarge { .. } => RotationPublishError::NotPublished,
+        error => match error.verdict() {
             PublishVerdict::Refused => RotationPublishError::Rejected,
             PublishVerdict::RegistryRefused | PublishVerdict::NotLanded => {
                 RotationPublishError::NotPublished
@@ -2291,7 +2298,7 @@ where
         override_seed: &[u8; SECRET_LEN],
         current: RepublishBase,
     ) -> Result<RepublishBase, RotationPublishError> {
-        let name = &current.observed.name().clone();
+        let name = current.observed.name();
         // The write floor the signature clears must still hold when the record
         // lands ([`floor::WriteEpochLease`]).
         let _write_lease = floor::acquire_write_epoch_lease(&record.scope_id)
@@ -2306,7 +2313,7 @@ where
         }
         .refuse_below(self.floors)
         .await
-        .map_err(|error| record_publish_verdict(RecordPublishError::Publish(error)))?;
+        .map_err(rotation_publish_verdict)?;
 
         let node_seed = kdf::node_seed(override_seed, &record.scope_id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
@@ -2367,7 +2374,7 @@ where
             // make this device's own next resolve read its record as current
             // rather than adopt the epoch it just cut (`net/resolve.rs`).
             PublishOutcome::Published { sequence } => Ok(RepublishBase {
-                observed: current.observed.clone().clearing(sequence),
+                observed: current.observed.clearing(sequence),
                 ..current
             }),
             PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
@@ -4106,7 +4113,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
 /// the pipeline's own release-active encode refusals, are deterministic on the
 /// bytes this pass built — a retry re-uploads and re-charges a head block
 /// forever without converging.
-fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
+pub(super) fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => WritePublishError::Rejected,
         RecordPublishError::Upload(_) => WritePublishError::NotLanded,
@@ -4115,7 +4122,7 @@ fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
 }
 
 /// [`publish_record_verdict`] for a failure of the publish pipeline itself.
-fn wave_publish_verdict(error: PublishError) -> WritePublishError {
+pub(super) fn wave_publish_verdict(error: PublishError) -> WritePublishError {
     match error.verdict() {
         PublishVerdict::RegistryRefused => WritePublishError::RegistryFull,
         PublishVerdict::Refused => WritePublishError::Rejected,

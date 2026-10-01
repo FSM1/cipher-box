@@ -20,17 +20,17 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use cipherbox_engine::SyncTimingProfile;
 use cipherbox_engine::api::ApiClient;
-use cipherbox_engine::net::author::ENVELOPE_V;
 use cipherbox_engine::net::eol;
 use cipherbox_engine::net::{
-    HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl, Observed, PublishError,
-    PublishOutcome, PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest,
-    eol_republish, keyless_re_put, publish, resolve, revive, run_liveness_loop,
+    HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl, PublishError, PublishOutcome,
+    PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest, eol_republish,
+    keyless_re_put, publish, resolve, revive, run_liveness_loop,
 };
 use cipherbox_engine::seams::{
     FloorStore, HttpResponse, RecordTransport, Scheduler, SnapshotCache, UnixMillis,
 };
 use cipherbox_engine::sync::ResolveMode;
+use cipherbox_engine::testkit::account::fresh_observed;
 use cipherbox_engine::testkit::fakes::{
     AdoptVerdict, InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore,
     ScriptedAdopter, ScriptedHttp,
@@ -41,11 +41,6 @@ use cipherbox_engine::testkit::{FakeDevice, FakeWorld, block_on};
 const TTL_NANOS: u64 = 2_000_000_000;
 const VALUE: &[u8] = b"/ipfs/bafyfixturehead";
 const DAY: u64 = 24 * 60 * 60;
-
-/// A publish basis at `name` with no record read there.
-fn fresh(name: &IpnsName) -> Observed {
-    Observed::gated(name, 0, ENVELOPE_V).expect("this build's envelope version")
-}
 
 fn signer(seed: u8) -> Ed25519Signer {
     Ed25519Signer::from_seed([seed; 32])
@@ -346,7 +341,7 @@ fn publish_registers_first_embeds_sequence_one_and_confirms() {
     device.http.enqueue_response(ok_200()); // register
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: vec!["bafyc1".into()],
@@ -389,7 +384,7 @@ fn publish_cas_embeds_the_exact_expected_sequence_floor_plus_one() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
@@ -425,7 +420,7 @@ fn register_first_fail_closed_puts_no_record() {
     });
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
@@ -475,7 +470,7 @@ fn publish_fails_closed_when_the_sequence_floor_cannot_be_read() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
@@ -519,7 +514,7 @@ fn publish_succeeds_on_any_ack_and_the_background_retry_reaches_the_failed_endpo
     let scheduler = world.scheduler.clone().with_auto_advance();
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
@@ -582,7 +577,7 @@ fn publish_all_endpoints_failing_is_fail_closed() {
     device.http.enqueue_response(ok_200()); // registration succeeds; the PUT does not
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
@@ -627,7 +622,7 @@ fn publish_confirm_detects_a_lost_cas_race() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
@@ -678,7 +673,7 @@ fn publish_confirm_reads_a_sibling_at_our_sequence_as_a_lost_race() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
@@ -739,7 +734,7 @@ fn publish_confirm_reads_a_sibling_on_a_later_endpoint_as_a_lost_race() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
@@ -798,7 +793,7 @@ fn publish_at_an_exhausted_sequence_floor_refuses_before_it_signs() {
     device.http.enqueue_response(ok_200());
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
@@ -1076,7 +1071,7 @@ fn eol_republish_renews_at_seq_plus_one_only_inside_the_window() {
     // adoption by advancing the durable sequence floor to 1 (the gate's job).
     device.http.enqueue_response(ok_200());
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
@@ -1590,7 +1585,7 @@ fn multi_day_eol_timeline_publish_renew_lapse_revive() {
     let endpoint = world.record_store.endpoints()[0].clone();
 
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &s,
         head_cid: "bafytimeline".into(),
         content_cids: Vec::new(),

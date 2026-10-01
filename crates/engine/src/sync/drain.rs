@@ -4347,8 +4347,6 @@ where
                     scope,
                     to,
                     node,
-                    // The load may have read the `from` end's floors, so the `to`
-                    // end's own floor bars the sequence.
                     Observed::unread(&name),
                     false,
                     &body,
@@ -5033,8 +5031,6 @@ where
                 ReadBody::Folder { .. } => Vec::new(),
             };
             let name = dest.end.write_name(&node.0);
-            // The load read the source end's floors, so the destination's own
-            // floor bars the sequence.
             let published = self
                 .publish_node(
                     scope,

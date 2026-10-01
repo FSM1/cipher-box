@@ -21,13 +21,12 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{PreservedFields, ReadBody};
 
 use cipherbox_engine::gate::{Adopted, Candidate, GateError, ReaderContext, adopt};
-use cipherbox_engine::net::author::ENVELOPE_V;
-use cipherbox_engine::net::{
-    AdoptOutcome, Adopter, GatePass, Observed, PublishRequest, publish, resolve,
-};
+use cipherbox_engine::net::{AdoptOutcome, Adopter, GatePass, PublishRequest, publish, resolve};
 use cipherbox_engine::seams::{HttpResponse, RecordTransport};
 use cipherbox_engine::sync::ResolveMode;
-use cipherbox_engine::testkit::account::{Blocks, EOL, TTL_NANOS, owner_identity, serve_http};
+use cipherbox_engine::testkit::account::{
+    Blocks, EOL, TTL_NANOS, fresh_observed, owner_identity, serve_http,
+};
 use cipherbox_engine::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemorySnapshotCache, ScriptedHttp,
 };
@@ -56,11 +55,6 @@ const PAYLOAD_SIZES: [usize; 3] = [64 * 1024, 1024 * 1024, 4 * 1024 * 1024];
 /// Samples per framing point: criterion's default 100 cannot fit in its
 /// measurement window once an iteration costs milliseconds.
 const FRAMING_SAMPLES: usize = 20;
-
-/// A publish basis at `name` with no record read there.
-fn fresh(name: &IpnsName) -> Observed {
-    Observed::gated(name, 0, ENVELOPE_V).expect("this build's envelope version")
-}
 
 fn payload(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i % 251) as u8).collect()
@@ -210,7 +204,7 @@ fn bench_publish(c: &mut Criterion) {
     let signer = kdf::ipns_keypair(&[0x99; 32]);
     let name = IpnsName::from_public_key(&signer.verifying_key());
     let request = PublishRequest {
-        observed: &fresh(&name),
+        observed: &fresh_observed(&name),
         signer: &signer,
         head_cid: "bafybenchhead".into(),
         content_cids: vec!["bafybenchleaf".into()],

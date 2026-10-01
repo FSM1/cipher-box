@@ -72,23 +72,26 @@ impl PublishBar {
     /// The read-, write- and cut-epoch floors this bar is held to, zero where
     /// none was raised. A read failure is fail-closed, never "no floor".
     async fn read_floors<F: FloorStore>(&self, floors: &F) -> Result<[u64; 3], PublishError> {
-        let mut at = [0; 3];
-        at[0] = floor::read_epoch_floor(floors, &self.scope_id)
+        let read = floor::read_epoch_floor(floors, &self.scope_id)
             .await
             .map_err(PublishError::FloorRead)?
             .unwrap_or(0);
-        if self.write_epoch.is_some() {
-            at[1] = floor::write_epoch_floor(floors, &self.scope_id)
+        let write = if self.write_epoch.is_some() {
+            floor::write_epoch_floor(floors, &self.scope_id)
                 .await
                 .map_err(PublishError::FloorRead)?
-                .unwrap_or(0);
-        }
-        if self.cut_epoch.is_some() {
-            at[2] = read_cut_epoch_floor(floors, &self.scope_id)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let cut = if self.cut_epoch.is_some() {
+            read_cut_epoch_floor(floors, &self.scope_id)
                 .await
-                .map_err(PublishError::FloorRead)?;
-        }
-        Ok(at)
+                .map_err(PublishError::FloorRead)?
+        } else {
+            0
+        };
+        Ok([read, write, cut])
     }
 
     fn refuse(&self, [read, write, cut]: [u64; 3]) -> Result<(), PublishError> {
@@ -123,10 +126,6 @@ pub enum BarFloor {
 /// the record it read there. [`publish`] signs strictly above it, so a second
 /// publish in one pass, or a publish over a record the floor has not adopted,
 /// cannot re-mint a sequence already spent.
-///
-/// A gated read makes one with [`Self::gated`], which is also where this build's
-/// envelope version is enforced; an author that read nothing at the name makes
-/// one with [`Self::unread`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Observed {
     name: IpnsName,
@@ -134,7 +133,8 @@ pub struct Observed {
 }
 
 impl Observed {
-    /// No read at `name`, only for a body authored fresh or one its source read version-checked.
+    /// No read at `name`, only for a body authored fresh or one its source read
+    /// version-checked. The name's own sequence floor still bars the sequence.
     pub(crate) fn unread(name: &IpnsName) -> Self {
         Self {
             name: name.clone(),
