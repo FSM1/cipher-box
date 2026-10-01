@@ -123,7 +123,8 @@ test('a cold start whose first route is a subfolder paints its file cells', asyn
   await vault.controlled();
   await c.signIn(page);
   await page.waitForURL('**/files');
-  // Before the root settles, so the subfolder is the first listing this device reads.
+  // No wait for the root to settle: the navigation lands as early as the sign-in
+  // allows. The engine suite pins the order where the focus lands before the first pass.
   await visit(page, deep);
   await files.at(FOLDER);
   await test.step('subfolder cells', () => painted(files, DEEP_FILE));
