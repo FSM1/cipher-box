@@ -1934,16 +1934,44 @@ fn a_write_link_conversion_leaves_a_held_node_in_the_vault_scope() {
 /// Another device moves the held node into the granted folder after this
 /// device last refreshed: it raises the inside ref above the outside one and
 /// drops the outside ref. The grant must not drop the ref that is now the
-/// winner, so it refuses the move, and a retry after a refresh moves the node.
-#[test]
-fn a_grant_refuses_to_drop_a_ref_relinked_since_its_snapshot() {
+/// winner. The interior move and the root promotion both refuse with the same
+/// not-converged result, never a trust violation, and a retry after a refresh
+/// moves the node into the granted scope.
+fn assert_a_relinked_ref_refuses_then_moves(via_root: bool) {
     let mut fx = GrantScenario::new();
-    let (keep, deep, inner) = dual_linked_at(&mut fx, 0, true, |_| {});
+    let (keep, deep, holder) = if via_root {
+        let keep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "keep");
+        let deep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, keep, "deep");
+        concurrent_add(
+            &fx.world,
+            &fx.blocks,
+            fx.folder,
+            &read_key_of(fx.folder),
+            SCOPE,
+            ChildRef {
+                id: deep.0,
+                name: "deep".to_owned(),
+                ipns_name: write_name(deep).as_str().as_bytes().to_vec(),
+                kind: CoreNodeKind::Folder,
+                link_counter: 0,
+                unknown: PreservedFields::new(),
+            },
+        );
+        block_on(fx.engine.command(Command::SetFocus {
+            node: Some(fx.folder),
+        }))
+        .expect("the focus moves");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        (keep, deep, fx.folder)
+    } else {
+        dual_linked_at(&mut fx, 0, true, |_| {})
+    };
+    let case = if via_root { "root" } else { "interior" };
     concurrent_edit(
         &fx.world,
         &fx.blocks,
-        inner,
-        &read_key_of(inner),
+        holder,
+        &read_key_of(holder),
         SCOPE,
         |children| {
             for child in children.iter_mut().filter(|child| child.id == deep.0) {
@@ -1960,37 +1988,46 @@ fn a_grant_refuses_to_drop_a_ref_relinked_since_its_snapshot() {
         |children| children.retain(|child| child.id != deep.0),
     );
 
-    assert!(
-        fx.grant_folder_to_recipient().is_err(),
-        "the grant refuses the move"
-    );
     assert_eq!(
-        published_child_names(&fx.world, &fx.blocks, inner, &read_key_of(inner)),
-        vec!["deep".to_owned()],
-        "the folder still names the node"
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::MalformedInput {
+            check: "subtree-not-converged"
+        }),
+        "{case}: the grant refuses the move as not converged"
     );
+    if !via_root {
+        assert_eq!(
+            published_child_names(&fx.world, &fx.blocks, holder, &read_key_of(holder)),
+            vec!["deep".to_owned()],
+            "{case}: the folder still names the node"
+        );
+    }
 
     for _ in 0..3 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
     assert_eq!(
-        published_child_names(
-            &fx.world,
-            &fx.blocks,
-            inner,
-            &read_key_under(&override_seed, inner)
-        ),
-        vec!["deep".to_owned()],
-        "a retry moves the folder with the node"
+        fx.grant_folder_to_recipient(),
+        Ok(CommandOutcome::Done),
+        "{case}: a retry after a refresh succeeds"
     );
+    let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
     let head = published_head(&fx.world, &fx.blocks, &write_name(deep)).expect("deep is published");
     let envelope = decode_envelope(&head).expect("the head block decodes");
     assert!(
         open_read_body(&envelope, &read_key_under(&override_seed, deep)).is_ok(),
-        "and the node moves into the granted scope"
+        "{case}: and the node moves into the granted scope"
     );
+}
+
+#[test]
+fn a_grant_refuses_to_drop_a_ref_relinked_since_its_snapshot() {
+    assert_a_relinked_ref_refuses_then_moves(false);
+}
+
+#[test]
+fn a_promotion_refuses_to_drop_a_ref_relinked_since_its_snapshot() {
+    assert_a_relinked_ref_refuses_then_moves(true);
 }
 
 /// The grantee reads the granted folder of a held node with no trust

@@ -101,6 +101,13 @@ pub enum RotationPublishError {
     /// distinct from [`Self::NotPublished`] so a forged or transplanted record
     /// is never retried as if it were a flaky endpoint.
     Rejected,
+    /// A promotion met a ref the grant must drop that no longer loses the link
+    /// rank: the caller's snapshot is stale. Nothing was published, and a
+    /// refresh clears it.
+    NotConverged {
+        /// The node the ref names.
+        node_id: [u8; 16],
+    },
 }
 
 impl RotationPublishError {
@@ -113,7 +120,7 @@ impl RotationPublishError {
     /// The class label a reject vector carries for this failure.
     pub fn class(&self) -> &'static str {
         match self {
-            Self::NotPublished | Self::LostRace => "availability",
+            Self::NotPublished | Self::LostRace | Self::NotConverged { .. } => "availability",
             Self::Rejected => "trust",
         }
     }
@@ -126,6 +133,9 @@ impl core::fmt::Display for RotationPublishError {
             RotationPublishError::LostRace => f.write_str("rotation publish lost the CAS race"),
             RotationPublishError::Rejected => {
                 f.write_str("rotation record rejected by adoption gate")
+            }
+            RotationPublishError::NotConverged { .. } => {
+                f.write_str("rotation publish met a ref the snapshot did not rank")
             }
         }
     }

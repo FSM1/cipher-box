@@ -2475,7 +2475,7 @@ where
             Err(failure) => return Err(promote_verdict(failure)),
         };
         drop_held_refs(&mut current.read_body, node.node_id, held_outside)
-            .map_err(|_| RotationPublishError::Rejected)?;
+            .map_err(|node_id| RotationPublishError::NotConverged { node_id })?;
         let children = body_children(&current.read_body);
         let base = RepublishBase {
             read_body: current.read_body,

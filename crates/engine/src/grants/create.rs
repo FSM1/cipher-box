@@ -242,7 +242,9 @@ pub enum CreateGrantError {
     Converge(SweepError),
     /// The subtree could not be proven epoch-converged: convergence work was
     /// dropped on a lost CAS race, so the grant is refused rather than minted
-    /// over a possibly-lagging subtree.
+    /// over a possibly-lagging subtree. Also a held node's ref that was
+    /// re-linked since the owner's snapshot ([`drop_held_refs`]); past the root
+    /// publish, a retry after a refresh resumes the move.
     SubtreeNotConverged {
         /// The interior nodes left unproven this pass — dropped on a lost CAS
         /// race, or unreadable at the epoch their record claims.
@@ -1205,7 +1207,14 @@ where
     let promoted_children = net
         .promote_scope_root(&parent_ref, &folder, &grantee_record, grantee.held_outside)
         .await
-        .map_err(CreateGrantError::Publish)?;
+        .map_err(|error| match error {
+            RotationPublishError::NotConverged { node_id } => {
+                CreateGrantError::SubtreeNotConverged {
+                    unconverged: vec![node_id],
+                }
+            }
+            error => CreateGrantError::Publish(error),
+        })?;
 
     let read_scope = GrantedReadScope {
         seed: override_seed.clone(),
@@ -1567,8 +1576,11 @@ where
                 .await
             {
                 Ok(MovingChild::Pending(mut node)) => {
-                    drop_held_refs(&mut node.read_body, child.node_id, held_outside)
-                        .map_err(|node_id| CreateGrantError::InteriorNotConverged { node_id })?;
+                    drop_held_refs(&mut node.read_body, child.node_id, held_outside).map_err(
+                        |node_id| CreateGrantError::SubtreeNotConverged {
+                            unconverged: vec![node_id],
+                        },
+                    )?;
                     // Release-active (security rule 8). The read admits any
                     // record at or below the scope's epoch, so a record that
                     // regressed since the pass would travel into the grantee's
