@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8dc7d6c99e9b",
+  "strategy": "manual-commit",
+  "branch": "fix/cold-start-file-rows-paint",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/web-e2e/tests/cold-start-listing.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8d/c7d6c99e9b/0/metadata.json",
+      "transcript": "/8d/c7d6c99e9b/0/full.jsonl",
+      "compact_transcript": "/8d/c7d6c99e9b/0/transcript.jsonl",
+      "content_hash": "/8d/c7d6c99e9b/0/content_hash.txt",
+      "prompt": "/8d/c7d6c99e9b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2424,
+    "cache_creation_tokens": 325595,
+    "cache_read_tokens": 22988591,
+    "output_tokens": 110450,
+    "api_call_count": 101
+  }
+}
