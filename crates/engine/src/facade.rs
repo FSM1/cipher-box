@@ -9232,9 +9232,10 @@ where {
         let root = self.state.snapshot.borrow().root;
         let mut seen = BTreeSet::from([root]);
         let mut level = vec![root];
+        let mut cut_short = false;
         while !level.is_empty() && !self.state.snapshot.borrow().contains(target) {
             let room = MAX_LOCATE_FOLDERS.saturating_sub(seen.len() - 1);
-            let next: Vec<NodeId> = {
+            let mut next: Vec<NodeId> = {
                 let base = self.state.snapshot.borrow();
                 level
                     .iter()
@@ -9242,20 +9243,23 @@ where {
                     .filter(|child| child.kind == NodeKind::Folder)
                     .map(|child| child.id)
                     .filter(|child| seen.insert(*child))
-                    .take(room)
                     .collect()
             };
+            cut_short |= next.len() > room;
+            next.truncate(room);
             let (_, verdict) = self
                 .navigation_legs(root, next.clone(), NodeKind::Folder, now, &settle)
                 .await;
             answered = answered.worst(verdict);
             level = next;
         }
-        // A level a leg could not read may hold the target yet.
-        let complete = !matches!(
-            answered,
-            RefreshVerdict::Unreachable | RefreshVerdict::Overdue
-        );
+        // A folder the bound cut, or a level a leg could not read, may hold the
+        // target yet.
+        let complete = !cut_short
+            && !matches!(
+                answered,
+                RefreshVerdict::Unreachable | RefreshVerdict::Overdue
+            );
         if complete && !self.state.snapshot.borrow().contains(target) {
             self.state.locate_miss.set(Some((target, now)));
         }
@@ -19360,6 +19364,31 @@ mod focus_access_tests {
         let mut route = Box::pin(engine.set_focus(Some(UNLISTED)));
 
         assert_eq!(poll_once(route.as_mut()), core::task::Poll::Ready(Ok(())));
+    }
+
+    /// Whether a route to [`UNLISTED`] records a miss over a vault of `folders`
+    /// folders under the root.
+    fn records_a_miss_over(folders: usize) -> bool {
+        let engine = started_engine();
+        {
+            let mut base = engine.state.snapshot.borrow_mut();
+            let root = base.root;
+            for i in 0..folders {
+                let id = file_id(i);
+                base.upsert_node(NodeMeta::new(id, format!("d{i}"), NodeKind::Folder));
+                base.link(root, id, 1);
+            }
+        }
+        block_on(engine.set_focus(Some(UNLISTED))).expect("the route resolves");
+        engine.state.locate_miss.get().is_some()
+    }
+
+    /// A level the folder bound cut short left folders unlisted, and the target
+    /// may sit under one of them: such a walk records no miss.
+    #[test]
+    fn a_walk_the_folder_bound_cut_short_records_no_miss() {
+        assert!(records_a_miss_over(MAX_LOCATE_FOLDERS), "a full walk does");
+        assert!(!records_a_miss_over(MAX_LOCATE_FOLDERS + 1));
     }
 
     #[test]
