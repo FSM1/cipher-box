@@ -7,6 +7,7 @@ import {
   isRecoverable,
   retainedRecords,
 } from './snapshotStore';
+import { notificationStore } from '../stores/notification.store';
 import { ROOT_ID, fakeEngine, flush, view } from './testFakes';
 
 describe('snapshotStore', () => {
@@ -322,6 +323,27 @@ describe('snapshotStore', () => {
     engine.pulls[0].resolve(view(new Uint8Array(16).fill(3)));
     await flush();
     expect(changes).toBe(1);
+  });
+
+  it('tells a trust stop on owed sharing work apart from work still being retried', () => {
+    notificationStore.clear();
+    const engine = fakeEngine();
+    createSnapshotStore(engine.client);
+    const owed = {
+      kind: 'rotationWorkOwed',
+      detail: 'rot-write-resolve-failed',
+      retryable: false,
+    } as const;
+
+    engine.emit({ ...owed, scopeRoot: new Uint8Array(16).fill(4), class: 'trust' });
+    engine.emit({ ...owed, scopeRoot: new Uint8Array(16).fill(5), class: 'capability' });
+
+    const messages = notificationStore.getState().map((notice) => notice.message);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toContain('failed verification');
+    expect(messages[1]).toContain('not finished yet');
+    expect(messages[1]).not.toContain('failed verification');
+    notificationStore.clear();
   });
 
   it('serves a stable empty state before an engine client exists', () => {

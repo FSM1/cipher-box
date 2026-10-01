@@ -104,6 +104,24 @@ impl OwedEntry {
     }
 }
 
+impl OwedEntry {
+    /// The scope the folder left, while the entry still owes its interior
+    /// move.
+    #[must_use]
+    pub fn interior_move_source(&self) -> Option<NodeId> {
+        match self.steps.first() {
+            Some(OwedStep::InteriorMove { left_scope }) => Some(*left_scope),
+            _ => None,
+        }
+    }
+
+    /// Whether the entry still owes its interior move.
+    #[must_use]
+    pub fn owes_interior_move(&self) -> bool {
+        self.interior_move_source().is_some()
+    }
+}
+
 /// The whole record, keyed by scope.
 pub type OwedRecord = BTreeMap<NodeId, OwedEntry>;
 
@@ -220,6 +238,17 @@ impl<St: StagingStore> OwedRotation<'_, St> {
     /// The entry at `scope`, if one stands.
     pub async fn entry(&self, scope: NodeId) -> SeamResult<Option<OwedEntry>> {
         self.read(|record| record.get(&scope).cloned()).await
+    }
+
+    /// The scopes that still owe an interior move, with the scope each left.
+    pub async fn interior_moves(&self) -> SeamResult<Vec<(NodeId, NodeId)>> {
+        self.read(|record| {
+            record
+                .iter()
+                .filter_map(|(scope, entry)| Some((*scope, entry.interior_move_source()?)))
+                .collect()
+        })
+        .await
     }
 
     /// The scopes the record names.

@@ -16,6 +16,7 @@ use crate::sync::owed_rotation::{OwedEntry, OwedRecordError, OwedRotation, OwedS
 pub(crate) struct OwedStop {
     pub(crate) detail: String,
     pub(crate) retryable: bool,
+    pub(crate) class: OwedWorkClass,
     /// The work can never land, so the entry is dropped.
     terminal: bool,
 }
@@ -32,6 +33,7 @@ impl OwedStop {
         Self {
             detail: format!("{step}: {class}"),
             retryable,
+            class: OwedWorkClass::of(error),
             terminal: false,
         }
     }
@@ -43,9 +45,15 @@ impl OwedStop {
 
     /// A grant step that stopped after its promotion publish.
     pub(crate) fn of_grant(error: &CreateGrantError) -> Self {
+        let class = match error.class() {
+            "availability" => OwedWorkClass::Availability,
+            "trust" => OwedWorkClass::Trust,
+            _ => OwedWorkClass::Capability,
+        };
         Self {
             detail: error.check().to_owned(),
-            retryable: error.class() == "availability",
+            retryable: class == OwedWorkClass::Availability,
+            class,
             terminal: false,
         }
     }
@@ -54,6 +62,7 @@ impl OwedStop {
         Self {
             detail: detail.to_owned(),
             retryable: false,
+            class: OwedWorkClass::Capability,
             terminal: false,
         }
     }
@@ -63,6 +72,7 @@ impl OwedStop {
     fn pending(detail: &'static str) -> Self {
         Self {
             retryable: true,
+            class: OwedWorkClass::Availability,
             ..Self::refused(detail)
         }
     }
@@ -167,6 +177,7 @@ where
             scope_root,
             detail: stop.detail,
             retryable: stop.retryable,
+            class: stop.class,
         });
     }
 
@@ -209,14 +220,14 @@ where
     /// Drive `cut` at `node` under an owed rotation entry (ADR 0063 D2, D5):
     /// the entry is durable before the first publish, and a step that stops
     /// after it, fail-closed or not, leaves the entry, tells the host, and
-    /// answers `Ok(None)`. `write_epoch` is the
-    /// write epoch of the record the cut was authorized against.
+    /// answers `Ok(None)`. `write_epoch` is the write epoch of the record the
+    /// cut was authorized against.
     ///
     /// A read-only cut clears its entry here. A cut that moves the write plane
     /// leaves it for the caller, which clears it after the post-steps. The
     /// caller holds the scope
-    /// ([`OwedCell::hold`](crate::sync::owed_rotation::OwedCell::hold)) across
-    /// both.
+    /// ([`OwedCell::hold`](crate::sync::owed_rotation::OwedCell::hold))
+    /// across both.
     pub(super) async fn rotate_owed_cut(
         &self,
         node: NodeId,
@@ -261,14 +272,14 @@ where
                     cut.commitment.cut_epoch,
                 )
                 .await;
-                self.stop_owed(node, write.into_iter().collect(), cut_stop(&error))
+                self.stop_owed(node, write.into_iter().collect(), cut_stop(error))
                     .await;
                 return Ok(None);
             }
             Err(error) => {
                 return match self.cut_set_published(target, cut).await {
                     Some(true) => {
-                        self.stop_owed(node, steps, cut_stop(&error)).await;
+                        self.stop_owed(node, steps, cut_stop(error)).await;
                         Ok(None)
                     }
                     Some(false) => {
@@ -666,7 +677,7 @@ where
         .map_err(|e| stop(EngineError::from_revoke(e)))?;
         self.rotate_planes(node, &target, &scope_root_name, &cut, None)
             .await
-            .map_err(|e| cut_stop(&e))?;
+            .map_err(cut_stop)?;
         Ok(())
     }
 
@@ -709,7 +720,7 @@ where
             let write = self
                 .rotate_planes(node, &target, &scope_root_name, &cut, None)
                 .await
-                .map_err(|e| cut_stop(&e))?
+                .map_err(cut_stop)?
                 .write
                 .ok_or_else(|| OwedStop::refused(OWED_WAVE_NOT_RUN))?;
             (write.new_root_name, write.new_write_epoch)
@@ -783,17 +794,13 @@ struct OwedScope {
     pointer_placed: bool,
 }
 
-/// The stop a plane rotation failure reports. The command answers `Ok` over
-/// it, so a trust verdict is named here or nowhere.
-fn cut_stop(error: &RotateOnCutError) -> OwedStop {
-    let detail = if error.is_retryable() || error.is_unreadable() {
-        error.check().to_owned()
-    } else {
-        format!("{}: trust-violation", error.check())
-    };
+/// The stop a plane rotation failure reports, classed as the command's own
+/// verdict on it would be.
+fn cut_stop(error: RotateOnCutError) -> OwedStop {
     OwedStop {
-        detail,
+        detail: error.check().to_owned(),
         retryable: error.is_retryable(),
         terminal: false,
+        class: OwedWorkClass::of(&EngineError::from_cut_rotation(error)),
     }
 }

@@ -4,7 +4,7 @@
 #![cfg(all(target_family = "wasm", target_os = "unknown"))]
 
 use cipherbox_engine::facade::{
-    BlockProgress, DeadLetterReason, Event, NodeId, OpPhase, Staleness,
+    BlockProgress, DeadLetterReason, Event, NodeId, OpPhase, OwedWorkClass, Staleness,
 };
 use cipherbox_engine::seams::OpId;
 use cipherbox_wasm::boundary::encode_event;
@@ -119,10 +119,12 @@ fn the_byte_and_enum_payloads_cross_under_their_names() {
     let rotation_owed = crossed(Event::RotationWorkOwed {
         scope_root: NodeId([0x9f; 16]),
         detail: "rot-write-publish-failed".into(),
-        retryable: true,
+        retryable: false,
+        class: OwedWorkClass::Trust,
     });
     assert_eq!(bytes(field(&rotation_owed, "scopeRoot")), vec![0x9f; 16]);
-    assert_eq!(field(&rotation_owed, "retryable"), JsValue::TRUE);
+    assert_eq!(field(&rotation_owed, "retryable"), JsValue::FALSE);
+    assert_eq!(field(&rotation_owed, "class"), JsValue::from_str("trust"));
 
     let unprovisioned = crossed(Event::VaultUnprovisioned {
         retryable: true,
@@ -204,9 +206,10 @@ fn each_event_kind_crosses_as_its_stable_name() {
                 scope_root: node,
                 detail: String::new(),
                 retryable: true,
+                class: OwedWorkClass::Availability,
             },
             "rotationWorkOwed",
-            4,
+            5,
         ),
         (
             Event::RotationWorkAbandoned {

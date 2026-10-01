@@ -56,8 +56,20 @@ describe('engine warnings', () => {
     const scopeRoot = new Uint8Array(16).fill(7);
 
     await act(async () => {
-      engine.emit({ kind: 'rotationWorkOwed', scopeRoot, detail: 'unavailable', retryable: true });
-      engine.emit({ kind: 'rotationWorkOwed', scopeRoot, detail: 'unavailable', retryable: true });
+      engine.emit({
+        kind: 'rotationWorkOwed',
+        scopeRoot,
+        detail: 'unavailable',
+        retryable: true,
+        class: 'availability',
+      });
+      engine.emit({
+        kind: 'rotationWorkOwed',
+        scopeRoot,
+        detail: 'unavailable',
+        retryable: true,
+        class: 'availability',
+      });
     });
 
     const notices = await screen.findAllByTestId('notification-notice');

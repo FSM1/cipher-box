@@ -79,9 +79,9 @@ use cipherbox_engine::testkit::{
 use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, ContentProfile,
     DeadLetterReason, Engine, EngineError, Event, EventStream, GatewayConfig, InvitePreview,
-    LinkPreviewState, LoginSecret, NodeId, NodeKind, Permission, PreviewEntry, PreviewNames,
-    RecordReader, ScopeEpochs, SessionBearer, SharePointer, SharingInviteLink, StoragePolicy,
-    SyncTimingProfile, decode_queue, load_bin_index, poll_verified, post_sealed,
+    LinkPreviewState, LoginSecret, NodeId, NodeKind, OwedWorkClass, Permission, PreviewEntry,
+    PreviewNames, RecordReader, ScopeEpochs, SessionBearer, SharePointer, SharingInviteLink,
+    StoragePolicy, SyncTimingProfile, decode_queue, load_bin_index, poll_verified, post_sealed,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -1503,7 +1503,7 @@ fn a_downgrade_right_after_a_manual_rotation_moves_the_lagging_subtree() {
 /// A node the ratchet reaches but that does not open under that seed is a
 /// trust violation, even below a lagging child the wave opened. The cut set
 /// has landed, so the revoke answers `Ok` and the host is told the work is
-/// owed, not retryable (ADR 0063 D5).
+/// owed behind a trust stop (ADR 0063 D5).
 #[test]
 fn a_write_revoke_refuses_a_lagging_grandchild_the_ratchet_cannot_open() {
     let mut fx = GrantScenario::new();
@@ -1518,8 +1518,9 @@ fn a_write_revoke_refuses_a_lagging_grandchild_the_ratchet_cannot_open() {
         owed_reports(&mut fx._events),
         vec![(
             fx.folder,
-            "rot-write-resolve-failed: trust-violation".to_owned(),
-            false
+            "rot-write-resolve-failed".to_owned(),
+            false,
+            OwedWorkClass::Trust
         )],
         "the wave reads past the lagging child and refuses the grandchild"
     );
@@ -1572,7 +1573,12 @@ fn a_write_revoke_reports_a_child_beyond_the_ratchet_as_an_unsupported_target() 
     );
     assert_eq!(
         owed_reports(&mut fx._events),
-        vec![(fx.folder, "rot-write-resolve-failed".to_owned(), false)]
+        vec![(
+            fx.folder,
+            "rot-write-resolve-failed".to_owned(),
+            false,
+            OwedWorkClass::Capability
+        )]
     );
 }
 
@@ -2705,8 +2711,9 @@ fn owed_scopes(events: &mut EventStream) -> Vec<NodeId> {
     scopes
 }
 
-/// The owed rotation work the stream reports: scope root, check, retryable.
-fn owed_reports(events: &mut EventStream) -> Vec<(NodeId, String, bool)> {
+/// The owed rotation work the stream reports: scope root, check, retryable,
+/// class.
+fn owed_reports(events: &mut EventStream) -> Vec<(NodeId, String, bool, OwedWorkClass)> {
     events_so_far(events)
         .into_iter()
         .filter_map(|event| match event {
@@ -2714,7 +2721,8 @@ fn owed_reports(events: &mut EventStream) -> Vec<(NodeId, String, bool)> {
                 scope_root,
                 detail,
                 retryable,
-            } => Some((scope_root, detail, retryable)),
+                class,
+            } => Some((scope_root, detail, retryable, class)),
             _ => None,
         })
         .collect()
@@ -10094,7 +10102,7 @@ fn an_owed_move_whose_folder_sits_under_another_scope_stays_owed() {
     assert!(
         reported.iter().any(|event| matches!(
             event,
-            Event::RotationWorkOwed { scope_root, detail, retryable: true }
+            Event::RotationWorkOwed { scope_root, detail, retryable: true, .. }
                 if *scope_root == fx.folder && detail == "owed-interior-move-source-moved"
         )),
         "each pass reports the move owed"
@@ -10138,8 +10146,7 @@ fn a_share_re_run_over_an_indexed_scope_keeps_the_move_owed() {
 }
 
 /// An owner relocation that carries a folder with an owed interior move into
-/// another scope is refused while the move is owed: the owner's own move is
-/// the one ground to drop it, and the record is this device's.
+/// another scope is refused while the move is owed, and the move stays owed.
 #[test]
 fn an_owner_move_of_a_folder_with_an_owed_move_into_another_scope_is_refused() {
     let mut fx = GrantScenario::new();
@@ -10171,6 +10178,100 @@ fn an_owner_move_of_a_folder_with_an_owed_move_into_another_scope_is_refused() {
     assert_eq!(moved, work_owed());
     tick(&fx.world, &fresh, &mut tasks);
     assert_eq!(owed_scopes(&mut events), vec![carried], "the move is owed");
+}
+
+/// A delete of a folder whose interior move is owed is refused while the move
+/// is owed: it takes the folder from the scope the move re-seals it into.
+#[test]
+fn a_delete_of_a_folder_with_an_owed_move_is_refused() {
+    let mut fx = GrantScenario::new();
+    fx.stall_the_owed_move();
+    assert_eq!(
+        block_on(fx.engine.command(Command::Delete { node: fx.folder })),
+        work_owed()
+    );
+}
+
+/// A restore of a binned folder whose interior move is owed is refused into
+/// another scope, and lands in the scope the move left.
+#[test]
+fn a_restore_of_a_folder_with_an_owed_move_into_another_scope_is_refused() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let binned = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "binned");
+    assert!(matches!(
+        block_on(fx.engine.command(Command::Delete { node: binned })),
+        Ok(CommandOutcome::Queued { .. })
+    ));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    stage_owed_record(
+        &fx,
+        &OwedRecord::from([(
+            binned,
+            OwedEntry {
+                cut_epoch: 0,
+                steps: vec![OwedStep::InteriorMove { left_scope: ROOT }],
+            },
+        )]),
+    );
+
+    let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &fresh, &mut tasks);
+    assert_eq!(
+        block_on(fresh.command(Command::Restore {
+            node: binned,
+            into: Some(fx.folder),
+        })),
+        work_owed()
+    );
+    assert!(
+        matches!(
+            block_on(fresh.command(Command::Restore {
+                node: binned,
+                into: None,
+            })),
+            Ok(CommandOutcome::Queued { .. })
+        ),
+        "a restore into the scope the move left is not refused"
+    );
+}
+
+/// A crossing queued before the share never carries the promoted folder out of
+/// the scope its owed interior move re-seals it into: the crossing's re-seal
+/// refuses the promoted root, and the pass lands the move.
+#[test]
+fn a_queued_crossing_of_a_folder_with_an_owed_move_does_not_publish() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let carried =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "carried");
+    assert!(matches!(
+        block_on(fx.engine.command(Command::Relink {
+            node: carried,
+            new_parent: fx.folder,
+        })),
+        Ok(CommandOutcome::Queued { .. })
+    ));
+    let root = write_name(ROOT);
+    fx.world.record_store.fail_put_for(root.as_str());
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: carried,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.owed_scopes(), vec![carried], "the interior move is owed");
+    fx.world.record_store.heal_put_for(root.as_str());
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        !queued_crossings(&fx.owner_device).is_empty(),
+        "the crossing did not publish"
+    );
+    assert_eq!(fx.owed_scopes(), vec![], "and the owed move landed");
 }
 
 /// A record at the folder's name with no grant section does not prove a
@@ -10381,7 +10482,12 @@ fn a_replayed_pre_cut_root_does_not_drop_an_owed_downgrade() {
     );
     assert_eq!(
         owed_reports(&mut fx._events),
-        vec![(fx.folder, "rot-write-resolve-failed".to_owned(), true)],
+        vec![(
+            fx.folder,
+            "rot-write-resolve-failed".to_owned(),
+            true,
+            OwedWorkClass::Availability
+        )],
         "the wave stopped at its first read of the root"
     );
     fx.world

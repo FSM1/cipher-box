@@ -159,7 +159,7 @@ use crate::sync::drain::{EngineSeams, owner_scoped_key, published_op_mark};
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::owed_rotation::{OWED_ROTATION_PREFIX, OwedEntry, OwedStep};
+use crate::sync::owed_rotation::{OWED_ROTATION_PREFIX, OwedEntry, OwedRotation, OwedStep};
 use crate::sync::pass::{ScopeLegContext, TickPass};
 use crate::sync::pointer::{POINTER_PAYLOAD_VERSION, PointerFetch, vault_pointer_name};
 use crate::sync::project::{map_kind, project_child_version};
@@ -1312,6 +1312,34 @@ impl From<cipherbox_core::seal::Permission> for Permission {
     }
 }
 
+/// The kind of stop that leaves rotation work owed
+/// ([`Event::RotationWorkOwed`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
+pub enum OwedWorkClass {
+    /// A stall a later pass may clear.
+    Availability,
+    /// A refusal a re-drive reaches again, such as a node the ratchet does not
+    /// reach.
+    Capability,
+    /// A record that failed verification.
+    Trust,
+}
+
+impl OwedWorkClass {
+    /// The class of the verdict a command would answer with.
+    pub(crate) fn of(error: &EngineError) -> Self {
+        match error {
+            EngineError::TrustViolation { .. } => Self::Trust,
+            EngineError::MalformedInput { .. } | EngineError::UnsupportedTarget { .. } => {
+                Self::Capability
+            }
+            _ => Self::Availability,
+        }
+    }
+}
+
 /// The staleness ladder (#33 D4): fresh → reconciling → stale → offline.
 /// Availability staleness keeps cached views usable indefinitely; trust
 /// violations are never staleness.
@@ -2267,6 +2295,9 @@ pub enum Event {
         /// Whether a later pass could clear this — an availability stall —
         /// versus a refusal that a re-drive reaches again.
         retryable: bool,
+        /// What kind of stop this is. A trust stop is a verification failure
+        /// the change cannot finish past.
+        class: OwedWorkClass,
     },
     /// Owed rotation work that can never land was dropped: its cut set never
     /// published, or its recipient left the contact book (ADR 0063 D3). Sent
@@ -2385,11 +2416,13 @@ impl fmt::Debug for Event {
                 scope_root,
                 detail,
                 retryable,
+                class,
             } => f
                 .debug_struct("RotationWorkOwed")
                 .field("scope_root", scope_root)
                 .field("detail", detail)
                 .field("retryable", retryable)
+                .field("class", class)
                 .finish(),
             Self::RotationWorkAbandoned { scope_root, detail } => f
                 .debug_struct("RotationWorkAbandoned")
@@ -3442,6 +3475,23 @@ fn refuse_moving_a_scope_root(
                       session cannot author"
                 .to_owned(),
         });
+    }
+    Ok(())
+}
+
+/// Refuse, retryably, an edit that takes away from the scope it left a folder
+/// whose interior move is owed, at `node` or under it: the move re-seals the
+/// folder into the scope it left, so the edit waits until that lands.
+fn refuse_an_owed_move_under(
+    rendered: &Snapshot,
+    node: NodeId,
+    owed_moves: &[(NodeId, NodeId)],
+) -> Result<(), EngineError> {
+    if owed_moves
+        .iter()
+        .any(|(scope, _)| *scope == node || rendered.is_descendant_of(*scope, node))
+    {
+        return Err(EngineError::rotation_work_owed());
     }
     Ok(())
 }
@@ -6650,6 +6700,7 @@ where {
                 // node by owner capture (CONTEXT.md), and a grantee never
                 // writes a bin.
                 let home = self.write_home(&rendered, node, TargetRole::Node)?;
+                refuse_an_owed_move_under(&rendered, node, &self.owed_moves().await?)?;
                 let to_bin = home == WriteHome::Vault && self.bin_retention_days() > 0;
                 // Both anchors snapshot the target's own sequence for the
                 // conditional-delete rebase rule.
@@ -6666,6 +6717,15 @@ where {
                     return Err(EngineError::RestoreTargetGone);
                 }
                 refuse_outside_vault(&rendered, into)?;
+                let lands_in = scope_of(&rendered, into, &self.relocation_scope_roots());
+                if self
+                    .owed_moves()
+                    .await?
+                    .iter()
+                    .any(|(scope, left)| *scope == node && *left != lands_in)
+                {
+                    return Err(EngineError::rotation_work_owed());
+                }
                 refuse_full_parent(&rendered, into, None, None, &self.authored_scope_roots())?;
                 let base_sequence = rendered.record_sequence(into).unwrap_or(1);
                 let op = Op::restore(
@@ -6732,8 +6792,9 @@ where {
                 let rendered = self.render().await?;
                 let (from_parent, base_sequence, plan) =
                     self.relocation_anchors(&rendered, node, new_parent)?;
-                self.refuse_carrying_an_owed_move(&rendered, node, plan)
-                    .await?;
+                if !plan.is_intra() {
+                    refuse_an_owed_move_under(&rendered, node, &self.owed_moves().await?)?;
+                }
                 refuse_full_parent(
                     &rendered,
                     new_parent,
@@ -6771,8 +6832,9 @@ where {
                 let rendered = self.render().await?;
                 let (from_parent, base_sequence, plan) =
                     self.relocation_anchors(&rendered, node, new_parent)?;
-                self.refuse_carrying_an_owed_move(&rendered, node, plan)
-                    .await?;
+                if !plan.is_intra() {
+                    refuse_an_owed_move_under(&rendered, node, &self.owed_moves().await?)?;
+                }
                 refuse_full_parent(
                     &rendered,
                     new_parent,
@@ -7802,9 +7864,7 @@ where {
                     .entry(node)
                     .await
                     .map_err(EngineError::from_seam)?
-                    .filter(|entry| {
-                        matches!(entry.steps.first(), Some(OwedStep::InteriorMove { .. }))
-                    })
+                    .filter(OwedEntry::owes_interior_move)
                     .ok_or_else(EngineError::rotation_work_owed)?;
                 return Box::pin(self.mint_share(node, share, permission, Some(standing))).await;
             }
@@ -11441,6 +11501,23 @@ where {
             .collect())
     }
 
+    /// The scopes this device owes an interior move at, with the scope each
+    /// folder left. Read through the session's owed record cell, so a command
+    /// sees the entries the pass and other commands wrote.
+    async fn owed_moves(&self) -> Result<Vec<(NodeId, NodeId)>, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let enc_secret = session.enc_subkey();
+        OwedRotation::new(
+            &self.seams.staging_store,
+            BookkeepingSeal::new(enc_secret, &*self.entropy),
+            enc_secret,
+            &self.state.owed_rotation,
+        )
+        .interior_moves()
+        .await
+        .map_err(EngineError::from_seam)
+    }
+
     /// Every scope boundary this session has named: the roots its own grants
     /// minted, the roots a gated descent proved (`install_descendant_scopes` in
     /// [`crate::sync::pass`]), and the roots the walk named without material
@@ -11448,37 +11525,6 @@ where {
     /// set the drain drives, which lists only the scopes it holds a seed pair
     /// for: a boundary the drain cannot author is one a relocation must still
     /// be classified against.
-    /// Refuse, retryably, a relocation that carries a folder whose interior
-    /// move is owed into another scope: the move re-seals the folder into the
-    /// scope it left, so it waits until that lands.
-    async fn refuse_carrying_an_owed_move(
-        &self,
-        rendered: &Snapshot,
-        node: NodeId,
-        plan: RelocationPlan,
-    ) -> Result<(), EngineError> {
-        if plan.is_intra() {
-            return Ok(());
-        }
-        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let keys = self.pass_keys(session)?;
-        let record = self
-            .conversion_pass(session, api, &keys)
-            .owed()
-            .load()
-            .await
-            .map_err(EngineError::from_seam)?;
-        let carried = record.iter().any(|(scope, entry)| {
-            matches!(entry.steps.first(), Some(OwedStep::InteriorMove { .. }))
-                && (*scope == node || rendered.is_descendant_of(*scope, node))
-        });
-        if carried {
-            return Err(EngineError::rotation_work_owed());
-        }
-        Ok(())
-    }
-
     fn relocation_scope_roots(&self) -> Vec<NodeId> {
         let mut roots: BTreeSet<NodeId> = self
             .state
