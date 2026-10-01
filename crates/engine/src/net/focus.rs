@@ -35,6 +35,8 @@ pub(crate) struct FolderRefreshReport {
     pub(crate) changed: bool,
     /// The worst verdict any folder leg earned.
     pub(crate) verdict: RefreshVerdict,
+    /// Whether any node went unanswered, which a worse verdict can hide.
+    pub(crate) unread: bool,
     /// Children a refreshed folder stopped naming — an unlink this device did
     /// not author, which the owner's engine adopts into the bin.
     pub(crate) departed: Vec<UnlinkedChild>,
@@ -43,6 +45,10 @@ pub(crate) struct FolderRefreshReport {
 impl FolderRefreshReport {
     fn fold(&mut self, verdict: RefreshVerdict) {
         self.verdict = self.verdict.worst(verdict);
+        self.unread |= matches!(
+            verdict,
+            RefreshVerdict::Unreachable | RefreshVerdict::Overdue
+        );
     }
 }
 
@@ -108,6 +114,7 @@ where
         let mut report = FolderRefreshReport {
             changed: false,
             verdict: RefreshVerdict::Reconciled,
+            unread: false,
             departed: Vec::new(),
         };
         for folder in folders.iter().rev() {
@@ -210,6 +217,7 @@ where
         let mut report = FolderRefreshReport {
             changed: false,
             verdict: RefreshVerdict::Reconciled,
+            unread: false,
             departed: Vec::new(),
         };
         for file in files {

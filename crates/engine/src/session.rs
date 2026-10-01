@@ -357,7 +357,8 @@ pub(crate) struct SessionState {
     /// The last target a navigation listed the whole vault for and did not
     /// find, with when. Only a walk whose every leg answered records one, and
     /// a route to that target lists nothing again until the stamp is past the
-    /// on-access threshold.
+    /// on-access threshold. A walk the folder bound cut short records one too:
+    /// a walk again would list the same prefix.
     pub(crate) locate_miss: Rc<Cell<Option<(NodeId, UnixMillis)>>>,
     /// The read epoch the same walk proved each of them at, which no seed cache
     /// carries ([`crate::rotation::scope_material`]). Replaced per walk, unlike

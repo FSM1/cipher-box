@@ -174,7 +174,7 @@ pub use crate::sync::drain::{QueueHold, QueueHoldReason};
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
-use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
+use crate::sync::refresh::ManualRefresh;
 use crate::sync::staging::{
     DEAD_LETTER_NOTICES_PREFIX, DroppedVersionDebts, PreservedBounds, PreservedDeadLetter,
     StagedBlocks, read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
@@ -9228,14 +9228,13 @@ where {
             return;
         }
         let settle = self.settle_leg(now);
-        let mut answered = RefreshVerdict::Reconciled;
+        let mut unread = false;
         let root = self.state.snapshot.borrow().root;
         let mut seen = BTreeSet::from([root]);
         let mut level = vec![root];
-        let mut cut_short = false;
         while !level.is_empty() && !self.state.snapshot.borrow().contains(target) {
             let room = MAX_LOCATE_FOLDERS.saturating_sub(seen.len() - 1);
-            let mut next: Vec<NodeId> = {
+            let next: Vec<NodeId> = {
                 let base = self.state.snapshot.borrow();
                 level
                     .iter()
@@ -9243,24 +9242,16 @@ where {
                     .filter(|child| child.kind == NodeKind::Folder)
                     .map(|child| child.id)
                     .filter(|child| seen.insert(*child))
+                    .take(room)
                     .collect()
             };
-            cut_short |= next.len() > room;
-            next.truncate(room);
-            let (_, verdict) = self
+            let (_, missed) = self
                 .navigation_legs(root, next.clone(), NodeKind::Folder, now, &settle)
                 .await;
-            answered = answered.worst(verdict);
+            unread |= missed;
             level = next;
         }
-        // A folder the bound cut, or a level a leg could not read, may hold the
-        // target yet.
-        let complete = !cut_short
-            && !matches!(
-                answered,
-                RefreshVerdict::Unreachable | RefreshVerdict::Overdue
-            );
-        if complete && !self.state.snapshot.borrow().contains(target) {
+        if !unread && !self.state.snapshot.borrow().contains(target) {
             self.state.locate_miss.set(Some((target, now)));
         }
     }
@@ -9307,8 +9298,9 @@ where {
     /// it: a leg holds one scope's read material ([`nodes_in_scope`]). A scope
     /// this session holds no material for leaves its nodes for the tick, and a
     /// scope's own root, which resolves on its own leg, is never read here.
-    /// Answers the nodes a leg attempted, and the worst verdict over them, a
-    /// scope left unread counted unreachable.
+    /// Answers the nodes a leg attempted, and whether any node was left unread:
+    /// a scope with no material, a leg that could not answer, or a scope root
+    /// no walk proved.
     async fn navigation_legs(
         &self,
         root: NodeId,
@@ -9316,14 +9308,14 @@ where {
         kind: NodeKind,
         now: UnixMillis,
         settle: &impl Fn(&[NodeId], FolderRefreshReport),
-    ) -> (Vec<NodeId>, RefreshVerdict) {
+    ) -> (Vec<NodeId>, bool) {
         let mut attempted = Vec::new();
-        let mut verdict = RefreshVerdict::Reconciled;
+        let mut unread = false;
         if nodes.is_empty() {
-            return (attempted, verdict);
+            return (attempted, unread);
         }
         let Some(session) = self.session.as_ref() else {
-            return (attempted, RefreshVerdict::Unreachable);
+            return (attempted, true);
         };
         let proved = self.state.descendant_scope_roots.borrow().clone();
         let unproved = self.state.unproved_scope_roots.borrow().clone();
@@ -9335,6 +9327,8 @@ where {
                 let scope = scope_root_of(&base, node, &scope_roots);
                 if node != scope {
                     by_scope.entry(scope).or_default().push(node);
+                } else if !proved.contains(&node) {
+                    unread = true;
                 }
             }
         }
@@ -9353,7 +9347,7 @@ where {
         };
         for (scope, nodes) in by_scope {
             let Ok(material) = legs.material(scope, self.scope_read_seed(&scope.0)).await else {
-                verdict = verdict.worst(RefreshVerdict::Unreachable);
+                unread = true;
                 continue;
             };
             let leg = FolderRefresh {
@@ -9378,11 +9372,11 @@ where {
                 NodeKind::Folder => leg.run(&nodes).await,
                 NodeKind::File => leg.run_files(&nodes).await,
             };
-            verdict = verdict.worst(report.verdict);
+            unread |= report.unread;
             settle(&nodes, report);
             attempted.extend(nodes);
         }
-        (attempted, verdict)
+        (attempted, unread)
     }
 
     // -----------------------------------------------------------------------
@@ -19383,12 +19377,35 @@ mod focus_access_tests {
         engine.state.locate_miss.get().is_some()
     }
 
-    /// A level the folder bound cut short left folders unlisted, and the target
-    /// may sit under one of them: such a walk records no miss.
+    /// A walk again inside the threshold lists the same bounded prefix, so a
+    /// walk the folder bound cut short records the miss as a full one does.
     #[test]
-    fn a_walk_the_folder_bound_cut_short_records_no_miss() {
-        assert!(records_a_miss_over(MAX_LOCATE_FOLDERS), "a full walk does");
-        assert!(!records_a_miss_over(MAX_LOCATE_FOLDERS + 1));
+    fn a_walk_the_folder_bound_cut_short_records_the_miss() {
+        assert!(records_a_miss_over(MAX_LOCATE_FOLDERS));
+        assert!(records_a_miss_over(MAX_LOCATE_FOLDERS + 1));
+    }
+
+    /// A scope root no walk proved is skipped, and its subtree stays unlisted:
+    /// the walk records no miss over it.
+    #[test]
+    fn a_walk_past_a_scope_root_no_walk_proved_records_no_miss() {
+        let engine = started_engine();
+        let unproved = file_id(0);
+        {
+            let mut base = engine.state.snapshot.borrow_mut();
+            let root = base.root;
+            base.upsert_node(NodeMeta::new(unproved, "shared", NodeKind::Folder));
+            base.link(root, unproved, 1);
+        }
+        engine
+            .state
+            .unproved_scope_roots
+            .borrow_mut()
+            .insert(unproved);
+
+        block_on(engine.set_focus(Some(UNLISTED))).expect("the route resolves");
+
+        assert_eq!(engine.state.locate_miss.get(), None);
     }
 
     #[test]

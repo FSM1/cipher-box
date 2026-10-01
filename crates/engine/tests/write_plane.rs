@@ -8224,6 +8224,54 @@ fn a_walk_a_leg_could_not_finish_records_no_miss() {
     assert_eq!(trail(&engine_b, deep), [photos, ROOT]);
 }
 
+/// A rejected leg outranks an unreachable one in the merged verdict, yet the
+/// unreachable folder is still unread: the walk records no miss, and the next
+/// route lists the vault again at once.
+#[test]
+fn a_walk_with_an_unread_leg_records_no_miss_whatever_else_a_level_rejects() {
+    let DeepCreate {
+        world,
+        blocks,
+        mut engine_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    let unreachable = NodeId([0x31; 16]);
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        child_ref(unreachable.0, "2027", CoreNodeKind::Folder),
+    );
+    world
+        .record_store
+        .fail_get_for(write_name(unreachable).as_str());
+    plant_record(
+        &world.record_store,
+        &blocks,
+        deep,
+        Planted {
+            node_id: deep.0,
+            scope_id: [0xF0; 16],
+            read_key: read_key_of(deep),
+            body: &planted_body(),
+        },
+    );
+    let gone = NodeId([0xEE; 16]);
+    let deep_name = write_name(deep);
+    let route = |engine: &mut Engine<FakeSeamTypes>| {
+        block_on(engine.command(Command::SetFocus { node: Some(gone) })).unwrap();
+    };
+
+    route(&mut engine_b);
+    let listed = world.record_store.get_count(deep_name.as_str());
+    assert!(listed > 0, "the walk reached the level that rejects");
+
+    route(&mut engine_b);
+    assert!(world.record_store.get_count(deep_name.as_str()) > listed);
+}
+
 /// The focus refresh is fail-closed on every binding the child gate holds. Each
 /// planted record is strictly newer and otherwise well-formed; only the bent
 /// binding stops it, and last-known-good stands through all three.
