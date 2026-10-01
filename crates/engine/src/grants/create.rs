@@ -28,6 +28,7 @@ use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as 
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
+use core::cmp::Ordering;
 use core::fmt;
 use zeroize::Zeroizing;
 
@@ -35,6 +36,7 @@ use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_ephemeral, fresh_
 use crate::grants::{SharePointer, TooLong};
 use cipherbox_core::payload::RepointObject;
 
+use crate::facade::NodeId;
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::contact::Contact;
 use crate::grants::{GrantRow, mint_grant_row, name_row};
@@ -47,6 +49,7 @@ use crate::rotation::{
     WriteHistory, converge_subtree, derive_write_name, reseal_at_current_epoch, reseal_scope_root,
 };
 use crate::seams::{Mailbox, SeamError};
+use crate::sync::model::{Link, link_rank};
 use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::IpnsName;
 use std::collections::BTreeSet;
@@ -90,6 +93,12 @@ pub struct GranteeScopePlan<'a> {
     /// each one's ascent link seals under `node_seed(fresh_override_seed,
     /// descendant.scope_id)` (blueprint/engine.md "subtree swept in").
     pub subtree_child_index: &'a [ChildScopeRef],
+    /// The nodes a folder inside the grant links whose winning link
+    /// ([`Snapshot::links_ranked`](crate::sync::model::Snapshot::links_ranked))
+    /// names a parent outside it. Readers resolve each one under that parent,
+    /// so the grant leaves it in the scope it holds and drops the losing ref
+    /// ([`drop_held_refs`]).
+    pub held_outside: &'a [HeldNode],
 }
 
 impl GranteeScopePlan<'_> {
@@ -339,6 +348,16 @@ pub enum CreateGrantError {
         /// The node whose record left the proved epoch.
         node_id: [u8; 16],
     },
+    /// A held node's ref no longer loses to the winner the owner's snapshot
+    /// ranked: another device re-linked it since ([`drop_held_refs`]). A
+    /// refresh clears it. Past the root publish, the grantee root stays and a
+    /// retry after a refresh resumes the move.
+    HeldRefRelinked {
+        /// The node the ref names.
+        node_id: [u8; 16],
+        /// Whether the grantee root had published when the refusal came.
+        root_published: bool,
+    },
     /// Re-sealing an interior node of the granted folder under the fresh
     /// derivation failed, or its CAS publish lost the race. Post-publish: same
     /// partial-commit surface as `InteriorResolve`, re-drivable the same way,
@@ -409,6 +428,7 @@ impl CreateGrantError {
         "interior-resolve-failed",
         "interior-not-converged",
         "interior-epoch-regressed",
+        "held-ref-relinked",
         "interior-publish-failed",
         "descendant-mint-failed",
         "descendant-publish-failed",
@@ -444,7 +464,7 @@ impl CreateGrantError {
             | Self::DescendantPublish { error, .. }
             | Self::ParentPublish(error)
             | Self::VouchScope(error) => error.class(),
-            Self::Mailbox(_) => "availability",
+            Self::Mailbox(_) | Self::HeldRefRelinked { .. } => "availability",
             Self::UnusableRecipientKey
             | Self::RecipientIsTheOwner
             | Self::DisplayNameTooLong(_) => "capability",
@@ -472,6 +492,7 @@ impl CreateGrantError {
             Self::InteriorResolve { .. } => "interior-resolve-failed",
             Self::InteriorNotConverged { .. } => "interior-not-converged",
             Self::InteriorEpochRegressed { .. } => "interior-epoch-regressed",
+            Self::HeldRefRelinked { .. } => "held-ref-relinked",
             Self::InteriorPublish { .. } => "interior-publish-failed",
             Self::DescendantMint { .. } => "descendant-mint-failed",
             Self::DescendantPublish { .. } => "descendant-publish-failed",
@@ -532,12 +553,14 @@ pub trait ScopeRootPromoter {
     /// Returns the children of the body it promoted. That body is the new scope
     /// root's, so its children are the interior the fresh scope now owns: taking
     /// them from the publish rather than from a read of the caller's own binds
-    /// the re-seal to the record this call made current.
+    /// the re-seal to the record this call made current. The promoted body
+    /// drops its refs to `held_outside` ([`drop_held_refs`]).
     async fn promote_scope_root(
         &self,
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
+        held_outside: &[HeldNode],
     ) -> Result<Vec<NodeRef>, RotationPublishError>;
 }
 
@@ -991,9 +1014,19 @@ where
     }
     // The pass runs on the scope this command already proved current, so the
     // parent name is resolved once here and not again inside the pass.
-    let swept = converge_subtree(resolver, publisher, &parent_ref, parent_scope, &folder)
-        .await
-        .map_err(CreateGrantError::Converge)?;
+    // A held node stays outside, so it is not the grant's to prove; the publish
+    // walk drops its ref only while that ref still loses ([`drop_held_refs`]).
+    let held_ids: Vec<[u8; 16]> = grantee.held_outside.iter().map(|held| held.id).collect();
+    let swept = converge_subtree(
+        resolver,
+        publisher,
+        &parent_ref,
+        parent_scope,
+        &folder,
+        &held_ids,
+    )
+    .await
+    .map_err(CreateGrantError::Converge)?;
     // A node the pass could not read is as unproven as one whose convergence
     // publish lost the race: either way the grantee could descend into a node
     // still sealed at an epoch its fresh seed does not reach.
@@ -1195,9 +1228,15 @@ where
     // (dest-first). A folder becoming a scope root is a promotion, not a
     // republish ([`ScopeRootPromoter`]).
     let promoted_children = net
-        .promote_scope_root(&parent_ref, &folder, &grantee_record)
+        .promote_scope_root(&parent_ref, &folder, &grantee_record, grantee.held_outside)
         .await
-        .map_err(CreateGrantError::Publish)?;
+        .map_err(|error| match error {
+            RotationPublishError::NotConverged { node_id } => CreateGrantError::HeldRefRelinked {
+                node_id,
+                root_published: false,
+            },
+            error => CreateGrantError::Publish(error),
+        })?;
 
     let read_scope = GrantedReadScope {
         seed: override_seed.clone(),
@@ -1338,7 +1377,15 @@ where
     // Their records still seal under the read key of the scope the folder left,
     // which no reader of the fresh scope derives and no epoch-1 history link
     // walks back to (blueprint/engine.md "subtree swept in").
-    reseal_granted_interior(net, net, &grantee_record, frontier, &bounds).await?;
+    reseal_granted_interior(
+        net,
+        net,
+        &grantee_record,
+        frontier,
+        &bounds,
+        grantee.held_outside,
+    )
+    .await?;
 
     // Re-key the reparented direct children so each ascent link re-seals under
     // the fresh grantee derivation (see `GranteeScopePlan::subtree_child_index`;
@@ -1447,6 +1494,59 @@ where
     })
 }
 
+/// A node the grant leaves outside, with the winning link the owner's snapshot
+/// ranked for it ([`Snapshot::links_ranked`](crate::sync::model::Snapshot::links_ranked)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldNode {
+    /// The held node's id.
+    pub id: [u8; 16],
+    /// The parent its winning link names, outside the granted folder.
+    pub winner_parent: [u8; 16],
+    /// The link counter of that winning link.
+    pub winner_counter: u64,
+}
+
+/// Drop the refs in `parent`'s `body` to a node in `held_outside`. Each must
+/// still lose to the winning link the snapshot ranked, so dropping it is the
+/// observed repair of that dual-link (blueprint/engine.md rebase table,
+/// "Dual-link"). A ref that no longer loses was re-linked since the snapshot;
+/// dropping it would unlink a live node, so its id is the `Err`. Known limit:
+/// the winner's own ref is taken from the snapshot, not re-read from its
+/// parent, which lies outside the grant.
+pub(crate) fn drop_held_refs(
+    body: &mut ReadBody,
+    parent: [u8; 16],
+    held_outside: &[HeldNode],
+) -> Result<(), [u8; 16]> {
+    let ReadBody::Folder { children, .. } = body else {
+        return Ok(());
+    };
+    for child in children.iter() {
+        if let Some(held) = held_entry(held_outside, child.id) {
+            let published = Link {
+                parent: NodeId(parent),
+                child: NodeId(child.id),
+                link_counter: child.link_counter,
+            };
+            let winner = Link {
+                parent: NodeId(held.winner_parent),
+                link_counter: held.winner_counter,
+                ..published
+            };
+            if link_rank(&winner, &published) != Ordering::Less {
+                return Err(child.id);
+            }
+        }
+    }
+    children.retain(|child| held_entry(held_outside, child.id).is_none());
+    Ok(())
+}
+
+/// The entry `held_outside` holds for `id`, if the grant leaves it outside.
+fn held_entry(held_outside: &[HeldNode], id: [u8; 16]) -> Option<&HeldNode> {
+    held_outside.iter().find(|held| held.id == id)
+}
+
 /// Whether `published` commits exactly the row `minted` mints: the recipient,
 /// the permission, the masked key and the writer pseudonym, not the blinded tag
 /// alone. Preserved unknown fields are ignored — a published entry may carry
@@ -1485,6 +1585,7 @@ async fn reseal_granted_interior<R, P>(
     root: &ResealedScopeRoot,
     frontier: Vec<NodeRef>,
     bounds: &InteriorBounds,
+    held_outside: &[HeldNode],
 ) -> Result<(), CreateGrantError>
 where
     R: SweepResolver + GrantResumeResolver,
@@ -1495,7 +1596,10 @@ where
     while !frontier.is_empty() {
         let mut next = Vec::new();
         for child in &frontier {
-            if !visited.insert(child.node_id) || bounds.stop_at.contains(&child.node_id) {
+            if !visited.insert(child.node_id)
+                || bounds.stop_at.contains(&child.node_id)
+                || held_entry(held_outside, child.node_id).is_some()
+            {
                 continue;
             }
             if let InteriorAdmission::Measured(measured) = &bounds.admits
@@ -1509,7 +1613,13 @@ where
                 .resolve_moving_child(&bounds.source, root, child)
                 .await
             {
-                Ok(MovingChild::Pending(node)) => {
+                Ok(MovingChild::Pending(mut node)) => {
+                    drop_held_refs(&mut node.read_body, child.node_id, held_outside).map_err(
+                        |node_id| CreateGrantError::HeldRefRelinked {
+                            node_id,
+                            root_published: true,
+                        },
+                    )?;
                     // Release-active (security rule 8). The read admits any
                     // record at or below the scope's epoch, so a record that
                     // regressed since the pass would travel into the grantee's
@@ -2283,6 +2393,7 @@ mod tests {
             parent: &ChildScopeRef,
             _node: &NodeRef,
             record: &ResealedScopeRoot,
+            _held_outside: &[HeldNode],
         ) -> Result<Vec<NodeRef>, RotationPublishError> {
             if parent.ipns_name != self.current_parent_name() {
                 return Err(RotationPublishError::Rejected);
@@ -2394,6 +2505,7 @@ mod tests {
             write_cut: None,
             pointer_read_key: &GRANTEE_POINTER_READ_KEY,
             subtree_child_index: &[],
+            held_outside: &[],
         };
         let recipient_contact = contact_for(recipient_pub);
 
@@ -2570,6 +2682,7 @@ mod tests {
                 write_cut,
                 pointer_read_key: &GRANTEE_POINTER_READ_KEY,
                 subtree_child_index: subtree,
+                held_outside: &[],
             };
             let recipient_contact = contact_for(recipient_pub);
 
@@ -2665,6 +2778,7 @@ mod tests {
             write_cut: None,
             pointer_read_key: &GRANTEE_POINTER_READ_KEY,
             subtree_child_index: &[],
+            held_outside: &[],
         };
         let contact = contact_for(recipient_enc().public());
         let recorder = RecordingMailbox::default();

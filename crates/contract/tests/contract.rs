@@ -1431,6 +1431,7 @@ impl ScopeRootPromoter for LocalNet {
         _parent: &ChildScopeRef,
         _node: &NodeRef,
         _record: &ResealedScopeRoot,
+        _held_outside: &[cipherbox_engine::grants::HeldNode],
     ) -> Result<Vec<NodeRef>, RotationPublishError> {
         Ok(Vec::new())
     }
@@ -1552,6 +1553,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         write_cut: None,
         pointer_read_key: &grantee_pointer_read_key,
         subtree_child_index: &[],
+        held_outside: &[],
     };
     let recipient = GrantRecipient {
         contact: &recipient_contact,

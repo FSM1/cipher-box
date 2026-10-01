@@ -967,6 +967,7 @@ fn create_family() -> RejectFamily {
         write_cut: None,
         pointer_read_key: &POINTER_READ_KEY,
         subtree_child_index: &[],
+        held_outside: &[],
     };
     let name = derive_write_name(&write_scope_seed, &INVITE_SCOPE);
 

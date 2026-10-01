@@ -57,8 +57,8 @@ pub use contact_store::{
 };
 pub use create::{
     ConvergedSubtree, CreateGrantError, CreateGrantOutcome, GrantRecipient, GrantResumeResolver,
-    GrantSubtree, GrantedReadScope, GranteeScopePlan, InteriorRecord, InteriorResealer, MintNet,
-    MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, PromotedSubtree,
+    GrantSubtree, GrantedReadScope, GranteeScopePlan, HeldNode, InteriorRecord, InteriorResealer,
+    MintNet, MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, PromotedSubtree,
     ScopePointerVoucher, ScopeRootPromoter, converge_grant_subtree, create_grant,
     mint_grantee_scope, post_share_pointer, post_share_pointer_at, resume_grantee_scope,
 };

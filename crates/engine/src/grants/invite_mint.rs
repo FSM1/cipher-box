@@ -505,6 +505,7 @@ mod tests {
             _parent: &ChildScopeRef,
             _node: &NodeRef,
             record: &ResealedScopeRoot,
+            _held_outside: &[crate::grants::HeldNode],
         ) -> Result<Vec<NodeRef>, RotationPublishError> {
             self.publish_scope_root(record).await?;
             Ok(self
@@ -616,6 +617,7 @@ mod tests {
                 write_cut: None,
                 pointer_read_key: &POINTER_READ_KEY,
                 subtree_child_index: &[],
+                held_outside: &[],
             };
             let history = parent_history();
             let override_seed = Zeroizing::new(OVERRIDE_SEED);

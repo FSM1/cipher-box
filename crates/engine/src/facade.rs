@@ -79,7 +79,7 @@ use crate::grants::received_status::{grafted_root_name, live_permission};
 use crate::grants::{
     BoundContact, CLAIM_KEY_LEN, ClaimOutcome, CommittedScope, Contact, ContactStore,
     ContactStoreError, ConvertedClaim, CreateGrantError, DEFAULT_ADMISSION_CAP,
-    DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim,
+    DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim, HeldNode,
     InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan, LinkHold,
     LinkSource, LinkSources, LinkTerms, MAX_ADMISSION_CAP, MintedInviteLink, OwnerAuthority,
     OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShare, ReceivedShareStore,
@@ -2837,6 +2837,7 @@ impl EngineError {
             CreateGrantError::InteriorPublish { error, .. }
             | CreateGrantError::DescendantPublish { error, .. }
             | CreateGrantError::ParentPublish(error) => *error != RotationPublishError::Rejected,
+            CreateGrantError::HeldRefRelinked { root_published, .. } => *root_published,
             CreateGrantError::Converge(_)
             | CreateGrantError::SubtreeNotConverged { .. }
             | CreateGrantError::SubtreeBoundaryDiverged { .. }
@@ -2877,6 +2878,10 @@ impl EngineError {
                 message: e.to_string(),
             },
             CreateGrantError::Publish(e) if e.is_retryable() => EngineError::Seam {
+                message: e.to_string(),
+            },
+            // A stale view of an honest re-link: a refresh clears it.
+            e @ CreateGrantError::HeldRefRelinked { .. } => EngineError::Seam {
                 message: e.to_string(),
             },
             CreateGrantError::Resume(reason) if reason != ResolveFailure::Rejected => {
@@ -4172,6 +4177,39 @@ fn subtree_child_scopes(
         }
     }
     Ok(inside)
+}
+
+/// The nodes a folder inside `node` links whose winning chain reaches the vault
+/// root without passing `node` ([`GranteeScopePlan::held_outside`]). A chain
+/// that cycles or ends short proves nothing, so its node stays inside.
+fn held_outside(rendered: &Snapshot, node: NodeId) -> Vec<HeldNode> {
+    let inside = |id: NodeId| id == node || rendered.is_descendant_of(id, node);
+    // A child with one link from inside is inside, so only a dual-linked child
+    // pays for the ancestor walks.
+    let mut link_count: BTreeMap<NodeId, u32> = BTreeMap::new();
+    for link in rendered.links() {
+        *link_count.entry(link.child).or_default() += 1;
+    }
+    let mut held: Vec<NodeId> = rendered
+        .links()
+        .iter()
+        .filter(|link| link_count[&link.child] > 1)
+        .filter(|link| inside(link.parent) && !inside(link.child))
+        .filter(|link| rendered.is_descendant_of(link.child, rendered.root))
+        .map(|link| link.child)
+        .collect();
+    held.sort_unstable();
+    held.dedup();
+    held.into_iter()
+        .filter_map(|child| {
+            let winner = rendered.winning_link(child)?;
+            Some(HeldNode {
+                id: child.0,
+                winner_parent: winner.parent.0,
+                winner_counter: winner.link_counter,
+            })
+        })
+        .collect()
 }
 
 /// The published grant blobs of a gated scope root, as the accept flow's
@@ -7527,6 +7565,7 @@ where {
         // this label, so a link minted past it would be one nobody can claim.
         let display_name = share_display_name(&rendered, node)?;
         let subtree = subtree_child_scopes(&rendered, node, &current.direct_child_scope_index)?;
+        let held = held_outside(&rendered, node);
 
         let pointer_read_key = session.pointer_read_key(&node.0);
         let pseudonym_signer = session.owner_writer_pseudonym_signer(&node.0);
@@ -7550,6 +7589,7 @@ where {
             write_cut: granted_write_scope_seed.as_deref(),
             pointer_read_key: pointer_read_key.as_bytes(),
             subtree_child_index: &subtree,
+            held_outside: &held,
         };
         let owner = OwnerGrantKeys {
             enc_secret: session.enc_subkey(),
@@ -11631,6 +11671,47 @@ mod tests {
             sole_holder(&contacts, &[8; SECRET_LEN]).map(|contact| contact.identity_pk.clone()),
             Some(vec![3; IDENTITY_PUBLIC_LEN])
         );
+    }
+
+    /// A link that loses the rank to a folder outside the grant is held. A
+    /// cycle or a self ref that outranks a node's inside link proves no chain
+    /// to the vault root, so the node stays inside.
+    #[test]
+    fn only_a_winning_chain_to_the_vault_root_holds_a_node_outside() {
+        let (root, granted, a, x, f, keep) = (
+            NodeId([1; 16]),
+            NodeId([2; 16]),
+            NodeId([3; 16]),
+            NodeId([4; 16]),
+            NodeId([5; 16]),
+            NodeId([6; 16]),
+        );
+        let tree = || {
+            let mut snap = Snapshot::new(root);
+            for (parent, child) in [(root, granted), (granted, a), (a, x), (x, f), (root, keep)] {
+                snap.link(parent, child, 1);
+            }
+            snap
+        };
+
+        let mut held = tree();
+        held.link(keep, x, 2);
+        assert_eq!(
+            held_outside(&held, granted),
+            vec![HeldNode {
+                id: x.0,
+                winner_parent: keep.0,
+                winner_counter: 2,
+            }]
+        );
+
+        let mut cycle = tree();
+        cycle.link(x, a, 5);
+        assert!(held_outside(&cycle, granted).is_empty());
+
+        let mut self_ref = tree();
+        self_ref.link(a, a, 5);
+        assert!(held_outside(&self_ref, granted).is_empty());
     }
 
     /// The proved-descendant set decides the own-plane floor namespace, so the

@@ -576,7 +576,7 @@ where
             scope_id: scope.scope_id,
             reason,
         })?;
-    walk_and_converge(resolver, publisher, &scope_ref, swept, None).await
+    walk_and_converge(resolver, publisher, &scope_ref, swept, None, &[]).await
 }
 
 /// Converge just the subtree rooted at `node` inside `scope` — grant creation's
@@ -590,18 +590,22 @@ where
 /// passes them in: grant creation must resolve the parent itself, because its
 /// resume probe reads the scope source only that resolve parks, and one command
 /// owes the parent name one resolve.
+///
+/// The walk neither reads nor descends into a node in `stop_at`: a node the
+/// grant leaves in another scope is not the grant's to prove.
 pub async fn converge_subtree<R, P>(
     resolver: &R,
     publisher: &P,
     scope: &ChildScopeRef,
     swept: SweptScope,
     node: &NodeRef,
+    stop_at: &[[u8; 16]],
 ) -> Result<SweepOutcome, SweepError>
 where
     R: SweepResolver,
     P: SweepPublisher,
 {
-    walk_and_converge(resolver, publisher, scope, swept, Some(node)).await
+    walk_and_converge(resolver, publisher, scope, swept, Some(node), stop_at).await
 }
 
 /// The one pass both entry points run over a scope root already proved current:
@@ -613,6 +617,7 @@ async fn walk_and_converge<R, P>(
     scope_ref: &ChildScopeRef,
     swept: SweptScope,
     from: Option<&NodeRef>,
+    stop_at: &[[u8; 16]],
 ) -> Result<SweepOutcome, SweepError>
 where
     R: SweepResolver,
@@ -650,7 +655,7 @@ where
     while !frontier.is_empty() {
         let mut next: Vec<NodeRef> = Vec::new();
         for child in &frontier {
-            if !visited.insert(child.node_id) {
+            if !visited.insert(child.node_id) || stop_at.contains(&child.node_id) {
                 continue;
             }
             if boundaries.contains(&child.node_id) {

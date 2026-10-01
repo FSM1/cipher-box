@@ -74,7 +74,7 @@ use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor};
 use crate::grants::child_index::canonicalize;
-use crate::grants::create::ScopePointerVoucher;
+use crate::grants::create::{HeldNode, ScopePointerVoucher, drop_held_refs};
 use crate::grants::{
     GrantResumeResolver, InteriorRecord, InteriorResealer, MovingChild, PromotedScopeRoot,
     ScopeRootPromoter, UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row,
@@ -2458,6 +2458,7 @@ where
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
+        held_outside: &[HeldNode],
     ) -> Result<Vec<NodeRef>, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         // The interior move this promotion heads seals under the same seed.
@@ -2468,11 +2469,13 @@ where
         // A node that already answers as a scope root is not a promotion, and
         // one whose record does not gate is refused rather than republished
         // under a body this pass invented ([`ScopeRootPromoter`]).
-        let current = match self.resolve_child(parent, node).await {
+        let mut current = match self.resolve_child(parent, node).await {
             Ok(SweptChild::Interior(current)) => current,
             Ok(SweptChild::ScopeRoot(_)) => return Err(RotationPublishError::Rejected),
             Err(failure) => return Err(promote_verdict(failure)),
         };
+        drop_held_refs(&mut current.read_body, node.node_id, held_outside)
+            .map_err(|node_id| RotationPublishError::NotConverged { node_id })?;
         let children = body_children(&current.read_body);
         let base = RepublishBase {
             read_body: current.read_body,
@@ -12996,12 +12999,20 @@ mod tests {
     fn staged_swept_scope(
         node_epoch: u64,
     ) -> (Harness<InMemoryRecordStore>, ChildScopeRef, [u8; 16]) {
+        staged_swept_scope_at(node_epoch, 1)
+    }
+
+    /// [`staged_swept_scope`] with the node's record at `sequence`.
+    fn staged_swept_scope_at(
+        node_epoch: u64,
+        sequence: u64,
+    ) -> (Harness<InMemoryRecordStore>, ChildScopeRef, [u8; 16]) {
         let node_id = [0x01; 16];
         let (node_name, node_block) = interior_record(node_id, node_epoch, Vec::new());
         let root = swept_root(vec![body_ref(node_id, &node_name)], &[]);
         let harness = Harness::plain();
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-        harness.stage_node(node_id, &node_name, &node_block);
+        harness.stage_node_at(node_id, &node_name, &node_block, sequence);
         (harness, child_ref(SCOPE, &root), node_id)
     }
 
@@ -13642,7 +13653,7 @@ mod tests {
 
         let lease = floor::acquire_write_epoch_lease(&node_id).expect("the scope starts free");
         assert_eq!(
-            block_on(net.promote_scope_root(&scope, &node, &record)),
+            block_on(net.promote_scope_root(&scope, &node, &record, &[])),
             Err(RotationPublishError::NotPublished),
         );
         assert_eq!(
@@ -13651,6 +13662,53 @@ mod tests {
             "and nothing was signed at the promoted name"
         );
         drop(lease);
+    }
+
+    /// A floor store that keeps no sequence-floor raise, so a publish has only
+    /// the CAS basis its caller passes.
+    struct UnkeptSequenceFloors {
+        inner: InMemoryFloorStore,
+    }
+
+    impl FloorStore for UnkeptSequenceFloors {
+        async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.epoch_floor(key).await
+        }
+
+        async fn raise_epoch_floor(&self, key: &[u8], epoch: u64) -> SeamResult<u64> {
+            self.inner.raise_epoch_floor(key, epoch).await
+        }
+
+        async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.sequence_floor(ipns_name).await
+        }
+
+        async fn raise_sequence_floor(&self, _ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+            Ok(sequence)
+        }
+
+        async fn clear(&self) -> SeamResult<()> {
+            self.inner.clear().await
+        }
+    }
+
+    /// A promotion signs one above the sequence of the record it read, with no
+    /// help from the sequence floor.
+    #[test]
+    fn a_promotion_lands_above_the_record_it_read() {
+        let (harness, scope, node_id) = staged_swept_scope_at(OWNER_ROOT_EPOCH, 7);
+        let floors = UnkeptSequenceFloors {
+            inner: harness.floors.clone(),
+        };
+        let net = net_over(&harness, &floors);
+        let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        let node = swept.children[0].clone();
+        assert_eq!(node.node_id, node_id);
+        let name = scope_name(&node.ipns_name).expect("a valid name");
+
+        block_on(net.promote_scope_root(&scope, &node, &promoted(&node), &[]))
+            .expect("the promotion lands");
+        assert_eq!(sequence_at(&harness, &name), Some(8));
     }
 
     /// The node id of the folder a grant promotes to a scope root — the scope
