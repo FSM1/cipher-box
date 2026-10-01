@@ -16,12 +16,12 @@ use std::collections::BTreeMap;
 
 use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::hex::lower as hex_lower;
-use cipherbox_engine::RelayedAnswerRefused;
 use cipherbox_engine::content::{ByoKind, DagError, ProviderError};
 use cipherbox_engine::entropy::EntropyError;
 use cipherbox_engine::gate::{GateRejection, GateStage, RejectionReason};
 use cipherbox_engine::grants::InviteFragment;
 use cipherbox_engine::grants::accept::TooLong;
+use cipherbox_engine::grants::conversion::ConversionRefusal;
 use cipherbox_engine::grants::{
     AbuseEvent, AuthorityViolation, CreateGrantError, GrantEditError, InviteError,
 };
@@ -36,6 +36,7 @@ use cipherbox_engine::settings::{PlacementRefusal, SettingsRefusal};
 use cipherbox_engine::testkit::checks::{
     InviteFragmentVector, invite_fragment_accept, invite_fragment_owner, reject_families,
 };
+use cipherbox_engine::{MalformedDeviceField, NameError, RelayedAnswerRefused};
 use reject_corpus::Corpus;
 
 const MANIFEST: &str = include_str!("../kat/checks/manifest.json");
@@ -131,7 +132,7 @@ fn every_class_is_an_axis_or_a_delegated_label() {
 /// leaves a reject vector unable to say where it came from — which is why a
 /// variant that means another surface's check delegates to it rather than
 /// repeating the string.
-fn surfaces() -> [(&'static str, &'static [&'static str]); 21] {
+fn surfaces() -> [(&'static str, &'static [&'static str]); 25] {
     [
         ("core-trust", TrustViolation::CHECKS),
         ("core-malformed", Malformed::CHECKS),
@@ -154,6 +155,10 @@ fn surfaces() -> [(&'static str, &'static [&'static str]); 21] {
         ("owner_entry", AbuseEvent::CHECKS),
         ("placement", PlacementRefusal::CHECKS),
         ("provider", ProviderError::CHECKS),
+        ("node_name", NameError::CHECKS),
+        ("defaults", DefaultsReason::CHECKS),
+        ("device_field", MalformedDeviceField::CHECKS),
+        ("conversion", ConversionRefusal::CHECKS),
     ]
 }
 
@@ -471,6 +476,157 @@ fn the_create_check_surface_matches_the_variants_in_order() {
     let (owned, delegated) = split(&named, CreateGrantError::CHECKS);
     assert_eq!(owned, CreateGrantError::CHECKS);
     assert_eq!(delegated, [EntropyError::CHECKS[0]]);
+}
+
+#[test]
+fn the_node_name_check_surface_matches_the_variants_in_order() {
+    let variants = [
+        NameError::Empty,
+        NameError::TooLong,
+        NameError::DotEntry,
+        NameError::Separator,
+        NameError::Control,
+        NameError::DeceptiveCharacter,
+        NameError::ReservedCharacter,
+        NameError::TrailingDotOrSpace,
+        NameError::ReservedDevice,
+        NameError::PlatformJunk,
+    ];
+    let named = variants.map(NameError::check);
+    assert_eq!(named, NameError::CHECKS);
+    let classes = variants.map(NameError::class);
+    assert_eq!(
+        classes,
+        [
+            "trust",
+            "over-cap",
+            "trust",
+            "trust",
+            "trust",
+            "trust",
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+        ]
+    );
+}
+
+#[test]
+fn the_defaults_check_surface_matches_the_variants_in_order() {
+    let variants = [
+        DefaultsReason::UnprovenFirstRun,
+        DefaultsReason::Suppressed,
+        DefaultsReason::StrandedMint,
+        DefaultsReason::RolledBack {
+            floor: 5,
+            sequence: 4,
+        },
+        DefaultsReason::RevisionRolledBack {
+            floor: 5,
+            revision: 4,
+        },
+        DefaultsReason::Expired,
+        DefaultsReason::TimedOut,
+        DefaultsReason::Unreadable,
+        DefaultsReason::FloorUnreadable,
+    ];
+    let named = variants.map(DefaultsReason::check);
+    assert_eq!(named, DefaultsReason::CHECKS);
+    let verdicts: Vec<&str> = variants
+        .into_iter()
+        .filter(|reason| reason.class() == "trust")
+        .map(DefaultsReason::check)
+        .collect();
+    assert_eq!(
+        verdicts,
+        ["rolled-back", "revision-rolled-back", "unreadable"]
+    );
+    assert!(
+        variants
+            .iter()
+            .all(|reason| matches!(reason.class(), "trust" | "availability"))
+    );
+}
+
+#[test]
+fn the_device_field_check_surface_matches_the_variants_in_order() {
+    let variants = [
+        MalformedDeviceField::DevicePublicKeyNotLowercaseHex,
+        MalformedDeviceField::EphemeralKeyNotAPoint,
+        MalformedDeviceField::AccountIdNotNewlineFree,
+        MalformedDeviceField::RequestIdNotNewlineFree,
+        MalformedDeviceField::IdentityTokenOutOfBounds,
+        MalformedDeviceField::DeviceLabelTooLong,
+        MalformedDeviceField::DeviceIdNotPathSafe,
+        MalformedDeviceField::DeviceSignatureNotLowercaseHex,
+        MalformedDeviceField::FactorSealScalarOutsideGroup,
+        MalformedDeviceField::RendezvousScalarOutsideGroup,
+        MalformedDeviceField::DenialSealsNothing,
+        MalformedDeviceField::SealedFactorNotCanonicalBase64,
+        MalformedDeviceField::SealedFactorUnderEnvelopeFloor,
+        MalformedDeviceField::SealedFactorOverCeiling,
+    ];
+    let named = variants.map(MalformedDeviceField::check);
+    assert_eq!(named, MalformedDeviceField::CHECKS);
+    let classes = variants.map(MalformedDeviceField::class);
+    assert_eq!(
+        classes,
+        [
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+            "over-cap",
+            "over-cap",
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+            "capability",
+            "over-cap",
+        ]
+    );
+    for field in variants {
+        assert_eq!(field.to_string(), field.check());
+    }
+}
+
+/// Pins every name the conversion record decodes, the two delegated to the
+/// invite surface included.
+#[test]
+fn the_conversion_check_surface_matches_the_variants_in_order() {
+    let variants = [
+        ConversionRefusal::GrantSetFull,
+        ConversionRefusal::AdmissionCapReached,
+        ConversionRefusal::ContactBookFull,
+        ConversionRefusal::RecipientKeyChanged,
+    ];
+    let named = variants.map(ConversionRefusal::check);
+    assert_eq!(
+        named,
+        [
+            "grant-set-full",
+            "link-admission-cap-reached",
+            "contact-book-full",
+            "claim-recipient-key-changed",
+        ]
+    );
+    let (owned, delegated) = split(&named, ConversionRefusal::CHECKS);
+    assert_eq!(owned, ConversionRefusal::CHECKS);
+    assert_eq!(
+        delegated,
+        [
+            InviteError::GrantSetFull.check(),
+            InviteError::AdmissionCapReached.check(),
+        ]
+    );
+    assert_eq!(
+        variants.map(ConversionRefusal::class),
+        ["over-cap", "over-cap", "over-cap", "capability"]
+    );
 }
 
 // --- invite fragment bytes ---------------------------------------------------

@@ -8,9 +8,10 @@
 //!
 //! Origin eviction is all-or-nothing (Storage Standard §7), so a read cache
 //! that grows to fill the quota takes the op queue and every staged byte with
-//! it. The cache is therefore the one consumer that gets a ceiling, reserved
-//! off headroom before the staging fraction; the op queue, snapshot cache, and
-//! floors stay demand-driven with first claim on what the fractions leave.
+//! it. The cache is therefore the one consumer that gets a ceiling; it comes
+//! off headroom before the staging fraction only once a read cache is built
+//! (ADR 0044 D7). The op queue, snapshot cache, and floors stay demand-driven
+//! with first claim on what the fractions leave.
 
 /// The platform-fixed caps and fractions the split is computed from.
 ///
@@ -20,7 +21,7 @@
 pub struct StoragePlatform {
     /// Hard ceiling on the staging budget however large headroom is.
     pub staging_cap_bytes: u64,
-    /// Percent of post-reservation headroom the staging budget may take.
+    /// Percent of headroom the staging budget may take.
     pub staging_percent: u32,
     /// Hard ceiling on the read cache's reservation.
     pub cache_cap_bytes: u64,
@@ -33,7 +34,7 @@ const MIB: u64 = 1 << 20;
 
 impl StoragePlatform {
     /// Browser origin storage: a single quota shared by every consumer, so the
-    /// staging fraction is the larger half of what the cache reservation leaves.
+    /// staging fraction is half of it.
     pub const WEB: Self = Self {
         staging_cap_bytes: GIB,
         staging_percent: 50,
@@ -70,8 +71,7 @@ pub struct StoragePolicy {
     /// Staged upload bytes ceiling: past it new uploads fail fast, while
     /// metadata ops queue unbounded (#33 D6).
     pub staging_budget_bytes: u64,
-    /// The sealed-block read cache's ceiling, reserved off headroom before the
-    /// staging fraction and enforced by the cache itself.
+    /// The sealed-block read cache's ceiling, enforced by the cache itself.
     pub read_cache_ceiling_bytes: u64,
     /// The platform's hard staging cap this split was computed under. Carried so
     /// a refused write can say *which* limit it hit — the platform ceiling this
@@ -89,13 +89,11 @@ impl StoragePolicy {
     /// honestly gets a small budget and an honest over-budget rejection,
     /// rather than a promised ceiling the host cannot honour.
     pub fn measured(platform: StoragePlatform, headroom_bytes: u64) -> Self {
-        let read_cache_ceiling_bytes =
-            percent_of(headroom_bytes, platform.cache_percent).min(platform.cache_cap_bytes);
-        let stageable = headroom_bytes.saturating_sub(read_cache_ceiling_bytes);
         Self {
-            staging_budget_bytes: percent_of(stageable, platform.staging_percent)
+            staging_budget_bytes: percent_of(headroom_bytes, platform.staging_percent)
                 .min(platform.staging_cap_bytes),
-            read_cache_ceiling_bytes,
+            read_cache_ceiling_bytes: percent_of(headroom_bytes, platform.cache_percent)
+                .min(platform.cache_cap_bytes),
             staging_cap_bytes: platform.staging_cap_bytes,
             headroom: Headroom::Measured,
         }
@@ -164,28 +162,31 @@ mod tests {
     }
 
     #[test]
-    fn the_cache_reservation_comes_off_headroom_before_the_staging_fraction() {
-        // 2 GiB headroom: 10% reserves 204.8 MiB, and staging takes half of
-        // what is left rather than half of the whole.
+    fn headroom_is_unreduced_while_no_read_cache_exists() {
+        // 2 GiB headroom: the ceiling is computed, but staging takes half of
+        // the whole headroom, so the web cap is reached exactly.
         let headroom = 2 * GIB;
         let policy = StoragePolicy::measured(StoragePlatform::WEB, headroom);
         assert_eq!(policy.read_cache_ceiling_bytes, headroom / 10);
         assert_eq!(
             policy.staging_budget_bytes,
-            (headroom - headroom / 10) / 2,
-            "the fraction applies to post-reservation headroom"
+            headroom / 2,
+            "no read-cache reservation comes off headroom"
         );
-        assert!(
-            policy.staging_budget_bytes < StoragePlatform::WEB.staging_cap_bytes,
-            "2 GiB of headroom no longer reaches the 1 GiB cap"
+        assert_eq!(
+            policy.staging_budget_bytes,
+            StoragePlatform::WEB.staging_cap_bytes
         );
+
+        let desktop = StoragePolicy::measured(StoragePlatform::DESKTOP, 8 * GIB);
+        assert_eq!(desktop.staging_budget_bytes, 2 * GIB);
     }
 
     #[test]
     fn a_tiny_headroom_yields_a_tiny_budget_and_never_floors_up() {
         let policy = StoragePolicy::measured(StoragePlatform::WEB, 1000);
         assert_eq!(policy.read_cache_ceiling_bytes, 100);
-        assert_eq!(policy.staging_budget_bytes, 450);
+        assert_eq!(policy.staging_budget_bytes, 500);
     }
 
     #[test]

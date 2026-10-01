@@ -85,6 +85,20 @@ pub enum DefaultsReason {
 }
 
 impl DefaultsReason {
+    /// Every defaults reason, in declaration order — the surface
+    /// `crates/engine/tests/kat_checks.rs` pins (see the crate header).
+    pub const CHECKS: &'static [&'static str] = &[
+        "unproven-first-run",
+        "suppressed",
+        "stranded-mint",
+        "rolled-back",
+        "revision-rolled-back",
+        "expired",
+        "timed-out",
+        "unreadable",
+        "floor-unreadable",
+    ];
+
     /// The stable check name a host renders, carrying no record figures — the
     /// floors and sequences the data-carrying variants hold are this device's
     /// own state, and a host has no use for them.
@@ -103,9 +117,21 @@ impl DefaultsReason {
         }
     }
 
+    /// The class label used in reject vectors: `trust` for a verdict,
+    /// `availability` otherwise.
+    #[must_use]
+    pub fn class(self) -> &'static str {
+        if self.is_verdict() {
+            "trust"
+        } else {
+            "availability"
+        }
+    }
+
     /// Whether the load refused bytes the plane actually served, rather than
     /// failing to reach it (blueprint/engine.md "Bin index record"). A caller
     /// that retries on availability must not retry on a verdict.
+    #[must_use]
     pub(crate) fn is_verdict(self) -> bool {
         match self {
             Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => true,

@@ -30,7 +30,7 @@
   hook" sections, and the `CONTEXT.md` "Manual refresh", "Sync timing profile", "Storage policy",
   "Focus window" and "Mailbox" terms
 - **Implemented by:** FSM1/cipher-box#878 (the storage policy, D6 to D8, with the cache
-  reservation of D7 made unconditional; the conditional form is not landed),
+  reservation of D7 made unconditional), FSM1/cipher-box#2137 (the conditional form of D7),
   FSM1/cipher-box#1212 (refresh forcing and the tick without jitter, D1 to D3),
   FSM1/cipher-box#1409 (the desktop headroom measurement, D7 and D8) and FSM1/cipher-box#1501
   (the mailbox transport and the harness, D4 and D5).
@@ -173,9 +173,7 @@ carries the platform cap beside the budget, so a refusal can say whether the pla
 device's headroom refused the write. Decided on 2026-07-27 in FSM1/cipher-box#829 and on
 2026-07-28 in FSM1/cipher-box#844 (section 2 for the conditional reservation).
 FSM1/cipher-box#878, merged six hours later, made the subtraction unconditional and gave no reason.
-`blueprint/engine.md` "Storage policy", `CONTEXT.md` "Storage policy" and
-`StoragePolicy::measured` lag this decision (consequence 9, E3). The code fix folds into the open
-read-cache issue FSM1/cipher-box#831.
+`StoragePolicy::measured` carries D7 since FSM1/cipher-box#2137.
 
 **D8 — A host that cannot measure headroom is unmeasurable, not full.** When the host has no
 headroom figure, the policy is the unmeasured policy: zero budgets, because inventing a figure is
@@ -264,21 +262,20 @@ must not. The tick already refreshes the focus window, and the stale hit adds th
 
 ## Consequences
 
-1. **`blueprint/engine.md` already carries D1 to D4, D6 and D8.** The "Module map" states that
+1. **`blueprint/engine.md` already carries D1 to D4 and D6 to D8.** The "Module map" states that
    the mailbox runs over the `Mailbox` the API client implements. The "Host seams" table has no
    `Mailbox` and no `RefreshHintSource` row, and its `Scheduler` row has no jitter; the note
    "`Mailbox` is not a host seam" states D4. The "Sync core" section states the 30 s tick,
    `Command::ManualRefresh`, the sync timing profile without the budget and the storage policy
    bullet with the unmeasurable state. The "Open edges" section routes the push overlay through
-   the command. It does not carry D7: its "Storage policy" bullet reserves the cache ceiling
-   unconditionally (consequence 9). The blueprint does not state the D7 formula, caps or
-   fractions; they live in `crates/engine/src/storage_policy.rs` (`StoragePlatform::WEB`,
-   `StoragePlatform::DESKTOP`, `StoragePolicy::measured`).
+   the command. Its "Storage policy" bullet carries D7 (consequence 9). The blueprint does not
+   state the D7 formula, caps or fractions; they live in `crates/engine/src/storage_policy.rs`
+   (`StoragePlatform::WEB`, `StoragePlatform::DESKTOP`, `StoragePolicy::measured`).
 
 2. **`blueprint/web-client.md` already carries D1, D2 and D4.** The "Browser seams" table has no
    `Mailbox` and no `RefreshHintSource` row, and its `Scheduler` row says that every wake-relevant
    transition forces a pass. The "UI state law" section states D2. The "Open edges" section routes
-   the push overlay through the command. Consequence 8 names the one row that lags.
+   the push overlay through the command. Consequence 8 records the reword.
 
 3. **`blueprint/desktop.md` already carries D4 and most of D1.** The "Engine wiring" table has no
    `Mailbox` and no `RefreshHintSource` row. The "Freshness — the desktop trigger source" section
@@ -289,13 +286,12 @@ must not. The tick already refreshes the focus window, and the stale hit adds th
 4. **`blueprint/testing.md` already carries D5.** The "crates/engine — seam fakes and the
    simulation harness" section names "a mailbox hub the fake HTTP serves the API's mailbox routes
    from". The "The DX hook" section keeps nocache manual refresh as the forcing path between
-   clients. Consequence 8 names the one bullet that lags.
+   clients. Consequence 8 records the reword.
 
-5. **`CONTEXT.md` already carries D2, D6 and D8.** The "Manual refresh" term states the forced
+5. **`CONTEXT.md` already carries D2 and D6 to D8.** The "Manual refresh" term states the forced
    nocache pass, the coalescing and the two failure verdicts. The "Sync timing profile" term
-   excludes the measured byte count. The "Storage policy" term states the split and the
-   unmeasured policy, but it reserves the cache ceiling unconditionally, so it does not carry D7
-   (consequence 9).
+   excludes the measured byte count. The "Storage policy" term states the split, the unmeasured
+   policy and the conditional reservation of D7 (consequence 9).
 
 6. **This ADR supersedes `#33` D1, D2 and D3 where they conflict, and the budget clause of D6.**
    D1 now reads: refresh is pull-only; a forced pass goes through `Command::ManualRefresh`, and a
@@ -328,8 +324,7 @@ must not. The tick already refreshes the focus window, and the stale hit adds th
    headroom before the staging fraction only once a sealed-block read cache is built; until then,
    headroom is unreduced (ADR 0044)". In `CONTEXT.md` "Storage policy", "the read-cache ceiling
    reserved off headroom before the staging fraction" becomes "the read-cache ceiling, reserved
-   off headroom before the staging fraction once a read cache exists". The code fix in
-   `StoragePolicy::measured` folds into the open read-cache issue FSM1/cipher-box#831.
+   off headroom before the staging fraction once a read cache exists".
 
 10. **`blueprint/desktop.md` "Freshness — the desktop trigger source" changes for the TTL check.**
     "A stale hit forces a pass for that node" becomes "a stale hit puts the node in the focus
@@ -377,15 +372,8 @@ measured headroom, also on the CI cadence (`web_storage_policy` in `crates/wasm/
 the testing blueprint's claim that budget exhaustion is reachable in CI holds for the engine unit
 tests and the desktop shell, not for a browser e2e run.
 
-**E3 — The blueprint and the code lag the conditional cache reservation.** The FSM1/cipher-box#844
-resolution lands the ceiling in the policy at once and subtracts it from headroom only once a read
-cache exists. FSM1/cipher-box#878 made the subtraction unconditional six hours later and gave no
-reason. `blueprint/engine.md` "Storage policy", `CONTEXT.md` "Storage policy" and
-`StoragePolicy::measured` follow the code. No consumer reads `read_cache_ceiling_bytes` at
-`origin/main`, and the read cache FSM1/cipher-box#831 is open. Until the fix lands, a full 1 GiB web
-budget needs about 2.22 GiB of headroom, not 2 GiB, and every budget below the cap is about 10 %
-smaller than D7 allows. Consequence 9 rewords the text; the code fix folds into
-FSM1/cipher-box#831.
+**E3 — The code lagged the conditional cache reservation.** Resolved on 2026-10-01 by
+FSM1/cipher-box#2137.
 
 **E4 — The policy is fixed for the life of the engine.** The host measures once at construction.
 Headroom that other applications consume during the session is not seen, and a staging write can
@@ -456,7 +444,7 @@ no host supplies it. Swapping the inbox means a second implementation inside the
   host is structural: the policy is a constructor value and `StagingStore` has no headroom
   method. No behaviour test proves it.
 - **D7:** `a_generous_headroom_lands_on_the_platform_cap`,
-  `the_cache_reservation_comes_off_headroom_before_the_staging_fraction`,
+  `headroom_is_unreduced_while_no_read_cache_exists`,
   `a_tiny_headroom_yields_a_tiny_budget_and_never_floors_up`,
   `a_headroom_near_the_integer_ceiling_does_not_wrap` and
   `every_shipped_platform_splits_within_its_headroom` in `crates/engine/src/storage_policy.rs`;
@@ -464,9 +452,8 @@ no host supplies it. Swapping the inbox means a second implementation inside the
   `a_refusal_quotes_the_room_left_never_the_whole_budget` in
   `crates/engine/src/content/budget.rs`; `storageHeadroom.test.ts` "reports quota minus usage when
   the estimate is complete" in `packages/client` (Web area).
-  `the_cache_reservation_comes_off_headroom_before_the_staging_fraction` proves the unconditional
-  form that lags D7 (E3); after FSM1/cipher-box#831 it proves the state with a read cache. No test
-  proves that headroom is unreduced while no read cache exists. That is a finding.
+  `headroom_is_unreduced_while_no_read_cache_exists` proves the state without a read cache; the
+  read-cache issue FSM1/cipher-box#831 adds the test for the state with one.
 - **D8:** `an_unmeasurable_host_is_distinguishable_from_a_full_one` and
   `a_measured_zero_headroom_yields_no_budget_and_stays_measured` in
   `crates/engine/src/storage_policy.rs`; `an_unmeasurable_host_is_never_reported_as_a_full_one`

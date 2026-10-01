@@ -53,37 +53,118 @@ impl ApprovalDecision {
 /// A field the device surface would not put in a signed payload or an
 /// envelope. Carries the check that fired, never the value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MalformedDeviceField {
-    check: &'static str,
+pub enum MalformedDeviceField {
+    /// A device identity public key that is not 32 bytes of lowercase hex.
+    DevicePublicKeyNotLowercaseHex,
+    /// A rendezvous key that is not a compressed secp256k1 point.
+    EphemeralKeyNotAPoint,
+    /// An account id that is empty or holds a newline.
+    AccountIdNotNewlineFree,
+    /// A request id that is empty or holds a newline.
+    RequestIdNotNewlineFree,
+    /// An identity token that is empty or past the registry's ceiling.
+    IdentityTokenOutOfBounds,
+    /// A device label past the registry's ceiling.
+    DeviceLabelTooLong,
+    /// An id outside the alphabet of an authenticated path segment.
+    DeviceIdNotPathSafe,
+    /// A signature that is not 64 bytes of lowercase hex.
+    DeviceSignatureNotLowercaseHex,
+    /// A seal scalar outside the secp256k1 group.
+    FactorSealScalarOutsideGroup,
+    /// A rendezvous scalar outside the secp256k1 group.
+    RendezvousScalarOutsideGroup,
+    /// A denial that carries a sealed factor.
+    DenialSealsNothing,
+    /// A sealed factor that is not canonical base64.
+    SealedFactorNotCanonicalBase64,
+    /// A sealed factor shorter than a whole envelope.
+    SealedFactorUnderEnvelopeFloor,
+    /// A sealed factor past the API's ceiling.
+    SealedFactorOverCeiling,
 }
 
 impl MalformedDeviceField {
+    /// Every device-field check, in declaration order — the surface
+    /// `crates/engine/tests/kat_checks.rs` pins (see the crate header).
+    pub const CHECKS: &'static [&'static str] = &[
+        "device-public-key-not-lowercase-hex",
+        "ephemeral-key-not-a-point",
+        "account-id-not-newline-free",
+        "request-id-not-newline-free",
+        "identity-token-out-of-bounds",
+        "device-label-too-long",
+        "device-id-not-path-safe",
+        "device-signature-not-lowercase-hex",
+        "factor-seal-scalar-outside-group",
+        "rendezvous-scalar-outside-group",
+        "denial-seals-nothing",
+        "sealed-factor-not-canonical-base64",
+        "sealed-factor-under-envelope-floor",
+        "sealed-factor-over-ceiling",
+    ];
+
     /// The check that refused; safe to surface and to log.
     pub fn check(self) -> &'static str {
-        self.check
+        match self {
+            Self::DevicePublicKeyNotLowercaseHex => "device-public-key-not-lowercase-hex",
+            Self::EphemeralKeyNotAPoint => "ephemeral-key-not-a-point",
+            Self::AccountIdNotNewlineFree => "account-id-not-newline-free",
+            Self::RequestIdNotNewlineFree => "request-id-not-newline-free",
+            Self::IdentityTokenOutOfBounds => "identity-token-out-of-bounds",
+            Self::DeviceLabelTooLong => "device-label-too-long",
+            Self::DeviceIdNotPathSafe => "device-id-not-path-safe",
+            Self::DeviceSignatureNotLowercaseHex => "device-signature-not-lowercase-hex",
+            Self::FactorSealScalarOutsideGroup => "factor-seal-scalar-outside-group",
+            Self::RendezvousScalarOutsideGroup => "rendezvous-scalar-outside-group",
+            Self::DenialSealsNothing => "denial-seals-nothing",
+            Self::SealedFactorNotCanonicalBase64 => "sealed-factor-not-canonical-base64",
+            Self::SealedFactorUnderEnvelopeFloor => "sealed-factor-under-envelope-floor",
+            Self::SealedFactorOverCeiling => "sealed-factor-over-ceiling",
+        }
+    }
+
+    /// The class label used in reject vectors. Each refusal fires before a
+    /// payload is signed and repeats on every retry of the same field: a
+    /// registry ceiling is `over-cap`, every other shape is `capability`.
+    /// An empty identity token shares the `over-cap` class of
+    /// `identity-token-out-of-bounds`.
+    pub fn class(self) -> &'static str {
+        match self {
+            Self::IdentityTokenOutOfBounds
+            | Self::DeviceLabelTooLong
+            | Self::SealedFactorOverCeiling => "over-cap",
+            Self::DevicePublicKeyNotLowercaseHex
+            | Self::EphemeralKeyNotAPoint
+            | Self::AccountIdNotNewlineFree
+            | Self::RequestIdNotNewlineFree
+            | Self::DeviceIdNotPathSafe
+            | Self::DeviceSignatureNotLowercaseHex
+            | Self::FactorSealScalarOutsideGroup
+            | Self::RendezvousScalarOutsideGroup
+            | Self::DenialSealsNothing
+            | Self::SealedFactorNotCanonicalBase64
+            | Self::SealedFactorUnderEnvelopeFloor => "capability",
+        }
     }
 }
 
 impl fmt::Display for MalformedDeviceField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.check)
+        write!(f, "{}", self.check())
     }
 }
 
-fn refuse(check: &'static str) -> MalformedDeviceField {
-    MalformedDeviceField { check }
-}
-
 /// A field the API constrains to lowercase hex of one fixed byte width.
-fn lower_hex<'a>(
-    value: &'a str,
+fn lower_hex(
+    value: &str,
     bytes: usize,
-    check: &'static str,
-) -> Result<&'a str, MalformedDeviceField> {
+    refusal: MalformedDeviceField,
+) -> Result<&str, MalformedDeviceField> {
     if value.len() == bytes * 2 && value.bytes().all(is_lower_hex) {
         Ok(value)
     } else {
-        Err(refuse(check))
+        Err(refusal)
     }
 }
 
@@ -92,7 +173,7 @@ fn device_public_key(value: &str) -> Result<&str, MalformedDeviceField> {
     lower_hex(
         value,
         ED25519_PUBLIC_LEN,
-        "device-public-key-not-lowercase-hex",
+        MalformedDeviceField::DevicePublicKeyNotLowercaseHex,
     )
 }
 
@@ -100,7 +181,7 @@ fn device_public_key(value: &str) -> Result<&str, MalformedDeviceField> {
 /// well-prefixed: this is the produce side of what `ecies_seal` hard-rejects, so
 /// a key that could never be sealed to is refused before a member compares it.
 fn ephemeral_public_key(value: &str) -> Result<[u8; ENC_LEN], MalformedDeviceField> {
-    let refusal = refuse("ephemeral-key-not-a-point");
+    let refusal = MalformedDeviceField::EphemeralKeyNotAPoint;
     let mut bytes = [0u8; ENC_LEN];
     decode_hex(value, &mut bytes).ok_or(refusal)?;
     if !ecies_recipient_is_a_point(&bytes) {
@@ -112,9 +193,9 @@ fn ephemeral_public_key(value: &str) -> Result<[u8; ENC_LEN], MalformedDeviceFie
 /// An identifier the API minted — a request id or an account id. Only its
 /// newline-freedom is this side's business; the API is authoritative on the
 /// rest, and a wrong value there is refused rather than believed.
-fn identifier<'a>(value: &'a str, check: &'static str) -> Result<&'a str, MalformedDeviceField> {
+fn identifier(value: &str, refusal: MalformedDeviceField) -> Result<&str, MalformedDeviceField> {
     if value.is_empty() || value.contains('\n') {
-        Err(refuse(check))
+        Err(refusal)
     } else {
         Ok(value)
     }
@@ -130,7 +211,7 @@ pub fn registration_payload(
     account_id: &str,
     device_public_key_hex: &str,
 ) -> Result<Vec<u8>, MalformedDeviceField> {
-    let account = identifier(account_id, "account-id-not-newline-free")?;
+    let account = identifier(account_id, MalformedDeviceField::AccountIdNotNewlineFree)?;
     let device = device_public_key(device_public_key_hex)?;
     Ok(join(&["cipherbox/device-registration/v1", account, device]))
 }
@@ -148,11 +229,11 @@ pub fn check_registration(
     registration_payload(account_id, device_public_key_hex)?;
     check_signature(signature_hex)?;
     if identity_token.is_empty() || identity_token.chars().count() > MAX_IDENTITY_TOKEN_CHARS {
-        return Err(refuse("identity-token-out-of-bounds"));
+        return Err(MalformedDeviceField::IdentityTokenOutOfBounds);
     }
     match label {
         Some(label) if label.chars().count() > MAX_LABEL_CHARS => {
-            Err(refuse("device-label-too-long"))
+            Err(MalformedDeviceField::DeviceLabelTooLong)
         }
         _ => Ok(()),
     }
@@ -185,7 +266,7 @@ pub fn check_registry_id(value: &str) -> Result<(), MalformedDeviceField> {
     if crate::seams::item_id_is_legal(value) {
         Ok(())
     } else {
-        Err(refuse("device-id-not-path-safe"))
+        Err(MalformedDeviceField::DeviceIdNotPathSafe)
     }
 }
 
@@ -194,7 +275,7 @@ fn check_signature(signature_hex: &str) -> Result<(), MalformedDeviceField> {
     lower_hex(
         signature_hex,
         ED25519_SIGNATURE_LEN,
-        "device-signature-not-lowercase-hex",
+        MalformedDeviceField::DeviceSignatureNotLowercaseHex,
     )
     .map(drop)
 }
@@ -232,7 +313,7 @@ pub fn approval_response_payload(
     sealed_factor: &str,
 ) -> Result<Vec<u8>, MalformedDeviceField> {
     let device = device_public_key(device_public_key_hex)?;
-    let request = identifier(request_id, "request-id-not-newline-free")?;
+    let request = identifier(request_id, MalformedDeviceField::RequestIdNotNewlineFree)?;
     ephemeral_public_key(ephemeral_public_key_hex)?;
     sealed_factor_bytes(decision, sealed_factor)?;
     Ok(join(&[
@@ -368,7 +449,7 @@ pub fn seal_factor(
     let recipient = ephemeral_public_key(rendezvous_public_key_hex)?;
     let aad = factor_aad(request_id, requester_device_public_key_hex)?;
     let sealed = ecies_seal(&recipient, seal_scalar, &aad, factor_key)
-        .ok_or_else(|| refuse("factor-seal-scalar-outside-group"))?;
+        .ok_or(MalformedDeviceField::FactorSealScalarOutsideGroup)?;
     let mut envelope = Vec::with_capacity(ENC_LEN + sealed.ciphertext.len());
     envelope.extend_from_slice(&sealed.enc);
     envelope.extend_from_slice(&sealed.ciphertext);
@@ -507,7 +588,7 @@ pub fn rendezvous_public_key(
 ) -> Result<String, MalformedDeviceField> {
     ecies_public_key(rendezvous_scalar)
         .map(|key| hex_lower(&key))
-        .ok_or_else(|| refuse("rendezvous-scalar-outside-group"))
+        .ok_or(MalformedDeviceField::RendezvousScalarOutsideGroup)
 }
 
 /// The factor envelope's additional authenticated data: the request it answers
@@ -518,7 +599,7 @@ fn factor_aad(
     request_id: &str,
     requester_device_public_key_hex: &str,
 ) -> Result<Vec<u8>, MalformedDeviceField> {
-    let request = identifier(request_id, "request-id-not-newline-free")?;
+    let request = identifier(request_id, MalformedDeviceField::RequestIdNotNewlineFree)?;
     let device = device_public_key(requester_device_public_key_hex)?;
     Ok(join(&[
         "cipherbox/device-approval/factor/v1",
@@ -538,16 +619,16 @@ fn sealed_factor_bytes(
 ) -> Result<(), MalformedDeviceField> {
     match decision {
         ApprovalDecision::Deny if sealed_factor.is_empty() => Ok(()),
-        ApprovalDecision::Deny => Err(refuse("denial-seals-nothing")),
+        ApprovalDecision::Deny => Err(MalformedDeviceField::DenialSealsNothing),
         ApprovalDecision::Approve => {
             let bytes = BASE64
                 .decode(sealed_factor)
-                .map_err(|_| refuse("sealed-factor-not-canonical-base64"))?;
+                .map_err(|_| MalformedDeviceField::SealedFactorNotCanonicalBase64)?;
             if bytes.len() < ENC_LEN + aead::TAG_LEN {
-                return Err(refuse("sealed-factor-under-envelope-floor"));
+                return Err(MalformedDeviceField::SealedFactorUnderEnvelopeFloor);
             }
             if bytes.len() > MAX_SEALED_FACTOR_BYTES {
-                return Err(refuse("sealed-factor-over-ceiling"));
+                return Err(MalformedDeviceField::SealedFactorOverCeiling);
             }
             Ok(())
         }

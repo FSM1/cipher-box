@@ -24,7 +24,7 @@ use futures_channel::mpsc;
 use super::accept::{
     CLAIM_MAX_POSTS, CLAIM_REPOST_MAX_WAIT, TooLong, fixed, reject_unknown, req, within,
 };
-use super::invite::{AckedClaim, MAX_INVITE_FRAGMENT_BYTES};
+use super::invite::{AckedClaim, InviteError, MAX_INVITE_FRAGMENT_BYTES};
 use crate::facade::Event;
 use crate::seams::{SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
@@ -76,6 +76,8 @@ pub enum ConversionRefusal {
 }
 
 impl ConversionRefusal {
+    /// The conversion record stores [`Self::check`] and decodes it back
+    /// through this list, so a renamed check is a durable format break.
     const ALL: [Self; 4] = [
         Self::GrantSetFull,
         Self::AdmissionCapReached,
@@ -83,13 +85,29 @@ impl ConversionRefusal {
         Self::RecipientKeyChanged,
     ];
 
+    /// The checks this type owns, in declaration order — the surface
+    /// `crates/engine/tests/kat_checks.rs` pins (see the crate header). The two
+    /// arms that carry the invite verdict verbatim stay off it.
+    pub const CHECKS: &'static [&'static str] =
+        &["contact-book-full", "claim-recipient-key-changed"];
+
     /// The stable wire and host-facing name.
     pub fn check(self) -> &'static str {
         match self {
-            Self::GrantSetFull => "grant-set-full",
-            Self::AdmissionCapReached => "link-admission-cap-reached",
+            Self::GrantSetFull => InviteError::GrantSetFull.check(),
+            Self::AdmissionCapReached => InviteError::AdmissionCapReached.check(),
             Self::ContactBookFull => "contact-book-full",
             Self::RecipientKeyChanged => "claim-recipient-key-changed",
+        }
+    }
+
+    /// The class label used in reject vectors.
+    pub fn class(self) -> &'static str {
+        match self {
+            Self::GrantSetFull => InviteError::GrantSetFull.class(),
+            Self::AdmissionCapReached => InviteError::AdmissionCapReached.class(),
+            Self::ContactBookFull => "over-cap",
+            Self::RecipientKeyChanged => "capability",
         }
     }
 
