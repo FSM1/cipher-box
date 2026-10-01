@@ -143,10 +143,7 @@ function isRecoveryFactor(entry: string): boolean {
 
 /** Adapts the Web3Auth SDK to the narrow session seam the login flow drives. */
 class Web3AuthSession implements WebCoreKitSession {
-  /**
-   * The address the exchange reported. The token deliberately carries no PII,
-   * so a restore reads it back from the sealed store (`ACCOUNT_EMAIL_KEY`).
-   */
+  /** The address the exchange reported; the token deliberately carries no PII. */
   private signedInEmail: string | null = null;
 
   /** The identity this sign-in used; kept through a login held at the policy,
@@ -497,15 +494,17 @@ class Web3AuthSession implements WebCoreKitSession {
       if (email === null) await this.store.removeItem(ACCOUNT_EMAIL_KEY);
       else await this.store.setItem(ACCOUNT_EMAIL_KEY, JSON.stringify({ subject, email }));
     } catch {
-      return;
+      // Display chrome only.
     }
   }
 
   /** The kept address, if it labels the subject this session restored. */
   private async keptEmail(): Promise<string | null> {
-    let kept: { subject?: unknown; email?: unknown };
+    let kept: { subject?: unknown; email?: unknown } | null;
     try {
-      kept = JSON.parse((await this.store.getItem(ACCOUNT_EMAIL_KEY)) ?? 'null') as typeof kept;
+      const raw = await this.store.getItem(ACCOUNT_EMAIL_KEY);
+      if (raw === null) return null;
+      kept = JSON.parse(raw) as typeof kept;
     } catch {
       return null;
     }

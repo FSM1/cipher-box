@@ -9269,8 +9269,7 @@ where {
         let Ok(Some(_pass)) = self.file_forced_pass() else {
             return false;
         };
-        let timeout = core::pin::pin!(self.seams.scheduler.sleep(LOCATE_WALK_WAIT));
-        futures_util::future::select(landing, timeout).await;
+        crate::record_plane::within(&self.seams.scheduler, LOCATE_WALK_WAIT, landing).await;
         self.state.boundary_walk_landed.get()
     }
 
@@ -9306,6 +9305,9 @@ where {
         settle: &impl Fn(&[NodeId], FolderRefreshReport),
     ) -> Vec<NodeId> {
         let mut attempted = Vec::new();
+        if nodes.is_empty() {
+            return attempted;
+        }
         let Some(session) = self.session.as_ref() else {
             return attempted;
         };
