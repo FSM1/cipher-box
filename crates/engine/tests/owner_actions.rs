@@ -1341,6 +1341,185 @@ fn revoking_a_write_grant_cuts_the_row_and_moves_the_scope_off_the_revokees_name
     );
 }
 
+/// A write grant over a folder holding `child`, which holds `grandchild`, and
+/// the write scope seed the grant hands the recipient.
+fn write_granted_nested_subtree(fx: &mut GrantScenario) -> (NodeId, NodeId, [u8; 32]) {
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let child = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "child",
+    );
+    let grandchild =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, child, "grand");
+    let granted = fx.granted_scope_repoint();
+    let section = published_grant_section_at(&fx.world, &fx.blocks, &granted.current_root)
+        .expect("the granted root");
+    let revokee_seed = grantee_write_scope_seed(&section, &granted.current_root, &fx.folder.0, 1);
+    (child, grandchild, revokee_seed)
+}
+
+/// The granted scope's read override seed at `epoch`, off the root at `name`.
+fn granted_override_seed(fx: &GrantScenario, name: &IpnsName, epoch: u64) -> Zeroizing<[u8; 32]> {
+    let section =
+        published_grant_section_at(&fx.world, &fx.blocks, name).expect("a granted scope root");
+    published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        epoch,
+        &section,
+    )
+    .expect("the owner blob yields the scope's override seed")
+}
+
+fn revoke_recipient(fx: &mut GrantScenario) -> Result<CommandOutcome, EngineError> {
+    block_on(fx.engine.command(Command::Revoke {
+        node: fx.folder,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+    }))
+}
+
+/// The read cut runs first, so every interior node lags the root's new read
+/// epoch when the write wave reads it. The wave reads each one through the
+/// root's ratchet and moves it, so the revokee's seed names no live node.
+#[test]
+fn a_write_revoke_moves_a_nested_subtree_that_lags_the_read_cut() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    let after = fx.granted_scope_repoint();
+    assert_ne!(
+        derive_write_name(&revokee_seed, &fx.folder.0),
+        after.current_root,
+        "the revokee's seed no longer derives the root the pointer vouches for"
+    );
+    assert_eq!(after.write_epoch, 3, "the revoke stepped the write epoch");
+    assert_eq!(after.min_read_epoch, 2, "after the read cut");
+    let root_seed = granted_override_seed(&fx, &after.current_root, 2);
+    let child_name = published_child_name(
+        &fx.world,
+        &fx.blocks,
+        &after.current_root,
+        &read_key_under(&root_seed, fx.folder),
+        "child",
+    );
+    assert_ne!(
+        derive_write_name(&revokee_seed, &child.0),
+        child_name,
+        "the moved root names the child at a name the revokee's seed does not derive"
+    );
+    let grandchild_name = published_child_name(
+        &fx.world,
+        &fx.blocks,
+        &child_name,
+        &read_key_under(&root_seed, child),
+        "grand",
+    );
+    assert_ne!(
+        derive_write_name(&revokee_seed, &grandchild.0),
+        grandchild_name,
+        "and the moved child names the grandchild at a name it does not derive"
+    );
+    let head = published_head(&fx.world, &fx.blocks, &grandchild_name)
+        .expect("the grandchild is live at its moved name");
+    let envelope = decode_envelope(&head).expect("the head decodes");
+    assert_eq!(
+        envelope.epoch, 2,
+        "re-sealed forward at the root's read epoch"
+    );
+    assert!(
+        open_read_body(&envelope, &read_key_under(&root_seed, grandchild)).is_ok(),
+        "under the read key of that epoch"
+    );
+}
+
+/// A manual rotation leaves the subtree lagging just as a revoke's read cut
+/// does, so a downgrade right after it still moves every node.
+#[test]
+fn a_downgrade_right_after_a_manual_rotation_moves_the_lagging_subtree() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done)
+    );
+    let rotated = fx.granted_scope_repoint();
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::ChangePermission {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    let after = fx.granted_scope_repoint();
+    assert_eq!(after.write_epoch, rotated.write_epoch + 1, "the wave ran");
+    assert_ne!(
+        derive_write_name(&revokee_seed, &fx.folder.0),
+        after.current_root,
+        "so the demoted party's seed no longer derives the root"
+    );
+}
+
+/// The ratchet reaches the lagging child's epoch, and the record there does not
+/// open under that seed: a refusal of the record itself, never staleness.
+#[test]
+fn a_write_revoke_refuses_a_lagging_child_the_ratchet_cannot_open() {
+    let mut fx = GrantScenario::new();
+    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    // The revokee holds the child's name key, and seals the body under a key
+    // no epoch of the scope derives.
+    let name = derive_write_name(&revokee_seed, &child.0);
+    let forged = author_child_envelope(EnvelopeAuthoring {
+        node_id: child.0,
+        scope_id: fx.folder.0,
+        epoch: 1,
+        read_key: &[0x13; 32],
+        nonce: &[0x5f; 24],
+        body: &ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        },
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the forged node seals");
+    fx.blocks.put(forged.block.clone());
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&revokee_seed, &child.0).as_bytes()),
+        format!("/ipfs/{}", forged.cid).as_bytes(),
+        sequence_at(&fx.world, &name) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+
+    assert!(
+        matches!(
+            revoke_recipient(&mut fx),
+            Err(EngineError::TrustViolation { .. })
+        ),
+        "a child no seed of the scope opens fails the wave closed"
+    );
+}
+
 /// Key regression, stated at the write plane: after the cut, the vault's write
 /// scope seed no longer names anything in the granted scope. That is what lets
 /// a later revoke of this grantee re-key one scope instead of the vault, and

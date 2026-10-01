@@ -48,7 +48,7 @@ use super::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
     author_scope_root_with_section, report_carried_cut,
 };
-use super::child::ChildAdopter;
+use super::child::{ChildAdopter, LaggingAnchor, LaggingRead, lagging_epoch, open_under_anchor};
 use super::last_known_good::{keep_newest_last_known_good, keep_then_commit};
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::pointer_fetch::{
@@ -72,7 +72,9 @@ use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
 use crate::gate::floor::PointerPlane;
-use crate::gate::{Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor};
+use crate::gate::{
+    Adopted, Candidate, GateError, GateRejection, PendingAdoption, RejectionReason, floor,
+};
 use crate::grants::child_index::canonicalize;
 use crate::grants::create::ScopePointerVoucher;
 use crate::grants::{
@@ -3888,12 +3890,22 @@ struct Discovered {
     /// under its own write scope seed, so the wave stops at them
     /// (`grants/child_index.rs`).
     child_scopes: BTreeSet<[u8; 16]>,
-    /// The lowest envelope read epoch this pass gated. A name wave cuts no read
-    /// key, so the wave's moved copies carry these same epochs.
+    /// The lowest read epoch the wave's moved copies carry.
     lowest_read_epoch: Option<u64>,
+    /// The gated scope root's ratchet, which opens an interior node that lags
+    /// the root's read epoch.
+    anchor: Option<LaggingAnchor>,
 }
 
 impl WaveSubtree {
+    fn record_anchor(&self, anchor: LaggingAnchor) {
+        self.inner.borrow_mut().anchor = Some(anchor);
+    }
+
+    fn anchor(&self) -> Option<LaggingAnchor> {
+        self.inner.borrow().anchor.clone()
+    }
+
     /// The name a gated parent gave `node_id`.
     fn name(&self, node_id: &[u8; 16]) -> Option<IpnsName> {
         self.inner.borrow().names.get(node_id).cloned()
@@ -4177,19 +4189,75 @@ where
                     rejection.reason,
                     RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor
                 ) => {}
+            Err(GateError::Rejected(rejection)) => {
+                return self
+                    .lagging_source(&adopter, name, record_bytes, rejection)
+                    .await;
+            }
             Err(error) => return Err(wave_verdict(error)),
         }
-        let (adopted, envelope) = adopter
-            .open_carried_at_floor(name, record_bytes)
-            .await
-            .map_err(wave_verdict)?;
+        match adopter.open_carried_at_floor(name, record_bytes).await {
+            Ok((adopted, envelope)) => {
+                let epoch = adopted.epoch;
+                self.interior_wave_source(adopted, envelope, epoch)
+            }
+            Err(GateError::Rejected(rejection)) => {
+                self.lagging_source(&adopter, name, record_bytes, rejection)
+                    .await
+            }
+            Err(error) => Err(wave_verdict(error)),
+        }
+    }
+
+    /// Open an interior node the gate refused for lagging the read-epoch floor
+    /// alone, under the seed the gated root's ratchet reaches for its epoch,
+    /// and re-seal it forward at the root's epoch as the sweep does. Any other
+    /// refusal, or an epoch no held link reaches, keeps `rejection`.
+    async fn lagging_source(
+        &self,
+        adopter: &ChildAdopter<'_, H, F>,
+        name: &IpnsName,
+        record_bytes: &[u8],
+        rejection: GateRejection,
+    ) -> Result<WaveSource, WritePublishError> {
+        let (Some(record_epoch), Some(anchor)) =
+            (lagging_epoch(&rejection.reason), self.subtree.anchor())
+        else {
+            return Err(wave_verdict(GateError::Rejected(rejection)));
+        };
+        match open_under_anchor(
+            self.snapshot_cache,
+            adopter,
+            name,
+            &anchor,
+            record_bytes,
+            record_epoch,
+        )
+        .await
+        .map_err(wave_verdict)?
+        {
+            LaggingRead::Opened(adopted, envelope) => {
+                self.interior_wave_source(adopted, *envelope, anchor.epoch)
+            }
+            LaggingRead::Unreachable(_) => Err(wave_verdict(GateError::Rejected(rejection))),
+        }
+    }
+
+    /// An opened interior node, re-sealed at `read_epoch` under the scope's
+    /// current read seed.
+    fn interior_wave_source(
+        &self,
+        adopted: Adopted,
+        envelope: Envelope,
+        read_epoch: u64,
+    ) -> Result<WaveSource, WritePublishError> {
         if envelope.v != ENVELOPE_V {
             return Err(WritePublishError::Rejected);
         }
         Ok(WaveSource {
             read_body: adopted.read_body,
-            read_epoch: adopted.epoch,
-            read_key: read_key_for(self.read_scope_seed, &node_id),
+            read_epoch,
+            read_key: read_key_for(self.read_scope_seed, &envelope.id),
             unknown: envelope.unknown,
             epoch_tag_unknown: envelope.epoch_tag_unknown,
             root: None,
@@ -4966,6 +5034,10 @@ where
 
         self.subtree.record_read_epoch(source.read_epoch);
         if let Some(plane) = &source.root {
+            self.subtree.record_anchor(LaggingAnchor {
+                epoch: source.read_epoch,
+                history_links: plane.section.history_links.clone(),
+            });
             self.record_scope_boundary(
                 &plane.write_body.direct_child_scope_index,
                 &plane.read_scope_seed,
