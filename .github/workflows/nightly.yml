@@ -175,6 +175,7 @@ jobs:
       contents: read
       issues: write
     uses: ./.github/workflows/staging-soak.yml
+    secrets: inherit
     with:
       ref: ${{ needs.staging-soak-tag.outputs.tag }}
 

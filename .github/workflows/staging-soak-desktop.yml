@@ -126,7 +126,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           host='target/debug/cipherbox-desktop'
           workdir="${RUNNER_TEMP}/desktop-soak"
           case "$RUNNER_OS" in
@@ -134,13 +134,13 @@ jobs:
               pkill -9 -f "${host}" || true
               mount | awk -v root="${workdir}" 'index($0, root) { print $3 }' \
                 | while read -r target; do diskutil unmount force "${target}" || true; done
-              running=$(pgrep -f "${host}" | wc -l | tr -d ' ')
+              running=$( (pgrep -f "${host}" || [ "$?" -eq 1 ]) | wc -l | tr -d ' ')
               ;;
             Linux)
               pkill -9 -f "${host}" || true
-              findmnt -rn -o TARGET | grep -F "${workdir}" \
+              findmnt -rn -o TARGET | awk -v root="${workdir}" 'index($0, root)' \
                 | while read -r target; do fusermount3 -uz "${target}" || true; done
-              running=$(pgrep -f "${host}" | wc -l | tr -d ' ')
+              running=$( (pgrep -f "${host}" || [ "$?" -eq 1 ]) | wc -l | tr -d ' ')
               ;;
             Windows)
               # WinFsp takes the mount away with the process.

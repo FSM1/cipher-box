@@ -211,6 +211,7 @@ jobs:
     needs: [guard, web-vault, web-shares]
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.web-vault.outputs.unbootstrapped != 'true' }}
     uses: ./.github/workflows/staging-soak-desktop.yml
+    secrets: inherit
     permissions:
       contents: read
     with:
@@ -223,6 +224,7 @@ jobs:
     needs: [guard, web-vault, desktop-macos]
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.web-vault.outputs.unbootstrapped != 'true' }}
     uses: ./.github/workflows/staging-soak-desktop.yml
+    secrets: inherit
     permissions:
       contents: read
     with:
@@ -235,6 +237,7 @@ jobs:
     needs: [guard, web-vault, desktop-linux]
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.web-vault.outputs.unbootstrapped != 'true' }}
     uses: ./.github/workflows/staging-soak-desktop.yml
+    secrets: inherit
     permissions:
       contents: read
     with:
