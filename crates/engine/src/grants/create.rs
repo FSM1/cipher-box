@@ -90,6 +90,11 @@ pub struct GranteeScopePlan<'a> {
     /// each one's ascent link seals under `node_seed(fresh_override_seed,
     /// descendant.scope_id)` (blueprint/engine.md "subtree swept in").
     pub subtree_child_index: &'a [ChildScopeRef],
+    /// The nodes a folder inside the grant links whose winning link
+    /// ([`Snapshot::links_ranked`](crate::sync::model::Snapshot::links_ranked))
+    /// names a parent outside it. Readers resolve each one under that parent,
+    /// so the interior re-seal leaves it in the scope it holds.
+    pub held_outside: &'a [[u8; 16]],
 }
 
 impl GranteeScopePlan<'_> {
@@ -637,7 +642,8 @@ struct InteriorBounds {
     source: ChildScopeRef,
     /// The read epoch that scope was gated at.
     source_read_epoch: u64,
-    /// The descendant scope roots the walk stops at.
+    /// The nodes the walk stops at: the descendant scope roots, and the nodes
+    /// [`GranteeScopePlan::held_outside`] names.
     stop_at: BTreeSet<[u8; 16]>,
     /// Which of the nodes the walk meets it may move.
     admits: InteriorAdmission,
@@ -1331,8 +1337,9 @@ where
         record: grantee_record,
         override_seed,
         frontier,
-        bounds,
+        mut bounds,
     } = root;
+    bounds.stop_at.extend(grantee.held_outside);
 
     // Re-seal the folder's interior nodes into the scope that now owns them.
     // Their records still seal under the read key of the scope the folder left,
@@ -2394,6 +2401,7 @@ mod tests {
             write_cut: None,
             pointer_read_key: &GRANTEE_POINTER_READ_KEY,
             subtree_child_index: &[],
+            held_outside: &[],
         };
         let recipient_contact = contact_for(recipient_pub);
 
@@ -2570,6 +2578,7 @@ mod tests {
                 write_cut,
                 pointer_read_key: &GRANTEE_POINTER_READ_KEY,
                 subtree_child_index: subtree,
+                held_outside: &[],
             };
             let recipient_contact = contact_for(recipient_pub);
 
@@ -2665,6 +2674,7 @@ mod tests {
             write_cut: None,
             pointer_read_key: &GRANTEE_POINTER_READ_KEY,
             subtree_child_index: &[],
+            held_outside: &[],
         };
         let contact = contact_for(recipient_enc().public());
         let recorder = RecordingMailbox::default();

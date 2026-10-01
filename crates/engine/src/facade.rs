@@ -3949,6 +3949,21 @@ fn subtree_child_scopes(
     Ok(inside)
 }
 
+/// The nodes a folder inside `node` links whose winning link names a parent
+/// outside it ([`GranteeScopePlan::held_outside`]).
+fn held_outside(rendered: &Snapshot, node: NodeId) -> Vec<[u8; 16]> {
+    let mut held: Vec<[u8; 16]> = rendered
+        .links()
+        .iter()
+        .filter(|link| link.parent == node || rendered.is_descendant_of(link.parent, node))
+        .filter(|link| !rendered.is_descendant_of(link.child, node))
+        .map(|link| link.child.0)
+        .collect();
+    held.sort_unstable();
+    held.dedup();
+    held
+}
+
 /// The published grant blobs of a gated scope root, as the accept flow's
 /// self-location reads them. The structure signature is the gate's to verify;
 /// self-location keys on the tag alone.
@@ -7302,6 +7317,7 @@ where {
         // this label, so a link minted past it would be one nobody can claim.
         let display_name = share_display_name(&rendered, node)?;
         let subtree = subtree_child_scopes(&rendered, node, &current.direct_child_scope_index)?;
+        let held_outside = held_outside(&rendered, node);
 
         let pointer_read_key = session.pointer_read_key(&node.0);
         let pseudonym_signer = session.owner_writer_pseudonym_signer(&node.0);
@@ -7325,6 +7341,7 @@ where {
             write_cut: granted_write_scope_seed.as_deref(),
             pointer_read_key: pointer_read_key.as_bytes(),
             subtree_child_index: &subtree,
+            held_outside: &held_outside,
         };
         let owner = OwnerGrantKeys {
             enc_secret: session.enc_subkey(),

@@ -1672,6 +1672,105 @@ fn a_delete_unlinks_a_node_from_a_folder_in_each_end_of_the_pass() {
     );
 }
 
+/// A node linked from `keep`, a folder of the vault's own scope, at the
+/// create's counter of 1, and from `inner`, a folder inside the granted folder,
+/// at `inner_counter`. `keep` is drawn so its id falls below `inner`'s when
+/// `keep_below` holds, and above it otherwise.
+fn dual_linked_at(
+    fx: &mut GrantScenario,
+    inner_counter: u64,
+    keep_below: bool,
+) -> (NodeId, NodeId, NodeId) {
+    let inner =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "box");
+    let keep = (0..16)
+        .map(|i| {
+            create_published_folder(
+                &fx.world,
+                &mut fx.engine,
+                &mut fx._tasks,
+                ROOT,
+                &format!("keep {i}"),
+            )
+        })
+        .find(|keep| (keep.0 < inner.0) == keep_below)
+        .expect("a folder id on the asked side of the inner folder's");
+    let deep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, keep, "deep");
+    concurrent_add(
+        &fx.world,
+        &fx.blocks,
+        inner,
+        &read_key_of(inner),
+        SCOPE,
+        ChildRef {
+            id: deep.0,
+            name: "deep".to_owned(),
+            ipns_name: write_name(deep).as_str().as_bytes().to_vec(),
+            kind: CoreNodeKind::Folder,
+            link_counter: inner_counter,
+            unknown: PreservedFields::new(),
+        },
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    (keep, deep, inner)
+}
+
+/// The grant re-seals a dual-linked node into the granted scope only when the
+/// link rank (highest counter, then lowest parent id) puts it under the granted
+/// folder, and a soft delete then unlinks it from both folders, in either
+/// parent-id order.
+fn assert_grant_and_delete_follow_the_link_rank(inner_counter: u64) {
+    for keep_below in [true, false] {
+        let mut fx = GrantScenario::new();
+        let (keep, deep, inner) = dual_linked_at(&mut fx, inner_counter, keep_below);
+        let inner_wins = inner_counter > 1 || (inner_counter == 1 && !keep_below);
+        let case = format!("inner counter {inner_counter}, keep below {keep_below}");
+
+        let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+        let granted_key = |node: NodeId| {
+            *kdf::read_key(kdf::node_seed(&override_seed, &node.0).as_bytes()).as_bytes()
+        };
+        let deep_key = if inner_wins {
+            granted_key(deep)
+        } else {
+            read_key_of(deep)
+        };
+        let head =
+            published_head(&fx.world, &fx.blocks, &write_name(deep)).expect("deep is published");
+        let envelope = decode_envelope(&head).expect("the head block decodes");
+        assert!(
+            open_read_body(&envelope, &deep_key).is_ok(),
+            "{case}: deep seals under the scope of the parent its winning link names"
+        );
+
+        block_on(fx.engine.command(Command::Delete { node: deep })).expect("the delete stages");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert_eq!(
+            published_child_names(&fx.world, &fx.blocks, inner, &granted_key(inner)),
+            Vec::<String>::new(),
+            "{case}: the folder inside the grant dropped the node"
+        );
+        assert_eq!(
+            published_child_names(&fx.world, &fx.blocks, keep, &read_key_of(keep)),
+            Vec::<String>::new(),
+            "{case}: and the folder in the vault's own scope dropped it too"
+        );
+    }
+}
+
+#[test]
+fn a_dual_link_tie_moves_with_a_grant_only_under_the_lower_parent_id() {
+    assert_grant_and_delete_follow_the_link_rank(1);
+}
+
+#[test]
+fn a_dual_link_the_granted_folder_loses_stays_in_the_vault_scope() {
+    assert_grant_and_delete_follow_the_link_rank(0);
+}
+
 /// The `ipnsName` `folder`'s published record names `child` by, read under
 /// `read_key`. A promoted scope names its own nodes, so the parent's record is
 /// the one plane that spells them.
