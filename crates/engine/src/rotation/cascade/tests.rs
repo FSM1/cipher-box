@@ -922,17 +922,17 @@ fn no_durable_revocation_floor_key_names_the_recipient() {
     let keys = store.epoch_keys();
     assert_eq!(keys.len(), 10, "two views of five floors hold ten keys");
     for key in keys {
-        assert_eq!(
-            key.len(),
-            OWNER_TAG_LEN + SECRET_LEN,
-            "a durable epoch key is the owner tag and one label"
-        );
         for run in subkey.windows(8) {
             assert!(
                 !key.windows(run.len()).any(|w| w == run),
                 "a durable floor key carries part of the recipient subkey"
             );
         }
+        assert_eq!(
+            key.len(),
+            OWNER_TAG_LEN + SECRET_LEN,
+            "a durable epoch key is the owner tag and one label"
+        );
     }
 }
 

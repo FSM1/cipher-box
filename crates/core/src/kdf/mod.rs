@@ -573,9 +573,9 @@ pub fn contact_label(
     *contact_label_bytes(contact_label_seed, identity_pk).as_bytes()
 }
 
-/// `name-label`: a fixed-width local label for a durable sequence-namespace
-/// floor key, so a floor store that a reader of local storage can open names no
-/// record it bars replay on (ADR 0016).
+/// `name-label`: a fixed-width local label for a durable floor key in either
+/// namespace, so a floor store that a reader of local storage can open names no
+/// record it bars replay on and no recipient a floor records (ADR 0016 D3).
 ///
 /// The message is the whole store key, not only an `ipnsName`, so two keys that
 /// share a name but not a purpose label to unrelated bytes. It is the catalog's

@@ -62,6 +62,12 @@ test.describe('browser seam conformance', () => {
     expect(outcome.ok).toBe(true);
   });
 
+  test('floor store upgrade drops old epoch floors and keeps sequence floors', async ({ page }) => {
+    const outcome = await runSeam(page, 'floorStoreUpgrade');
+    expect(outcome.error ?? '', 'floor store upgrade behavioral failure').toBe('');
+    expect(outcome.ok).toBe(true);
+  });
+
   test('account switching reclaims snapshots and preserves owner-local bookkeeping', async ({
     page,
   }) => {

@@ -29,7 +29,7 @@ import {
   WorkerScheduler,
   toHex,
 } from '../../src/seams/index.js';
-import { deleteDatabase, openDatabase } from '../../src/seams/idb.js';
+import { deleteDatabase, openDatabase, transactionDone } from '../../src/seams/idb.js';
 import { eraseAccountStores, reclaimOtherAccountStores } from '../../src/accountStores.js';
 import { makeBrowserSeams } from '../../src/worker/browserSeams.js';
 import type { HarnessWorkerScope } from './workerScope.js';
@@ -300,6 +300,37 @@ async function runHttpBehavioral(): Promise<void> {
   }
 }
 
+/**
+ * The version-1 floor store, as the previous release left it, opens at version 2
+ * with its epoch floors gone and its sequence floors kept.
+ */
+async function runFloorStoreUpgradeBehavioral(): Promise<void> {
+  const name = `floor-upgrade-${Date.now()}`;
+  const epochKey = new Uint8Array(57).fill(0x0a);
+  const sequenceKey = new Uint8Array(64).fill(0x0b);
+  const old = await openDatabase(name, 1, (opened) => {
+    opened.createObjectStore('epoch');
+    opened.createObjectStore('sequence');
+  });
+  const tx = old.transaction(['epoch', 'sequence'], 'readwrite');
+  tx.objectStore('epoch').put(4, toHex(epochKey));
+  tx.objectStore('sequence').put(9, toHex(sequenceKey));
+  await transactionDone(tx);
+  old.close();
+
+  const floors = new IdbFloorStore(name);
+  if ((await floors.epochFloor(epochKey)) !== null) {
+    throw new Error('floorStoreUpgrade: an old-shape epoch floor survived the upgrade');
+  }
+  if ((await floors.sequenceFloor(sequenceKey)) !== 9) {
+    throw new Error('floorStoreUpgrade: the upgrade lost a sequence floor');
+  }
+  await floors.raiseEpochFloor(epochKey, 2);
+  if ((await new IdbFloorStore(name).epochFloor(epochKey)) !== 2) {
+    throw new Error('floorStoreUpgrade: a reopen at version 2 cleared the epoch store again');
+  }
+}
+
 /** Account switching preserves owner-local bytes over real IndexedDB and OPFS. */
 async function runStoreReclaimBehavioral(): Promise<void> {
   const config = {
@@ -548,6 +579,10 @@ async function run(seam: string): Promise<void> {
     }
     case 'stagingStoreBatch': {
       await runStagingBatchBehavioral();
+      return;
+    }
+    case 'floorStoreUpgrade': {
+      await runFloorStoreUpgradeBehavioral();
       return;
     }
     case 'storeReclaim': {
