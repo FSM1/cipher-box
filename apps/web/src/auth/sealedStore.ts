@@ -85,6 +85,10 @@ export class SealedStore {
     this.storage.setItem(key, encodeEnvelope(iv, new Uint8Array(sealed)));
   }
 
+  async removeItem(key: string): Promise<void> {
+    this.storage.removeItem(key);
+  }
+
   /** `null` for anything the key does not authenticate under this envelope. */
   private async unseal(
     key: string,

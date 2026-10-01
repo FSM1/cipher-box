@@ -673,6 +673,41 @@ describe('a Core Kit login', () => {
     await created.logout();
     expect(created.email()).toBeNull();
   });
+
+  it('reads the address back on a restore, since the token carries none', async () => {
+    await session().login(credential({ email: 'member@example.test' }));
+    sdk.userInfo = { verifierId: SUBJECT };
+
+    const restored = session();
+    await restored.restore();
+
+    expect(restored.email()).toBe('member@example.test');
+    expect(window.localStorage.getItem('cipherbox_account_email')).not.toContain('member@');
+  });
+
+  it('reads back no address a different subject left', async () => {
+    await session().login(credential({ email: 'member@example.test' }));
+    sdk.userInfo = { verifierId: 'another-subject' };
+
+    const restored = session();
+    await restored.restore();
+
+    expect(restored.email()).toBeNull();
+  });
+
+  it('keeps no address past a logout or a sign-in that carries none', async () => {
+    const created = session();
+    await created.login(credential({ email: 'member@example.test' }));
+    await created.logout();
+    expect(window.localStorage.getItem('cipherbox_account_email')).toBeNull();
+
+    await created.login(credential({ email: 'member@example.test' }));
+    await created.login(credential({ method: 'wallet', email: null }));
+    sdk.userInfo = { verifierId: SUBJECT };
+    const restored = session();
+    await restored.restore();
+    expect(restored.email()).toBeNull();
+  });
 });
 
 /**
