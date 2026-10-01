@@ -29,6 +29,15 @@ on:
         default: false
         type: boolean
   workflow_call:
+    secrets:
+      SOAK_OWNER_WALLET_KEY:
+        required: false
+      SOAK_GRANTEE_WALLET_KEY:
+        required: false
+      SOAK_GRANTEE_LOGIN_SECRET:
+        required: false
+      STAGING_GRAFANA_READ_TOKEN:
+        required: false
     inputs:
       base-url:
         description: 'The deployed app to soak. Only the STAGING_APP_URL variable is accepted, and it is the default.'
@@ -211,6 +220,8 @@ jobs:
     needs: [guard, web-vault, web-shares]
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.web-vault.outputs.unbootstrapped != 'true' }}
     uses: ./.github/workflows/staging-soak-desktop.yml
+    secrets:
+      SOAK_GRANTEE_LOGIN_SECRET: ${{ secrets.SOAK_GRANTEE_LOGIN_SECRET }}
     permissions:
       contents: read
     with:
@@ -223,6 +234,8 @@ jobs:
     needs: [guard, web-vault, desktop-macos]
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.web-vault.outputs.unbootstrapped != 'true' }}
     uses: ./.github/workflows/staging-soak-desktop.yml
+    secrets:
+      SOAK_GRANTEE_LOGIN_SECRET: ${{ secrets.SOAK_GRANTEE_LOGIN_SECRET }}
     permissions:
       contents: read
     with:
@@ -235,6 +248,8 @@ jobs:
     needs: [guard, web-vault, desktop-linux]
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.web-vault.outputs.unbootstrapped != 'true' }}
     uses: ./.github/workflows/staging-soak-desktop.yml
+    secrets:
+      SOAK_GRANTEE_LOGIN_SECRET: ${{ secrets.SOAK_GRANTEE_LOGIN_SECRET }}
     permissions:
       contents: read
     with:
