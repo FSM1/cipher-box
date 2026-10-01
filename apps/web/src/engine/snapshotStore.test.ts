@@ -96,7 +96,6 @@ describe('snapshotStore', () => {
 
     store.setFocus(new Uint8Array(16).fill(7));
 
-    // The relay forces a pass at once; the engine must already hold the new focus.
     expect(setFocus.mock.invocationCallOrder[0]).toBeLessThan(
       reportFocus.mock.invocationCallOrder[0]
     );
@@ -127,6 +126,19 @@ describe('snapshotStore', () => {
     expect(engine.focus).toHaveLength(1);
     expect(engine.reported).toHaveLength(1);
     expect(engine.pulls).toHaveLength(1);
+  });
+
+  it('asserts the first focus even when it names the root', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+
+    store.setFocus(null);
+    engine.ackFocus();
+    await flush();
+    store.setFocus(null);
+
+    expect(engine.focus).toEqual([null]);
+    expect(engine.reported).toEqual([null]);
   });
 
   it('coalesces an event burst into one re-pull', async () => {

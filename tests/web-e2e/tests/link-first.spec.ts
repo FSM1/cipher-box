@@ -9,8 +9,8 @@
  */
 
 import type { Page } from '@playwright/test';
-import { Device, freshLogin, type Login, type Tab } from '../devices';
-import { expect, test as base } from '../fixtures';
+import { deviceTest as test, Device, freshLogin, type OpenDevice, type Tab } from '../devices';
+import { expect } from '../fixtures';
 import { FilesPage } from '../page-objects/files.page';
 import type { InvitePage } from '../page-objects/invite.page';
 import { SharedPage, type RowStanding } from '../page-objects/shared.page';
@@ -32,21 +32,6 @@ const heldByLink = (row: RowStanding) => row !== 'gone' && row.viaLink;
 const granted = (row: RowStanding) =>
   row !== 'gone' && row.resolution === 'granted' && !row.viaLink;
 const revoked = (row: RowStanding) => row !== 'gone' && row.resolution === 'revocation-signal';
-
-/** Opens a device the test closes when it ends; a fresh account without `login`. */
-type OpenDevice = (login?: Login) => Promise<Device>;
-
-const test = base.extend<{ device: OpenDevice }>({
-  device: async ({ browser }, use) => {
-    const opened: Device[] = [];
-    await use(async (login = freshLogin()) => {
-      const device = await Device.open(browser, login);
-      opened.push(device);
-      return device;
-    });
-    for (const device of opened) await device.close();
-  },
-});
 
 /** The two owner devices, the folder they share, and the holder of the read link. */
 interface Flow {

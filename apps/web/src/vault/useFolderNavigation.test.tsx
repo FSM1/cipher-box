@@ -171,8 +171,9 @@ describe('the vault browser read path', () => {
       await Promise.resolve();
     });
 
-    expect(engine.focus).toEqual([DOCS]);
-    expect(engine.reported).toEqual([DOCS]);
+    // The mount asserted the root focus first.
+    expect(engine.focus).toEqual([null, DOCS]);
+    expect(engine.reported).toEqual([null, DOCS]);
 
     await act(async () => {
       engine.ackFocus();
@@ -219,7 +220,7 @@ describe('the vault browser read path', () => {
       await Promise.resolve();
     });
 
-    expect(engine.focus).toEqual([DOCS]);
+    expect(engine.focus).toEqual([null, DOCS]);
   });
 
   it('builds the breadcrumb chain from the ancestor trail, root first', async () => {

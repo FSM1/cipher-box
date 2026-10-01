@@ -9,6 +9,7 @@
 
 import { toHex } from '@cipherbox/client';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
+import { test } from './fixtures';
 import { FilesPage } from './page-objects/files.page';
 import { SharePage } from './page-objects/share.page';
 import type { VaultPage } from './page-objects/vault.page';
@@ -93,3 +94,18 @@ export class Device {
     await this.context.close();
   }
 }
+
+/** Opens a device the test closes when it ends; a fresh account without `login`. */
+export type OpenDevice = (login?: Login) => Promise<Device>;
+
+export const deviceTest = test.extend<{ device: OpenDevice }>({
+  device: async ({ browser }, use) => {
+    const opened: Device[] = [];
+    await use(async (login = freshLogin()) => {
+      const device = await Device.open(browser, login);
+      opened.push(device);
+      return device;
+    });
+    for (const device of opened) await device.close();
+  },
+});

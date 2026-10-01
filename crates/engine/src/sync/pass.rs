@@ -53,7 +53,7 @@ use crate::scope_seeds::{
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
-    SnapshotCache, StagingStore, UnixMillis,
+    SharerScopedFloorStore, SnapshotCache, StagingStore, UnixMillis,
 };
 use crate::session::{SessionSecrets, SessionState};
 use crate::settings::{
@@ -146,6 +146,77 @@ struct ScopeSets {
     unproved: BTreeSet<NodeId>,
 }
 
+/// What every scope leg of one tick or one navigation reads alike.
+pub(crate) struct ScopeLegContext<'a, F> {
+    pub(crate) floors: &'a F,
+    pub(crate) sharers: &'a GraftedSharers,
+    pub(crate) contact_label_seed: &'a SecretBytes,
+    pub(crate) own_root: [u8; 16],
+    /// The own check and the floor namespace read this one set.
+    pub(crate) proved: &'a BTreeSet<NodeId>,
+    pub(crate) unproved: &'a BTreeSet<NodeId>,
+    pub(crate) base: &'a BaseSnapshot,
+    pub(crate) root_name: Option<&'a IpnsName>,
+}
+
+/// One scope's leg material: the seed and floors its records unseal and gate
+/// under, and the plane it reads on.
+pub(crate) struct ScopeLegMaterial<'a, F> {
+    pub(crate) seed: Zeroizing<[u8; 32]>,
+    pub(crate) floors: SharerScopedFloorStore<'a, F>,
+    pub(crate) scope_root_name: Option<IpnsName>,
+    /// `false` for a grafted scope, which reads on the grafted plane.
+    pub(crate) own: bool,
+}
+
+/// Why a scope runs no leg.
+pub(crate) enum NoScopeLeg {
+    /// The pass is charged an outage: a boundary no walk proved material for
+    /// ([`focus_scope_roots`]), or a scope this vault owns and holds no seed
+    /// for, such as a promotion the last walk could not re-prove.
+    Outage,
+    /// Its rows wait for a pass that holds its material.
+    Waiting,
+}
+
+impl<'a, F> ScopeLegContext<'a, F> {
+    /// The material of `scope`'s leg. `seed` is awaited only for a scope whose
+    /// material a walk proved.
+    pub(crate) async fn material(
+        &self,
+        scope: NodeId,
+        seed: impl Future<Output = Option<Zeroizing<[u8; 32]>>>,
+    ) -> Result<ScopeLegMaterial<'a, F>, NoScopeLeg> {
+        if self.unproved.contains(&scope) {
+            return Err(NoScopeLeg::Outage);
+        }
+        let own = is_own_scope(&self.own_root, self.proved, &scope.0);
+        let Some(seed) = seed.await else {
+            return Err(if own {
+                NoScopeLeg::Outage
+            } else {
+                NoScopeLeg::Waiting
+            });
+        };
+        let floors = floor_view(
+            self.floors,
+            self.sharers,
+            self.contact_label_seed,
+            &self.own_root,
+            self.proved,
+            &scope.0,
+        )
+        .ok_or(NoScopeLeg::Waiting)?;
+        let scope_root_name = scope_root_record_name(&self.base.borrow(), self.root_name, &scope.0);
+        Ok(ScopeLegMaterial {
+            seed,
+            floors,
+            scope_root_name,
+            own,
+        })
+    }
+}
+
 /// What the mailbox pull hands the claim conversion.
 struct MailboxPull {
     owner_keys: Option<Rc<SweepKeys>>,
@@ -215,17 +286,6 @@ where
             verdict,
             stop: false,
         }
-    }
-
-    /// The root adopt and the scope walk alone, for a navigation that lands
-    /// before the first pass.
-    pub(crate) async fn walk_boundaries(&self, state: &SessionState) {
-        let Some(pass) = self.loop_gate(state, TickCause::Poll) else {
-            return;
-        };
-        let (floors_before, _) = self.refresh_floors(state, &pass).await;
-        let _ = self.adopt_root(state, &pass, &floors_before).await;
-        self.walk_scopes(state, &pass).await;
     }
 
     /// The loop gate: the pass's own copy of every secret it runs under, or
@@ -480,7 +540,6 @@ where
 
     /// The scope walk below the vault root, and the boundaries it proved.
     async fn walk_scopes(&self, state: &SessionState, pass: &Pass) -> Vec<DescendantScopeRoot> {
-        state.boundary_walk_ran.set(true);
         // The held record is the root this pass reconciled, so the
         // walk needs no second read of either plane to start.
         let held_root = state
@@ -531,6 +590,7 @@ where
                     walked.unproved,
                 );
                 descendants = walked.proved;
+                state.boundary_walk_landed.set(true);
             }
             state
                 .scope_roots_walked
@@ -594,8 +654,7 @@ where
         // no folder target of its own, because that root resolves on
         // its pointer leg. Its scope still needs a pass, so the rows
         // it lists reach the file leg below.
-        let root = state.snapshot.borrow().root;
-        for folder in state.focus.borrow().folders_in_view_or_root(root) {
+        for folder in state.focus.borrow().folders_in_view() {
             by_scope
                 .entry(scope_root_of(
                     &state.snapshot.borrow(),
@@ -605,55 +664,38 @@ where
                 .or_default();
         }
         let scope_roots = state.bookmarked_scope_roots.borrow().clone();
+        let legs = ScopeLegContext {
+            floors: &self.seams.floors,
+            sharers: grafted,
+            contact_label_seed: &pass.contact_label_seed,
+            own_root: self.root_id,
+            proved: &scopes.proved,
+            unproved: &scopes.unproved,
+            base: &state.snapshot,
+            root_name: Some(&pass.root_name),
+        };
         for (scope_root, targets) in by_scope {
-            if scopes.unproved.contains(&scope_root) {
-                // No material was ever proved for this boundary, so
-                // its subtree waits for the walk that proves it
-                // ([`focus_scope_roots`]).
-                folder_verdict = folder_verdict.worst(RefreshVerdict::Unreachable);
-                continue;
-            }
-            let own = is_own_scope(&self.root_id, &scopes.proved, &scope_root.0);
-            let Some(scope_read_seed) = cached_seed(&state.scope_read_seeds, &scope_root.0) else {
-                // A scope this vault owns and cannot read is an
-                // outage on its own leg: a promotion the last
-                // boundary walk could not re-prove keeps its place
-                // in the proved set and loses its seed, so the
-                // folders in view under it stay unread. Charge the
-                // pass for them rather than reporting a window it
-                // never read.
-                if own {
+            let seed = async { cached_seed(&state.scope_read_seeds, &scope_root.0) };
+            let material = match legs.material(scope_root, seed).await {
+                Ok(material) => material,
+                Err(NoScopeLeg::Outage) => {
                     folder_verdict = folder_verdict.worst(RefreshVerdict::Unreachable);
+                    continue;
                 }
-                continue;
+                Err(NoScopeLeg::Waiting) => continue,
             };
-            let Some(scope_floors) = floor_view(
-                &self.seams.floors,
-                grafted,
-                &pass.contact_label_seed,
-                &self.root_id,
-                &scopes.proved,
-                &scope_root.0,
-            ) else {
-                continue;
-            };
-            let scope_root_name = scope_root_record_name(
-                &state.snapshot.borrow(),
-                Some(&pass.root_name),
-                &scope_root.0,
-            );
             let refresh = FolderRefresh {
                 transport: &self.seams.transport,
                 snapshot_cache: &self.seams.snapshot_cache,
                 http: &self.seams.http,
-                floors: &scope_floors,
+                floors: &material.floors,
                 gateway: &self.seams.gateway,
                 base: &state.snapshot,
                 events: &self.seams.events,
                 scope_id: scope_root.0,
-                scope_read_seed: &scope_read_seed,
-                scope_root_name: scope_root_name.as_ref(),
-                plane: (!own).then_some(GraftedLeg {
+                scope_read_seed: &material.seed,
+                scope_root_name: material.scope_root_name.as_ref(),
+                plane: (!material.own).then_some(GraftedLeg {
                     scope_roots: &scope_roots,
                     claims: &state.grafted_claims,
                 }),
@@ -685,7 +727,7 @@ where
                     &base_now,
                     &focus_scope_ids,
                     scope_root,
-                    state.focus.borrow().folders_in_view_or_root(root),
+                    state.focus.borrow().folders_in_view().collect(),
                 );
                 for folder in in_view.into_iter().rev() {
                     queue_unprojected_children(

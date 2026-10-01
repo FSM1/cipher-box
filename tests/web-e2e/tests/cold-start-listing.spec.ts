@@ -1,13 +1,14 @@
 /**
  * A cold start over a vault that already holds files paints each file row's
  * size and modified cells, at the root, inside a subfolder, and inside a
- * folder the owner shared, with no manual refresh. A second owner device is the cold start: a new browser context has
- * empty stores, so every child record it lists comes off the network.
+ * folder the owner shared, with no manual refresh. A second owner device is
+ * the cold start: a new browser context has empty stores, so every child
+ * record it lists comes off the network.
  */
 
 import type { Page } from '@playwright/test';
-import { Device, freshLogin, type Login, type Tab } from '../devices';
-import { expect, test as base } from '../fixtures';
+import { deviceTest as test, freshLogin, type Login, type OpenDevice, type Tab } from '../devices';
+import { expect } from '../fixtures';
 import { FilesPage } from '../page-objects/files.page';
 import { VaultPage } from '../page-objects/vault.page';
 import { drained } from '../vault';
@@ -22,20 +23,6 @@ const SIZE = '2 KB';
 const UNRESOLVED = '...';
 
 const CELLS = { timeout: 60_000, intervals: [1_000] };
-
-type OpenDevice = (login: Login) => Promise<Device>;
-
-const test = base.extend<{ device: OpenDevice }>({
-  device: async ({ browser }, use) => {
-    const opened: Device[] = [];
-    await use(async (login) => {
-      const device = await Device.open(browser, login);
-      opened.push(device);
-      return device;
-    });
-    for (const device of opened) await device.close();
-  },
-});
 
 /**
  * Device A runs `write`, waits until the root's published children are
@@ -120,7 +107,7 @@ test('a cold start paints file sizes and dates at the root and in a subfolder', 
   await test.step('root cells', () => painted(files, ROOT_FILE));
 
   await visit(page, deep);
-  await expect(files.breadcrumbs.locator('[aria-current="page"]')).toHaveText(FOLDER);
+  await files.at(FOLDER);
   await test.step('subfolder cells', () => painted(files, DEEP_FILE));
 });
 
@@ -138,7 +125,7 @@ test('a cold start whose first route is a subfolder paints its file cells', asyn
   await page.waitForURL('**/files');
   // Before the root settles, so the subfolder is the first listing this device reads.
   await visit(page, deep);
-  await expect(files.breadcrumbs.locator('[aria-current="page"]')).toHaveText(FOLDER);
+  await files.at(FOLDER);
   await test.step('subfolder cells', () => painted(files, DEEP_FILE));
 
   await files.toRoot();
