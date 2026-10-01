@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "2c5c5f3702cf",
+  "strategy": "manual-commit",
+  "branch": "fix/cold-start-file-rows-paint",
+  "checkpoints_count": 9,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/2c/5c5f3702cf/0/metadata.json",
+      "transcript": "/2c/5c5f3702cf/0/full.jsonl",
+      "compact_transcript": "/2c/5c5f3702cf/0/transcript.jsonl",
+      "content_hash": "/2c/5c5f3702cf/0/content_hash.txt",
+      "prompt": "/2c/5c5f3702cf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1406,
+    "cache_creation_tokens": 234329,
+    "cache_read_tokens": 9830381,
+    "output_tokens": 67879,
+    "api_call_count": 57
+  }
+}

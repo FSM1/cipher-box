@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "2c5c5f3702cf",
+  "session_id": "cc94825a-d06d-4b5e-a54b-a1b4a14dba58",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-01T00:42:32.503072Z",
+  "branch": "fix/cold-start-file-rows-paint",
+  "checkpoints_count": 9,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "47d0a63d2692",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1406,
+    "cache_creation_tokens": 234329,
+    "cache_read_tokens": 9830381,
+    "output_tokens": 67879,
+    "api_call_count": 57
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Fix a regression where file sizes and modified dates show '...' after a cold start in the CipherBox web app, and add web e2e/smoke coverage so it gets caught in future.",
+    "outcome": "Found and fixed three engine/web defects (root focus never queued, shared-folder navigation file leg skipped, pre-walk focus raising false abuse), added a cold-start listing smoke spec with three cases, and the full local smoke slice passed. Changes were committed on a fix branch and the push/draft PR was being made.",
+    "learnings": {
+      "repo": [
+        "The web sends focus null for the vault root at /files; the engine treats SetFocus{None} as 'no folder open', so root file rows were never queued and stayed size/mtime None ('...'). Every Rust test used Some(ROOT), masking it.",
+        "The sync rung/status ('synced') is stamped from the root leg only; file-leg failures don't affect it, so the status bar can say synced while file rows stay unresolved.",
+        "snapshotStore.assertFocus called reportFocus (which triggers a forced manualRefresh in LeaderRelay) before facade.setFocus; the engine runs commands in order so the forced pass saw the old focus.",
+        "refresh_focus_on_access deliberately skipped rows belonging to a shared folder's own scope (scoped_to), leaving them for the 30s poll tick; now a per-scope navigation_file_legs runs each scope under its own seed.",
+        "start returns before any pass runs; descendant scopes are installed only by walk_scopes, so an early SetFocus on a shared folder read it under the root seed and raised a false AttributableAbuse (adoption gate rejected at grant-section).",
+        "Web e2e smoke = every test not tagged @full; new untagged specs join the PR-blocking Web E2E Smoke automatically. FilesPage.cells(name) reads size/modified but no spec used it before.",
+        "Local e2e bundle builds need the CI build env (including the Google client id) or smoke tests fail at login; README recipe was updated.",
+        "Engine tests: changed cold-tick behaviour required updating three write_plane tests and capstone pass_tick.rs expectations."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/vault/useFolderNavigation.ts",
+          "line": 46,
+          "finding": "Calls store.setFocus(route.kind === 'node' ? route.id : null), so /files sends null."
+        },
+        {
+          "path": "apps/web/src/engine/snapshotStore.ts",
+          "line": 199,
+          "finding": "setFocus returns early when the node is unchanged, so the initial null focus never reaches the engine."
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "line": 8707,
+          "finding": "refresh_focus_on_access skipped queueing children when folder is None; fixed to use folder.unwrap_or(root)."
+        },
+        {
+          "path": "crates/engine/src/sync/pass.rs",
+          "line": 669,
+          "finding": "queue_unprojected_children loop over folders_in_view() had nothing to iterate when open_folder was None; now uses folders_in_view_or_root."
+        },
+        {
+          "path": "apps/web/src/vault/listing.ts",
+          "line": 13,
+          "finding": "UNRESOLVED = '...' placeholder rendered when child.size/mtime is null."
+        }
+      ],
+      "workflow": [
+        "Parallel investigation lanes in separate worktrees worked well, but their edits overlap in shared files (facade.rs), so sequencing fix lanes mattered.",
+        "A subagent's temporary worktree vanishes; save its failing test diff out before relying on it.",
+        "Subagent diff stats can include sibling lanes' edits, making per-lane attribution unclear.",
+        "Verify with the whole smoke slice locally after engine changes that affect every cold start."
+      ]
+    },
+    "friction": [
+      "A response was stopped by a safety classifier mid-investigation and had to be restated without the withheld content.",
+      "The first full smoke run had five failures caused by the local bundle lacking the CI build env (Google client id), not by the changes.",
+      "Mint-link flow in the shared-folder spec leaves the dialog open and has a 180s timeout exceeding the 120s per-test budget.",
+      "The engine lane's guard attempts for the pre-walk focus bug broke six plain-folder cold-start tests, requiring a different design.",
+      "Could not reproduce the ~130s tail on staging in the fake world."
+    ],
+    "open_items": [
+      "The shared-folder spec case has a timing risk (180s mint timeout vs 120s test timeout) and relies on an unverified assumption that the probe folder ordering publishes the scope cut.",
+      "Public Engine::focus_folders() still returns folders_in_view() without the root.",
+      "The extra staging 130s delay beyond one poll cadence is unexplained.",
+      "Draft PR was being opened; CI results and review still pending."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
