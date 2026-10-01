@@ -184,8 +184,8 @@ use crate::sync::staging::{
 use crate::sync::staleness::{Connectivity, classify, next_boundary};
 use crate::sync::tick::{
     FocusFile, ResolveMode, TickControl, elapsed_at_least, focus_folders_due, focus_scope_roots,
-    nodes_in_scope, on_access_refresh_due, queue_focus_file, queue_unprojected_children,
-    run_tick_loop, run_with_boundaries, scope_root_of, scope_root_record_name, settle_focus_leg,
+    nodes_in_scope, queue_focus_file, queue_unprojected_children, refresh_due, run_tick_loop,
+    run_with_boundaries, scope_root_of, scope_root_record_name, settle_focus_leg,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -9234,11 +9234,7 @@ where {
                 let stamps = self.state.focus_refreshed.borrow();
                 next.iter()
                     .copied()
-                    .filter(|folder| {
-                        stamps
-                            .get(folder)
-                            .is_none_or(|last| on_access_refresh_due(now, *last, &self.profile))
-                    })
+                    .filter(|folder| refresh_due(stamps.get(folder).copied(), now, &self.profile))
                     .collect()
             };
             self.navigation_legs(root, unlisted, NodeKind::Folder, now, &settle)
@@ -11639,7 +11635,7 @@ where {
             .get(&node)
             .copied()
             .max(hinted);
-        let stale = last.is_none_or(|last| on_access_refresh_due(now, last, &self.profile));
+        let stale = refresh_due(last, now, &self.profile);
         if stale {
             self.focus_hinted.set(Some((node, now)));
             if is_file {

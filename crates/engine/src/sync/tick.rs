@@ -368,11 +368,7 @@ pub fn focus_folders_due(
 ) -> Vec<NodeId> {
     focus_folders(snapshot, focus)
         .into_iter()
-        .filter(|folder| {
-            last_refreshed
-                .get(folder)
-                .is_none_or(|last| on_access_refresh_due(now, *last, profile))
-        })
+        .filter(|folder| refresh_due(last_refreshed.get(folder).copied(), now, profile))
         .collect()
 }
 
@@ -413,6 +409,16 @@ pub fn on_access_refresh_due(
     profile: &SyncTimingProfile,
 ) -> bool {
     elapsed_at_least(now, last_refreshed, profile.stale_after)
+}
+
+/// [`on_access_refresh_due`] over a stamp that may be absent: a node no leg has
+/// refreshed is due.
+pub fn refresh_due(
+    last_refreshed: Option<UnixMillis>,
+    now: UnixMillis,
+    profile: &SyncTimingProfile,
+) -> bool {
+    last_refreshed.is_none_or(|last| on_access_refresh_due(now, last, profile))
 }
 
 /// A tick loop's control signal.

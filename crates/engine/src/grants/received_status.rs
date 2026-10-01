@@ -44,7 +44,7 @@ use crate::seams::{
 use crate::sync::model::{NodeMeta, node_id_label};
 use crate::sync::project::project_folder_partial;
 use crate::sync::render::BaseSnapshot;
-use crate::sync::tick::{ResolveMode, on_access_refresh_due};
+use crate::sync::tick::{ResolveMode, refresh_due};
 
 use super::accept::ReceivedShareStore;
 use super::accept::{BookmarkKey, LinkHold, ReceivedShare, ReceivedSharesList, ReceivedSharesLock};
@@ -394,7 +394,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// Re-classify the bookmarked shared scope roots that are due, into
     /// `verdicts`.
     ///
-    /// The poll leg is paced by [`on_access_refresh_due`], the same damper the
+    /// The poll leg is paced by [`refresh_due`], the same damper the
     /// focus window's folder leg uses; a forced pass ([`ResolveMode::NoCache`])
     /// re-resolves every share. This leg alone resolves a grafted scope root —
     /// the focus window drops it, because a scope's own root never resolves
@@ -450,10 +450,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
         let due = |key: &BookmarkKey| {
             self.mode == ResolveMode::NoCache
-                || verdicts
-                    .borrow()
-                    .get(key)
-                    .is_none_or(|held| on_access_refresh_due(now, held.at, profile))
+                || refresh_due(verdicts.borrow().get(key).map(|held| held.at), now, profile)
         };
         // One budget, spent least recently refreshed first, so capped passes
         // reach every bookmark in turn. A held bookmark spends one resolve on

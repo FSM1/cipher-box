@@ -104,6 +104,24 @@ async function visit(page: Page, path: string): Promise<void> {
   }, path);
 }
 
+/**
+ * A cold device signed in on `login`, with no wait for its root to settle: a
+ * first route lands as early as the sign-in allows.
+ */
+async function signedInUnsettled(
+  device: OpenDevice,
+  login: Login
+): Promise<{ page: Page; files: FilesPage }> {
+  const c = await device(login);
+  const page = await c.page();
+  const vault = new VaultPage(page);
+  await vault.open();
+  await vault.controlled();
+  await c.signIn(page);
+  await page.waitForURL('**/files');
+  return { page, files: new FilesPage(page) };
+}
+
 /** Waits until `name`'s row paints its size and a resolved modified date. */
 async function painted(files: FilesPage, name: string): Promise<void> {
   await expect(files.row(name)).toBeVisible();
@@ -133,14 +151,7 @@ test('a cold start whose first route is a subfolder paints its file cells', asyn
   const login = freshLogin();
   const deep = await seed(device, login, NESTED, nested);
 
-  const c = await device(login);
-  const page = await c.page();
-  const vault = new VaultPage(page);
-  const files = new FilesPage(page);
-  await vault.open();
-  await vault.controlled();
-  await c.signIn(page);
-  await page.waitForURL('**/files');
+  const { page, files } = await signedInUnsettled(device, login);
   // No wait for the root to settle: the navigation lands as early as the sign-in
   // allows. The engine suite pins the order where the focus lands before the first pass.
   await visit(page, deep);
@@ -157,14 +168,7 @@ test('a cold start whose first route is two folders down shows that folder and i
   const login = freshLogin();
   const deeper = await seed(device, login, [`folder ${FOLDER}`], twiceNested);
 
-  const c = await device(login);
-  const page = await c.page();
-  const vault = new VaultPage(page);
-  const files = new FilesPage(page);
-  await vault.open();
-  await vault.controlled();
-  await c.signIn(page);
-  await page.waitForURL('**/files');
+  const { page, files } = await signedInUnsettled(device, login);
   // The cold-start base holds the root's own children alone, as after a reload.
   await visit(page, deeper);
   await files.at(DEEPER);
