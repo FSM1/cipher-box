@@ -4832,6 +4832,11 @@ pub const MAX_FOCUS_FILES: usize = 64;
 /// merely passed turns into standing poll traffic.
 pub const MAX_FOCUS_FOLDERS: usize = 8;
 
+/// The most folders one navigation lists while it looks for a folder the base
+/// does not hold yet. Each costs one record resolve, so the bound caps what a
+/// single route can spend on the record plane.
+pub const MAX_LOCATE_FOLDERS: usize = 256;
+
 pub use crate::grants::MAX_CONTACT_CODE_BYTES;
 
 /// The engine's live read streams, bounded by [`MAX_OPEN_STREAMS`].
@@ -6657,15 +6662,7 @@ where {
                 .await
                 .map(|()| CommandOutcome::Done),
             Command::RecoverDeadLetter { op_id } => self.recover_dead_letter(op_id).await,
-            Command::SetFocus { node } => {
-                self.state.focus.borrow_mut().open_folder = node;
-                // Navigation is the tick model's second trigger source (#33 D2):
-                // refresh the newly-focused chain now rather than waiting out a
-                // poll cadence, and only past the staleness threshold — a repeat
-                // visit renders the state already held.
-                self.refresh_focus_on_access(authored_at, node).await;
-                Ok(CommandOutcome::Done)
-            }
+            Command::SetFocus { node } => self.set_focus(node).await.map(|()| CommandOutcome::Done),
             Command::ImportContact { contact_code } => {
                 if contact_code.len() > MAX_CONTACT_CODE_BYTES {
                     return Err(EngineError::MalformedInput {
@@ -9101,6 +9098,22 @@ where {
         )
     }
 
+    /// [`Command::SetFocus`]: point the focus window at `node` and refresh what
+    /// it brings into view. Navigation is the tick model's second trigger source
+    /// (#33 D2): the newly focused chain refreshes now rather than a poll cadence
+    /// later, and only past the staleness threshold — a repeat visit renders the
+    /// state already held.
+    ///
+    /// Shared-borrow, so a host can run its network legs beside the snapshot
+    /// reads that paint the cached view (blueprint/engine.md "Resolve").
+    pub async fn set_focus(&self, node: Option<NodeId>) -> Result<(), EngineError> {
+        self.live_session()?;
+        self.state.focus.borrow_mut().open_folder = node;
+        self.refresh_focus_on_access(self.seams.scheduler.now(), node)
+            .await;
+        Ok(())
+    }
+
     /// Refresh the focus window's folders that are past the on-access staleness
     /// threshold, then the files `folder` lists no size for.
     ///
@@ -9108,6 +9121,19 @@ where {
     /// same navigation and paints its size within one resolve round trip rather
     /// than a poll cadence later.
     async fn refresh_focus_on_access(&self, now: UnixMillis, folder: Option<NodeId>) {
+        let settle = |nodes: &[NodeId], report| {
+            settle_focus_leg(
+                &self.state.observed_unlinks,
+                &self.state.focus_refreshed,
+                &self.events,
+                nodes,
+                report,
+                now,
+            );
+        };
+        if let Some(folder) = folder {
+            self.locate_folder(folder, now, &settle).await;
+        }
         // The rows wait for the first pass ([`SessionState::boundary_walk_landed`]).
         if !self.state.boundary_walk_landed.get() {
             if let Some(folder) = folder {
@@ -9147,16 +9173,6 @@ where {
                 mode: ResolveMode::CacheFirst,
                 observed_at: now.0,
             });
-        let settle = |nodes: &[NodeId], report| {
-            settle_focus_leg(
-                &self.state.observed_unlinks,
-                &self.state.focus_refreshed,
-                &self.events,
-                nodes,
-                report,
-                now,
-            );
-        };
         if let Some(leg) = &leg
             && !due.is_empty()
         {
@@ -9168,18 +9184,99 @@ where {
         self.navigation_file_legs(root, now, &settle).await;
     }
 
-    /// The on-access file leg, one per scope the queued rows belong to, as the
-    /// tick runs it: a leg holds one scope's read material ([`nodes_in_scope`]).
-    /// A scope this session holds no material for keeps its rows queued for the
-    /// tick.
+    /// List the vault a level at a time, from the root down, until the base
+    /// holds `target`. The cold-start base holds the root's own children alone,
+    /// so a route that a reload restores can name a folder no listing reached.
+    ///
+    /// Each level reads under the scope the boundary walk names for it, so a
+    /// navigation that lands before the first walk waits for a pass to land one.
+    async fn locate_folder(
+        &self,
+        target: NodeId,
+        now: UnixMillis,
+        settle: &impl Fn(&[NodeId], FolderRefreshReport),
+    ) {
+        if self.state.snapshot.borrow().contains(target) {
+            return;
+        }
+        if !self.state.boundary_walk_landed.get() {
+            let Ok(Some(pass)) = self.file_forced_pass() else {
+                return;
+            };
+            let _ = pass.landed().await;
+            if !self.state.boundary_walk_landed.get() {
+                return;
+            }
+        }
+        let root = self.state.snapshot.borrow().root;
+        let mut seen = BTreeSet::from([root]);
+        let mut level = vec![root];
+        while !level.is_empty() && !self.state.snapshot.borrow().contains(target) {
+            let room = MAX_LOCATE_FOLDERS.saturating_sub(seen.len() - 1);
+            let next: Vec<NodeId> = {
+                let base = self.state.snapshot.borrow();
+                level
+                    .iter()
+                    .flat_map(|folder| base.children(*folder))
+                    .filter(|child| child.kind == NodeKind::Folder)
+                    .map(|child| child.id)
+                    .filter(|child| seen.insert(*child))
+                    .take(room)
+                    .collect()
+            };
+            // A folder a leg listed inside the staleness threshold already has
+            // its children in the base.
+            let unlisted = {
+                let stamps = self.state.focus_refreshed.borrow();
+                next.iter()
+                    .copied()
+                    .filter(|folder| {
+                        stamps
+                            .get(folder)
+                            .is_none_or(|last| on_access_refresh_due(now, *last, &self.profile))
+                    })
+                    .collect()
+            };
+            self.navigation_legs(root, unlisted, NodeKind::Folder, now, settle)
+                .await;
+            level = next;
+        }
+    }
+
+    /// The on-access file leg over the queued rows. A row leaves the queue once
+    /// a leg has attempted it, the tick leg's rule.
     async fn navigation_file_legs(
         &self,
         root: NodeId,
         now: UnixMillis,
         settle: &impl Fn(&[NodeId], FolderRefreshReport),
     ) {
+        let attempted = self
+            .navigation_legs(root, self.queued_focus_files(), NodeKind::File, now, settle)
+            .await;
+        self.state
+            .focus
+            .borrow_mut()
+            .open_files
+            .retain(|row| !attempted.contains(&row.node));
+    }
+
+    /// One on-access leg of `kind` per scope `nodes` belong to, as the tick runs
+    /// it: a leg holds one scope's read material ([`nodes_in_scope`]). A scope
+    /// this session holds no material for leaves its nodes for the tick, and a
+    /// scope's own root, which resolves on its own leg, is never read here.
+    /// Answers the nodes a leg attempted.
+    async fn navigation_legs(
+        &self,
+        root: NodeId,
+        nodes: Vec<NodeId>,
+        kind: NodeKind,
+        now: UnixMillis,
+        settle: &impl Fn(&[NodeId], FolderRefreshReport),
+    ) -> Vec<NodeId> {
+        let mut attempted = Vec::new();
         let Some(session) = self.session.as_ref() else {
-            return;
+            return attempted;
         };
         let proved = self.state.descendant_scope_roots.borrow().clone();
         let unproved = self.state.unproved_scope_roots.borrow().clone();
@@ -9187,11 +9284,11 @@ where {
         {
             let base = self.state.snapshot.borrow();
             let scope_roots = focus_scope_roots(&proved, &unproved);
-            for node in self.queued_focus_files() {
-                by_scope
-                    .entry(scope_root_of(&base, node, &scope_roots))
-                    .or_default()
-                    .push(node);
+            for node in nodes {
+                let scope = scope_root_of(&base, node, &scope_roots);
+                if node != scope {
+                    by_scope.entry(scope).or_default().push(node);
+                }
             }
         }
         let sharers = self.state.grafted_sharers.borrow().clone();
@@ -9207,7 +9304,7 @@ where {
             base: &self.state.snapshot,
             root_name: root_name.as_ref(),
         };
-        for (scope, files) in by_scope {
+        for (scope, nodes) in by_scope {
             let Ok(material) = legs.material(scope, self.scope_read_seed(&scope.0)).await else {
                 continue;
             };
@@ -9229,15 +9326,14 @@ where {
                 mode: ResolveMode::CacheFirst,
                 observed_at: now.0,
             };
-            settle(&files, leg.run_files(&files).await);
-            // The tick leg's rule: a row leaves the queue only once a pass has
-            // attempted it.
-            self.state
-                .focus
-                .borrow_mut()
-                .open_files
-                .retain(|row| !files.contains(&row.node));
+            let report = match kind {
+                NodeKind::Folder => leg.run(&nodes).await,
+                NodeKind::File => leg.run_files(&nodes).await,
+            };
+            settle(&nodes, report);
+            attempted.extend(nodes);
         }
+        attempted
     }
 
     // -----------------------------------------------------------------------

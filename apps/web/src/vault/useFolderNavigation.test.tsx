@@ -191,6 +191,50 @@ describe('the vault browser read path', () => {
     expect(screen.getByTestId('parent-dir-row')).toBeDefined();
   });
 
+  it('returns to a folder the engine holds while its focus refresh is still out', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine, folderPath(DOCS));
+    await act(async () => {
+      engine.ackFocus();
+      engine.pulls[engine.pulls.length - 1].resolve(
+        folderView({ folder: DOCS, folderName: 'documents', ancestors: [{ id: ROOT, name: '' }] })
+      );
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'root' }));
+      await Promise.resolve();
+    });
+    // The root's focus refresh never lands: the engine answers from what it holds.
+    await act(async () => {
+      engine.pulls[engine.pulls.length - 1].resolve(
+        folderView({
+          children: [
+            {
+              id: DOCS,
+              name: 'documents',
+              kind: 'folder',
+              size: null,
+              mtime: null,
+              pending: 'none',
+              deadLetter: false,
+              pendingInviteClaims: 0,
+              ipnsName: null,
+              contentVersion: null,
+              contentCid: null,
+            },
+          ],
+        })
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId('file-browser-loading')).toBeNull();
+    expect(rowNames().map((cell) => cell.textContent)).toEqual(['documents']);
+    expect(screen.getByTestId('breadcrumbs').textContent).toBe('~/root');
+  });
+
   it.each([['Enter'], [' ']])('opens a folder from the keyboard with %j', async (key) => {
     const engine = fakeEngine();
     renderBrowser(engine);

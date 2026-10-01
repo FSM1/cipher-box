@@ -16,6 +16,8 @@ import { drained } from '../vault';
 const ROOT_FILE = 'root.bin';
 const FOLDER = 'deep';
 const DEEP_FILE = 'deep.bin';
+const DEEPER = 'deeper';
+const DEEPER_FILE = 'deeper.bin';
 const SHARED = 'shared';
 const SHARED_FILE = 'shared.bin';
 const BYTES = new Uint8Array(2048);
@@ -58,6 +60,22 @@ async function nested({ files }: Tab): Promise<string> {
   await expect(files.row(DEEP_FILE)).toBeVisible();
   await files.published();
   return `/files/${deep}`;
+}
+
+/** A folder inside a folder, with one file. Answers with the inner folder's route. */
+async function twiceNested({ files }: Tab): Promise<string> {
+  await files.createFolder(FOLDER);
+  await files.open(FOLDER);
+  await files.createFolder(DEEPER);
+  await expect(files.row(DEEPER)).toBeVisible();
+  const deeper = await files.row(DEEPER).getAttribute('data-node-id');
+  expect(deeper).toBeTruthy();
+
+  await files.open(DEEPER);
+  await files.upload(DEEPER_FILE, BYTES);
+  await expect(files.row(DEEPER_FILE)).toBeVisible();
+  await files.published();
+  return `/files/${deeper}`;
 }
 
 /** A folder with one file, shared by a read link. */
@@ -131,6 +149,27 @@ test('a cold start whose first route is a subfolder paints its file cells', asyn
 
   await files.toRoot();
   await test.step('root cells', () => painted(files, ROOT_FILE));
+});
+
+test('a cold start whose first route is two folders down shows that folder and its trail', async ({
+  device,
+}) => {
+  const login = freshLogin();
+  const deeper = await seed(device, login, [`folder ${FOLDER}`], twiceNested);
+
+  const c = await device(login);
+  const page = await c.page();
+  const vault = new VaultPage(page);
+  const files = new FilesPage(page);
+  await vault.open();
+  await vault.controlled();
+  await c.signIn(page);
+  await page.waitForURL('**/files');
+  // The cold-start base holds the root's own children alone, as after a reload.
+  await visit(page, deeper);
+  await files.at(DEEPER);
+  await expect(files.breadcrumbs).toContainText(`~/root/${FOLDER}/${DEEPER}`);
+  await test.step('inner folder cells', () => painted(files, DEEPER_FILE));
 });
 
 test('a cold start paints the file cells of a folder the owner shared', async ({ device }) => {

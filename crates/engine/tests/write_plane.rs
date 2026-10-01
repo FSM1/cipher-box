@@ -7954,6 +7954,14 @@ struct DeepCreate {
 }
 
 fn deep_create_seen_by_a_second_device() -> DeepCreate {
+    let mut created = deep_create_on_a_cold_second_device();
+    // A navigation reads nothing until a pass has walked the scope boundaries.
+    tick(&created.world, &created.engine_b, &mut created.tasks_b);
+    created
+}
+
+/// The same, with device B booted and no pass run yet: a reload's first route.
+fn deep_create_on_a_cold_second_device() -> DeepCreate {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -7979,9 +7987,7 @@ fn deep_create_seen_by_a_second_device() -> DeepCreate {
     let deep = child_id(&engine_a, photos, "2026");
 
     let bob = world.device(b"alice-second-device");
-    let (engine_b, events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
-    // A navigation reads nothing until a pass has walked the scope boundaries.
-    tick(&world, &engine_b, &mut tasks_b);
+    let (engine_b, events_b, tasks_b) = boot(&world, &blocks, &bob, 7);
     DeepCreate {
         world,
         blocks,
@@ -8074,6 +8080,68 @@ fn a_second_device_lists_below_the_scope_root_once_it_focuses_there() {
     assert_eq!(
         view.children[0].id, deep,
         "and under the node id device A published it with"
+    );
+}
+
+/// The trail a device's view of `folder` names, nearest first.
+fn trail(engine: &Engine<FakeSeamTypes>, folder: NodeId) -> Vec<NodeId> {
+    block_on(engine.snapshot(folder))
+        .expect("a folder view")
+        .ancestors
+        .iter()
+        .map(|crumb| crumb.id)
+        .collect()
+}
+
+/// A reload can route straight to a folder below the root's own children,
+/// which the cold-start base does not hold. The navigation lists its way down
+/// to it, so the folder and its trail render with no walk from the root.
+#[test]
+fn a_focus_on_a_folder_no_listing_reached_lists_its_way_down() {
+    let DeepCreate {
+        mut engine_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    assert!(
+        matches!(
+            block_on(engine_b.snapshot(deep)),
+            Err(EngineError::UnknownNode)
+        ),
+        "the cold-start base lifts the root's direct children only"
+    );
+
+    block_on(engine_b.command(Command::SetFocus { node: Some(deep) })).unwrap();
+
+    assert_eq!(trail(&engine_b, deep), [photos, ROOT]);
+}
+
+/// A reload's first route lands before the first pass has walked the scope
+/// boundaries, which name the seed each level reads under. The navigation
+/// waits for a pass to land the walk, then lists its way down.
+#[test]
+fn a_focus_before_the_first_pass_lists_its_way_down_once_the_walk_lands() {
+    let DeepCreate {
+        mut engine_b,
+        mut tasks_b,
+        mut events_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_on_a_cold_second_device();
+
+    command_while_ticking(
+        &mut engine_b,
+        Command::SetFocus { node: Some(deep) },
+        &mut tasks_b,
+    )
+    .expect("the window opens");
+
+    assert_eq!(trail(&engine_b, deep), [photos, ROOT]);
+    assert!(
+        accused_nobody(&mut events_b),
+        "every level read under its own seed"
     );
 }
 
