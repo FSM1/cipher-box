@@ -58,7 +58,8 @@ cursor that does not open or decode, or a replayed older one, costs only work.
    resolve for any other node. Each adopts, or re-opens at the floor (`open_at_floor`) a record
    that this device already adopted. The admitted sequence is S.
 2. The walk skips a name that a delete doomed, that the retire ledger owes a retire, that the
-   parent no longer names, or that the drain has a publish of in flight.
+   parent no longer names, or that the drain has a publish of in flight. Amended by ADR 0063 D4
+   on 2026-10-01: the walk also skips every name in a scope that has an owed rotation entry.
 3. Registration goes in batches of up to `REGISTRY_BATCH_MAX` names.
 4. After the registration, the walk reads the name through the fan-out again. If the freshest
    record is not the admitted record, the walk does not sign.
