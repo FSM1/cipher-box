@@ -1469,8 +1469,8 @@ fn a_downgrade_right_after_a_manual_rotation_moves_the_lagging_subtree() {
     );
 }
 
-/// The current fail-closed result: the revoke stops at a grandchild the
-/// ratchet reaches but cannot open, after the lagging child opened.
+/// A node the ratchet reaches but that does not open under that seed is a
+/// trust violation, even below a lagging child the wave opened.
 #[test]
 fn a_write_revoke_refuses_a_lagging_grandchild_the_ratchet_cannot_open() {
     let mut fx = GrantScenario::new();
@@ -1488,17 +1488,18 @@ fn a_write_revoke_refuses_a_lagging_grandchild_the_ratchet_cannot_open() {
     );
 }
 
-/// A lagging node at an epoch no held history link reaches is a limit of this
-/// reader, not a verdict on the record (ADR 0021 D5).
+/// A lagging node beyond the ratchet is not a trust verdict (ADR 0021 D5).
 #[test]
-fn a_write_revoke_reports_a_child_beyond_the_ratchet_as_unavailable() {
+fn a_write_revoke_reports_a_child_beyond_the_ratchet_as_an_unsupported_target() {
     let mut fx = GrantScenario::new();
     let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
     plant_unopenable_node(&fx, &revokee_seed, child, 0);
 
     assert!(matches!(
         fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
-        Err(EngineError::ContentUnavailable { .. })
+        Err(EngineError::UnsupportedTarget {
+            check: "rot-write-resolve-failed"
+        })
     ));
 }
 

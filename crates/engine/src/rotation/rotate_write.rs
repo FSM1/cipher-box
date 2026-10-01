@@ -309,8 +309,7 @@ pub enum WritePublishError {
     /// for and gave no capability to publish on. Re-running reaches the same
     /// verdict.
     Rejected,
-    /// A lagging node whose epoch no held history link reaches: a capability
-    /// limit of this reader, not a verdict on the record (ADR 0021 D5).
+    /// [`ResolveFailure::Unreadable`], met on the publish arm.
     Unreadable,
 }
 
@@ -334,6 +333,14 @@ impl WritePublishError {
             Self::NotLanded | Self::LostRace | Self::RegistryFull => "availability",
             Self::Rejected => "trust",
             Self::Unreadable => "capability",
+        }
+    }
+
+    /// Whether a retry could land it: only availability, never a verdict.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::NotLanded | Self::LostRace | Self::RegistryFull => true,
+            Self::Rejected | Self::Unreadable => false,
         }
     }
 }
@@ -570,13 +577,24 @@ impl WriteRotateError {
             | WriteRotateError::ResumedSeedNotAtItsRoot
             | WriteRotateError::ResumedWaveAtAnotherEpoch => false,
             WriteRotateError::Entropy(_) => true,
-            WriteRotateError::Publish { error, .. } => !matches!(
-                error,
-                WritePublishError::Rejected | WritePublishError::Unreadable
-            ),
+            WriteRotateError::Publish { error, .. } => error.is_retryable(),
             WriteRotateError::Resolve { reason, .. } => *reason == ResolveFailure::Unavailable,
             WriteRotateError::Repoint(e) => matches!(e, PointerError::Entropy(_)),
         }
+    }
+
+    /// Whether the wave met [`ResolveFailure::Unreadable`] on either arm.
+    pub fn is_unreadable(&self) -> bool {
+        matches!(
+            self,
+            WriteRotateError::Resolve {
+                reason: ResolveFailure::Unreadable,
+                ..
+            } | WriteRotateError::Publish {
+                error: WritePublishError::Unreadable,
+                ..
+            }
+        )
     }
 }
 

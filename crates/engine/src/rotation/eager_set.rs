@@ -78,7 +78,8 @@ pub enum ResolveFailure {
     /// need a core schema change.
     ConflictingChildLabel,
     /// The descendant lags an epoch no held history link reaches: a capability
-    /// limit of this reader, not a verdict on the record (ADR 0021 D5).
+    /// limit of this reader, not a verdict on the record, and no retry clears
+    /// it (ADR 0021 D5).
     Unreadable,
 }
 

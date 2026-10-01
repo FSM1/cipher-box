@@ -2560,13 +2560,12 @@ impl EngineError {
         }
     }
 
-    /// [`from_rotation`](EngineError::from_rotation), with a node no held
-    /// history link reaches kept off the trust axis (ADR 0021 D5).
+    /// [`from_rotation`](EngineError::from_rotation), with an unreadable node
+    /// ([`ResolveFailure::Unreadable`]) reported as a target this build cannot
+    /// act on.
     fn from_cut_rotation(err: RotateOnCutError) -> Self {
         if err.is_unreadable() {
-            EngineError::ContentUnavailable {
-                message: err.to_string(),
-            }
+            EngineError::UnsupportedTarget { check: err.check() }
         } else {
             EngineError::from_rotation(err)
         }
@@ -13864,14 +13863,22 @@ mod tests {
     /// clears.
     #[test]
     fn a_cut_maps_only_an_unreadable_node_off_the_trust_axis() {
-        let unreadable = RotateOnCutError::Write(crate::rotation::WriteRotateError::Resolve {
+        use crate::rotation::{WritePublishError, WriteRotateError};
+        let resolve = WriteRotateError::Resolve {
             node_id: [0x11; 16],
             reason: ResolveFailure::Unreadable,
-        });
-        assert!(matches!(
-            EngineError::from_cut_rotation(unreadable),
-            EngineError::ContentUnavailable { .. }
-        ));
+        };
+        let republish = WriteRotateError::Publish {
+            stage: "republish",
+            node_id: [0x11; 16],
+            error: WritePublishError::Unreadable,
+        };
+        for unreadable in [resolve, republish] {
+            assert!(matches!(
+                EngineError::from_cut_rotation(RotateOnCutError::Write(unreadable)),
+                EngineError::UnsupportedTarget { .. }
+            ));
+        }
         let owner_key_refusal =
             RotateOnCutError::Read(crate::rotation::CascadeError::OwnerSubkeyMissing {
                 scope_id: [0x11; 16],
