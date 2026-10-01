@@ -30,7 +30,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 use zeroize::Zeroizing;
 
-use crate::boundary::{decode_command, encode_event, encode_outcome, encode_view};
+use crate::boundary::{
+    decode_command, decode_siwe_intent, encode_event, encode_outcome, encode_view,
+};
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
     JsFloorStoreSeam, JsHttpSeam, JsRecordTransportSeam, JsSchedulerSeam, JsSnapshotCacheSeam,
@@ -474,10 +476,13 @@ impl EngineHandle {
     /// string; rejects with the engine error, or with a refusal when the intent
     /// names no pool.
     #[wasm_bindgen(js_name = siweChallenge)]
-    pub fn siwe_challenge(&self, intent: String) -> Promise {
+    pub fn siwe_challenge(&self, intent: Ts<SiweIntent>) -> Promise {
+        let intent = match decode_siwe_intent(&intent.js_value()) {
+            Ok(intent) => intent,
+            Err(refusal) => return Promise::reject(&refusal.into()),
+        };
         let engine = self.engine.clone();
         future_to_promise(async move {
-            let intent = siwe_intent(&intent)?;
             let nonce = engine
                 .read()
                 .await
@@ -635,15 +640,6 @@ impl EngineHandle {
                 None => JsValue::UNDEFINED,
             })
         })
-    }
-}
-
-/// Maps the host's intent string onto the pool the nonce is minted from.
-fn siwe_intent(intent: &str) -> Result<SiweIntent, JsValue> {
-    match intent {
-        "login" => Ok(SiweIntent::Login),
-        "link" => Ok(SiweIntent::Link),
-        other => Err(js_sys::Error::new(&format!("unknown siwe intent: {other}")).into()),
     }
 }
 

@@ -124,7 +124,7 @@ pub use net::{
     resolve, revive,
 };
 pub use profile::SyncTimingProfile;
-pub use record_plane::DefaultsReason;
+pub use record_plane::{BinIndexHoldCheck, DefaultsReason};
 pub use rotation::{
     ChildIndexResolver, CommittedSet, CutRotationReport, CutRotator, EagerSet, EnumerationError,
     GrantCutPlan, PrevEpochSeed, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
@@ -141,10 +141,10 @@ pub use seams::{
 };
 pub use settings::{
     DEFAULT_BIN_RETENTION_DAYS, DEFAULT_KEEP_LATEST_VERSIONS, MAX_BIN_RETENTION_DAYS, Placement,
-    PlacementDecision, PlacementRefusal, PlacementSource, SessionPlacement, SettingsLoad,
-    SettingsOrigin, SettingsPublishError, SettingsRead, SettingsRefusal, VaultSettings,
-    VaultSettingsSummary, decide_placement, load_settings, placement_of, publish_settings,
-    settings_name,
+    PlacementDecision, PlacementRefusal, PlacementSource, SessionPlacement, SettingsHoldCheck,
+    SettingsLoad, SettingsOrigin, SettingsPublishError, SettingsRead, SettingsRefusal,
+    VaultSettings, VaultSettingsSummary, decide_placement, load_settings, placement_of,
+    publish_settings, settings_name,
 };
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{

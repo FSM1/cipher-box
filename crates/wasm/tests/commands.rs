@@ -6,13 +6,13 @@
 
 use cipherbox_engine::content::{ByoBearer, ByoKind};
 use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
-use cipherbox_engine::facade::{Command, NodeId, NodeKind, Permission};
+use cipherbox_engine::facade::{Command, NodeId, NodeKind, Permission, SiweIntent};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_engine::seams::{OpId, UnixMillis};
 use cipherbox_engine::settings::MAX_BIN_RETENTION_DAYS;
 use cipherbox_engine::wire::BIGINT_TAG;
 use cipherbox_engine::{PinMode, RetentionPolicy};
-use cipherbox_wasm::boundary::decode_command;
+use cipherbox_wasm::boundary::{decode_command, decode_siwe_intent};
 use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::wasm_bindgen_test;
@@ -592,5 +592,26 @@ fn a_retention_the_engine_would_refuse_is_refused() {
             );
         }
         other => panic!("decoded {other:?}"),
+    }
+}
+
+/// A nonce is minted for the pool the intent names, and for no other spelling.
+#[wasm_bindgen_test]
+fn a_siwe_intent_decodes_by_its_name_and_refuses_any_other() {
+    assert_eq!(
+        decode_siwe_intent(&JsValue::from_str("login")).ok(),
+        Some(SiweIntent::Login)
+    );
+    assert_eq!(
+        decode_siwe_intent(&JsValue::from_str("link")).ok(),
+        Some(SiweIntent::Link)
+    );
+    for refused in [
+        JsValue::from_str("Login"),
+        JsValue::from_str("admin"),
+        JsValue::from_f64(0.0),
+        JsValue::UNDEFINED,
+    ] {
+        assert!(decode_siwe_intent(&refused).is_err());
     }
 }

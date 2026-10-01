@@ -20,6 +20,7 @@ import type {
   AuthMethodKind,
   BinOrigin,
   BinRow,
+  BinIndexHoldCheck,
   BinView,
   BlockProgress,
   Breadcrumb,
@@ -30,8 +31,10 @@ import type {
   DeadLetter,
   DeadLetterReason,
   Event,
+  GranteeNameSource,
   InvitePreview,
   LinkPreviewState,
+  NodeKind,
   OpPhase,
   PendingApprovalView,
   PendingClass,
@@ -47,11 +50,13 @@ import type {
   ResolutionClass,
   ScopeEpochs,
   ScopeSharing,
+  SettingsHoldCheck,
   SettingsOrigin,
   SharingContact,
   SharingGrant,
   SharingInviteLink,
   SharingView,
+  SiweIntent,
   SnapshotChild,
   SnapshotView,
   Staleness,
@@ -67,11 +72,14 @@ export type {
   BlockProgress,
   ByoKind,
   DeadLetterReason,
+  GranteeNameSource,
+  NodeKind,
   PendingClass,
   Permission,
   PinMode,
   ReclaimStallReason,
   SettingsOrigin,
+  SiweIntent,
   Staleness,
 };
 
@@ -82,9 +90,6 @@ export type {
  * realm's heap.
  */
 export const MAX_FRAGMENT_CHARS = 4096;
-
-/** What a created node is. */
-export type NodeKind = Extract<Command, { kind: 'create' }>['nodeKind'];
 
 /**
  * The phase an `opProgress` event reports. `uploadCompleted` means the
@@ -100,76 +105,32 @@ export type BreadcrumbDescriptor = Breadcrumb;
 export type DeadLetterDescriptor = DeadLetter;
 
 /**
- * The rule that refused the member's own settings, as the engine's stable check
- * names. Only the verdicts a settings hold can carry: a hold waits on the member
- * changing something, so a provider's own answer is retried rather than held.
- * `settings-unavailable` is the stranded mint, whose exit is a settings save.
+ * The rule a settings hold waits on, and the load outcome a bin index hold
+ * waits on: the engine's own check names. A hold names a rule, never the
+ * endpoint or the bearer the settings carry.
  */
-export const SETTINGS_HOLD_CHECKS = [
-  'byo-endpoint-invalid',
-  'byo-endpoint-insecure',
-  'byo-endpoint-blocked',
-  'byo-credential-invalid',
-  'byo-provider-missing',
-  'byo-no-external-ingress',
-  'settings-unavailable',
-] as const;
-
-export type SettingsHoldCheck = (typeof SETTINGS_HOLD_CHECKS)[number];
-
-/**
- * What a bin index load produced, as the engine's stable check names. Only the
- * outcomes a bin index hold can carry: a refusal of bytes the plane served is
- * charged as an attempt, and a stranded mint dead-letters.
- */
-export const BIN_INDEX_HOLD_CHECKS = [
-  'unproven-first-run',
-  'suppressed',
-  'expired',
-  'timed-out',
-  'floor-unreadable',
-] as const;
-
-export type BinIndexHoldCheck = (typeof BIN_INDEX_HOLD_CHECKS)[number];
+export type { BinIndexHoldCheck, SettingsHoldCheck };
 
 /** The queue head held over the account quota. */
 export type QuotaHoldDescriptor = Extract<QueueHold, { reason: 'quota' }>;
 
-/**
- * The queue head held over the member's own settings. The check names the rule,
- * never the endpoint or the bearer those settings carry.
- */
-export type SettingsHoldDescriptor = Extract<QueueHold, { reason: 'settings' }> & {
-  check: SettingsHoldCheck;
-};
+/** The queue head held over the member's own settings. */
+export type SettingsHoldDescriptor = Extract<QueueHold, { reason: 'settings' }>;
 
 /** The queue head held over the owner's bin index. */
-export type BinIndexHoldDescriptor = Extract<QueueHold, { reason: 'bin-index' }> & {
-  check: BinIndexHoldCheck;
-};
+export type BinIndexHoldDescriptor = Extract<QueueHold, { reason: 'bin-index' }>;
 
-/**
- * The one held queue head: the engine `QueueHold`, with each check narrowed to
- * the names this build renders. A host dispatches on `reason`.
- */
-export type QueueHoldDescriptor =
-  | QuotaHoldDescriptor
-  | SettingsHoldDescriptor
-  | BinIndexHoldDescriptor;
+/** The one held queue head: the engine `QueueHold`. A host dispatches on `reason`. */
+export type QueueHoldDescriptor = QueueHold;
 
 /** One direct child in a snapshot: the engine `SnapshotChild`. */
 export type SnapshotChildDescriptor = SnapshotChild;
 
-/** A key-free folder snapshot: the engine `SnapshotView`, its hold narrowed. */
-export type SnapshotDescriptor = Omit<SnapshotView, 'queueHold'> & {
-  queueHold: QueueHoldDescriptor | null;
-};
+/** A key-free folder snapshot: the engine `SnapshotView`. */
+export type SnapshotDescriptor = SnapshotView;
 
 /** One contact the vault's book holds: the engine `SharingContact`. */
 export type SharingContactDescriptor = SharingContact;
-
-/** Who chose a grantee name on the owner-signed row. */
-export type GranteeNameSource = NonNullable<SharingGrant['granteeName']>['source'];
 
 /** One grant a scope's ledger commits: the engine `SharingGrant`. */
 export type SharingGrantDescriptor = SharingGrant;
@@ -378,21 +339,14 @@ export interface OpenedStream {
 /** One event the engine emitted: the engine `Event`. */
 export type EventDescriptor = Event;
 
-/**
- * Which SIWE surface a nonce is minted for. The API keeps one challenge pool per
- * intent and refuses a cross-intent spend, so the caller names the operation the
- * wallet signature will authorise.
- */
-export type SiweIntent = 'login' | 'link';
+/** One prior version of a file: the engine `VersionEntry`. */
+export type VersionEntryDescriptor = VersionEntry;
 
 /**
  * One read intent, as data. Every read the engine serves is one member of this
  * union, so a new read costs one member and one [`ReadResults`] entry rather
  * than a hand-threaded method at each layer of the rail.
  */
-/** One prior version of a file: the engine `VersionEntry`. */
-export type VersionEntryDescriptor = VersionEntry;
-
 export type ReadDescriptor =
   | { kind: 'snapshot'; folder: Uint8Array | null }
   | { kind: 'sharing'; scope: Uint8Array | null }

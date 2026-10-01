@@ -1,6 +1,7 @@
 //! The one decode of a facade command from its JS value, and the one encode of
-//! what it answers, of each event and of each view. All are the engine's own types, typed for
-//! TS by tsify (blueprint/web-client.md "WASM packaging and the type boundary").
+//! what it answers, of each event and of each view. All are the engine's own
+//! types, typed for TS by tsify (blueprint/web-client.md "WASM packaging and
+//! the type boundary").
 //!
 //! Serde buffers an internally tagged value whole before it picks the variant,
 //! and frees that buffer unwiped when a later field refuses. So a command that
@@ -11,7 +12,7 @@
 
 use cipherbox_engine::content::ByoBearer;
 use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
-use cipherbox_engine::facade::{Command, CommandOutcome, Event};
+use cipherbox_engine::facade::{Command, CommandOutcome, Event, SiweIntent};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_engine::seams::check_bearer;
 use cipherbox_engine::wire::{BIGINT_TAG, KEEP_STORED_BEARER};
@@ -92,6 +93,11 @@ pub fn encode_event(event: &Event) -> Result<Ts<Event>, JsError> {
         .serialize(&SERIALIZER)
         .map(Ts::new_unchecked)
         .map_err(|_| JsError::new("the event does not encode"))
+}
+
+/// Decodes the intent a SIWE nonce is minted for.
+pub fn decode_siwe_intent(intent: &JsValue) -> Result<SiweIntent, JsError> {
+    serde_wasm_bindgen::from_value(intent.clone()).map_err(|_| JsError::new("unknown siwe intent"))
 }
 
 /// Encodes one view, or one list of view rows.

@@ -84,6 +84,25 @@ pub enum DefaultsReason {
     FloorUnreadable,
 }
 
+/// What a bin index hold waits on, by the check name of its load outcome. One
+/// variant per outcome a hold can carry, so a host's table of notices is
+/// checked against this set at build time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "kebab-case"))]
+pub enum BinIndexHoldCheck {
+    /// `unproven-first-run`.
+    UnprovenFirstRun,
+    /// `suppressed`.
+    Suppressed,
+    /// `expired`.
+    Expired,
+    /// `timed-out`.
+    TimedOut,
+    /// `floor-unreadable`.
+    FloorUnreadable,
+}
+
 impl DefaultsReason {
     /// Every defaults reason, in declaration order — the surface
     /// `crates/engine/tests/kat_checks.rs` pins (see the crate header).
@@ -132,6 +151,22 @@ impl DefaultsReason {
     /// failing to reach it (blueprint/engine.md "Bin index record"). A caller
     /// that retries on availability must not retry on a verdict.
     #[must_use]
+    /// The name a host renders a bin index hold under, or `None` for a reason
+    /// the drain charges or dead-letters rather than holds.
+    pub fn hold_check(self) -> Option<BinIndexHoldCheck> {
+        match self {
+            Self::UnprovenFirstRun => Some(BinIndexHoldCheck::UnprovenFirstRun),
+            Self::Suppressed => Some(BinIndexHoldCheck::Suppressed),
+            Self::Expired => Some(BinIndexHoldCheck::Expired),
+            Self::TimedOut => Some(BinIndexHoldCheck::TimedOut),
+            Self::FloorUnreadable => Some(BinIndexHoldCheck::FloorUnreadable),
+            Self::StrandedMint
+            | Self::RolledBack { .. }
+            | Self::RevisionRolledBack { .. }
+            | Self::Unreadable => None,
+        }
+    }
+
     pub(crate) fn is_verdict(self) -> bool {
         match self {
             Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => true,

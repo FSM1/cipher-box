@@ -11,10 +11,10 @@
 //! The wasm-bindgen-generated `.d.ts` is the single boundary contract that
 //! `packages/client` re-exports — there is no hand-maintained TS mirror of
 //! engine structures. The facade commands, their outcomes, the events and the
-//! views cross as the engine's own types, typed by tsify ([`boundary`]). Boundary hygiene is
-//! structural: `u64`s cross as `bigint`, binary payloads as `Uint8Array`, and
-//! the command surface exposes only intent while the event and read surfaces
-//! carry key-free view state and decrypted user content.
+//! views cross as the engine's own types, typed by tsify ([`boundary`]).
+//! Boundary hygiene is structural: `u64`s cross as `bigint`, binary payloads as
+//! `Uint8Array`, and the command surface exposes only intent while the event
+//! and read surfaces carry key-free view state and decrypted user content.
 //!
 //! One secret crosses out, and only because handing it over *is* the feature:
 //! an invite link's bearer capability (the `inviteLinkMinted` outcome), which

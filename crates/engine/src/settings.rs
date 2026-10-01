@@ -504,6 +504,66 @@ impl SettingsRefusal {
             Self::Placement(refusal) => refusal.class(),
         }
     }
+
+    /// The name a host renders this hold under, or `None` for a refusal that
+    /// [`PlacementRefusal::holds`] and [`ProviderError::is_deterministic`]
+    /// never hold on.
+    pub fn hold_check(&self) -> Option<SettingsHoldCheck> {
+        Some(match self {
+            Self::Byo(ProviderError::InvalidEndpoint) => SettingsHoldCheck::ByoEndpointInvalid,
+            Self::Byo(ProviderError::InsecureTransport) => SettingsHoldCheck::ByoEndpointInsecure,
+            Self::Byo(ProviderError::BlockedAddress) => SettingsHoldCheck::ByoEndpointBlocked,
+            Self::Byo(ProviderError::InvalidCredential) => SettingsHoldCheck::ByoCredentialInvalid,
+            Self::Byo(ProviderError::UnresolvedCredential) => {
+                SettingsHoldCheck::ByoCredentialUnresolved
+            }
+            Self::Byo(ProviderError::NoStoredCredential) => {
+                SettingsHoldCheck::ByoCredentialNotStored
+            }
+            Self::Byo(ProviderError::RepointedCredential) => {
+                SettingsHoldCheck::ByoCredentialRepointed
+            }
+            Self::Placement(PlacementRefusal::NoProvider) => SettingsHoldCheck::ByoProviderMissing,
+            Self::Placement(PlacementRefusal::NoExternalIngress(_)) => {
+                SettingsHoldCheck::ByoNoExternalIngress
+            }
+            Self::Placement(PlacementRefusal::SettingsUnavailable(
+                DefaultsReason::StrandedMint,
+            )) => SettingsHoldCheck::SettingsUnavailable,
+            Self::Byo(_) | Self::Placement(PlacementRefusal::SettingsUnavailable(_)) => {
+                return None;
+            }
+        })
+    }
+}
+
+/// The rule a settings hold waits on, by the check name of the refusal it
+/// holds. One variant per refusal a hold can carry, so a host's table of
+/// notices is checked against this set at build time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "kebab-case"))]
+pub enum SettingsHoldCheck {
+    /// `byo-endpoint-invalid`.
+    ByoEndpointInvalid,
+    /// `byo-endpoint-insecure`.
+    ByoEndpointInsecure,
+    /// `byo-endpoint-blocked`.
+    ByoEndpointBlocked,
+    /// `byo-credential-invalid`.
+    ByoCredentialInvalid,
+    /// `byo-credential-unresolved`.
+    ByoCredentialUnresolved,
+    /// `byo-credential-not-stored`.
+    ByoCredentialNotStored,
+    /// `byo-credential-repointed`.
+    ByoCredentialRepointed,
+    /// `byo-provider-missing`.
+    ByoProviderMissing,
+    /// `byo-no-external-ingress`.
+    ByoNoExternalIngress,
+    /// `settings-unavailable`: the stranded mint, whose exit is a settings save.
+    SettingsUnavailable,
 }
 
 /// Where a session's placement decision came from. An assumed default

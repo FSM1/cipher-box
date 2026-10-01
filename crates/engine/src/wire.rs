@@ -1,22 +1,25 @@
-//! The serde shape of the facade commands, events and views at the WASM boundary: the
-//! adapters for the field types whose durable serde form is not the boundary
-//! form (blueprint/web-client.md "WASM packaging and the type boundary").
+//! The serde shape of the facade commands, events and views at the WASM
+//! boundary: the adapters for the field types whose durable serde form is not
+//! the boundary form (blueprint/web-client.md "WASM packaging and the type
+//! boundary").
 //!
-//! [`NodeId`] and [`NodeKind`] already derive serde for the op queue, which must
-//! still read what the previous release wrote, so the boundary spells them
-//! through these adapters rather than through a changed derive.
+//! [`NodeId`] and [`facade::NodeKind`] already derive serde for the op queue,
+//! which must still read what the previous release wrote, so the boundary
+//! spells them through these adapters rather than through a changed derive.
 
 use core::fmt;
 
 use cipherbox_core::seal::NameSource;
 use serde::de::{self, Deserializer, Visitor};
-use serde::ser::{SerializeStruct, Serializer};
+use serde::ser::{self, SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::content::ByoBearer;
-use crate::facade::{self, NodeId, NodeKind, QueueHoldReason};
+use crate::facade::{self, NodeId, QueueHoldReason};
+use crate::record_plane::BinIndexHoldCheck;
 use crate::seams::{OpId, UnixMillis};
+use crate::settings::SettingsHoldCheck;
 use crate::settings::{DEFAULT_BIN_RETENTION_DAYS, MAX_BIN_RETENTION_DAYS};
 use crate::{Contact, MintedInviteLink, RetentionPolicy};
 
@@ -132,27 +135,36 @@ pub fn no_fields<'de, D: Deserializer<'de>>(deserializer: D) -> Result<(), D::Er
 pub mod node_kind {
     use super::*;
 
-    #[derive(Deserialize)]
+    /// The boundary spelling of a [`facade::NodeKind`].
+    #[derive(Serialize, Deserialize, tsify::Tsify)]
     #[serde(rename_all = "camelCase")]
-    enum Wire {
+    pub enum NodeKind {
+        /// `"file"`.
         File,
+        /// `"folder"`.
         Folder,
     }
 
     /// Refuses any other spelling.
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<NodeKind, D::Error> {
-        Ok(match Wire::deserialize(deserializer)? {
-            Wire::File => NodeKind::File,
-            Wire::Folder => NodeKind::Folder,
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<facade::NodeKind, D::Error> {
+        Ok(match NodeKind::deserialize(deserializer)? {
+            NodeKind::File => facade::NodeKind::File,
+            NodeKind::Folder => facade::NodeKind::Folder,
         })
     }
 
     /// Writes the kind as the decode reads it.
-    pub fn serialize<S: Serializer>(kind: &NodeKind, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(match kind {
-            NodeKind::File => "file",
-            NodeKind::Folder => "folder",
-        })
+    pub fn serialize<S: Serializer>(
+        kind: &facade::NodeKind,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match kind {
+            facade::NodeKind::File => NodeKind::File,
+            facade::NodeKind::Folder => NodeKind::Folder,
+        }
+        .serialize(serializer)
     }
 }
 
@@ -368,21 +380,37 @@ pub fn minted_link<S: Serializer>(
 
 /// A grantee name and who chose it, as one value, so neither crosses without
 /// the other.
+#[derive(Serialize, tsify::Tsify)]
+pub struct GranteeName<'a> {
+    /// The name.
+    pub name: &'a str,
+    /// Who chose it.
+    pub source: GranteeNameSource,
+}
+
+/// Who chose a grantee name ([`NameSource`]).
+#[derive(Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum GranteeNameSource {
+    /// The owner gave or edited the name.
+    Owner,
+    /// The claimant asked for the name.
+    Claimant,
+}
+
+/// An optional grantee name as a [`GranteeName`].
 pub fn grantee_name<S: Serializer>(
     named: &Option<(String, NameSource)>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    #[derive(Serialize)]
-    struct Named<'a> {
-        name: &'a str,
-        source: &'static str,
-    }
-
     named
         .as_ref()
-        .map(|(name, source)| Named {
+        .map(|(name, source)| GranteeName {
             name,
-            source: source.as_wire(),
+            source: match source {
+                NameSource::Owner => GranteeNameSource::Owner,
+                NameSource::Claimant => GranteeNameSource::Claimant,
+            },
         })
         .serialize(serializer)
 }
@@ -417,8 +445,8 @@ pub enum QueueHold {
         #[serde(serialize_with = "node_id::serialize")]
         #[tsify(type = "Uint8Array")]
         node: NodeId,
-        /// The stable check name of the rule that refused.
-        check: &'static str,
+        /// The rule that refused.
+        check: SettingsHoldCheck,
     },
     /// Held over the owner's bin index.
     BinIndex {
@@ -428,15 +456,16 @@ pub enum QueueHold {
         #[serde(serialize_with = "node_id::serialize")]
         #[tsify(type = "Uint8Array")]
         node: NodeId,
-        /// The stable check name of the load outcome.
-        check: &'static str,
+        /// The load outcome.
+        check: BinIndexHoldCheck,
     },
 }
 
-impl From<facade::QueueHold> for QueueHold {
-    fn from(hold: facade::QueueHold) -> Self {
+impl QueueHold {
+    /// `None` for a hold on a refusal no hold may carry.
+    fn of(hold: facade::QueueHold) -> Option<Self> {
         let (op_id, node) = (hold.op_id, hold.node);
-        match hold.reason {
+        Some(match hold.reason {
             QueueHoldReason::Quota { needed_bytes } => Self::Quota {
                 op_id,
                 node,
@@ -445,21 +474,24 @@ impl From<facade::QueueHold> for QueueHold {
             QueueHoldReason::Settings(refusal) => Self::Settings {
                 op_id,
                 node,
-                check: refusal.check(),
+                check: refusal.hold_check()?,
             },
             QueueHoldReason::BinIndex(reason) => Self::BinIndex {
                 op_id,
                 node,
-                check: reason.check(),
+                check: reason.hold_check()?,
             },
-        }
+        })
     }
 }
 
-/// An optional held queue head as a [`QueueHold`].
+/// An optional held queue head as a [`QueueHold`]. Refuses a hold whose check
+/// no host table names, rather than send a cause no notice can render.
 pub fn queue_hold<S: Serializer>(
     hold: &Option<facade::QueueHold>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    hold.map(QueueHold::from).serialize(serializer)
+    hold.map(|hold| QueueHold::of(hold).ok_or_else(|| ser::Error::custom("unnamed hold check")))
+        .transpose()?
+        .serialize(serializer)
 }

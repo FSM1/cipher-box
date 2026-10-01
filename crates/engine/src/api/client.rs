@@ -2440,16 +2440,23 @@ mod tests {
                     "createdAt": "2026-08-27T09:00:00.000Z",
                     "lastSeenAt": "2026-08-27T09:30:00.000Z",
                 },
+                {
+                    "id": "device-3",
+                    "publicKey": DEVICE_KEY,
+                    "createdAt": "2026-08-27T08:00:00.000Z",
+                    "lastSeenAt": "2026-08-27T08:30:00.000Z",
+                },
             ]}),
         ));
 
         let rows = block_on(client.devices()).expect("the registry served its rows");
 
-        assert_eq!(rows.len(), 2, "the envelope is unwrapped to its rows");
+        assert_eq!(rows.len(), 3, "the envelope is unwrapped to its rows");
         assert_eq!(rows[0].id, "device-1");
         assert_eq!(rows[0].label.as_deref(), Some("Laptop"));
         assert_eq!(rows[1].id, "device-2");
         assert_eq!(rows[1].label, None, "a null label decodes as none");
+        assert_eq!(rows[2].label, None, "an absent label decodes as none");
         let requests = http.requests();
         let sent = &requests[sent_after_login];
         assert_eq!(sent.method, HttpMethod::Get);

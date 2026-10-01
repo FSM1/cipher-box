@@ -15,8 +15,8 @@ use cipherbox_engine::facade::{
 use cipherbox_engine::seams::OpId;
 use cipherbox_engine::{
     AuthMethod, AuthMethodKind, ByoKind, DefaultsReason, PendingApprovalView, PinMode,
-    ProviderError, ReclaimStall, ReclaimStallReason, RegisteredDevice, ResolutionClass,
-    RetentionPolicy, SettingsOrigin, SettingsRefusal, VaultSettingsSummary,
+    PlacementRefusal, ProviderError, ReclaimStall, ReclaimStallReason, RegisteredDevice,
+    ResolutionClass, RetentionPolicy, SettingsOrigin, SettingsRefusal, VaultSettingsSummary,
 };
 use cipherbox_wasm::boundary::encode_view;
 use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
@@ -221,6 +221,68 @@ fn a_queue_hold_names_its_reason_and_carries_only_that_reasons_figure() {
     assert_eq!(keys(&bin_index), ["reason", "opId", "node", "check"]);
     assert_eq!(field(&bin_index, "reason"), JsValue::from_str("bin-index"));
     assert_eq!(field(&bin_index, "check"), JsValue::from_str("suppressed"));
+}
+
+/// Each hold crosses under the check name of the rule that refused, and a
+/// hold on a refusal no hold may carry refuses the encode rather than send a
+/// cause no notice can render.
+#[wasm_bindgen_test]
+fn a_hold_check_crosses_as_the_check_name_of_its_refusal() {
+    let check = |reason| {
+        encode_view(&snapshot(Some(QueueHold {
+            op_id: OpId(1),
+            node: NodeId([6; 16]),
+            reason,
+        })))
+        .map(|view| field(&field(&view, "queueHold"), "check"))
+    };
+    let held = [
+        ProviderError::InvalidEndpoint,
+        ProviderError::InsecureTransport,
+        ProviderError::BlockedAddress,
+        ProviderError::InvalidCredential,
+        ProviderError::UnresolvedCredential,
+        ProviderError::NoStoredCredential,
+        ProviderError::RepointedCredential,
+    ]
+    .map(SettingsRefusal::Byo)
+    .into_iter()
+    .chain(
+        [
+            PlacementRefusal::NoProvider,
+            PlacementRefusal::NoExternalIngress(ByoKind::Psa),
+            PlacementRefusal::SettingsUnavailable(DefaultsReason::StrandedMint),
+        ]
+        .map(SettingsRefusal::Placement),
+    );
+    for refusal in held {
+        assert_eq!(
+            check(QueueHoldReason::Settings(refusal)).ok(),
+            Some(JsValue::from_str(refusal.check())),
+            "{refusal:?}"
+        );
+    }
+    for reason in [
+        DefaultsReason::UnprovenFirstRun,
+        DefaultsReason::Suppressed,
+        DefaultsReason::Expired,
+        DefaultsReason::TimedOut,
+        DefaultsReason::FloorUnreadable,
+    ] {
+        assert_eq!(
+            check(QueueHoldReason::BinIndex(reason)).ok(),
+            Some(JsValue::from_str(reason.check())),
+            "{reason:?}"
+        );
+    }
+
+    assert!(
+        check(QueueHoldReason::Settings(SettingsRefusal::Byo(
+            ProviderError::Unreachable
+        )))
+        .is_err()
+    );
+    assert!(check(QueueHoldReason::BinIndex(DefaultsReason::StrandedMint)).is_err());
 }
 
 /// A bin row carries no route and no key: the entry's bin-held key and its

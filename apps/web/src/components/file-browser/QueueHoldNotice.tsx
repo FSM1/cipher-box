@@ -10,6 +10,12 @@ const SETTINGS_CAUSES: Record<SettingsHoldCheck, string> = {
   'byo-endpoint-blocked': 'the address of your own storage provider is one this app may not call',
   'byo-credential-invalid':
     'the access token for your own storage provider carries characters a request cannot hold',
+  'byo-credential-unresolved':
+    'your settings keep a stored access token for your own storage provider and none was resolved. save your settings again',
+  'byo-credential-not-stored':
+    'your settings keep the stored access token for your own storage provider and this device holds none. enter the access token and save',
+  'byo-credential-repointed':
+    'your settings keep an access token stored for a different storage provider. enter the access token for this one and save',
   'byo-provider-missing': 'your settings send bytes to your own storage provider and name none',
   'byo-no-external-ingress': 'the storage provider your settings name cannot take uploads',
   'settings-unavailable':

@@ -280,6 +280,8 @@ pub enum NodeKind {
 /// and refuses a cross-intent spend, so a signature the host collects under one
 /// prompt can never serve the other operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum SiweIntent {
     /// A wallet sign-in.
     Login,
@@ -392,7 +394,7 @@ pub struct SnapshotChild {
     #[cfg_attr(
         feature = "wasm",
         serde(serialize_with = "crate::wire::node_kind::serialize"),
-        tsify(type = "\"file\" | \"folder\"")
+        tsify(type = "NodeKind")
     )]
     pub kind: NodeKind,
     /// Plaintext content size in bytes, once the content plane projects it.
@@ -608,7 +610,7 @@ pub struct SharingGrant {
     #[cfg_attr(
         feature = "wasm",
         serde(serialize_with = "crate::wire::grantee_name"),
-        tsify(type = "{ name: string; source: \"owner\" | \"claimant\" } | null")
+        tsify(type = "GranteeName | null")
     )]
     pub grantee_name: Option<(String, NameSource)>,
     /// The tag of the link that admitted this grantee, as
@@ -887,7 +889,7 @@ pub struct PreviewEntry {
     #[cfg_attr(
         feature = "wasm",
         serde(serialize_with = "crate::wire::node_kind::serialize"),
-        tsify(type = "\"file\" | \"folder\"")
+        tsify(type = "NodeKind")
     )]
     pub kind: NodeKind,
 }
@@ -1044,7 +1046,7 @@ pub struct BinRow {
     #[cfg_attr(
         feature = "wasm",
         serde(serialize_with = "crate::wire::node_kind::serialize"),
-        tsify(type = "\"file\" | \"folder\"")
+        tsify(type = "NodeKind")
     )]
     pub kind: NodeKind,
     /// The folder the node was unlinked from — a restore's default destination.
@@ -1505,7 +1507,7 @@ pub enum Command {
         #[cfg_attr(
             feature = "wasm",
             serde(rename = "nodeKind", with = "crate::wire::node_kind"),
-            tsify(type = "\"file\" | \"folder\"")
+            tsify(type = "NodeKind")
         )]
         kind: NodeKind,
     },

@@ -5,11 +5,12 @@
  * interpretation, no crypto — the engine below the facade owns all of that.
  */
 
-import { BIN_INDEX_HOLD_CHECKS, MAX_FRAGMENT_CHARS, SETTINGS_HOLD_CHECKS } from './protocol.js';
+import { MAX_FRAGMENT_CHARS } from './protocol.js';
 import type {
   AuthMethodDescriptor,
   AuthMethodKind,
   BinDescriptor,
+  BinIndexHoldCheck,
   BinOriginDescriptor,
   ByoKind,
   DeadLetterReason,
@@ -26,6 +27,7 @@ import type {
   ReceivedShareDescriptor,
   ReceivedShareResolution,
   ReclaimStallReason,
+  SettingsHoldCheck,
   SettingsOrigin,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -180,6 +182,27 @@ const PERMISSIONS: Record<Permission, true> = { read: true, write: true };
 
 const GRANTEE_NAME_SOURCES: Record<GranteeNameSource, true> = { owner: true, claimant: true };
 
+const SETTINGS_HOLD_CHECKS: Record<SettingsHoldCheck, true> = {
+  'byo-endpoint-invalid': true,
+  'byo-endpoint-insecure': true,
+  'byo-endpoint-blocked': true,
+  'byo-credential-invalid': true,
+  'byo-credential-unresolved': true,
+  'byo-credential-not-stored': true,
+  'byo-credential-repointed': true,
+  'byo-provider-missing': true,
+  'byo-no-external-ingress': true,
+  'settings-unavailable': true,
+};
+
+const BIN_INDEX_HOLD_CHECKS: Record<BinIndexHoldCheck, true> = {
+  'unproven-first-run': true,
+  suppressed: true,
+  expired: true,
+  'timed-out': true,
+  'floor-unreadable': true,
+};
+
 const RESOLUTIONS: Record<ReceivedShareResolution, true> = {
   granted: true,
   'revocation-signal': true,
@@ -263,25 +286,17 @@ function readQueueHold(hold: QueueHold | null): QueueHoldDescriptor | null {
   if (hold === null) return null;
   switch (hold.reason) {
     case 'quota':
-      return hold;
+      break;
     case 'settings':
-      return { ...hold, check: holdCheck(hold, SETTINGS_HOLD_CHECKS) };
+      known(SETTINGS_HOLD_CHECKS, hold.check, 'settings hold check');
+      break;
     case 'bin-index':
-      return { ...hold, check: holdCheck(hold, BIN_INDEX_HOLD_CHECKS) };
+      known(BIN_INDEX_HOLD_CHECKS, hold.check, 'bin-index hold check');
+      break;
     default:
       throw new Error(`unknown WASM queue hold reason: ${(hold as { reason: unknown }).reason}`);
   }
-}
-
-function holdCheck<TCheck extends string>(
-  hold: { reason: string; check: string },
-  checks: readonly TCheck[]
-): TCheck {
-  const check = checks.find((name) => name === hold.check);
-  if (check === undefined) {
-    throw new Error(`unknown WASM ${hold.reason} hold check: ${hold.check}`);
-  }
-  return check;
+  return hold;
 }
 
 /** Passes a snapshot through once each enum value in it is one this build knows. */
