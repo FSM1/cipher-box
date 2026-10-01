@@ -74,7 +74,7 @@ use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor};
 use crate::grants::child_index::canonicalize;
-use crate::grants::create::{ScopePointerVoucher, drop_held_refs};
+use crate::grants::create::{HeldNode, ScopePointerVoucher, drop_held_refs};
 use crate::grants::{
     GrantResumeResolver, InteriorRecord, InteriorResealer, MovingChild, PromotedScopeRoot,
     ScopeRootPromoter, UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row,
@@ -2458,7 +2458,7 @@ where
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
-        held_outside: &[[u8; 16]],
+        held_outside: &[HeldNode],
     ) -> Result<Vec<NodeRef>, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         // The interior move this promotion heads seals under the same seed.
@@ -2474,7 +2474,8 @@ where
             Ok(SweptChild::ScopeRoot(_)) => return Err(RotationPublishError::Rejected),
             Err(failure) => return Err(promote_verdict(failure)),
         };
-        drop_held_refs(&mut current.read_body, held_outside);
+        drop_held_refs(&mut current.read_body, node.node_id, held_outside)
+            .map_err(|_| RotationPublishError::Rejected)?;
         let children = body_children(&current.read_body);
         let base = RepublishBase {
             read_body: current.read_body,

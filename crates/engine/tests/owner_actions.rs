@@ -1931,6 +1931,68 @@ fn a_write_link_conversion_leaves_a_held_node_in_the_vault_scope() {
     assert_held_in_the_vault_scope(&fx, keep, deep, "after the conversion");
 }
 
+/// Another device moves the held node into the granted folder after this
+/// device last refreshed: it raises the inside ref above the outside one and
+/// drops the outside ref. The grant must not drop the ref that is now the
+/// winner, so it refuses the move, and a retry after a refresh moves the node.
+#[test]
+fn a_grant_refuses_to_drop_a_ref_relinked_since_its_snapshot() {
+    let mut fx = GrantScenario::new();
+    let (keep, deep, inner) = dual_linked_at(&mut fx, 0, true, |_| {});
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        inner,
+        &read_key_of(inner),
+        SCOPE,
+        |children| {
+            for child in children.iter_mut().filter(|child| child.id == deep.0) {
+                child.link_counter = 3;
+            }
+        },
+    );
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        keep,
+        &read_key_of(keep),
+        SCOPE,
+        |children| children.retain(|child| child.id != deep.0),
+    );
+
+    assert!(
+        fx.grant_folder_to_recipient().is_err(),
+        "the grant refuses the move"
+    );
+    assert_eq!(
+        published_child_names(&fx.world, &fx.blocks, inner, &read_key_of(inner)),
+        vec!["deep".to_owned()],
+        "the folder still names the node"
+    );
+
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    assert_eq!(
+        published_child_names(
+            &fx.world,
+            &fx.blocks,
+            inner,
+            &read_key_under(&override_seed, inner)
+        ),
+        vec!["deep".to_owned()],
+        "a retry moves the folder with the node"
+    );
+    let head = published_head(&fx.world, &fx.blocks, &write_name(deep)).expect("deep is published");
+    let envelope = decode_envelope(&head).expect("the head block decodes");
+    assert!(
+        open_read_body(&envelope, &read_key_under(&override_seed, deep)).is_ok(),
+        "and the node moves into the granted scope"
+    );
+}
+
 /// The grantee reads the granted folder of a held node with no trust
 /// violation, and the folder holds no ref the grantee could re-rank.
 #[test]
@@ -2716,6 +2778,21 @@ fn concurrent_add(
     scope_id: [u8; 16],
     extra: ChildRef,
 ) {
+    concurrent_edit(world, blocks, folder, read_key, scope_id, |children| {
+        children.push(extra);
+    });
+}
+
+/// Another writer publishes `folder`'s next record, with `edit` applied to the
+/// children the folder currently carries.
+fn concurrent_edit(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    folder: NodeId,
+    read_key: &[u8; 32],
+    scope_id: [u8; 16],
+    edit: impl FnOnce(&mut Vec<ChildRef>),
+) {
     let name = write_name(folder);
     let head = published_head(world, blocks, &name).expect("the folder is published");
     let envelope = decode_envelope(&head).expect("the head block decodes");
@@ -2728,13 +2805,14 @@ fn concurrent_add(
     else {
         panic!("expected a folder body");
     };
-    children.push(extra);
+    edit(&mut children);
+    let sequence = sequence_at(world, &name) + 1;
     let authored = author_child_envelope(EnvelopeAuthoring {
         node_id: folder.0,
         scope_id,
         epoch: envelope.epoch,
         read_key,
-        nonce: &[0x77; 24],
+        nonce: &[0x77 ^ sequence.to_le_bytes()[0]; 24],
         body: &ReadBody::Folder {
             created_at,
             modified_at,
@@ -2749,7 +2827,7 @@ fn concurrent_add(
     let record = IpnsRecord::create_v2(
         &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &folder.0).as_bytes()),
         format!("/ipfs/{}", authored.cid).as_bytes(),
-        sequence_at(world, &name) + 1,
+        sequence,
         TTL_NANOS,
         EOL,
     )

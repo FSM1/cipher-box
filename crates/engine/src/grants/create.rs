@@ -95,7 +95,7 @@ pub struct GranteeScopePlan<'a> {
     /// names a parent outside it. Readers resolve each one under that parent,
     /// so the grant leaves it in the scope it holds and drops the losing ref
     /// ([`drop_held_refs`]).
-    pub held_outside: &'a [[u8; 16]],
+    pub held_outside: &'a [HeldNode],
 }
 
 impl GranteeScopePlan<'_> {
@@ -545,7 +545,7 @@ pub trait ScopeRootPromoter {
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
-        held_outside: &[[u8; 16]],
+        held_outside: &[HeldNode],
     ) -> Result<Vec<NodeRef>, RotationPublishError>;
 }
 
@@ -1463,13 +1463,41 @@ where
     })
 }
 
-/// Drop `body`'s refs to `held_outside`. Each is the losing link of a node the
-/// grant leaves outside, so dropping it is the observed repair of that
-/// dual-link (blueprint/engine.md rebase table, "Dual-link").
-pub(crate) fn drop_held_refs(body: &mut ReadBody, held_outside: &[[u8; 16]]) {
-    if let ReadBody::Folder { children, .. } = body {
-        children.retain(|child| !held_outside.contains(&child.id));
+/// A node the grant leaves outside, with the winning link the owner's snapshot
+/// ranked for it ([`Snapshot::links_ranked`](crate::sync::model::Snapshot::links_ranked)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldNode {
+    /// The held node's id.
+    pub id: [u8; 16],
+    /// The parent its winning link names, outside the granted folder.
+    pub winner_parent: [u8; 16],
+    /// The link counter of that winning link.
+    pub winner_counter: u64,
+}
+
+/// Drop the refs in `parent`'s `body` to a node in `held_outside`. Each must
+/// still lose to the winning link the snapshot ranked, so dropping it is the
+/// observed repair of that dual-link (blueprint/engine.md rebase table,
+/// "Dual-link"). A ref that no longer loses was re-linked since the snapshot;
+/// dropping it would unlink a live node, so its id is the `Err`.
+pub(crate) fn drop_held_refs(
+    body: &mut ReadBody,
+    parent: [u8; 16],
+    held_outside: &[HeldNode],
+) -> Result<(), [u8; 16]> {
+    let ReadBody::Folder { children, .. } = body else {
+        return Ok(());
+    };
+    for child in children.iter() {
+        if let Some(held) = held_outside.iter().find(|held| held.id == child.id) {
+            let loses = (child.link_counter, held.winner_parent) < (held.winner_counter, parent);
+            if !loses {
+                return Err(child.id);
+            }
+        }
     }
+    children.retain(|child| !held_outside.iter().any(|held| held.id == child.id));
+    Ok(())
 }
 
 /// Whether `published` commits exactly the row `minted` mints: the recipient,
@@ -1510,7 +1538,7 @@ async fn reseal_granted_interior<R, P>(
     root: &ResealedScopeRoot,
     frontier: Vec<NodeRef>,
     bounds: &InteriorBounds,
-    held_outside: &[[u8; 16]],
+    held_outside: &[HeldNode],
 ) -> Result<(), CreateGrantError>
 where
     R: SweepResolver + GrantResumeResolver,
@@ -1523,7 +1551,7 @@ where
         for child in &frontier {
             if !visited.insert(child.node_id)
                 || bounds.stop_at.contains(&child.node_id)
-                || held_outside.contains(&child.node_id)
+                || held_outside.iter().any(|held| held.id == child.node_id)
             {
                 continue;
             }
@@ -1539,7 +1567,8 @@ where
                 .await
             {
                 Ok(MovingChild::Pending(mut node)) => {
-                    drop_held_refs(&mut node.read_body, held_outside);
+                    drop_held_refs(&mut node.read_body, child.node_id, held_outside)
+                        .map_err(|node_id| CreateGrantError::InteriorNotConverged { node_id })?;
                     // Release-active (security rule 8). The read admits any
                     // record at or below the scope's epoch, so a record that
                     // regressed since the pass would travel into the grantee's
@@ -2313,7 +2342,7 @@ mod tests {
             parent: &ChildScopeRef,
             _node: &NodeRef,
             record: &ResealedScopeRoot,
-            _held_outside: &[[u8; 16]],
+            _held_outside: &[HeldNode],
         ) -> Result<Vec<NodeRef>, RotationPublishError> {
             if parent.ipns_name != self.current_parent_name() {
                 return Err(RotationPublishError::Rejected);

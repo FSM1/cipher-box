@@ -79,7 +79,7 @@ use crate::grants::received_status::{grafted_root_name, live_permission};
 use crate::grants::{
     BoundContact, CLAIM_KEY_LEN, ClaimOutcome, CommittedScope, Contact, ContactStore,
     ContactStoreError, ConvertedClaim, CreateGrantError, DEFAULT_ADMISSION_CAP,
-    DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim,
+    DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim, HeldNode,
     InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan, LinkHold,
     LinkSource, LinkSources, LinkTerms, MAX_ADMISSION_CAP, MintedInviteLink, OwnerAuthority,
     OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShare, ReceivedShareStore,
@@ -3952,18 +3952,27 @@ fn subtree_child_scopes(
 /// The nodes a folder inside `node` links whose winning chain reaches the vault
 /// root without passing `node` ([`GranteeScopePlan::held_outside`]). A chain
 /// that cycles or ends short proves nothing, so its node stays inside.
-fn held_outside(rendered: &Snapshot, node: NodeId) -> Vec<[u8; 16]> {
+fn held_outside(rendered: &Snapshot, node: NodeId) -> Vec<HeldNode> {
     let inside = |id: NodeId| id == node || rendered.is_descendant_of(id, node);
-    let mut held: Vec<[u8; 16]> = rendered
+    let mut held: Vec<NodeId> = rendered
         .links()
         .iter()
         .filter(|link| inside(link.parent) && !inside(link.child))
         .filter(|link| rendered.is_descendant_of(link.child, rendered.root))
-        .map(|link| link.child.0)
+        .map(|link| link.child)
         .collect();
     held.sort_unstable();
     held.dedup();
-    held
+    held.into_iter()
+        .filter_map(|child| {
+            let winner = rendered.winning_link(child)?;
+            Some(HeldNode {
+                id: child.0,
+                winner_parent: winner.parent.0,
+                winner_counter: winner.link_counter,
+            })
+        })
+        .collect()
 }
 
 /// The published grant blobs of a gated scope root, as the accept flow's
@@ -11450,7 +11459,14 @@ mod tests {
 
         let mut held = tree();
         held.link(keep, x, 2);
-        assert_eq!(held_outside(&held, granted), vec![x.0]);
+        assert_eq!(
+            held_outside(&held, granted),
+            vec![HeldNode {
+                id: x.0,
+                winner_parent: keep.0,
+                winner_counter: 2,
+            }]
+        );
 
         let mut cycle = tree();
         cycle.link(x, a, 5);
