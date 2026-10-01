@@ -42,7 +42,7 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::sync::doomed::{journalled_keys, open_reclamation};
-use crate::sync::owed_rotation::{open_owed_record, owed_rotation_key};
+use crate::sync::owed_rotation::{OwedCell, OwedRotation};
 use crate::sync::tick::ResolveMode;
 use crate::sync::{BookkeepingSeal, owner_tag};
 
@@ -133,6 +133,8 @@ pub(crate) struct RenewalWalk<'a, T, H: Http, C: CredentialStore, F, S, St, Sch>
     /// The scope roots the boundary walk met with a write cut that did not
     /// finish.
     pub(crate) unfinished_write_cuts: &'a BTreeSet<[u8; 16]>,
+    /// The session's owed rotation record, the one the re-drive reads.
+    pub(crate) owed: &'a OwedCell,
 }
 
 /// What one pass did.
@@ -441,14 +443,15 @@ where
     /// The scopes this owner's owed rotation record names. A blob this
     /// identity does not open reads as no record.
     async fn owed_scopes(&self) -> SeamResult<BTreeSet<[u8; 16]>> {
-        let blob = self
-            .staging
-            .staged_bytes(&owed_rotation_key(self.enc_secret))
-            .await?;
-        Ok(blob
-            .and_then(|blob| open_owed_record(self.seal, &blob))
-            .map(|record| record.keys().map(|scope| scope.0).collect())
-            .unwrap_or_default())
+        let record = OwedRotation {
+            staging: self.staging,
+            seal: self.seal,
+            enc_secret: self.enc_secret,
+            cell: self.owed,
+        }
+        .load()
+        .await?;
+        Ok(record.keys().map(|scope| scope.0).collect())
     }
 
     /// Admit `scope_id`'s root once per pass.

@@ -2268,6 +2268,19 @@ pub enum Event {
         /// versus a refusal that a re-drive reaches again.
         retryable: bool,
     },
+    /// Owed rotation work that can never land was dropped: its cut set never
+    /// published, or its folder or recipient is gone (ADR 0063 D3). Sent once.
+    RotationWorkAbandoned {
+        /// The scope root the work was owed at.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
+        scope_root: NodeId,
+        /// Key-material-free classification of why the work was dropped.
+        detail: String,
+    },
     /// The renewal walk met an owned scope root whose name its write seed does
     /// not derive: a write cut that did not finish, which only the device that
     /// owes it finishes. Its names lapse until then (ADR 0063 consequence 8).
@@ -2376,6 +2389,11 @@ impl fmt::Debug for Event {
                 .field("scope_root", scope_root)
                 .field("detail", detail)
                 .field("retryable", retryable)
+                .finish(),
+            Self::RotationWorkAbandoned { scope_root, detail } => f
+                .debug_struct("RotationWorkAbandoned")
+                .field("scope_root", scope_root)
+                .field("detail", detail)
                 .finish(),
             Self::WriteCutUnfinished { scope_root } => f
                 .debug_struct("WriteCutUnfinished")
@@ -6221,6 +6239,7 @@ where {
         let roots_walked = self.state.scope_roots_walked.clone();
         let owed_driven = self.state.owed_rotation_driven.clone();
         let unfinished_write_cuts = self.state.unfinished_write_cuts.clone();
+        let owed_rotation = self.state.owed_rotation.clone();
         let descendant_scope_roots = self.state.descendant_scope_roots.clone();
         self.seams.scheduler.spawn(Box::pin(async move {
             // One latch per session: the loop is spawned once per start.
@@ -6342,6 +6361,7 @@ where {
                             held: &held,
                         },
                         unfinished_write_cuts: &unfinished,
+                        owed: &owed_rotation,
                     };
                     // A scope this session minted holds seeds before the next
                     // boundary walk names it.
@@ -7279,10 +7299,10 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let identity_pk = recipient_identity(recipient_identity_public_key)?;
+        // The recipient being revoked is owed no share pointer any more.
+        self.cancel_owed_delivery(node, &identity_pk).await?;
         let redriven = self.redrive_owed_at(node).await?;
-        if redriven == Redriven::StillOwed {
-            return Ok(());
-        }
+        let still_owed = redriven == Redriven::StillOwed;
         let book = self
             .contact_store(session)
             .contacts_with_bindings()
@@ -7312,6 +7332,9 @@ where {
                     let cut = grantee_cut_set(&authority, &scope, &person)
                         .map_err(EngineError::from_invite)?
                         .ok_or_else(|| EngineError::from_revoke(RevokeError::NotGranted))?;
+                    if still_owed {
+                        return Err(EngineError::rotation_work_owed());
+                    }
                     if !cut.admitting_links.is_empty() {
                         converted.clone()?;
                         let links: Vec<[u8; IDENTITY_PUBLIC_LEN]> = cut
@@ -7370,14 +7393,52 @@ where {
                 .map_err(EngineError::from_contact_store)?;
         }
         match cut {
-            // The re-drive finished the cut that removed the row.
+            // The re-drive finished, or still owes, the cut that removed the
+            // row: the same revoke, which has nothing left to add.
             Err(EngineError::MalformedInput { check })
-                if redriven == Redriven::Finished && check == RevokeError::NotGranted.check() =>
+                if check == RevokeError::NotGranted.check() =>
             {
-                Ok(())
+                match redriven {
+                    Redriven::Finished => Ok(()),
+                    Redriven::StillOwed => self.owed_cut_stands(node).await,
+                    Redriven::NoEntry | Redriven::Dropped => {
+                        Err(EngineError::MalformedInput { check })
+                    }
+                }
             }
             cut => cut.map(|_| ()),
         }
+    }
+
+    /// `Ok` when the entry still owed at `node` is a cut's, which a command
+    /// whose own change already shows on the set may stand behind; otherwise
+    /// the retryable refusal.
+    async fn owed_cut_stands(&self, node: NodeId) -> Result<(), EngineError> {
+        match self.owed_entry(node).await? {
+            Some(entry) if entry.is_cut() => Ok(()),
+            _ => Err(EngineError::rotation_work_owed()),
+        }
+    }
+
+    /// Drop the share pointer owed to `identity_pk` at `node`.
+    async fn cancel_owed_delivery(
+        &self,
+        node: NodeId,
+        identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
+    ) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let keys = self.pass_keys(session)?;
+        let _hold = self
+            .state
+            .owed_rotation
+            .hold(node)
+            .ok_or_else(EngineError::rotation_work_owed)?;
+        self.conversion_pass(session, api, &keys)
+            .owed()
+            .cancel_delivery(node, identity_pk)
+            .await
+            .map_err(EngineError::from_owed_record)
     }
 
     /// Cut the tags `select` names out of the owner-signed committed set at
@@ -7488,6 +7549,15 @@ where {
             .get()
             .map(|index| session.vault_pointer_signer(index));
         let pass = self.conversion_pass(session, api, &keys);
+        let _hold = match owes {
+            Some(_) => Some(
+                self.state
+                    .owed_rotation
+                    .hold(node)
+                    .ok_or_else(EngineError::rotation_work_owed)?,
+            ),
+            None => None,
+        };
         let report = match owes {
             Some(write_epoch) => {
                 let Some(report) = pass
@@ -7686,14 +7756,19 @@ where {
             }
             ScopeShare::InviteLink { .. } => None,
         };
-        if self.redrive_owed_at(node).await? == Redriven::Finished
-            && let Some(recipient) = owed_delivery
-        {
-            self.contact_store(session)
-                .vouch(&recipient)
-                .await
-                .map_err(EngineError::from_contact_store)?;
-            return Ok(CommandOutcome::Done);
+        match (self.redrive_owed_at(node).await?, owed_delivery) {
+            (Redriven::Finished, Some(recipient)) => {
+                self.contact_store(session)
+                    .vouch(&recipient)
+                    .await
+                    .map_err(EngineError::from_contact_store)?;
+                return Ok(CommandOutcome::Done);
+            }
+            // The same share over a move the re-drive cannot prove: the share
+            // runs again, and the mint resumes against a root that landed.
+            (Redriven::StillOwed, Some(_)) => self.clear_owed_move(node).await?,
+            (Redriven::StillOwed, None) => return Err(EngineError::rotation_work_owed()),
+            (Redriven::NoEntry | Redriven::Finished | Redriven::Dropped, _) => {}
         }
         let keys = OwnerActionKeys::new(session);
         // The parent is the scope that already holds the folder, which is the
@@ -7838,6 +7913,11 @@ where {
                 write,
             });
         }
+        let _hold = self
+            .state
+            .owed_rotation
+            .hold(node)
+            .ok_or_else(EngineError::rotation_work_owed)?;
         pass.owe(
             node,
             OwedEntry {
@@ -8021,6 +8101,29 @@ where {
             }
         }
         Ok(CommandOutcome::Done)
+    }
+
+    /// Clear the entry at `node` when it is a mint's that still owes its
+    /// interior move, so the same share runs again from the start.
+    async fn clear_owed_move(&self, node: NodeId) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let keys = self.pass_keys(session)?;
+        let _hold = self
+            .state
+            .owed_rotation
+            .hold(node)
+            .ok_or_else(EngineError::rotation_work_owed)?;
+        let pass = self.conversion_pass(session, api, &keys);
+        let owed = pass.owed();
+        match owed.entry(node).await.map_err(EngineError::from_seam)? {
+            Some(entry) if matches!(entry.steps.first(), Some(OwedStep::InteriorMove { .. })) => {
+                owed.clear(node)
+                    .await
+                    .map_err(EngineError::from_owed_record)
+            }
+            _ => Err(EngineError::rotation_work_owed()),
+        }
     }
 
     /// The owed rotation entry at `node`, if one stands.
@@ -8361,13 +8464,19 @@ where {
         let identity_pk = recipient_identity(recipient_identity_public_key)?;
         refuse_the_owner(session, &identity_pk)?;
         let redriven = self.redrive_owed_at(node).await?;
-        if redriven == Redriven::StillOwed {
-            return Ok(());
-        }
         let keys = OwnerActionKeys::new(session);
         let gated = self
             .settled_owner_scope(&keys, node, PERMISSION_CHANGE_TARGET)
             .await?;
+        if redriven == Redriven::StillOwed {
+            let changed = held_grantee(session, &gated.target, &gated.current, &identity_pk)?
+                .is_some_and(|held| held.permission == CommittedPermission::from(permission));
+            return if changed {
+                self.owed_cut_stands(node).await
+            } else {
+                Err(EngineError::rotation_work_owed())
+            };
+        }
         let applied = self
             .apply_permission(
                 node,

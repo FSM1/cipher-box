@@ -66,6 +66,23 @@ describe('engine warnings', () => {
     expect(notices[0].textContent).not.toContain('unavailable');
   });
 
+  it('renders owed rotation work that was dropped as a warning without its detail', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({
+        kind: 'rotationWorkAbandoned',
+        scopeRoot: new Uint8Array(16).fill(8),
+        detail: 'owed-scope-not-indexed',
+      });
+    });
+
+    const notice = await screen.findByTestId('notification-notice');
+    expect(notice.textContent).toContain('could not be finished');
+    expect(notice.textContent).not.toContain('owed-scope-not-indexed');
+  });
+
   it('renders a write cut another device has not finished as a warning', async () => {
     const engine = fakeEngine();
     draw(engine.client);

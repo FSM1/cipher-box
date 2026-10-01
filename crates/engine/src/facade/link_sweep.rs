@@ -237,6 +237,21 @@ where
         now: UnixMillis,
         pending: &[[u8; IDENTITY_PUBLIC_LEN]],
     ) -> Result<(Vec<NodeId>, Vec<[u8; IDENTITY_PUBLIC_LEN]>), EngineError> {
+        // A scope with owed work, or one a command drives now, waits for the
+        // pass after that work lands.
+        let node = NodeId(target.scope.scope_id);
+        let Some(_hold) = self.owed.hold(node) else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        if self
+            .owed()
+            .entry(node)
+            .await
+            .map_err(EngineError::from_seam)?
+            .is_some()
+        {
+            return Ok((Vec::new(), Vec::new()));
+        }
         let current = self
             .net(target, PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
@@ -259,7 +274,6 @@ where
             },
             &tags,
         )?;
-        let node = NodeId(target.scope.scope_id);
         let report = self
             .rotate_owed_cut(
                 node,

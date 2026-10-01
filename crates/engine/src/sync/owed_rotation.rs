@@ -12,7 +12,7 @@
 //! through, so a command and the tick never write back each other's stale copy.
 
 use core::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::seal::OwnerLocalKind;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -103,6 +103,19 @@ pub struct OwedEntry {
     pub steps: Vec<OwedStep>,
 }
 
+impl OwedEntry {
+    /// Whether this is a revoke's or a downgrade's entry: a cut and nothing a
+    /// mint owes.
+    #[must_use]
+    pub fn is_cut(&self) -> bool {
+        self.cut_epoch > 0
+            && self
+                .steps
+                .iter()
+                .all(|step| matches!(step, OwedStep::ReadCut | OwedStep::WriteCut { .. }))
+    }
+}
+
 /// The whole record, keyed by scope.
 pub type OwedRecord = BTreeMap<NodeId, OwedEntry>;
 
@@ -111,6 +124,9 @@ pub type OwedRecord = BTreeMap<NodeId, OwedEntry>;
 pub enum OwedRecordError {
     /// The record already holds [`MAX_OWED_ENTRIES`] scopes.
     Full,
+    /// An entry already stands at the scope: a new command there waits until
+    /// the work it owes lands.
+    Standing,
     /// An entry's steps are out of command order or repeat a kind.
     StepsOutOfOrder,
     /// The staging store refused the write.
@@ -122,22 +138,52 @@ impl OwedRecordError {
     pub fn check(&self) -> &'static str {
         match self {
             Self::Full => "owed-rotation-record-full",
+            Self::Standing => ROTATION_WORK_OWED,
             Self::StepsOutOfOrder => "owed-rotation-steps-out-of-order",
             Self::Store(_) => "owed-rotation-not-durable",
         }
     }
 }
 
-/// The session's copy of the record: `None` until the first read loads it.
+/// The check of a command refused while owed work stands at its scope. A
+/// retry clears it once the work lands.
+pub const ROTATION_WORK_OWED: &str = "rotation-work-owed";
+
+/// The session's copy of the record, `None` until the first read loads it,
+/// and the scopes a command or the pass is driving now.
 #[derive(Default)]
-pub struct OwedCell(RefCell<Option<OwedRecord>>);
+pub struct OwedCell {
+    record: RefCell<Option<OwedRecord>>,
+    held: RefCell<BTreeSet<NodeId>>,
+}
 
 impl OwedCell {
     /// Drop the session's copy, so the next session reads its own record.
     pub fn forget(&self) {
-        if let Ok(mut cell) = self.0.try_borrow_mut() {
+        if let Ok(mut cell) = self.record.try_borrow_mut() {
             *cell = None;
         }
+    }
+
+    /// Take `scope` for one driver until the hold drops, or `None` while
+    /// another driver holds it.
+    pub fn hold(&self, scope: NodeId) -> Option<ScopeHold<'_>> {
+        self.held
+            .borrow_mut()
+            .insert(scope)
+            .then(|| ScopeHold { cell: self, scope })
+    }
+}
+
+/// One driver's exclusive claim on a scope's owed work.
+pub struct ScopeHold<'a> {
+    cell: &'a OwedCell,
+    scope: NodeId,
+}
+
+impl Drop for ScopeHold<'_> {
+    fn drop(&mut self) {
+        self.cell.held.borrow_mut().remove(&self.scope);
     }
 }
 
@@ -159,7 +205,7 @@ impl<St: StagingStore> OwedRotation<'_, St> {
     /// The record, read from the store the first time. A blob this identity
     /// does not open reads as no record, as every bookkeeping kind does.
     pub async fn load(&self) -> SeamResult<OwedRecord> {
-        if let Some(record) = self.cell.0.borrow().as_ref() {
+        if let Some(record) = self.cell.record.borrow().as_ref() {
             return Ok(record.clone());
         }
         let stored = self
@@ -170,7 +216,7 @@ impl<St: StagingStore> OwedRotation<'_, St> {
             .and_then(|blob| open_owed_record(self.seal, &blob))
             .unwrap_or_default();
         // A command may have written the cell during the read.
-        let mut cell = self.cell.0.borrow_mut();
+        let mut cell = self.cell.record.borrow_mut();
         Ok(cell.get_or_insert(record).clone())
     }
 
@@ -179,13 +225,51 @@ impl<St: StagingStore> OwedRotation<'_, St> {
         Ok(self.load().await?.remove(&scope))
     }
 
-    /// Write `entry` at `scope`, durably, replacing what stood there.
+    /// Write `entry` at `scope`, durably. Refused while an entry stands there.
     pub async fn owe(&self, scope: NodeId, entry: OwedEntry) -> Result<(), OwedRecordError> {
         let mut record = self.load().await.map_err(OwedRecordError::Store)?;
-        if !record.contains_key(&scope) && record.len() >= MAX_OWED_ENTRIES {
+        if record.contains_key(&scope) {
+            return Err(OwedRecordError::Standing);
+        }
+        if record.len() >= MAX_OWED_ENTRIES {
             return Err(OwedRecordError::Full);
         }
         record.insert(scope, entry);
+        self.store(record).await
+    }
+
+    /// Replace the steps of the entry at `scope` with `steps`, if it stands.
+    pub async fn leave(&self, scope: NodeId, steps: Vec<OwedStep>) -> Result<(), OwedRecordError> {
+        let mut record = self.load().await.map_err(OwedRecordError::Store)?;
+        let Some(entry) = record.get_mut(&scope) else {
+            return Ok(());
+        };
+        entry.steps = steps;
+        self.store(record).await
+    }
+
+    /// Drop the delivery to `recipient` from the entry at `scope`, and the
+    /// entry when that leaves a mint owing nothing.
+    pub async fn cancel_delivery(
+        &self,
+        scope: NodeId,
+        recipient: &[u8; IDENTITY_PK_LEN],
+    ) -> Result<(), OwedRecordError> {
+        let mut record = self.load().await.map_err(OwedRecordError::Store)?;
+        let Some(entry) = record.get_mut(&scope) else {
+            return Ok(());
+        };
+        let before = entry.steps.len();
+        entry.steps.retain(|step| {
+            !matches!(step, OwedStep::DeliverGrant { recipient_identity_pk, .. }
+                if recipient_identity_pk == recipient)
+        });
+        if entry.steps.len() == before {
+            return Ok(());
+        }
+        if entry.steps.is_empty() && entry.cut_epoch == 0 {
+            record.remove(&scope);
+        }
         self.store(record).await
     }
 
@@ -210,8 +294,8 @@ impl<St: StagingStore> OwedRotation<'_, St> {
         self.store(record).await
     }
 
-    /// Set the cell to `record` and write it through. A record left in the cell
-    /// when the store refuses is what this session still owes.
+    /// Write `record` through, then set the cell to it, so the cell never
+    /// holds what the store refused.
     async fn store(&self, record: OwedRecord) -> Result<(), OwedRecordError> {
         let key = owed_rotation_key(self.enc_secret);
         let blob = if record.is_empty() {
@@ -219,12 +303,13 @@ impl<St: StagingStore> OwedRotation<'_, St> {
         } else {
             Some(seal_owed_record(self.seal, &record)?)
         };
-        *self.cell.0.borrow_mut() = Some(record);
         match blob {
             None => self.staging.remove_staged_bytes(&key).await,
             Some(blob) => self.staging.put_staged_bytes(&key, &blob).await,
         }
-        .map_err(OwedRecordError::Store)
+        .map_err(OwedRecordError::Store)?;
+        *self.cell.record.borrow_mut() = Some(record);
+        Ok(())
     }
 }
 
@@ -396,6 +481,25 @@ mod tests {
     }
 
     /// What one session sealed is what the next one re-drives.
+    /// A second driver is refused while the first holds the scope, and the
+    /// refusal leaves the first driver's claim in place.
+    #[test]
+    fn a_held_scope_refuses_a_second_driver_until_the_first_drops() {
+        let cell = OwedCell::default();
+        let first = cell.hold(node(1)).expect("a free scope is held");
+        assert!(cell.hold(node(1)).is_none(), "a second driver is refused");
+        assert!(
+            cell.hold(node(1)).is_none(),
+            "and the refusal kept the first claim"
+        );
+        assert!(cell.hold(node(2)).is_some(), "another scope is free");
+        drop(first);
+        assert!(
+            cell.hold(node(1)).is_some(),
+            "the scope is free once dropped"
+        );
+    }
+
     #[test]
     fn a_sealed_record_opens_as_the_entries_it_named() {
         let entropy = RefCell::new(SeededEntropy::new(3));

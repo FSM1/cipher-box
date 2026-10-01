@@ -129,6 +129,7 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   vaultSettingsChanged: true,
   scopeExitCutOwed: true,
   rotationWorkOwed: true,
+  rotationWorkAbandoned: true,
   writeCutUnfinished: true,
   granteeJoined: true,
   opProgress: true,

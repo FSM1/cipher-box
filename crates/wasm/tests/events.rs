@@ -209,6 +209,14 @@ fn each_event_kind_crosses_as_its_stable_name() {
             4,
         ),
         (
+            Event::RotationWorkAbandoned {
+                scope_root: node,
+                detail: String::new(),
+            },
+            "rotationWorkAbandoned",
+            3,
+        ),
+        (
             Event::WriteCutUnfinished { scope_root: node },
             "writeCutUnfinished",
             2,

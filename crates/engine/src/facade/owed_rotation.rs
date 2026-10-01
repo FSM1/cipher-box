@@ -8,7 +8,9 @@ use super::claim_conversion::{ConversionSites, Running};
 use super::*;
 use crate::grants::resume_owed_interior_move;
 use crate::rotation::{RotateOnCutError, WriteRotateError, owed_read_cut};
-use crate::sync::owed_rotation::{OwedEntry, OwedRecordError, OwedRotation, OwedStep};
+use crate::sync::owed_rotation::{
+    OwedEntry, OwedRecordError, OwedRotation, OwedStep, ROTATION_WORK_OWED,
+};
 
 /// What stopped one owed step: a key-material-free check, and whether a later
 /// pass could clear it.
@@ -16,6 +18,8 @@ use crate::sync::owed_rotation::{OwedEntry, OwedRecordError, OwedRotation, OwedS
 pub(crate) struct OwedStop {
     pub(crate) detail: String,
     pub(crate) retryable: bool,
+    /// The work can never land, so the entry is dropped.
+    terminal: bool,
 }
 
 impl OwedStop {
@@ -30,6 +34,10 @@ impl OwedStop {
         Self {
             detail: format!("{step}: {class}"),
             retryable,
+            terminal: matches!(
+                error,
+                EngineError::UnsupportedTarget { check } if *check == OWED_SCOPE_NOT_INDEXED
+            ),
         }
     }
 
@@ -43,6 +51,7 @@ impl OwedStop {
         Self {
             detail: error.check().to_owned(),
             retryable: error.class() == "availability",
+            terminal: false,
         }
     }
 
@@ -50,6 +59,15 @@ impl OwedStop {
         Self {
             detail: detail.to_owned(),
             retryable: false,
+            terminal: false,
+        }
+    }
+
+    /// A step whose target is gone, so the work can never land.
+    fn abandoned(detail: &'static str) -> Self {
+        Self {
+            terminal: true,
+            ..Self::refused(detail)
         }
     }
 }
@@ -61,8 +79,18 @@ pub(crate) enum Redriven {
     NoEntry,
     /// An entry stood, and the re-drive finished it.
     Finished,
-    /// An entry stands still: the command has nothing to add.
+    /// An entry stood whose work can never land, and the re-drive dropped it.
+    Dropped,
+    /// An entry stands still.
     StillOwed,
+}
+
+/// How a re-drive that did not stop ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Settled {
+    Finished,
+    /// The published cut epoch is below the entry's: its cut set never landed.
+    NeverLanded,
 }
 
 /// The check a re-drive reports for a write cut that the published scope says
@@ -78,13 +106,28 @@ const OWED_RECIPIENT_UNKNOWN: &str = "owed-grant-recipient-unknown";
 const OWED_MOVE_SOURCE_MOVED: &str = "owed-interior-move-source-moved";
 /// The enclosing scope's index names no root for the owed scope.
 const OWED_SCOPE_NOT_INDEXED: &str = "owed-scope-not-indexed";
+/// The published cut epoch is below the entry's, so its cut set never landed.
+const OWED_CUT_NEVER_LANDED: &str = "owed-cut-never-landed";
+/// The folder answers as no scope root, and nothing owner-signed proves the
+/// promotion never ran.
+const OWED_MOVE_NOT_PROMOTED: &str = "owed-interior-move-not-promoted";
+/// The root claims the owed write epoch, and no owner-signed pointer vouches
+/// for the root it moved to.
+const OWED_WAVE_UNVOUCHED: &str = "owed-write-cut-unvouched";
 
 impl EngineError {
     /// The refusal of an owed rotation entry that did not store before the
     /// first publish (ADR 0063 D2).
-    fn from_owed_record(error: OwedRecordError) -> Self {
+    pub(crate) fn from_owed_record(error: OwedRecordError) -> Self {
         EngineError::Seam {
             message: error.check().to_owned(),
+        }
+    }
+
+    /// The retryable refusal of a command while owed work stands at its scope.
+    pub(crate) fn rotation_work_owed() -> Self {
+        EngineError::Seam {
+            message: ROTATION_WORK_OWED.to_owned(),
         }
     }
 }
@@ -128,13 +171,39 @@ where
     }
 
     /// Leave `steps` owed at `scope`, and tell the host. A store that refuses
-    /// leaves the session's copy holding them, which this pass still re-drives.
+    /// leaves the entry holding the steps before them, which still re-drive.
     pub(crate) async fn stop_owed(&self, scope: NodeId, steps: Vec<OwedStep>, stop: OwedStop) {
-        if let Ok(Some(mut entry)) = self.owed().entry(scope).await {
-            entry.steps = steps;
-            let _ = self.owed().owe(scope, entry).await;
-        }
+        let _ = self.owed().leave(scope, steps).await;
         self.report_owed(scope, stop);
+    }
+
+    /// Drop the entry at `scope`, whose work can never land, and tell the host
+    /// once why.
+    async fn abandon(&self, scope: NodeId, detail: String) {
+        let _ = self.owed().clear(scope).await;
+        let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
+            scope_root: scope,
+            detail,
+        });
+    }
+
+    /// Settle one re-drive of `scope`'s entry.
+    async fn settle_redrive(&self, scope: NodeId, redriven: Result<Settled, OwedStop>) -> Redriven {
+        match redriven {
+            Ok(Settled::Finished) => Redriven::Finished,
+            Ok(Settled::NeverLanded) => {
+                self.abandon(scope, OWED_CUT_NEVER_LANDED.to_owned()).await;
+                Redriven::Dropped
+            }
+            Err(stop) if stop.terminal => {
+                self.abandon(scope, stop.detail).await;
+                Redriven::Dropped
+            }
+            Err(stop) => {
+                self.report_owed(scope, stop);
+                Redriven::StillOwed
+            }
+        }
     }
 
     /// Drive `cut` at `node` under an owed rotation entry (ADR 0063 D2, D5):
@@ -143,7 +212,10 @@ where
     /// write epoch of the record the cut was authorized against.
     ///
     /// A read-only cut clears its entry here. A cut that moves the write plane
-    /// leaves it for the caller, which clears it after the post-steps.
+    /// leaves it for the caller, which clears it after the post-steps. The
+    /// caller holds the scope
+    /// ([`OwedCell::hold`](crate::sync::owed_rotation::OwedCell::hold)) across
+    /// both.
     pub(super) async fn rotate_owed_cut(
         &self,
         node: NodeId,
@@ -241,9 +313,9 @@ where
     }
 
     /// Re-drive every owed entry, and tell the host of each one still owed
-    /// (ADR 0063 D3). A conversion pass or a command that holds [`Running`]
-    /// may be driving the same scope, so the pass then leaves the record to
-    /// the next pass.
+    /// (ADR 0063 D3). A scope a command holds is left to the next pass, and
+    /// each entry is read again under the hold, so the pass never drives an
+    /// entry a command has replaced or cleared.
     pub(crate) async fn redrive_owed(&self, sites: &impl ConversionSites) {
         let Some(_running) = Running::take(self.running) else {
             return;
@@ -252,20 +324,30 @@ where
         let Ok(record) = self.owed().load().await else {
             return;
         };
-        for (scope, entry) in record {
-            if let Err(stop) = self.redrive_entry(sites, scope, entry).await {
-                self.report_owed(scope, stop);
-            }
+        for scope in record.into_keys() {
+            let Some(_hold) = self.owed.hold(scope) else {
+                continue;
+            };
+            let Ok(Some(entry)) = self.owed().entry(scope).await else {
+                continue;
+            };
+            let redriven = self.redrive_entry(sites, scope, entry).await;
+            self.settle_redrive(scope, redriven).await;
         }
     }
 
     /// Re-drive the entry at `scope`, if one stands, before a command acts
-    /// there (ADR 0063 D5), and tell the host when it is still owed.
+    /// there (ADR 0063 D5), and tell the host when it is still owed. Refused
+    /// with the retryable [`ROTATION_WORK_OWED`] while the pass drives it.
     pub(crate) async fn redrive_scope(
         &self,
         sites: &impl ConversionSites,
         scope: NodeId,
     ) -> Result<Redriven, EngineError> {
+        let _hold = self
+            .owed
+            .hold(scope)
+            .ok_or_else(EngineError::rotation_work_owed)?;
         let Some(entry) = self
             .owed()
             .entry(scope)
@@ -274,28 +356,30 @@ where
         else {
             return Ok(Redriven::NoEntry);
         };
-        let Some(_running) = Running::take(self.running) else {
-            return Ok(Redriven::StillOwed);
-        };
-        match self.redrive_entry(sites, scope, entry).await {
-            Ok(()) => Ok(Redriven::Finished),
-            Err(stop) => {
-                self.report_owed(scope, stop);
-                Ok(Redriven::StillOwed)
-            }
-        }
+        let redriven = self.redrive_entry(sites, scope, entry).await;
+        Ok(self.settle_redrive(scope, redriven).await)
     }
 
     /// Run the steps `entry` still owes at `scope` in order, advancing the
-    /// record as each lands, then its post-steps, then clear it.
+    /// record as each lands, then its post-steps, then clear it. A cut whose
+    /// set never landed owes nothing, and raises no floor (ADR 0063 D2).
     async fn redrive_entry(
         &self,
         sites: &impl ConversionSites,
         scope: NodeId,
         entry: OwedEntry,
-    ) -> Result<(), OwedStop> {
+    ) -> Result<Settled, OwedStop> {
+        if entry.cut_epoch > 0 {
+            let published = self
+                .owed_scope(sites, scope)
+                .await
+                .map_err(|e| OwedStop::of("owed-cut", &e))?;
+            if published.current.commitment.cut_epoch < entry.cut_epoch {
+                return Ok(Settled::NeverLanded);
+            }
+        }
         for (at, step) in entry.steps.iter().enumerate() {
-            let landed = match step {
+            match step {
                 OwedStep::InteriorMove { left_scope } => {
                     self.redrive_interior_move(sites, scope, *left_scope).await
                 }
@@ -311,10 +395,6 @@ where
                         .await
                 }
             }?;
-            if landed == Landed::NothingOwed {
-                let _ = self.owed().clear(scope).await;
-                return Ok(());
-            }
             if let Some(next) = entry.steps.get(at + 1) {
                 let _ = self.owed().advance_to(scope, next).await;
             }
@@ -325,7 +405,7 @@ where
                 .map_err(|e| OwedStop::of("owed-cut-epoch-floor", &EngineError::from_seam(e)))?;
         }
         let _ = self.owed().clear(scope).await;
-        Ok(())
+        Ok(Settled::Finished)
     }
 
     /// The scope root at `node` where its owner-signed pointer vouches for it,
@@ -343,10 +423,9 @@ where
         } else {
             self.indexed_place(sites, node).await?
         };
-        let target = self
-            .moved_root(node, &placed)
-            .await?
-            .unwrap_or_else(|| placed.clone());
+        let moved = self.moved_root(node, &placed).await?;
+        let pointer_placed = moved.is_some();
+        let target = moved.unwrap_or_else(|| placed.clone());
         let current = self
             .net(&target, PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
@@ -356,6 +435,7 @@ where
             indexed: placed.scope.ipns_name,
             target,
             current,
+            pointer_placed,
         })
     }
 
@@ -390,12 +470,12 @@ where
         sites: &impl ConversionSites,
         node: NodeId,
         left_scope: NodeId,
-    ) -> Result<Landed, OwedStop> {
+    ) -> Result<(), OwedStop> {
         let step = "owed-interior-move";
         let stop = |e: EngineError| OwedStop::of(step, &e);
         let parent = sites.enclosing(node).await.map_err(stop)?;
         if parent.scope.scope_id != left_scope.0 {
-            return Err(OwedStop::refused(OWED_MOVE_SOURCE_MOVED));
+            return Err(OwedStop::abandoned(OWED_MOVE_SOURCE_MOVED));
         }
         let net = self.net(&parent, PointerConsultArm::Permitted);
         let current = net
@@ -462,9 +542,14 @@ where
         )
         .await
         {
-            Ok(Some(_)) => Ok(Landed::Step),
-            // No root was promoted, so the grant never published.
-            Ok(None) => Ok(Landed::NothingOwed),
+            Ok(Some(_)) => Ok(()),
+            // A parent-scope writer can publish a record at the folder's name,
+            // so a root with no grant section does not prove the promotion
+            // never ran.
+            Ok(None) => Err(OwedStop {
+                retryable: true,
+                ..OwedStop::refused(OWED_MOVE_NOT_PROMOTED)
+            }),
             Err(e) => Err(OwedStop::of_grant(&e)),
         }
     }
@@ -475,18 +560,16 @@ where
         sites: &impl ConversionSites,
         node: NodeId,
         cut_epoch: u64,
-    ) -> Result<Landed, OwedStop> {
+    ) -> Result<(), OwedStop> {
         let stop = |e: EngineError| OwedStop::of("owed-read-cut", &e);
         let OwedScope {
             target, current, ..
         } = self.owed_scope(sites, node).await.map_err(stop)?;
-        // Below the entry's epoch the cut set never landed; above it a later
-        // cut re-keyed the scope.
-        if current.commitment.cut_epoch < cut_epoch {
-            return Ok(Landed::NothingOwed);
-        }
+        // Above the entry's epoch a later cut re-keyed the scope. At it, the
+        // published state does not tell a cascade that landed from one that did
+        // not, so a re-drive after a lost advance runs one more cascade.
         if current.commitment.cut_epoch > cut_epoch {
-            return Ok(Landed::Step);
+            return Ok(());
         }
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name).map_err(stop)?;
         let cut = owed_read_cut(&GrantCutPlan {
@@ -501,7 +584,7 @@ where
         self.rotate_planes(node, &target, &scope_root_name, &cut, None)
             .await
             .map_err(|e| cut_stop(&e))?;
-        Ok(Landed::Step)
+        Ok(())
     }
 
     /// Run the name wave the scope at `node` still owes at `write_epoch`,
@@ -512,14 +595,20 @@ where
         sites: &impl ConversionSites,
         node: NodeId,
         write_epoch: u64,
-    ) -> Result<Landed, OwedStop> {
+    ) -> Result<(), OwedStop> {
         let stop = |e: EngineError| OwedStop::of("owed-write-cut", &e);
         let OwedScope {
             indexed,
             target,
             current,
+            pointer_placed,
         } = self.owed_scope(sites, node).await.map_err(stop)?;
         let (root_name, landed_epoch) = if current.write_epoch >= write_epoch {
+            // A landed wave re-points the scope pointer, and the floor never
+            // takes an epoch only the root read off the wire states.
+            if !pointer_placed {
+                return Err(OwedStop::refused(OWED_WAVE_UNVOUCHED));
+            }
             (
                 parsed_scope_name(&target.scope.ipns_name).map_err(stop)?,
                 current.write_epoch,
@@ -554,7 +643,7 @@ where
                 .await
                 .map_err(stop)?;
         }
-        Ok(Landed::Step)
+        Ok(())
     }
 
     /// Post the share pointer a grant still owes its recipient, at the name the
@@ -565,13 +654,13 @@ where
         node: NodeId,
         recipient_identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
         write: bool,
-    ) -> Result<Landed, OwedStop> {
+    ) -> Result<(), OwedStop> {
         let stop = |e: EngineError| OwedStop::of("owed-grant-delivery", &e);
         let contacts = StagingContactStore::new(self.staging, self.enc_secret, self.entropy);
         let contact = match resolve_recipient(&contacts, recipient_identity_pk).await {
             Ok(contact) => contact,
             Err(ContactStoreError::RecipientNotImported) => {
-                return Err(OwedStop::refused(OWED_RECIPIENT_UNKNOWN));
+                return Err(OwedStop::abandoned(OWED_RECIPIENT_UNKNOWN));
             }
             Err(e) => return Err(stop(EngineError::from_contact_store(e))),
         };
@@ -596,18 +685,8 @@ where
         )
         .await
         .map_err(|e| stop(EngineError::from_create_grant(e)))?;
-        Ok(Landed::Step)
+        Ok(())
     }
-}
-
-/// How an owed step ended when it did not stop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Landed {
-    /// The step landed, now or before.
-    Step,
-    /// The published state shows the entry's first publish never landed, so
-    /// nothing at all is owed.
-    NothingOwed,
 }
 
 /// The scope an owed step acts on: the name the parent's index gives it, and
@@ -616,6 +695,8 @@ struct OwedScope {
     indexed: Vec<u8>,
     target: OwnerScope,
     current: CascadeTarget,
+    /// The owner-signed scope pointer placed `target`.
+    pointer_placed: bool,
 }
 
 /// The stop a plane rotation failure reports.
@@ -623,5 +704,6 @@ fn cut_stop(error: &RotateOnCutError) -> OwedStop {
     OwedStop {
         detail: error.check().to_owned(),
         retryable: error.is_retryable(),
+        terminal: false,
     }
 }

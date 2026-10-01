@@ -58,7 +58,10 @@ use cipherbox_engine::seams::{
 };
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::op::ScopeCrossing;
-use cipherbox_engine::sync::owed_rotation::OWED_ROTATION_PREFIX;
+use cipherbox_engine::sync::owed_rotation::{
+    OWED_ROTATION_PREFIX, OwedEntry, OwedRecord, OwedStep, ROTATION_WORK_OWED, owed_rotation_key,
+    seal_owed_record,
+};
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
 use cipherbox_engine::sync::{
     BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, doomed_journal_key, owner_tag,
@@ -9616,9 +9619,36 @@ fn a_share_after_the_parent_sweep_heals_the_index_finishes_the_stalled_interior_
     );
 }
 
-/// The write-epoch floor reads a write revoke makes before its read cascade
-/// publishes the cut set. Every read after them fails, so the wave stops.
-const READS_BEFORE_THE_WAVE: u64 = 5;
+/// The name of the folder's scope pointer, which a name wave re-points last.
+fn folder_pointer(fx: &GrantScenario) -> IpnsName {
+    scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0)
+}
+
+/// Revoke the recipient's write grant while the scope pointer refuses every
+/// publish, so the wave stops after the cut set lands. The pointer stays
+/// refused until the caller heals it.
+fn stop_the_revoke_wave(fx: &mut GrantScenario) {
+    let _ = fx.owed_scopes();
+    fx.world
+        .record_store
+        .fail_put_for(folder_pointer(fx).as_str());
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(
+            fx,
+            Command::Revoke {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+            }
+        ),
+        Ok(CommandOutcome::Done),
+        "the cut set is published, so the wave that stops is owed, not refused"
+    );
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "and reported owed");
+}
 
 /// A write grant, then a revoke whose write wave stops after the read cascade
 /// published the cut set. Returns the revokee's write scope seed.
@@ -9631,33 +9661,367 @@ fn strand_a_write_revoke(fx: &mut GrantScenario) -> [u8; 32] {
     let section = published_grant_section_at(&fx.world, &fx.blocks, &granted.current_root)
         .expect("the granted root");
     let revokee_seed = grantee_write_scope_seed(&section, &granted.current_root, &fx.folder.0, 1);
-    let _ = fx.owed_scopes();
-
-    fx.owner_device
-        .floor_store
-        .fail_epoch_floor_reads_after(&write_epoch_floor_key(&fx.folder.0), READS_BEFORE_THE_WAVE);
-    assert_eq!(
-        command_across_retries(
-            fx,
-            Command::Revoke {
-                node: fx.folder,
-                recipient_identity_public_key: recipient_identity()
-                    .verifying_key()
-                    .to_sec1()
-                    .to_vec(),
-            }
-        ),
-        Ok(CommandOutcome::Done),
-        "the cut set is published, so the wave that stops is owed, not refused"
-    );
-    fx.owner_device.floor_store.heal_floors();
-    assert_eq!(fx.owed_scopes(), vec![fx.folder], "and reported owed");
+    stop_the_revoke_wave(fx);
+    fx.world
+        .record_store
+        .heal_put_for(folder_pointer(fx).as_str());
     assert_eq!(
         fx.granted_scope_repoint().current_root,
         granted.current_root,
-        "the wave did not move the scope"
+        "the wave did not re-point the scope"
     );
     revokee_seed
+}
+
+/// The retryable refusal of a command while owed work stands at its scope.
+fn work_owed() -> Result<CommandOutcome, EngineError> {
+    Err(EngineError::Seam {
+        message: ROTATION_WORK_OWED.to_owned(),
+    })
+}
+
+/// The scope roots the stream reports owed work dropped at, with why.
+fn abandoned(events: &mut EventStream) -> Vec<(NodeId, String)> {
+    events_so_far(events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::RotationWorkAbandoned { scope_root, detail } => Some((scope_root, detail)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// ADR 0063 D5: while a cut is owed at a scope, a revoke that names another
+/// grantee is refused, retryably, and that grantee keeps the grant.
+#[test]
+fn a_revoke_of_another_grantee_while_a_cut_is_owed_is_refused() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    stop_the_revoke_wave(&mut fx);
+
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::Revoke {
+                node: folder,
+                recipient_identity_public_key: bystander_identity(),
+            }
+        ),
+        work_owed()
+    );
+    assert!(
+        fx.granted_to().contains(&bystander_identity()),
+        "the other grantee keeps the grant"
+    );
+}
+
+/// A revoke of a grantee whose share pointer is still owed cancels that
+/// delivery, so no later pass hands them the grant the revoke cut.
+#[test]
+fn a_revoke_of_a_grantee_whose_delivery_is_owed_cancels_the_delivery() {
+    let mut fx = GrantScenario::new();
+    let recipient = recipient_identity().verifying_key().to_sec1();
+    fx.world.mailbox_hub.forget_recipient(&recipient);
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the delivery is owed");
+
+    assert_eq!(fx.revoke_person(&recipient), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.committed_permission(&fx.granted_scope_repoint().current_root),
+        None,
+        "the revoke cut the row"
+    );
+
+    fx.world.mailbox_hub.remember_recipient(&recipient);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        inbox(&fx.recipient_device).is_empty(),
+        "and no pass delivers the grant the revoke cut"
+    );
+}
+
+/// ADR 0063 D2: a link revoke over a scope with an owed write cut is refused
+/// before any publish, so the cut stays owed and the pass finishes it.
+#[test]
+fn a_link_revoke_while_a_write_cut_is_owed_is_refused() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let _ = fx.mint_link();
+    stop_the_revoke_wave(&mut fx);
+    fx.world
+        .record_store
+        .heal_put_for(folder_pointer(&fx).as_str());
+
+    assert_eq!(fx.revoke_link(false), work_owed());
+    assert_eq!(fx.link_entries(), 1, "the link stands");
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        fx.granted_scope_repoint().write_epoch,
+        3,
+        "the pass finished the owed write cut"
+    );
+}
+
+/// The expired-link sweep leaves a scope with owed work to a later pass, and
+/// cuts the link once the owed work has landed.
+#[test]
+fn the_link_sweep_leaves_a_scope_with_owed_work_to_a_later_pass() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let deadline = fx.an_hour_from_now();
+    let _ = fx.mint_link_until(Permission::Read, deadline);
+    stop_the_revoke_wave(&mut fx);
+
+    fx.world
+        .scheduler
+        .advance_to(swept_at(&fx.engine, deadline));
+    fx.world
+        .scheduler
+        .advance(fx.engine.profile().link_sweep_cadence);
+    for _ in 0..12 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        fx.link_entries(),
+        1,
+        "the sweep leaves the owed scope alone"
+    );
+
+    fx.world
+        .record_store
+        .heal_put_for(folder_pointer(&fx).as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.world
+        .scheduler
+        .advance(fx.engine.profile().link_sweep_cadence);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        fx.granted_scope_repoint().write_epoch,
+        3,
+        "the pass finished the owed write cut"
+    );
+    assert_eq!(fx.link_entries(), 0, "and a later sweep cut the link");
+}
+
+/// ADR 0063 D2: a share to another recipient while a mint's interior move is
+/// owed is refused, and the first recipient's owed delivery still lands.
+#[test]
+fn a_share_to_another_recipient_while_a_mint_is_owed_is_refused() {
+    let mut fx = GrantScenario::new();
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.owed_scopes(),
+        vec![fx.folder],
+        "the interior move is owed"
+    );
+
+    assert_eq!(fx.grant_bystander(Permission::Read), work_owed());
+
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        delivered_share_pointer(&fx.recipient_device).scope_root_name,
+        write_name(fx.folder).as_str().as_bytes(),
+        "the first recipient's owed delivery landed"
+    );
+}
+
+/// A downgrade whose cut-set publish failed, with a read-back that did not
+/// answer, leaves an entry whose cut never landed. The pass drops it: it runs
+/// no wave over the uncut set, raises no cut-epoch floor, and says so once.
+#[test]
+fn a_downgrade_whose_cut_set_never_landed_is_dropped_with_no_wave_and_no_floor() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let root = fx.granted_scope_repoint().current_root;
+    let mut cut_epoch_floor = fx.folder.0.to_vec();
+    cut_epoch_floor.extend_from_slice(b"/cut-epoch");
+    fx.world.record_store.fail_put_for(root.as_str());
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 1);
+    let folder = fx.folder;
+    let downgrade = || Command::ChangePermission {
+        node: folder,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        permission: Permission::Read,
+    };
+    assert!(
+        command_across_retries(&mut fx, downgrade()).is_err(),
+        "the cut set did not publish"
+    );
+    fx.owner_device.floor_store.heal_floors();
+    fx.world.record_store.heal_put_for(root.as_str());
+    let _ = events_so_far(&mut fx._events);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        abandoned(&mut fx._events),
+        vec![(fx.folder, "owed-cut-never-landed".to_owned())]
+    );
+    assert_eq!(
+        fx.granted_scope_repoint().write_epoch,
+        2,
+        "no wave ran over the uncut set"
+    );
+
+    assert_eq!(
+        command_across_retries(&mut fx, downgrade()),
+        Ok(CommandOutcome::Done),
+        "the scope still resolves, so the downgrade runs again"
+    );
+    assert_eq!(
+        fx.committed_permission(&fx.granted_scope_repoint().current_root),
+        Some(CorePermission::Read)
+    );
+}
+
+/// Owed work that can never land is dropped once, with the reason, rather
+/// than retried on every pass: here a delivery to a recipient this device's
+/// contact book does not hold.
+#[test]
+fn owed_work_whose_recipient_is_unknown_is_abandoned_once() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(11));
+    let unknown: [u8; IDENTITY_PUBLIC_LEN] = bystander_identity()
+        .try_into()
+        .expect("a compressed identity key");
+    let record = OwedRecord::from([(
+        fx.folder,
+        OwedEntry {
+            cut_epoch: 0,
+            steps: vec![OwedStep::DeliverGrant {
+                recipient_identity_pk: unknown,
+                write: false,
+            }],
+        },
+    )]);
+    let blob =
+        seal_owed_record(BookkeepingSeal::new(&enc, &entropy), &record).expect("the record seals");
+    block_on(
+        fx.owner_device
+            .staging_store
+            .put_staged_bytes(&owed_rotation_key(&enc), &blob),
+    )
+    .expect("stage the record");
+
+    let (fresh, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    for _ in 0..3 {
+        tick(&fx.world, &fresh, &mut tasks);
+    }
+    assert_eq!(
+        abandoned(&mut events),
+        vec![(fx.folder, "owed-grant-recipient-unknown".to_owned())],
+        "the entry is dropped once, with why"
+    );
+    for _ in 0..2 {
+        tick(&fx.world, &fresh, &mut tasks);
+    }
+    let later = events_so_far(&mut events);
+    assert!(
+        !later.iter().any(|event| matches!(
+            event,
+            Event::RotationWorkOwed { .. } | Event::RotationWorkAbandoned { .. }
+        )),
+        "and no later pass reports it"
+    );
+}
+
+/// A record at the folder's name with no grant section does not prove a
+/// promotion never ran: a parent-scope writer can publish one. The interior
+/// move stays owed rather than being dropped.
+#[test]
+fn an_interior_move_over_a_root_with_no_grant_section_stays_owed() {
+    let mut fx = GrantScenario::new();
+    let unpromoted = published_value(&fx.world, &write_name(fx.folder));
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.owed_scopes(),
+        vec![fx.folder],
+        "the interior move is owed"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+
+    publish_value_at(&fx.world, fx.folder, &unpromoted);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        fx.owed_scopes(),
+        vec![fx.folder],
+        "the entry stays owed and is reported"
+    );
+}
+
+/// ADR 0063 D4: the walk reads the owed scopes from the record the re-drive
+/// reads, so a staging read that fails after the session loaded it does not
+/// stall the walk.
+#[test]
+fn the_renewal_walk_reads_the_owed_record_the_re_drive_reads() {
+    let mut fx = GrantScenario::new();
+    let recipient = recipient_identity().verifying_key().to_sec1();
+    fx.world.mailbox_hub.forget_recipient(&recipient);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let outer_before = sequence_at(&fx.world, &write_name(outer));
+
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_reads_under(OWED_ROTATION_PREFIX);
+    fx.world
+        .scheduler
+        .advance(Duration::from_secs(65 * 24 * 60 * 60));
+    let _ = events_so_far(&mut fx._events);
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        !events_so_far(&mut fx._events).iter().any(|event| matches!(
+            event,
+            Event::RenewalFailed { detail, .. } if detail.contains("owed rotation record")
+        )),
+        "the walk does not stall on the store read"
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(outer)),
+        outer_before + 1,
+        "and renews the scope with no owed work"
+    );
 }
 
 /// Drive `command` to its end, moving virtual time on by one poll cadence each
@@ -9812,11 +10176,15 @@ fn an_entry_that_is_not_durable_refuses_the_grant_before_any_publish() {
     );
     assert!(fx.owed_scopes().is_empty(), "and nothing is owed");
 
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // The session holds no entry the store refused, so a retry is the grant.
     assert_eq!(
-        published_grant_section(&fx.world, &fx.blocks, fx.folder),
-        None,
-        "and no pass publishes it later"
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        delivered_share_pointer(&fx.recipient_device).scope_root_name,
+        fx.granted_scope_repoint().current_root.as_str().as_bytes(),
+        "the retry mints and delivers the grant"
     );
 }
 
