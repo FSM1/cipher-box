@@ -61,6 +61,8 @@ the code. There are two paths, and only two: the sweep's interior read, and the 
 re-author of one. Each path holds the same four conditions. The record carries no grant section.
 The read moves no floor. The sequence bar is the replay bar. The epoch is one the scope root's
 own ratchet reaches. A third path needs its own decision.
+Amended by ADR 0064 D1 on 2026-10-01: the name wave's read of a lagging interior node is the
+fourth sanctioned path, after the child resolve's lagging read (ADR 0021 D2).
 
 **D3 — The relaxation is the epoch stage alone, and it relaxes downward alone.** No other gate
 stage is weakened for this read, and a record above the pass epoch is refused.

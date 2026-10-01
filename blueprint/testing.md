@@ -113,7 +113,12 @@ scenario fails the meta-test):
   rename/rename, add/add auto-suffix, dest-first move, dual-link repair);
 - the rotation trigger table and the eager-set law — owner cascade vs
   grantee flat, sweep idempotence, concurrent sweepers, resumed name waves
-  via the history link;
+  via the history link; a write revoke over a nested subtree, a downgrade just
+  after a manual read rotation, and a write grant just after a read revoke move
+  each lagging node at the root's epoch, a lagging grandchild that does not
+  open under the ratchet's seed is a trust violation, and a child whose epoch
+  no held link reaches is reported unreachable, not as a trust violation
+  (ADR 0064, `crates/engine/tests/owner_actions.rs`);
 - the keyless re-PUT adversary (FSM1/cipher-box-next#38) — forged old-epoch records at old
   names, re-point adoption, the pin-window bound;
 - revocation classification (revocation-signal vs unresolvable vs epoch-lag)
