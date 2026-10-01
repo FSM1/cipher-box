@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.9.1](https://github.com/FSM1/cipher-box/compare/v2.9.0...v2.9.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **web-e2e:** repair staging invite expiry and assertion budgets ([#2169](https://github.com/FSM1/cipher-box/issues/2169)) ([2abdc1c](https://github.com/FSM1/cipher-box/commit/2abdc1caa13c1207627edc652e3294cef8bd5307))
+* **web:** keep the account identity and the folder view across a reload ([#2160](https://github.com/FSM1/cipher-box/issues/2160)) ([3e8faa4](https://github.com/FSM1/cipher-box/commit/3e8faa4f9cb103f5848aea54911a198bdcb3f8d3))
+
 ## [2.9.0](https://github.com/FSM1/cipher-box/compare/v2.8.0...v2.9.0) (2026-10-01)
 
 
