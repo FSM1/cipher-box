@@ -1,0 +1,145 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8cc507f9b04f",
+  "session_id": "cc94825a-d06d-4b5e-a54b-a1b4a14dba58",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-01T01:05:48.530684Z",
+  "branch": "fix/cold-start-file-rows-paint",
+  "checkpoints_count": 7,
+  "save_step_count": 1,
+  "files_touched": [
+    "apps/web/src/engine/snapshotStore.test.ts",
+    "tests/web-e2e/devices.ts",
+    "tests/web-e2e/page-objects/files.page.ts",
+    "tests/web-e2e/tests/cold-start-listing.spec.ts",
+    "tests/web-e2e/tests/link-first.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ce76966167f3",
+  "checkpoint_transcript_start": 813,
+  "transcript_lines_at_start": 813,
+  "compact_transcript_start": 108,
+  "token_usage": {
+    "input_tokens": 496,
+    "cache_creation_tokens": 62406,
+    "cache_read_tokens": 6331795,
+    "output_tokens": 25997,
+    "api_call_count": 23
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Open a draft PR (#2145) for the cold-start file-rows listing fix in CipherBox, run multi-lane reviews (simplify, security, crypto-privacy, code review), and fold the findings into the PR.",
+    "outcome": "The draft PR was opened and four review gates reported. The fold lane removed the inline boundary walk and replaced it with a latch, added one shared per-scope leg builder, and moved the root mapping to the WASM host. All engine, wasm, fuse and web suites and the 30/30 smoke slice pass, but nothing is committed yet.",
+    "learnings": {
+      "repo": [
+        "The engine's `boundary_walk_ran` flag was set at walk start, so a navigation during an in-flight or failed walk read a shared folder under the vault root seed. The adoption gate then rejected the rows and emitted a false AttributableAbuse. The fix is a `boundary_walk_landed` latch, set only on `Ok` after the boundary sets are installed. `refresh_focus_on_access` queues the folder's children and returns before any read leg until the latch is set.",
+        "The desktop FUSE host never sends SetFocus, so `open_folder` is always None there. An engine-level 'root in view' fallback would make every tick resolve root rows, which conflicts with blueprint/desktop.md's refresh-on-access rule. Mapping a null focus to the root at the WASM host (`focus_names_the_root`) avoids this.",
+        "In `snapshotStore.ts` the focus now starts as `undefined`, so the first `setFocus(null)` is sent. `useFolderNavigation.test.tsx` now expects `[null, DOCS]` because the mount sends the root focus first.",
+        "The tick and the facade navigation duplicated the per-scope leg setup (unproved skip, seed, floors, scope root name, own-vs-grafted plane), and the two copies had already drifted. They now share `ScopeLegContext::material` in `sync/pass.rs`.",
+        "Web-e2e fixtures: the `device` fixture lives in `tests/web-e2e/devices.ts` as `deviceTest` and `OpenDevice`. Putting it in `fixtures.ts` would create an import cycle (devices → vault → fixtures).",
+        "Each Rust integration test file builds as its own crate, so sharing helpers such as `recipient_identity` and `import_recipient` needs a shared module via `#[path]`, as `content_wipe.rs` does.",
+        "A web-e2e spec with no tag runs in the Web E2E Smoke slice, because smoke uses `grepInvert: /@full/`.",
+        "Type-erased holders such as `Sweeper` exist because the command path lacks the `Clone + 'static` bounds. `BoundaryWalk` was modelled on it but was deleted in the fold."
+      ],
+      "code": [
+        {
+          "path": "crates/engine/src/sync/pass.rs",
+          "line": 483,
+          "finding": "`walk_scopes` set `boundary_walk_ran` as its first line, before any await. It was therefore true while the walk was in flight, failed, or never started. The fix sets `boundary_walk_landed` only on `Ok` after the install."
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "line": 8747,
+          "end_line": 8810,
+          "finding": "`navigation_file_legs` copied the tick's per-scope leg from `pass.rs:616-678`. It decided `is_own_scope` from the proved set but took floors from `scope_floors`, which also counts minted scopes. It also re-read `root` after an await, which broke the 'one root read' comment."
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "line": 5516,
+          "finding": "`clear_failed_start` clears only the spawner, not `boundary_walk`, so a failed start keeps `TickPass` and its seams alive. This became moot once `BoundaryWalk` was deleted."
+        },
+        {
+          "path": "crates/engine/tests/write_plane.rs",
+          "line": 14099,
+          "end_line": 14126,
+          "finding": "A test comment said the web host sends the forced refresh before the focus. The same PR reverses that order in `snapshotStore.ts`, so the comment was false."
+        }
+      ],
+      "workflow": [
+        "Run several independent review lanes (simplify, security, crypto-privacy, code review) over the same diff. Two or more lanes independently confirmed the main flaw, the flag-timing race, so the overlap is a useful confidence signal.",
+        "After the review reports landed, a follow-up redirect to the in-flight fold agent via SendMessage replaced one planned fix with a better one: map the root at the WASM host instead of adding an engine rule.",
+        "Check that tests catch the bug by deliberately breaking the fix. Here that meant setting the latch at walk start and removing the gate, and the failed-walk test caught both.",
+        "`git checkout main -- <file>` restores single files without switching branches.",
+        "Keep an invariant's comment at one home and link to it elsewhere, per AGENTS.md. Several review findings flagged the same reason stated three times."
+      ]
+    },
+    "friction": [
+      "The first-draft inline boundary walk reintroduced the race it was meant to fix, and also made the first navigation wait on a network round trip, so offline cold starts wait out the adopt timeout. It took four review lanes to expose this.",
+      "Several test comments and docs went stale within the same PR, such as the web-host command-order narration and the 'one root read' comment.",
+      "The fold agent ran about 13 minutes and had to be redirected mid-flight when the code review showed the desktop conflict.",
+      "Six tests that navigated before any tick needed an extra tick in the shared fixture after the latch change."
+    ],
+    "open_items": [
+      "Commit and push the fold, which is currently uncommitted. After that, re-check CI on the new push; the first push had 34 checks green and one still running.",
+      "An `Ok` walk with `failure` set still sets the latch. This follows the 'on Ok' rule and matches what the tick reads, but it may deserve revisiting.",
+      "The two cold-start e2e tests each seed an identical NESTED vault. Sharing the seed was rejected for isolation, so revisit it only if suite time becomes a problem.",
+      "The first navigation still duplicates the first tick's floors, adopt and walk once per session. This was accepted as a one-time cost.",
+      "A security-review note on desktop root rows crowding the 64-slot focus queue was addressed by removing the engine root rule. Verify that no desktop path still pays for it.",
+      "The `smoke` description in blueprint/testing.md (line ~258) may need an update, since the spec adds three two-device tests.",
+      "`walk_boundaries` was deleted, so the earlier note about `consult_scope_pointers` being skipped no longer applies. Confirm the tick path still behaves as on main."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-01T01:05:29.393269Z",
+    "agent_lines": 0,
+    "agent_removed": 40,
+    "human_added": 62,
+    "human_modified": 257,
+    "human_removed": 0,
+    "total_committed": 81,
+    "total_lines_changed": 616,
+    "agent_percentage": 6.493506493506493,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 306,
+      "user_lines_removed": 257,
+      "agent_lines_added": 32,
+      "agent_lines_removed": 40,
+      "user_added_per_file": {
+        "apps/web/src/engine/snapshotStore.test.ts": 13,
+        "apps/web/src/engine/snapshotStore.ts": 8,
+        "apps/web/src/vault/useFolderNavigation.test.tsx": 4,
+        "crates/engine/src/facade.rs": 42,
+        "crates/engine/src/facade/tests/capstone/pass_tick.rs": 1,
+        "crates/engine/src/session.rs": 7,
+        "crates/engine/src/sync/pass.rs": 95,
+        "crates/engine/tests/write_plane.rs": 108,
+        "crates/wasm/src/host.rs": 28
+      },
+      "user_removed_per_file": {
+        "apps/web/src/engine/snapshotStore.ts": 5,
+        "apps/web/src/vault/useFolderNavigation.test.tsx": 3,
+        "crates/engine/src/facade.rs": 58,
+        "crates/engine/src/facade/tests/capstone/pass_tick.rs": 2,
+        "crates/engine/src/session.rs": 4,
+        "crates/engine/src/sync/pass.rs": 53,
+        "crates/engine/src/sync/tick.rs": 31,
+        "crates/engine/tests/write_plane.rs": 95,
+        "crates/wasm/src/host.rs": 6
+      }
+    }
+  ]
+}

@@ -1,0 +1,381 @@
+have you run the usual code review, simplify subagent passes?
+
+---
+
+<task-notification>
+<task-id>a0d1e20693b2ddcb8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-b57de37e/cc94825a-d06d-4b5e-a54b-a1b4a14dba58/tasks/a0d1e20693b2ddcb8.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review of PR 2145 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The four review agents run in the background. I will wait for their results.</result>
+<usage><subagent_tokens>74680</subagent_tokens><tool_uses>8</tool_uses><duration_ms>62616</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a609d6228e47de0ed</task-id>
+<tool-use-id>toolu_01FNyMMRiiuXLMfNE7X6EnY1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-b57de37e/cc94825a-d06d-4b5e-a54b-a1b4a14dba58/tasks/a609d6228e47de0ed.output</output-file>
+<status>completed</status>
+<summary>Agent "Reuse review of PR 2145" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found reuse issues in all five areas.
+
+1. **`crates/engine/src/facade.rs:8755-8765`: the `by_scope` loop rewrites grouping that already exists.** `crates/engine/src/sync/tick.rs:271` `focus_by_scope(&amp;base, &amp;focus, &amp;focus_scope_roots(..))` returns these groups in its `.files`. The facade's queued files are the same list as `focus_files` (`tick.rs:292`). The pass gets them with `nodes_in_scope(.., scope_root, focus_files(..))` (`pass.rs:701-706`). Cost: a second scope-grouping rule that can drift from the tick's.
+   - **Per-scope setup is copied.** `facade.rs:8767-8800` repeats `pass.rs:606-662` step for step: the unproved skip, seed lookup, floors lookup, `scope_root_record_name`, the `is_own_scope`/`GraftedLeg` choice, the `FolderRefresh` literal, then the `open_files.retain` at `pass.rs:735-739`.
+   - **No leg builder exists.** I found no `focus_leg`, `scope_leg` or `folder_refresh_for`. The only `FolderRefresh` literals are `facade.rs:8709`, `facade.rs:8782`, `pass.rs:645` and a test at `net/focus.rs:499`.
+   - **A shared constructor is feasible.** `FolderRefresh&lt;'a, T, S, H, F&gt;` is generic, so each side's handles (`self.record_transport`/`self.gateway`/`self.events` versus `self.seams.*`) can be passed by reference. A fn like `scope_leg(state, scope, own, seed, floors, root_name, mode, now, transport, cache, http, gateway, events)` would take about 12 arguments. That is barely better than the struct literal. The part worth sharing is the scope setup and the plane choice, not the literal.
+
+2. **The two `plane` checks use different inputs.** The pass uses `is_own_scope(&amp;self.root_id, &amp;scopes.proved, ..)` (`pass.rs:616`). `self.root_id` is captured once at `TickPass::new`, from the snapshot root at `facade.rs:5948`. The facade reads the snapshot root each time (`facade.rs:8752`, `:8793`). Both pass `proved` = `descendant_scope_roots` only. But the facade's `scope_floors` (`facade.rs:8512-8527`) decides "own" from `own_descendant_scopes(descendant + minted)`. So the floor namespace and the plane can disagree for a scope that was minted but not yet proved.
+
+3. **`tick.rs:126-137`: `folders_in_view_or_root` copies the body of `folders_in_view`.** It can be written as `once(open).chain(self.folders_in_view().filter(|n| *n != open))`. `folders_in_view` is still called at `tick.rs:195` (`focus_set`) and `facade.rs:11158` (the public `focus_folders()`). The `tick.rs:195` call could switch, since `focus_folders` already drops the root, but that changes `focus_set` output and its tests. Keep both, with the new one built on the old.
+
+4. **`write_plane.rs:14042` and `:14078-14093`: the contact import and grant are hand-rolled.** `RECIPIENT_SECRET = [0x5B; 32]` matches the constant at `mount_convergence.rs:48` and `owner_actions.rs:79`. `mount_convergence.rs` already has `recipient_identity()` (410), `import_recipient()` (416) and `grant_to_recipient_at(engine, node, Permission)` (445); `owner_actions.rs` has the first two (380, 526). Each test file builds as its own crate, so reuse means moving them into a shared module. `content_wipe.rs:19` already pulls in a shared module with `#[path]`. The cost is a third copy.
+
+5. **`cold-start-listing.spec.ts`:**
+   - **`device` fixture (lines 28-38):** copy of `tests/link-first.spec.ts:37-48`. Move it into `fixtures.ts` or `devices.ts`.
+   - **Manual login in the second test (lines 132-138):** repeats `coldStart` (`vault.ts:50`) and `Device.online` (`devices.ts:77`) without the `settled()` wait. Nothing covers it today. A `settle` option on `coldStart`/`online` would let it reuse them.
+   - **`visit` (pushState):** nothing equivalent exists. `FilesPage.goto` does a document load, and `openFromSidebar` only reaches `/files`.
+   - **Breadcrumb check (lines 123 and 141):** repeats the `[aria-current="page"]` expectation inside `FilesPage.open`/`toRoot` (`files.page.ts:108`, `:119`). Add a `FilesPage.at(name)` helper.
+   - **`seed`:** none.</result>
+<usage><subagent_tokens>81764</subagent_tokens><tool_uses>20</tool_uses><duration_ms>99352</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab77da6f8255c4bb2</task-id>
+<tool-use-id>toolu_01LvuFokbr4dQpVWDKDrEJ1P</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-b57de37e/cc94825a-d06d-4b5e-a54b-a1b4a14dba58/tasks/ab77da6f8255c4bb2.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency review of PR 2145" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Each of the six items is answered below with location, cost and a cheaper alternative where one exists.
+
+**1. Cold-start walk duplicated by the first tick** (`facade.rs:8682-8695`, `pass.rs:222-229`)
+- **Cost:** the first navigation pays for `refresh_floors`, a root `adopt_root` (resolve) and a full `walk_scopes`. Then the first poll pass (`pass.rs:198-200`) runs all three again. The walk leaves no marker the pass checks, so the pass re-walks every scope root. The held records and warm `snapshot_cache` only make the pass's root adopt cheaper. Before this PR, the first navigation also didn't block on a network round trip; now it does, and offline it waits out the adopt timeout before painting.
+- **Repeat on failure: no.** `boundary_walk_ran` is set as the first line of `walk_scopes` (`pass.rs:483`), before the held-root check and the network calls. A failed or offline walk still counts as run. The only case that retries is `loop_gate` returning `None` (no root name or secrets), and that returns before any I/O.
+- **Cheaper:** keep it as is. If you want, the first pass could skip its walk when a walk finished within the last cadence, but the duplicate happens once per session.
+
+**2. `BoundaryWalk` capture** (`facade.rs:5958-5963`)
+- **Cost:** small. It holds one `Rc&lt;TickPass&gt;` (also held by the spawner and loop) plus a `SessionState`, which is only `Rc` fields, so the copy is cheap.
+- **Lifetime gap:** `shut_down` (`facade.rs:5066`) clears the walk, but `clear_failed_start` (`facade.rs:5516`) clears only the spawner. After a failed start the walk keeps `TickPass` and its `EngineSeams` (including the API client) alive.
+- **Cheaper:** clear `boundary_walk` in `clear_failed_start` too. Optionally `take()` it once the flag is set.
+
+**3. `navigation_file_legs`** (`facade.rs:8747-8810`)
+- Running the scopes one after another matches the tick, so that is consistent.
+- **Worse than the tick:**
+  - The root's `scope_read_seed` is now awaited twice per navigation: once at `:8705`, then again at `:8771`. Each call does a durable floor read through `refresh_seed_floor`. The tick reads floors once (`refresh_floors`) and then uses `cached_seed`.
+  - `scope_floors` is also built twice per scope: once inside `scope_read_seed`, again at `:8774`.
+  - **Cheaper:** pass the caller's root seed in, and have `scope_read_seed` return `(floors, seed)`.
+- **The three set clones and the root re-borrow:** negligible, since the sets hold a few ids each.
+
+**4. `folders_in_view_or_root`** (`pass.rs:598`, `:688`)
+- **Not a regression:** the old code also collected `folders_in_view()` once per scope (`.collect()` at the old `:672`).
+- **Cheaper:** the window only changes inside the loop through `queue_unprojected_children`, which updates `open_files`, not the folders. So compute the `Vec` once before the loop (the `:598` result) and reuse it at `:688`.
+
+**5. `for _ in 0..4` tick loop** (`write_plane.rs:14093`)
+- The file has no settle, drain or tick-until helper. Six earlier `0..4` loops use the same pattern (e.g. `:9753`, `:10694`), so this follows the file's convention.
+- Rebuilding the seeded world in each of the 3 tests means in-memory fakes only. It is cheap, so leave it.
+
+**6. Playwright seeds** (`cold-start-listing.spec.ts:112`, `:127`)
+- The first two tests each seed an identical `NESTED` vault, a full device-A session with 2 uploads and a drain. That is roughly one extra seed per CI run, plausibly tens of seconds.
+- Sharing it needs `describe.serial` plus a `beforeAll` seed. That fights the per-test `device` fixture, ties the two tests together, and the config already sets `retries: 0`.
+- **Verdict:** accept the cost for the isolation. Only revisit if this suite's run time becomes a problem.</result>
+<usage><subagent_tokens>76608</subagent_tokens><tool_uses>17</tool_uses><duration_ms>96948</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a09a9828ddc9b0bca</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-b57de37e/cc94825a-d06d-4b5e-a54b-a1b4a14dba58/tasks/a09a9828ddc9b0bca.output</output-file>
+<status>completed</status>
+<summary>Agent "Altitude review of PR 2145" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found five altitude issues. The duplicated per-scope leg (item 2) is the biggest, and it has already caused one divergence.
+
+**1. (a) The root fallback lives in a sibling function instead of in `FocusWindow`'s own model**
+- `tick.rs:128` `folders_in_view_or_root` is only called from `pass.rs:597` and `pass.rs:688`.
+- The original `folders_in_view` (`tick.rs:117`) is still used by `focus_set` (`tick.rs:195`) and by `Engine::focus_folders` (`facade.rs:11158`). So the old function is not a leftover. The two definitions of "in view" now disagree: the tick holds the root in view, but `focus_set` and the public `focus_folders()` say nothing is open.
+- **Cost:** two functions with nearly the same body, and readers of the window get different answers.
+- **Deeper change:** have `folders_in_view` substitute the root when `open_folder` is `None`. It can take the root from `Snapshot`, as `focus_set` already does. Then delete the variant. Setting `open_folder = Some(root)` in the facade would not be enough: the tick's "cold session never sends a focus" case would still need it at start. `focus_folders` (`tick.rs:224`) already drops the root, so the folder leg does not change.
+
+**2. (b) `navigation_file_legs` copies the tick's per-scope leg**
+- `facade.rs:8747-8809` repeats `pass.rs:616-678`: the unproved skip, the seed and floors lookup, `scope_root_record_name`, building `FolderRefresh` with `GraftedLeg`, and `run_files`.
+- **It has already drifted:**
+  - The facade's "own scope" test uses the snapshot root and the proved set only (`facade.rs:8793`).
+  - The facade's floors come from `scope_floors` (`facade.rs:8512`), which counts proved plus minted scopes as own.
+  - The tick uses `self.root_id` and the proved set for both (`pass.rs:616` and `pass.rs:634`).
+  - So in the facade, a scope this session minted but has not yet proved gets own-vault floors but goes down the grafted path.
+- The two roots are equal today, because `root_id` is read from the snapshot at build time (`facade.rs:5947`).
+- The navigation's folder leg is still filtered to the vault's own scope only (`facade.rs:8695`). Its file leg now runs per scope, so a shared subfolder's folder leg is still skipped on navigation.
+- **Deeper change:** add one `scope_leg(scope, …) -&gt; Option&lt;FolderRefresh&gt;` builder in `sync/`, taking the handles both callers can supply. Have both the facade and the tick loop over `by_scope` for folders and files.
+
+**3. (c) The boundary walk and its flag patch over a missing "boundaries known" signal**
+- The type-erased `BoundaryWalk` (`facade.rs:4532`) has a precedent: `Sweeper` is erased the same way, because `command` does not hold the `Clone + 'static` bounds. Storing the typed `Rc&lt;TickPass&gt;` would hit the same problem.
+- Running the walk inside `start` doesn't work either: an account with no root name yet gets its root later from `provision_in_session`, after `start` has finished.
+- **Cost:**
+  - `walk_boundaries` (`pass.rs:222`) runs a second copy of the pass's first three stages, and it can run at the same time as the first tick pass. That means two root adopts and two walks.
+  - The flag is set at `pass.rs:483`, when the walk *starts*. A navigation that arrives while a walk is in flight, or after a walk that found no keys or was unavailable, skips the walk with no scope roots known. That is the very case the flag was added to prevent.
+  - `scope_roots_walked` is set *after* the outcome, so the two flags mean different things.
+- **Deeper change:** have the first pass fire a "boundaries known" latch after `walk_scopes` returns, and have navigation await it. At minimum, set the flag at the end of the walk.
+
+**4. `snapshotStore.ts` call-order swap**
+- The order dependency is guarded by the inline comment and the new call-order test. Nothing at its home records it.
+- The relay's focus union (`leaderRelay.ts:269` and `:437`) only decides whether to force a pass. The engine never receives the union, so the forced pass relies on `setFocus` having already landed.
+- **Deeper change:** document the dependency on `forceRefresh` (`leaderRelay.ts:688`), or skip the forced pass for the leader's own tab, since `SetFocus` already runs the navigation legs.
+
+**5. Test edits**
+- The removed `tick()` calls (`write_plane.rs` around lines 13913, 13978 and 14237) are correct. Ticks now paint the root's rows, which would break each test's "nothing painted yet" starting state.
+- The trade-off: these tests now also run the boundary walk inside navigation, so they no longer cover navigation after a tick has run.
+- The new expected value in `pass_tick.rs:129` reflects the new behaviour, and the test's intent is preserved.</result>
+<usage><subagent_tokens>83461</subagent_tokens><tool_uses>20</tool_uses><duration_ms>120793</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9f68a58ee06b3bcc</task-id>
+<tool-use-id>toolu_0171igBAf9f6tvGMjzJ3B79B</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-b57de37e/cc94825a-d06d-4b5e-a54b-a1b4a14dba58/tasks/a9f68a58ee06b3bcc.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplification review of PR 2145" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found nine points. The biggest are: the boundary walk can be a concrete typed field, `navigation_file_legs` reads `root` a second time, and one test doc describes the web host's old command order, which this same PR reverses.
+
+**1. The type-erased boundary walk can be a typed field** (`facade.rs:4532`, `:4636`, `:5959`). The closure returns a boxed future and clones `pass` and `state` on every call. That boxing isn't needed:
+- The full pass type can be named with the bounds `SeamTypes` already gives: `TickPass&lt;RecordAccelerator&lt;T::RecordTransport&gt;, T::Http, T::CredentialStore, LiveSeam&lt;T::FloorStore&gt;, LiveSeam&lt;T::SnapshotCache&gt;, LiveSeam&lt;QueueGenerationStore&lt;T::StagingStore&gt;&gt;, T::Scheduler&gt;`.
+- `walk_boundaries`'s impl bounds hold for that type without the method-level `where` clause. Only building `EngineSeams` (the `.clone()` calls) needs that clause.
+- `self.state` is already `Rc&lt;SessionState&gt;`.
+
+Simpler form: add `type LiveTickPass&lt;T&gt; = …;`, store `RefCell&lt;Option&lt;Rc&lt;LiveTickPass&lt;T&gt;&gt;&gt;&gt;`, and call `pass.walk_boundaries(&amp;self.state).await`. That removes `BoundaryWalk`, its doc, and the double clone. Clearing it with `try_borrow_mut` on forget (`:5066`) is fine: it matches the neighbouring fields, and no borrow is held across an await.
+
+**2. `boundary_walk_ran` can't be derived from existing state; keep it** (`session.rs:348`).
+- `scope_roots_walked` stays false after a failed walk or when unproved roots remain.
+- `walked_read_epochs` is empty for a vault with no shares.
+- `current_root_name` and the held root record are also set at start or by writes.
+- One catch: `pass.rs:483` sets the flag on entry, even when the walk is skipped because there are no sweep keys or no held root. An offline first navigation then never retries.
+
+**3. `walk_boundaries` (`pass.rs:222`) duplicates three lines of `run`, and `run` shouldn't call it.** `run` needs `grafted`, `resolved` and `read_seed`, and runs `consult_scope_pointers` in between. Leave it as is.
+
+**4. `folders_in_view_or_root` is a near copy** (`tick.rs:126`). `folders_in_view` is still used at `tick.rs:195` and `facade.rs:11158`. Simpler: one private `fn in_view_with(&amp;self, open: Option&lt;NodeId&gt;) -&gt; impl Iterator`. `folders_in_view` passes `self.open_folder`; the root variant passes `Some(self.open_folder.unwrap_or(root))`. Both can return iterators.
+
+**5. `navigation_file_legs` reads `root` a second time** (`facade.rs:8752`). The read happens after the caller's `leg.run(&amp;due).await`, which breaks the caller's stated "One root read" rule (`:8692`). Pass `root` in as a parameter.
+- The `proved`, `unproved` and `bookmarked` clones are needed, since they are held across awaits.
+- The `scope_floors` else-arm (`:8774`) is effectively dead, because `scope_read_seed` already returns `None` without floors.
+- The root folder leg (`:8709`) and the per-scope leg are two near-identical `FolderRefresh` literals; a small builder would cover both.
+
+**6. Comment-rule violations**
+- **Stale host narration:** the doc and inline comment on `write_plane.rs:14105` and `:14126` say the web host sends the forced refresh before the focus. This PR's `snapshotStore.ts` change sends the focus first. Cut the host story and state the engine property only.
+- **Invariant stated three times:** "until a walk, a shared folder reads as the vault's own scope" appears at `session.rs:348`, `facade.rs:8683` and the test doc at `write_plane.rs:~14152`. Keep it at the field and make the block comment a link.
+- **Repeated phrase:** "a navigation that lands before the first pass" appears in the `BoundaryWalk` doc and the `walk_boundaries` doc.
+- **Says where, not why:** the `boundary_walk` field doc ("Built beside the tick loop spawner…") says where it's built, not what it's for.
+- **Duplicate in the TS test:** the comment in `snapshotStore.test.ts:24` repeats the one in `snapshotStore.ts`, and the test name already says it. Drop it.
+- **Over-long line:** `cold-start-listing.spec.ts:4` is over 120 chars and needs re-wrapping.
+
+**7. Tests**
+- `plain_and_shared_folders` (`write_plane.rs:14048`): returning a `Vec` and reading `rows[1].1` is opaque. Return `[Folder; 2]` with `struct Folder { name, id, file }` and destructure with `let [plain, shared] = …`; it still loops.
+- `shared_scope_beside_own_row` is fine.
+- The `seed&lt;T&gt;` generic in the spec is cheap and has two real return types, so keep it.</result>
+<usage><subagent_tokens>79634</subagent_tokens><tool_uses>17</tool_uses><duration_ms>150379</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa8214c4438bb7a0c</task-id>
+<tool-use-id>toolu_011gvnA63oHQD11jzX7c7h3F</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-b57de37e/cc94825a-d06d-4b5e-a54b-a1b4a14dba58/tasks/aa8214c4438bb7a0c.output</output-file>
+<status>completed</status>
+<summary>Agent "Crypto-privacy review of PR 2145 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The crypto-privacy gate found one Medium finding, no High or Critical, and one Low note. Nothing in this diff exposes key material and nothing weakens the adoption gate. The one real gap is a timing window in which the new inline walk is skipped and a shared folder is read under the wrong scope.
+
+## Findings
+
+**1. MEDIUM: the "walk ran" flag is set when a walk starts, not when it installs its result**
+- **Location:** `crates/engine/src/sync/pass.rs:483` sets `boundary_walk_ran` at the first line of `walk_scopes`. The check that reads it is at `crates/engine/src/facade.rs:8686`.
+- **How it fails:**
+  1. At `start`, the tick loop starts its first pass at once (`pass.manual.arm()`, `facade.rs:5966`). Commands use `&amp;mut self`, but the spawned tick task runs at the same time as a command and switches with it at each await.
+  2. The tick's first pass enters `walk_scopes`. The flag becomes `true`, then the walk awaits `descendant_scope_roots`.
+  3. The host sends `SetFocus { node: Some(shared) }` in that window. The navigation reads the flag as `true` and skips the inline walk.
+  4. The proved set is still empty, so `scope_root_of` puts the shared folder and its rows in the vault root's group.
+  5. The unchanged folder leg and the new file leg read those records under the vault root seed. The AAD-bound unseal fails, `resolve_child` returns `GateError::Rejected`, and `emit_trust_violation` sends `AttributableAbuse` against an honest owner.
+- **Same result, other paths:**
+  - A walk that sets the flag and then installs nothing: no sweep keys, no held root record after a failed adopt, or `WalkFailure::Unavailable`.
+  - A host that drops the `SetFocus` future in the middle of the inline walk.
+  - In each case, later navigations do not try the walk again until a tick installs a proved set.
+- **Effect:** The read fails closed and nothing is adopted. The harm is a false abuse report and a `Rejected` verdict. Behaviour before this PR was worse, so this is an incomplete fix, not a regression.
+- **Recommended fix:**
+  - Set the flag only after a walk installs a result, so only after `Ok(walked)` and `install_descendant_scopes`, not at the start of `walk_scopes`.
+  - Let a navigation wait on a walk that is already running, through one shared future. Do not skip it.
+  - Add a test: start the tick's first pass, stop it inside the walk, send `SetFocus` on the shared folder, and assert `accused_nobody`.
+
+**2. LOW (information): the facade and the tick use a different "own" set**
+- **Location:** `facade.rs:8774` and `facade.rs:8793`.
+- **What differs:**
+  - `scope_floors` gives `floor_view` the proved set plus `minted_scope_roots`. The plane check gives `is_own_scope` the proved set only.
+  - The tick gives `scopes.proved` to both.
+- **Effect:** none found. A scope that was minted but not proved again can only be a group key when it is the top ancestor or a node with no parent. In that case the facade selects the vault's own floor namespace, which is correct. `run_files` does not read `plane`.
+- **Recommended fix:** none required. You can pass the same set to both calls so the facade and the tick agree.
+
+## Answers to your questions
+
+- **Key material:** Clear. `scope_read_seed` returns `Option&lt;Zeroizing&lt;[u8;32]&gt;&gt;`, held in a local for one loop iteration and borrowed by `FolderRefresh`. `ChildAdopter` gets a `Zeroizing` clone, the same as the tick. No seed goes into a container that does not zeroize. The facade helper also runs `refresh_seed_floor` before each read, which is stricter than the tick's `cached_seed`.
+- **AAD/scope binding:** Clear for the code that was changed. The grouping is the same as the tick's: `scope_root_of` over `focus_scope_roots(proved, unproved)`. Unproved scopes are skipped before any seed lookup or read. The old code had the same grouping but read only the root group. A wrong pairing with the vault seed happens only when the proved set is empty or incomplete, which is finding 1.
+- **Floors:** Clear. Both paths call `floor_view`, with the same contact-label seed and the same `grafted_sharers` state. The cut-epoch check is in the shared `ChildAdopter`/`resolve_child` path, so both legs apply the same floor. The facade's floor view is not weaker.
+- **Grafted plane:** Clear. It is the same `GraftedLeg` over `bookmarked_scope_roots` and `grafted_claims`. The record name for a lagged child read comes from `scope_root_record_name` and the same `current_root_name` cell. `run_files` does not use `plane`.
+- **Inline boundary walk:**
+  - The root adopt passes the same gate as the tick's. The order is the same (`refresh_floors` → `adopt_root` with `floors_before`), the cache mode is the same (`Poll` → CacheFirst), and so is `RootAdopter`.
+  - It skips `consult_scope_pointers`. That is the same as a poll whose consult is not due. Floors only go up, so skipping it cannot lower them.
+  - A walk that fails cannot leave a half-proved set: proved scopes are installed one by one with their seeds, and names without proof go to the unproved set. The only gap is the flag in finding 1.
+- **Privacy:** Clear. No new log line or event text contains a seed. The new tests compare sizes, child ids, read counts and `AttributableAbuse` absence only. `[6u8; 32]` and `RECIPIENT_SECRET` are fixtures used to build state, and no assertion compares or prints derived key bytes.
+
+## Gates with no findings
+
+No primitive, KDF edge, AAD layout, wire format, KAT, encode/decode check, or TypeScript crypto changed. The two `apps/web` and `tests/web-e2e` files touch no keys.
+
+Files reviewed:
+- `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/src/facade.rs`
+- `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/src/sync/pass.rs`
+- `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/src/sync/tick.rs`
+- `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/src/net/focus.rs`
+- `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/src/grants/grafted.rs`
+- `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/tests/write_plane.rs`</result>
+<usage><subagent_tokens>114824</subagent_tokens><tool_uses>19</tool_uses><duration_ms>192091</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a71ee0a8c1a731d1e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-b57de37e/cc94825a-d06d-4b5e-a54b-a1b4a14dba58/tasks/a71ee0a8c1a731d1e.output</output-file>
+<status>completed</status>
+<summary>Agent "Security review of PR 2145 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Security review: PR #2145 (`git diff main...HEAD`)
+
+None of these findings is a vulnerability that an attacker can exploit. No row is ever adopted under the wrong seed, so data stays fail-closed. Finding 1 is a defect in trust reporting: it can send a false abuse report against an honest writer.
+
+## Finding 1, MEDIUM: the item 3 fix is narrowed, not complete
+
+**Where:** `crates/engine/src/sync/pass.rs:483`, `crates/engine/src/facade.rs:8686`
+
+**Mechanism:** `walk_scopes` sets `boundary_walk_ran` to true before it does its work. `descendant_scope_roots` is filled only after the walk's awaits finish, and only when the walk returns `Ok`. Three paths leave the flag true while the set stays empty:
+
+- **(a) A pass is mid-walk.** The tick loop is a spawned task and does not take the command write lock (`crates/wasm/src/host.rs`). A `SetFocus` that arrives while the first pass awaits inside `descendant_scope_roots` sees the flag as true and skips the inline walk.
+- **(b) The walk fails.** The walk returns `Err`, which includes `WalkFailure::Unavailable` on a cold network.
+- **(c) The walk never starts.** `held_root` or `sweep_keys` is `None`, and `walk_scopes` returns at once.
+
+**Failure:** In each case `navigation_file_legs` gives a shared folder's rows to the root scope. It reads them under the vault seed, the child gate rejects them, and the engine emits a false attributable-abuse event. This is the bug that item 3 sets out to fix.
+
+**Fix:**
+1. Set the flag only after `install_descendant_scopes`, on `Ok`. Rename it to state that meaning, for example `boundary_walk_landed`.
+2. In `refresh_focus_on_access`, do not run the inline walk again while that flag is false. Skip the folder and file legs and keep the rows queued for the tick. A retry on each `SetFocus` would run a full root adopt and walk on every navigation, with no `stale_after` damping.
+
+## Finding 2, LOW: the inline walk can overlap a pass's root adopt
+
+**Where:** `crates/engine/src/sync/pass.rs:222-229`
+
+**Mechanism:** If a pass that a cadence or an earlier command started has not yet reached `walk_scopes`, the inline walk runs `refresh_floors`, `adopt_root` and `walk_scopes` at the same time as that pass.
+
+**Failure:**
+- The inline adopt is `CacheFirst`. If it reads sequence N after the pass has committed floor N+1, `resolve.rs` reports a strictly older sequence as a `TrustViolation`. That is a false trust event on the vault root.
+- `deposit_seed` overwrites without a check. The `Current` arm can therefore write back an older read seed that has a lower stamp. This heals itself: the next `refresh_seed_floor` evicts it.
+
+**Fix:** Skip the inline walk while a pass is in flight. `sync_status.reconcile_started` is a candidate in-flight marker. The fix for finding 1 removes most of this window.
+
+## Finding 3, LOW (freshness, not security): on desktop, root rows push out the rows of folders in use
+
+**Where:** `crates/engine/src/sync/tick.rs:128`, `crates/engine/src/sync/pass.rs:688`
+
+**Mechanism:**
+- Desktop never sets `open_folder`, so the root now always takes navigation's slot.
+- `in_view.rev()` queues the root's rows last, which makes them the newest.
+- A full queue and `leg_file_share` both drop the oldest bulk rows first.
+
+**Failure:** On a desktop cold start over a root with many files that have no size yet, each pass spends its 64 resolves on root rows. The bulk rows of the touched folder wait about one pass for each 64 root files.
+
+**Fix:** Put the root in the slot only when `touched_folders` is empty, or queue it first so it has the lowest priority.
+
+## Answers to the specific questions
+
+- **Resource bounds:** No finding. Both legs stay within `MAX_FOCUS_FILES`.
+  - The tick still charges `leg_file_share` across its legs for each pass.
+  - The navigation leg groups one snapshot of `open_files`, which `queue_focus_file` bounds to 64. A large root listing therefore gives at most 64 file resolves per `SetFocus`, across all scopes together. Add to this the folder leg (`focus_folders_due`) and one inline walk for each session.
+  - A repeated `SetFocus` is damped. `settle_focus_leg` stamps each row it attempts, and `queue_focus_file` does not queue that row again until `on_access_refresh_due`. The rows of a scope with no seed stay queued. They cost one floor-store read for each scope group and no resolve.
+- **Wrong-scope seed:**
+  - No new finding for the grouping. `scope_root_of` over `focus_scope_roots(proved, unproved)` gives the same grouping as the tick's `nodes_in_scope`. Rows of an unproved boundary are skipped. Grafted scopes get `GraftedLeg` through `is_own_scope`, as on the tick.
+  - The window from grouping to `run_files`, where a concurrent walk promotes a folder, is old. The code before this PR had it too (`scoped_to` then an await). The only new path is finding 1.
+- **`RefCell` borrows held across an await:** No finding. Every `borrow()` in the new code is a temporary or is cloned before the next await: `boundary_walk`, `descendant_scope_roots`, `bookmarked`, `scope_root_record_name`, and the `base` block, which has no await.
+- **Teardown:** No new finding. Teardown clears `boundary_walk`. An inline walk in flight is stopped by `alive` in `loop_gate`, the same as the tick.
+- **Manual refresh:** No finding. `walk_boundaries` does not call `settle_verdict` or `manual.begin`, so it does not answer or take a filed manual request. The double-adopt risk is in finding 2.
+- **Determinism:** No finding. The new code uses `now` and `self.seams.scheduler.now()` only. There is no new clock or RNG.
+- **Injection, auth/expiry gates, secrets in logs:** No finding. The diff adds no new input sink, no auth path, and no logging.
+- **`snapshotStore.ts` order swap:** No finding. It changes only the order in which messages are sent. The test file and the e2e spec are out of scope.
+
+Files:
+- `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/src/sync/pass.rs`
+- `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/src/facade.rs`
+- `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/src/sync/tick.rs`</result>
+<usage><subagent_tokens>117953</subagent_tokens><tool_uses>24</tool_uses><duration_ms>257373</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af2ab394109965ba0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev--t3-worktrees-cipher-box-t3code-b57de37e/cc94825a-d06d-4b5e-a54b-a1b4a14dba58/tasks/af2ab394109965ba0.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review of PR 2145 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I ran the code-review skill on both axes over `git diff main...HEAD` (2 commits, 10 files). I checked the main findings against the code myself.
+
+## Spec axis
+
+1. **Medium. The walk flag is set too early.** `crates/engine/src/sync/pass.rs:483`. `walk_scopes` sets `boundary_walk_ran` before its first await. It also sets the flag when there is no held root and when the walk returns `Unavailable`.
+   - Failing case: the first cadence pass starts and waits on the network inside the walk. Then a `SetFocus` on a shared folder arrives. The check at `facade.rs:8686` sees the flag as true and skips the inline walk. `descendant_scope_roots` is still empty, so the folder is read under the vault seed and the adoption gate raises the false attributable abuse that fix 3 removes.
+   - Also, a walk that fails or does nothing still sets the flag. After that, no navigation tries the walk again until a pass succeeds.
+   - Fix: set the flag after the `if let Ok(walked)` install. Add a test where a pass's walk is held open when `SetFocus` arrives.
+2. **Medium-low. The desktop behaviour changes, and no document states it.** `crates/fuse` never sends `SetFocus` (its only call is `note_focus_access`, `crates/fuse/src/ops.rs:411`). So `open_folder` is always `None` on desktop, and each tick now queues the root's file rows that have no size.
+   - Worst case: 64 resolves (`MAX_FOCUS_FILES`) per 30 s tick. The `stale_after` damper lets each row through once per 90 s. A file that has no size resolves once per 90 s for the whole session.
+   - This conflicts with `blueprint/desktop.md:236-237` ("Everything else refreshes on access"). It also adds root-file resolves to the browse/read exposure that desktop.md:239-246 describes. The edit to `capstone/pass_tick.rs` shows the extra stamp. Neither the PR body nor the commit states this change.
+   - Fix: apply the root fallback only on the navigation path and on hosts that send `SetFocus`. If you keep it, state it in `desktop.md` and `engine.md`.
+3. **Low. `Engine::focus_folders()` is now inconsistent.** `facade.rs:~11157` still returns `folders_in_view()`, without the root fallback. No host reads it (wasm, fuse, desktop, client and web do not). Only tests read it: `fuse_op_core.rs`, `write_plane.rs:13829` and the facade tests. Fix: make it use `folders_in_view_or_root`, or correct its doc comment.
+4. **Low. Smoke scope.** `blueprint/testing.md:258` describes the smoke slice as login and CRUD "plus one timing-profile cross-client scenario". This spec adds three tests with two devices each. The setup runs per test, so tests 1 and 2 seed the same vault twice. When a poll fails, test 2 runs to the 120 s test timeout.
+
+## Standards axis
+
+1. **HARD. A test comment is now false.** `crates/engine/tests/write_plane.rs:14099-14101` says "The web host files its forced refresh before the focus moves". This same diff reverses that order in `snapshotStore.ts`. Fix: say that the test models the order where the forced pass lands first.
+2. **SOFT. A stale comment.** `crates/engine/src/facade.rs:8692-8693`. The comment "One root read … across the await below" is no longer true, because `navigation_file_legs` reads `root` again after the awaits. Fix: delete the comment, or pass `root` into the helper.
+3. **SOFT. The same reason is stated twice.** The `boundary_walk_ran` doc in `session.rs` and the comment at `facade.rs:8683-8685` both say "a shared folder reads as the vault's own scope". AGENTS.md says to state a reason once, at its home.
+4. **SOFT. An omission with no reason.** `pass.rs` `walk_boundaries` does not call `consult_scope_pointers`, which `run` calls first. Nothing says whether this is intended.
+5. **SOFT.** `cold-start-listing.spec.ts:4` is a comment line of 118 characters.
+6. **Judgement call: duplicated code.** `navigation_file_legs` and `pass.rs:~607` repeat the per-scope leg: seed lookup, `floor_view`, `scope_root_record_name`, `FolderRefresh` with `GraftedLeg`, and the `retain`. The two copies already differ: the facade decides `is_own_scope` from `descendant_scope_roots`, but its floors come from `own_descendant_scopes`. Fix: extract one shared helper.
+7. **Judgement call: speculative generality.** The type-erased `BoundaryWalk` closure has only one implementation. Low priority.
+
+## Cleared
+
+- **Check 1 (tests fail without their fix):**
+  - `a_set_focus_of_no_folder_paints_the_roots_unprojected_rows` fails on main, because main queues rows only `if let Some(folder)`.
+  - The `tick.rs` test calls a method that does not exist on main.
+  - `a_second_focus…` fails if you remove the flag.
+- **Flag lifecycle:** `shut_down` resets the flag (`facade.rs:5100`). A root cut does not change the root `NodeId`. Seeds are read when each leg runs. On a fresh vault, `loop_gate` returns `None`, so the inline walk does nothing.
+- **Check 2 (smoke budget):** the spec has no tag, and smoke uses `grepInvert: /@full/`, so the spec runs in `Web E2E Smoke`. The test timeout is 120 s and the CI step budget is 12 minutes. The PR reports the whole smoke slice at 31 s.
+- **Check 5 (terms):** "focus window", "scope root" and "adoption gate" match `CONTEXT.md`. "grafted", "boundary walk" and "file leg" are established engine terms (they are used many times on main), but `CONTEXT.md` does not define them.
+- **Check 6 (commits and PR):** both subjects follow Conventional Commits and have no parentheses. There is no tool attribution. `Entire-Checkpoint` is the accepted trailer.
+- **Law 1:** the Rust tests run in `ci-rust.yml:101`, the vitest test in `ci-web.yml:92`, and the Playwright spec in the smoke gate.
+- **Other code:** the `snapshotStore` order swap and its test are correct. The new code reads no clock and no RNG. `let _ = adopt_root(..)` is safe, because `adopt_root` emits its own trust-violation event. No key material is logged. The README change is in the PR body.
+
+**Summary:** Spec has 4 findings; the worst is the early `boundary_walk_ran` set, which reopens the false accusation in a race. Standards has 5 findings and 2 judgement calls; the worst is the test comment in `write_plane.rs` that the same diff makes false.
+
+Files: `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/src/sync/pass.rs`, `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/src/facade.rs`, `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/crates/engine/tests/write_plane.rs`, `/Users/myankelev/.t3/worktrees/cipher-box/t3code-b57de37e/blueprint/desktop.md`</result>
+<usage><subagent_tokens>66723</subagent_tokens><tool_uses>6</tool_uses><duration_ms>305035</duration_ms></usage>
+</task-notification>
