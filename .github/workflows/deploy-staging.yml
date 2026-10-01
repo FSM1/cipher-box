@@ -3,9 +3,6 @@
 name: Deploy Staging
 
 on:
-  push:
-    tags:
-      - 'staging-*'
   workflow_call:
     inputs:
       staging_tag:
@@ -25,7 +22,7 @@ env:
   REGISTRY: ghcr.io
   # A dispatch has no tag, so it ships the dispatched commit. Every value this
   # can take is also a valid checkout ref.
-  DEPLOY_TAG: ${{ inputs.staging_tag || (github.event_name == 'workflow_dispatch' && github.sha) || github.ref_name }}
+  DEPLOY_TAG: ${{ inputs.staging_tag || github.sha }}
 
 # The shared staging environment group. A tag run already holds it for the whole
 # chain, so the call it makes takes a group of its own rather than waiting on its
@@ -47,7 +44,7 @@ jobs:
       contents: read
     steps:
       - name: Assert the dispatched commit is an ancestor of main
-        if: ${{ !inputs.staging_tag && github.event_name == 'workflow_dispatch' }}
+        if: ${{ !inputs.staging_tag }}
         env:
           GH_TOKEN: ${{ github.token }}
           DISPATCHED_SHA: ${{ github.sha }}

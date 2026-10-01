@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging-approval
     permissions:
-      contents: write
+      contents: read
     outputs:
       staging_tag: ${{ steps.tag.outputs.staging_tag }}
     steps:
@@ -82,6 +82,7 @@ jobs:
         with:
           ref: ${{ needs.resolve-main.outputs.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Calculate staging tag
         id: tag
@@ -110,13 +111,23 @@ jobs:
             printf 'Description: %s\n' "$DESCRIPTION" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # The tag-creation ruleset lets only the release bot and the admin through.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: write
+
       - name: Create and push staging tag
         env:
           STAGING_TAG: ${{ steps.tag.outputs.staging_tag }}
           MAIN_SHA: ${{ needs.resolve-main.outputs.sha }}
+          TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
+          set -euo pipefail
           git tag "${STAGING_TAG}" "${MAIN_SHA}"
-          git push origin "${STAGING_TAG}"
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${STAGING_TAG}"
 
   deploy:
     name: Deploy Staging
