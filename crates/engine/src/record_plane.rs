@@ -147,23 +147,6 @@ impl DefaultsReason {
         }
     }
 
-    /// The name a host renders a bin index hold under, or `None` for a reason
-    /// the drain charges or dead-letters rather than holds.
-    #[must_use]
-    pub fn hold_check(self) -> Option<BinIndexHoldCheck> {
-        match self {
-            Self::UnprovenFirstRun => Some(BinIndexHoldCheck::UnprovenFirstRun),
-            Self::Suppressed => Some(BinIndexHoldCheck::Suppressed),
-            Self::Expired => Some(BinIndexHoldCheck::Expired),
-            Self::TimedOut => Some(BinIndexHoldCheck::TimedOut),
-            Self::FloorUnreadable => Some(BinIndexHoldCheck::FloorUnreadable),
-            Self::StrandedMint
-            | Self::RolledBack { .. }
-            | Self::RevisionRolledBack { .. }
-            | Self::Unreadable => None,
-        }
-    }
-
     /// Whether the load refused bytes the plane actually served, rather than
     /// failing to reach it (blueprint/engine.md "Bin index record"). A caller
     /// that retries on availability must not retry on a verdict.

@@ -453,17 +453,31 @@ impl PlacementRefusal {
     /// later tick alone. Every other degraded load can clear on a later tick,
     /// so it holds nothing.
     ///
-    /// The one place the split is decided, so a hold cannot be taken on terms
-    /// its release check does not recognise.
-    pub fn holds(self) -> Option<SettingsRefusal> {
-        match self {
-            Self::NoProvider
-            | Self::NoExternalIngress(_)
-            | Self::SettingsUnavailable(DefaultsReason::StrandedMint) => {
-                Some(SettingsRefusal::Placement(self))
+    /// The one place the split is decided, and the hold's check name with it,
+    /// so a hold cannot be taken on terms its release check or a host does not
+    /// recognise.
+    pub fn holds(self) -> Option<SettingsHold> {
+        let check = match self {
+            Self::NoProvider => SettingsHoldCheck::ByoProviderMissing,
+            Self::NoExternalIngress(_) => SettingsHoldCheck::ByoNoExternalIngress,
+            Self::SettingsUnavailable(DefaultsReason::StrandedMint) => {
+                SettingsHoldCheck::SettingsUnavailable
             }
-            Self::SettingsUnavailable(_) => None,
-        }
+            Self::SettingsUnavailable(
+                DefaultsReason::UnprovenFirstRun
+                | DefaultsReason::Suppressed
+                | DefaultsReason::RolledBack { .. }
+                | DefaultsReason::RevisionRolledBack { .. }
+                | DefaultsReason::Expired
+                | DefaultsReason::TimedOut
+                | DefaultsReason::Unreadable
+                | DefaultsReason::FloorUnreadable,
+            ) => return None,
+        };
+        Some(SettingsHold {
+            refusal: SettingsRefusal::Placement(self),
+            check,
+        })
     }
 }
 
@@ -471,8 +485,6 @@ impl PlacementRefusal {
 /// request is built and repeats verbatim until its exit
 /// ([`PlacementRefusal::holds`]), which is what makes one hold rather than an
 /// attempt.
-/// Built through [`PlacementRefusal::holds`] and
-/// [`ProviderError::is_deterministic`], never by hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsRefusal {
     /// [`validate_byo_config`](crate::content::validate_byo_config) refused the
@@ -504,35 +516,42 @@ impl SettingsRefusal {
             Self::Placement(refusal) => refusal.class(),
         }
     }
+}
 
-    /// The name a host renders this hold under, or `None` for a refusal that
-    /// [`PlacementRefusal::holds`] and [`ProviderError::is_deterministic`]
-    /// never hold on.
-    pub fn hold_check(&self) -> Option<SettingsHoldCheck> {
-        Some(match self {
-            Self::Byo(ProviderError::InvalidEndpoint) => SettingsHoldCheck::ByoEndpointInvalid,
-            Self::Byo(ProviderError::InsecureTransport) => SettingsHoldCheck::ByoEndpointInsecure,
-            Self::Byo(ProviderError::BlockedAddress) => SettingsHoldCheck::ByoEndpointBlocked,
-            Self::Byo(ProviderError::InvalidCredential) => SettingsHoldCheck::ByoCredentialInvalid,
-            Self::Byo(ProviderError::UnresolvedCredential) => {
-                SettingsHoldCheck::ByoCredentialUnresolved
-            }
-            Self::Byo(ProviderError::NoStoredCredential) => {
-                SettingsHoldCheck::ByoCredentialNotStored
-            }
-            Self::Byo(ProviderError::RepointedCredential) => {
-                SettingsHoldCheck::ByoCredentialRepointed
-            }
-            Self::Placement(PlacementRefusal::NoProvider) => SettingsHoldCheck::ByoProviderMissing,
-            Self::Placement(PlacementRefusal::NoExternalIngress(_)) => {
-                SettingsHoldCheck::ByoNoExternalIngress
-            }
-            Self::Placement(PlacementRefusal::SettingsUnavailable(
-                DefaultsReason::StrandedMint,
-            )) => SettingsHoldCheck::SettingsUnavailable,
-            Self::Byo(_) | Self::Placement(PlacementRefusal::SettingsUnavailable(_)) => {
-                return None;
-            }
+/// A settings hold: the refusal, and the name a host renders it under, set
+/// together where the hold is taken. Built through [`PlacementRefusal::holds`]
+/// and [`SettingsHold::byo`], never by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingsHold {
+    /// The refusal, whose recurrence is the hold's exit test.
+    pub refusal: SettingsRefusal,
+    /// The rule a host renders.
+    pub check: SettingsHoldCheck,
+}
+
+impl SettingsHold {
+    /// The hold a provider error takes, or `None` for an answer from the
+    /// provider, which a later attempt may change. A policy verdict on the
+    /// member's own config is reached before any request is built and again by
+    /// every retry, so it holds.
+    pub fn byo(error: ProviderError) -> Option<Self> {
+        let check = match error {
+            ProviderError::InvalidEndpoint => SettingsHoldCheck::ByoEndpointInvalid,
+            ProviderError::InsecureTransport => SettingsHoldCheck::ByoEndpointInsecure,
+            ProviderError::BlockedAddress => SettingsHoldCheck::ByoEndpointBlocked,
+            ProviderError::InvalidCredential => SettingsHoldCheck::ByoCredentialInvalid,
+            ProviderError::UnresolvedCredential => SettingsHoldCheck::ByoCredentialUnresolved,
+            ProviderError::NoStoredCredential => SettingsHoldCheck::ByoCredentialNotStored,
+            ProviderError::RepointedCredential => SettingsHoldCheck::ByoCredentialRepointed,
+            ProviderError::Unreachable
+            | ProviderError::NoVerdict
+            | ProviderError::Rejected { .. }
+            | ProviderError::MalformedBlockAddress
+            | ProviderError::AddressMismatch => return None,
+        };
+        Some(Self {
+            refusal: SettingsRefusal::Byo(error),
+            check,
         })
     }
 }
@@ -1776,7 +1795,7 @@ mod tests {
             stranded,
         ] {
             assert_eq!(
-                refusal.holds(),
+                refusal.holds().map(|hold| hold.refusal),
                 Some(SettingsRefusal::Placement(refusal)),
                 "{}",
                 refusal.check(),
@@ -1824,8 +1843,16 @@ mod tests {
             ProviderError::InsecureTransport,
             ProviderError::BlockedAddress,
             ProviderError::InvalidCredential,
+            ProviderError::UnresolvedCredential,
+            ProviderError::NoStoredCredential,
+            ProviderError::RepointedCredential,
         ] {
-            assert!(policy.is_deterministic(), "{}", policy.check());
+            assert_eq!(
+                SettingsHold::byo(policy).map(|hold| hold.refusal),
+                Some(SettingsRefusal::Byo(policy)),
+                "{}",
+                policy.check()
+            );
         }
         for answered in [
             ProviderError::Unreachable,
@@ -1834,7 +1861,7 @@ mod tests {
             ProviderError::MalformedBlockAddress,
             ProviderError::AddressMismatch,
         ] {
-            assert!(!answered.is_deterministic(), "{}", answered.check());
+            assert_eq!(SettingsHold::byo(answered), None, "{}", answered.check());
         }
     }
 

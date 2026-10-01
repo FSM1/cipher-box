@@ -11,7 +11,7 @@ use core::fmt;
 
 use cipherbox_core::seal::NameSource;
 use serde::de::{self, Deserializer, Visitor};
-use serde::ser::{self, SerializeStruct, Serializer};
+use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -461,37 +461,29 @@ pub enum QueueHold {
     },
 }
 
-impl QueueHold {
-    /// `None` for a hold on a refusal no hold may carry.
-    fn of(hold: facade::QueueHold) -> Option<Self> {
+impl From<facade::QueueHold> for QueueHold {
+    fn from(hold: facade::QueueHold) -> Self {
         let (op_id, node) = (hold.op_id, hold.node);
-        Some(match hold.reason {
+        match hold.reason {
             QueueHoldReason::Quota { needed_bytes } => Self::Quota {
                 op_id,
                 node,
                 needed_bytes,
             },
-            QueueHoldReason::Settings(refusal) => Self::Settings {
+            QueueHoldReason::Settings(settings) => Self::Settings {
                 op_id,
                 node,
-                check: refusal.hold_check()?,
+                check: settings.check,
             },
-            QueueHoldReason::BinIndex(reason) => Self::BinIndex {
-                op_id,
-                node,
-                check: reason.hold_check()?,
-            },
-        })
+            QueueHoldReason::BinIndex(check) => Self::BinIndex { op_id, node, check },
+        }
     }
 }
 
-/// An optional held queue head as a [`QueueHold`]. Refuses a hold whose check
-/// no host table names, rather than send a cause no notice can render.
+/// An optional held queue head as a [`QueueHold`].
 pub fn queue_hold<S: Serializer>(
     hold: &Option<facade::QueueHold>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    hold.map(|hold| QueueHold::of(hold).ok_or_else(|| ser::Error::custom("unnamed hold check")))
-        .transpose()?
-        .serialize(serializer)
+    hold.map(QueueHold::from).serialize(serializer)
 }

@@ -14632,9 +14632,12 @@ mod tests {
         let hold = QueueHold {
             op_id: OpId(1),
             node: root,
-            reason: QueueHoldReason::Settings(crate::settings::SettingsRefusal::Byo(
-                crate::content::ProviderError::InsecureTransport,
-            )),
+            reason: QueueHoldReason::Settings(
+                crate::settings::SettingsHold::byo(
+                    crate::content::ProviderError::InsecureTransport,
+                )
+                .unwrap(),
+            ),
         };
         *engine.state.queue_hold.borrow_mut() = Some(hold);
 

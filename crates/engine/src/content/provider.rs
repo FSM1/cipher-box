@@ -449,23 +449,6 @@ impl ProviderError {
             ProviderError::AddressMismatch => "trust",
         }
     }
-
-    /// Whether this is a policy verdict on the member's own config, reached
-    /// before any request is built and reached again by every retry — as
-    /// against an answer from the provider, which a later attempt may change.
-    /// The two want opposite treatment from a retry loop.
-    pub fn is_deterministic(&self) -> bool {
-        matches!(
-            self,
-            ProviderError::InvalidEndpoint
-                | ProviderError::InsecureTransport
-                | ProviderError::BlockedAddress
-                | ProviderError::InvalidCredential
-                | ProviderError::UnresolvedCredential
-                | ProviderError::NoStoredCredential
-                | ProviderError::RepointedCredential
-        )
-    }
 }
 
 /// Test that a member's BYO provider is reachable and authenticated, engine-side
