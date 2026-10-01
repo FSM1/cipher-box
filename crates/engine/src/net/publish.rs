@@ -423,8 +423,32 @@ where
         }
     }
 
-    // Parallel PUT: success is the first ack; the rest retry in the background.
-    let key = request.name.as_str();
+    put_and_confirm(
+        transport,
+        scheduler,
+        profile,
+        request.name,
+        record_bytes,
+        sequence,
+    )
+    .await
+}
+
+/// PUT the signed `record_bytes` at `sequence` to every endpoint, then confirm
+/// by re-resolve. Success is the first ack; the rest retry in the background.
+pub(crate) async fn put_and_confirm<T, Sch>(
+    transport: &T,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    name: &IpnsName,
+    record_bytes: Vec<u8>,
+    sequence: u64,
+) -> Result<PublishReceipt, PublishError>
+where
+    T: RecordTransport + Clone + 'static,
+    Sch: Scheduler + Clone + 'static,
+{
+    let key = name.as_str();
     let fanout = fanout_put(transport, key, &record_bytes).await;
     if fanout.all_refused {
         return Err(PublishError::AllEndpointsRefused);
@@ -444,7 +468,7 @@ where
     }
 
     // Only our own bytes, uncontested at their sequence, confirm the publish.
-    let (outcome, winner) = match fanout_get_tied(transport, request.name).await {
+    let (outcome, winner) = match fanout_get_tied(transport, name).await {
         Some((_, bytes, tied)) if bytes == record_bytes && tied.is_empty() => {
             (PublishOutcome::Published { sequence }, None)
         }

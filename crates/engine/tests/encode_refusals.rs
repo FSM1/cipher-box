@@ -13,6 +13,10 @@ use cipherbox_engine::grants::conversion::{
 use cipherbox_engine::grants::{
     AckedClaim, CLAIM_ID_LEN, InviteClaim, InviteError, InviteFragment, MAX_INVITE_FRAGMENT_BYTES,
 };
+use cipherbox_engine::net::renewal_walk::cursor::{
+    CursorCodecError, DeferredRoot, MAX_CURSOR_PATH, MAX_DEFERRED_ROOTS, RenewalCursor,
+    encode_cursor,
+};
 use cipherbox_engine::seams::UnixMillis;
 
 fn pointer_name() -> IpnsName {
@@ -65,4 +69,27 @@ fn a_conversion_record_holding_a_payload_past_its_bound_is_refused_at_encode() {
         acked_at: UnixMillis(1),
     });
     assert!(encode_conversions(&record).is_err());
+}
+
+/// The renewal cursor's decoder refuses a path or a deferred set past its cap,
+/// so its encoder refuses to write one.
+#[test]
+fn a_renewal_cursor_past_either_cap_is_refused_at_encode() {
+    let mut cursor = RenewalCursor::starting(UnixMillis(0));
+    cursor.path = vec![[1; 16]; MAX_CURSOR_PATH + 1];
+    assert_eq!(encode_cursor(&cursor), Err(CursorCodecError::PathTooLong));
+
+    let mut cursor = RenewalCursor::starting(UnixMillis(0));
+    cursor.deferred = vec![
+        DeferredRoot {
+            scope_id: [2; 16],
+            node_id: [3; 16],
+            name: pointer_name(),
+        };
+        MAX_DEFERRED_ROOTS + 1
+    ];
+    assert_eq!(
+        encode_cursor(&cursor),
+        Err(CursorCodecError::TooManyDeferred)
+    );
 }

@@ -120,7 +120,30 @@ scenario fails the meta-test):
   and the withheld-update escalation;
 - the offline queue — FIFO replay through rebase, dead-letter on
   revoked-while-offline with staged bytes preserved, staging-budget
-  fail-fast.
+  fail-fast;
+- the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
+  virtual clock, a file that no session opens or publishes for 65 days is at
+  S + 1 with a fresh validity after the passes that ADR 0061 consequence 2
+  names; a bin entry, a deferred depth-64 folder and a node that lags a cut
+  renew; a pass that parks below an ancestor resumes at that ancestor's next
+  sibling; a link cycle ends in the pass that meets it; an unavailable scope
+  root or child, a 503 registration, a failed ledger read or a failed PUT
+  keeps the cursor for the next pass, across sessions, for one day from the
+  cycle's first keep-back at most; a scope root or child with no record and
+  a 4xx registration or an acknowledged sequence that does not open move
+  the cursor at once and emit `renewalFailed`; a 401 after the refresh keeps
+  the cursor back; a doomed-name journal that does not list, or a cursor that
+  does not read, renews and stores nothing and emits `renewalFailed`; a journal entry that does not read or
+  open stops only its own scope root, and `tests/owner_actions.rs` shows that
+  another owned scope still renews; unit tests in
+  `net::renewal_walk` fix the window edge at exactly one day, a keep-back
+  time ahead of the clock, and one window for each cycle; a publish during the
+  registration wait makes the walk refuse; at one
+  sequence the later EOL wins in the resolve and in the last-known-good
+  keeper. `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
+  wave left at its old name, which nothing renews; `tests/write_plane.rs`
+  covers a renewal inside the drain's window, and a lost race on a scope root
+  or an interior folder healed after a restart or a re-read.
 
 Adversarial cases are first-class: the harness can replay, transplant, and
 re-sign records with any key it holds; every crypto-review finding (FSM1/cipher-box-next#35)

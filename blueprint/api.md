@@ -264,6 +264,9 @@ Per the liveness design (FSM1/cipher-box-next#24), restated here as API surface:
 - **Recovery endpoint**: authenticated, rate-limited fetch of cached (possibly
   expired) record bytes by name — the revival aid after a >EOL lapse; a
   key-holder extracts the last CID and mints a fresh record.
+- Two per-account throttles bound the engine's renewal walk (ADR 0061
+  consequence 4): `registry` at 120 calls a minute and `recovery` at 30 calls
+  a minute.
 
 ## Mailbox
 

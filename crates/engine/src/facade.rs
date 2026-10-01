@@ -52,8 +52,8 @@ use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner, RegisteredDevice};
 use crate::bin_index::{
-    BinIndexKeys, BinIndexLoad, BinnedNode, holds_a_bin_index_mark, load_bin_index,
-    publish_bin_index,
+    BinIndexKeys, BinIndexLoad, BinnedNode, cached_bin_index, holds_a_bin_index_mark,
+    load_bin_index, publish_bin_index,
 };
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::limits::folder_listing_budget;
@@ -101,6 +101,9 @@ use crate::net::VaultPointerVoucher;
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
+use crate::net::renewal_walk::{
+    BinRoot, RenewalWalk, SCOPE_ROOTS_WAIT_POLLS, WalkGuards, WalkScope,
+};
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, MovedScopeSeed, RotationAncestry, SweptScopeState};
@@ -3960,6 +3963,26 @@ fn rendered_name(rendered: &Snapshot, node: NodeId) -> String {
         .unwrap_or_default()
 }
 
+/// The renewal walk's bin roots: every entry of the cached bin index.
+async fn bin_roots<S: SnapshotCache>(snapshot_cache: &S, keys: &BinIndexKeys) -> Vec<BinRoot> {
+    let Some(index) = cached_bin_index(snapshot_cache, keys).await else {
+        return Vec::new();
+    };
+    index
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let name = scope_name(entry.ipns_name()).ok()?;
+            Some(BinRoot {
+                node_id: entry.node_id,
+                scope_id: entry.scope_id,
+                name,
+                deleted_at: entry.deleted_at,
+            })
+        })
+        .collect()
+}
+
 /// Emit an [`Event::RenewalFailed`] for every sub-EOL renewal that did not land
 /// (a lost CAS race or a fail-closed publish failure). A comfortably-ahead or
 /// republished record emits nothing. Best-effort over the in-process channel: a
@@ -5798,16 +5821,17 @@ where {
     /// Spawn the ~hourly liveness loop (blueprint/engine.md "Liveness"):
     /// actively-used vaults keep their own records alive off the injected
     /// scheduler, so no client depends on the API republisher. Each pass runs
-    /// the keyless re-PUT (every held record, byte-for-byte) and then the
-    /// sub-EOL seq+1 renewal (any name inside the 30-day EOL window). The task
-    /// holds only `Rc`/seam-handle clones, so the engine may drop while it is
-    /// parked; the alive latch then stops it.
+    /// the keyless re-PUT (every held record, byte-for-byte), the sub-EOL
+    /// seq+1 renewal of the renewal set, and then a bounded part of the
+    /// renewal walk (ADR 0061). The task holds only `Rc`/seam-handle clones, so
+    /// the engine may drop while it is parked; the alive latch then stops it.
     fn spawn_liveness_loop(&self, api: Rc<ApiClient<T::Http, T::CredentialStore>>)
     where
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
         T::SnapshotCache: Clone + 'static,
+        T::StagingStore: Clone + 'static,
     {
         let scheduler = self.seams.scheduler.clone();
         let transport = self.record_transport.clone();
@@ -5825,60 +5849,159 @@ where {
         let scope_write_seeds = self.state.scope_write_seeds.clone();
         let on_access_misses = self.state.on_access_misses.clone();
         let root_id = self.state.snapshot.borrow().root.0;
+        let staging = LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone());
+        let base = self.state.snapshot.clone();
+        let root_name = self.state.current_root_name.clone();
+        let walked = self.state.walked_read_epochs.clone();
+        let bin_keys = self.secrets.tick_bin_keys.clone();
+        let publishing = self.state.publishing.clone();
+        let orphan_heads = self.state.orphan_heads.clone();
+        let roots_walked = self.state.scope_roots_walked.clone();
+        let descendant_scope_roots = self.state.descendant_scope_roots.clone();
         self.seams.scheduler.spawn(Box::pin(async move {
             // One latch per session: the loop is spawned once per start.
             let scope_tree_walked = Cell::new(false);
+            let next_maintenance = Cell::new(Some(scheduler.now()));
+            let walk_waits = Cell::new(0u32);
             run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
                 if !alive.get() {
                     return LivenessControl::Stop;
                 }
-                drop_superseded(&transport, &held).await;
-                // The flip is the only other producer of a held scope pointer,
-                // so a session that runs no rotation must re-enrol what it owns
-                // or the pointer lapses at its EOL.
+                // The walk retries at the poll cadence until the boundary walk
+                // has run, so the hourly maintenance keeps its own clock.
+                let now = scheduler.now();
+                if now.reached(next_maintenance.get()) {
+                    next_maintenance.set(Some(now.saturating_add(RE_PUT_INTERVAL)));
+                    drop_superseded(&transport, &held).await;
+                    // The flip is the only other producer of a held scope pointer,
+                    // so a session that runs no rotation must re-enrol what it owns
+                    // or the pointer lapses at its EOL.
+                    let session_keys = pointer_keys.borrow().clone();
+                    if let Some(keys) = session_keys {
+                        let consulted = enrol_owned_scope_pointers(ScopePointerEnrolment {
+                            api: &api,
+                            transport: &transport,
+                            gateway: &gateway,
+                            http: &http,
+                            floors: &floors,
+                            snapshot_cache: &snapshot_cache,
+                            events: &events,
+                            scheduler: &scheduler,
+                            profile: &profile,
+                            entropy: &entropy,
+                            enc_secret: &keys.enc_secret,
+                            identity: &keys.owner_identity,
+                            keys: &keys.scope_keys,
+                            held: &held,
+                            root_id,
+                            payload_version: POINTER_PAYLOAD_VERSION,
+                            walked: &scope_tree_walked,
+                            on_access_misses: &on_access_misses,
+                        })
+                        .await;
+                        // The consult advances a sighted scope's write-epoch floor,
+                        // so the seed cells it retires are evicted here, exactly as
+                        // the focus tick evicts them around its own consult.
+                        for scope_id in consulted {
+                            refresh_seed_floors(
+                                &floors,
+                                &scope_id,
+                                &scope_read_seeds,
+                                &scope_write_seeds,
+                            )
+                            .await;
+                        }
+                    }
+                    let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
+                    keyless_re_put(&transport, &records).await;
+                    // Surface every renewal that did not land (LostRace/PublishError)
+                    // as an Event — never a silent failure (blueprint/engine.md).
+                    let renewals =
+                        eol_renew_pass(&transport, &api, &floors, &scheduler, &profile, &records)
+                            .await;
+                    emit_renewal_failures(&events, &renewals);
+                }
                 let session_keys = pointer_keys.borrow().clone();
+                if session_keys.is_some() && !roots_walked.get() {
+                    if walk_waits.get() < SCOPE_ROOTS_WAIT_POLLS {
+                        walk_waits.set(walk_waits.get() + 1);
+                        return LivenessControl::ContinueAfter(profile.poll_cadence);
+                    }
+                    walk_waits.set(0);
+                    return LivenessControl::Continue;
+                }
+                walk_waits.set(0);
                 if let Some(keys) = session_keys {
-                    let consulted = enrol_owned_scope_pointers(ScopePointerEnrolment {
-                        api: &api,
+                    let scopes: Vec<WalkScope> = owned_sweep_targets(
+                        &base.borrow(),
+                        root_name.borrow().as_ref(),
+                        &walked,
+                        &scope_read_seeds,
+                        &scope_write_seeds,
+                    )
+                    .into_iter()
+                    .filter_map(|target| {
+                        let name = scope_name(&target.scope.ipns_name).ok()?;
+                        Some(WalkScope {
+                            scope_id: target.scope.scope_id,
+                            name,
+                            ascent: target.ascent,
+                            write_seed: cached_seed(&scope_write_seeds, &target.scope.scope_id),
+                        })
+                    })
+                    .collect();
+                    let bin_keys = bin_keys.borrow().clone();
+                    let bins = match &bin_keys {
+                        Some(keys) => bin_roots(&snapshot_cache, keys).await,
+                        None => Vec::new(),
+                    };
+                    let walk = RenewalWalk {
                         transport: &transport,
-                        gateway: &gateway,
-                        http: &http,
+                        api: &api,
                         floors: &floors,
                         snapshot_cache: &snapshot_cache,
-                        events: &events,
+                        staging: &staging,
                         scheduler: &scheduler,
                         profile: &profile,
-                        entropy: &entropy,
+                        gateway: &gateway,
+                        http: &http,
                         enc_secret: &keys.enc_secret,
                         identity: &keys.owner_identity,
-                        keys: &keys.scope_keys,
-                        held: &held,
-                        root_id,
-                        payload_version: POINTER_PAYLOAD_VERSION,
-                        walked: &scope_tree_walked,
-                        on_access_misses: &on_access_misses,
-                    })
-                    .await;
-                    // The consult advances a sighted scope's write-epoch floor,
-                    // so the seed cells it retires are evicted here, exactly as
-                    // the focus tick evicts them around its own consult.
-                    for scope_id in consulted {
-                        refresh_seed_floors(
-                            &floors,
-                            &scope_id,
-                            &scope_read_seeds,
-                            &scope_write_seeds,
-                        )
+                        seal: BookkeepingSeal::new(&keys.enc_secret, &*entropy),
+                        bin_keys: bin_keys.as_deref(),
+                        guards: WalkGuards {
+                            publishing: &publishing,
+                            orphan_heads: &orphan_heads,
+                            held: &held,
+                        },
+                    };
+                    // A scope this session minted holds seeds before the next
+                    // boundary walk names it.
+                    let scope_roots: BTreeSet<[u8; 16]> = descendant_scope_roots
+                        .borrow()
+                        .iter()
+                        .map(|root| root.0)
+                        .chain(scope_read_seeds.borrow().keys().copied())
+                        .chain(scope_write_seeds.borrow().keys().copied())
+                        .collect();
+                    let report = walk
+                        .pass(&scopes, &bins, &scope_roots, &|| alive.get())
                         .await;
+                    emit_renewal_failures(&events, &report.renewals);
+                    for routing_key in &report.rejected {
+                        emit_trust_violation(
+                            &events,
+                            routing_key,
+                            "the renewal walk's adoption gate refused the record",
+                        );
+                    }
+                    for (routing_key, detail) in report.failed {
+                        let _ = events.unbounded_send(Event::RenewalFailed {
+                            routing_key,
+                            detail: detail.to_owned(),
+                        });
                     }
                 }
-                let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
-                keyless_re_put(&transport, &records).await;
-                // Surface every renewal that did not land (LostRace/PublishError)
-                // as an Event — never a silent failure (blueprint/engine.md).
-                let renewals =
-                    eol_renew_pass(&transport, &api, &floors, &scheduler, &profile, &records).await;
-                emit_renewal_failures(&events, &renewals);
                 LivenessControl::Continue
             })
             .await;

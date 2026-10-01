@@ -82,6 +82,23 @@ pub fn eol_from(now: UnixMillis) -> String {
     format_rfc3339(now.saturating_add(EOL_WINDOW))
 }
 
+/// The EOL a renewal walk signs at `now`: one day short of [`eol_from`], so a
+/// real write another device signs at the same sequence carries the later EOL
+/// (ADR 0061 D3 step 6).
+pub fn renewal_eol_from(now: UnixMillis) -> String {
+    format_rfc3339(
+        now.saturating_add(EOL_WINDOW)
+            .saturating_sub(Duration::from_secs(SECS_PER_DAY)),
+    )
+}
+
+/// Whether the EOL `candidate` is strictly later than `held`. An EOL that does
+/// not parse is never later than one that does. At one sequence, every reader
+/// takes the record with the later EOL (ADR 0061 D3 step 7).
+pub fn eol_is_later(candidate: &[u8], held: &[u8]) -> bool {
+    parse_rfc3339(candidate) > parse_rfc3339(held)
+}
+
 /// Milliseconds of EOL remaining at `now` for a record whose signed
 /// `Validity` bytes are `validity`. Negative once past the EOL; `None` when the
 /// timestamp does not parse (a malformed record — the caller fails closed).

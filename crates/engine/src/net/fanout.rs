@@ -11,6 +11,7 @@ use core::task::Poll;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 
+use super::eol::eol_is_later;
 use crate::seams::{EndpointId, RecordTransport};
 
 /// Hard ceiling on one signed IPNS record fetched from a `/routing/v1`
@@ -244,16 +245,13 @@ pub async fn fanout_get_under<T: RecordTransport>(
     name: &IpnsName,
     rule: VacancyRule,
 ) -> FanoutRecord {
-    let Scan {
-        best,
-        vacant,
-        failures,
-        ..
-    } = scan(transport, name).await;
+    let scan = scan(transport, name).await;
+    let absent = scan.absent(rule);
+    let Scan { best, failures, .. } = scan;
     if let Some((verified, bytes)) = best {
         return FanoutRecord::Found(verified, bytes);
     }
-    if vacant > 0 && (rule == VacancyRule::FirstRun || failures.is_empty()) {
+    if absent {
         FanoutRecord::Absent
     } else {
         FanoutRecord::Unavailable(EndpointFailures(failures))
@@ -261,27 +259,52 @@ pub async fn fanout_get_under<T: RecordTransport>(
 }
 
 /// The freshest verified record, and every other record another endpoint
-/// served at its sequence. The freshest pick keeps the first endpoint on a tie,
-/// so without the ties a sibling's record on a later endpoint hides behind it.
+/// served at its sequence. The freshest pick keeps the later EOL on a tie, and
+/// the first endpoint when the EOLs match, so without the ties a sibling's
+/// record on a later endpoint hides behind it.
 /// The ties are record-verified only; a caller gates one before it builds on
 /// it.
 pub(crate) async fn fanout_get_tied<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
 ) -> Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)> {
-    let Scan { best, tied, .. } = scan(transport, name).await;
-    best.map(|(verified, bytes)| (verified, bytes, tied))
+    fanout_get_tied_classified(transport, name).await.0
+}
+
+/// [`fanout_get_tied`], and whether the endpoints agree the name holds no
+/// record when none serves one, under [`VacancyRule::Unanimous`].
+pub(crate) async fn fanout_get_tied_classified<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> (Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)>, bool) {
+    let scan = scan(transport, name).await;
+    let absent = scan.absent(VacancyRule::Unanimous);
+    let Scan { best, tied, .. } = scan;
+    (
+        best.map(|(verified, bytes)| (verified, bytes, tied)),
+        absent,
+    )
 }
 
 /// Every endpoint's answer to one fan-out GET, before a caller reads it.
 struct Scan {
-    /// The freshest verifiable record, the first endpoint winning a tie.
+    /// The freshest verifiable record. At one sequence the later EOL wins
+    /// (ADR 0061 D3 step 7), then the first endpoint.
     best: Option<(VerifiedRecord, Vec<u8>)>,
     /// The other distinct verifiable records at `best`'s sequence, one per
     /// endpoint at most.
     tied: Vec<Vec<u8>>,
     vacant: usize,
     failures: Vec<(EndpointId, EndpointFailure)>,
+}
+
+impl Scan {
+    /// Whether the endpoints agree the name holds no record, by `rule`.
+    fn absent(&self, rule: VacancyRule) -> bool {
+        self.best.is_none()
+            && self.vacant > 0
+            && (rule == VacancyRule::FirstRun || self.failures.is_empty())
+    }
 }
 
 async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
@@ -323,7 +346,14 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
         };
         match &scan.best {
             Some((current, held)) if verified.sequence == current.sequence => {
-                if bytes != *held && !scan.tied.contains(&bytes) {
+                if bytes == *held || scan.tied.contains(&bytes) {
+                    continue;
+                }
+                if eol_is_later(&verified.validity, &current.validity) {
+                    if let Some((_, displaced)) = scan.best.replace((verified, bytes)) {
+                        scan.tied.push(displaced);
+                    }
+                } else {
                     scan.tied.push(bytes);
                 }
             }
@@ -347,6 +377,34 @@ mod tests {
     use crate::seams::{SeamError, SeamResult};
     use crate::testkit::block_on;
     use crate::testkit::fakes::InMemoryRecordStore;
+
+    fn scan_of(vacant: usize, failures: usize) -> Scan {
+        Scan {
+            best: None,
+            tied: Vec::new(),
+            vacant,
+            failures: (0..failures)
+                .map(|at| {
+                    (
+                        EndpointId::new(format!("e{at}")),
+                        EndpointFailure::Transport,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    /// Under the unanimous rule, only every endpoint answering "no record" is
+    /// an absence: one failure, or no endpoint at all, is not.
+    #[test]
+    fn the_unanimous_rule_needs_every_endpoint_to_answer_no_record() {
+        assert!(!scan_of(1, 1).absent(VacancyRule::Unanimous), "one failure");
+        assert!(
+            scan_of(2, 0).absent(VacancyRule::Unanimous),
+            "every endpoint"
+        );
+        assert!(!scan_of(0, 0).absent(VacancyRule::Unanimous), "no endpoint");
+    }
 
     /// A transport that ignores `max_bytes` and serves whatever it was seeded,
     /// recording the cap the engine handed it.
@@ -378,6 +436,38 @@ mod tests {
             _record: &[u8],
         ) -> SeamResult<()> {
             Err(SeamError::new("put unused by this fake"))
+        }
+    }
+
+    /// A renewal signs one day short of a real write's EOL, so at one sequence
+    /// the real write is the one every reader takes, on whichever endpoint it
+    /// sits (ADR 0061 D3 step 7).
+    #[test]
+    fn at_one_sequence_the_later_eol_wins_on_any_endpoint() {
+        use crate::net::eol::{eol_from, renewal_eol_from};
+        use crate::seams::UnixMillis;
+
+        let signer = Ed25519Signer::from_seed([3u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let now = UnixMillis(5_000_000);
+        let renewal =
+            IpnsRecord::create_v2(&signer, b"/ipfs/renewed", 4, 1, &renewal_eol_from(now))
+                .marshal();
+        let write =
+            IpnsRecord::create_v2(&signer, b"/ipfs/written", 4, 1, &eol_from(now)).marshal();
+        for order in [[&renewal, &write], [&write, &renewal]] {
+            let eps = vec![EndpointId::new("a"), EndpointId::new("b")];
+            let store = InMemoryRecordStore::new(eps.clone());
+            store.seed_record(&eps[0], name.as_str(), order[0].clone());
+            store.seed_record(&eps[1], name.as_str(), order[1].clone());
+
+            let (_, best, tied) = block_on(fanout_get_tied(&store, &name)).expect("a record");
+            assert_eq!(best, write, "the real write wins the tie");
+            assert_eq!(
+                tied,
+                vec![renewal.clone()],
+                "the renewal is the tied record"
+            );
         }
     }
 

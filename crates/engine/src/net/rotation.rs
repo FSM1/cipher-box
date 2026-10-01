@@ -702,9 +702,10 @@ fn nonce<E: Entropy>(entropy: &RefCell<E>) -> Result<[u8; 24], RotationPublishEr
 /// A rotation root read's verdict, carrying ADR 0003 D2's below-floor split: a
 /// scope root under its own read-epoch floor is a **superseded name**, not a
 /// trust rejection — rotations publish before they raise the floor, so the
-/// condition cannot mean the root lags. Only the sweep routes that verdict
-/// (through the pointer consult); every other arm folds it back into a
-/// fail-closed rejection.
+/// condition cannot mean the root lags. The sweep routes that verdict
+/// through the pointer consult, and the boundary walk's `walk_verdict` and the
+/// renewal walk's `admit_owned_scope_root` read it as availability; every other arm folds it
+/// back into a fail-closed rejection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RootGateVerdict {
     Rejected,
@@ -1723,6 +1724,81 @@ async fn write_plane_of_gated<F: FloorStore>(
         write_scope_seed,
         body,
         epoch,
+    })
+}
+
+/// One owned scope root as the renewal walk admitted it (ADR 0061 D3 step 1).
+pub(crate) struct AdmittedScopeRoot {
+    /// The record bytes the gate admitted.
+    pub(crate) record_bytes: Vec<u8>,
+    /// The admitted sequence.
+    pub(crate) sequence: u64,
+    pub(crate) read_body: ReadBody,
+    pub(crate) read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
+    /// `None` when the root is held keyless.
+    pub(crate) write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
+}
+
+/// Why the renewal walk admitted no owned scope root.
+pub(crate) enum ScopeRootAdmission {
+    /// The gate refused the record: a trust violation.
+    Rejected,
+    /// No record could be read now, or the record sits below its scope's own
+    /// floor after a rotation and converges: availability, which can pass.
+    Unavailable,
+    /// The endpoints agree the name holds no record.
+    Gone,
+}
+
+/// Gate the owned scope root `scope_id` at `name` through the root adopter,
+/// under `ascent` for a scope below the vault root.
+#[expect(clippy::too_many_arguments, reason = "one root read's full seam set")]
+pub(crate) async fn admit_owned_scope_root<T, H, F, S>(
+    transport: &T,
+    gateway: &Gateway,
+    http: &H,
+    floors: &F,
+    snapshot_cache: &S,
+    enc_secret: &X25519Secret,
+    identity: &EcdsaVerifier,
+    scope_id: [u8; 16],
+    ascent: Option<&Zeroizing<[u8; SECRET_LEN]>>,
+    name: &IpnsName,
+) -> Result<AdmittedScopeRoot, ScopeRootAdmission>
+where
+    T: RecordTransport,
+    H: Http,
+    F: FloorStore,
+    S: SnapshotCache,
+{
+    let adopter = RootAdopter::new(gateway, http, floors, enc_secret, identity, scope_id);
+    let adopter = match ascent {
+        Some(seed) => adopter.under_parent_node_seed(seed.clone()),
+        None => adopter,
+    };
+    let record_bytes = match fanout_get_classified(transport, name).await {
+        FanoutRecord::Found(_, record_bytes) => record_bytes,
+        FanoutRecord::Absent => return Err(ScopeRootAdmission::Gone),
+        FanoutRecord::Unavailable(_) => return Err(ScopeRootAdmission::Unavailable),
+    };
+    let gated = gated_root_cached(&adopter, snapshot_cache, name, &record_bytes, None)
+        .await
+        .map_err(|verdict| match verdict {
+            // A rotation publishes before it raises the floor, so a root below
+            // its own floor is a stale read that converges, as for `walk_verdict`.
+            RootGateVerdict::Unavailable | RootGateVerdict::Superseded => {
+                ScopeRootAdmission::Unavailable
+            }
+            RootGateVerdict::Rejected | RootGateVerdict::NotResealable => {
+                ScopeRootAdmission::Rejected
+            }
+        })?;
+    Ok(AdmittedScopeRoot {
+        record_bytes,
+        sequence: gated.sequence,
+        read_body: gated.read_body,
+        read_scope_seed: gated.read_scope_seed,
+        write_scope_seed: gated.write_scope_seed,
     })
 }
 
@@ -13357,6 +13433,32 @@ mod tests {
             Err(SweepResolveFailure::Superseded),
             "a rotation publishes before it raises the floor, so this is a stale name",
         );
+    }
+
+    /// After a rotation a GET can still serve the old root. It sits below the
+    /// scope's own floor, which is a stale read that converges, not a trust
+    /// violation and not a name the walk passes.
+    #[test]
+    fn the_walk_reads_a_scope_root_below_its_own_floor_as_unavailable() {
+        let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        block_on(harness.floors.raise_epoch_floor(&SCOPE, SWEPT_EPOCH + 3))
+            .expect("raise the floor past the record");
+        let owner = owner_identity();
+        let name = scope_name(&scope.ipns_name).expect("a scope name");
+
+        let admitted = block_on(admit_owned_scope_root(
+            &harness.transport,
+            &harness.gateway,
+            &harness.http,
+            &harness.floors,
+            &harness.cache,
+            &owner_enc(),
+            &owner.verifying_key(),
+            SCOPE,
+            None,
+            &name,
+        ));
+        assert!(matches!(admitted, Err(ScopeRootAdmission::Unavailable)));
     }
 
     #[test]

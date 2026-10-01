@@ -10,7 +10,7 @@
   [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md),
   [ADR 0033](./0033-every-attacker-sized-field-has-one-canonical-form-and-a-symmetric-fail-closed-bound.md),
   and ADR 0062 (the revival of a lapsed name)
-- **Implemented by:** not landed; FSM1/cipher-box#2108 tracks the change
+- **Implemented by:** FSM1/cipher-box#2112 (D1 to D4)
 - **Amends:** [ADR 0057](./0057-an-observer-outside-a-session-reads-a-verified-record-and-adopts-nothing.md) Context
 
 ## Context
@@ -32,7 +32,8 @@ subtree), and each deferred root of D2. The walk stops at a scope-root boundary 
 scope as its own. A visit renews a name whose EOL is inside the walk window.
 
 **D2 — The walk is depth-first in node-id order, and its cursor is the path of node ids from the
-root.** The cursor holds a version byte, the cycle start, the current root, the folder node ids on
+root.** The cursor holds a version byte, the cycle start, the time the cycle first kept the cursor
+back after a transient failure (or none), the current root, the folder node ids on
 the path (64 at most), the last child visited at the deepest level, and the deferred roots (256 at
 most, each a scope id, a node id and a name). A resume re-reads each folder on the path from its
 parent's current body, and continues at the deepest folder still on the path. The walk
@@ -40,7 +41,10 @@ does not descend below a folder at depth 64: it adds that folder as a deferred r
 later with a new path. A deferred name that went stale fails the signer bind, and the next cycle
 finds that folder again. When the set is full, the walk descends below depth 64 in memory and
 finishes that subtree in the same pass, with no per-pass budget. The cursor stays at the depth-64
-folder, so the encode never fails, and a pass that ends inside the subtree starts it again. The cursor seals on the owner-local structure under the new kind
+folder, so the encode never fails, and a pass that ends inside the subtree starts it again. Until
+one day after the cycle's first keep-back time, a pass that meets a transient failure stores the
+cursor it began from. After that day, or when that time is ahead of the clock, each pass of the
+cycle stores where it stopped, and a new cycle clears the time. The cursor seals on the owner-local structure under the new kind
 `renewal-cursor` (discriminator `0x09`). This is not a KDF edge: the seal is HPKE auth mode to the
 owner's own enc subkey, and the kind is a discriminator in the AAD and the `info`. The body is
 padded to the caps, so the sealed length shows nothing. The decode and the encode enforce both
@@ -70,12 +74,8 @@ cursor that does not open or decode, or a replayed older one, costs only work.
 
 A `LostRace` ends the renewal of that name for this cycle, with no retry.
 
-**D4 — A node that a stopped name wave did not reach renews at its old name.** When the parent
-names a name that the current write seed does not derive, the owner's walk derives the older write
-seed through the write-plane history link. It renews the node only if the derived name is the name
-that the parent names, and only after D3 step 1 admits the body against the scope's current
-commitment, so a write that a revoked writer made after the revocation is never renewed. D3 step 2
-stops the walk at each old name that the wave retired.
+**D4 — The walk renews a node only under the write seed that derives its scope root's name.** It
+renews no name under a superseded seed.
 
 ## Alternatives considered
 
@@ -85,8 +85,8 @@ stops the walk at each old name that the wave retired.
   days, restarts a long walk at the root.
 - **A breadth-first frontier of names as the cursor.** A flat folder makes it as large as the vault.
 - **Re-sign at the same sequence.** Each renewal then confirms as a `LostRace` against itself.
-- **The name wave owns the liveness of its old names.** A wave stopped for longer than the EOL
-  reads `Absent` at each old name, and each node needs a revival (ADR 0062).
+- **Renew a node at its old name under a superseded seed**, derived through the write-plane
+  history link. The walk then signs under a seed that does not derive its scope root's name.
 - **A keyed re-signer on the API**, as v1 had. The zero-knowledge server must hold no signing key.
 
 ## Consequences
@@ -99,9 +99,10 @@ stops the walk at each old name that the wave retired.
    60 days of EOL left, and a new cycle no sooner than 7 days after the previous one began. A move
    can put a subtree behind the cursor for one cycle, so two visits of one name are at most
    `2 max(T, 7 days) + T` apart, where T is the longest time that the owner takes to run
-   `ceil(N / 500)` passes. The window holds when T is at most 19 days. For N = 10 000, that is 20
-   passes in each 19 days. A name visited with 60.1 days left is not renewed, and the next visit
-   comes at most 57 days later, before the EOL.
+   `ceil(N / 500)` passes, plus at most 1 day for which the cycle keeps the cursor back (D2). The
+   window holds when T is at most 19 days, so the passes take at most 18 days. For N = 10 000, that
+   is 20 passes in each 18 days. A name visited with 60.1 days left is not renewed, and the next
+   visit comes at most 57 days later, with at least 3 days of EOL left.
 3. `blueprint/engine.md` "Host seams" names `renewal-cursor` on the `StagingStore` seam, and
    `blueprint/core.md` adds it to the owner-local kind registry and the KAT set: one populated
    accept body, and a cross-kind reject for each ordered pair with every other kind.
@@ -114,3 +115,4 @@ stops the walk at each old name that the wave retired.
 8. Accepted residual: a grantee runs no walk, so a shared folder lapses for its grantees when the
    owner starts no session for about two months. The owner accepted it on 2026-09-30; the research
    for a grantee walk is FSM1/cipher-box#2111.
+9. Under D4, a node that a stopped name wave left at an older name lapses, and ADR 0062 revives it.

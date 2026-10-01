@@ -678,6 +678,11 @@
         "name": "grantee-names",
         "discriminator": 8,
         "hpkeInfo": "cipherbox/v2/owner-local/grantee-names"
+      },
+      {
+        "name": "renewal-cursor",
+        "discriminator": 9,
+        "hpkeInfo": "cipherbox/v2/owner-local/renewal-cursor"
       }
     ],
     "reserved": [
@@ -688,11 +693,11 @@
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 8
+      "count": 9
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 52,
+      "count": 66,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",
