@@ -22,6 +22,9 @@ export const IDENTITY_TOKEN_AUDIENCE = 'web3auth';
 /** Long enough for the Core Kit handshake, short enough that a leak is stale. */
 const TOKEN_TTL_SECONDS = 300;
 
+/** Covers a verifying instance whose clock runs behind the signing instance's. */
+const EXPIRY_SKEW_SECONDS = 60;
+
 /** Expired rows one spend reclaims; each spend adds one row, so the table tracks its live set. */
 const SPENT_SWEEP_BATCH = 100;
 
@@ -120,6 +123,7 @@ export class IdentityTokenService implements OnModuleInit {
    * relying party cannot be replayed here.
    */
   async verify(token: string): Promise<VerifiedIdentityToken> {
+    const now = this.clock.now();
     const { payload } = await jose.jwtVerify(
       token,
       await jose.importJWK(this.publicJwk, ALGORITHM),
@@ -129,19 +133,22 @@ export class IdentityTokenService implements OnModuleInit {
         algorithms: [ALGORITHM],
         requiredClaims: ['exp', 'jti'],
         // Expiry reads the injected clock, the same seam `sign` stamps from.
-        currentDate: this.clock.now(),
+        currentDate: now,
       }
     );
     const { sub: subject, method, jti: tokenId, exp } = payload;
     if (typeof subject !== 'string' || !isIdentitySubjectKind(method)) {
       throw new Error('identity token is missing its subject or method claim');
     }
-    // `jose` accepts any JSON number as `exp`; `1e999` and `1e300` give no valid Date.
+    // `jose` accepts any JSON number as `exp`. A spent row lives until `exp`, so
+    // bound it by the lifetime `sign` stamps; an absent or invalid `exp` gives NaN,
+    // which fails the comparison.
     const expiresAt = new Date((exp ?? NaN) * 1000);
+    const latestExpiryMs = now.getTime() + (TOKEN_TTL_SECONDS + EXPIRY_SKEW_SECONDS) * 1000;
     if (
       typeof tokenId !== 'string' ||
       !UUID_RE.test(tokenId) ||
-      Number.isNaN(expiresAt.getTime())
+      !(expiresAt.getTime() <= latestExpiryMs)
     ) {
       throw new Error('identity token is missing its token id or a valid expiry');
     }
