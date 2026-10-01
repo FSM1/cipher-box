@@ -4199,10 +4199,7 @@ where
             Err(error) => return Err(wave_verdict(error)),
         }
         match adopter.open_carried_at_floor(name, record_bytes).await {
-            Ok((adopted, envelope)) => {
-                let epoch = adopted.epoch;
-                self.interior_wave_source(adopted, envelope, epoch)
-            }
+            Ok((adopted, envelope)) => self.interior_wave_source(adopted.epoch, adopted, envelope),
             Err(GateError::Rejected(rejection)) => {
                 self.lagging_source(&adopter, name, record_bytes, rejection)
                     .await
@@ -4239,7 +4236,7 @@ where
         .map_err(wave_verdict)?
         {
             LaggingRead::Opened(adopted, envelope) => {
-                self.interior_wave_source(adopted, *envelope, anchor.epoch)
+                self.interior_wave_source(anchor.epoch, adopted, *envelope)
             }
             LaggingRead::Unreachable(_) => Err(WritePublishError::Unreadable),
         }
@@ -4249,9 +4246,9 @@ where
     /// current read seed.
     fn interior_wave_source(
         &self,
+        read_epoch: u64,
         adopted: Adopted,
         envelope: Envelope,
-        read_epoch: u64,
     ) -> Result<WaveSource, WritePublishError> {
         if envelope.v != ENVELOPE_V {
             return Err(WritePublishError::Rejected);

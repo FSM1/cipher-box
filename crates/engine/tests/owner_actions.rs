@@ -1341,13 +1341,8 @@ fn revoking_a_write_grant_cuts_the_row_and_moves_the_scope_off_the_revokees_name
     );
 }
 
-/// A write grant over a folder holding `child`, which holds `grandchild`, and
-/// the write scope seed the grant hands the recipient.
-fn write_granted_nested_subtree(fx: &mut GrantScenario) -> (NodeId, NodeId, [u8; 32]) {
-    assert_eq!(
-        fx.grant_folder_at(Permission::Write),
-        Ok(CommandOutcome::Done)
-    );
+/// A `child` folder under the granted folder, holding a `grand` folder.
+fn nested_subtree(fx: &mut GrantScenario) -> (NodeId, NodeId) {
     let child = create_published_folder(
         &fx.world,
         &mut fx.engine,
@@ -1357,32 +1352,32 @@ fn write_granted_nested_subtree(fx: &mut GrantScenario) -> (NodeId, NodeId, [u8;
     );
     let grandchild =
         create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, child, "grand");
-    let granted = fx.granted_scope_repoint();
-    let section = published_grant_section_at(&fx.world, &fx.blocks, &granted.current_root)
-        .expect("the granted root");
-    let revokee_seed = grantee_write_scope_seed(&section, &granted.current_root, &fx.folder.0, 1);
+    (child, grandchild)
+}
+
+/// A write grant over a folder holding `child`, which holds `grandchild`, and
+/// the write scope seed the grant hands the recipient.
+fn write_granted_nested_subtree(fx: &mut GrantScenario) -> (NodeId, NodeId, [u8; 32]) {
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let (child, grandchild) = nested_subtree(fx);
+    let root = fx.granted_scope_repoint().current_root;
+    let revokee_seed = grantee_write_scope_seed(&fx.folder_section(), &root, &fx.folder.0, 1);
     (child, grandchild, revokee_seed)
 }
 
-/// The granted scope's read override seed at `epoch`, off the root at `name`.
-fn granted_override_seed(fx: &GrantScenario, name: &IpnsName, epoch: u64) -> Zeroizing<[u8; 32]> {
-    let section =
-        published_grant_section_at(&fx.world, &fx.blocks, name).expect("a granted scope root");
+/// The granted scope's read override seed at `epoch`, off its current root.
+fn granted_override_seed(fx: &GrantScenario, epoch: u64) -> Zeroizing<[u8; 32]> {
     published_override_seed(
         &kdf::enc_subkey(&SECRET),
         ENVELOPE_V,
         fx.folder.0,
         epoch,
-        &section,
+        &fx.folder_section(),
     )
     .expect("the owner blob yields the scope's override seed")
-}
-
-fn revoke_recipient(fx: &mut GrantScenario) -> Result<CommandOutcome, EngineError> {
-    block_on(fx.engine.command(Command::Revoke {
-        node: fx.folder,
-        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
-    }))
 }
 
 /// The read cut runs first, so every interior node lags the root's new read
@@ -1393,7 +1388,10 @@ fn a_write_revoke_moves_a_nested_subtree_that_lags_the_read_cut() {
     let mut fx = GrantScenario::new();
     let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
 
-    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
 
     let after = fx.granted_scope_repoint();
     assert_ne!(
@@ -1403,7 +1401,7 @@ fn a_write_revoke_moves_a_nested_subtree_that_lags_the_read_cut() {
     );
     assert_eq!(after.write_epoch, 3, "the revoke stepped the write epoch");
     assert_eq!(after.min_read_epoch, 2, "after the read cut");
-    let root_seed = granted_override_seed(&fx, &after.current_root, 2);
+    let root_seed = granted_override_seed(&fx, 2);
     let child_name = published_child_name(
         &fx.world,
         &fx.blocks,
@@ -1479,7 +1477,7 @@ fn a_write_revoke_refuses_a_lagging_grandchild_the_ratchet_cannot_open() {
     let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
     plant_unopenable_node(&fx, &revokee_seed, grandchild, 1);
 
-    let refused = revoke_recipient(&mut fx);
+    let refused = fx.revoke_person(&recipient_identity().verifying_key().to_sec1());
     assert!(
         matches!(
             &refused,
@@ -1499,7 +1497,7 @@ fn a_write_revoke_reports_a_child_beyond_the_ratchet_as_unavailable() {
     plant_unopenable_node(&fx, &revokee_seed, child, 0);
 
     assert!(matches!(
-        revoke_recipient(&mut fx),
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
         Err(EngineError::ContentUnavailable { .. })
     ));
 }
@@ -1510,15 +1508,11 @@ fn a_write_revoke_reports_a_child_beyond_the_ratchet_as_unavailable() {
 fn a_write_grant_right_after_a_read_revoke_moves_the_lagging_subtree() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    let child = create_published_folder(
-        &fx.world,
-        &mut fx.engine,
-        &mut fx._tasks,
-        fx.folder,
-        "child",
+    let (child, _) = nested_subtree(&mut fx);
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
     );
-    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, child, "grand");
-    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
 
     assert_eq!(
         fx.grant_bystander(Permission::Write),
@@ -1526,7 +1520,7 @@ fn a_write_grant_right_after_a_read_revoke_moves_the_lagging_subtree() {
     );
 
     let after = fx.granted_scope_repoint();
-    let root_seed = granted_override_seed(&fx, &after.current_root, 2);
+    let root_seed = granted_override_seed(&fx, 2);
     let child_name = published_child_name(
         &fx.world,
         &fx.blocks,

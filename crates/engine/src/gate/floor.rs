@@ -231,11 +231,11 @@ pub enum Strictness {
     /// last-known-good): only exact equality is admitted — lower is a
     /// fail-closed replay, higher is a record that never passed an adopt.
     AtFloor,
-    /// The replay bar alone: the floor or anything above it. The four
-    /// sanctioned lagging readers take it — [`crate::rotation::sweep`]'s
-    /// interior read, the drain's re-author of a lagging node, the child
-    /// resolve's lagging read (ADR 0021), and the write wave's read of a lagging
-    /// node (ADR 0064), the last three through
+    /// The replay bar alone: the floor or anything above it. The sanctioned
+    /// lagging readers take it — [`crate::rotation::sweep`]'s interior read,
+    /// the drain's re-author of a lagging node, the child resolve's lagging
+    /// read (ADR 0021), and the write wave's read of a lagging node
+    /// (ADR 0064), all but the sweep through
     /// [`ChildAdopter::open_interior_under`]. Each must reach records the
     /// **epoch** stage refuses, so they run [`check_sequence`] rather than
     /// [`check`], and their bar is named here, beside the rest of the floor
