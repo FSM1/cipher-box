@@ -395,7 +395,9 @@ its degraded outcome applies a different policy rather than showing stale data.
   `Expired` or `Unreadable` for a record that verified under the account's own
   settings key, a save signs above that record's sequence, and the floor rises
   only on a confirm. A body that a newer release wrote refuses the save
-  (ADR 0062 D4).
+  (ADR 0062 D4). For a lapsed record the load fetches the head only to learn
+  its release, and never adopts the record; an unknown release refuses the
+  save as a newer one does.
 - **A settings load enrols the record it read in the session's renewal set**
   (ADR 0034 D9), so a session that only reads keeps the name alive. It enrols
   only a record that cleared the whole floor law, the lapsed-EOL refusal

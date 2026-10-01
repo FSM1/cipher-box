@@ -67,7 +67,8 @@ an older device does not report `RolledBack` for good. The same rule holds when 
 `Expired` or `Unreadable` for a served record that verified under the account's own settings key:
 the save signs above the sequence of that record, and the floor rises only on a confirm. When a
 newer release wrote the body, the load holds nothing and the save is refused, so an older client
-does not overwrite that body.
+does not overwrite that body. For a lapsed record, the load fetches the head only to learn its
+release and never adopts the record; an unknown release refuses the save as a newer one does.
 
 **D5 — A device with no floor revives a name from the corroborated recovery record, and the user
 sees it.** The shell shows a "restored from the server copy" state for such a vault. When another
