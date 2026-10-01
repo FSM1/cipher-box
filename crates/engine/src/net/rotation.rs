@@ -667,9 +667,9 @@ fn new_override_seed(
 fn publish_verdict(failure: ResolveFailure) -> RotationPublishError {
     match failure {
         ResolveFailure::Unavailable => RotationPublishError::NotPublished,
-        ResolveFailure::Rejected | ResolveFailure::ConflictingChildLabel => {
-            RotationPublishError::Rejected
-        }
+        ResolveFailure::Rejected
+        | ResolveFailure::ConflictingChildLabel
+        | ResolveFailure::Unreadable => RotationPublishError::Rejected,
     }
 }
 
@@ -3894,15 +3894,15 @@ struct Discovered {
     lowest_read_epoch: Option<u64>,
     /// The gated scope root's ratchet, which opens an interior node that lags
     /// the root's read epoch.
-    anchor: Option<LaggingAnchor>,
+    anchor: Option<Rc<LaggingAnchor>>,
 }
 
 impl WaveSubtree {
     fn record_anchor(&self, anchor: LaggingAnchor) {
-        self.inner.borrow_mut().anchor = Some(anchor);
+        self.inner.borrow_mut().anchor = Some(Rc::new(anchor));
     }
 
-    fn anchor(&self) -> Option<LaggingAnchor> {
+    fn anchor(&self) -> Option<Rc<LaggingAnchor>> {
         self.inner.borrow().anchor.clone()
     }
 
@@ -4071,6 +4071,7 @@ fn wave_verdict(error: GateError) -> WritePublishError {
 fn wave_read_verdict(failure: ResolveFailure) -> WritePublishError {
     match failure {
         ResolveFailure::Unavailable => WritePublishError::NotLanded,
+        ResolveFailure::Unreadable => WritePublishError::Unreadable,
         ResolveFailure::Rejected | ResolveFailure::ConflictingChildLabel => {
             WritePublishError::Rejected
         }
@@ -4082,6 +4083,7 @@ fn wave_read_verdict(failure: ResolveFailure) -> WritePublishError {
 fn subtree_verdict(error: WritePublishError) -> ResolveFailure {
     match error {
         WritePublishError::Rejected => ResolveFailure::Rejected,
+        WritePublishError::Unreadable => ResolveFailure::Unreadable,
         WritePublishError::NotLanded
         | WritePublishError::LostRace
         | WritePublishError::RegistryFull => ResolveFailure::Unavailable,
@@ -4212,7 +4214,7 @@ where
     /// Open an interior node the gate refused for lagging the read-epoch floor
     /// alone, under the seed the gated root's ratchet reaches for its epoch,
     /// and re-seal it forward at the root's epoch as the sweep does. Any other
-    /// refusal, or an epoch no held link reaches, keeps `rejection`.
+    /// refusal keeps `rejection`.
     async fn lagging_source(
         &self,
         adopter: &ChildAdopter<'_, H, F>,
@@ -4239,7 +4241,7 @@ where
             LaggingRead::Opened(adopted, envelope) => {
                 self.interior_wave_source(adopted, *envelope, anchor.epoch)
             }
-            LaggingRead::Unreachable(_) => Err(wave_verdict(GateError::Rejected(rejection))),
+            LaggingRead::Unreachable(_) => Err(WritePublishError::Unreadable),
         }
     }
 
@@ -5412,7 +5414,7 @@ where
             }
             match net.direct_child_index(&child).await {
                 Ok(grandchildren) => next.extend(grandchildren),
-                Err(ResolveFailure::Rejected) => {}
+                Err(ResolveFailure::Rejected | ResolveFailure::Unreadable) => {}
                 Err(ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel) => {
                     complete = false;
                 }

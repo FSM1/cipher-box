@@ -309,6 +309,9 @@ pub enum WritePublishError {
     /// for and gave no capability to publish on. Re-running reaches the same
     /// verdict.
     Rejected,
+    /// A lagging node whose epoch no held history link reaches: a capability
+    /// limit of this reader, not a verdict on the record (ADR 0021 D5).
+    Unreadable,
 }
 
 /// The class label a re-point seal failure carries. `PointerError` serves the
@@ -330,6 +333,7 @@ impl WritePublishError {
         match self {
             Self::NotLanded | Self::LostRace | Self::RegistryFull => "availability",
             Self::Rejected => "trust",
+            Self::Unreadable => "capability",
         }
     }
 }
@@ -341,6 +345,7 @@ impl core::fmt::Display for WritePublishError {
             WritePublishError::LostRace => f.write_str("write-plane publish lost the CAS race"),
             WritePublishError::RegistryFull => f.write_str("name registry rejected register-first"),
             WritePublishError::Rejected => f.write_str("write-plane publish refused fail-closed"),
+            WritePublishError::Unreadable => f.write_str("node epoch beyond this scope's ratchet"),
         }
     }
 }
@@ -565,7 +570,10 @@ impl WriteRotateError {
             | WriteRotateError::ResumedSeedNotAtItsRoot
             | WriteRotateError::ResumedWaveAtAnotherEpoch => false,
             WriteRotateError::Entropy(_) => true,
-            WriteRotateError::Publish { error, .. } => *error != WritePublishError::Rejected,
+            WriteRotateError::Publish { error, .. } => !matches!(
+                error,
+                WritePublishError::Rejected | WritePublishError::Unreadable
+            ),
             WriteRotateError::Resolve { reason, .. } => *reason == ResolveFailure::Unavailable,
             WriteRotateError::Repoint(e) => matches!(e, PointerError::Entropy(_)),
         }

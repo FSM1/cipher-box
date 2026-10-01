@@ -1471,19 +1471,84 @@ fn a_downgrade_right_after_a_manual_rotation_moves_the_lagging_subtree() {
     );
 }
 
-/// The ratchet reaches the lagging child's epoch, and the record there does not
-/// open under that seed: a refusal of the record itself, never staleness.
+/// The current fail-closed result: the revoke stops at a grandchild the
+/// ratchet reaches but cannot open, after the lagging child opened.
 #[test]
-fn a_write_revoke_refuses_a_lagging_child_the_ratchet_cannot_open() {
+fn a_write_revoke_refuses_a_lagging_grandchild_the_ratchet_cannot_open() {
+    let mut fx = GrantScenario::new();
+    let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_unopenable_node(&fx, &revokee_seed, grandchild, 1);
+
+    let refused = revoke_recipient(&mut fx);
+    assert!(
+        matches!(
+            &refused,
+            Err(EngineError::TrustViolation { message })
+                if message.contains(&hex_lower(&grandchild.0))
+        ),
+        "the wave reads past the lagging child and refuses the grandchild: {refused:?}"
+    );
+}
+
+/// A lagging node at an epoch no held history link reaches is a limit of this
+/// reader, not a verdict on the record (ADR 0021 D5).
+#[test]
+fn a_write_revoke_reports_a_child_beyond_the_ratchet_as_unavailable() {
     let mut fx = GrantScenario::new();
     let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
-    // The revokee holds the child's name key, and seals the body under a key
-    // no epoch of the scope derives.
-    let name = derive_write_name(&revokee_seed, &child.0);
+    plant_unopenable_node(&fx, &revokee_seed, child, 0);
+
+    assert!(matches!(
+        revoke_recipient(&mut fx),
+        Err(EngineError::ContentUnavailable { .. })
+    ));
+}
+
+/// A read revoke leaves the subtree lagging, so the write grant that follows
+/// moves lagging nodes off the names the vault's write seed derives.
+#[test]
+fn a_write_grant_right_after_a_read_revoke_moves_the_lagging_subtree() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let child = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "child",
+    );
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, child, "grand");
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    assert_eq!(
+        fx.grant_bystander(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    let after = fx.granted_scope_repoint();
+    let root_seed = granted_override_seed(&fx, &after.current_root, 2);
+    let child_name = published_child_name(
+        &fx.world,
+        &fx.blocks,
+        &after.current_root,
+        &read_key_under(&root_seed, fx.folder),
+        "child",
+    );
+    assert_ne!(
+        child_name,
+        write_name(child),
+        "the wave moved the child off the vault seed's name"
+    );
+}
+
+/// The revokee holds `node`'s name key, and publishes a body sealed at `epoch`
+/// under a key no epoch of the scope derives.
+fn plant_unopenable_node(fx: &GrantScenario, revokee_seed: &[u8; 32], node: NodeId, epoch: u64) {
+    let name = derive_write_name(revokee_seed, &node.0);
     let forged = author_child_envelope(EnvelopeAuthoring {
-        node_id: child.0,
+        node_id: node.0,
         scope_id: fx.folder.0,
-        epoch: 1,
+        epoch,
         read_key: &[0x13; 32],
         nonce: &[0x5f; 24],
         body: &ReadBody::Folder {
@@ -1498,7 +1563,7 @@ fn a_write_revoke_refuses_a_lagging_child_the_ratchet_cannot_open() {
     .expect("the forged node seals");
     fx.blocks.put(forged.block.clone());
     let record = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&revokee_seed, &child.0).as_bytes()),
+        &kdf::ipns_keypair(kdf::write_seed(revokee_seed, &node.0).as_bytes()),
         format!("/ipfs/{}", forged.cid).as_bytes(),
         sequence_at(&fx.world, &name) + 1,
         TTL_NANOS,
@@ -1510,14 +1575,6 @@ fn a_write_revoke_refuses_a_lagging_child_the_ratchet_cannot_open() {
             .record_store
             .seed_record(&endpoint, name.as_str(), record.clone());
     }
-
-    assert!(
-        matches!(
-            revoke_recipient(&mut fx),
-            Err(EngineError::TrustViolation { .. })
-        ),
-        "a child no seed of the scope opens fails the wave closed"
-    );
 }
 
 /// Key regression, stated at the write plane: after the cut, the vault's write

@@ -339,7 +339,6 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
 }
 
 /// The gated scope root's epoch and carried history links.
-#[derive(Clone)]
 pub(crate) struct LaggingAnchor {
     pub(crate) epoch: u64,
     pub(crate) history_links: Vec<SignedSealed>,

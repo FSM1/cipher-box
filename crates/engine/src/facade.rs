@@ -123,9 +123,9 @@ use crate::record_plane::DefaultsReason;
 use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
     MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure,
-    Retryable, RevokeError, RevokedCommittedSet, RotateError, RotationPublishError,
-    ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys, SweepOutcome,
-    SweepResolveFailure, SweepRun, SweepTaskFactory, WalkedReadEpochs, WriteHistory,
+    Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
+    RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys,
+    SweepOutcome, SweepResolveFailure, SweepRun, SweepTaskFactory, WalkedReadEpochs, WriteHistory,
     WriteRevokeKind, bounded, cut_for_write_scope, derive_write_name, record_grant_floor,
     reseal_at_current_epoch, reseal_scope_root, revoke_grants, revoke_write_grant, rotate_on_cut,
     run_sweep, run_sweep_job,
@@ -2557,6 +2557,17 @@ impl EngineError {
         match err {
             RotateError::Reseal(ResealError::Entropy(e)) => EngineError::from_entropy(e),
             other => EngineError::from_rotation(other),
+        }
+    }
+
+    /// [`from_rotation`](EngineError::from_rotation), with a node no held
+    /// history link reaches kept off the trust axis (ADR 0021 D5).
+    fn from_cut_rotation(err: RotateOnCutError) -> Self {
+        match err.class() {
+            "capability" => EngineError::ContentUnavailable {
+                message: err.to_string(),
+            },
+            _ => EngineError::from_rotation(err),
         }
     }
 
