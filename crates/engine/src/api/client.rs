@@ -468,7 +468,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
                 "/content/upload",
                 Some(APPLICATION_OCTET_STREAM),
                 &[(CONTENT_CID, cid)],
-                Some(content.to_vec()),
+                Some(content),
                 self.deadlines.transfer_ms,
             )
             .await?;
@@ -721,12 +721,14 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         path: &str,
         body: &B,
     ) -> Result<HttpResponse, ApiError> {
+        // Wipe the master copy; each send moves its own copy to the Http seam.
+        let body = Zeroizing::new(to_json(body));
         self.request_authed_with(
             method,
             path,
             Some(APPLICATION_JSON),
             &[],
-            Some(to_json(body)),
+            Some(&body),
             self.deadlines.control_ms,
         )
         .await
@@ -750,18 +752,11 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         path: &str,
         content_type: Option<&str>,
         extra_headers: &[(&str, &str)],
-        body: Option<Vec<u8>>,
+        body: Option<&[u8]>,
         timeout_ms: u64,
     ) -> Result<HttpResponse, ApiError> {
         let first = self
-            .send_with_token(
-                method,
-                path,
-                content_type,
-                extra_headers,
-                body.clone(),
-                timeout_ms,
-            )
+            .send_with_token(method, path, content_type, extra_headers, body, timeout_ms)
             .await?;
         if first.status != 401 {
             return Ok(first);
@@ -783,7 +778,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         path: &str,
         content_type: Option<&str>,
         extra_headers: &[(&str, &str)],
-        body: Option<Vec<u8>>,
+        body: Option<&[u8]>,
         timeout_ms: u64,
     ) -> Result<HttpResponse, ApiError> {
         let mut headers = Vec::new();
@@ -813,7 +808,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             method,
             url: self.url(path),
             headers,
-            body,
+            body: body.map(<[u8]>::to_vec),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(timeout_ms),
         };
@@ -1728,6 +1723,40 @@ mod tests {
             ],
             "one refresh, then one retry of the same route"
         );
+    }
+
+    /// The retry after a 401 sends the body of the first send, for a JSON body
+    /// and for an upload.
+    #[test]
+    fn the_retry_after_a_401_sends_the_first_body() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        http.enqueue_response(json_response(401, json!({ "message": "expired" })));
+        http.enqueue_response(json_response(
+            200,
+            login_response("jwt-2", &"e".repeat(64), "gw-e"),
+        ));
+        http.enqueue_response(json_response(201, json!({ "id": "m1" })));
+        block_on(Mailbox::post(&client, &[0x02; 33], b"sealed", "idem")).expect("post");
+
+        let block = b"sealed-block".to_vec();
+        let cid = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
+        http.enqueue_response(json_response(401, json!({ "message": "expired" })));
+        http.enqueue_response(json_response(
+            200,
+            login_response("jwt-3", &"f".repeat(64), "gw-f"),
+        ));
+        http.enqueue_response(json_response(
+            201,
+            json!({ "cid": cid, "size": block.len() }),
+        ));
+        block_on(client.upload(&cid, &block)).expect("upload");
+
+        let requests = http.requests();
+        assert!(requests[2].body.is_some());
+        assert_eq!(requests[2].body, requests[4].body, "the JSON retry body");
+        assert_eq!(requests[5].body.as_deref(), Some(&block[..]));
+        assert_eq!(requests[5].body, requests[7].body, "the upload retry body");
     }
 
     /// Routing addresses the recipient's identity key as the API's lowercase-hex

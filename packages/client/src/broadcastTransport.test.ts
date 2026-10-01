@@ -1264,8 +1264,7 @@ describe('broadcast transport ↔ leader relay', () => {
         opId: 424242n,
         node,
         phase: 'uploadProgress',
-        blocksConfirmed: 30003,
-        blocksTotal: 90009,
+        progress: { confirmed: 30003, total: 90009 },
         error: null,
       },
     ];

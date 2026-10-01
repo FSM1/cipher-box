@@ -98,7 +98,7 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
             Command::RegisterDevice {
                 public_key: DEVICE_KEY.to_owned(),
                 signature: "device-signature".to_owned(),
-                identity_token: "identity-token".to_owned(),
+                identity_token: "identity-token".to_owned().into(),
                 label: None,
             },
             // A registration names the account the session holds, so an engine

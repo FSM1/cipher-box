@@ -97,8 +97,7 @@ class JournalHost extends StubEngineHost {
       opId,
       node: new Uint8Array(16).fill(0xa7),
       phase: 'uploadCompleted',
-      blocksConfirmed: 4,
-      blocksTotal: 4,
+      progress: { confirmed: 4, total: 4 },
       error: null,
     });
     return opId;

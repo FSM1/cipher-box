@@ -1,6 +1,6 @@
-//! The serde shape of the facade commands at the WASM boundary: the adapters
-//! for the field types whose durable serde form is not the boundary form
-//! (blueprint/web-client.md "WASM packaging and the type boundary").
+//! The serde shape of the facade commands and events at the WASM boundary: the
+//! adapters for the field types whose durable serde form is not the boundary
+//! form (blueprint/web-client.md "WASM packaging and the type boundary").
 //!
 //! [`NodeId`] and [`NodeKind`] already derive serde for the op queue, which must
 //! still read what the previous release wrote, so the boundary spells them
@@ -78,6 +78,11 @@ pub mod node_id {
             .map(NodeId)
             .map_err(|_| de::Error::invalid_length(raw.len(), &"16 node id bytes"))
     }
+
+    /// Writes the 16 bytes as a `Uint8Array`.
+    pub fn serialize<S: Serializer>(id: &NodeId, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&id.0)
+    }
 }
 
 /// An optional node id; `null` and `undefined` are both absent.
@@ -142,11 +147,11 @@ pub mod node_kind {
     }
 }
 
-/// An invite fragment, which the boundary takes into a zeroizing buffer itself,
-/// outside the serde decode that buffers the whole command. This decode takes
-/// only the empty placeholder the boundary puts in its place, and wipes and
-/// refuses anything else.
-pub mod fragment_placeholder {
+/// A secret text field — an invite fragment, an identity token — which the
+/// boundary takes into a zeroizing buffer itself, outside the serde decode that
+/// buffers the whole command. This decode takes only the empty placeholder the
+/// boundary puts in its place, and wipes and refuses anything else.
+pub mod secret_placeholder {
     use super::*;
 
     /// Takes `""` alone.
@@ -158,7 +163,7 @@ pub mod fragment_placeholder {
             Ok(text)
         } else {
             Err(de::Error::custom(
-                "a fragment is taken outside the command decode",
+                "a secret is taken outside the command decode",
             ))
         }
     }

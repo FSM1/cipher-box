@@ -2,10 +2,10 @@
  * The UI ↔ engine-worker wire protocol (blueprint/web-client.md "Engine hosting
  * and tab leadership").
  *
- * Everything here is plain structured-clone data. A command and what it answers
- * are the engine's own types, generated into the wasm-bindgen `.d.ts` and
- * re-exported here under the names the hosts import; the worker hands a command
- * to the engine as it arrived, and the engine decodes it.
+ * Everything here is plain structured-clone data. A command, what it answers and
+ * an event are the engine's own types, generated into the wasm-bindgen `.d.ts`
+ * and re-exported here under the names the hosts import; the worker hands a
+ * command to the engine as it arrived, and the engine decodes it.
  *
  * `u64`s cross as `bigint`; binary payloads cross as `Uint8Array`, with file
  * content transferred as an `ArrayBuffer` so no bytes are copied through the
@@ -20,12 +20,16 @@ import type {
   ByoKind,
   Command,
   CommandOutcome,
+  DeadLetterReason,
+  Event,
+  OpPhase,
   Permission,
   PinMode,
+  Staleness,
   VaultSettings,
 } from '../../wasm/cipherbox_wasm.js';
 
-export type { ApprovalDecision, ByoKind, Permission, PinMode };
+export type { ApprovalDecision, ByoKind, DeadLetterReason, Permission, PinMode, Staleness };
 
 /**
  * The most fragment characters any hop carries. A guard, not the contract — the
@@ -38,24 +42,12 @@ export const MAX_FRAGMENT_CHARS = 4096;
 /** What a created node is. */
 export type NodeKind = Extract<Command, { kind: 'create' }>['nodeKind'];
 
-/** The staleness ladder (mirrors the facade `Staleness`). */
-export type Staleness = 'fresh' | 'reconciling' | 'stale' | 'offline';
-
 /**
- * The phase an `opProgress` event reports (mirrors the facade `OpPhase`).
- * `uploadCompleted` means the version's blocks are on the network, not that its
- * record published — the op leaves the pending-op overlay when it does.
+ * The phase an `opProgress` event reports. `uploadCompleted` means the
+ * version's blocks are on the network, not that its record published — the op
+ * leaves the pending-op overlay when it does.
  */
-export type OpProgressPhase =
-  | 'downloadStarted'
-  | 'downloadCompleted'
-  | 'downloadFailed'
-  | 'uploadStarted'
-  | 'uploadProgress'
-  | 'uploadCompleted'
-  | 'uploadFailed'
-  | 'uploadCancelled'
-  | 'externalPinFailed';
+export type OpProgressPhase = OpPhase;
 
 /** One ancestor step in a snapshot's breadcrumb trail, as data. */
 export interface BreadcrumbDescriptor {
@@ -65,28 +57,6 @@ export interface BreadcrumbDescriptor {
 
 /** What the op queue holds for a node (mirrors the facade `PendingClass`). */
 export type PendingClass = 'none' | 'metadata' | 'content';
-
-/** Why a queued op will never publish (mirrors the facade `DeadLetterReason`). */
-export type DeadLetterReason =
-  | 'targetGone'
-  | 'destinationGone'
-  | 'destinationInsideTarget'
-  | 'suffixExhausted'
-  | 'undecodable'
-  | 'payloadRefused'
-  | 'attemptsExhausted'
-  | 'contentUnrecoverable'
-  | 'baseSuperseded'
-  | 'headTooLarge'
-  | 'preservationRefused'
-  | 'alreadyPublished'
-  | 'targetStillLinked'
-  | 'scopeRootNotResealable'
-  | 'binIndexFull'
-  | 'crossingUnauthorable'
-  | 'binIndexStrandedMint'
-  | 'targetLinkedAcrossScopes'
-  | 'graftedScopeVaultSurface';
 
 /** A terminal dead-lettered op and its reason, as data. */
 export interface DeadLetterDescriptor {
@@ -646,50 +616,8 @@ export interface OpenedStream {
   readonly size: number;
 }
 
-/** One event the engine emitted, as data (mirrors the facade `Event`). */
-export type EventDescriptor =
-  | { kind: 'snapshotUpdated' }
-  | { kind: 'stalenessChanged'; staleness: Staleness }
-  | { kind: 'withheldUpdateEscalation'; ipnsName: Uint8Array }
-  | { kind: 'deadLetter'; opId: bigint; reason: DeadLetterReason }
-  /** This device holds a preserved dead-letter record another build wrote. */
-  | { kind: 'parkedWritesUnreadable' }
-  /** A dropped parked write's registry rows did not reach the retire ledger; they stay charged. */
-  | { kind: 'registryDebtUnjournaled' }
-  /** This device's grantee-name cache did not open and was cleared; names on the rows stand. */
-  | { kind: 'granteeNamesCleared' }
-  /**
-   * This device's conversion record did not open. It is set aside and the
-   * record starts empty; each claimant posts its claim again.
-   */
-  | { kind: 'conversionRecordUnreadable' }
-  /** The conversion record held its bound of refused claims, so the oldest went. */
-  | { kind: 'refusedClaimDropped' }
-  | { kind: 'attributableAbuse'; description: string }
-  | { kind: 'renewalFailed'; routingKey: string; detail: string }
-  | { kind: 'vaultUnprovisioned'; retryable: boolean; detail: string }
-  /** The engine adopted vault settings other than the ones it held; read them again. */
-  | { kind: 'vaultSettingsChanged' }
-  /** A scope-exit cut this device owes did not land, so the scope is uncut. */
-  | { kind: 'scopeExitCutOwed'; scopeRoot: Uint8Array; detail: string }
-  /**
-   * A claimant joined the scope through a link. `name` is the name it
-   * suggested, or empty: show it as a suggestion next to `fingerprint`.
-   */
-  | { kind: 'granteeJoined'; scopeRoot: Uint8Array; name: string; fingerprint: string }
-  | {
-      kind: 'opProgress';
-      opId: bigint | null;
-      node: Uint8Array;
-      phase: OpProgressPhase;
-      /**
-       * Blocks of the version confirmed so far and its whole block count, on
-       * the phases that count them.
-       */
-      blocksConfirmed: number | null;
-      blocksTotal: number | null;
-      error: string | null;
-    };
+/** One event the engine emitted: the engine `Event`. */
+export type EventDescriptor = Event;
 
 /**
  * Which SIWE surface a nonce is minted for. The API keeps one challenge pool per

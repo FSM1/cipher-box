@@ -211,8 +211,7 @@ describe('LocalTransport', () => {
         opId: null,
         node: new Uint8Array(16),
         phase: 'downloadStarted',
-        blocksConfirmed: null,
-        blocksTotal: null,
+        progress: null,
         error: null,
       },
     ];

@@ -12,9 +12,8 @@
 //! `console_error_panic_hook` surfaces the assertion message to the browser
 //! console, and the harness observes the non-resolution as a failure.
 //!
-//! This module also exports a test-only facade constructor (`deadLetterEvent`)
-//! so the browser suite can exercise the facade's own `u64`→`bigint` boundary,
-//! which the engine does not yet emit on its own.
+//! This module also exports test-only events (`sampleEvents`) so the browser
+//! suite can check what JS receives against the generated `Event` type.
 
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
@@ -24,6 +23,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
+use crate::boundary::encode_event;
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, JsRecordTransportSeam, JsSchedulerSeam,
     RecordTransportAdapter, SchedulerAdapter, SnapshotCacheAdapter, StagingStoreAdapter,
@@ -146,13 +146,41 @@ pub async fn run_record_transport_conformance(
     conformance::record_transport::check(&adapter, &routing_key, &record).await;
 }
 
-/// Test-only: builds a `deadLetter` facade event carrying `opId`. The op id is
-/// a `u64`, so the browser suite can assert the facade's `u64`→`bigint`
-/// boundary round-trips a value beyond `Number.MAX_SAFE_INTEGER` intact.
-#[wasm_bindgen(js_name = deadLetterEvent)]
-pub fn dead_letter_event(op_id: u64) -> crate::Event {
-    crate::Event::from_facade(facade::Event::DeadLetter {
-        op_id: OpId(op_id),
-        reason: facade::DeadLetterReason::Undecodable,
-    })
+/// Test-only: one event of each field kind, encoded as `nextEvent` encodes
+/// them — a `u64`, bytes, an absent `Option`, a nested struct and an enum.
+#[wasm_bindgen(js_name = sampleEvents, unchecked_return_type = "Event[]")]
+pub fn sample_events(op_id: u64) -> Result<Vec<JsValue>, JsError> {
+    [
+        facade::Event::DeadLetter {
+            op_id: OpId(op_id),
+            reason: facade::DeadLetterReason::Undecodable,
+        },
+        facade::Event::OpProgress {
+            op_id: Some(OpId(op_id)),
+            node: facade::NodeId([7; 16]),
+            phase: facade::OpPhase::UploadProgress,
+            progress: Some(facade::BlockProgress {
+                confirmed: 2,
+                total: 5,
+            }),
+            error: Some("unavailable".into()),
+        },
+        facade::Event::OpProgress {
+            op_id: None,
+            node: facade::NodeId([8; 16]),
+            phase: facade::OpPhase::DownloadStarted,
+            progress: None,
+            error: None,
+        },
+        facade::Event::WithheldUpdateEscalation {
+            ipns_name: vec![9, 8, 7],
+        },
+        facade::Event::StalenessChanged {
+            level: facade::Staleness::Offline,
+        },
+        facade::Event::SnapshotUpdated,
+    ]
+    .iter()
+    .map(|event| encode_event(event).map(JsValue::from))
+    .collect()
 }

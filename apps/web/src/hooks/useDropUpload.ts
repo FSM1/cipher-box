@@ -320,7 +320,10 @@ function rowUpdate(event: EventDescriptor): RowUpdate | null {
   switch (event.phase) {
     case 'uploadStarted':
     case 'uploadProgress':
-      return { opId: event.opId, change: { phase: 'uploading', progress: fraction(event) } };
+      return {
+        opId: event.opId,
+        change: { phase: 'uploading', progress: fraction(event.progress) },
+      };
     case 'uploadCompleted':
       return { opId: event.opId, change: { phase: 'uploaded', progress: 1, error: null } };
     case 'uploadFailed':
@@ -332,7 +335,7 @@ function rowUpdate(event: EventDescriptor): RowUpdate | null {
   }
 }
 
-function fraction(event: { blocksConfirmed: number | null; blocksTotal: number | null }): number {
-  const total = event.blocksTotal ?? 0;
-  return total > 0 ? Math.min((event.blocksConfirmed ?? 0) / total, 1) : 0;
+function fraction(progress: Extract<EventDescriptor, { kind: 'opProgress' }>['progress']): number {
+  const total = progress?.total ?? 0;
+  return total > 0 ? Math.min((progress?.confirmed ?? 0) / total, 1) : 0;
 }

@@ -1088,6 +1088,8 @@ impl From<cipherbox_core::seal::Permission> for Permission {
 /// Availability staleness keeps cached views usable indefinitely; trust
 /// violations are never staleness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum Staleness {
     /// View is within the freshness window.
     Fresh,
@@ -1640,7 +1642,7 @@ pub enum Command {
         /// The link's URL fragment, verbatim.
         #[cfg_attr(
             feature = "wasm",
-            serde(with = "crate::wire::fragment_placeholder"),
+            serde(with = "crate::wire::secret_placeholder"),
             tsify(type = "string")
         )]
         fragment: Zeroizing<String>,
@@ -1719,8 +1721,14 @@ pub enum Command {
         /// [`Engine::device_registration_challenge`]; made in browser custody,
         /// so it crosses as bytes the engine never produced.
         signature: String,
-        /// The CipherBox identity token this device signed in with.
-        identity_token: String,
+        /// The CipherBox identity token this device signed in with: a bearer
+        /// credential.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::secret_placeholder"),
+            tsify(type = "string")
+        )]
+        identity_token: Zeroizing<String>,
         /// A display label for the approval prompt: context, never evidence.
         label: Option<String>,
     },
@@ -1909,6 +1917,16 @@ impl CommandOutcome {
 /// `Debug` is hand-written for the same reason [`Command`]'s is: this is the
 /// stream a host logs, and two variants name a record.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(
+        tag = "kind",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    ),
+    tsify(large_number_types_as_bigints, missing_as_null)
+)]
 pub enum Event {
     /// A new gate-passing snapshot (with pending-op overlay applied) is
     /// available.
@@ -1916,11 +1934,17 @@ pub enum Event {
     /// Staleness-ladder transition.
     StalenessChanged {
         /// The new level.
+        #[cfg_attr(feature = "wasm", serde(rename = "staleness"))]
         level: Staleness,
     },
     /// Withheld-update escalation on a shared scope (#33 D7).
     WithheldUpdateEscalation {
         /// The pinned name, as opaque bytes.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "serde_bytes::serialize"),
+            tsify(type = "Uint8Array")
+        )]
         ipns_name: Vec<u8>,
     },
     /// A queued op terminally failed; staged bytes are preserved unless the
@@ -1990,6 +2014,11 @@ pub enum Event {
     /// failure").
     ScopeExitCutOwed {
         /// The scope root that still owes the cut.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
         scope_root: NodeId,
         /// Key-material-free classification of what stopped the rotation.
         detail: String,
@@ -1999,6 +2028,11 @@ pub enum Event {
     /// device reads the grantee off the record.
     GranteeJoined {
         /// The folder's scope root.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
         scope_root: NodeId,
         /// The grantee name the claimant suggested, or empty. The claimant
         /// chose it, so a host shows it as a suggestion next to the
@@ -2016,6 +2050,11 @@ pub enum Event {
         /// [`Engine::commit_write`] returned, so a host keys progress per op.
         op_id: Option<OpId>,
         /// The node the transfer is for.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// The phase reached.
         phase: OpPhase,
@@ -2103,6 +2142,7 @@ impl fmt::Debug for Event {
 /// (its leaves plus the root manifest). Blocks, not bytes: a resumed upload's
 /// confirmed prefix is no longer on this device to measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
 pub struct BlockProgress {
     /// Blocks confirmed so far, counting a previous pass's durable progress.
     pub confirmed: u32,
@@ -2112,6 +2152,8 @@ pub struct BlockProgress {
 
 /// The phase an [`Event::OpProgress`] reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum OpPhase {
     /// A content download started.
     DownloadStarted,
@@ -18366,7 +18408,7 @@ mod tests {
         block_on(engine.command(Command::RegisterDevice {
             public_key: DEVICE_KEY.to_owned(),
             signature: device_signature(),
-            identity_token: "identity-token".to_owned(),
+            identity_token: "identity-token".to_owned().into(),
             label: Some("Laptop".to_owned()),
         }))
         .expect("the registry accepted the key");

@@ -1,6 +1,6 @@
 //! The one decode of a facade command from its JS value, and the one encode of
-//! what it answers. Both types are the engine's own, typed for TS by tsify
-//! (blueprint/web-client.md "WASM packaging and the type boundary").
+//! what it answers and of each event. All are the engine's own types, typed for
+//! TS by tsify (blueprint/web-client.md "WASM packaging and the type boundary").
 //!
 //! Serde buffers an internally tagged value whole before it picks the variant,
 //! and frees that buffer unwiped when a later field refuses. So a command that
@@ -10,7 +10,8 @@
 //! the member typed.
 
 use cipherbox_engine::content::ByoBearer;
-use cipherbox_engine::facade::{Command, CommandOutcome};
+use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
+use cipherbox_engine::facade::{Command, CommandOutcome, Event};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_engine::seams::check_bearer;
 use cipherbox_engine::wire::{BIGINT_TAG, KEEP_STORED_BEARER};
@@ -38,13 +39,24 @@ fn refused() -> JsError {
 pub fn decode_command(command: &JsValue) -> Result<Command, JsError> {
     let kind = field(command, "kind");
     if kind == "claimInviteLink" {
-        let fragment = field(command, "fragment");
-        let mut decoded = decode(&with_placeholder(command, &["fragment"], &"".into())?)?;
-        let Command::ClaimInviteLink { fragment: slot, .. } = &mut decoded else {
-            return Err(refused());
-        };
-        *slot = take_fragment(&fragment)?;
-        return Ok(decoded);
+        return decode_secret_text(command, "fragment", MAX_FRAGMENT_TEXT_LEN, |decoded| {
+            match decoded {
+                Command::ClaimInviteLink { fragment, .. } => Some(fragment),
+                _ => None,
+            }
+        });
+    }
+    if kind == "registerDevice" {
+        // A char is at most two UTF-16 units; the engine checks the char count.
+        return decode_secret_text(
+            command,
+            "identityToken",
+            2 * MAX_IDENTITY_TOKEN_CHARS,
+            |decoded| match decoded {
+                Command::RegisterDevice { identity_token, .. } => Some(identity_token),
+                _ => None,
+            },
+        );
     }
     if kind == "saveVaultSettings" {
         let token = BEARER_PATH
@@ -72,6 +84,14 @@ pub fn encode_outcome(outcome: &CommandOutcome) -> Result<Ts<CommandOutcome>, Js
         .serialize(&SERIALIZER)
         .map(Ts::new_unchecked)
         .map_err(|_| JsError::new("the command outcome does not encode"))
+}
+
+/// Encodes one event.
+pub fn encode_event(event: &Event) -> Result<Ts<Event>, JsError> {
+    event
+        .serialize(&SERIALIZER)
+        .map(Ts::new_unchecked)
+        .map_err(|_| JsError::new("the event does not encode"))
 }
 
 fn decode(command: &JsValue) -> Result<Command, JsError> {
@@ -150,11 +170,26 @@ fn with_placeholder(
     Ok(copy.into())
 }
 
-/// An invite link's fragment, measured before it is copied into linear memory:
-/// past the engine's own text bound it cannot be a link.
-fn take_fragment(value: &JsValue) -> Result<Zeroizing<String>, JsError> {
+/// Decodes `command` with the empty placeholder at `key`, then takes the text
+/// at `key` into the zeroizing slot that `slot_of` names.
+fn decode_secret_text(
+    command: &JsValue,
+    key: &str,
+    max_units: usize,
+    slot_of: fn(&mut Command) -> Option<&mut Zeroizing<String>>,
+) -> Result<Command, JsError> {
+    let secret = field(command, key);
+    let mut decoded = decode(&with_placeholder(command, &[key], &"".into())?)?;
+    let slot = slot_of(&mut decoded).ok_or_else(refused)?;
+    *slot = take_text(&secret, max_units)?;
+    Ok(decoded)
+}
+
+/// A secret text field, measured in UTF-16 units before it is copied into
+/// linear memory: past `max_units` the engine would refuse it anyway.
+fn take_text(value: &JsValue, max_units: usize) -> Result<Zeroizing<String>, JsError> {
     let text = value.dyn_ref::<JsString>().ok_or_else(refused)?;
-    if text.length() as usize > MAX_FRAGMENT_TEXT_LEN {
+    if text.length() as usize > max_units {
         return Err(refused());
     }
     text.as_string().map(Zeroizing::new).ok_or_else(refused)

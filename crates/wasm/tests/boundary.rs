@@ -2,8 +2,8 @@
 //! wasm-bindgen-test-runner → Node.js). They exercise the two boundary risks
 //! the WASM leg exists to cover (blueprint/web-client.md "Boundary hygiene"):
 //! `u64`→`bigint` marshalling and the getrandom → `crypto.getRandomValues`
-//! worker-scope wiring, plus the event and view surface shapes. The command
-//! decode has its own file (`commands.rs`).
+//! worker-scope wiring, plus the view surface shapes. The command decode and
+//! the event encode have their own files (`commands.rs`, `events.rs`).
 //!
 //! The whole file is gated to the browser target; native `cargo test` for this
 //! crate runs the host conversion tests in `src/lib.rs` instead.
@@ -12,8 +12,8 @@
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
 use cipherbox_wasm::{
-    BinOriginKind, BinView, DeadLetterReason, Event, InvitePreview, NodeId, NodeKind, OpPhase,
-    PendingClass, Permission, SnapshotView, Staleness,
+    BinOriginKind, BinView, DeadLetterReason, InvitePreview, NodeId, NodeKind, PendingClass,
+    Permission, SnapshotView,
 };
 use js_sys::{Array, BigInt, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -32,36 +32,6 @@ fn getrandom_wires_to_crypto_get_random_values() {
         buf.iter().any(|&b| b != 0),
         "32 random bytes are all-zero with negligible probability"
     );
-}
-
-/// A `u64` op id (> Number.MAX_SAFE_INTEGER) must survive the boundary as a
-/// JS `bigint` — the u64/BigInt parity surface. Read through the generated
-/// `#[wasm_bindgen(getter)]` glue (not the Rust field) so a wasm-bindgen ABI
-/// regression that marshalled it as an f64 `number` — truncating at 2^53 — is
-/// observed, not hidden.
-#[wasm_bindgen_test]
-fn op_id_u64_crosses_as_bigint() {
-    let event: JsValue = Event::from_facade(facade::Event::DeadLetter {
-        op_id: OpId(u64::MAX),
-        reason: facade::DeadLetterReason::Undecodable,
-    })
-    .into();
-    let op_id = Reflect::get(&event, &JsValue::from_str("opId")).expect("opId getter is readable");
-
-    assert_eq!(
-        op_id.js_typeof(),
-        JsValue::from_str("bigint"),
-        "opId must cross as a JS bigint, never a number"
-    );
-    // A number (f64) marshalling would round u64::MAX to 2^64; assert the exact
-    // value survived, in JS's own decimal rendering.
-    let decimal = String::from(
-        op_id
-            .unchecked_into::<BigInt>()
-            .to_string(10)
-            .expect("bigint renders in base 10"),
-    );
-    assert_eq!(decimal, u64::MAX.to_string());
 }
 
 /// Binary payloads cross as a JS `Uint8Array`. Read the `bytes` getter through
@@ -84,134 +54,6 @@ fn node_id_bytes_cross_as_uint8array_and_reject_bad_length() {
     assert!(
         NodeId::from_bytes(&[0u8; 20]).is_err(),
         "a wrong-length node id must throw at the boundary"
-    );
-}
-
-/// Event getters return key-free view state, keyed off `kind`.
-#[wasm_bindgen_test]
-fn event_getters_map_variants() {
-    let staleness = Event::from_facade(facade::Event::StalenessChanged {
-        level: facade::Staleness::Stale,
-    });
-    assert_eq!(staleness.kind(), "stalenessChanged");
-    assert_eq!(staleness.staleness(), Some(Staleness::Stale));
-    assert!(staleness.op_id().is_none());
-
-    let withheld = Event::from_facade(facade::Event::WithheldUpdateEscalation {
-        ipns_name: vec![9, 8, 7],
-    });
-    assert_eq!(withheld.ipns_name(), Some(vec![9, 8, 7]));
-
-    let settings = Event::from_facade(facade::Event::VaultSettingsChanged);
-    assert_eq!(settings.kind(), "vaultSettingsChanged");
-    assert!(settings.op_id().is_none());
-
-    let owed = Event::from_facade(facade::Event::ScopeExitCutOwed {
-        scope_root: facade::NodeId([0x9e; 16]),
-        detail: "publish-failed".into(),
-    });
-    assert_eq!(owed.kind(), "scopeExitCutOwed");
-    assert_eq!(owed.scope_root(), Some(vec![0x9e; 16]));
-    assert_eq!(owed.detail(), Some("publish-failed".into()));
-    assert!(staleness.scope_root().is_none());
-}
-
-/// `opProgress` payload getters cross with boundary-correct JS shapes — op id
-/// as `bigint`, node id as `Uint8Array` — and every getter is `undefined` both
-/// off-variant and for an absent optional field.
-#[wasm_bindgen_test]
-fn op_progress_getters_cross_and_stay_undefined_off_variant() {
-    let progress = Event::from_facade(facade::Event::OpProgress {
-        op_id: Some(OpId(u64::MAX)),
-        node: facade::NodeId([5u8; 16]),
-        phase: facade::OpPhase::DownloadFailed,
-        progress: None,
-        error: Some("unavailable".into()),
-    });
-    assert_eq!(progress.kind(), "opProgress");
-    assert_eq!(progress.phase(), Some(OpPhase::DownloadFailed));
-    assert_eq!(progress.error(), Some("unavailable".into()));
-
-    let js: JsValue = progress.into();
-    let op_id = Reflect::get(&js, &JsValue::from_str("opId")).expect("opId getter is readable");
-    assert_eq!(op_id.js_typeof(), JsValue::from_str("bigint"));
-    let node = Reflect::get(&js, &JsValue::from_str("node")).expect("node getter is readable");
-    assert!(node.is_instance_of::<Uint8Array>());
-    assert_eq!(node.unchecked_into::<Uint8Array>().to_vec(), vec![5u8; 16]);
-
-    let op_less = Event::from_facade(facade::Event::OpProgress {
-        op_id: None,
-        node: facade::NodeId([0u8; 16]),
-        phase: facade::OpPhase::DownloadStarted,
-        progress: None,
-        error: None,
-    });
-    assert!(op_less.op_id().is_none());
-    assert!(op_less.error().is_none());
-    assert!(op_less.blocks_confirmed().is_none());
-    assert!(op_less.blocks_total().is_none());
-    let js: JsValue = op_less.into();
-    assert!(
-        Reflect::get(&js, &JsValue::from_str("opId"))
-            .expect("opId getter is readable")
-            .is_undefined()
-    );
-    assert!(
-        Reflect::get(&js, &JsValue::from_str("error"))
-            .expect("error getter is readable")
-            .is_undefined()
-    );
-
-    let other: JsValue = Event::from_facade(facade::Event::SnapshotUpdated).into();
-    for key in [
-        "node",
-        "phase",
-        "error",
-        "opId",
-        "blocksConfirmed",
-        "blocksTotal",
-    ] {
-        assert!(
-            Reflect::get(&other, &JsValue::from_str(key))
-                .expect("getter is readable")
-                .is_undefined(),
-            "{key} must be undefined off-variant"
-        );
-    }
-}
-
-/// An upload's progress crosses with its op id and its block counters: the id
-/// as `bigint` (it is a `u64`), the counters as plain JS `number`s a host can do
-/// progress arithmetic on without widening.
-#[wasm_bindgen_test]
-fn upload_progress_crosses_with_its_op_id_and_block_counters() {
-    let event = Event::from_facade(facade::Event::OpProgress {
-        op_id: Some(OpId(7)),
-        node: facade::NodeId([3u8; 16]),
-        phase: facade::OpPhase::UploadProgress,
-        progress: Some(facade::BlockProgress {
-            confirmed: 2,
-            total: 5,
-        }),
-        error: None,
-    });
-    assert_eq!(event.phase(), Some(OpPhase::UploadProgress));
-    assert_eq!(event.blocks_confirmed(), Some(2));
-    assert_eq!(event.blocks_total(), Some(5));
-
-    let js: JsValue = event.into();
-    let confirmed = Reflect::get(&js, &JsValue::from_str("blocksConfirmed"))
-        .expect("blocksConfirmed getter is readable");
-    assert_eq!(confirmed.js_typeof(), JsValue::from_str("number"));
-    assert_eq!(confirmed.as_f64(), Some(2.0));
-    let total = Reflect::get(&js, &JsValue::from_str("blocksTotal"))
-        .expect("blocksTotal getter is readable");
-    assert_eq!(total.as_f64(), Some(5.0));
-    assert_eq!(
-        Reflect::get(&js, &JsValue::from_str("opId"))
-            .expect("opId getter is readable")
-            .js_typeof(),
-        JsValue::from_str("bigint")
     );
 }
 

@@ -132,9 +132,9 @@ test.describe('engine worker host', () => {
     expect(events).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
-  test('the u64 event boundary round-trips a bigint beyond MAX_SAFE_INTEGER', async ({ page }) => {
-    const outcome = await runBoundary(page, 'bigint');
-    expect(outcome.error ?? '', 'bigint boundary failure').toBe('');
+  test('an engine event reaches JS as its generated type names it', async ({ page }) => {
+    const outcome = await runBoundary(page, 'events');
+    expect(outcome.error ?? '', 'event boundary failure').toBe('');
     expect(outcome.ok).toBe(true);
   });
 

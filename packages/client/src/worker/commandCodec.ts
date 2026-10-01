@@ -1,9 +1,9 @@
 /**
  * Translates between the plain-data wire protocol and the wasm-bindgen facade
  * types, inside the engine worker realm: the checkers for the request fields a
- * read or a write handle carries, and the readers that turn a view's key-free
- * getters into a descriptor. No interpretation, no crypto — the engine below
- * the facade owns all of that.
+ * read or a write handle carries, the readers that turn a view's key-free
+ * getters into a descriptor, and the fail-closed read of an event. No
+ * interpretation, no crypto — the engine below the facade owns all of that.
  */
 
 import { BIN_INDEX_HOLD_CHECKS, MAX_FRAGMENT_CHARS, SETTINGS_HOLD_CHECKS } from './protocol.js';
@@ -42,7 +42,6 @@ import type {
   WasmAuthMethod,
   WasmBinRow,
   WasmBinView,
-  WasmEvent,
   WasmInvitePreview,
   WasmNodeId,
   WasmPendingApproval,
@@ -136,45 +135,18 @@ export function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNod
 
 function staleness(wasm: EngineWasm, level: number): Staleness {
   switch (level) {
-    case wasm.Staleness.Fresh:
+    case wasm.ViewStaleness.Fresh:
       return 'fresh';
-    case wasm.Staleness.Reconciling:
+    case wasm.ViewStaleness.Reconciling:
       return 'reconciling';
-    case wasm.Staleness.Stale:
+    case wasm.ViewStaleness.Stale:
       return 'stale';
-    case wasm.Staleness.Offline:
+    case wasm.ViewStaleness.Offline:
       return 'offline';
     default:
       // Fail closed: an unmapped value means a JS/WASM version mismatch, not a
       // safe-to-ignore state (the event pump turns this throw into a fatal).
       throw new Error(`unknown WASM staleness value: ${level}`);
-  }
-}
-
-function opPhase(wasm: EngineWasm, phase: number | undefined): OpProgressPhase {
-  switch (phase) {
-    case wasm.OpPhase.DownloadStarted:
-      return 'downloadStarted';
-    case wasm.OpPhase.DownloadCompleted:
-      return 'downloadCompleted';
-    case wasm.OpPhase.DownloadFailed:
-      return 'downloadFailed';
-    case wasm.OpPhase.UploadStarted:
-      return 'uploadStarted';
-    case wasm.OpPhase.UploadProgress:
-      return 'uploadProgress';
-    case wasm.OpPhase.UploadCompleted:
-      return 'uploadCompleted';
-    case wasm.OpPhase.UploadFailed:
-      return 'uploadFailed';
-    case wasm.OpPhase.UploadCancelled:
-      return 'uploadCancelled';
-    case wasm.OpPhase.ExternalPinFailed:
-      return 'externalPinFailed';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch, not a
-      // safe-to-ignore state (the event pump turns this throw into a fatal).
-      throw new Error(`unknown WASM op phase value: ${phase}`);
   }
 }
 
@@ -192,49 +164,49 @@ function pendingClass(wasm: EngineWasm, pending: number): PendingClass {
   }
 }
 
-function deadLetterReason(wasm: EngineWasm, reason: number | undefined): DeadLetterReason {
+function deadLetterReason(wasm: EngineWasm, reason: number): DeadLetterReason {
   switch (reason) {
-    case wasm.DeadLetterReason.TargetGone:
+    case wasm.ViewDeadLetterReason.TargetGone:
       return 'targetGone';
-    case wasm.DeadLetterReason.DestinationGone:
+    case wasm.ViewDeadLetterReason.DestinationGone:
       return 'destinationGone';
-    case wasm.DeadLetterReason.DestinationInsideTarget:
+    case wasm.ViewDeadLetterReason.DestinationInsideTarget:
       return 'destinationInsideTarget';
-    case wasm.DeadLetterReason.SuffixExhausted:
+    case wasm.ViewDeadLetterReason.SuffixExhausted:
       return 'suffixExhausted';
-    case wasm.DeadLetterReason.Undecodable:
+    case wasm.ViewDeadLetterReason.Undecodable:
       return 'undecodable';
-    case wasm.DeadLetterReason.PayloadRefused:
+    case wasm.ViewDeadLetterReason.PayloadRefused:
       return 'payloadRefused';
-    case wasm.DeadLetterReason.AttemptsExhausted:
+    case wasm.ViewDeadLetterReason.AttemptsExhausted:
       return 'attemptsExhausted';
-    case wasm.DeadLetterReason.ContentUnrecoverable:
+    case wasm.ViewDeadLetterReason.ContentUnrecoverable:
       return 'contentUnrecoverable';
-    case wasm.DeadLetterReason.BaseSuperseded:
+    case wasm.ViewDeadLetterReason.BaseSuperseded:
       return 'baseSuperseded';
-    case wasm.DeadLetterReason.HeadTooLarge:
+    case wasm.ViewDeadLetterReason.HeadTooLarge:
       return 'headTooLarge';
-    case wasm.DeadLetterReason.PreservationRefused:
+    case wasm.ViewDeadLetterReason.PreservationRefused:
       return 'preservationRefused';
-    case wasm.DeadLetterReason.AlreadyPublished:
+    case wasm.ViewDeadLetterReason.AlreadyPublished:
       return 'alreadyPublished';
-    case wasm.DeadLetterReason.TargetStillLinked:
+    case wasm.ViewDeadLetterReason.TargetStillLinked:
       return 'targetStillLinked';
-    case wasm.DeadLetterReason.ScopeRootNotResealable:
+    case wasm.ViewDeadLetterReason.ScopeRootNotResealable:
       return 'scopeRootNotResealable';
-    case wasm.DeadLetterReason.BinIndexFull:
+    case wasm.ViewDeadLetterReason.BinIndexFull:
       return 'binIndexFull';
-    case wasm.DeadLetterReason.CrossingUnauthorable:
+    case wasm.ViewDeadLetterReason.CrossingUnauthorable:
       return 'crossingUnauthorable';
-    case wasm.DeadLetterReason.BinIndexStrandedMint:
+    case wasm.ViewDeadLetterReason.BinIndexStrandedMint:
       return 'binIndexStrandedMint';
-    case wasm.DeadLetterReason.TargetLinkedAcrossScopes:
+    case wasm.ViewDeadLetterReason.TargetLinkedAcrossScopes:
       return 'targetLinkedAcrossScopes';
-    case wasm.DeadLetterReason.GraftedScopeVaultSurface:
+    case wasm.ViewDeadLetterReason.GraftedScopeVaultSurface:
       return 'graftedScopeVaultSurface';
     default:
-      // Fail closed: an unmapped (or absent) value means a JS/WASM version
-      // mismatch, not a dead letter safe to report without its reason.
+      // Fail closed: an unmapped value means a JS/WASM version mismatch, not a
+      // dead letter safe to report without its reason.
       throw new Error(`unknown WASM dead letter reason value: ${reason}`);
   }
 }
@@ -282,77 +254,84 @@ function nodeKindFrom(wasm: EngineWasm, kind: number): NodeKind {
   }
 }
 
-export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
-  switch (event.kind) {
-    case 'snapshotUpdated':
-      return { kind: 'snapshotUpdated' };
-    case 'stalenessChanged':
-      return {
-        kind: 'stalenessChanged',
-        staleness: staleness(wasm, event.staleness ?? wasm.Staleness.Fresh),
-      };
-    case 'withheldUpdateEscalation':
-      return { kind: 'withheldUpdateEscalation', ipnsName: event.ipnsName ?? new Uint8Array() };
-    case 'deadLetter':
-      return {
-        kind: 'deadLetter',
-        opId: event.opId ?? 0n,
-        reason: deadLetterReason(wasm, event.deadLetterReason),
-      };
-    case 'parkedWritesUnreadable':
-      return { kind: 'parkedWritesUnreadable' };
-    case 'registryDebtUnjournaled':
-      return { kind: 'registryDebtUnjournaled' };
-    case 'granteeNamesCleared':
-      return { kind: 'granteeNamesCleared' };
-    case 'conversionRecordUnreadable':
-      return { kind: 'conversionRecordUnreadable' };
-    case 'refusedClaimDropped':
-      return { kind: 'refusedClaimDropped' };
-    case 'vaultSettingsChanged':
-      return { kind: 'vaultSettingsChanged' };
-    case 'attributableAbuse':
-      return { kind: 'attributableAbuse', description: event.description ?? '' };
-    case 'renewalFailed':
-      return {
-        kind: 'renewalFailed',
-        routingKey: event.routingKey ?? '',
-        detail: event.detail ?? '',
-      };
-    case 'vaultUnprovisioned':
-      return {
-        kind: 'vaultUnprovisioned',
-        retryable: event.retryable ?? false,
-        detail: event.detail ?? '',
-      };
-    case 'scopeExitCutOwed':
-      return {
-        kind: 'scopeExitCutOwed',
-        scopeRoot: event.scopeRoot ?? new Uint8Array(),
-        detail: event.detail ?? '',
-      };
-    case 'granteeJoined':
-      return {
-        kind: 'granteeJoined',
-        scopeRoot: event.scopeRoot ?? new Uint8Array(),
-        name: event.name ?? '',
-        fingerprint: event.fingerprint ?? '',
-      };
-    case 'opProgress':
-      return {
-        kind: 'opProgress',
-        opId: event.opId ?? null,
-        node: event.node ?? new Uint8Array(),
-        phase: opPhase(wasm, event.phase),
-        blocksConfirmed: event.blocksConfirmed ?? null,
-        blocksTotal: event.blocksTotal ?? null,
-        error: event.error ?? null,
-      };
-    default:
-      // Fail closed: an unmapped kind means a JS/WASM version mismatch, not a
-      // safe-to-ignore event (the event pump turns this throw into a fatal).
-      throw new Error(`unknown WASM event kind: ${event.kind}`);
+const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
+  snapshotUpdated: true,
+  stalenessChanged: true,
+  withheldUpdateEscalation: true,
+  deadLetter: true,
+  parkedWritesUnreadable: true,
+  registryDebtUnjournaled: true,
+  granteeNamesCleared: true,
+  conversionRecordUnreadable: true,
+  refusedClaimDropped: true,
+  attributableAbuse: true,
+  renewalFailed: true,
+  vaultUnprovisioned: true,
+  vaultSettingsChanged: true,
+  scopeExitCutOwed: true,
+  granteeJoined: true,
+  opProgress: true,
+};
+
+const STALENESS: Record<Staleness, true> = {
+  fresh: true,
+  reconciling: true,
+  stale: true,
+  offline: true,
+};
+
+const OP_PHASES: Record<OpProgressPhase, true> = {
+  downloadStarted: true,
+  downloadCompleted: true,
+  downloadFailed: true,
+  uploadStarted: true,
+  uploadProgress: true,
+  uploadCompleted: true,
+  uploadFailed: true,
+  uploadCancelled: true,
+  externalPinFailed: true,
+};
+
+const DEAD_LETTER_REASONS: Record<DeadLetterReason, true> = {
+  targetGone: true,
+  destinationGone: true,
+  destinationInsideTarget: true,
+  suffixExhausted: true,
+  undecodable: true,
+  payloadRefused: true,
+  attemptsExhausted: true,
+  contentUnrecoverable: true,
+  baseSuperseded: true,
+  headTooLarge: true,
+  preservationRefused: true,
+  alreadyPublished: true,
+  targetStillLinked: true,
+  scopeRootNotResealable: true,
+  binIndexFull: true,
+  crossingUnauthorable: true,
+  binIndexStrandedMint: true,
+  targetLinkedAcrossScopes: true,
+  graftedScopeVaultSurface: true,
+};
+
+function known(values: Record<string, true>, value: unknown, what: string): void {
+  if (typeof value !== 'string' || !Object.hasOwn(values, value)) {
+    throw new Error(`unknown WASM ${what}: ${String(value)}`);
   }
+}
+
+/**
+ * Passes an engine event through once its kind and each enum value in it are
+ * ones this build knows. An unknown value means a JS/WASM version mismatch, not
+ * a safe-to-ignore event, so the read fails closed (the event pump turns the
+ * throw into a fatal).
+ */
+export function readEvent(event: EventDescriptor): EventDescriptor {
+  known(EVENT_KINDS, event.kind, 'event kind');
+  if (event.kind === 'stalenessChanged') known(STALENESS, event.staleness, 'staleness');
+  if (event.kind === 'deadLetter') known(DEAD_LETTER_REASONS, event.reason, 'dead letter reason');
+  if (event.kind === 'opProgress') known(OP_PHASES, event.phase, 'op phase');
+  return event;
 }
 
 /** Reads a wasm-bindgen `SnapshotView`'s key-free getters into a descriptor. */

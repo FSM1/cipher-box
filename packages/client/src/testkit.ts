@@ -55,19 +55,8 @@ export const fakeWasmEnums = {
   BinOriginKind: { Root: 0, Folder: 1, Gone: 2 },
   ReclaimStallReason: { NodeUnreadable: 0, TargetStillLive: 1, TargetUnexpandable: 2 },
   AuthMethodKind: { Identity: 0, Wallet: 1, Test: 2, Unknown: 3 },
-  Staleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
-  OpPhase: {
-    DownloadStarted: 0,
-    DownloadCompleted: 1,
-    DownloadFailed: 2,
-    UploadStarted: 3,
-    UploadProgress: 4,
-    UploadCompleted: 5,
-    UploadFailed: 6,
-    UploadCancelled: 7,
-    ExternalPinFailed: 8,
-  },
-  DeadLetterReason: {
+  ViewStaleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
+  ViewDeadLetterReason: {
     TargetGone: 0,
     DestinationGone: 1,
     DestinationInsideTarget: 2,

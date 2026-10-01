@@ -79,8 +79,7 @@ const progress = (opId: bigint, confirmed: number, total: number): EventDescript
   opId,
   node: new Uint8Array(16),
   phase: 'uploadProgress',
-  blocksConfirmed: confirmed,
-  blocksTotal: total,
+  progress: { confirmed, total },
   error: null,
 });
 
@@ -205,8 +204,7 @@ describe('reporting what the engine says about the op', () => {
         opId: 1n,
         node: new Uint8Array(16),
         phase: 'uploadFailed',
-        blocksConfirmed: null,
-        blocksTotal: null,
+        progress: null,
         error: 'no reachable pin provider',
       })
     );
@@ -246,8 +244,7 @@ describe('reporting what the engine says about the op', () => {
         opId: 1n,
         node: new Uint8Array(16),
         phase: 'uploadCompleted',
-        blocksConfirmed: 2,
-        blocksTotal: 2,
+        progress: { confirmed: 2, total: 2 },
         error: null,
       })
     );
@@ -275,8 +272,7 @@ describe('reporting what the engine says about the op', () => {
         opId: 1n,
         node: new Uint8Array(16),
         phase: 'uploadCompleted',
-        blocksConfirmed: 2,
-        blocksTotal: 2,
+        progress: { confirmed: 2, total: 2 },
         error: null,
       })
     );
@@ -334,8 +330,7 @@ describe('cancelling', () => {
         opId: 1n,
         node: new Uint8Array(16),
         phase: 'uploadCancelled',
-        blocksConfirmed: null,
-        blocksTotal: null,
+        progress: null,
         error: null,
       })
     );
@@ -359,8 +354,7 @@ describe('cancelling', () => {
         opId: 1n,
         node: new Uint8Array(16),
         phase: 'uploadCancelled',
-        blocksConfirmed: null,
-        blocksTotal: null,
+        progress: null,
         error: null,
       })
     );
@@ -388,8 +382,7 @@ describe('cancelling', () => {
         opId: 1n,
         node: new Uint8Array(16),
         phase: 'uploadCancelled',
-        blocksConfirmed: null,
-        blocksTotal: null,
+        progress: null,
         error: null,
       })
     );

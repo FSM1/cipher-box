@@ -281,7 +281,7 @@ fn check_signature(signature_hex: &str) -> Result<(), MalformedDeviceField> {
 }
 
 /// The API's own ceilings on the two free-text fields a registration carries.
-const MAX_IDENTITY_TOKEN_CHARS: usize = 4096;
+pub const MAX_IDENTITY_TOKEN_CHARS: usize = 4096;
 const MAX_LABEL_CHARS: usize = 64;
 
 /// How many rendezvous a host is ever offered at once. The list is relayed, so

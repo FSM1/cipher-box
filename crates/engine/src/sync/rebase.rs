@@ -118,6 +118,8 @@ pub enum DropReason {
 /// [`Self::ContentUnrecoverable`] keeps the op's staged content, which is what
 /// makes it a dead letter rather than a drop (CONTEXT.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum DeadLetterReason {
     /// The op's target/parent is absent from gate-passing state and cannot be
     /// recreated — its scope was revoked (or the node hard-deleted) while the

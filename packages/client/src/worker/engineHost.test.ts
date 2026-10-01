@@ -64,7 +64,7 @@ const emptyView = {
   ancestors: [],
   deadLetters: [],
   retainedRecords: 0,
-  staleness: fakeWasmEnums.Staleness.Fresh,
+  staleness: fakeWasmEnums.ViewStaleness.Fresh,
 };
 
 /**

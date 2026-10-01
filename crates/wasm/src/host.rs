@@ -30,7 +30,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 use zeroize::Zeroizing;
 
-use crate::boundary::{decode_command, encode_outcome};
+use crate::boundary::{decode_command, encode_event, encode_outcome};
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
     JsFloorStoreSeam, JsHttpSeam, JsRecordTransportSeam, JsSchedulerSeam, JsSnapshotCacheSeam,
@@ -38,8 +38,8 @@ use crate::seams_bridge::{
     StagingStoreAdapter,
 };
 use crate::{
-    AuthMethod, BinView, Event, InvitePreview, NodeId, OpenedStream, PendingApproval,
-    ReceivedShareRow, RegisteredDevice, SharingView, SnapshotView, VaultStorageView, VersionEntry,
+    AuthMethod, BinView, InvitePreview, NodeId, OpenedStream, PendingApproval, ReceivedShareRow,
+    RegisteredDevice, SharingView, SnapshotView, VaultStorageView, VersionEntry,
 };
 
 /// The largest integer a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
@@ -650,13 +650,13 @@ impl EngineHandle {
 
     /// Awaits the next event on the one-way stream, or resolves to `undefined`
     /// once the engine is gone. At most one call may be outstanding.
-    #[wasm_bindgen(js_name = nextEvent)]
+    #[wasm_bindgen(js_name = nextEvent, unchecked_return_type = "Promise<Event | undefined>")]
     pub fn next_event(&self) -> Promise {
         let events = self.events.clone();
         future_to_promise(async move {
             let next = events.lock().await.next().await;
             Ok(match next {
-                Some(event) => Event::from_facade(event).into(),
+                Some(event) => encode_event(&event)?.into(),
                 None => JsValue::UNDEFINED,
             })
         })
@@ -888,7 +888,7 @@ mod tests {
     }
 
     /// Hosts switch on `kind`, so each arm's discriminant is a stable string
-    /// literal — the marshalling `Event::kind` already uses.
+    /// literal, the same `kind` tag the events carry.
     #[wasm_bindgen_test]
     fn each_outcome_kind_crosses_as_its_stable_name() {
         for (outcome, name) in [

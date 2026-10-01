@@ -5,6 +5,7 @@
 #![cfg(all(target_family = "wasm", target_os = "unknown"))]
 
 use cipherbox_engine::content::{ByoBearer, ByoKind};
+use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
 use cipherbox_engine::facade::{Command, NodeId, NodeKind, Permission};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_engine::seams::{OpId, UnixMillis};
@@ -18,6 +19,8 @@ use wasm_bindgen_test::wasm_bindgen_test;
 
 const BEARER: &[u8] = b"s3cret-token";
 const FRAGMENT: &str = "ZnJhZ21lbnQtdGV4dA";
+/// Stands in for an identity token; nothing verifies it here.
+const IDENTITY_TOKEN: &str = "aGVhZGVy.cGF5bG9hZA.c2ln";
 
 fn object(fields: &[(&str, JsValue)]) -> JsValue {
     let out = Object::new();
@@ -439,6 +442,57 @@ fn the_plain_serde_decode_refuses_a_real_fragment() {
         ("name", text("")),
     ]);
     assert!(serde_wasm_bindgen::from_value::<Command>(claim).is_err());
+}
+
+fn registration(identity_token: JsValue) -> JsValue {
+    object(&[
+        ("kind", text("registerDevice")),
+        ("publicKey", text("ab")),
+        ("signature", text("cd")),
+        ("identityToken", identity_token),
+        ("label", text("Laptop")),
+    ])
+}
+
+#[wasm_bindgen_test]
+fn a_device_registration_takes_its_identity_token_verbatim() {
+    match decode_command(&registration(text(IDENTITY_TOKEN))).unwrap() {
+        Command::RegisterDevice {
+            public_key,
+            signature,
+            identity_token,
+            label,
+        } => {
+            assert!(identity_token.as_str() == IDENTITY_TOKEN);
+            assert_eq!(public_key, "ab");
+            assert_eq!(signature, "cd");
+            assert_eq!(label.as_deref(), Some("Laptop"));
+        }
+        other => panic!("decoded {other:?}"),
+    }
+}
+
+/// An identity token past what the engine could accept, or one that is not
+/// text, is refused before it is copied into linear memory.
+#[wasm_bindgen_test]
+fn an_identity_token_past_the_bound_or_not_text_is_refused() {
+    let at_bound = registration(text(&"A".repeat(2 * MAX_IDENTITY_TOKEN_CHARS)));
+    assert!(decode_command(&at_bound).is_ok());
+
+    let past = registration(text(&"A".repeat(2 * MAX_IDENTITY_TOKEN_CHARS + 1)));
+    assert!(decode_command(&past).is_err());
+
+    assert!(decode_command(&registration(bytes(IDENTITY_TOKEN.as_bytes()))).is_err());
+    assert!(decode_command(&registration(JsValue::NULL)).is_err());
+}
+
+/// As for a fragment: the serde decode takes only the empty placeholder, so a
+/// registration cannot reach the engine by a path that buffers its identity
+/// token and frees it without a wipe.
+#[wasm_bindgen_test]
+fn the_plain_serde_decode_refuses_a_real_identity_token() {
+    let command = registration(text(IDENTITY_TOKEN));
+    assert!(serde_wasm_bindgen::from_value::<Command>(command).is_err());
 }
 
 /// The bearer is three-state: a transferred buffer sets it, `"keep"` keeps the
