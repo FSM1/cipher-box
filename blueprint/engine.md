@@ -269,7 +269,7 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    rejects the **whole record** as a trust violation (FSM1/cipher-box-next#39 D3).
 4. **Sequence** — strictly newer than the durable per-name floor.
 5. **Epoch** — epoch tag at or above the scope's durable epoch floor. An
-   interior record below the floor is opened only by the three readers that the
+   interior record below the floor is opened only by the four readers that the
    "sweep" section names.
 6. **Unseal** — success required; core's trust-violation error class carries
    through fail-closed.
@@ -910,7 +910,7 @@ Idempotent lazy-wave advancement over a scope's **interior nodes** — not its
 descendant scope roots, which the cascade rotates eagerly (FSM1/cipher-box-next#26 D2,
 [ADR 0003](../decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
 The work-list is the epoch-lag predicate: an interior node whose envelope epoch
-is behind its scope's current epoch. Reading one is one of exactly **three**
+is behind its scope's current epoch. Reading one is one of exactly **four**
 paths that run the sequence floor without the read-epoch floor. The second is
 the drain's re-author of a lagging interior node, which carries the same wave
 for an ordinary write
@@ -918,13 +918,15 @@ for an ordinary write
 The third is the child resolve's read of a lagging interior node, which serves
 a member read before the wave arrives
 ([ADR 0021](../decisions/0021-a-read-opens-an-epoch-lagged-interior-record.md)).
+The fourth is the name wave's read of a lagging interior node, which it moves
+forward at the root's epoch (ADR 0064).
 A lagging node sits below that floor by construction, and carries no seed,
 grant blob or commitment for the stage to protect; its body opens under the
 seed the scope's history-link ratchet walks back to. The re-seal relabels the
 node's epoch tag: the tag is a key-selection label that names the epoch whose
 read seed opens the body, and no reader treats it as authorship
 ([ADR 0017](../decisions/0017-the-epoch-tag-is-a-key-selection-label-not-an-attestation.md)).
-All three paths hold the same conditions: the record carries no grant section,
+All four paths hold the same conditions: the record carries no grant section,
 the read moves no read-epoch floor, the sequence bar is the replay bar, and the
 epoch is one the scope root's own ratchet reaches. A node the retained
 window no longer reaches is readable by nobody: it is reported unreachable and
@@ -968,8 +970,11 @@ and can derive no name, so the wave rewrites each `ChildRef.ipnsName` to the
 child's freshly derived name and re-seals that parent's read body under its
 unchanged read key at its unchanged read epoch; without it they reach the new
 root and stop ([ADR 0004](../decisions/0004-read-body-child-names-on-the-name-wave.md)).
+A node that lags the root's read epoch is the exception: the wave opens it under
+the root's ratchet and re-seals it at the root's epoch under the current read
+key, so the move also carries the lazy wave (ADR 0064 D2).
 The republish is therefore **not** byte-stable, and the wave touches read-plane
-_metadata_ while never re-keying it — the **read** override seed, read keys and
+_metadata_ while re-keying only a lagging node — the **read** override seed and
 `minReadEpoch` still carry verbatim, and the read-epoch floor never moves.
 
 The wave carries one envelope epoch across the whole subtree, so every republish
