@@ -523,8 +523,11 @@ class Web3AuthSession implements WebCoreKitSession {
    * takes the wrapping key with it.
    */
   private async clearStore(): Promise<void> {
-    await this.store.removeItem(ACCOUNT_EMAIL_KEY);
-    await this.store.purge(this.coreKit._storageKey);
+    try {
+      await this.store.removeItem(ACCOUNT_EMAIL_KEY);
+    } finally {
+      await this.store.purge(this.coreKit._storageKey);
+    }
   }
 
   /**

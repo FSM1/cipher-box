@@ -103,14 +103,14 @@ export class FilesPage {
   }
 
   /** Walks the trail back to the vault root. */
-  async toRoot(options: { timeout?: number } = {}): Promise<void> {
+  async toRoot(): Promise<void> {
     await this.page.getByRole('button', { name: 'root', exact: true }).click();
-    await this.at('root', options);
+    await this.at('root');
   }
 
   /** Waits until the trail names `name` as the current folder. */
-  async at(name: string, options: { timeout?: number } = {}): Promise<void> {
-    await expect(this.breadcrumbs.locator('[aria-current="page"]')).toHaveText(name, options);
+  async at(name: string): Promise<void> {
+    await expect(this.breadcrumbs.locator('[aria-current="page"]')).toHaveText(name);
   }
 
   /**

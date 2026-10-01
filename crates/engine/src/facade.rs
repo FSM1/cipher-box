@@ -4837,6 +4837,11 @@ pub const MAX_FOCUS_FOLDERS: usize = 8;
 /// single route can spend on the record plane.
 pub const MAX_LOCATE_FOLDERS: usize = 256;
 
+/// How long a route waits for the session's first boundary walk. The route
+/// holds the host's shared lock meanwhile, so the bound caps how long it can
+/// hold a write, and every read queued behind that write, off the engine.
+const LOCATE_WALK_WAIT: core::time::Duration = core::time::Duration::from_secs(10);
+
 pub use crate::grants::MAX_CONTACT_CODE_BYTES;
 
 /// The engine's live read streams, bounded by [`MAX_OPEN_STREAMS`].
@@ -9109,9 +9114,26 @@ where {
     pub async fn set_focus(&self, node: Option<NodeId>) -> Result<(), EngineError> {
         self.live_session()?;
         self.state.focus.borrow_mut().open_folder = node;
+        if let Some(folder) = node {
+            self.locate_folder(folder).await;
+        }
         self.refresh_focus_on_access(self.seams.scheduler.now(), node)
             .await;
         Ok(())
+    }
+
+    /// How a navigation leg settles at `now`: the tick leg's settle.
+    fn settle_leg(&self, now: UnixMillis) -> impl Fn(&[NodeId], FolderRefreshReport) + '_ {
+        move |nodes, report| {
+            settle_focus_leg(
+                &self.state.observed_unlinks,
+                &self.state.focus_refreshed,
+                &self.events,
+                nodes,
+                report,
+                now,
+            );
+        }
     }
 
     /// Refresh the focus window's folders that are past the on-access staleness
@@ -9121,19 +9143,7 @@ where {
     /// same navigation and paints its size within one resolve round trip rather
     /// than a poll cadence later.
     async fn refresh_focus_on_access(&self, now: UnixMillis, folder: Option<NodeId>) {
-        let settle = |nodes: &[NodeId], report| {
-            settle_focus_leg(
-                &self.state.observed_unlinks,
-                &self.state.focus_refreshed,
-                &self.events,
-                nodes,
-                report,
-                now,
-            );
-        };
-        if let Some(folder) = folder {
-            self.locate_folder(folder, now, &settle).await;
-        }
+        let settle = self.settle_leg(now);
         // The rows wait for the first pass ([`SessionState::boundary_walk_landed`]).
         if !self.state.boundary_walk_landed.get() {
             if let Some(folder) = folder {
@@ -9189,25 +9199,19 @@ where {
     /// so a route that a reload restores can name a folder no listing reached.
     ///
     /// Each level reads under the scope the boundary walk names for it, so a
-    /// navigation that lands before the first walk waits for a pass to land one.
-    async fn locate_folder(
-        &self,
-        target: NodeId,
-        now: UnixMillis,
-        settle: &impl Fn(&[NodeId], FolderRefreshReport),
-    ) {
-        if self.state.snapshot.borrow().contains(target) {
+    /// navigation that lands before the first walk waits for one
+    /// ([`Self::boundary_walk_settled`]). A walk that missed is not repeated for
+    /// the same target until the base moves.
+    async fn locate_folder(&self, target: NodeId) {
+        if self.state.snapshot.borrow().contains(target) || !self.boundary_walk_settled().await {
             return;
         }
-        if !self.state.boundary_walk_landed.get() {
-            let Ok(Some(pass)) = self.file_forced_pass() else {
-                return;
-            };
-            let _ = pass.landed().await;
-            if !self.state.boundary_walk_landed.get() {
-                return;
-            }
+        let missed = (target, self.state.snapshot.borrow().links().len());
+        if self.state.locate_miss.get() == Some(missed) {
+            return;
         }
+        let now = self.seams.scheduler.now();
+        let settle = self.settle_leg(now);
         let root = self.state.snapshot.borrow().root;
         let mut seen = BTreeSet::from([root]);
         let mut level = vec![root];
@@ -9237,10 +9241,37 @@ where {
                     })
                     .collect()
             };
-            self.navigation_legs(root, unlisted, NodeKind::Folder, now, settle)
+            self.navigation_legs(root, unlisted, NodeKind::Folder, now, &settle)
                 .await;
             level = next;
         }
+        let base = self.state.snapshot.borrow();
+        if !base.contains(target) {
+            self.state
+                .locate_miss
+                .set(Some((target, base.links().len())));
+        }
+    }
+
+    /// Whether this session's boundary walk has landed, waiting up to
+    /// [`LOCATE_WALK_WAIT`] for the first one: the walk alone, never the rest of
+    /// the pass that carries it. Only a running sync loop lands a walk, and a
+    /// rejected walk refuses every retry alike, so neither is waited on.
+    async fn boundary_walk_settled(&self) -> bool {
+        if self.state.boundary_walk_landed.get() {
+            return true;
+        }
+        if self.state.boundary_walk_rejected.get() {
+            return false;
+        }
+        let landing = self.state.boundary_walk_landing();
+        // Brings the first pass forward; its verdict is not this route's to wait on.
+        let Ok(Some(_pass)) = self.file_forced_pass() else {
+            return false;
+        };
+        let timeout = core::pin::pin!(self.seams.scheduler.sleep(LOCATE_WALK_WAIT));
+        futures_util::future::select(landing, timeout).await;
+        self.state.boundary_walk_landed.get()
     }
 
     /// The on-access file leg over the queued rows. A row leaves the queue once
@@ -19237,6 +19268,72 @@ mod focus_access_tests {
             Some(0),
         );
         engine
+    }
+
+    /// A started engine whose first boundary walk has not landed, and its clock.
+    fn engine_before_the_walk() -> (Engine<FakeSeamTypes>, VirtualScheduler) {
+        let (mut engine, clock) = engine();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
+        engine.state.boundary_walk_landed.set(false);
+        // A running sync loop, whose pass is what lands a walk.
+        drop(engine.tick_loop_spawner.borrow_mut().take());
+        engine.manual_refresh.arm();
+        (engine, clock)
+    }
+
+    /// A folder no listing reached; the route to it must locate it.
+    const UNLISTED: NodeId = NodeId([0xEE; 16]);
+
+    fn poll_once<F: Future>(future: Pin<&mut F>) -> core::task::Poll<F::Output> {
+        future.poll(&mut core::task::Context::from_waker(
+            core::task::Waker::noop(),
+        ))
+    }
+
+    #[test]
+    fn a_route_resolves_when_the_walk_lands_with_no_pass_ending() {
+        let (engine, _clock) = engine_before_the_walk();
+        let mut route = Box::pin(engine.set_focus(Some(UNLISTED)));
+        assert!(
+            poll_once(route.as_mut()).is_pending(),
+            "the route waits for the walk"
+        );
+
+        // The pass's walk leg lands; nothing else of a pass runs.
+        engine.state.land_boundary_walk();
+
+        assert_eq!(poll_once(route.as_mut()), core::task::Poll::Ready(Ok(())));
+    }
+
+    #[test]
+    fn a_route_stops_waiting_for_the_walk_at_its_bound() {
+        let (engine, clock) = engine_before_the_walk();
+        let mut route = Box::pin(engine.set_focus(Some(UNLISTED)));
+        assert!(poll_once(route.as_mut()).is_pending());
+
+        clock.advance(LOCATE_WALK_WAIT);
+
+        assert_eq!(poll_once(route.as_mut()), core::task::Poll::Ready(Ok(())));
+    }
+
+    #[test]
+    fn a_route_does_not_wait_on_a_walk_no_sync_loop_will_run() {
+        let (mut engine, _clock) = engine();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
+
+        let mut route = Box::pin(engine.set_focus(Some(UNLISTED)));
+
+        assert_eq!(poll_once(route.as_mut()), core::task::Poll::Ready(Ok(())));
+    }
+
+    #[test]
+    fn a_route_does_not_wait_on_a_walk_a_rejection_refuses() {
+        let (engine, _clock) = engine_before_the_walk();
+        engine.state.boundary_walk_rejected.set(true);
+
+        let mut route = Box::pin(engine.set_focus(Some(UNLISTED)));
+
+        assert_eq!(poll_once(route.as_mut()), core::task::Poll::Ready(Ok(())));
     }
 
     #[test]

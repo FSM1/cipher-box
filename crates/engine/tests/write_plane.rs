@@ -8145,6 +8145,38 @@ fn a_focus_before_the_first_pass_lists_its_way_down_once_the_walk_lands() {
     );
 }
 
+/// A route to an id the vault does not hold (a deleted folder in a bookmark)
+/// lists the vault once. A second route to it lists nothing while the base
+/// stands as that walk left it.
+#[test]
+fn a_route_to_an_id_the_vault_lacks_lists_the_vault_once() {
+    let DeepCreate {
+        world,
+        mut engine_b,
+        photos,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    let photos_name = block_on(engine_b.snapshot(ROOT))
+        .unwrap()
+        .children
+        .into_iter()
+        .find(|child| child.id == photos)
+        .and_then(|child| child.ipns_name)
+        .expect("the root lists photos by name");
+    let gone = NodeId([0xEE; 16]);
+
+    block_on(engine_b.command(Command::SetFocus { node: Some(gone) })).unwrap();
+    let listed = world.record_store.get_count(&photos_name);
+    assert!(listed > 0, "the first route lists the vault");
+
+    world
+        .scheduler
+        .advance(core::time::Duration::from_secs(3600));
+    block_on(engine_b.command(Command::SetFocus { node: Some(gone) })).unwrap();
+
+    assert_eq!(world.record_store.get_count(&photos_name), listed);
+}
+
 /// The focus refresh is fail-closed on every binding the child gate holds. Each
 /// planted record is strictly newer and otherwise well-formed; only the bent
 /// binding stops it, and last-known-good stands through all three.

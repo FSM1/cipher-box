@@ -10,9 +10,6 @@ import { mediaFixtures, mediaPath } from './media';
 
 const FOLDERS = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot'];
 
-/** A cold resolve on the deployed record plane has a tail of about 60 s (blueprint/engine.md "Resolve"). */
-const POST_RELOAD_NAVIGATION_MS = 60_000;
-
 test('a six-folder tree survives a reload', async ({ page }) => {
   const files = new FilesPage(page);
   const image = mediaFixtures().image;
@@ -57,7 +54,7 @@ test('a six-folder tree survives a reload', async ({ page }) => {
 
   await files.open('delta');
   await expect(files.row('charlie')).toBeVisible();
-  await files.toRoot({ timeout: POST_RELOAD_NAVIGATION_MS });
+  await files.toRoot();
 
   await files.open('alpha');
   await expect(files.row(image.name)).toBeVisible();

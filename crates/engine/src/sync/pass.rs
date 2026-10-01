@@ -591,7 +591,7 @@ where
                     walked.unproved,
                 );
                 descendants = walked.proved;
-                state.boundary_walk_landed.set(true);
+                state.land_boundary_walk();
             }
             state
                 .scope_roots_walked
