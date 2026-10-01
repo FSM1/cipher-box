@@ -15,6 +15,7 @@ use core::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::seal::OwnerLocalKind;
+use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
@@ -39,9 +40,6 @@ const FORMAT_V1: u8 = 1;
 /// before its first publish (ADR 0063 D2).
 pub const MAX_OWED_ENTRIES: usize = 64;
 
-/// The length of a SEC1-compressed identity public key.
-const IDENTITY_PK_LEN: usize = 33;
-
 /// One step an owner rotation still owes, in the order every command runs
 /// them: no command owes both an interior move and a read cut, so one rank
 /// orders every entry.
@@ -65,7 +63,7 @@ pub enum OwedStep {
     /// write-scope cut landed.
     DeliverGrant {
         /// The recipient's SEC1 identity public key.
-        recipient_identity_pk: [u8; IDENTITY_PK_LEN],
+        recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
         /// Whether the grant is at write.
         write: bool,
     },
@@ -79,16 +77,6 @@ impl OwedStep {
             Self::ReadCut => 2,
             Self::WriteCut { .. } => 3,
             Self::DeliverGrant { .. } => 4,
-        }
-    }
-
-    /// A key-material-free name for the step.
-    pub fn check(&self) -> &'static str {
-        match self {
-            Self::InteriorMove { .. } => "owed-interior-move",
-            Self::ReadCut => "owed-read-cut",
-            Self::WriteCut { .. } => "owed-write-cut",
-            Self::DeliverGrant { .. } => "owed-grant-delivery",
         }
     }
 }
@@ -205,8 +193,23 @@ impl<St: StagingStore> OwedRotation<'_, St> {
     /// The record, read from the store the first time. A blob this identity
     /// does not open reads as no record, as every bookkeeping kind does.
     pub async fn load(&self) -> SeamResult<OwedRecord> {
+        self.read(OwedRecord::clone).await
+    }
+
+    /// The entry at `scope`, if one stands.
+    pub async fn entry(&self, scope: NodeId) -> SeamResult<Option<OwedEntry>> {
+        self.read(|record| record.get(&scope).cloned()).await
+    }
+
+    /// The scopes the record names.
+    pub async fn scopes(&self) -> SeamResult<Vec<NodeId>> {
+        self.read(|record| record.keys().copied().collect()).await
+    }
+
+    /// `view` over the record, loading it into the cell the first time.
+    async fn read<R>(&self, view: impl FnOnce(&OwedRecord) -> R) -> SeamResult<R> {
         if let Some(record) = self.cell.record.borrow().as_ref() {
-            return Ok(record.clone());
+            return Ok(view(record));
         }
         let stored = self
             .staging
@@ -217,12 +220,7 @@ impl<St: StagingStore> OwedRotation<'_, St> {
             .unwrap_or_default();
         // A command may have written the cell during the read.
         let mut cell = self.cell.record.borrow_mut();
-        Ok(cell.get_or_insert(record).clone())
-    }
-
-    /// The entry at `scope`, if one stands.
-    pub async fn entry(&self, scope: NodeId) -> SeamResult<Option<OwedEntry>> {
-        Ok(self.load().await?.remove(&scope))
+        Ok(view(cell.get_or_insert(record)))
     }
 
     /// Write `entry` at `scope`, durably. Refused while an entry stands there.
@@ -253,7 +251,7 @@ impl<St: StagingStore> OwedRotation<'_, St> {
     pub async fn cancel_delivery(
         &self,
         scope: NodeId,
-        recipient: &[u8; IDENTITY_PK_LEN],
+        recipient: &[u8; IDENTITY_PUBLIC_LEN],
     ) -> Result<(), OwedRecordError> {
         let mut record = self.load().await.map_err(OwedRecordError::Store)?;
         let Some(entry) = record.get_mut(&scope) else {
@@ -469,7 +467,7 @@ mod tests {
                 },
                 OwedStep::WriteCut { write_epoch: 2 },
                 OwedStep::DeliverGrant {
-                    recipient_identity_pk: [2; IDENTITY_PK_LEN],
+                    recipient_identity_pk: [2; IDENTITY_PUBLIC_LEN],
                     write: true,
                 },
             ],
@@ -480,7 +478,6 @@ mod tests {
         OwedRecord::from([(node(1), revoke()), (node(2), write_grant())])
     }
 
-    /// What one session sealed is what the next one re-drives.
     /// A second driver is refused while the first holds the scope, and the
     /// refusal leaves the first driver's claim in place.
     #[test]
@@ -500,6 +497,7 @@ mod tests {
         );
     }
 
+    /// What one session sealed is what the next one re-drives.
     #[test]
     fn a_sealed_record_opens_as_the_entries_it_named() {
         let entropy = RefCell::new(SeededEntropy::new(3));

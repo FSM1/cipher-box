@@ -340,15 +340,15 @@ where
         // Reported on every pass, a held one too: the boundary walk can name
         // an unfinished cut after the pass that closed the cycle.
         let owed = self.owed_scopes().await;
-        let underived = owed.as_ref().map_or_else(
-            |_| Vec::new(),
-            |owed| {
+        let underived = owed
+            .as_ref()
+            .map(|owed| {
                 self.unfinished_write_cuts
                     .difference(owed)
                     .copied()
                     .collect()
-            },
-        );
+            })
+            .unwrap_or_default();
         if held {
             return WalkReport {
                 underived,
@@ -443,15 +443,15 @@ where
     /// The scopes this owner's owed rotation record names. A blob this
     /// identity does not open reads as no record.
     async fn owed_scopes(&self) -> SeamResult<BTreeSet<[u8; 16]>> {
-        let record = OwedRotation {
+        let scopes = OwedRotation {
             staging: self.staging,
             seal: self.seal,
             enc_secret: self.enc_secret,
             cell: self.owed,
         }
-        .load()
+        .scopes()
         .await?;
-        Ok(record.keys().map(|scope| scope.0).collect())
+        Ok(scopes.into_iter().map(|scope| scope.0).collect())
     }
 
     /// Admit `scope_id`'s root once per pass.

@@ -7299,9 +7299,16 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let identity_pk = recipient_identity(recipient_identity_public_key)?;
+        let keys = self.pass_keys(session)?;
+        let pass = self.conversion_pass(session, api, &keys);
         // The recipient being revoked is owed no share pointer any more.
-        self.cancel_owed_delivery(node, &identity_pk).await?;
-        let redriven = self.redrive_owed_at(node).await?;
+        pass.cancel_owed_delivery(node, &identity_pk).await?;
+        let sites = EngineSites {
+            engine: self,
+            session,
+            api,
+        };
+        let redriven = pass.redrive_scope(&sites, node).await?;
         let still_owed = redriven == Redriven::StillOwed;
         let book = self
             .contact_store(session)
@@ -7310,8 +7317,6 @@ where {
             .map_err(EngineError::from_contact_store)?;
         let contact_enc_pks = sole_enc_subkeys(&book, &identity_pk);
         let converted = self.convert_before_link_cut(session, api, node).await;
-        let keys = self.pass_keys(session)?;
-        let pass = self.conversion_pass(session, api, &keys);
         let pointers = self.scope_pointer_index(session);
         let held = RefCell::new(None);
         let admitting = RefCell::new(Vec::new());
@@ -7398,47 +7403,11 @@ where {
             Err(EngineError::MalformedInput { check })
                 if check == RevokeError::NotGranted.check() =>
             {
-                match redriven {
-                    Redriven::Finished => Ok(()),
-                    Redriven::StillOwed => self.owed_cut_stands(node).await,
-                    Redriven::NoEntry | Redriven::Dropped => {
-                        Err(EngineError::MalformedInput { check })
-                    }
-                }
+                pass.settle_shown(node, redriven, EngineError::MalformedInput { check })
+                    .await
             }
             cut => cut.map(|_| ()),
         }
-    }
-
-    /// `Ok` when the entry still owed at `node` is a cut's, which a command
-    /// whose own change already shows on the set may stand behind; otherwise
-    /// the retryable refusal.
-    async fn owed_cut_stands(&self, node: NodeId) -> Result<(), EngineError> {
-        match self.owed_entry(node).await? {
-            Some(entry) if entry.is_cut() => Ok(()),
-            _ => Err(EngineError::rotation_work_owed()),
-        }
-    }
-
-    /// Drop the share pointer owed to `identity_pk` at `node`.
-    async fn cancel_owed_delivery(
-        &self,
-        node: NodeId,
-        identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
-    ) -> Result<(), EngineError> {
-        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let keys = self.pass_keys(session)?;
-        let _hold = self
-            .state
-            .owed_rotation
-            .hold(node)
-            .ok_or_else(EngineError::rotation_work_owed)?;
-        self.conversion_pass(session, api, &keys)
-            .owed()
-            .cancel_delivery(node, identity_pk)
-            .await
-            .map_err(EngineError::from_owed_record)
     }
 
     /// Cut the tags `select` names out of the owner-signed committed set at
@@ -7515,31 +7484,52 @@ where {
             }
         }
         .map_err(EngineError::from_revoke)?;
-        self.drive_cut(
-            node,
-            target,
-            &scope_root_name,
-            &cut,
-            Some(current.write_epoch),
-        )
-        .await
-        .map(|_| ())
+        self.drive_owed_cut(node, target, &scope_root_name, &cut, current.write_epoch)
+            .await
+            .map(|_| ())
     }
 
     /// Drive an authorized cut at `target` through the planes it demands
     /// ([`rotate_on_cut`] over the production [`OwnerCutNet`]).
-    ///
-    /// `owes` carries the write epoch the cut was authorized at when the cut
-    /// is the first publish of its command: the cut then runs under an owed
-    /// rotation entry, and a step that stops after the cut set lands answers
-    /// `Ok(None)` (ADR 0063 D5).
     async fn drive_cut(
         &self,
         node: NodeId,
         target: &OwnerScope,
         scope_root_name: &IpnsName,
         cut: &RevokedCommittedSet,
-        owes: Option<u64>,
+    ) -> Result<CutRotationReport, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let keys = self.pass_keys(session)?;
+        let vault_pointer_signer = self
+            .vault_pointer_index
+            .get()
+            .map(|index| session.vault_pointer_signer(index));
+        let report = self
+            .conversion_pass(session, api, &keys)
+            .rotate_cut(
+                node,
+                target,
+                scope_root_name,
+                cut,
+                vault_pointer_signer.as_ref(),
+            )
+            .await?;
+        self.after_write_wave(node, target, &report).await?;
+        Ok(report)
+    }
+
+    /// [`Self::drive_cut`] for a cut that is the first publish of its command,
+    /// authorized at `write_epoch`: the cut runs under an owed rotation entry,
+    /// and a step that stops after the cut set lands answers `Ok(None)` (ADR
+    /// 0063 D5).
+    async fn drive_owed_cut(
+        &self,
+        node: NodeId,
+        target: &OwnerScope,
+        scope_root_name: &IpnsName,
+        cut: &RevokedCommittedSet,
+        write_epoch: u64,
     ) -> Result<Option<CutRotationReport>, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
@@ -7549,57 +7539,27 @@ where {
             .get()
             .map(|index| session.vault_pointer_signer(index));
         let pass = self.conversion_pass(session, api, &keys);
-        let _hold = match owes {
-            Some(_) => Some(
-                self.state
-                    .owed_rotation
-                    .hold(node)
-                    .ok_or_else(EngineError::rotation_work_owed)?,
-            ),
-            None => None,
-        };
-        let report = match owes {
-            Some(write_epoch) => {
-                let Some(report) = pass
-                    .rotate_owed_cut(
-                        node,
-                        target,
-                        scope_root_name,
-                        cut,
-                        vault_pointer_signer.as_ref(),
-                        write_epoch,
-                    )
-                    .await?
-                else {
-                    return Ok(None);
-                };
-                report
-            }
-            None => {
-                pass.rotate_cut(
-                    node,
-                    target,
-                    scope_root_name,
-                    cut,
-                    vault_pointer_signer.as_ref(),
-                )
-                .await?
-            }
+        let _hold = pass.hold_owed(node)?;
+        let Some(report) = pass
+            .rotate_owed_cut(
+                node,
+                target,
+                scope_root_name,
+                cut,
+                vault_pointer_signer.as_ref(),
+                write_epoch,
+            )
+            .await?
+        else {
+            return Ok(None);
         };
         if let Err(error) = self.after_write_wave(node, target, &report).await {
-            let Some(write_epoch) = owes else {
-                return Err(error);
-            };
-            let steps = vec![OwedStep::WriteCut {
-                write_epoch: write_epoch.saturating_add(1),
-            }];
+            let steps = vec![owed_rotation::owed_write_cut(write_epoch)?];
             pass.stop_owed(node, steps, OwedStop::of_post_step(&error))
                 .await;
             return Ok(None);
         }
-        if owes.is_some() {
-            let _ = pass.owed().clear(node).await;
-        }
+        let _ = pass.owed().clear(node).await;
         Ok(Some(report))
     }
 
@@ -7737,6 +7697,8 @@ where {
                 check: checks.vault_root,
             });
         }
+        let pass_keys = self.pass_keys(session)?;
+        let pass = self.conversion_pass(session, api, &pass_keys);
         // A share the owed entry already delivers is the same command, which
         // the re-drive finishes (ADR 0063 D5). The vouch is idempotent and is
         // the one step of the grant the entry does not carry.
@@ -7744,8 +7706,10 @@ where {
             ScopeShare::Contact { contact, .. } => {
                 let recipient = contact.identity_pk().to_sec1();
                 let write = permission == Permission::Write;
-                self.owed_entry(node)
-                    .await?
+                pass.owed()
+                    .entry(node)
+                    .await
+                    .map_err(EngineError::from_seam)?
                     .is_some_and(|entry| {
                         entry.steps.contains(&OwedStep::DeliverGrant {
                             recipient_identity_pk: recipient,
@@ -7756,7 +7720,12 @@ where {
             }
             ScopeShare::InviteLink { .. } => None,
         };
-        match (self.redrive_owed_at(node).await?, owed_delivery) {
+        let sites = EngineSites {
+            engine: self,
+            session,
+            api,
+        };
+        match (pass.redrive_scope(&sites, node).await?, owed_delivery) {
             (Redriven::Finished, Some(recipient)) => {
                 self.contact_store(session)
                     .vouch(&recipient)
@@ -7766,7 +7735,7 @@ where {
             }
             // The same share over a move the re-drive cannot prove: the share
             // runs again, and the mint resumes against a root that landed.
-            (Redriven::StillOwed, Some(_)) => self.clear_owed_move(node).await?,
+            (Redriven::StillOwed, Some(_)) => pass.clear_owed_move(node).await?,
             (Redriven::StillOwed, None) => return Err(EngineError::rotation_work_owed()),
             (Redriven::NoEntry | Redriven::Finished | Redriven::Dropped, _) => {}
         }
@@ -7896,8 +7865,6 @@ where {
             held: &self.state.held_records,
             payload_version: POINTER_PAYLOAD_VERSION,
         };
-        let keys_for_pass = self.pass_keys(session)?;
-        let pass = self.conversion_pass(session, api, &keys_for_pass);
         let mut owed_steps = vec![OwedStep::InteriorMove {
             left_scope: NodeId(parent.scope_id),
         }];
@@ -7913,11 +7880,7 @@ where {
                 write,
             });
         }
-        let _hold = self
-            .state
-            .owed_rotation
-            .hold(node)
-            .ok_or_else(EngineError::rotation_work_owed)?;
+        let _hold = pass.hold_owed(node)?;
         pass.owe(
             node,
             OwedEntry {
@@ -8049,7 +8012,7 @@ where {
         };
         // The interior move landed; the write-scope cut and the delivery stay
         // owed until each lands.
-        let mut owed_steps = owed_steps.split_off(1);
+        owed_steps.remove(0);
         let _ = pass.owed().advance_to(node, &owed_steps[0]).await;
         let scope_root_name = match mint_permission {
             Permission::Read => scope_root_name,
@@ -8058,19 +8021,18 @@ where {
                     &current,
                     ChildScopeRef::new(node.0, scope_root_name.as_str().as_bytes().to_vec()),
                 );
-                let moved = match self
-                    .resolve_owned_scope(&keys, minted, checks.index_lost_a_root)
-                    .await
-                {
-                    Ok(minted) => {
-                        self.moved_by_write_cut(node, &minted.target, &minted.current)
-                            .await
-                    }
-                    Err(e) => Err(e),
+                let moved = async {
+                    let minted = self
+                        .resolve_owned_scope(&keys, minted, checks.index_lost_a_root)
+                        .await?;
+                    let moved = self
+                        .moved_by_write_cut(node, &minted.target, &minted.current)
+                        .await?;
+                    parsed_scope_name(&moved.scope.ipns_name)
                 };
-                match moved.and_then(|moved| parsed_scope_name(&moved.scope.ipns_name)) {
+                match moved.await {
                     Ok(name) => {
-                        owed_steps = owed_steps.split_off(1);
+                        owed_steps.remove(0);
                         let _ = pass.owed().advance_to(node, &owed_steps[0]).await;
                         name
                     }
@@ -8101,56 +8063,6 @@ where {
             }
         }
         Ok(CommandOutcome::Done)
-    }
-
-    /// Clear the entry at `node` when it is a mint's that still owes its
-    /// interior move, so the same share runs again from the start.
-    async fn clear_owed_move(&self, node: NodeId) -> Result<(), EngineError> {
-        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let keys = self.pass_keys(session)?;
-        let _hold = self
-            .state
-            .owed_rotation
-            .hold(node)
-            .ok_or_else(EngineError::rotation_work_owed)?;
-        let pass = self.conversion_pass(session, api, &keys);
-        let owed = pass.owed();
-        match owed.entry(node).await.map_err(EngineError::from_seam)? {
-            Some(entry) if matches!(entry.steps.first(), Some(OwedStep::InteriorMove { .. })) => {
-                owed.clear(node)
-                    .await
-                    .map_err(EngineError::from_owed_record)
-            }
-            _ => Err(EngineError::rotation_work_owed()),
-        }
-    }
-
-    /// The owed rotation entry at `node`, if one stands.
-    async fn owed_entry(&self, node: NodeId) -> Result<Option<OwedEntry>, EngineError> {
-        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let keys = self.pass_keys(session)?;
-        self.conversion_pass(session, api, &keys)
-            .owed()
-            .entry(node)
-            .await
-            .map_err(EngineError::from_seam)
-    }
-
-    /// Re-drive the owed rotation entry at `node`, if one stands, before an
-    /// owner command acts there (ADR 0063 D5).
-    async fn redrive_owed_at(&self, node: NodeId) -> Result<Redriven, EngineError> {
-        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let keys = self.pass_keys(session)?;
-        let pass = self.conversion_pass(session, api, &keys);
-        let sites = EngineSites {
-            engine: self,
-            session,
-            api,
-        };
-        pass.redrive_scope(&sites, node).await
     }
 
     /// Refuse a share at a node this device already holds a read-epoch floor
@@ -8463,7 +8375,15 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let identity_pk = recipient_identity(recipient_identity_public_key)?;
         refuse_the_owner(session, &identity_pk)?;
-        let redriven = self.redrive_owed_at(node).await?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let pass_keys = self.pass_keys(session)?;
+        let pass = self.conversion_pass(session, api, &pass_keys);
+        let sites = EngineSites {
+            engine: self,
+            session,
+            api,
+        };
+        let redriven = pass.redrive_scope(&sites, node).await?;
         let keys = OwnerActionKeys::new(session);
         let gated = self
             .settled_owner_scope(&keys, node, PERMISSION_CHANGE_TARGET)
@@ -8472,7 +8392,7 @@ where {
             let changed = held_grantee(session, &gated.target, &gated.current, &identity_pk)?
                 .is_some_and(|held| held.permission == CommittedPermission::from(permission));
             return if changed {
-                self.owed_cut_stands(node).await
+                pass.owed_cut_stands(node).await
             } else {
                 Err(EngineError::rotation_work_owed())
             };
@@ -8490,10 +8410,10 @@ where {
         match applied {
             // The re-drive finished the change the command asks for.
             Err(EngineError::MalformedInput { check })
-                if redriven == Redriven::Finished
-                    && check == GrantEditError::SamePermission.check() =>
+                if check == GrantEditError::SamePermission.check() =>
             {
-                Ok(())
+                pass.settle_shown(node, redriven, EngineError::MalformedInput { check })
+                    .await
             }
             applied => applied,
         }
@@ -8679,9 +8599,9 @@ where {
         // A write-scope cut sets the write plane, so the wave ran and its
         // outcome names the root the scope moved to.
         let moved = self
-            .drive_cut(node, target, &scope_root_name, &cut, None)
+            .drive_cut(node, target, &scope_root_name, &cut)
             .await?
-            .and_then(|report| report.write)
+            .write
             .map(|write| write.new_root_name)
             .ok_or(EngineError::TrustViolation {
                 message: "the write-scope cut reported no name wave".to_owned(),
