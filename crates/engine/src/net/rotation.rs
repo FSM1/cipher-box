@@ -702,9 +702,10 @@ fn nonce<E: Entropy>(entropy: &RefCell<E>) -> Result<[u8; 24], RotationPublishEr
 /// A rotation root read's verdict, carrying ADR 0003 D2's below-floor split: a
 /// scope root under its own read-epoch floor is a **superseded name**, not a
 /// trust rejection — rotations publish before they raise the floor, so the
-/// condition cannot mean the root lags. Only the sweep routes that verdict
-/// (through the pointer consult); every other arm folds it back into a
-/// fail-closed rejection.
+/// condition cannot mean the root lags. The sweep routes that verdict
+/// through the pointer consult, and the boundary walk's `walk_verdict` and the
+/// renewal walk's `admit_owned_scope_root` read it as availability; every other arm folds it
+/// back into a fail-closed rejection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RootGateVerdict {
     Rejected,

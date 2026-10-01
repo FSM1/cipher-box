@@ -169,9 +169,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   stores where it stopped, across sessions. A permanent failure (no record
   at any endpoint and none cached, a 403 or other 4xx, a decode error, an
   acknowledged sequence that does not open) moves the cursor on at once and
-  emits `renewalFailed`. A pass whose doomed-name journal does not list, or
-  holds an entry that does not read or open, renews nothing, stores nothing
-  and emits `renewalFailed` for each owned scope root.
+  emits `renewalFailed`. A pass whose doomed-name journal does not list
+  renews nothing, stores nothing and emits `renewalFailed` for each owned
+  scope root. A journal entry that does not read or open stops only the scope
+  root it was written under: the pass renews no name of that scope, keeps the
+  cursor back and emits `renewalFailed` for that scope root.
   A move can put a subtree behind the cursor for one cycle, so two
   visits of one name are at most `2 max(T, 7 days) + T` apart, where T is the
   longest time the owner takes to run `ceil(N / 500)` passes plus at most one

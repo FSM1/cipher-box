@@ -245,16 +245,13 @@ pub async fn fanout_get_under<T: RecordTransport>(
     name: &IpnsName,
     rule: VacancyRule,
 ) -> FanoutRecord {
-    let Scan {
-        best,
-        vacant,
-        failures,
-        ..
-    } = scan(transport, name).await;
+    let scan = scan(transport, name).await;
+    let absent = scan.absent(rule);
+    let Scan { best, failures, .. } = scan;
     if let Some((verified, bytes)) = best {
         return FanoutRecord::Found(verified, bytes);
     }
-    if vacant > 0 && (rule == VacancyRule::FirstRun || failures.is_empty()) {
+    if absent {
         FanoutRecord::Absent
     } else {
         FanoutRecord::Unavailable(EndpointFailures(failures))
@@ -280,13 +277,9 @@ pub(crate) async fn fanout_get_tied_classified<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
 ) -> (Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)>, bool) {
-    let Scan {
-        best,
-        tied,
-        vacant,
-        failures,
-    } = scan(transport, name).await;
-    let absent = best.is_none() && vacant > 0 && failures.is_empty();
+    let scan = scan(transport, name).await;
+    let absent = scan.absent(VacancyRule::Unanimous);
+    let Scan { best, tied, .. } = scan;
     (
         best.map(|(verified, bytes)| (verified, bytes, tied)),
         absent,
@@ -303,6 +296,15 @@ struct Scan {
     tied: Vec<Vec<u8>>,
     vacant: usize,
     failures: Vec<(EndpointId, EndpointFailure)>,
+}
+
+impl Scan {
+    /// Whether the endpoints agree the name holds no record, by `rule`.
+    fn absent(&self, rule: VacancyRule) -> bool {
+        self.best.is_none()
+            && self.vacant > 0
+            && (rule == VacancyRule::FirstRun || self.failures.is_empty())
+    }
 }
 
 async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
@@ -375,6 +377,34 @@ mod tests {
     use crate::seams::{SeamError, SeamResult};
     use crate::testkit::block_on;
     use crate::testkit::fakes::InMemoryRecordStore;
+
+    fn scan_of(vacant: usize, failures: usize) -> Scan {
+        Scan {
+            best: None,
+            tied: Vec::new(),
+            vacant,
+            failures: (0..failures)
+                .map(|at| {
+                    (
+                        EndpointId::new(format!("e{at}")),
+                        EndpointFailure::Transport,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    /// Under the unanimous rule, only every endpoint answering "no record" is
+    /// an absence: one failure, or no endpoint at all, is not.
+    #[test]
+    fn the_unanimous_rule_needs_every_endpoint_to_answer_no_record() {
+        assert!(!scan_of(1, 1).absent(VacancyRule::Unanimous), "one failure");
+        assert!(
+            scan_of(2, 0).absent(VacancyRule::Unanimous),
+            "every endpoint"
+        );
+        assert!(!scan_of(0, 0).absent(VacancyRule::Unanimous), "no endpoint");
+    }
 
     /// A transport that ignores `max_bytes` and serves whatever it was seeded,
     /// recording the cap the engine handed it.

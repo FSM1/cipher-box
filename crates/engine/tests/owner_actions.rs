@@ -57,7 +57,9 @@ use cipherbox_engine::seams::{
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::op::ScopeCrossing;
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
-use cipherbox_engine::sync::{BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS};
+use cipherbox_engine::sync::{
+    BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS, doomed_journal_key, owner_tag,
+};
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, owner_identity,
     owner_pointer_read_key, owner_pseudonym, retire_targets, seed_account_with,
@@ -10123,6 +10125,18 @@ fn restart_later(
     EventStream,
     (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>),
 ) {
+    restart_later_with(fx, |_| {})
+}
+
+/// [`restart_later`], with `prepare` run on the later device before it starts.
+fn restart_later_with(
+    fx: GrantScenario,
+    prepare: impl FnOnce(&FakeDevice),
+) -> (
+    FakeWorld,
+    EventStream,
+    (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>),
+) {
     let GrantScenario {
         world,
         blocks,
@@ -10136,6 +10150,7 @@ fn restart_later(
         .scheduler
         .advance(Duration::from_secs(65 * 24 * 60 * 60));
     let device = world.device(b"the owner's later device");
+    prepare(&device);
     let (engine, events, mut tasks) = boot_owner(&world, &blocks, &device);
     for _ in 0..3 {
         tick(&world, &engine, &mut tasks);
@@ -10178,6 +10193,64 @@ fn a_folder_inside_a_granted_scope_renews_at_the_next_start() {
         abuse_events(&mut events),
         0,
         "a known scope root is no violation"
+    );
+}
+
+/// A doomed-name journal entry that does not open stops the walk only under
+/// its own scope root: a folder in another owned scope still renews, and the
+/// stall names the entry's scope root alone.
+#[test]
+fn an_unreadable_journal_entry_stops_the_walk_under_its_own_scope_only() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let inner_before = sequence_at(&fx.world, &write_name(inner));
+    let outer_before = sequence_at(&fx.world, &write_name(outer));
+    let (world, mut events, _later) = restart_later_with(fx, |device| {
+        let entry =
+            doomed_journal_key(&owner_tag(&kdf::enc_subkey(&SECRET)), ROOT, NodeId([7; 16]));
+        block_on(
+            device
+                .staging_store
+                .put_staged_bytes(&entry, b"not a sealed reclamation"),
+        )
+        .expect("stage the entry");
+    });
+
+    assert_eq!(
+        sequence_at(&world, &write_name(inner)),
+        inner_before + 1,
+        "the granted scope still renews"
+    );
+    assert_eq!(
+        sequence_at(&world, &write_name(outer)),
+        outer_before,
+        "the entry's scope does not"
+    );
+    let stalled: std::collections::BTreeSet<String> = events_so_far(&mut events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::RenewalFailed {
+                routing_key,
+                detail,
+            } if detail.contains("doomed-name journal") => Some(routing_key),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        stalled,
+        std::collections::BTreeSet::from([write_name(ROOT).as_str().to_owned()]),
+        "the stall names the vault root alone"
     );
 }
 

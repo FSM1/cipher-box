@@ -63,8 +63,7 @@ pub const CYCLE_HOLD: Duration = Duration::from_secs(7 * DAY);
 pub const KEEP_BACK_WINDOW: Duration = Duration::from_secs(DAY);
 
 /// Why the walk renews no name under an owned scope root this pass.
-const JOURNAL_UNLISTED: &str =
-    "the doomed-name journal does not list, so the renewal walk renews nothing";
+const JOURNAL_UNREADABLE: &str = "the doomed-name journal does not list or open, so the renewal walk renews nothing under this scope root";
 /// Why the walk does not renew a name the endpoints agree holds no record.
 const NO_RECORD: &str = "the name holds no record the renewal walk can renew";
 /// Why the walk does not renew a name whose acknowledged sequence is unreadable.
@@ -205,6 +204,17 @@ struct Due {
     head_cid: String,
 }
 
+/// This owner's doomed-name journal, as one pass reads it.
+#[derive(Default)]
+struct Doomed {
+    /// The names a delete doomed.
+    names: BTreeSet<String>,
+    /// The scope roots with an entry that does not read or open. Any name in
+    /// such a scope can be doomed, and renewing a doomed name leaks a
+    /// registration, so the walk renews none of them.
+    unreadable: BTreeSet<[u8; 16]>,
+}
+
 /// How a root's walk ended.
 enum RootEnd {
     Finished,
@@ -224,8 +234,8 @@ struct Pass<'s> {
     /// cycle is reachable, and the walk enters each folder once for each pass.
     descended: BTreeSet<[u8; 16]>,
     due: Vec<Due>,
-    /// The names a delete doomed.
-    doomed: BTreeSet<String>,
+    /// The names a delete doomed, and the scopes whose journal does not open.
+    doomed: Doomed,
     /// A visit met a transient failure ([`KEEP_BACK_WINDOW`]).
     kept_back: bool,
     owner_tag: [u8; 32],
@@ -312,14 +322,22 @@ where
             return WalkReport {
                 failed: scopes
                     .iter()
-                    .map(|scope| (scope.name.as_str().to_owned(), JOURNAL_UNLISTED))
+                    .map(|scope| (scope.name.as_str().to_owned(), JOURNAL_UNREADABLE))
                     .collect(),
                 ..WalkReport::default()
             };
         };
+        let report = WalkReport {
+            failed: scopes
+                .iter()
+                .filter(|scope| doomed.unreadable.contains(&scope.scope_id))
+                .map(|scope| (scope.name.as_str().to_owned(), JOURNAL_UNREADABLE))
+                .collect(),
+            ..WalkReport::default()
+        };
         let mut pass = Pass {
             cursor: stored.unwrap_or_else(|| RenewalCursor::starting(now)),
-            report: WalkReport::default(),
+            report,
             visits: 0,
             materials: BTreeMap::new(),
             scope_roots: scopes
@@ -362,19 +380,25 @@ where
         pass.report
     }
 
-    /// The names every doomed-name journal entry of this owner holds, or `None`
-    /// when the store does not list or an entry does not read or open: renewing
-    /// a doomed name leaks a registration.
-    async fn doomed_names(&self, owner_tag: &[u8; 32]) -> Option<BTreeSet<String>> {
+    /// What this owner's doomed-name journal holds, or `None` when the store
+    /// does not list.
+    async fn doomed_names(&self, owner_tag: &[u8; 32]) -> Option<Doomed> {
         let keys = self.staging.staged_keys().await.ok()?;
-        let mut doomed = BTreeSet::new();
-        for (key, _, _) in journalled_keys(owner_tag, &keys) {
-            let Some(blob) = self.staging.staged_bytes(&key).await.ok()? else {
+        let mut doomed = Doomed::default();
+        for (key, scope_root, _) in journalled_keys(owner_tag, &keys) {
+            let reclamation = match self.staging.staged_bytes(&key).await {
+                Ok(None) => continue,
+                Ok(Some(blob)) => open_reclamation(self.seal, &blob),
+                Err(_) => None,
+            };
+            let Some(reclamation) = reclamation else {
+                doomed.unreadable.insert(scope_root.0);
                 continue;
             };
-            let reclamation = open_reclamation(self.seal, &blob)?;
-            doomed.extend(reclamation.names());
-            doomed.extend(reclamation.quarantined.into_iter().map(|held| held.name));
+            doomed.names.extend(reclamation.names());
+            doomed
+                .names
+                .extend(reclamation.quarantined.into_iter().map(|held| held.name));
         }
         Some(doomed)
     }
@@ -704,8 +728,12 @@ where
         else {
             return;
         };
+        if pass.doomed.unreadable.contains(&material_scope) {
+            pass.kept_back = true;
+            return;
+        }
         let key = name.as_str();
-        if pass.doomed.contains(key)
+        if pass.doomed.names.contains(key)
             || self
                 .guards
                 .orphan_heads

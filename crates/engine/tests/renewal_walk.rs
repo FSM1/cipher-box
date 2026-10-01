@@ -17,13 +17,14 @@ use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::eol::{eol_from, renewal_eol_from};
 use cipherbox_engine::net::renewal_walk::WALK_BUDGET;
 use cipherbox_engine::net::renewal_walk::cursor::{CursorStore, MAX_CURSOR_PATH, RenewalCursor};
-use cipherbox_engine::net::retire::NODE_TOMBSTONE_PREFIX;
+use cipherbox_engine::net::retire::{NODE_TOMBSTONE_PREFIX, StagingRetireLedger};
 use cipherbox_engine::seams::{
     BoxedTask, HttpMethod, HttpRequest, HttpResponse, RecordTransport, Scheduler, SnapshotCache,
     StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::{BookkeepingSeal, doomed_journal_key, owner_tag};
 use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, seed_account};
+use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED,
     OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED, SeededEntropy, block_on,
@@ -574,13 +575,22 @@ const HOUR: Duration = Duration::from_secs(60 * 60);
 /// One file a session wrote and then left for 65 days: its name, and its
 /// record as that session left it.
 fn a_file_left_for_65_days(world: &FakeWorld, blocks: &Blocks) -> (IpnsName, VerifiedRecord) {
+    let (_, name, before) = a_file_node_left_for_65_days(world, blocks);
+    (name, before)
+}
+
+/// [`a_file_left_for_65_days`], with the file's node.
+fn a_file_node_left_for_65_days(
+    world: &FakeWorld,
+    blocks: &Blocks,
+) -> (NodeId, IpnsName, VerifiedRecord) {
     let nodes = written_then_left(world, blocks, |engine, tasks| {
         vec![write_file(world, engine, tasks, ROOT, "note.txt")]
     });
     let name = write_name(nodes[0]);
     let before = record_at(world, &name);
     world.scheduler.advance(DAY * 65);
-    (name, before)
+    (nodes[0], name, before)
 }
 
 /// The renewal cursor `device` stored, if any.
@@ -850,10 +860,11 @@ fn a_journal_that_does_not_list_renews_nothing_and_stores_nothing() {
     assert_renewed_at_start(&world, &name, &before, started, "the file");
 }
 
-/// A doomed-name journal entry that does not open could name any name, so the
-/// pass renews nothing, stores nothing and reports the stall.
+/// A doomed-name journal entry that does not open could name any name in its
+/// scope, so the pass renews nothing there, keeps the cursor back and reports
+/// the scope root.
 #[test]
-fn an_unreadable_doomed_journal_entry_stops_the_pass() {
+fn an_unreadable_doomed_journal_entry_stops_its_scope() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let (name, before) = a_file_left_for_65_days(&world, &blocks);
@@ -867,14 +878,44 @@ fn an_unreadable_doomed_journal_entry_stops_the_pass() {
     )
     .expect("stage the entry");
     tick(&world, &engine, &mut tasks);
-    assert_eq!(record_at(&world, &name), before, "the pass renews nothing");
-    assert_eq!(stored_cursor(&device), None, "the pass stores nothing");
+    assert_scope_stalled(&world, &device, &mut events, &name, &before);
+}
+
+/// A doomed-name journal entry that does not read stops its scope as one that
+/// does not open does.
+#[test]
+fn a_doomed_journal_entry_that_does_not_read_stops_its_scope() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, before) = a_file_left_for_65_days(&world, &blocks);
+    let device = world.device(b"a later session");
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    let entry = doomed_journal_key(&owner_tag(&kdf::enc_subkey(&SECRET)), ROOT, NodeId([7; 16]));
+    block_on(device.staging_store.put_staged_bytes(&entry, b"any bytes")).expect("stage it");
+    device.staging_store.inner().fail_staged_reads_under(&entry);
+    tick(&world, &engine, &mut tasks);
+    device.staging_store.inner().heal_staged_reads();
+    assert_scope_stalled(&world, &device, &mut events, &name, &before);
+}
+
+/// The file under the stalled vault root is not renewed, the cursor is kept
+/// back, and the stall names the vault root.
+fn assert_scope_stalled(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    events: &mut EventStream,
+    name: &IpnsName,
+    before: &VerifiedRecord,
+) {
+    assert_eq!(record_at(world, name), *before, "the pass renews nothing");
+    let cursor = stored_cursor(device).expect("a kept-back cursor");
     assert!(
-        renewal_failed(
-            &mut events,
-            write_name(ROOT).as_str(),
-            "doomed-name journal"
-        ),
+        cursor.kept_back_since.is_some(),
+        "the pass kept the cursor back"
+    );
+    assert!(cursor.root.is_some(), "the range is kept");
+    assert!(
+        renewal_failed(events, write_name(ROOT).as_str(), "doomed-name journal"),
         "the stall is reported"
     );
 }
@@ -988,6 +1029,92 @@ fn a_failed_ledger_read_keeps_the_cursor_for_the_next_pass() {
         "the first pass renews nothing"
     );
 
+    world.scheduler.advance(HOUR);
+    tick(&world, &engine, &mut tasks);
+    assert_renewed_at_start(&world, &name, &before, started, "the file");
+}
+
+/// An acknowledged sequence that does not open is a permanent failure: the
+/// pass moves the cursor on and reports the file.
+#[test]
+fn an_unreadable_acknowledged_sequence_moves_the_cursor_and_is_reported() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (node, name, before) = a_file_node_left_for_65_days(&world, &blocks);
+    let device = world.device(b"a later session");
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    let key = StagingRetireLedger::<InMemoryStagingStore>::acknowledged_key(
+        &owner_tag(&kdf::enc_subkey(&SECRET)),
+        node.0,
+    )
+    .expect("a key");
+    block_on(
+        device
+            .staging_store
+            .put_staged_bytes(&key, b"not a sealed mark"),
+    )
+    .expect("stage it");
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(record_at(&world, &name), before, "the pass renews nothing");
+    let cursor = stored_cursor(&device).expect("the pass stored its cursor");
+    assert_eq!(cursor.root, None, "the cursor moved past the file");
+    assert_eq!(cursor.kept_back_since, None);
+    assert!(
+        renewal_failed(&mut events, name.as_str(), "acknowledged sequence"),
+        "the file is reported"
+    );
+}
+
+/// A registry that answers 401 to the registration after the client refreshed
+/// its session makes the pass keep the cursor back, so the next pass renews the
+/// file.
+#[test]
+fn a_401_after_the_refresh_keeps_the_cursor_for_the_next_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (name, before) = a_file_left_for_65_days(&world, &blocks);
+    let started = world.scheduler.now();
+    let device = world.device(b"a later session");
+    let refusing = Arc::new(AtomicBool::new(true));
+    for _ in 0..4000 {
+        let (blocks, key, refusing) = (blocks.clone(), name.as_str().to_owned(), refusing.clone());
+        device.http.enqueue_derived(move |request| {
+            if request.url.ends_with("/auth/refresh") {
+                return Ok(HttpResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: format!(
+                        r#"{{"accessToken":"jwt-1","refreshToken":"{}","acceleratorToken":"gw-1"}}"#,
+                        "a".repeat(64)
+                    )
+                    .into_bytes(),
+                });
+            }
+            if registers(request, &key) && refusing.load(Ordering::SeqCst) {
+                return Ok(HttpResponse {
+                    status: 401,
+                    headers: Vec::new(),
+                    body: b"{\"statusCode\":401,\"message\":\"unauthorized\"}".to_vec(),
+                });
+            }
+            blocks.reply(request)
+        });
+    }
+    let (engine, _events, mut tasks) = boot_served(&world, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert_eq!(
+        record_at(&world, &name),
+        before,
+        "the first pass renews nothing"
+    );
+    let cursor = stored_cursor(&device).expect("a kept-back cursor");
+    assert!(cursor.root.is_some(), "the range is kept");
+    assert!(
+        cursor.kept_back_since.is_some(),
+        "the pass kept the cursor back"
+    );
+
+    refusing.store(false, Ordering::SeqCst);
     world.scheduler.advance(HOUR);
     tick(&world, &engine, &mut tasks);
     assert_renewed_at_start(&world, &name, &before, started, "the file");
