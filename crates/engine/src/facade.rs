@@ -4031,6 +4031,46 @@ pub(crate) struct OwnerScope {
     vouched: bool,
 }
 
+/// The re-seal of `parent`, resolved as `current`, that a grant inside it runs
+/// to move the granted folder out of its index.
+fn parent_scope_plan<'a>(
+    parent: &'a OwnerScope,
+    current: &'a CascadeTarget,
+    owner_enc_secret: &'a X25519Secret,
+) -> ParentScopePlan<'a> {
+    ParentScopePlan {
+        identity: ScopeRootIdentity {
+            v: current.v,
+            scope_id: parent.scope.scope_id,
+            ipns_name: &parent.scope.ipns_name,
+            owner_enc_pub: &current.owner_enc_pub,
+            owner_enc_secret: Some(owner_enc_secret),
+            // An interior parent is itself a descendant, so its re-seal owes
+            // the ascent link it already carries.
+            ascent: parent
+                .parent_node_seed
+                .as_deref()
+                .map(AscentAuthority::ParentSeed),
+            owes_ascent_link: current.carried_ascent_link,
+            pseudonym_signer: &current.pseudonym_signer,
+        },
+        seeds: ResealSeeds {
+            override_seed: &current.override_seed,
+            read_epoch: current.current_read_epoch,
+            prev: None,
+            write_scope_seed: &current.write_scope_seed,
+            write_epoch: current.write_epoch,
+            write_history: WriteHistory::Carried(&current.write_history_link),
+            pointer_read_key: &current.pointer_read_key,
+        },
+        commitment: &current.commitment,
+        commitment_sig: &current.commitment_sig,
+        grant_ledger: &current.grant_ledger,
+        current_child_index: &current.direct_child_scope_index,
+        carried_history_links: &current.carried_history_links,
+    }
+}
+
 /// What an action does when the parent's owner-signed index does not vouch for
 /// the node's scope root.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -7469,14 +7509,7 @@ where {
     ) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
-        let plan = GrantCutPlan {
-            commitment: &current.commitment,
-            commitment_sig: &current.commitment_sig,
-            grant_ledger: &current.grant_ledger,
-            scope_root_name: &scope_root_name,
-            owner_signer: session.identity(),
-            pointer_read_key: &current.pointer_read_key,
-        };
+        let plan = GrantCutPlan::over(current, &scope_root_name, session.identity());
         let cut = match kind {
             CutKind::Revoke(tags) => revoke_grants(&plan, tags),
             CutKind::Downgrade(tag) => {
@@ -7817,39 +7850,7 @@ where {
             identity_signer: session.identity(),
             pseudonym_signer: &pseudonym_signer,
         };
-        let parent_plan = ParentScopePlan {
-            identity: ScopeRootIdentity {
-                v: current.v,
-                scope_id: parent.scope_id,
-                ipns_name: &parent.ipns_name,
-                owner_enc_pub: &current.owner_enc_pub,
-                owner_enc_secret: Some(session.enc_subkey()),
-                // An interior parent is itself a descendant, so its re-seal owes
-                // the ascent link it already carries.
-                ascent: parent_scope
-                    .parent_node_seed
-                    .as_deref()
-                    .map(AscentAuthority::ParentSeed),
-                owes_ascent_link: current.carried_ascent_link,
-                pseudonym_signer: &current.pseudonym_signer,
-            },
-            seeds: ResealSeeds {
-                override_seed: &current.override_seed,
-                read_epoch: current.current_read_epoch,
-                // Updating the index is a metadata-only re-seal at the same
-                // epoch, so it cuts no read plane and mints no history link.
-                prev: None,
-                write_scope_seed: &current.write_scope_seed,
-                write_epoch: current.write_epoch,
-                write_history: WriteHistory::Carried(&current.write_history_link),
-                pointer_read_key: &current.pointer_read_key,
-            },
-            commitment: &current.commitment,
-            commitment_sig: &current.commitment_sig,
-            grant_ledger: &current.grant_ledger,
-            current_child_index: &current.direct_child_scope_index,
-            carried_history_links: &current.carried_history_links,
-        };
+        let parent_plan = parent_scope_plan(&parent_scope, &current, session.enc_subkey());
 
         let scope_root_name = grantee.ipns_name();
         let voucher = ScopePointerMint {
@@ -7906,19 +7907,22 @@ where {
                     &parent_plan,
                 )
                 .await;
-                match outcome {
-                    Ok(outcome) => (PendingShare::SharePointer(recipient), outcome.read_scope),
-                    Err(e) if e.is_post_publish() => {
-                        self.state.minted_scope_roots.borrow_mut().insert(node);
-                        pass.stop_owed(node, owed_steps, OwedStop::of_grant(&e))
-                            .await;
-                        return Ok(CommandOutcome::Done);
-                    }
+                let granted = match outcome {
+                    Ok(granted) => granted,
                     Err(e) => {
                         let _ = pass.owed().clear(node).await;
                         return Err(EngineError::from_share_mint(e, checks));
                     }
+                };
+                // The root landed, so a stalled handover leaves the move owed,
+                // as a link's does below.
+                if let Some(stalled) = granted.handover.err() {
+                    self.state.minted_scope_roots.borrow_mut().insert(node);
+                    pass.stop_owed(node, owed_steps, OwedStop::of_grant(&stalled))
+                        .await;
+                    return Ok(CommandOutcome::Done);
                 }
+                (PendingShare::SharePointer(recipient), granted.read_scope)
             }
             ScopeShare::InviteLink {
                 expires_at,
@@ -8587,14 +8591,11 @@ where {
     ) -> Result<OwnerScope, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
-        let cut = cut_for_write_scope(&GrantCutPlan {
-            commitment: &current.commitment,
-            commitment_sig: &current.commitment_sig,
-            grant_ledger: &current.grant_ledger,
-            scope_root_name: &scope_root_name,
-            owner_signer: session.identity(),
-            pointer_read_key: &current.pointer_read_key,
-        })
+        let cut = cut_for_write_scope(&GrantCutPlan::over(
+            current,
+            &scope_root_name,
+            session.identity(),
+        ))
         .map_err(EngineError::from_revoke)?;
         // A write-scope cut sets the write plane, so the wave ran and its
         // outcome names the root the scope moved to.

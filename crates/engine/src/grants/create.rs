@@ -472,24 +472,6 @@ impl CreateGrantError {
         }
     }
 
-    /// Whether the grantee scope root had published when this stopped the
-    /// grant, so the interior move and every step after it are owed
-    /// (ADR 0063 D2).
-    pub fn is_post_publish(&self) -> bool {
-        matches!(
-            self,
-            Self::DescendantResolve { .. }
-                | Self::InteriorResolve { .. }
-                | Self::InteriorNotConverged { .. }
-                | Self::InteriorEpochRegressed { .. }
-                | Self::InteriorPublish { .. }
-                | Self::DescendantMint { .. }
-                | Self::DescendantPublish { .. }
-                | Self::ParentMint(_)
-                | Self::ParentPublish(_)
-        )
-    }
-
     /// A stable machine tag for assertions and host classification.
     pub fn check(&self) -> &'static str {
         match self {
@@ -765,6 +747,9 @@ pub(crate) const MINT_EPOCH: u64 = 1;
 /// owes [`GranteeScopePlan::write_cut`] by construction. It additionally owes
 /// the name wave over the minted scope, which the caller runs once this returns,
 /// and then [`post_share_pointer`] (blueprint/engine.md "Grant creation").
+///
+/// The outer `Err` leaves no grantee root on the network; a stop after the
+/// root landed is [`PromotedGrant::handover`].
 pub async fn create_grant<E, N, V>(
     entropy: &mut E,
     net: &N,
@@ -773,7 +758,7 @@ pub async fn create_grant<E, N, V>(
     recipient: &GrantRecipient<'_>,
     owner: &OwnerGrantKeys<'_>,
     parent: &ParentScopePlan<'_>,
-) -> Result<CreateGrantOutcome, CreateGrantError>
+) -> Result<PromotedGrant, CreateGrantError>
 where
     E: Entropy,
     N: MintNet,
@@ -1141,8 +1126,19 @@ where
         .cloned()
         .ok_or(CreateGrantError::ResumeNotThisGrant)?;
     resume_grantee_scope(entropy, net, promoted, &entry, owner)
-        .await
+        .await?
+        .handover
         .map(Some)
+}
+
+/// A grantee scope whose root has landed, and the handover that ran after it.
+/// An `Err` in [`Self::handover`] is a stop past the root's publish, so the
+/// interior move and every step after it are owed (ADR 0063 D2).
+pub struct PromotedGrant {
+    /// The promoted scope's read material, known once its root landed.
+    pub read_scope: GrantedReadScope,
+    /// The interior, descendant and parent publishes after the root.
+    pub handover: Result<CreateGrantOutcome, CreateGrantError>,
 }
 
 /// Mint the grantee scope `row` is committed at over the converged folder, then
@@ -1155,38 +1151,11 @@ where
 /// appended to a scope the owner has already been rotating (#25 D6). `row` must
 /// be minted at [`GranteeScopePlan::ipns_name`]; the mint binds the same bytes.
 ///
-/// Fail-closed **through the grantee publish**. A folder a stalled attempt
-/// already promoted is [`resume_grantee_scope`]'s to finish, and
-/// [`converge_grant_subtree`] is what tells the two apart.
+/// Fail-closed **through the grantee publish**: the outer `Err` leaves no
+/// grantee root on the network. A folder a stalled attempt already promoted is
+/// [`resume_grantee_scope`]'s to finish, and [`converge_grant_subtree`] is what
+/// tells the two apart.
 pub async fn mint_grantee_scope<E, N, V>(
-    entropy: &mut E,
-    net: &N,
-    voucher: &V,
-    converged: ConvergedSubtree<'_>,
-    row: &GrantRow,
-    owner: &OwnerGrantKeys<'_>,
-) -> Result<CreateGrantOutcome, CreateGrantError>
-where
-    E: Entropy,
-    N: MintNet,
-    V: ScopePointerVoucher,
-{
-    promote_grantee_scope(entropy, net, voucher, converged, row, owner)
-        .await?
-        .handover
-}
-
-/// A grantee scope whose root has landed, and the handover that ran after it.
-pub(crate) struct PromotedGrant {
-    /// The promoted scope's read material, known once its root landed.
-    pub read_scope: GrantedReadScope,
-    /// The interior, descendant and parent publishes after the root.
-    pub handover: Result<CreateGrantOutcome, CreateGrantError>,
-}
-
-/// [`mint_grantee_scope`] with its two sides apart. The `Err` is fail-closed:
-/// no grantee root is on the network.
-pub(crate) async fn promote_grantee_scope<E, N, V>(
     entropy: &mut E,
     net: &N,
     voucher: &V,
@@ -1355,14 +1324,14 @@ where
 ///
 /// The published root must be the one `entry`'s own plan minted. Both halves
 /// of that proof are release-active, ahead of everything the shared tail
-/// publishes.
+/// publishes, and refuse in the outer `Err`.
 pub async fn resume_grantee_scope<E, N>(
     entropy: &mut E,
     net: &N,
     subtree: PromotedSubtree<'_>,
     entry: &GrantSetEntry,
     owner: &OwnerGrantKeys<'_>,
-) -> Result<CreateGrantOutcome, CreateGrantError>
+) -> Result<PromotedGrant, CreateGrantError>
 where
     E: Entropy,
     N: MintNet,
@@ -1395,7 +1364,11 @@ where
         return Err(CreateGrantError::ResumeNotThisGrant);
     }
 
-    hand_over_granted_folder(
+    let read_scope = GrantedReadScope {
+        seed: promoted.override_seed.clone(),
+        epoch: promoted.record.read_epoch,
+    };
+    let handover = hand_over_granted_folder(
         entropy,
         net,
         grantee,
@@ -1418,7 +1391,11 @@ where
         },
         entry.tag,
     )
-    .await
+    .await;
+    Ok(PromotedGrant {
+        read_scope,
+        handover,
+    })
 }
 
 /// Hand the granted folder to `root`, the scope root now published over it:
@@ -2633,7 +2610,8 @@ mod tests {
                 &owner,
                 &parent,
             )
-            .await?;
+            .await?
+            .handover?;
             post_share_pointer(
                 &mut entropy,
                 &recorder,
@@ -2809,7 +2787,8 @@ mod tests {
                     &owner,
                     &parent,
                 )
-                .await?;
+                .await?
+                .handover?;
                 post_share_pointer(
                     &mut entropy,
                     &mailbox,

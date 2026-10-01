@@ -573,35 +573,7 @@ where
             pointer_read_key: &pointer_read_key,
             subtree_child_index: &subtree,
         };
-        let parent_plan = ParentScopePlan {
-            identity: ScopeRootIdentity {
-                v: current.v,
-                scope_id: parent.scope.scope_id,
-                ipns_name: &parent.scope.ipns_name,
-                owner_enc_pub: &current.owner_enc_pub,
-                owner_enc_secret: Some(self.enc_secret),
-                ascent: parent
-                    .parent_node_seed
-                    .as_deref()
-                    .map(AscentAuthority::ParentSeed),
-                owes_ascent_link: current.carried_ascent_link,
-                pseudonym_signer: &current.pseudonym_signer,
-            },
-            seeds: ResealSeeds {
-                override_seed: &current.override_seed,
-                read_epoch: current.current_read_epoch,
-                prev: None,
-                write_scope_seed: &current.write_scope_seed,
-                write_epoch: current.write_epoch,
-                write_history: WriteHistory::Carried(&current.write_history_link),
-                pointer_read_key: &current.pointer_read_key,
-            },
-            commitment: &current.commitment,
-            commitment_sig: &current.commitment_sig,
-            grant_ledger: &current.grant_ledger,
-            current_child_index: &current.direct_child_scope_index,
-            carried_history_links: &current.carried_history_links,
-        };
+        let parent_plan = parent_scope_plan(&parent, &current, self.enc_secret);
         let owner = OwnerGrantKeys {
             enc_secret: self.enc_secret,
             identity_signer: self.identity,
@@ -647,8 +619,12 @@ where
             return Ok(());
         }
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name).map_err(stop)?;
-        let cut = owed_read_cut(&self.published_cut_plan(&current, &scope_root_name))
-            .map_err(|e| stop(EngineError::from_revoke(e)))?;
+        let cut = owed_read_cut(&GrantCutPlan::over(
+            &current,
+            &scope_root_name,
+            self.identity,
+        ))
+        .map_err(|e| stop(EngineError::from_revoke(e)))?;
         self.rotate_planes(node, &target, &scope_root_name, &cut, None)
             .await
             .map_err(|e| cut_stop(&e))?;
@@ -684,8 +660,12 @@ where
             )
         } else if current.write_epoch.checked_add(1) == Some(write_epoch) {
             let scope_root_name = parsed_scope_name(&target.scope.ipns_name).map_err(stop)?;
-            let cut = cut_for_write_scope(&self.published_cut_plan(&current, &scope_root_name))
-                .map_err(|e| stop(EngineError::from_revoke(e)))?;
+            let cut = cut_for_write_scope(&GrantCutPlan::over(
+                &current,
+                &scope_root_name,
+                self.identity,
+            ))
+            .map_err(|e| stop(EngineError::from_revoke(e)))?;
             let write = self
                 .rotate_planes(node, &target, &scope_root_name, &cut, None)
                 .await
@@ -749,23 +729,6 @@ where
         .await
         .map_err(|e| stop(EngineError::from_create_grant(e)))?;
         Ok(())
-    }
-
-    /// The cut plan over the set `current` already publishes at
-    /// `scope_root_name`, signed by this owner.
-    fn published_cut_plan<'p>(
-        &'p self,
-        current: &'p CascadeTarget,
-        scope_root_name: &'p IpnsName,
-    ) -> GrantCutPlan<'p> {
-        GrantCutPlan {
-            commitment: &current.commitment,
-            commitment_sig: &current.commitment_sig,
-            grant_ledger: &current.grant_ledger,
-            scope_root_name,
-            owner_signer: self.identity,
-            pointer_read_key: &current.pointer_read_key,
-        }
     }
 }
 

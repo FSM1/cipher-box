@@ -844,14 +844,11 @@ where
     ) -> Result<OwnerScope, EngineError> {
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let parent = sites.enclosing(node).await?;
-        let cut = cut_for_write_scope(&GrantCutPlan {
-            commitment: &current.commitment,
-            commitment_sig: &current.commitment_sig,
-            grant_ledger: &current.grant_ledger,
-            scope_root_name: &scope_root_name,
-            owner_signer: self.identity,
-            pointer_read_key: &current.pointer_read_key,
-        })
+        let cut = cut_for_write_scope(&GrantCutPlan::over(
+            current,
+            &scope_root_name,
+            self.identity,
+        ))
         .map_err(EngineError::from_revoke)?;
         // The vault root takes no link, so no conversion cuts it.
         let report = self

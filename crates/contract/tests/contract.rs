@@ -1601,6 +1601,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         },
     )
     .await
+    .and_then(|grant| grant.handover)
     .expect("the grant mints against the local net");
 
     post_share_pointer(

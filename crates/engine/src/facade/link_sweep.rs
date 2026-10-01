@@ -264,14 +264,7 @@ where
         }
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let cut = sweep_cut(
-            &GrantCutPlan {
-                commitment: &current.commitment,
-                commitment_sig: &current.commitment_sig,
-                grant_ledger: &current.grant_ledger,
-                scope_root_name: &scope_root_name,
-                owner_signer: self.identity,
-                pointer_read_key: &current.pointer_read_key,
-            },
+            &GrantCutPlan::over(&current, &scope_root_name, self.identity),
             &tags,
         )?;
         let report = self
