@@ -255,7 +255,7 @@ fn a_hold_check_crosses_as_the_check_name_of_its_refusal() {
     for hold in byo.into_iter().chain(placement) {
         assert_eq!(
             check(QueueHoldReason::Settings(hold)),
-            JsValue::from_str(hold.refusal.check()),
+            JsValue::from_str(hold.refusal().check()),
             "{hold:?}"
         );
     }

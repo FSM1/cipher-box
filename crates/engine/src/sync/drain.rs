@@ -83,7 +83,7 @@ use crate::net::{
     fanout_get_verify, observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
-use crate::record_plane::{BinIndexHoldCheck, DefaultsReason};
+use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
 use crate::rotation::{LaggingSeedMiss, ScopeExitRotator, derive_write_name, lagging_read_seed};
 use crate::seams::{
     CredentialStore, DebtOrigin, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
@@ -212,20 +212,11 @@ fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
 /// and on a single-device account nothing is left to publish it — so the op
 /// dead-letters with the state named rather than waiting for ever.
 fn halt_for_bin_load(reason: DefaultsReason) -> Halt {
-    let check = match reason {
-        DefaultsReason::StrandedMint => {
-            return Halt::Permanent(DeadLetterReason::BinIndexStrandedMint);
-        }
-        DefaultsReason::RolledBack { .. }
-        | DefaultsReason::RevisionRolledBack { .. }
-        | DefaultsReason::Unreadable => return Halt::Attempt,
-        DefaultsReason::UnprovenFirstRun => BinIndexHoldCheck::UnprovenFirstRun,
-        DefaultsReason::Suppressed => BinIndexHoldCheck::Suppressed,
-        DefaultsReason::Expired => BinIndexHoldCheck::Expired,
-        DefaultsReason::TimedOut => BinIndexHoldCheck::TimedOut,
-        DefaultsReason::FloorUnreadable => BinIndexHoldCheck::FloorUnreadable,
-    };
-    Halt::HeldByBinIndex(check)
+    match reason.split() {
+        LoadSplit::Verdict => Halt::Attempt,
+        LoadSplit::StrandedMint => Halt::Permanent(DeadLetterReason::BinIndexStrandedMint),
+        LoadSplit::Held(check) => Halt::HeldByBinIndex(check),
+    }
 }
 
 /// A bin index publish that did not land, on the same split as
@@ -2262,7 +2253,7 @@ where
                     }
                 }
                 QueueHoldReason::Settings(hold) => {
-                    if settings_refusal(self.inputs.placement) == Some(hold) {
+                    if settings_hold(self.inputs.placement) == Some(hold) {
                         return false;
                     }
                 }
@@ -2285,7 +2276,7 @@ where
             // the member cannot act on. An outage is not a verdict: it keeps
             // the head where it is rather than spending the unattributed budget
             // on a placement no pass can decide.
-            return settings_refusal(self.inputs.placement).is_some();
+            return settings_hold(self.inputs.placement).is_some();
         };
         // Only the hosted leg is quota-gated, so no answer the quota endpoint
         // could give bears on a hold under a placement without one — and an
@@ -7348,7 +7339,7 @@ fn classify_placement(error: ProviderError) -> Halt {
 ///
 /// Only the external-only leg can hold an op on its config: a dual write's
 /// mirror is best-effort and never fails the op.
-fn settings_refusal(placement: &PlacementDecision) -> Option<SettingsHold> {
+fn settings_hold(placement: &PlacementDecision) -> Option<SettingsHold> {
     match placement {
         Ok(Placement::External(config)) => validate_byo_config(config)
             .err()
@@ -8464,10 +8455,7 @@ mod tests {
             assert!(
                 matches!(
                     classify_placement(settings),
-                    Halt::HeldBySettings(SettingsHold {
-                        refusal: SettingsRefusal::Byo(refused),
-                        ..
-                    }) if refused == settings
+                    Halt::HeldBySettings(hold) if hold.refusal() == SettingsRefusal::Byo(settings)
                 ),
                 "{}",
                 settings.check(),
@@ -8481,11 +8469,11 @@ mod tests {
     fn a_settings_hold_lets_go_only_once_the_placement_stops_refusing() {
         let refused = byo("file:///etc/passwd");
         assert_eq!(
-            settings_refusal(&Ok(Placement::External(refused.clone()))).map(|hold| hold.refusal),
+            settings_hold(&Ok(Placement::External(refused.clone()))).map(|hold| hold.refusal()),
             Some(SettingsRefusal::Byo(ProviderError::InvalidEndpoint)),
         );
         assert_eq!(
-            settings_refusal(&Err(PlacementRefusal::NoProvider)).map(|hold| hold.refusal),
+            settings_hold(&Err(PlacementRefusal::NoProvider)).map(|hold| hold.refusal()),
             Some(SettingsRefusal::Placement(PlacementRefusal::NoProvider)),
         );
         for admitted in [
@@ -8499,7 +8487,7 @@ mod tests {
                 DefaultsReason::Suppressed,
             )),
         ] {
-            assert_eq!(settings_refusal(&admitted), None);
+            assert_eq!(settings_hold(&admitted), None);
         }
     }
 

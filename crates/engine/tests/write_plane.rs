@@ -59,8 +59,8 @@ use cipherbox_engine::seams::{
     SeamResult, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
-    Destinations, SettingsHold, SettingsOrigin, SettingsPublishError, SettingsRefusal,
-    VaultSettings, publish_settings, settings_name,
+    Destinations, SettingsOrigin, SettingsPublishError, SettingsRefusal, VaultSettings,
+    publish_settings, settings_name,
 };
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
@@ -120,10 +120,10 @@ fn settings_hold(view: &SnapshotView) -> Option<(QueueHold, SettingsRefusal)> {
     match view.queue_hold {
         Some(
             hold @ QueueHold {
-                reason: QueueHoldReason::Settings(SettingsHold { refusal, .. }),
+                reason: QueueHoldReason::Settings(settings),
                 ..
             },
-        ) => Some((hold, refusal)),
+        ) => Some((hold, settings.refusal())),
         _ => None,
     }
 }

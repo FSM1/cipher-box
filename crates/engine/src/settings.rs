@@ -453,9 +453,10 @@ impl PlacementRefusal {
     /// later tick alone. Every other degraded load can clear on a later tick,
     /// so it holds nothing.
     ///
-    /// The one place the split is decided, and the hold's check name with it,
-    /// so a hold cannot be taken on terms its release check or a host does not
-    /// recognise.
+    /// The one place the placement half of the split is decided, and the
+    /// hold's check name with it, so a hold cannot be taken on terms its
+    /// release check or a host does not recognise. [`SettingsHold::byo`]
+    /// decides the provider half.
     pub fn holds(self) -> Option<SettingsHold> {
         let check = match self {
             Self::NoProvider => SettingsHoldCheck::ByoProviderMissing,
@@ -523,13 +524,21 @@ impl SettingsRefusal {
 /// and [`SettingsHold::byo`], never by hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SettingsHold {
-    /// The refusal, whose recurrence is the hold's exit test.
-    pub refusal: SettingsRefusal,
-    /// The rule a host renders.
-    pub check: SettingsHoldCheck,
+    refusal: SettingsRefusal,
+    check: SettingsHoldCheck,
 }
 
 impl SettingsHold {
+    /// The refusal, whose recurrence is the hold's exit test.
+    pub fn refusal(self) -> SettingsRefusal {
+        self.refusal
+    }
+
+    /// The rule a host renders.
+    pub fn check(self) -> SettingsHoldCheck {
+        self.check
+    }
+
     /// The hold a provider error takes, or `None` for an answer from the
     /// provider, which a later attempt may change. A policy verdict on the
     /// member's own config is reached before any request is built and again by
@@ -1795,7 +1804,7 @@ mod tests {
             stranded,
         ] {
             assert_eq!(
-                refusal.holds().map(|hold| hold.refusal),
+                refusal.holds().map(|hold| hold.refusal()),
                 Some(SettingsRefusal::Placement(refusal)),
                 "{}",
                 refusal.check(),
@@ -1848,7 +1857,7 @@ mod tests {
             ProviderError::RepointedCredential,
         ] {
             assert_eq!(
-                SettingsHold::byo(policy).map(|hold| hold.refusal),
+                SettingsHold::byo(policy).map(|hold| hold.refusal()),
                 Some(SettingsRefusal::Byo(policy)),
                 "{}",
                 policy.check()

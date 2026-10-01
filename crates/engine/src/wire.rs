@@ -473,7 +473,7 @@ impl From<facade::QueueHold> for QueueHold {
             QueueHoldReason::Settings(settings) => Self::Settings {
                 op_id,
                 node,
-                check: settings.check,
+                check: settings.check(),
             },
             QueueHoldReason::BinIndex(check) => Self::BinIndex { op_id, node, check },
         }

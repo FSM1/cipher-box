@@ -152,16 +152,36 @@ impl DefaultsReason {
     /// that retries on availability must not retry on a verdict.
     #[must_use]
     pub(crate) fn is_verdict(self) -> bool {
+        self.split() == LoadSplit::Verdict
+    }
+
+    /// The one split of a load that did not establish the record: a verdict,
+    /// the stranded mint, or an availability outcome a bin index hold waits on.
+    #[must_use]
+    pub(crate) fn split(self) -> LoadSplit {
         match self {
-            Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => true,
-            Self::UnprovenFirstRun
-            | Self::Suppressed
-            | Self::StrandedMint
-            | Self::Expired
-            | Self::TimedOut
-            | Self::FloorUnreadable => false,
+            Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => {
+                LoadSplit::Verdict
+            }
+            Self::StrandedMint => LoadSplit::StrandedMint,
+            Self::UnprovenFirstRun => LoadSplit::Held(BinIndexHoldCheck::UnprovenFirstRun),
+            Self::Suppressed => LoadSplit::Held(BinIndexHoldCheck::Suppressed),
+            Self::Expired => LoadSplit::Held(BinIndexHoldCheck::Expired),
+            Self::TimedOut => LoadSplit::Held(BinIndexHoldCheck::TimedOut),
+            Self::FloorUnreadable => LoadSplit::Held(BinIndexHoldCheck::FloorUnreadable),
         }
     }
+}
+
+/// [`DefaultsReason::split`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoadSplit {
+    /// The load refused bytes the plane served.
+    Verdict,
+    /// [`DefaultsReason::StrandedMint`].
+    StrandedMint,
+    /// Availability, under the check a hold renders.
+    Held(BinIndexHoldCheck),
 }
 
 /// The verdict a load reaches when no endpoint served a record, from the three
