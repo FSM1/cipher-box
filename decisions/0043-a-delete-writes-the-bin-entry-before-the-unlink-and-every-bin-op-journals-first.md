@@ -125,7 +125,8 @@ another scope with `Halt::Permanent(CrossingUnauthorable)`, and the facade does 
 command time. A node deleted from an unshared scope therefore cannot be restored into a shared
 folder, which is the case ADR 0010 item 4 names. The choice of fix is the owner's: a cross-scope
 restore in the drain, or the rule "a restore lands in the entry's own scope" with a refusal at
-command time.
+command time. Owner choice on 2026-10-02: a restore into another scope is refused at command time
+until the cross-scope re-seal lands; the drain halt stays as a defense.
 
 **E4 — Owner capture sees only a departure from a folder that this device has rendered.** A
 grantee's unlink from a folder that no owner device refreshes after the unlink is never captured,

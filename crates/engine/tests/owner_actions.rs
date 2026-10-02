@@ -4179,6 +4179,94 @@ fn published_bin_entries(fx: &GrantScenario) -> Vec<BinEntry> {
     index.entries
 }
 
+/// Whether the account's published bin index still holds `node`'s entry.
+fn still_binned(fx: &GrantScenario, node: NodeId) -> bool {
+    published_bin_entries(fx)
+        .iter()
+        .any(|entry| entry.node_id == node.0)
+}
+
+/// A restore re-keys in place under the scope its entry was filed under, so a
+/// destination in another scope is refused when the command is given, with its
+/// own code, and nothing reaches the queue to dead-letter.
+#[test]
+fn a_restore_into_a_folder_of_another_scope_is_refused_at_command_time() {
+    let mut fx = GrantScenario::new();
+    let loose = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "loose");
+    block_on(fx.engine.command(Command::Delete { node: loose })).expect("the delete queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Restore {
+            node: loose,
+            into: Some(fx.folder),
+        })),
+        Err(EngineError::RestoreCrossesScope),
+        "the shared folder is another scope than the vault root the entry names"
+    );
+    assert!(
+        block_on(fx.owner_device.staging_store.queued_ops())
+            .unwrap()
+            .is_empty(),
+        "the refusal stages nothing"
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .is_empty()
+    );
+    assert!(still_binned(&fx, loose), "the entry stands for another try");
+}
+
+/// The owner shares the folder a node was deleted from after the delete, so
+/// that folder is now a scope root and a default restore crosses into it. The
+/// refusal is the cross-scope one, and a folder of the entry's own scope still
+/// takes the node.
+#[test]
+fn a_default_restore_into_an_origin_shared_after_the_delete_is_refused() {
+    let mut fx = GrantScenario::new();
+    let draft = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "draft",
+    );
+    block_on(fx.engine.command(Command::Delete { node: draft })).expect("the delete queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Restore {
+            node: draft,
+            into: None,
+        })),
+        Err(EngineError::RestoreCrossesScope),
+        "the origin folder became its own scope after the delete"
+    );
+    assert!(still_binned(&fx, draft));
+
+    block_on(fx.engine.command(Command::Restore {
+        node: draft,
+        into: Some(ROOT),
+    }))
+    .expect("a folder of the entry's own scope takes the restore");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(!still_binned(&fx, draft), "and the restore lands");
+    assert!(
+        block_on(fx.engine.view())
+            .unwrap()
+            .children(ROOT)
+            .iter()
+            .any(|child| child.id == draft)
+    );
+}
+
 /// Every publish helper resolves the plane of the node it seals, so a pass that
 /// carries a second end serves the ops inside that scope from it. A soft delete
 /// of a node in the granted scope files its bin entry under **that** scope's id
@@ -10438,7 +10526,7 @@ fn bin_a_folder_over_an_owed_move(fx: &mut GrantScenario) -> (NodeId, NodeId) {
 }
 
 /// A restore of a binned folder above one whose interior move is owed is
-/// refused into another scope.
+/// refused into another scope, as every cross-scope restore is.
 #[test]
 fn a_restore_of_a_binned_folder_above_an_owed_move_into_another_scope_is_refused() {
     let mut fx = GrantScenario::new();
@@ -10452,7 +10540,7 @@ fn a_restore_of_a_binned_folder_above_an_owed_move_into_another_scope_is_refused
             node: outer,
             into: Some(fx.folder),
         })),
-        work_owed()
+        Err(EngineError::RestoreCrossesScope)
     );
 }
 
@@ -10502,7 +10590,7 @@ fn a_restore_of_a_folder_with_an_owed_move_into_another_scope_is_refused() {
             node: binned,
             into: Some(fx.folder),
         })),
-        work_owed()
+        Err(EngineError::RestoreCrossesScope)
     );
     assert!(
         matches!(

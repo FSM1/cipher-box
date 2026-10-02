@@ -715,7 +715,10 @@ items 4, 6 and 7, ADR 0043).
   from the entry's `originParent`, and journaled on the op. A destination the
   vault no longer holds is its own refusal, so a host can offer another folder
   rather than report a generic failure; one lost between the queue and the drain
-  is the same `destinationGone` dead letter a move gets.
+  is the same `destinationGone` dead letter a move gets. A destination in another
+  scope than the one the entry was filed under is refused at command time with
+  `restoreCrossesScope`, until a cross-scope re-seal lands; this includes a
+  default restore whose origin folder was shared after the delete.
 - **A purge proves the node unlinked before it destroys anything.** The bin entry
   alone is not that proof: the soft delete writes the entry, unlinks, then
   republishes the parent, so a parent publish that spends its attempt budget
@@ -1086,8 +1089,7 @@ entry stands, with the class of the stop (`availability`, `capability` or
 that finds the work can never land, because the cut set never published or the
 recipient left the contact book, drops the entry and emits
 `rotationWorkAbandoned` once. A
-relocation into another scope, a delete, a purge, or a restore into another
-scope that takes a folder with an owed interior move out of the scope it
+relocation into another scope, a delete, a purge, or a restore that takes a folder with an owed interior move out of the scope it
 left is refused, retryably, until the move lands; a crossing the queue
 already holds waits for it, uncharged. At the entry's own cut epoch the published state does not tell a read cascade that
 landed from one that did not, so a re-drive after a lost advance runs one more.
