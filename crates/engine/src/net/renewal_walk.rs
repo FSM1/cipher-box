@@ -178,7 +178,8 @@ impl ScopeMaterial {
 struct Plane {
     scope_id: [u8; 16],
     read_seed: Zeroizing<[u8; 32]>,
-    /// The read epoch `read_seed` belongs to ([`ChildAdopter::with_seed_stamp`]).
+    /// The read epoch `read_seed` belongs to ([`ChildAdopter::with_seed_stamp`]);
+    /// `None` for a held key, which binds no epoch.
     seed_stamp: Option<u64>,
 }
 
@@ -660,7 +661,6 @@ where
                     .iter()
                     .find(|bin| bin.node_id == node_id && !pass.owed.contains(&bin.scope_id))?;
                 let (scope_id, name) = (bin.scope_id, bin.name.clone());
-                // The held key binds no epoch.
                 let plane = Plane {
                     scope_id,
                     read_seed: keys.held_key(&node_id, bin.deleted_at),

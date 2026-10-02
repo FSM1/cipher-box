@@ -612,24 +612,24 @@ fn seal_above(world: &FakeWorld, blocks: &Blocks, node: NodeId, epoch: u64) {
 /// The detail of the abuse the walk reports for a record its gate refused.
 const WALK_REFUSED: &str = "the renewal walk's adoption gate refused the record";
 
-/// The abuse a session reports when the read-epoch floor rises to `floor` while
-/// it reads a folder whose record a writer sealed at `sealed_at` under a key
-/// this device does not hold.
-fn walk_abuse_after_a_floor_rise(sealed_at: u64, floor: u64) -> Vec<String> {
+/// The abuse a session reports when the read-epoch floor rises to `epoch` while
+/// it reads a folder whose record a writer sealed at `epoch` under a key this
+/// device does not hold.
+fn walk_abuse_after_a_floor_rise(epoch: u64) -> Vec<String> {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let nodes = written_then_left(&world, &blocks, |engine, tasks| {
         let outer = create_folder(&world, engine, tasks, ROOT, "outer");
         vec![create_folder(&world, engine, tasks, outer, "inner")]
     });
-    seal_above(&world, &blocks, nodes[0], sealed_at);
+    seal_above(&world, &blocks, nodes[0], epoch);
     let device = world.device(b"a later session");
     let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
     while events.try_next().is_some() {}
     device.floor_store.raise_epoch_floor_on_sequence_read(
         &floor_label(write_name(nodes[0]).as_str().as_bytes()),
         &floor_label(&SCOPE),
-        floor,
+        epoch,
     );
 
     tick(&world, &engine, &mut tasks);
@@ -641,16 +641,15 @@ fn walk_abuse_after_a_floor_rise(sealed_at: u64, floor: u64) -> Vec<String> {
     .concat();
     assert_eq!(
         block_on(device.floor_store.epoch_floor(&floor_key)).expect("the floor reads"),
-        Some(floor),
+        Some(epoch),
         "a read of the record raised the floor",
     );
-    let mut abuse = Vec::new();
-    while let Some(event) = events.try_next() {
-        if let Event::AttributableAbuse { description } = event {
-            abuse.push(description);
-        }
-    }
-    abuse
+    core::iter::from_fn(|| events.try_next())
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A cut on this device raises the read-epoch floor after the walk admitted
@@ -658,7 +657,7 @@ fn walk_abuse_after_a_floor_rise(sealed_at: u64, floor: u64) -> Vec<String> {
 /// seed the cut minted, so it accuses no writer.
 #[test]
 fn a_floor_rise_during_a_walk_read_accuses_no_record_at_the_new_floor() {
-    let abuse = walk_abuse_after_a_floor_rise(OWNER_ROOT_EPOCH + 1, OWNER_ROOT_EPOCH + 1);
+    let abuse = walk_abuse_after_a_floor_rise(OWNER_ROOT_EPOCH + 1);
     assert!(
         !abuse
             .iter()
@@ -671,7 +670,7 @@ fn a_floor_rise_during_a_walk_read_accuses_no_record_at_the_new_floor() {
 /// tampering.
 #[test]
 fn a_walk_record_at_its_seeds_epoch_that_does_not_open_stays_a_violation() {
-    let abuse = walk_abuse_after_a_floor_rise(OWNER_ROOT_EPOCH, OWNER_ROOT_EPOCH);
+    let abuse = walk_abuse_after_a_floor_rise(OWNER_ROOT_EPOCH);
     assert!(
         abuse
             .iter()

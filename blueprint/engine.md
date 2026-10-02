@@ -202,9 +202,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   EOL; the one carve-out is the vault settings resolve, whose reader is always
   its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
-  (FSM1/cipher-box-next#34 D4). Interior old names batch-retire at name-wave completion, each
-  only when the root's or the superseded write scope seed derives it for its node (ADR 0065 D1),
-  and any other old name stays registered to its EOL; the old
+  (FSM1/cipher-box-next#34 D4). Interior old names batch-retire at name-wave completion, under
+  the seed rule of "rotateScopeWrite" (ADR 0065 D1); the old
   scope-root name lingers until the migration window closes (open edge
   below). An abandoned op retires the **whole** set its
   publish charged — the name it registered and every block it uploaded, root

@@ -4044,11 +4044,9 @@ impl WaveSubtree {
         self.inner.borrow_mut().superseded_write_seed = Some(Zeroizing::new(*seed));
     }
 
-    /// Whether each of `names` is a name that the root's or the superseded
-    /// write scope seed derives for a node below the root that this pass
-    /// gated: the only names the wave retires. In a resumed wave the root's
-    /// seed is the new one, so a node that drops there retires a name that
-    /// seed derives (ADR 0065 D1, D2).
+    /// Whether [`Self::retires`] holds for each of `names` at a node below the
+    /// root that this pass gated. In a resumed wave the root's seed is the new
+    /// one, so a node that drops there retires a name that seed derives.
     fn retirable(&self, scope_id: &[u8; 16], names: &[IpnsName]) -> bool {
         let inner = self.inner.borrow();
         let seeds: Vec<&[u8; SECRET_LEN]> = [&inner.root_write_seed, &inner.superseded_write_seed]
@@ -4073,8 +4071,7 @@ impl WaveSubtree {
         names.iter().all(|name| derived.contains(name.as_str()))
     }
 
-    /// Whether the root's or the superseded write scope seed derives `name`
-    /// for `node_id`.
+    /// Backs [`WriteScopeNode::retirable`].
     fn retires(&self, node_id: &[u8; 16], name: &IpnsName) -> bool {
         self.derives(node_id, name)
             || self
@@ -4769,7 +4766,8 @@ where
     /// of the same scope.
     ///
     /// `None` on anything unreadable: without it the wave tombstones nothing,
-    /// which leaks a registration instead of retiring a live name.
+    /// which leaks a registration instead of retiring a live name. A proved seed
+    /// is also kept for [`Self::retire`].
     fn superseded_write_scope_seed(
         &self,
         envelope: &Envelope,
@@ -4796,13 +4794,11 @@ where
         let payload =
             open_owner_history_link(self.owner_enc_secret, &ctx, &body.write_history_link).ok()?;
         let prev = Zeroizing::new(*payload.prev_seed());
-        (derive_write_name(&prev, &self.scope_id) == *superseded_root_name).then_some(prev)
-    }
-
-    /// Hand the wave the superseded seed, and keep it for [`Self::retire`].
-    fn superseded(&self, prev: &[u8; SECRET_LEN]) -> SecretBytes {
-        self.subtree.record_superseded_write_seed(prev);
-        SecretBytes::new(*prev)
+        if derive_write_name(&prev, &self.scope_id) != *superseded_root_name {
+            return None;
+        }
+        self.subtree.record_superseded_write_seed(&prev);
+        Some(prev)
     }
 
     /// Fetch and adoption-gate this scope's root at `name`, refusing an envelope
@@ -4865,7 +4861,7 @@ where
                     repoint.write_epoch,
                     superseded_root,
                 )
-                .map(|prev| self.superseded(&prev)),
+                .map(|prev| SecretBytes::new(*prev)),
         })
     }
 
@@ -5508,7 +5504,7 @@ where
                 repoint.write_epoch,
                 self.current_root_name,
             )
-            .map(|prev| self.superseded(&prev));
+            .map(|prev| SecretBytes::new(*prev));
         Ok(RecoveredWave {
             in_flight: Some(ResumedWriteWave {
                 write_scope_seed: SecretBytes::new(*seed),
@@ -13450,17 +13446,10 @@ mod tests {
     #[test]
     fn retire_refuses_a_name_outside_the_walked_scope() {
         let harness = Harness::plain();
-        let mid_name = stage_node(&harness, MID, &folder(Vec::new()));
-        let root = staged_root(
-            &harness,
-            vec![ref_to(MID, &mid_name)],
-            Vec::new(),
-            Vec::new(),
-        );
+        let (root, mid_name) = staged_over_mid(&harness);
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
-        block_on(net.resolve_node(&SCOPE, None)).expect("the root resolves");
-        block_on(net.resolve_node(&MID, None)).expect("the walk adopts MID");
+        walk_root_and_mid(&net);
 
         for outside in [
             derive_write_name(&[0x4e; 32], &MID),
@@ -13481,13 +13470,7 @@ mod tests {
     /// not hold.
     fn interior_stop_after_a_floor_rise(epoch: u64) -> NodeStop {
         let harness = Harness::plain();
-        let mid_name = stage_node(&harness, MID, &folder(Vec::new()));
-        let root = staged_root(
-            &harness,
-            vec![ref_to(MID, &mid_name)],
-            Vec::new(),
-            Vec::new(),
-        );
+        let (root, _) = staged_over_mid(&harness);
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         block_on(net.resolve_node(&SCOPE, None)).expect("the root resolves");
