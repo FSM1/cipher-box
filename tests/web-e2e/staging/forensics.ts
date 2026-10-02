@@ -7,11 +7,15 @@
 
 import type { Page } from '@playwright/test';
 
-// A JWT, then a long run of base64, base64url or hex: the shape of a token,
-// a key or a share.
+// The shapes of a token, a key, a share or a person: a JWT, a query or a
+// fragment, an email, padded base64, and a long run inside one path segment, so
+// that the path around it stays readable.
 const SECRET_SHAPES: readonly RegExp[] = [
   /eyJ[\w-]*\.[\w-]*\.[\w-]*/g,
-  /[A-Za-z0-9+/_-]{32,}={0,2}/g,
+  /[?#][^\s"']*/g,
+  /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,
+  /[A-Za-z0-9+/]{24,}={1,2}/g,
+  /[A-Za-z0-9+_-]{24,}/g,
 ];
 
 export function redact(text: string): string {

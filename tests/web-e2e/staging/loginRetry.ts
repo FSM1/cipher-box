@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 /**
  * Refusals that the Web3Auth sapphire devnet nodes raise under their own load.
  * A fault window outlasts one attempt, so a match waits and tries again; any
@@ -19,6 +22,37 @@ export function devnetFault(refusal: string): DevnetFault | null {
 
 /** The wait before each retry of a devnet fault: 3.5 minutes in total. */
 export const DEVNET_BACKOFF_MS: readonly number[] = [15_000, 30_000, 60_000, 105_000];
+
+/** What a sign-in does after a refused attempt. */
+export type NextStep =
+  | { action: 'retry'; fault: DevnetFault; waitMs: number }
+  | { action: 'fail'; fault: DevnetFault | null; result: 'refused' | 'exhausted' };
+
+/**
+ * Decides the step after refused `attempt` (0-based). Once a sign-in in this
+ * run has exhausted the backoff, the devnet is down for the run, and a later
+ * sign-in that waits again only pushes the run past its step timeout.
+ */
+export function nextStep(attempt: number, refusal: string, runExhausted: boolean): NextStep {
+  const fault = devnetFault(refusal);
+  if (fault === null) return { action: 'fail', fault, result: 'refused' };
+  const waitMs = runExhausted ? undefined : DEVNET_BACKOFF_MS[attempt];
+  if (waitMs === undefined) return { action: 'fail', fault, result: 'exhausted' };
+  return { action: 'retry', fault, waitMs };
+}
+
+// A file, not module state: Playwright starts a new worker after a failed
+// test, and the output directory is emptied at the start of each run.
+const EXHAUSTED_FILE = 'devnet-exhausted';
+
+export function runExhausted(outputDir: string): boolean {
+  return existsSync(join(outputDir, EXHAUSTED_FILE));
+}
+
+export function markRunExhausted(outputDir: string): void {
+  mkdirSync(outputDir, { recursive: true });
+  writeFileSync(join(outputDir, EXHAUSTED_FILE), '');
+}
 
 /**
  * One sign-in, as the stats see it: the faults it absorbed, by attempt, and how

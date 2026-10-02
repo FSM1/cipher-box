@@ -1,5 +1,17 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DEVNET_BACKOFF_MS, devnetFault, summarize } from './loginRetry';
+import {
+  DEVNET_BACKOFF_MS,
+  devnetFault,
+  markRunExhausted,
+  nextStep,
+  runExhausted,
+  summarize,
+} from './loginRetry';
+
+const NONCE = 'could not retrieve nonce: Internal error';
 
 describe('devnetFault', () => {
   it.each([
@@ -60,5 +72,51 @@ describe('summarize', () => {
     expect(summarize([])).toBe(
       'sign-ins: 0, recovered: 0, absorbed faults: none, failed after all retries: 0, refused: 0'
     );
+  });
+});
+
+describe('nextStep', () => {
+  it('fails at once on a refusal that is not a devnet fault', () => {
+    expect(nextStep(0, 'the wallet signature was rejected', false)).toEqual({
+      action: 'fail',
+      fault: null,
+      result: 'refused',
+    });
+  });
+
+  it('retries a devnet fault with the backoff of its attempt', () => {
+    DEVNET_BACKOFF_MS.forEach((waitMs, attempt) => {
+      expect(nextStep(attempt, NONCE, false)).toEqual({ action: 'retry', fault: 'nonce', waitMs });
+    });
+  });
+
+  it('stops after the last wait, on the fifth attempt', () => {
+    expect(nextStep(DEVNET_BACKOFF_MS.length, NONCE, false)).toEqual({
+      action: 'fail',
+      fault: 'nonce',
+      result: 'exhausted',
+    });
+  });
+
+  it('does not wait in a run that has already exhausted the backoff', () => {
+    expect(nextStep(0, NONCE, true)).toEqual({
+      action: 'fail',
+      fault: 'nonce',
+      result: 'exhausted',
+    });
+  });
+});
+
+describe('run exhaustion state', () => {
+  it('reads false until a sign-in marks it, and true after', () => {
+    const root = mkdtempSync(join(tmpdir(), 'login-retry-'));
+    const outputDir = join(root, 'test-results');
+    try {
+      expect(runExhausted(outputDir)).toBe(false);
+      markRunExhausted(outputDir);
+      expect(runExhausted(outputDir)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

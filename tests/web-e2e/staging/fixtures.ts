@@ -17,10 +17,11 @@ import type { Hex } from 'viem';
 import { FilesPage } from '../page-objects/files.page';
 import { LoginPage } from '../page-objects/login.page';
 import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
-import { recordForensics, requestTarget, type Forensics } from './forensics';
+import { recordForensics, redact, requestTarget, type Forensics } from './forensics';
 import {
-  DEVNET_BACKOFF_MS,
-  devnetFault,
+  markRunExhausted,
+  nextStep,
+  runExhausted,
   SIGN_IN_ANNOTATION,
   type SignInRecord,
 } from './loginRetry';
@@ -167,11 +168,11 @@ export async function signIn(page: Page): Promise<number> {
  * waits for `signedIn`. Returns the milliseconds the successful attempt took.
  *
  * The auth network refuses a login under its own load, which the panel draws as
- * a banner and not as a navigation. A devnet fault waits out its window, then
- * reloads the same address, fragment included, and tries again; any other
- * refusal fails at once. The thrown error lists each refused request of the
- * last attempt by host, path and status only, since a body or a query can
- * carry a token. Each sign-in leaves a {@link SignInRecord} annotation, which
+ * a banner and not as a navigation. {@link nextStep} decides what follows a
+ * refusal: a devnet fault waits out its window, then reloads the same address,
+ * fragment included, and tries again. The thrown error lists each refused
+ * request of the last attempt by host, path and status only, and is redacted,
+ * since it lands in a public log. Each sign-in leaves a {@link SignInRecord} annotation, which
  * the staging reporter sums.
  */
 export async function signInWithWallet(page: Page, signedIn: Locator): Promise<number> {
@@ -182,7 +183,10 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
     test.info().annotations.push({ type: SIGN_IN_ANNOTATION, description: JSON.stringify(record) });
   };
 
+  const outputDir = test.info().project.outputDir;
+
   for (let attempt = 0; ; attempt += 1) {
+    const attemptStarted = Date.now();
     if (attempt > 0) await page.reload();
     await expect(login.walletButton).toBeEnabled({ timeout: 60_000 });
 
@@ -208,18 +212,20 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
       return Date.now() - started;
     }
 
-    const fault = devnetFault(refusal);
-    const wait = DEVNET_BACKOFF_MS[attempt];
-    if (fault !== null) faults.push({ fault, attempt: attempt + 1 });
-    if (wait === undefined || fault === null) {
-      annotate(fault === null ? 'refused' : 'exhausted');
+    const step = nextStep(attempt, refusal, runExhausted(outputDir));
+    if (step.fault !== null) faults.push({ fault: step.fault, attempt: attempt + 1 });
+    if (step.action === 'fail') {
+      if (step.result === 'exhausted') markRunExhausted(outputDir);
+      annotate(step.result);
       throw new Error(
-        `the wallet login was refused on attempt ${attempt + 1}; the refusal read: ` +
-          `${refusal}; the refused requests: ${failed.join(', ') || 'none'}`
+        redact(
+          `the wallet login was refused on attempt ${attempt + 1}; the refusal read: ` +
+            `${refusal}; the refused requests: ${failed.join(', ') || 'none'}`
+        )
       );
     }
-    test.info().setTimeout(test.info().timeout + (Date.now() - started) + wait);
-    await page.waitForTimeout(wait);
+    test.info().setTimeout(test.info().timeout + (Date.now() - attemptStarted) + step.waitMs);
+    await page.waitForTimeout(step.waitMs);
   }
 }
 
