@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "929ad3d1a93e",
+  "strategy": "manual-commit",
+  "branch": "fix/login-busy-labels-per-method",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/auth-ui/src/RecoveryPhraseForm.test.tsx",
+    "packages/auth-ui/src/RecoveryPhraseForm.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/92/9ad3d1a93e/0/metadata.json",
+      "transcript": "/92/9ad3d1a93e/0/full.jsonl",
+      "compact_transcript": "/92/9ad3d1a93e/0/transcript.jsonl",
+      "content_hash": "/92/9ad3d1a93e/0/content_hash.txt",
+      "prompt": "/92/9ad3d1a93e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3312,
+    "cache_creation_tokens": 430037,
+    "cache_read_tokens": 40347982,
+    "output_tokens": 156904,
+    "api_call_count": 153
+  }
+}

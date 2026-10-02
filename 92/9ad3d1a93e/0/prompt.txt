@@ -1,0 +1,2096 @@
+/mattpocock-skills:diagnosing-bugs I found another bug I want you to log and fix: Adding a wallet login method to a google main login account and then logging in with the wallet leads to a different account [Image: image.png; ref=image_cfad974d-de7a-4d64-8565-16c9c7359686] [Image: image.png; ref=image_3bce97ba-f13d-4263-a790-e0ae0daeddda] In the 2nd screenshot I am trying to log in with the same `0xa29A9bA09806c2bB8DC61f8edCddAfe99920aF4d` that I linked in the first screenshot, but I am taken to a different account
+
+<t3_context version="1">
+<context kind="image" id="image_cfad974d-de7a-4d64-8565-16c9c7359686">
+name: image.png
+mimeType: image/png
+sizeBytes: 68868
+attachmentId: 6f491603-2031-4a27-95c5-3dbfb7bdb568-b5e6d903-add0-40fe-9d5d-a156877bbbf9
+</context>
+<context kind="image" id="image_3bce97ba-f13d-4263-a790-e0ae0daeddda">
+name: image.png
+mimeType: image/png
+sizeBytes: 144532
+attachmentId: 6f491603-2031-4a27-95c5-3dbfb7bdb568-b36c38d0-41e4-4de4-a610-fdabf244b786
+</context>
+</t3_context>
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/6f491603-2031-4a27-95c5-3dbfb7bdb568-b5e6d903-add0-40fe-9d5d-a156877bbbf9.png]
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/6f491603-2031-4a27-95c5-3dbfb7bdb568-b36c38d0-41e4-4de4-a610-fdabf244b786.png]
+
+---
+
+while you're there, an option should exist to bind an email to an existing google login, even if it is the same email as the google login, since the google auth is tied to the google user ID - these should be seen as different credential by the system, and should be linkable.
+
+---
+
+for any auth path queries, feel free to refer back to the v1 code which had this all working really well.
+
+---
+
+also please log an issue to implement a true terminal style trigger for the google login. Design wise I would like it to look something like this: [Image: image.png; ref=image_84138866-ef44-4f0c-8091-8e8a62513313] ideally if this button could just be a trigger for the existing iframe approach that would be grant.
+
+<t3_context version="1">
+<context kind="image" id="image_84138866-ef44-4f0c-8091-8e8a62513313">
+name: image.png
+mimeType: image/png
+sizeBytes: 911405
+attachmentId: 6f491603-2031-4a27-95c5-3dbfb7bdb568-67a3b8ac-fbee-41f6-aa7f-97ba19f6a2ab
+</context>
+</t3_context>
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/6f491603-2031-4a27-95c5-3dbfb7bdb568-67a3b8ac-fbee-41f6-aa7f-97ba19f6a2ab.png]
+
+---
+
+oooh another glitch I noticed is that when logging in with a wallet, the obfuscated wallet address is not displayed anywhere.
+
+---
+
+<task-notification>
+<task-id>bg9t70qfz</task-id>
+<tool-use-id>toolu_01LscL3dQFU2oaK9ULf7tjXs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/bg9t70qfz.output</output-file>
+<status>killed</status>
+<summary>Background command "Start the web dev server with a fresh WASM build" was stopped after reaching its background time limit</summary>
+<note>If the work in progress still needs it, start it again with `run_in_background` and a longer `timeout`. If it already had the longest `timeout` allowed, do not restart it. Either way, report that it was stopped.</note>
+</task-notification>
+
+---
+
+there's no wallet address listed anywhere as you can see
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/6f491603-2031-4a27-95c5-3dbfb7bdb568-767faa33-569e-4bea-8757-1eba23beca62.png]
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/6f491603-2031-4a27-95c5-3dbfb7bdb568-91c040e5-062a-459a-b918-a4749e882ed6.png]
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/6f491603-2031-4a27-95c5-3dbfb7bdb568-543a74b6-8f3e-4d23-b1ca-d97a13337ba8.png]
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/6f491603-2031-4a27-95c5-3dbfb7bdb568-c4ff4063-192c-41bb-a9b3-c09046b20528.png]
+
+---
+
+<task-notification>
+<task-id>a6f743c22e289ebe4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a6f743c22e289ebe4.output</output-file>
+<status>completed</status>
+<summary>Agent "Wallet sign-in display label" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I implemented issue #2201 in three commits on `fix/wallet-sign-in-display-label` (worktree `/Users/myankelev/Code/random/cipher-box-wt/wallet-label`). All the gates pass. I did not push and I did not open a PR. The main checkout still shows only its three untracked paths from before.
+
+After a wallet sign-in, the user menu and the account pane now show the truncated wallet address. Google and email sign-ins show the same text as before. The full wallet address does not leave the exchange.
+
+The truncated form is `0xa29A...aF4d` with three ASCII dots, not the `…` character. This is the output of `truncateWalletAddress`, and I did not change that function because `auth.service.ts` also uses it.
+
+## Commits and files
+
+**`8935afb47` fix(api): carry a display identifier in every identity grant**
+- `apps/api/src/auth/services/identity-exchange.service.ts`: `IdentityGrant` gets `display: string`. Email gives the normalized address. Google gives the Google email (it is always present, because `verify` rejects a token without one). Wallet gives `siwe.truncateWalletAddress(address)`. `email` does not change.
+- `apps/api/src/auth/dto/identity.dto.ts`: `display` added to `IdentityTokenResponseDto`, with its `@ApiProperty` description and example.
+- `apps/api/src/auth/identity.controller.ts`: `present()` passes `display` through.
+- `apps/api/openapi.json`: regenerated, because the CI "OpenAPI freshness" check compares it.
+- `apps/api/src/auth/services/identity-exchange.service.test.ts`: this is a new file, because no unit test for the exchange service existed.
+- `apps/api/src/auth/identity.http.itest.ts`: new `display` assertions.
+
+**`9bfda0ac4` fix(login): keep the display identifier with the credential**
+- `packages/login/src/identity.ts`: `IdentityCredential.display` added and read from the grant body.
+- `packages/login/src/session.ts`: the seam you called `Session` is `CoreKitSession`. It gets `display(): string | null`, and `AccountRecord.signedIn` gets a third argument, `display`.
+- `packages/login/src/flow.ts`: `handOff` passes `display` to `account.signedIn`.
+- `packages/login/src/testFakes.ts` (new constant `FAKE_WALLET_DISPLAY`), `flow.test.ts`, `identity.test.ts`, `hostAgnostic.test.ts`: updated.
+
+**`3433a6f3d` fix(web): show the sign-in display identifier for every method**
+- `apps/web/src/auth/coreKit.ts`: the session keeps `signedInDisplay` and clears it on logout. The display goes into the same sealed slot as the email, as `{subject, email, display}`, and a restore reads it back. Before, the slot was deleted when the email was null. Now a wallet sign-in writes the slot with its display. The stored key name stays `cipherbox_account_email`, so `clearStore` still removes it. I only renamed the constant to `ACCOUNT_LABELS_KEY`.
+- `apps/desktop/src/auth/coreKit.ts`: `signedInDisplay` and `display()` added, in memory only, the same as the email on desktop.
+- `apps/web/src/stores/auth.store.ts`: `display` added. The store keeps it for every method, and the equality check now compares it too.
+- `UserMenu.tsx`: renders `display ?? '[an0n]'`.
+- `SettingsPage.tsx`: the row label reads `wallet` for a wallet sign-in and `address` for the others. I added the test id `settings-identifier-label` to that label. The value keeps `settings-email`.
+- Updated tests and fakes: `authFakes.tsx`, `coreKit.test.ts` (web), `CoreKitProvider.test.tsx`, `useAuth.test.tsx`, `UserMenu.test.tsx`, `SettingsPage.test.tsx`, `auth.store.test.ts`, `apps/desktop/src/auth/coreKit.test.ts`.
+
+## Tests added or changed
+- **Exchange unit test, email:** the display is the normalized address.
+- **Exchange unit test, Google:** the display is the Google email, and the Google subject does not appear.
+- **Exchange unit test, wallet:** the display is the truncated checksummed address, `email` is null, and the serialized grant does not contain the full address.
+- **Integration, email:** `display` equals the address, including for the address typed in uppercase with spaces.
+- **Integration, Google:** `display` equals the Google email.
+- **Integration, wallet:** `display` is the truncated form, and the response body does not contain the full address in any letter case.
+- **Login package:** the handoff gives the account record `{method, email, display}`. A wallet grant carries the truncated display. A restored session reports `display: null`.
+- **Web Core Kit session:**
+  - It reports and clears the display.
+  - A restore reads back email and display.
+  - It ignores labels that belong to a different subject.
+  - A wallet display survives a restore, while the email stays null.
+  - Nothing remains after logout.
+- **Desktop Core Kit session:** it reports the display and drops it on sign-out.
+- **useAuth:** a wallet sign-in puts the truncated display in the store, with `email` null.
+- **Auth store:** a wallet sign-in keeps its display. A different display makes a new snapshot.
+- **UserMenu:** a wallet session shows the truncated address. A session with no display shows `[an0n]`.
+- **SettingsPage:** the label reads `address` with the email for Google. It reads `wallet` with the truncated address for a wallet sign-in. It shows `[an0n]` when there is no display.
+
+## Gates
+- `apps/api`:
+  - `pnpm typecheck`: clean.
+  - `pnpm test`: 491 passed (43 files).
+  - `pnpm test:integration -- identity`: 275 passed. The filter did not narrow the run, so all 19 files ran.
+  - Verbose run of `identity.http.itest.ts` alone: 20 passed.
+- `packages/login`: `pnpm typecheck` is clean. `pnpm test`: 57 passed (5 files).
+- `apps/web`: `pnpm test` (`tsc -b &amp;&amp; vitest run`): 880 passed (69 files). The worktree had no WASM, so I ran `pnpm build:wasm` first with `CARGO_TARGET_DIR=…/wallet-label-target`. The build output is ignored by git.
+- `apps/desktop`: `pnpm typecheck` is clean. `pnpm test`: 112 passed (8 files).
+- `pnpm eslint` and `pnpm prettier --check` on all the changed files: clean.
+
+## Residuals
+- Desktop `main.ts` and `frontDoor.tsx` still show `model.email`. Desktop has no wallet sign-in, so the display is the same as the email there and nothing changes for the member. I did not connect the display on desktop.
+- No e2e test in `tests/` checks `[an0n]`, `settings-email` or the shape of the grant body. `tests/web-e2e/tools/exportLoginSecret.ts` reads only `token` and `verifierId`, so I changed nothing there.
+- The web client now expects `display` in every grant. An older API that does not send it gives no display, and the UI then shows `[an0n]`. The project does not support old versions, so I added no fallback.
+
+My scratch files are in `/tmp/cb-wallet-label/`.</result>
+<usage><subagent_tokens>158578</subagent_tokens><tool_uses>71</tool_uses><duration_ms>895449</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7e1b9ed201a47cbb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a7e1b9ed201a47cbb.output</output-file>
+<status>completed</status>
+<summary>Agent "Engine+web: email link flow" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The client half of the email link is built and committed in three commits (engine, client package, web). Every gate the brief names passes. I did not push or open a PR, and I did not touch the main checkout.
+
+Worktree: `/Users/myankelev/Code/random/cipher-box-wt/link-ui`, branch `fix/link-method-points-at-subject-ui`, on top of main at `4ed4aad47`.
+- `de68a4403` feat(engine): link an email code login to the signed-in account
+- `5a2d13cd6` feat(client): wrap the email link commands
+- `79dd598f3` feat(web): link an email code login from the settings pane
+
+## Files changed
+**Engine**
+- `crates/engine/src/api/types.rs`: two new request bodies. `AuthMethodKind` gains `Email`. Without it, an `'email'` row decodes as `unknown`, and the web table `email: 'email'` does not type-check.
+- `crates/engine/src/api/client.rs`: `email_link_send_code` and `email_link`, beside `siwe_link`.
+- `crates/engine/src/facade.rs`: two new commands, their wire names and their dispatch.
+- `crates/wasm`: no change. Its per-command table only extracts secret fields (`claimInviteLink`, `registerDevice`, `saveVaultSettings`), and `siweLink` is not in it either.
+
+**Client package**
+- `packages/client/src/facade.ts`, `facade.test.ts`
+- `packages/client/src/worker/commandCodec.ts`, `commandCodec.test.ts`: `AUTH_METHOD_KINDS` gains `email`. Without it the codec rejects an email row.
+- `broadcastTransport.ts` has no per-command table, so it did not change.
+
+**Web**
+- `apps/web/src/hooks/useAuthMethods.ts`
+- `apps/web/src/components/settings/AuthMethodsPane.tsx`
+- `apps/web/src/components/settings/AuthMethodsPane.test.tsx`
+- `apps/web/src/test/authFakes.tsx`
+
+## Commands and requests
+- `emailLinkSendCode { email }` posts `POST /auth/email/link/send-code` with a Bearer token and the body `{"email": ...}`.
+- `emailLink { email, code }` does two requests, as `siwe_link` does:
+  1. `POST /auth/challenge/step-up` with `{"operation":"link"}`. The engine checks the challenge prefix before the identity key signs it.
+  2. `POST /auth/email/link` with a Bearer token and `{"email", "code", "challenge", "challengeSignature"}`.
+- Both commands accept a 201 with an empty body. A 409 becomes `ApiError::Status { message }`, and the host shows it as `"api returned status 409: Email is already linked to another account"`. This is the same mapping that `siwe_link` uses.
+
+## Tests added
+**Engine, `client.rs`**
+- `email_link_send_code_posts_the_address_as_the_owner`: one Bearer POST with exactly `{email}`, and no step-up challenge.
+- `email_link_mints_the_link_challenge_and_reproves_the_identity_key`: a link challenge is fetched first, then the exact four-field body is posted, and the 201 with no body is accepted.
+- `a_refused_email_link_carries_the_api_message`: a 409 keeps the API's message string.
+- Extended `an_unlink_challenge_the_api_could_not_have_issued_is_never_signed`: `email_link` does not sign a challenge the API could not have issued.
+- Extended `auth_methods_decodes_display_rows_including_an_unknown_kind`: an `email` row decodes with its masked address.
+
+**Engine, `facade.rs`**
+- `email_link_send_code_command_forwards_the_address`: the command posts the right path and body.
+- `email_link_command_forwards_the_code_and_reproves_the_identity_key`: the body carries the session identity key's signature over the link challenge.
+- Extended `a_step_up_challenge_for_another_operation_is_never_signed`: `EmailLink` does not sign a challenge for another operation.
+
+**Client package**
+- `facade.test.ts`, "sends a request for an email link code naming only the address": the descriptor is `{kind:'emailLinkSendCode', email}`.
+- `facade.test.ts`, "sends an email link as its own command, never as a login": the descriptor is `{kind:'emailLink', email, code}`.
+- Extended `commandCodec.test.ts` "passes known rows through": an `email` row passes the codec.
+
+**Web, `AuthMethodsPane.test.tsx`**
+- "links an email with the code sent to it, then re-reads the list": the address is trimmed and lowercased, non-digits are stripped from the code, the link is sent, the list is re-read, and the form closes.
+- "shows the API refusal of a link and keeps the code step open": the 409 text shows in `settings-auth-error`.
+- "stays on the address step when the code is refused": the form does not advance when the send fails.
+- "starts over at a new address and sends the code there": the old code is cleared, and the link uses the second address.
+- "labels only the send in flight as sending": the busy label follows the pane's own command, and the wallet button keeps its label.
+- "labels an email row by its kind": the row shows the `email` label and the masked address, and it can be unlinked.
+
+## Gate commands and last lines
+- `cargo fmt --all --check`: no output (passed).
+- `cargo clippy --workspace --all-targets -- -D warnings`: `Finished dev profile ... in 3m 30s`, exit 0.
+- `cargo test -p cipherbox-engine`: `test result: ok. 2062 passed; 0 failed` (library), and all other binaries passed with 0 failures.
+- `cargo check --target wasm32-unknown-unknown -p cipherbox-wasm`: `Finished dev profile ... in 1m 02s`, exit 0.
+- `pnpm build:wasm` (packages/client): `Engine WASM + bindings written to .../packages/client/wasm`.
+- `pnpm typecheck` (packages/client): clean.
+- `pnpm test` (packages/client): `Tests 690 passed (690)`.
+- `cd apps/web &amp;&amp; pnpm test`: `Test Files 69 passed (69)`, `Tests 882 passed (882)`.
+- `pnpm exec prettier --check` and `pnpm exec eslint` on the changed TS files from the repo root: both clean.
+
+All cargo commands used `CARGO_TARGET_DIR=/Users/myankelev/Code/random/cipher-box-wt/link-ui-target`.
+
+## Residuals
+1. **A mistyped code gets a generic message.** The API answers a bad code with a 401. The engine then refreshes the session once and retries, which sends the used code and the used challenge again, and the host shows "api rejected the request as unauthorized". `siwe/link` has the same behaviour. I did not change it.
+2. **No contract tests yet.** There is no live contract test for the two new routes, because the API half has not landed. `crates/contract/tests/contract.rs` has `siwe_link_*` cases to copy when it does.
+3. **No browser check.** I did not run Puppeteer, because no stack I can start has the endpoints. Manual steps:
+   - Open settings and click `[LINK AN EMAIL]`.
+   - Enter an address and click `[SEND CODE]`, then enter the code and click `[LINK]`.
+   - Expect an `email` row with a masked address.
+   - Repeat with an address that is linked to another account, and expect the 409 text in `settings-auth-error`.
+4. **Two additions the brief did not ask for:**
+   - The address step has a `// cancel` button. Without it, the member cannot close the form.
+   - `useAuthMethods().busy` is now the in-flight command name or `null`, not a boolean. The pane is its only consumer.
+5. **Label style mismatch.** The new button reads `[LINK AN EMAIL]` as the brief specifies, but the wallet button beside it reads `link a wallet` in lower case. The owner should pick one style.
+6. **The code is a plain `String` in the command.** The wallet signature is handled the same way. The address and the code stay only in the form state, and the form clears them when the link lands or when the member starts over.
+
+## Contract deviation
+None. The paths and bodies match the contract exactly.</result>
+<usage><subagent_tokens>142440</subagent_tokens><tool_uses>52</tool_uses><duration_ms>1060882</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>acb3beb1948b33e5d</task-id>
+<tool-use-id>toolu_011GhBLVVRtGTTGG1ob8GWV3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/acb3beb1948b33e5d.output</output-file>
+<status>completed</status>
+<summary>Agent "API: link points at subject" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I built the API half of both issues and all the API gates pass. The bug from issue 2198 is fixed: a wallet linked to a Google account now opens that account. The email link routes from issue 2199 match the contract exactly. Worktree: `/Users/myankelev/Code/random/cipher-box-wt/link-api`, branch `fix/link-method-points-at-subject`, 8 commits on top of main at 4ed4aad47. I did not push, did not open a PR, did not touch the main checkout and did not regenerate the OpenAPI document.
+
+## Red run (step 1)
+This is the second run. The first run failed on a bug in my test helper, not on the product bug.
+```
+ FAIL  src/auth/method-link.http.itest.ts &gt; method link HTTP flows (real Postgres) &gt; wallet link &gt; a linked wallet exchange reaches the subject of the account it was linked to
+AssertionError: expected 'a313ccc8-f97f-42eb-81a8-0123b15c6a40' to be '5642cbde-7909-46e6-be42-9bf5133e9a5f' // Object.is equality
+
+Expected: "5642cbde-7909-46e6-be42-9bf5133e9a5f"
+Received: "a313ccc8-f97f-42eb-81a8-0123b15c6a40"
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+```
+
+## Commits
+1. `16c630b8d test(api): prove a linked wallet exchange reaches the account's subject`
+2. `8636bc204 feat(api): give each identity subject row a subject id`
+3. `69de8a675 feat(api): read the bound subject of an account from its devices`
+4. `3c629298e fix(api): point a linked wallet at the subject of the account`
+5. `0351b7ce5 fix(api): unlink removes the subject row the link wrote`
+6. `afc0592bb test(api): prove a refused wallet link writes nothing`
+7. `7cdee1f51 feat(api): link a passwordless email address to an account`
+8. `6ff0b4dac docs: state the subject_id column and the method link rules`
+
+## Files changed
+All paths are under `/Users/myankelev/Code/random/cipher-box-wt/link-api/`.
+- New: `apps/api/src/migrations/1790700000000-AddIdentitySubjectSubjectId.ts` (adds `subject_id`, backfills `subject_id = id`, sets NOT NULL, adds the index). A local drift check (`migration:generate`) found no changes.
+- New: `apps/api/src/auth/method-link.http.itest.ts`
+- `apps/api/src/auth/`: `auth.controller.ts`, `auth.module.ts`, `auth.module.test.ts`, `dto/auth.dto.ts`, `entities/auth-method.entity.ts`, `entities/identity-subject.entity.ts`, `auth.http.itest.ts`, `identity.http.itest.ts`
+- `apps/api/src/auth/services/`: `auth.service.ts`, `auth.service.test.ts`, `email-otp.service.ts`, `email-otp.service.test.ts`, `identity-exchange.service.ts`, `identity-subject.service.ts`, `identity-subject.service.test.ts`, `identity-token.service.ts` (comment only), `siwe.service.ts` (`hashWalletAddress` removed; both tables now use `identityService.hashIdentifier`)
+- `apps/api/src/common/advisory-lock.ts` (new `authMethodIdentifierLockKey`)
+- `apps/api/src/device-approval/`: `device-approval.module.ts`, `device-approval.http.itest.ts` (its hand-written insert now sets `subject_id`), `services/account-device.service.ts`, `services/account-device.service.test.ts`
+- `apps/api/src/ops/ops.http.itest.ts`, `apps/api/src/ops/trust-proxy.http.itest.ts` (wiring only)
+- `apps/api/src/testing/integration-db.ts` (registers the migration)
+- `blueprint/api.md`
+
+## Tests added
+**`method-link.http.itest.ts`** (14 tests, real Postgres, real exchange, real `POST /devices`):
+- After a wallet link, a wallet sign-in returns the Google subject S.
+- After an unlink, a wallet sign-in mints a subject that is not S.
+- An account with no registered device gets 409 'This account has no bound identity subject', and no rows are written.
+- A wallet that already has its own subject gets 409 'Wallet already opens another account'. Nothing is written and the wallet keeps its own subject.
+- Unlinking the wallet the account was created through gets 409, and the wallet still opens the account.
+- After an email link, an email sign-in through `send-code` and `verify-code` returns S.
+- The Google account's own email address can be linked, and it then opens S.
+- A sign-in code at `POST /auth/email/link` gets 401 and writes nothing.
+- A link code at `verify-code` gets 401.
+- `POST /auth/email/link/send-code` without a session gets 401.
+- An address that already has its own subject gets 409 'Email is already linked to another account', and nothing is written.
+- An account with no device gets 409 for the email link, and nothing is written.
+- The method list shows the address masked as `l***@example.com`.
+- After an email unlink, an email sign-in mints a new subject.
+
+**Unit tests:**
+- `auth.service.test.ts`, wallet link:
+  - The link writes the subject row with the bound subject, under the same hash the exchange uses.
+  - A repeated link with the same subject changes nothing.
+  - Each of the three 409 refusals writes nothing.
+  - A unique-index violation from a racing exchange becomes 409.
+- `auth.service.test.ts`, unlink:
+  - It deletes the subject row the link wrote.
+  - It refuses the account's own origin identity.
+  - It keeps the origin row of another subject and deletes only the display row.
+- `auth.service.test.ts`, email link:
+  - It writes the masked display row and the subject row.
+  - It refuses a sign-in code, a forged re-proof, an address linked to another account, an address that has its own subject, and an account with no bound subject. Each refusal writes nothing.
+- `account-device.service.test.ts`, `boundSubjectOf`:
+  - It returns the one subject the devices carry.
+  - It returns null for an account with no device.
+  - It returns null when the devices carry two subjects.
+  - It does not read another account's devices.
+- `email-otp.service.test.ts`:
+  - A sign-in code is refused as a link code, and the reverse.
+  - Each purpose keeps its own outstanding code.
+- `identity-subject.service.test.ts`:
+  - A fresh row has `subject_id` equal to its id.
+  - A resolve returns the subject a linked row points at, not the row id.
+
+## Gates on the final HEAD
+- `pnpm typecheck`: exit 0
+- `pnpm test`: `Test Files 42 passed (42)`, `Tests 511 passed (511)`
+- `pnpm test:integration`: `Test Files 20 passed (20)`, `Tests 288 passed (288)`
+- `pnpm lint`: there is no such script in `apps/api`, so I ran root `pnpm eslint` on the changed files instead: exit 0
+- `pnpm prettier --check` on the changed files: "All matched files use Prettier code style!"
+- `pnpm exec markdownlint blueprint/api.md`: exit 0
+- `pnpm lint:tracker-refs`: "No tracking-issue references in 1095 source files."
+
+## Changes from the brief
+None from the issue 2199 contract. Four changes from the brief's steps:
+- **Unlink (step 5).** A blanket delete breaks in two cases, because `account_devices` has a foreign key to `identity_subjects.id`:
+  - **The method is the account's own origin identity.** An example is a wallet-first account that links the same wallet. Deleting that row hits the foreign key and gives a 500. The unlink now answers 409, because a removal would revoke nothing.
+  - **The subject row is the origin of another subject.** This is data from before the fix. The unlink removes only the display row and leaves the other vault's subject alone.
+
+  Only rows that a link wrote are deleted.
+- **Module wiring.** `AccountDeviceService` moved from `DeviceApprovalModule` to `AuthModule`, which now provides and exports it. Injecting it into `AuthService` would otherwise make a circular import between the two modules. No test builds `DeviceApprovalModule`'s dependency graph, so only a real app boot proves this wiring.
+- **DTOs.** `SiweLinkRequestDto` is now `IntersectionType(SiweLoginRequestDto, IdentityLinkProofDto)`, and `EmailLinkRequestDto` reuses the same proof class. When you regenerate the OpenAPI document, check whether the schema for `siwe/link` moved.
+- **Test helpers.** `auth.http.itest.ts` gained a `boundLogin()` helper that seeds a subject row and a device row directly in the database. The existing link tests use it, because a link now needs a bound subject.
+
+## Residuals
+- **First claim (ADR 0039 E4).** The bound subject comes from the device registry, so the first-claim weakness is inherited: an account that holds a leaked identity token can register under another member's subject first, and links then point at that subject.
+- **Accounts with devices under two subjects.** `boundSubjectOf` returns null for these, so they cannot link. The registry allows this state, and the device-approval itest helper `registerDevice` creates it.
+- **Wallets already split by the bug.** A wallet that got its own subject from a sign-in cannot be repaired by the member: a new link gets 409, and an unlink removes only the display row. A wallet linked before the fix that never did a wallet sign-in is repaired by linking it again.
+- **Code budget.** The send limit is now per (purpose, address), so one address can get 5 sign-in codes plus 5 link codes in a window.
+- **Bound subject read.** `boundSubjectOf` runs before the link and unlink transactions, not under their locks. A device registration or revoke running at the same time is not serialized against them.
+- **No foreign key on link rows.** `subject_id` on a link row has no foreign key to the origin row. Integrity depends on the unlink refusal.
+- **Race test.** The race "an exchange inserts the subject row during a link" is covered by a unit test with an injected error only, not on Postgres.
+- **Blueprint wording.** The new blueprint text says the bound subject is "the one subject its registered devices carry". The slice that lands ADR 0058 D1 must reword it.
+- **Terms.** `CONTEXT.md` has no entry for identity subject, bound subject or method link. The new text uses these terms without a definition there.
+- **Mail text.** Both purposes send the same neutral message ("Your CipherBox verification code"), so a link code does not say "sign in".</result>
+<usage><subagent_tokens>246481</subagent_tokens><tool_uses>97</tool_uses><duration_ms>1533738</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b45q6zsro</task-id>
+<tool-use-id>toolu_011SQvrk5YuZQgU4DD1LrEfk</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/b45q6zsro.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the full API integration gate on the merged branch" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bdj3tku3x</task-id>
+<tool-use-id>toolu_01BftAwwo7unFZHogKKkVhQv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/bdj3tku3x.output</output-file>
+<status>completed</status>
+<summary>Background command "Build the WASM and run the client, login, web, and desktop gates on the merged branch" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad5f90cfa7d3dd082</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/ad5f90cfa7d3dd082.output</output-file>
+<status>completed</status>
+<summary>Agent "Contract cases for email link" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I added six live contract cases for the email link. All six pass against a real API, and the full suite passes (36 of 36). Before you merge, you must add one line to the CI file. If you do not add it, the contract suite fails in CI.
+
+**Blocking residual.** I did not edit `.github/workflows/ci.yml`, because it is outside my scope. Add this line to the `env` block of the `contract-suite` job:
+
+```yaml
+CONTRACT_API_LOG: /tmp/api-test.log
+```
+
+The CI job already writes the output of the test-mode API to that file. All six new cases panic when `CONTRACT_API_URL` is set and `CONTRACT_API_LOG` is not set. This failure is intentional: the cases do not skip, so the gate cannot pass silently. The suite runs in the **Contract Suite** job (`contract-suite`). That job reports through the `Contract Suite Result` context, which is required for a merge.
+
+**How the suite gets the code.** The test-mode API has no `MAIL_PROVIDER`, so it uses `LoggingMailProvider`. That provider writes `Verification code for &lt;address&gt;: NNNNNN` to the API log. The harness reads the last line for the address and takes the 6 digits after it. The lines contain colour codes, so the harness reads digits only. The engine client has no email sign-in calls, so the harness sends the sign-in exchange (`/auth/identity/email/send-code` and `verify-code`) as raw HTTP.
+
+**Bound account setup (`bound_account`).** The harness creates a fresh identity account and does an email sign-in exchange to get the identity token and the subject. Then it registers an Ed25519 device through `client.register_device`. It signs the payload `cipherbox/device-registration/v1\n{accountId}\n{publicKey}`.
+
+**Files changed**
+- `/Users/myankelev/Code/random/cipher-box-wt/link-api/crates/contract/Cargo.toml`: adds the tokio `time` feature to dev-dependencies. `Cargo.lock` does not change.
+- `/Users/myankelev/Code/random/cipher-box-wt/link-api/crates/contract/src/lib.rs`: adds `api_log()`, which reads `CONTRACT_API_LOG`.
+- `/Users/myankelev/Code/random/cipher-box-wt/link-api/crates/contract/tests/contract.rs`: adds the helpers `fresh_email`, `delivered_code`, `email_exchange`, `bound_account` and `assert_conflict`, plus the six cases. It also adds one line to the module header. It also removes one sentence from the doc comment on `the_device_approval_surface_is_mounted_and_fails_closed`, which said that no headless suite can get an identity token. `bound_account` now gets one, so that sentence was false.
+
+**Cases added**
+1. `email_link_send_code_delivers_a_code_the_sign_in_route_refuses`: `email_link_send_code` gets 201, and the sign-in `verify-code` route refuses the link code with 401.
+2. `email_link_points_the_address_at_the_accounts_subject`: on a bound account, `email_link` gets 201. Then `auth_methods` shows the `Email` row as `l***@example.com`, and the email sign-in returns the subject of the account. After `unlink_auth_method`, the row is gone and the address no longer opens that subject.
+3. `email_link_without_a_fresh_challenge_is_refused`: a re-proof from a different key gets `ApiError::Unauthorized`, and no row is added.
+4. `email_link_with_a_wrong_or_sign_in_code_is_refused`: a wrong code gets 401, a sign-in code gets 401, and no row is added.
+5. `email_link_refused_without_a_bound_subject`: an account with no device gets 409 with `ApiError::Status { message: "This account has no bound identity subject" }`.
+6. `email_link_refused_for_an_address_that_opens_another_account`: an address with its own subject gets 409 with "Email is already linked to another account". The address still opens its own subject.
+
+**Commands and last lines.** I ran every cargo command with `CARGO_TARGET_DIR=/Users/myankelev/Code/random/cipher-box-wt/link-api-target`.
+- `cargo fmt --all` and `cargo fmt --all --check`: clean.
+- `cargo clippy -p cipherbox-contract --all-targets -- -D warnings`: `Finished dev profile ... in 0.94s`, no warnings.
+- `cargo test -p cipherbox-contract --no-run`: compiles both test executables.
+- `CONTRACT_API_URL=http://localhost:3200 CONTRACT_API_LOG=/tmp/linkapi-api-test.log CONTRACT_GATEWAY_URL=http://localhost:8080 cargo test -p cipherbox-contract --test contract email_link`: `test result: ok. 6 passed; 0 failed; ... 30 filtered out`.
+- The same environment with the full suite (`cargo test -p cipherbox-contract`): `test result: ok. 36 passed; 0 failed`.
+
+**Live run setup.** The suite ran live against an API that I started from this worktree on port 3200. It used database `cipherbox_contract_linkapi` in `cipherbox-postgres`, with migrations applied, and the same environment as the CI job (`NODE_ENV=test`, `THROTTLE_AUTH_LIMIT=200`). The API on port 3000 belongs to another worktree, so I did not use it. There was no production-mode instance, so the cases that need one did not test it.
+
+**Other residuals**
+- The API process on port 3200 (PID 949) is still running, with its log at `/tmp/linkapi-api-test.log`. The database `cipherbox_contract_linkapi` still exists. Stop or drop them when you no longer need them.
+- The new cases send about 40 more requests to the per-IP auth limit of 200 per minute. Two full runs in the same minute did not get a 429.</result>
+<usage><subagent_tokens>122412</subagent_tokens><tool_uses>34</tool_uses><duration_ms>500439</duration_ms></usage>
+</task-notification>
+
+---
+
+when the PR's are ready for coderabbit, ask 4570247d-f8ba-4699-b237-6798c2e6f478 to handle the coderabbit request and return control when the message is posted.
+
+---
+
+<task-notification>
+<task-id>boaqanohm</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/boaqanohm.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the Rust format, clippy, and engine test gates on the merged branch" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ee982f4847834c4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a0ee982f4847834c4.output</output-file>
+<status>completed</status>
+<summary>Agent "Security review of link PR" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No vulnerability in this diff meets the bar of more than 80% confidence of real exploitability. I reviewed `git diff main...HEAD` in `/Users/myankelev/Code/random/cipher-box-wt/link-api` against AGENTS.md security rules, ADR 0039, ADR 0058 and `blueprint/api.md` "Identity and auth". I did not edit any file and I did not run a git write command.
+
+## Findings
+
+None.
+
+## Notes below the threshold (not reported as findings)
+
+These are hardening items. None has a concrete attacker path that gets past the 80% bar.
+
+1. **The link email and the sign-in email have the same text.** File: `apps/api/src/auth/services/mail.provider.ts`, `sendVerificationCode`. Severity Low. Category `phishing-hardening`. Confidence 3.
+   - `EmailCodePurpose` keeps a sign-in code out of the link route.
+   - But a phisher who has their own session can call `POST /auth/email/link/send-code` with the victim's address. The victim then gets a mail that looks the same as a sign-in mail.
+   - If the victim reads that code to the phisher, the victim's address (when it has no email-kind subject yet) points at the phisher's subject. The victim's next email sign-in then reaches the phisher's account through the device approval.
+   - This needs social engineering. A sign-in code read to a phisher already gives a similar result today.
+   - Recommendation: pass the purpose to `MailProvider` and say "link this address to an account" in the link mail.
+
+2. **Unlink can stop protecting the origin identity when `bound` is null.** File: `apps/api/src/auth/services/auth.service.ts`, `unlinkAuthMethod`, the `isOrigin &amp;&amp; subject.subjectId === bound` check. Severity Low. Category `revocation-honesty`. Confidence 3.
+   - A member can link their own origin identity while `bound` is that identity's subject.
+   - If `bound` later becomes null (all devices revoked, or devices on two subjects), the unlink deletes the display row and keeps the origin subject row.
+   - The method list then hides a method that still opens the account. Only the account owner can cause this, so there is no attacker path.
+   - Recommendation: refuse an unlink of any origin row whose display row the caller owns, with no reference to `bound`.
+
+3. **Unlink does not revoke identity tokens that are already out.** An identity token minted before the unlink stays valid for at most `TOKEN_TTL_SECONDS` (300 s). During that time it can still call `loginWithJWT` and `POST /device-approval/session` for the old subject. A device approval still needs the member to approve it, so this gives no takeover. Confidence 2.
+
+## Checked, no finding
+
+1. **Account takeover through a link.**
+   - Both link routes need a full access token. `JwtAuthGuard` refuses a scoped token, and `accountKey` refuses a token that carries no `publicKey`.
+   - Both routes also need a fresh `identity-link` step-up challenge, signed by the account identity key. An access token alone cannot link or unlink.
+   - A wallet link also needs a SIWE signature with `SIWE_LINK_STATEMENT`, over a nonce from the `siwe-link` pool. That pool binds the nonce to the account key. So a sign-in signature cannot act as a link, and a link signature cannot act as a sign-in: the statement and the nonce pool are both different.
+   - An email link needs a code issued for the `link` purpose.
+   - Every refusal throws before any write, or inside the transaction, and that rolls back the transaction:
+     - display row of another account: 409
+     - subject row of another subject: 409
+     - `bound === null`: 409
+     - unique violation from a racing exchange: 409. Any other error gives 500, with nothing committed.
+   - The victim's identity cannot point at the attacker's subject unless the attacker holds the victim's SIWE signature or OTP.
+
+2. **Subject confusion.**
+   - `boundSubjectOf` reads only the caller's `account_devices` rows. It returns null when there is no subject, or when there are two subjects.
+   - The registry `claimedElsewhere` check runs under the subject lock, so a subject sits on the devices of at most one account. Only the account owner can change their own devices, so the unlocked read of `bound` gives no attacker interleaving.
+   - A link writes only `bound`. An attacker can only point identities at subjects for which they already hold an identity token, so two victim accounts cannot come to share a subject.
+   - A racing exchange is safe in all three orders:
+     - The exchange inserts first: the link insert trips `uq_identity_subjects_kind_identifier`. The link then gives 409 and rolls back the display row.
+     - The exchange reads first and inserts later: `orIgnore` drops its insert, and the re-read returns `bound`.
+     - The exchange runs after the link commits: it returns `bound`.
+
+3. **Unlink.**
+   - Unlink re-proves the identity key and deletes the subject row by the same `(kind, identifierHash)` that the link and `IdentitySubjectService.resolve` use.
+   - The wallet hash is the same in all paths: `hashIdentifier(getAddress(...))`, the same value as the old `hashWalletAddress`.
+   - The email hash is the same in all paths: `trim().toLowerCase()`.
+   - Unlink never deletes an origin row. A non-origin row can only exist beside a display row of the same user, which is written under the identifier lock.
+   - After unlink, the exchange mints a new subject. The tests cover this.
+
+4. **Resolution.**
+   - These all use `subject_id`:
+     - token `sub` (`resolve` returns `subjectId`)
+     - `account_devices.identity_subject_id` (from the token `sub`)
+     - `accountForIdentitySubject`
+     - the registry `subjectLockKey`
+     - `boundSubjectOf`
+   - The FK from `account_devices.identity_subject_id` to `identity_subjects.id` stays valid, because `subject_id` always equals the `id` of an origin row and unlink never deletes an origin row.
+   - The migration backfills `subject_id = id`.
+
+5. **Data exposure.**
+   - `display` is the email (already in `email`) for Google and for email sign-ins. For a wallet it is truncated, so the full address does not leave the exchange.
+   - The sealed web store keeps the truncated wallet and the email, as before.
+   - `auth_methods.identifier_display` for an email is masked (`m***@domain`). `IsEmail` makes sure an `@` is present.
+   - No new log line holds an address or a code. The 409 messages hold no identifier.
+
+6. **OTP purpose.**
+   - `storeKey` is `${purpose}:${address}`. It is the key for the code store, the attempt counter and the send budget.
+   - The `login:` and `link:` prefixes cannot collide.
+   - Both purposes use the same `normalizeEmail`, so a different spelling of the address cannot move a code across purposes.
+
+7. **Mail logging.**
+   - Only `LoggingMailProvider` logs the code.
+   - `buildMailProvider` refuses that provider, and a missing provider, at boot when `NODE_ENV` is not `development` or `test`.
+   - The SendGrid path logs only the HTTP status.
+   - The CI `CONTRACT_API_LOG` is used only by the contract harness.</result>
+<usage><subagent_tokens>130247</subagent_tokens><tool_uses>17</tool_uses><duration_ms>256957</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af99739c8cde4873a</task-id>
+<tool-use-id>toolu_01KqNHnW9zAQQcEqnLa6bdzz</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/af99739c8cde4873a.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify: efficiency and altitude" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found 6 efficiency findings and 5 altitude findings. The largest gap is that the migration does not repair links made before this PR. I edited no file and ran no git write command.
+
+## EFFICIENCY
+
+**E1. `apps/api/src/auth/services/auth.service.ts:267`, `:285` (`linkMethod`).** The read of the bound subject runs before the transaction, and the code refuses the null case only after two locks and two reads.
+- **Cost:** A link from an account with no device opens a transaction, takes two advisory locks and runs two `findOne` queries before it refuses. The code does not read the value again after it gets the locks. In practice the value cannot go stale, because an account has one subject. But a device registration or a revocation between the read and the lock can change it from null to a value, or the reverse.
+- **Change:** Read `account_devices` through `manager` inside the transaction. Do the `bound === null` check first, before the display read and the subject read. The no-device itests (method-link.http.itest.ts:325 and :478) use new identifiers, so they still get the same 409 message.
+- **SAFE.**
+
+**E2. `auth.service.ts:289` → `:404` (`touchAuthMethod`).** The link reads the display row at :276, and `touchAuthMethod` reads it again with its own `findOne`. On a hit, `repository.save(existing)` is a SELECT and then an UPDATE.
+- **Cost:** Three statements where one is enough. The diff changes the signature of this function, so the fix is in scope.
+- **Change:** Use the row from :276. If it exists, call `methods.update({ id }, { lastUsedAt })`. If not, call `insert`.
+- **SAFE.**
+
+**E3. `auth.service.ts:350` (`unlinkAuthMethod`).** `boundSubjectOf` runs for every unlink, also for the three early refusals (unknown row, wrong kind, last method). The code uses the value only when `isOrigin` is true (:377).
+- **Cost:** One query outside the transaction on every unlink.
+- **Change:** Read it lazily, through `manager`, inside the `isOrigin` branch. If you apply A2, the read goes away.
+- **SAFE.**
+
+**E4. `apps/api/src/common/advisory-lock.ts:111` (`authMethodIdentifierLockKey`).** The link uses two race mechanisms:
+- The identifier lock serializes two links of the same identifier.
+- The `isUniqueViolation` catch handles a link that races an exchange.
+- **Cost:** One more lock key on each link, and two mechanisms for one class of race. `uq_auth_methods_kind_identifier` already exists.
+- **Change:** Remove the identifier lock. Let the catch map both unique constraints to 409: the `auth_methods` index to `linkedElsewhere`, and the subject index to `opensAnother`.
+- **SAFE.** The value is low.
+
+**E5. `apps/api/src/auth/entities/identity-subject.entity.ts:24` and the migration (`idx_identity_subjects_subject`).** No production query filters on `subjectId`.
+- **Cost:** Each first-sight insert and each link insert writes to an index that nothing reads.
+- **Change:** Remove the index from the entity and from the migration. Add it when a query needs it.
+- **SAFE.**
+
+**E6. `apps/api/src/auth/services/email-otp.service.ts:84`, `:201` (`storeKey`).** The purpose is part of the key that `chargeSend` charges.
+- **Cost:** The send budget for one address doubles, to 5 sign-in plus 5 link sends in each window. `MAX_TRACKED_ADDRESSES` now counts (purpose, address) pairs, not addresses.
+- **Change:** Keep one entry and one send budget for each address. Give that entry one code slot for each purpose.
+- **SAFE.**
+
+**No findings for these areas:**
+- **Settings pane renders.** The busy state changed from a boolean to a command name, and the focus ref and effect add no render.
+- **Engine and client.** `EmailLink` and `EmailLinkSendCode` use the same pattern as `SiweLink`, and they hold no long-lived closure.
+- **The re-read of `GET /auth/methods` after `linkEmail`.** It follows the link and unlink pattern that already exists.
+
+## ALTITUDE
+
+**A1. Migration `1790700000000` and the `auth.service.ts:384` guard (data from before this PR).** The migration sets `subject_id = id` on each row. It writes no subject row for the wallet `auth_methods` rows that the old `siweLink` wrote.
+- **Cost:** These wallets still mint a new subject when they sign in. That is the bug this PR fixes, and existing data keeps it. The pane lists a wallet that does not open the account. The production branch "keep the origin row of another subject" (tested at `auth.service.test.ts:175`) is only there to handle this old data.
+- **Change:** In the migration, do one of these:
+  - Backfill: for each wallet display row, insert a link row that points at the account's single `account_devices` subject.
+  - Delete the display rows that have no link row.
+- **RISKY.** It changes data. The owner must choose between the backfill and the delete.
+
+**A2. `auth.service.ts:281–296` and `:373–386` (the unlink special case).** The origin refusal in unlink is a patch on top of a link that accepts too much:
+- `linkMethod` is the only writer of wallet and email display rows. I checked this with grep.
+- So a display row for the account's own origin can exist only because the link accepted a subject row whose `subjectId === bound`.
+- `method-link.http.itest.ts:349` shows the sequence: it links the account's own origin wallet with 201, and then it expects 409 from the unlink.
+- **Cost:** A `bound` read and a refusal branch on every unlink. The member also sees a row that they can never remove.
+- **Change:** Use this general rule: a link refuses any subject row that already exists.
+  - For the account's own subject, refuse with "already opens this account".
+  - For another subject, refuse with `opensAnother`.
+  - Then each display row that a link writes has exactly one subject row that the link wrote. The unlink deletes that pair, with no `bound` read and no refusal.
+  - Keep the `id !== subjectId` guard only for the old rows of A1.
+- **RISKY.** It changes a refusal path. Update itest :349, `auth.service.test.ts:165`, and the `blueprint/api.md` sentence "refuses the identity the account was created through".
+
+**A3. `apps/api/src/auth/auth.module.ts` and `apps/api/src/device-approval/device-approval.module.ts` (where the interim source lives).**
+- **What is good:** The interim read is in one method, `account-device.service.ts:208` (`boundSubjectOf`).
+- **What it cost:**
+  - The diff moved `AccountDeviceService` into `AuthModule`, with its `IdentityTokenService`, `DataSource`, `Clock` and `ConfigService` dependencies.
+  - `auth/` now imports from `device-approval/services`. `device-approval.module.ts:26` already imports `AuthModule`, so the two directories now depend on each other.
+  - The replacement under ADR 0058 D1 is a read of `users.identity_subject_id`, which belongs to auth.
+- **Change:** Put the interim reader in `AuthService` as a private method that reads `account_devices` through the transaction `manager`, and undo the module move. The same change also fixes E1.
+- **SAFE.**
+
+**A4. `display` on the grant (`apps/api/src/auth/services/identity-exchange.service.ts`, `packages/login/src/identity.ts`, `session.ts`, `flow.ts`, `apps/web/src/stores/auth.store.ts`, `apps/web/src/auth/coreKit.ts`, `apps/desktop/src/auth/coreKit.ts`).**
+- **What the code does now:**
+  - On web, nothing reads `email` from the store any more. `UserMenu` and `SettingsPage` read only `display`.
+  - On desktop, `apps/desktop/src/main.ts:59–61` reads `email` and ignores `display`. So `signedInDisplay` in the desktop session is dead state, and a wallet sign-in on desktop still shows "Signed in".
+  - The grant already had `email` for display only. For Google and email sign-ins, `display === email`.
+- **Cost:** Two parallel labels through about eight interfaces and one sealed slot. The desktop does not get the fix.
+- **Change:** Replace `email` with `display`; do not keep both. Carry one field from end to end: `IdentityGrant`, the DTO, `IdentityCredential`, `CoreKitSession`, `AccountRecord.signedIn`, the web store, the sealed slot, and `model` in desktop `main.ts`. Keep the field on the grant, not derived in the client: the server already does the normalization and the wallet truncation in one place.
+- **SAFE** under the greenfield rule. Update the tests that assert `email` on the grant, for example `packages/login/src/identity.test.ts`, the itests and the contract tests.
+
+**A5. The `subject_id` column on `identity_subjects`.** This is the correct shape, so no change.
+- Many identities map to one subject, and a column holds that. A separate link table would only repeat the `(kind, identifier_hash)` unique key. This agrees with ADR 0058, where a separate table earns its place only for many subjects per account.
+- The design has one convention to know: the origin row's `id` is the subject. The FK from `account_devices.identity_subject_id` to `identity_subjects.id` holds only because the subject id equals that `id`, and the code never deletes an origin row.
+- One small doc fix: the comment at `apps/api/src/device-approval/entities/account-device.entity.ts:42` says "The `identity_subjects` row this device authenticated through". That is now false when a device signs in through a linked identity: the column holds the subject. Change the comment to say "the subject". **SAFE.**
+
+**No findings for the OTP purpose split itself.** The code is bound to its purpose in the store key in `EmailOtpService`, and that is the correct layer. Both purpose values stay in `AuthService` and `IdentityExchangeService`. The only issue is the send budget in E6.</result>
+<usage><subagent_tokens>130414</subagent_tokens><tool_uses>20</tool_uses><duration_ms>376874</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>accff8711e0d46561</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/accff8711e0d46561.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify: reuse and simplification" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## REUSE
+
+1. **apps/api/src/auth/services/auth.service.ts:428** (`isUniqueViolation`, with `UNIQUE_VIOLATION` at :66). SAFE.
+   - **Finding:** This copies `isPublicKeyConflict` in `apps/api/src/device-approval/services/account-device.service.ts:224`, and the constant at :28 of that file.
+   - **Cost:** There are now two copies of the Postgres error check. A change to one can miss the other.
+   - **Change:** Move `isUniqueViolation(error, constraint)` and `UNIQUE_VIOLATION` to `apps/api/src/common/`, next to `isLockNotAvailable` (`advisory-lock.ts:57`) or into a new `pg-errors.ts`. Make `isPublicKeyConflict` call it.
+
+2. **crates/contract/tests/contract.rs:478-481** (`bound_account`). SAFE.
+   - **Finding:** The test builds `"cipherbox/device-registration/v1\n{account}\n{key}"` by hand. `cipherbox_engine::devices::registration_payload` (`crates/engine/src/devices.rs:210`) already makes this payload. `cipherbox-engine` is a direct dependency of `crates/contract` (Cargo.toml:19).
+   - **Cost:** If the wire payload changes, this test and the engine go out of sync.
+   - **Change:** Sign `registration_payload(account_id, &amp;public_key)?`.
+
+3. **apps/api/src/auth/method-link.http.itest.ts:54** and **apps/api/src/auth/services/auth.service.test.ts:44** (`CapturingMailProvider`). SAFE.
+   - **Finding:** The PR adds a third and a fourth copy of this class. The other copies are in `identity.http.itest.ts:50` and `email-otp.service.test.ts:10`.
+   - **Cost:** The same fake is now in four files.
+   - **Change:** Export one copy from `apps/api/src/testing/fakes.ts`.
+
+4. **apps/api/src/auth/method-link.http.itest.ts:63, :73, :78, :171, :211, :221**. SAFE.
+   - **Finding:** These helpers copy helpers in `auth.http.itest.ts`:
+     - `newIdentity` and `signChallenge` copy :57 and :66.
+     - `accountIdOf` copies `jwtPayload(...).sub` at :71.
+     - `identityLogin` copies :184.
+     - `reproof` copies `identityReproof` at :174.
+     - `siweMessage` copies `siweNonce` + `siweSign` at :448 and :457.
+   - **Cost:** About 60 lines are duplicated. The two copies of the login and re-proof flows can go out of sync.
+   - **Change:** Move the three module-level functions to `apps/api/src/testing/`. Move the HTTP helpers there too, with an `http` parameter.
+
+5. **apps/api/src/ops/ops.http.itest.ts:63** and **apps/api/src/ops/trust-proxy.http.itest.ts:79**. SAFE.
+   - **Finding:** Both files get the same new block of `AuthService` dependencies: `AccountDeviceService`, `EmailOtpService`, a `MailProvider` stub that rejects, and `IdentityTokenService`.
+   - **Cost:** Each new `AuthService` dependency must be added to every suite by hand.
+   - **Change:** Export an `authServiceProviders` list (and the entity list) from `apps/api/src/testing/`.
+
+6. **apps/web/src/components/settings/AuthMethodsPane.tsx:181** (`filledButton`). SAFE.
+   - **Finding:** This copies `filledButton` in `packages/auth-ui/src/EmailLoginForm.tsx:129`. The same class string is also inline at `RecoveryPhraseForm.tsx:85`.
+   - **Cost:** The button class string is now in three places.
+   - **Change:** Export one `filledButton` from `@cipherbox/auth-ui`. `apps/web` already depends on that package.
+
+7. **apps/web/src/components/settings/AuthMethodsPane.tsx:48** (`EmailLinkForm`) and **packages/auth-ui/src/EmailLoginForm.tsx**. RISKY.
+   - **Finding:** A shared piece is warranted. About 80 lines are the same in both forms: the two steps (address, then code with "use a different address"), the input attributes, the digit filter, the 6-digit rule, the CSS classes and the focus effect. The differences are:
+     - the button labels
+     - the test IDs and DOM IDs
+     - a cancel button
+     - focus on the address field
+     - boolean-resolving callbacks in place of throwing ones
+   - **Cost:** A fix to one form misses the other.
+   - **Change:** Do this after `fix/login-busy-labels-per-method` merges. That branch changes the busy/pending props of `EmailLoginForm.tsx` now. Then move an `EmailCodeForm` into `auth-ui`, with props for labels, a test-ID/DOM-ID prefix and an optional `onCancel`. Use it for login and for link. It is RISKY now because of the conflict with that branch, and because the test IDs change if you do not pass a prefix.
+
+8. **apps/api/src/auth/services/auth.service.ts:435** (`maskEmail`). SAFE, low priority.
+   - **Finding:** Each other display formatter is on the service of its method: `truncateWalletAddress` is on `SiweService` and `truncatePublicKey` is on `IdentityService`.
+   - **Change:** Move `maskEmail` to `EmailOtpService`, or make it a module export next to `normalizeEmail`.
+
+The PR also changes `siweService.hashWalletAddress` to `identityService.hashIdentifier`. This gives the same result, because `verifySiweMessage` already returns `getAddress(...)`. `packages/login/src` has no display or truncate helper that the PR copies.
+
+## SIMPLIFICATION
+
+1. **apps/api/src/auth/services/auth.service.ts:189-191, :238-240, :345-350**. SAFE.
+   - **Finding:** `siweLink`, `emailLink` and `unlinkAuthMethod` all start with the same three lines: normalize the key, consume the challenge, verify the signature.
+   - **Cost:** There are three copies of the re-proof gate. The PR adds the third.
+   - **Change:** Add `private reproveAccountKey(publicKey, challenge, signature, kind, binding?)`. Make it return `canonicalKey`, because `siweLink` uses that key again for the nonce.
+
+2. **apps/api/src/auth/services/auth.service.ts:60, :242-252** (`LinkConflicts`). SAFE.
+   - **Finding:** The email link passes the same string twice.
+   - **Change:** Make the conflict texts plain parameters, `linkedElsewhere: string, opensAnother = linkedElsewhere`. Then `emailLink` passes one string. Remove the interface and the `const linkedElsewhere` local.
+
+3. **apps/api/src/auth/services/auth.service.ts:285** (the `bound === null` refusal). RISKY.
+   - **Finding:** `bound` is read before the transaction. The null check still runs only after the code takes two locks and does two reads.
+   - **Change:** Throw before `runLockGuardedTransaction`. The refusal then takes no lock and does no read.
+   - **Behavior change:** Take an unbound account that links an identifier which already opens another subject. Today it gets "linked elsewhere" or "opens another account". After the change it gets "This account has no bound identity subject". The itests use new identifiers, so they pass either way.
+
+4. **apps/api/src/auth/services/auth.service.ts:51** (`UNLINKABLE_KINDS`). SAFE.
+   - **Finding:** The constant now sets which kinds a link can write, and `LinkableKind` comes from it. The name says the opposite.
+   - **Change:** Rename it to `LINKABLE_KINDS`.
+
+5. **apps/api/src/auth/services/auth.service.ts:289**. SAFE, low priority.
+   - **Finding:** `touchAuthMethod` reads again the `(kind, identifierHash)` row that `display` already holds, in the same transaction.
+   - **Change:** Pass `display` in as an optional existing row. Do this only if one more parameter is acceptable.
+
+6. **apps/api/src/auth/entities/identity-subject.entity.ts:8-20**. SAFE.
+   - **Finding:** The new `IDENTITY_SUBJECT_IDENTIFIER_UNIQUE` const sits between the class doc block and `@Entity`. The two doc blocks are now stacked, so the class doc attaches to the const.
+   - **Cost:** Hover documentation and generated docs lose the class description.
+   - **Change:** Move the const and its one-line doc above the class doc block.
+
+7. **apps/web/src/stores/auth.store.ts:17, :56, :86**. SAFE.
+   - **Finding:** `UserMenu` and `SettingsPage` now read `display`. Nothing in `apps/web` reads `AuthState.email`. The equality check at :56 is the only other use.
+   - **Cost:** The store holds PII that nothing reads, and keeps a wallet guard for it.
+   - **Change:** Remove `email` from `AuthState`, `SIGNED_OUT` and `set`. Update the header comment. The `signedIn` signature stays, because it follows `AccountRecord`.
+
+8. **apps/web/src/auth/coreKit.ts:200, :503** (`keepLabels` seals `email`). RISKY.
+   - **Finding:** After item 7, nothing in the web app reads the sealed email.
+   - **Change:** Seal `display` only.
+   - **Behavior change:** After a restore, `CoreKitSession.email()` then returns null, and `packages/login/src/flow.ts:175` still calls it. Moving the desktop to `display` as well is out of scope.
+
+9. **crates/contract/tests/contract.rs:504, :526, :579, :602, :661, :682**. SAFE.
+   - **Finding:** These lines repeat the same pair: `expect_auth("link code", client.email_link_send_code(&amp;email).await); let code = delivered_code(&amp;email).await;`. The check `auth_methods().len() == 1, "the refused link added nothing"` repeats 4 times (:592, :638, :671, :692).
+   - **Change:** Add `async fn link_code(client, email) -&gt; String` and `async fn assert_nothing_linked(client)`.
+
+10. **crates/contract/tests/contract.rs:448**. SAFE.
+    - **Finding:** "so the engine's client has no call for it" is a comment that justifies an absence, which AGENTS.md forbids.
+    - **Change:** Remove the clause.
+
+11. **apps/api/src/auth/method-link.http.itest.ts** (`linkEmail(account, email, await sendLinkCode(...), N)` repeats 6 times). SAFE.
+    - **Change:** Add `linkFreshCode(account, email, expected)` to send the code and link in one call.
+
+12. **apps/api/src/auth/method-link.http.itest.ts:299, :301**. SAFE.
+    - **Finding:** These lines use `kind as never`.
+    - **Change:** Type the parameter as `AuthMethodKind` or `IdentitySubjectKind`, and remove the cast.
+
+13. **crates/engine/src/api/client.rs:272, :310** and **crates/engine/src/facade.rs:7020, :7036**. SAFE, low priority.
+    - **Finding:** `email_link` copies `siwe_link`: a step-up challenge, a signature, then a POST with the body plus `challenge` and `challengeSignature`. `IdentityChallengeSigner::from_signer(session.identity().clone())` now appears 4 times in `facade.rs`.
+    - **Change:** Add a `#[serde(flatten)]` `LinkProof` struct and one `post_with_link_proof(path, body, signer)` helper. Add a facade helper that returns `(api, signer)`.
+
+14. **apps/api/src/common/advisory-lock.ts** (`authMethodIdentifierLockKey(kind: string, ...)`). SAFE.
+    - **Change:** Change `kind: string` to `kind: AuthMethodKind`.</result>
+<usage><subagent_tokens>150026</subagent_tokens><tool_uses>27</tool_uses><duration_ms>406520</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a87c5eaf4e34d8711</task-id>
+<tool-use-id>toolu_01QPMu2L1ZtNVQxgxxwifNLQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a87c5eaf4e34d8711.output</output-file>
+<status>completed</status>
+<summary>Agent "Crypto-privacy review of link PR" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found six problems in this PR. The most serious one: a link can point the attacker's own login method at the victim's subject, if the victim's identity token leaks before the victim's first device registration. The other findings are one Medium, two Low and two Info. I did not edit any files and ran no git write commands. My only file is /tmp/cb-link-crypto/notes.md.
+
+All paths below are under `/Users/myankelev/Code/random/cipher-box-wt/link-api`.
+
+## Findings
+
+### [MEDIUM] F1: A link trusts a device row that the API cannot check, so one leaked identity token becomes a permanent way into the victim's subject
+
+**Location:** `apps/api/src/device-approval/services/account-device.service.ts:208` (`boundSubjectOf`), `apps/api/src/auth/services/auth.service.ts:267` (`linkMethod`)
+
+**Invariant broken:** After a link, the method must reach the subject that derives this account's key. The link takes `bound` from `account_devices.identity_subject_id`. A device row proves only that the registrant once held an identity token for that subject. It does not prove that the subject derives the account's key. ADR 0058 Context says this directly: the API "cannot compute the key that a subject derives". This interim source inherits ADR 0039 E4.
+
+**Scenario:**
+1. The attacker gets an unspent identity token for victim subject S_V. The window is the one ADR 0058 Context names: "from the mint to the member's first registration, which can come days after the sign-in, or never".
+2. The attacker calls `POST /auth/login` with a fresh random secp256k1 key. This makes a new account A with no device.
+3. The attacker sends `POST /devices` with the leaked token. The row {A, S_V} passes `claimedElsewhere`, so `boundSubjectOf(A)` returns S_V.
+4. The attacker links their own wallet W. They re-prove with A's key and sign SIWE with W. The PR writes `identity_subjects(wallet, H(W)) → S_V`.
+5. From now on, every SIWE sign-in with W mints a fresh identity token whose `sub` is S_V.
+
+The Core Kit is constructed without `disableHashedFactorKey` (`apps/web/src/auth/coreKit.ts:616`, `apps/desktop/src/auth/coreKit.ts:232`). The SDK default keeps the hashed factor on. So, while the victim has no factor policy, each such token reconstructs the victim's full TSS key. After the victim enables the policy, the route still gives the auth share.
+
+Before this PR, the leak was single-use and lasted 300 s. After this PR, it is permanent. The victim cannot see or unlink W, because W is listed under account A.
+
+**Recommendation:** The owner must decide the sequence. One choice: land ADR 0058 D1 (`users.identity_subject_id`, written at login under the subject lock), and gate `linkMethod` on that column, before email or wallet link ships. The other choice: record this amplification as an ADR 0058 residual next to E1. Server-side code cannot close the gap, because the server cannot connect a subject to a key. Do not try to patch it in code.
+
+### [MEDIUM] F2: The link-code email looks the same as the sign-in-code email, so the purpose split does not stop phishing
+
+**Location:** `apps/api/src/auth/services/mail.provider.ts:14,26-45`, `apps/api/src/auth/services/email-otp.service.ts:100`
+
+**Invariant broken:** Item 3. A proof for one operation must not serve another. The server keeps the codes apart (`storeKey`). The person reading the email cannot tell them apart. Subject and body are both "Your CipherBox verification code". The contract helper confirms this: "A sign-in code and a link code log the same line".
+
+**Scenario:**
+1. Any account holder calls `POST /auth/email/link/send-code` for the victim's address X.
+2. The phisher asks for "your CipherBox sign-in code", and the victim reads it out.
+3. The phisher links X to the phisher's account. This works when X has no origin subject yet.
+4. The victim's next email sign-in opens the phisher's vault. The victim uploads into it, and the phisher reads every file (account fixation).
+
+The comment at `email-otp.service.ts:20-26` says the split stops exactly this attack. That claim is false while the email text is the same.
+
+**Recommendation:** Pass the purpose to `MailProvider.sendVerificationCode(to, code, purpose)`. Give the link email its own subject and body, for example: "Someone signed in to CipherBox asked to add this address as a login. Do not share this code." Add a test at the `MailProvider` seam.
+
+### [LOW] F3: A link code is not bound to the account that asked for it
+
+**Location:** `apps/api/src/auth/services/email-otp.service.ts:201` (`storeKey`), `apps/api/src/auth/auth.controller.ts:196-197`
+
+**Invariant broken:** A code must reach only the session that requested it.
+
+**Scenario:** The member asks for a link code for X. An attacker sees the code, for example by shoulder-surfing or a shared inbox. The attacker spends it first from their own account. X then opens the attacker's vault, with the same fixation as F2. The member's own attempt fails with "No verification code is outstanding".
+
+A second, smaller point: `send-code` needs only an access token. A stolen token can send link emails to any address. The limits are five per address per 15 minutes for each purpose, plus the throttle. The split also doubles each address's send budget.
+
+**Recommendation:** Store link codes as `link:&lt;userId&gt;:&lt;address&gt;`. `request.user.userId` is already in scope at the controller, so this is a two-line change. Add a test that account B cannot spend a code that account A requested.
+
+### [LOW] F4: When the bound subject is null, the unlink guard lets the unlink through but revokes nothing
+
+**Location:** `apps/api/src/auth/services/auth.service.ts:350,376-377`
+
+**Invariant broken:** After an unlink, the method must reach no key, or the unlink must refuse.
+
+**Scenario:** The account has zero devices, or devices that carry more than one subject, so `bound` is null. The member unlinks the email that was its origin subject. The condition `isOrigin &amp;&amp; subject.subjectId === bound` is false. The display row is deleted and the subject row stays. The method keeps opening the account, but the response is a success.
+
+The new text in `blueprint/api.md:100` ("refuses the identity the account was created through") is therefore false in this case. This is the false revocation that the `UNLINKABLE_KINDS` comment warns about.
+
+**Recommendation:** Answer 409 when `isOrigin &amp;&amp; bound === null`, because the server cannot tell whose origin row it is. A cleaner fix is to read the ADR 0058 D1 column when it lands.
+
+### [LOW] F5: `bound` is read outside the transaction and without the registry lock
+
+**Location:** `apps/api/src/auth/services/auth.service.ts:267,350`
+
+**Invariant broken:** Item 2. The write paths run under the locks that guard their inputs.
+
+**Scenario:** A device revoke or registration commits between `boundSubjectOf` and the link transaction. The link then writes an `identity_subjects` row against a subject set that has already changed. A real attack needs F1's preconditions. Even without an attacker, the check and the write are not atomic.
+
+**Recommendation:** Move `boundSubjectOf` inside `runLockGuardedTransaction`, read it through `manager`, and add `registryLockKey(userId)` to the `boundedAcquire` list. That is the same lock `claim()` takes.
+
+### [INFO] F6: Nothing in the schema says a `subject_id` names an existing origin row
+
+**Location:** `apps/api/src/migrations/1790700000000-AddIdentitySubjectSubjectId.ts`
+
+**Invariant at risk:** `account_devices.identity_subject_id` now stores token `sub` values, which are subject ids. Its foreign key still points at `identity_subjects.id`. It holds only because an origin row has `id == subject_id`, and no code deletes origin rows. No constraint stops a link row from pointing at a missing subject. No constraint stops an origin row being deleted while link rows still point at it.
+
+**Recommendation:** The migration is in this diff, so add the constraint here. Add `subject_id REFERENCES identity_subjects(id) ON DELETE RESTRICT`. Postgres accepts a self-reference; the backfill makes origin rows reference themselves. A `CHECK` cannot express "origin rows equal their own id", so keep that rule in `resolve`.
+
+### [INFO] F7: The link step-up challenge does not name what is being linked
+
+**Location:** `apps/api/src/auth/services/challenge.service.ts` (`identity-link` pool, which both link routes share)
+
+Wallet link and email link use the same `identity-link` pool. The pool binds `publicKey` only, not the method kind or the identifier hash. Someone who captures a signed but unspent link proof can spend it on the other route, with their own SIWE message or OTP. Doing so needs XSS or a TLS break before submission, which already gives more than this.
+
+**Recommendation:** Accept this, or bind `subject: '&lt;kind&gt;'` at mint, as unlink binds `methodId`.
+
+### [INFO] F8: Unlink does not stop tokens or sessions that already exist
+
+An exchange that read the link row before the unlink commits still mints a token. That token is valid for up to 300 s. A device that already rebuilt the key through the method keeps it. This matches ADR 0009 D5 ("nothing it already holds is un-shared"). Note it in the blueprint unlink line.
+
+## Checked and holds
+
+- **One subject per provider identity.** The unique index `(kind, identifier_hash)` holds this. `resolve` uses insert-or-ignore and then reads the row back. It now returns `subjectId` on all three paths.
+- **Migration backfill.** It sets `subject_id = id`, which is correct because every existing row is an origin. It then sets `NOT NULL`, adds the index, and holds an advisory lock while it runs.
+- **New rows.** `IdentitySubjectService` now mints the id through `Entropy.randomUuid()` instead of `gen_random_uuid()`. Entropy is injected, which is an improvement.
+- **Hash parity.** The link and the exchange compute the same hash. Wallet: `getAddress` output, then `hashIdentifier`; this is the same bytes as the removed `hashWalletAddress`. Email: `trim().toLowerCase()` on both sides. Old `auth_methods` wallet hashes still match.
+- **Token `sub` = `subject_id`.**
+  - The device-registration subject lock (`device-registry-subject:&lt;sub&gt;`) keys on the same value whichever method signed in.
+  - The rendezvous (`device-approval.service.ts:openSession`) maps the verified token's `subject` through `accountForIdentitySubject`, so a linked method can reach approval.
+  - `claim()` stays consistent for a second device that signs in through a linked method.
+  - No reader mixes `id` and `subject_id`: link and unlink read `id` only to decide whether a row is an origin.
+- **Refusals write nothing.**
+  - Every link refusal throws inside one transaction. It holds `auth-method:&lt;userId&gt;` and `auth-method-identifier:&lt;kind&gt;:&lt;hash&gt;`.
+  - If an exchange wins the race, the `23505` error carries the named constraint. The wrapper rethrows it, the code maps it to 409, and the display row rolls back with the transaction.
+  - Unlink deletes the display row and the link row in one transaction. It leaves the origin row of a different subject in place.
+- **Order of proofs.** The step-up challenge is consumed and verified before the OTP is checked, so a stolen access token cannot burn OTP attempts. A 409 after a valid OTP burns the code and the challenge. That consumption is in memory with no database write, which is fail-closed.
+- **Conflict messages.** Conflicts are checked only after the proof of ownership (SIWE or OTP), so the 409 text is no enumeration oracle.
+- **Challenge binding.**
+  - The step-up challenge is minted with `publicKey = accountKey(request)` and consumed once against the same key.
+  - The engine's `step_up_challenge` checks the `cipherbox-link:v2:` prefix before it signs.
+  - The `PanickingSigner` refusal test now covers `email_link`.
+  - `EmailLink` signs through the same `IdentityChallengeSigner` path as `UnlinkAuthMethod`.
+  - The SIWE statement split and the OTP purpose split hold on the server.
+- **Linkability.** `identity_subjects` now groups a wallet hash and an email hash under one `subject_id`. `auth_methods` already grouped the same hashes under one `user_id`, and `account_devices` already joins account to subject (ADR 0058 Consequence 12). A database reader could make this join before. The PR adds no new edge. Hashes stay unsalted SHA-256 (ADR 0039 D1, pre-existing).
+- **Display values.**
+  - The grant `display` is the Google or email address, which is already in `email`, or `0xAbCd...1234`. The wallet form keeps 32 of 160 address bits: it confirms a guessed address but cannot recover one. The client already holds the full address.
+  - Web now seals `display` with the email in the WebCrypto store (`ACCOUNT_LABELS_KEY`). The entry is bound to the subject and cleared on logout. For wallet sign-ins this is the one new place the truncated address is stored. Desktop keeps it in memory only. `auth.store` is not persisted.
+  - `maskEmail` (`auth.service.ts:435`) writes the first character and the full domain into `auth_methods.identifier_display`. This is a new partial identifier at rest. The entity comment says "Plaintext identifiers are never stored". It is acceptable as display, but reword the comment to say "masked".
+- **Test-mode mail.** `LoggingMailProvider` logs the address and the code. `buildMailProvider` refuses `log`, or no provider at all, unless `NODE_ENV` is `development` or `test`. Only the CI contract job reads that log (`CONTRACT_API_LOG`).
+- **No key or seed material.** The diff touches no seal, KDF edge, wire format or KAT.
+- **Plain strings in the engine (item 5).** The new commands take the code and the address as plain `String`. This is acceptable. Neither value is key or seed material, neither derives anything in the KDF catalog, and neither touches a wire format. The SIWE message and signature already travel as `String`. The zeroize rule applies to seeds and keys. An OTP lasts 300 s, allows five tries, and is spent on use.
+
+## Additional test cases
+
+1. **Unlink, null bound** (`auth.service.test.ts`, `unlinkAuthMethod`): unlink of an origin row when `boundSubjectOf` is null answers 409 and keeps both rows (F4).
+2. **Code bound to user** (`email-otp.service.test.ts`, `EmailOtpService.verify`): a link code that user A requested does not verify for user B (F3).
+3. **Link email text** (`mail.provider.test.ts`, `MailProvider` seam): the link-purpose email has a different subject and body from the sign-in email (F2).
+4. **Schema constraint** (`method-link.http.itest.ts`, real Postgres): inserting a link row whose `subject_id` names no row fails, and deleting an origin row with link rows pointing at it fails (F6).
+5. **Rendezvous through a linked method** (`device-approval.http.itest.ts`, `openSession`): an identity token minted through a linked wallet opens a rendezvous for the account that linked it, and registering a second device with that token records the account's `subject_id`.</result>
+<usage><subagent_tokens>119719</subagent_tokens><tool_uses>24</tool_uses><duration_ms>430597</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a805a332e15ff2f2c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a805a332e15ff2f2c.output</output-file>
+<status>completed</status>
+<summary>Agent "Fold display rename across clients" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I replaced `email` with `display` across all the client layers in the worktree `/Users/myankelev/Code/random/cipher-box-wt/link-display` (branch `fix/link-method-points-at-subject-display`). Every gate passed. Nothing is pushed. A wallet sign-in on desktop now shows the truncated address.
+
+## Commits (on top of 26ee06591)
+- `adb50bef0` fix(api): carry one display label on the identity grant
+- `acba4538e` fix(login): carry the display label alone through the login flow
+- `60df62c96` fix(web): keep the display label alone in the session and the auth store
+- `7e7fb8075` fix(desktop): label the signed-in window with the display label
+
+The commits have no attribution trailers. I checked this.
+
+## Files per layer
+All paths are under `/Users/myankelev/Code/random/cipher-box-wt/link-display/`.
+
+- **API:**
+  - `apps/api/src/auth/services/identity-exchange.service.ts`: `IdentityGrant` keeps `display` only. `mint(method, identifier, display)`. Google gives the Google email, email gives the normalized address, wallet gives `siwe.truncateWalletAddress`.
+  - `apps/api/src/auth/dto/identity.dto.ts` and `identity.controller.ts` (`present()`) no longer have `email`.
+  - `apps/api/openapi.json` is regenerated. It removes the `email` property and its `required` entry.
+- **packages/login:** `identity.ts`, `session.ts`, `flow.ts`, `testFakes.ts`.
+  - `IdentityCredential.display` only.
+  - `CoreKitSession.display()` replaces `email()`.
+  - `AccountRecord.signedIn(method, display)`.
+  - `handOff` passes `display`.
+  - I also rebuilt `dist` so that web and desktop typecheck against the new types.
+- **apps/web:**
+  - `auth/coreKit.ts`: keeps `signedInDisplay` only. `keepDisplay`/`keptDisplay` seal `{subject, display}` in `ACCOUNT_LABELS_KEY` with the same stored name, `cipherbox_account_email`.
+  - `stores/auth.store.ts`: no `email`, and `signedIn(method, display = null)`. The header comment says that `display` is PII for Google and email sign-ins, so the store stays memory only.
+- **apps/desktop:**
+  - `auth/coreKit.ts` keeps `signedInDisplay` only.
+  - `ShellModel.display` replaces `email`.
+  - `main.ts` writes `display`, and `frontDoor.tsx` renders `model.display`.
+- **packages/client:** It does not carry the grant, so it has no change.
+- **tests/web-e2e:** Nothing reads the grant label, so it has no change.
+
+## Tests changed
+- **API:**
+  - `identity-exchange.service.test.ts`: I removed the `grant.email` assertions.
+  - `identity.http.itest.ts`: I removed the three `body.email` assertions. The `display` assertions stay, and so does the check that the wallet response body has no full address.
+- **login:** `flow.test.ts`, `identity.test.ts` and `hostAgnostic.test.ts` now expect `{method, display}`.
+- **web:**
+  - `coreKit.test.ts`: the cases now assert `display()` only. These cases are report/drop on logout, restore, other-subject, wallet replacing an earlier label, and nothing kept after logout.
+  - `auth.store.test.ts`: I removed "accepts a wallet login with no email" and "drops an email handed to a wallet login", because they only tested the `email` field. I added "accepts a sign-in that kept no display" and changed the wallet case to `signedIn('wallet', '0xa29A...aF4d')`.
+  - `authFakes.tsx`: the `email` option is now `display`.
+  - `useAuth.test.tsx`, `CoreKitProvider.test.tsx`, `UserMenu.test.tsx` and `SettingsPage.test.tsx` now use the new signatures and shapes.
+- **desktop:**
+  - `main.test.ts` has a new case: "labels a wallet sign-in with the truncated address the exchange gave". It records the label of each redraw and shows that a wallet sign-in draws `0xa29A...aF4d`. This is the bug from the finding.
+  - `frontDoor.test.tsx`, `window.test.ts` and `auth/coreKit.test.ts` now use the new model and credential shapes.
+- The `settings-email` test id is not renamed.
+
+## Gate last lines
+- API typecheck: `tsc --noEmit` clean.
+- API unit tests: `Test Files 43 passed (43) / Tests 514 passed (514)`.
+- API integration tests: `Test Files 20 passed (20) / Tests 289 passed (289)`.
+- login: typecheck clean; `Test Files 5 passed (5) / Tests 57 passed (57)`.
+- client: typecheck clean; `Test Files 32 passed (32) / Tests 690 passed (690)`.
+- web (after `pnpm build:wasm` with the given target dir): `Test Files 69 passed (69) / Tests 885 passed (885)`.
+- desktop: `tsc -b` clean; `Test Files 8 passed (8) / Tests 113 passed (113)`.
+- Root `eslint` on the changed files exits 0. `prettier --check` on the changed files and `openapi.json` says: "All matched files use Prettier code style!"
+
+## Residuals
+- The parallel agent's branch can also regenerate `apps/api/openapi.json`. After both branches merge, run `pnpm openapi:generate` one more time.
+- The contract crate does not break. `crates/contract/tests/contract.rs` reads the grant as untyped JSON and reads only `verifierId`. The `email` fields in `crates/engine/src/api/types.rs` are request bodies for the email link, not the grant.
+- A browser that kept an old `{subject, email}` slot restores with no label until the next sign-in. This is acceptable because the project is greenfield.</result>
+<usage><subagent_tokens>138695</subagent_tokens><tool_uses>53</tool_uses><duration_ms>371635</duration_ms></usage>
+</task-notification>
+
+---
+
+lets go with option b. I have the tokens to burn this weekend.
+
+---
+
+its cipherbox-cf - that uuid i gave you is a session id - there is a memory on how to map it to a session id.
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/43763.sock" from-name="cipher-box-cf" from-mode="bypass">
+Acknowledged by cipher-box-cf. PR #2195 (head 0980048dd) has the next CodeRabbit slot. The previous request was posted at 02:56:31Z, so I post `@coderabbitai full review` at 03:57:05Z (1 h + 30 s margin). The owner's current process posts the request comment on the draft PR, and CodeRabbit reviews a draft PR from that comment. So I do not toggle ready/draft. I do not push to the branch and do not change the body. I reply with the comment URL after it is posted. Do not push to the branch after that time, or the review covers a stale head.
+</cross-session-message>
+
+---
+
+<task-notification>
+<task-id>aae3476a2357e9c79</task-id>
+<tool-use-id>toolu_01WuZrrM6FPHA7CvHHfJzZHx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/aae3476a2357e9c79.output</output-file>
+<status>completed</status>
+<summary>Agent "Bind slice: API and contract" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>All four test agents are still running. I'll wait for them to report back before committing the tests.</result>
+<usage><subagent_tokens>192673</subagent_tokens><tool_uses>68</tool_uses><duration_ms>967969</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7b08a79331f15c5a</task-id>
+<tool-use-id>toolu_012dcAU5JCuVCHCLLP4chA7v</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a7b08a79331f15c5a.output</output-file>
+<status>completed</status>
+<summary>Agent "Rework device-approval itest" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I reworked the device-approval HTTP integration test for ADR 0058 D3, and it now passes. All 34 tests pass, including the 25 that were failing. Typecheck, eslint and prettier are clean. I changed only `/Users/myankelev/Code/random/cipher-box-wt/bind-api/apps/api/src/device-approval/device-approval.http.itest.ts` and made no git writes.
+
+**Helpers**
+- `bind(userId, subject)`: the one place the bind is written, as a direct `UPDATE users SET identity_subject_id = $1 WHERE id = $2`.
+- `boundAccount()`: seeds an account, creates the `identity_subjects` row through `identityToken(subject)`, binds it, and returns the account with `identitySubject` and `subjectToken`.
+- `enroll()`: now starts from `boundAccount()` and registers with `subjectToken`.
+- `registerDevice()`: registers the second device with a new token for `account.identitySubject`, not a random subject.
+
+**Changed existing tests (spend describe)**
+- The replay, simultaneous-spend, session-after-spend and grace-reclaim tests now use a bound account. The registrations that must succeed would 409 otherwise.
+- "401s a replay from another account before any identity check": the other account stays unbound on purpose. If the bind check ran before the spend, the answer would be 409, so the 401 proves the spend comes first.
+- "leaves the token unspent when the registration is refused": the other account is now bound to its own subject. The 409 now also asserts the message `The identity token names a subject other than the one bound to this account`. This replaces the old "Identity is already linked to another account" case. The member then still registers with the same token (201).
+
+**New describe: "the registration rule (ADR 0058 D3)"**
+- **Unbound account:** 409 `This account has no bound identity subject`, no `account_devices` row, no `spent_identity_tokens` row.
+- **Token for another subject:** 409 with the mismatch message, no row, no spent token.
+- **Bound account:** 201. The one row has the account's `userId` and the bound subject, and the spent table holds exactly the token's `jti`.
+- **Session through the bind:** after `enroll()`, `POST /device-approval/session` with a fresh token returns a scoped token with `sub` set to the account and `scope` set to `device-approval`.
+- **Bound subject, no device:** the session request gets 404.
+- **Unbound subject on a device row:** I inserted the device row directly to simulate a row from before the bind. The session request still gets 404.
+
+**Command output (last lines)**
+- vitest: `Test Files 1 passed (1)` / `Tests 34 passed (34)`
+- `pnpm typecheck`: `tsc --noEmit`, no errors
+- eslint on the file: no output (clean)
+- prettier: `All matched files use Prettier code style!`
+
+I found nothing wrong in the product code. The refused registrations roll back the token spend, as the tests confirm.</result>
+<usage><subagent_tokens>82900</subagent_tokens><tool_uses>10</tool_uses><duration_ms>131193</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aae3476a2357e9c79</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/aae3476a2357e9c79.output</output-file>
+<status>completed</status>
+<summary>Agent "Bind slice: API and contract" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>I'm waiting on three agents: unit tests, the identity-bind itest and the contract cases. I'll commit the tests once they finish.</result>
+<usage><subagent_tokens>192586</subagent_tokens><tool_uses>70</tool_uses><duration_ms>1018345</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac5fb021a70f60ae4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/ac5fb021a70f60ae4.output</output-file>
+<status>completed</status>
+<summary>Agent "Unit tests for bind rules" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I updated both unit test files for ADR 0058 D2/D3, and all the required checks pass. I did not edit `fake-repo.ts`, because the fake already has `existsBy`, `update` with `IsNull`, and it ignores `select`. I also did not edit `device-approval.service.test.ts`, because it passes. The other modified files in the worktree (`openapi.json`, `device-approval.http.itest.ts`, `blueprint/api.md`, `identity-bind.http.itest.ts`) are not mine.
+
+**`apps/api/src/auth/services/auth.service.test.ts`**
+- I moved the `AuthService` constructor call into a module-level `authServiceOver(challenges, users, authMethods, identityTokens)` and the challenge signing into `signChallenge(challenge, privateKey)`. The old describe uses both and still passes `{}` for `IdentityTokenService`.
+- New describe `AuthService login bind (ADR 0058 D2)`. It uses a fake `verify` that maps known tokens to a subject and throws for all others, and `spend` is a `vi.fn`. Logins are real secp256k1-signed `identity-login` challenges.
+  - The first login with a token creates the account and binds the subject (`isNewUser` is true).
+  - A login with a token binds an existing unbound account and creates no second row.
+  - A forged token gets 401 `Invalid identity token` and no `users` row is created.
+  - A login without a token binds nothing.
+  - A bound account that logs in with another subject's token keeps its bind, and no row gets the other subject.
+  - When another account already has the subject, the login still succeeds and neither row changes.
+  - A binding login never calls `spend`.
+  - `boundSubjectOf` returns the bind for a bound account, and null for an unbound or unknown account.
+
+**`apps/api/src/device-approval/services/account-device.service.test.ts`**
+- I added a `users` fake and a `bind(userId, subject)` helper. `beforeEach` binds `account` to the subject of `token`. The cap tests and the `list` test seed the bind again after `build()` or for `otherAccount`.
+- `FakeDataSource` has no `getRepository` and does not roll back, so the test now uses a local `rollingBackDataSource()`. It serves `getRepository(User)`, and it puts the spent-token set back when the transaction work throws, as Postgres does. This is what lets a test assert that a refused token stays unspent.
+- I removed the case for "Identity is already linked to another account".
+- Changed cases:
+  - The re-touch refusal can no longer be reached through `register`, because the bind check now fails first. The test therefore seeds a device row under a different subject directly. A re-touch with the bound subject then gets 409 `Device key is registered under another identity`.
+  - The "key already registered to another account" test now binds `otherAccount` and checks the exact message.
+- New cases:
+  - A bound account's registration records the bound subject and spends the token.
+  - An unbound account gets 409 `This account has no bound identity subject`, no row is written, and the token stays unspent.
+  - A token for another subject gets 409 `The identity token names a subject other than the one bound to this account`, no row is written, and the token stays unspent.
+- `accountForIdentitySubject`:
+  - A bound account with a device resolves to that account.
+  - A bound account with no device gives null.
+  - An unbound subject gives null, even when a device row carries it.
+
+**Command output (last lines)**
+- `vitest run src/auth src/device-approval`: `Test Files 18 passed (18)`, `Tests 294 passed (294)`
+- `pnpm typecheck`: `tsc --noEmit` exited cleanly.
+- `eslint` on both files: no output.
+- `prettier --check` on both files: `All matched files use Prettier code style!`
+
+**Product code**
+I found no defects. A forged token in `identityLogin` uses up the login challenge, because the challenge is consumed before the token is verified. I think that is harmless.</result>
+<usage><subagent_tokens>101972</subagent_tokens><tool_uses>13</tool_uses><duration_ms>215865</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aae3476a2357e9c79</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/aae3476a2357e9c79.output</output-file>
+<status>completed</status>
+<summary>Agent "Bind slice: API and contract" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Still waiting on the identity-bind itest and the contract cases.</result>
+<usage><subagent_tokens>193688</subagent_tokens><tool_uses>71</tool_uses><duration_ms>1076917</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae789c639d32c5821</task-id>
+<tool-use-id>toolu_01DL9TVVuieUuNpEEAJQsuxP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/ae789c639d32c5821.output</output-file>
+<status>completed</status>
+<summary>Agent "New identity-bind HTTP itest" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I wrote the new suite and all 7 tests pass. Typecheck, eslint and prettier are clean, and the two existing auth suites still pass. It is the only file I created or edited, and I made no git writes.
+
+**File:** `/Users/myankelev/Code/random/cipher-box-wt/bind-api/apps/api/src/auth/identity-bind.http.itest.ts`
+
+Setup is copied from `identity.http.itest.ts`, with the Google keys checked against a fake JWKS. The mail provider is the rejecting fake from `auth.http.itest.ts`, since this suite sends no email. Each identity token comes from a real `POST /auth/identity/google` exchange. Each login asks for a fresh `/auth/challenge`, because the challenge is consumed before the token is verified. Every test empties `users`, `identity_subjects` and `spent_identity_tokens` first. Assertions read `users.identity_subject_id` directly from Postgres.
+
+**Tests:**
+- **Binds at first token login:** a new account's column equals the exchange's `verifierId`, and `isNewUser` is true.
+- **Does not rebind:** a second login with subject B leaves the column on subject A, and no account is bound to B. That second check is what proves the `IS NULL` guard works.
+- **Subject held by another account:** the login answers 200. The new account's row exists with a null column, and the holder still has the subject; exactly one account is bound to it.
+- **Forged token:** the claims match what this API stamps, but a key this API does not hold signs it. It answers 401 `Invalid identity token` and creates no users row.
+- **Garbage string:** it answers 401 `Invalid identity token` and creates no users row.
+- **No token:** 200, and the column stays null.
+- **Login does not spend the token:** no `spent_identity_tokens` row after the first login. The same token then verifies at a second login of the same account (200), still with no spent row, and the bind is unchanged.
+
+There is no expired-token test. The brief allowed "expired or garbage", and testing expiry would need a clock that can be moved, which these suites don't have; the garbage string covers the case.
+
+**Command output (last lines):**
+- New suite: `Test Files  1 passed (1)  Tests  7 passed (7)`
+- `pnpm typecheck`: `tsc --noEmit`, no errors
+- `eslint`: exit 0
+- `prettier --check`: `All matched files use Prettier code style!`
+- `identity.http.itest.ts` and `auth.http.itest.ts` together: `Test Files  2 passed (2)  Tests  75 passed (75)`
+
+I saw nothing wrong in the product code.</result>
+<usage><subagent_tokens>91606</subagent_tokens><tool_uses>12</tool_uses><duration_ms>255750</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a314cbe93175ef457</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a314cbe93175ef457.output</output-file>
+<status>completed</status>
+<summary>Agent "Fold API and contract findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I folded all four themes into PR #2203 in five commits. Every gate passes, including the live contract suite. Nothing is pushed. I did not touch the four files the other agent owns. One decision changes data, and you need to know it first.
+
+**Decision you need to know:** the migration's delete reads "no link row" as "no `identity_subjects` row with `id &lt;&gt; subject_id`". The backfill makes every existing subject row point at itself, so a database that migrates from the old schema loses **every** wallet linked before this fix. Every member must link the wallet again. Under the other reading, a display row whose wallet has its own subject row would survive. The new unlink would then delete that subject row, which is a member's vault mapping, or fail with a 500 on the `account_devices` foreign key. I ran the statement against sample rows. The only wallet display row that stays is the one with a link row. Email and identity rows stay.
+
+## Commits on `fix/link-method-points-at-subject`
+- `7c9457685` **fix(api), Theme 1:** a link refuses when any subject row exists for the identifier. The 409 says "Wallet already opens this account" / "Email already opens this account", or "opens another account". An unlink deletes the display row and the subject row as a pair, with no origin refusal. The migration does the delete above. I updated `blueprint/api.md` with the token-lifetime sentence (ADR 0009 D5).
+- `114c7fc12` **refactor(api), Theme 2:**
+  - The bound-subject read moved into the link transaction. It takes `authMethodLockKey` and `registryLockKey` (now in `advisory-lock.ts`) and refuses an unbound account first.
+  - The per-identifier lock is gone. A unique violation on either index maps to its 409, through the new `common/pg-errors.ts`.
+  - `subject_id` now has a self-referencing foreign key with `ON DELETE RESTRICT`, in place of the old index.
+  - The other Theme 2 items are done: `reproveAccountKey`, `touchAuthMethod` with no second read, `LINKABLE_KINDS`, the plain message parameters, `maskEmail` moved, the comment rewording, and `AccountDeviceService` back in `DeviceApprovalModule`.
+- `bc3a4aca4` **fix(api), Theme 3:**
+  - Each address has one store entry with one send budget, and one code slot for each purpose.
+  - A link code is bound to the account that asked for it.
+  - The link email has its own subject and body. The logging provider keeps the line `Verification code for &lt;address&gt;: NNNNNN` for both purposes.
+  - `identity-exchange.service.ts` needed no change: overloads keep its `send`/`verify` calls valid, and a link call without an account id is a type error.
+- `749520c17` **test(api), Theme 4:** new shared helpers in `apps/api/src/testing/auth-http.ts` and `apps/api/src/testing/auth-providers.ts`, and one `CapturingMailProvider` in `testing/fakes.ts`. `auth.http.itest.ts`, `method-link.http.itest.ts`, `ops.http.itest.ts` and `trust-proxy.http.itest.ts` now use them. `method-link` has `linkFreshCode` and a typed `kind`.
+- `ff8c6471d` **test(contract):** `crates/contract/tests/contract.rs` now signs the payload from `cipherbox_engine::devices::registration_payload`. It has `link_code` and `assert_nothing_linked`, and the absence clause is gone.
+
+## Tests added or changed
+- **Link rules:**
+  - Linking the account's own origin wallet gives 409 "Wallet already opens this account". Nothing is written, and the wallet still opens its original subject.
+  - The same refusal holds for a wallet or address whose subject row already points at the bound subject (unit tests).
+- **Bound subject:**
+  - Devices that carry two subjects mean the account has no bound subject.
+  - Another account's devices never bind this account.
+- **Lost race:** a unique violation on `uq_auth_methods_kind_identifier` gives "Wallet is already linked to another account".
+- **Foreign key (itest):**
+  - A link row whose `subject_id` names no row fails on `fk_identity_subjects_subject`.
+  - Deleting an origin row that a link row points at fails, and both rows stay.
+- **Link code binding:**
+  - Account B presenting A's link code gets 401 "No verification code is outstanding". Six tries cost A no attempts, and A can still link with the code (unit test and itest).
+  - Both purposes share one send budget of 5.
+- **Mail:** a link code gets its own subject and body, and the logging provider writes the same line for both purposes.
+- **Rendezvous:** a token minted through a linked wallet opens a rendezvous for the linking account. Registering a second device with it records the account's subject id.
+
+## Gates (last lines)
+- `pnpm typecheck`: clean. `pnpm test`: `Tests 519 passed (519)`. `pnpm test:integration`: `Test Files 20 passed (20)`, `Tests 293 passed (293)`.
+- Migration drift (CI runs it; not on your list): on a fresh database, migration generate reports "No changes in database schema were found". Revert and re-run also work.
+- `pnpm openapi:generate`: the document did not change, so there is no commit.
+- eslint: clean. prettier: "All matched files use Prettier code style!". markdownlint: clean. `lint:tracker-refs`: "No tracking-issue references in 1099 source files."
+- `cargo fmt --all --check`: clean. clippy on the contract crate: `Finished dev profile`.
+- Live contract suite: `test result: ok. 36 passed; 0 failed`. The six email-link legs ran live.
+
+## Notes
+- `CONTRACT_API_PROD_URL` was not set, so any production-mode leg skipped locally. CI starts both instances.
+- With the index gone, each unlink's restrict check does one sequential scan of `identity_subjects`. The table has one row per identity, so this is small.
+- The API on port 3200 now runs from the current build, with its log at `/tmp/linkapi-api-test.log`. Its database `cipherbox_contract_linkapi` was dropped, recreated and migrated, because it held the old shape of the migration.</result>
+<usage><subagent_tokens>254230</subagent_tokens><tool_uses>93</tool_uses><duration_ms>1762660</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aae3476a2357e9c79</task-id>
+<tool-use-id>toolu_019aMFY9vkvuMRt2XFBVjfHs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/aae3476a2357e9c79.output</output-file>
+<status>completed</status>
+<summary>Agent "Bind slice: API and contract" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The contract cases agent is still running. I'll commit its work when it reports.</result>
+<usage><subagent_tokens>196220</subagent_tokens><tool_uses>75</tool_uses><duration_ms>1300327</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae7840471b6a64d1a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/ae7840471b6a64d1a.output</output-file>
+<status>completed</status>
+<summary>Agent "Contract suite bind cases" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All four cases pass against a live local API. Format and clippy are clean, and the existing device-approval case still passes.
+
+**Files changed**
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/crates/contract/Cargo.toml`: new `[dev-dependencies]` only. `k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }` reuses the 0.13.4 already in the lock. Also `sha3 = "0.10"` and `base64.workspace = true` (0.22, already in the lock).
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/Cargo.lock`: only what cargo wrote. That is the three new dependency names under `cipherbox-contract`, plus new `keccak 0.1.6` and `sha3 0.10.9` entries. CI has no `cargo deny`/`vet`/`audit` gate.
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/crates/contract/tests/contract.rs`: the new helpers and cases. I put the helpers here, not in `lib.rs`, because they need the dev-dependencies.
+
+**New tests**
+1. `the_first_login_that_presents_an_identity_token_binds_its_subject`: a login that presents wallet token T1 binds subject S. A fresh token for S then registers a device (201), and a third token for S opens `/device-approval/session` (200). The test also asserts that one wallet always gives the same subject.
+2. `a_login_does_not_rebind_a_subject_that_another_account_holds`: account A binds S. B's login with a fresh token for S answers 200. B's registration answers 409 `This account has no bound identity subject`, and A's registration still answers 201.
+3. `a_registration_from_an_unbound_account_is_refused`: a login with no token, then a registration with a valid token, answers 409 `This account has no bound identity subject`.
+4. `a_registration_whose_token_names_another_subject_is_refused`: A is bound to W1's subject. A token from W2 answers 409 `The identity token names a subject other than the one bound to this account`. The same device key with a fresh W1 token then answers 201, so the refusal wrote no row.
+
+**Helpers**
+- `random_wallet`, `wallet_address` (EIP-55), `personal_sign` (EIP-191, v = 27/28), `wallet_identity_token`
+- `login_presenting_identity_token`, `account_id_of` (reads the JWT `sub`), `random_device_key`, `register_device`, `assert_conflict`, `session_status`
+
+**Things that differ from the brief**
+- **Helper signature:** `login_presenting_identity_token` takes `Option&lt;&amp;str&gt;` so case 3 can reuse it with `None`. Its doc line says the body becomes `client.login_identity(signer, identity_token)`. The existing `login_identity(&amp;signer)` calls are untouched.
+- **SIWE message:** I did not copy `link_message`'s shape. viem's suffix regex needs the full `URI / Version / Chain ID / Nonce / Issued At` block, or no nonce is parsed. The domain is `localhost:5173`, which CI accepts because it does not set `CORS_ALLOWED_ORIGINS`.
+- **Two edits to existing prose in `contract.rs`, please review:**
+  - I added the bind to the coverage list in the module header.
+  - On `the_device_approval_surface_is_mounted_and_fails_closed`, I removed the clause saying no headless suite can produce an identity token. The wallet exchange now does, so that clause was false.
+- **Local boot:** the worktree has no `.env`, so I added `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD` to the brief's start command.
+
+**Command output**
+- `cargo fmt --all --check`: no diff.
+- clippy: `Finished dev profile [unoptimized + debuginfo] target(s) in 0.72s`
+- Live run against the API on port 3307, database `cb_bind_contract`:
+  ```
+  test the_device_approval_surface_is_mounted_and_fails_closed ... ok
+  test a_registration_from_an_unbound_account_is_refused ... ok
+  test the_first_login_that_presents_an_identity_token_binds_its_subject ... ok
+  test a_registration_whose_token_names_another_subject_is_refused ... ok
+  test a_login_does_not_rebind_a_subject_that_another_account_holds ... ok
+  test result: ok. 5 passed; 0 failed; ... 29 filtered out; finished in 0.49s
+  ```
+- I stopped the API and dropped the database. The background task's exit code 144 is that kill.
+
+**Other notes**
+- **Product code:** I found nothing wrong.
+- **Not mine:** `git diff --stat` shows `apps/api/openapi.json` and `blueprint/api.md` modified in this worktree. Those come from other agents.
+- **Rate limit:** the new cases make about 36 calls to the per-IP auth limit, which is 200 per minute in CI. I did not run the full suite to check the total. If it is exceeded, the tests fail loudly with a 429 message.
+- **Unverified:** `link_message` has no suffix block. So the existing `siwe_link_*` tests may be getting their 401 at the missing-nonce check, not at signature verification. That is outside my scope and I did not confirm it.</result>
+<usage><subagent_tokens>111583</subagent_tokens><tool_uses>28</tool_uses><duration_ms>574421</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aae3476a2357e9c79</task-id>
+<tool-use-id>toolu_012nC2crw2x3Szz97xsGEcTA</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/aae3476a2357e9c79.output</output-file>
+<status>completed</status>
+<summary>Agent "Bind slice: API and contract" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The API half of ADR 0058 is built and committed on `feat/identity-subject-bind-at-login`. Every gate passes and nothing is pushed. Worktree: `/Users/myankelev/Code/random/cipher-box-wt/bind-api`, based on `de1ac3f00`. Two points need your decision before merge: the rendezvous now finds the account through the bind alone, which differs from ADR 0058 consequence 11, and the other agent's engine change will break the contract crate's build unless one of us adds `, None` to the existing calls.
+
+## Commits
+1. `5049212d3 feat(api): add the identity subject bind column on users` (D1)
+   - Migration `1790910095402-AddUserIdentitySubject` adds `users.identity_subject_id`: a nullable uuid, unique, with a foreign key to `identity_subjects`. There is no backfill.
+   - I checked the account hard delete. The foreign key points from `users` to `identity_subjects` and subjects are never deleted, so the existing delete order works.
+   - The migration-drift check is clean and the down migration works.
+2. `4887a96b4 feat(api): bind the identity subject to the account at login` (D2)
+   - `POST /auth/login` takes an optional `identityToken`. A token that does not verify gets 401 `Invalid identity token` and nothing is written.
+   - The bind is written in one transaction with the user create, under the subject lock. It is written only when both the account and the subject are unbound. Login does not spend the token.
+   - `subjectLockKey` and `registryLockKey` moved to `common/advisory-lock.ts`. `AuthService.boundSubjectOf(manager, userId)` is added for the later method-link PR.
+3. `3902969fd feat(api): read the identity subject bind at device registration` (D3)
+   - `POST /devices` gives 409 `This account has no bound identity subject` for an unbound account. It gives 409 `The identity token names a subject other than the one bound to this account` when the token's subject differs from the bind.
+   - Both refusals roll back the token spend and write no row. The old `claimedElsewhere` check is gone. The refusal for re-registering a key under another subject stays.
+4. `b6f76c918 test(api): …`: unit tests and real-Postgres tests (details below).
+5. `09d1a5d91 docs: …`: `blueprint/api.md` and the regenerated `apps/api/openapi.json`.
+6. `ef2d64b86 test(contract): …`: live contract cases, plus `k256`, `sha3` and `base64` as dev-dependencies of the contract crate.
+
+## Tests
+- **`auth.service.test.ts` (unit):**
+  - The first login with a token binds the account.
+  - A token binds an existing unbound account.
+  - A forged token gets 401 and creates no account.
+  - A login without a token binds nothing.
+  - A bound account keeps its bind when it logs in with another subject's token.
+  - A subject already bound elsewhere leaves both accounts unchanged.
+  - Login never spends the token.
+  - `boundSubjectOf` returns the bind or null.
+- **`account-device.service.test.ts` (unit):**
+  - A bound account registers: the row records the bound subject and the token is spent.
+  - Both 409 refusals write no row and leave the token unspent.
+  - The rendezvous lookup returns the account only when it is bound and has a device. An unbound subject gets null even when an old device row carries it.
+- **`identity-bind.http.itest.ts` (new, real Google exchange with a fake JWKS):**
+  - The bind lands at the first login.
+  - A second login does not rebind.
+  - A subject held by another account gives 200 and changes nothing.
+  - A forged or garbage token gives 401 and creates no account.
+  - A login without a token binds nothing.
+  - The token is not spent and verifies again at a second login.
+- **`device-approval.http.itest.ts` (reworked):**
+  - `enroll` binds the account first. `registerDevice` uses a new token for the account's bound subject.
+  - New describe block: an unbound account gets 409 with nothing written.
+  - A token for another subject gets 409 with nothing written.
+  - A bound registration records the subject and spends the token.
+  - The session reaches the account through the bind.
+  - A bound account with no device gets 404. An old device row with an unbound subject gets 404.
+- **`contract.rs` (live):**
+  - A wallet exchange mints a real token, the first login with it binds, and the account then registers a device (201) and opens a session (200).
+  - A second account that logs in with the same subject gets 200 at login and 409 at registration. The first account still registers.
+  - A registration from an unbound account gets 409.
+  - A registration with another subject's token gets 409, and the same key then registers with the right token.
+  - These cases ran live against a local API on port 3307: 5 passed.
+
+## Gate results
+- API typecheck: 0 errors.
+- `pnpm test`: 499/499 passed.
+- `pnpm test:integration`: 287/287 passed.
+- eslint exit 0, prettier clean, markdownlint OK.
+- `lint:tracker-refs`: "No tracking-issue references in 1097 source files".
+- `cargo fmt --all --check` OK; clippy on `cipherbox-contract`: Finished with no warnings.
+
+## Departures from the contract and the ADR
+- **Rendezvous through the bind alone.** I did this plus a check that the account has at least one registered device, so ADR 0039 D3 ("no rendezvous without an approver") still holds. There is no fallback to `account_devices`.
+  - **Why:** a device row written for an unbound subject before the bind (the ADR 0039 E4 case) can no longer route a member's rendezvous to another account.
+  - **Conflict with the ADR:** consequence 11 still says the rendezvous maps a subject through `account_devices`. ADR 0039 D3's first sentence still describes the registry check the bind replaced. Both need your edit.
+  - **Cost:** an existing account gets no device approval until its first login after an identity exchange.
+- **Contract login helper.** `login_presenting_identity_token(base, signer, Option&lt;&amp;str&gt;)` logs in over raw HTTP today. When the engine half lands, its body becomes `client.login_identity(signer, token)`.
+  - Every existing `login_identity(&amp;signer)` call in `contract.rs` then needs `, None`. Whichever PR merges second must make that edit.
+
+## For the client half and residuals
+- **Token lifetime at login:** `verify` enforces the 300-second lifetime, so under D2 a login that presents an older token gets 401. A sign-in that waits on device approval or recovery can cross that line. The client must send no token on that start, or retry the login without it.
+- A bad token still uses up the login challenge, because the challenge is consumed before the token is verified. It costs one extra round-trip and is harmless.
+- `Cargo.lock` gains `sha3` and `keccak`, for the contract crate's dev-dependencies only.
+- The unique and foreign-key constraints on `users` carry TypeORM's generated hash names (`UQ_f136…`, `FK_f136…`), not the repo's readable `uq_…` style. The drift check is clean; renaming is optional.
+- `blueprint/testing.md` does not list these tests yet. That file is outside what I own.
+- `link_message` in `contract.rs` is older code and lacks the URI/Version/Chain ID block. So the `siwe_link_*` 401 cases may fail at the missing-nonce check rather than at signature verification. I did not change them.
+- Clean-up: the scratch databases are dropped and no API process is left running.</result>
+<usage><subagent_tokens>202902</subagent_tokens><tool_uses>80</tool_uses><duration_ms>1620122</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aae3476a2357e9c79</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/aae3476a2357e9c79.output</output-file>
+<status>completed</status>
+<summary>Agent "Bind slice: API and contract" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>That notification was only a wait timer that ended, so there is nothing to act on. The report above stands.</result>
+<usage><subagent_tokens>203419</subagent_tokens><tool_uses>80</tool_uses><duration_ms>1639725</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aae3476a2357e9c79</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/aae3476a2357e9c79.output</output-file>
+<status>completed</status>
+<summary>Agent "Bind slice: API and contract" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>That was another wait timer ending, so there is nothing to act on. The report above stands.</result>
+<usage><subagent_tokens>203620</subagent_tokens><tool_uses>80</tool_uses><duration_ms>1868228</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aae3476a2357e9c79</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/aae3476a2357e9c79.output</output-file>
+<status>completed</status>
+<summary>Agent "Bind slice: API and contract" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>That was the last wait timer ending. Its "No matches found" means no API process from the contract run is still running. There is nothing to act on, and the report above stands.</result>
+<usage><subagent_tokens>204046</subagent_tokens><tool_uses>80</tool_uses><duration_ms>1900913</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aae3476a2357e9c79</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/aae3476a2357e9c79.output</output-file>
+<status>completed</status>
+<summary>Agent "Bind slice: API and contract" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That was the last wait timer ending, so nothing is left running in the background. The report above stands.</result>
+<usage><subagent_tokens>204665</subagent_tokens><tool_uses>80</tool_uses><duration_ms>1918971</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4ba9040cd3142a3b</task-id>
+<tool-use-id>toolu_01KozfwP9GpizhFYjAJptUYd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a4ba9040cd3142a3b.output</output-file>
+<status>completed</status>
+<summary>Agent "Bind slice: engine and clients" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I built the client half of ADR 0058, Consequences 3 to 7. It is in five layer commits on `feat/identity-subject-bind-at-login-client` in `/Users/myankelev/Code/random/cipher-box-wt/bind-client`. Nothing is pushed and no PR is open. **The branch does not pass the CI clippy gate by itself:** `crates/contract/tests/contract.rs` has 7 one-argument `login_identity` calls, which now fail to compile (E0061). I may not touch that file, so I ran clippy with `--exclude cipherbox-contract`. The merge needs the API agent's update to those calls, as `None` / `Some("…")` (an `Option&lt;&amp;str&gt;`, not an owned `String`).
+
+## Commits
+- `e34063921` feat(engine): present the identity token at login when a start follows an exchange
+- `e99b6261b` feat(client): carry the identity token from the facade start to the engine
+- `3984c2411` feat(login): hand the exchange's identity token to the start while it still verifies
+- `d066d6461` feat(web): give the login flow the wall clock and prove the start presents the token
+- `cb58b8696` feat(desktop): carry the identity token in the Tauri start command beside the raw secret
+
+## The body `POST /auth/login` sends
+- Without a token: `{"publicKey":"…","challenge":"…","signature":"…"}`
+- With a token: `{"publicKey":"…","challenge":"…","signature":"…","identityToken":"…"}`
+
+## Files per layer
+- **Engine:**
+  - `crates/engine/src/api/types.rs`: `LoginRequest.identity_token`, omitted when empty.
+  - `crates/engine/src/api/client.rs`: `login_identity(signer, identity_token: Option&lt;&amp;str&gt;)`.
+  - `crates/engine/src/facade.rs`: new `start_with_identity_token(secret, Option&lt;String&gt;)`. The engine drops the token when the login returns.
+  - `crates/engine/benches/pipeline.rs`: call updated.
+  - `crates/wasm/src/host.rs`: `start(secret, identityToken?)`.
+- **packages/client:** `facade.ts`, `transport.ts`, `correlatedTransport.ts`, `engineClient.ts`, `worker/protocol.ts`, `worker/serve.ts`, `worker/engineHost.ts`, `testkit.ts`, and tests. A follower start and a failover start send no token.
+- **packages/login:**
+  - `identity.ts`: the credential keeps the grant's `expiresAt`.
+  - `secret.ts`: `handOffLoginSecret` sends the token only while the clock is more than 30 s before `expiresAt`.
+  - `flow.ts`: new required `now: () =&gt; Date` on `LoginHost`. The redeemed credential is kept per session until a start uses it.
+  - `testFakes.ts` and tests updated.
+- **apps/web:** `auth/useAuth.ts` passes `now`. Updated `test/authFakes.tsx`, `auth/useAuth.test.tsx`, `auth/coreKit.test.ts` and `auth/CoreKitProvider.test.tsx`.
+- **apps/desktop:**
+  - `src/auth/facade.ts`: the token goes in an `x-cipherbox-identity-token` header, because the secret is the raw invoke body.
+  - `src/main.ts`: passes `now`.
+  - `src-tauri/src/session.rs`: reads the header and refuses an empty or non-text value.
+  - `src-tauri/src/engine/mod.rs`: passes the token on to `start_with_identity_token`.
+  - `src-tauri/src/e2e/mod.rs`: the dev-key start passes none.
+  - New `src/auth/facade.test.ts`.
+
+## Where this differs from your brief and the earlier coordinator message
+1. `Engine::start(secret)` is unchanged and calls the new method with no token. It has about 120 call sites, and some `.start(` matches are unrelated methods. The production hosts call the token-taking method.
+2. `CoreKitSession` has no new `identityToken()`. The flow already holds the credential it redeemed, so it passes that to the start. The web's own `identityToken()` still serves registration, and the desktop session keeps no token.
+3. `crates/wasm/src/boundary.rs` is unchanged. `start` is not a `Command`, so the per-command secret table does not apply to it.
+4. `commandCodec.test.ts` does not exist. The tests for the worker message are in `transport.test.ts`, `serve.test.ts` and `engineHost.test.ts`.
+5. As the coordinator asked, recovery and approval starts now send the token if they come in time, and no start sends it in the last 30 s before expiry. A restore always sends none. The hosts pass the clock in, and the flow never reads the clock itself.
+
+## Tests
+- **Engine:** the login body has `identityToken` when given and no such field when not. The challenge request never carries it. The new start method forwards the token to the login.
+- **Client:**
+  - The facade forwards the token, and sends none when it has none.
+  - The worker message carries the token outside the transfer list.
+  - `serveEngine` gives the host the token, or none.
+  - The WASM start receives the token.
+  - The leader worker's start carries the token; a failover start carries none.
+- **Login:**
+  - Google, email and wallet sign-ins send the token, and a restore sends none.
+  - Recovery and approval send the token when they come in time.
+  - A start 30 001 ms before expiry sends it; one 30 000 ms before expiry sends none.
+  - Approval 10 minutes later sends none.
+  - The token survives a flow the host rebuilds.
+  - An unreadable expiry sends none.
+  - A real exchange with no browser API still gets its token to the start.
+- **Web:** the Google, email, wallet and immediate-phrase starts send the token, and a restore sends none. The session still holds the token after login, for `POST /devices`.
+- **Desktop:**
+  - Rust reads the token from the header, or `None` without one.
+  - Rust refuses an empty or non-text header.
+  - TS puts the token in the header and sends no options without it.
+
+## Gate results
+- `cargo fmt --all --check`: clean.
+- `cargo test -p cipherbox-engine`: 2059 unit tests plus all integration suites, 0 failed.
+- `cargo clippy --workspace --all-targets --exclude cipherbox-contract -- -D warnings`: exit 0.
+- `cargo check --target wasm32-unknown-unknown -p cipherbox-wasm`: Finished.
+- `cargo test -p cipherbox-desktop`: 69 passed.
+- packages/client: 33 files / 682 tests passed; typecheck clean.
+- packages/login: 5 / 63 passed; typecheck clean.
+- apps/web (`tsc -b &amp;&amp; vitest`): 69 / 876 passed.
+- apps/desktop: 9 / 113 passed; typecheck clean.
+- eslint on changed files: clean. prettier: "All matched files use Prettier code style!"
+- `cargo check -p cipherbox-contract --tests`: E0061 errors, as described at the top.
+
+## Remaining points
+- The `feat(login)` commit alone leaves the apps/web and apps/desktop typecheck failing, because `now` is required. The next two commits fix it, so a squash merge is fine.
+- If a tab signs in through an exchange while another tab leads, the token is dropped together with the secret and does not reach a login. The account binds at its next sign-in in the leading tab.
+- The e2e `signIn` hook in `apps/web/src/engine/introspection.ts` starts from a raw secret with no token. Consequence 8 (web e2e approval legs through an exchange) is outside my scope and I did not change it.
+- No Rust test proves that the desktop engine host forwards the token, because that needs a live API. The header test and the engine forward test cover each side of it.</result>
+<usage><subagent_tokens>215363</subagent_tokens><tool_uses>109</tool_uses><duration_ms>2107339</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab1e56978a13aacd4</task-id>
+<tool-use-id>toolu_01MVsmYBJZw31MnwGR5VNono</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/ab1e56978a13aacd4.output</output-file>
+<status>completed</status>
+<summary>Agent "Integrate bind halves, run gates" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I merged the two halves and all gates pass on the merged HEAD. The live contract suite passed 34 of 34, and the PR smoke slice passed 28 of 28 locally. I made two changes that differ from the brief; they are listed first. Nothing is pushed and no PR is open. The worktree is clean at `d957deba0`.
+
+## Deviations from the brief
+1. **Step 2: I could not keep the helper's signature.** The engine client has no public way to read the access token (`SessionBearer::peek` is `pub(crate)`). These are the changes:
+   - `login_presenting_identity_token` now returns `Client` and calls `client.login_identity(signer, token)`.
+   - `register_device` takes `&amp;Client` and calls `client.register_device`.
+   - `assert_conflict` matches `ApiError::Status { status: 409, message, .. }`.
+   - I removed `account_id_of` and the `base64` dev-dependency (`Cargo.lock` changed).
+   - The callers stay the same, with one change: they pass the client and no longer pass `base`.
+   - Result: the bind legs now also prove that the engine client decodes both 409 refusals (ADR 0058 consequence 4).
+2. **Step 3: I did not write `signInWithEmailCode` or an API-log reader.**
+   - `tests/web-e2e/identity.ts` already does a headless wallet exchange, and the device-approval spec already got its token from it. I only pass that token to the sign-in hook.
+   - Nothing in `crates/contract` reads `CONTRACT_API_LOG`, so setting that variable had no effect.
+
+## Commits I added
+- `1904878e2` merge of `feat/identity-subject-bind-at-login-client`. It had no conflicts.
+- `871555610` test(contract): log in through the engine client with the identity token. This adds `, None` to the 7 calls that took one argument and makes the helper change above.
+- `d10b6fa1c` test(web-e2e): sign the approver in through the exchange so its account binds.
+- `721d48df6` docs: map the identity subject bind suites in the testing blueprint. This adds three entries to the suite map in `blueprint/testing.md`:
+  - a coverage clause in the contract suite section;
+  - a new `apps/api` integration bullet for the job `Integration tests (real Postgres)`;
+  - a sentence about the approver's exchange sign-in in the Web Playwright entry.
+- `d957deba0` test(web-e2e): a one-line note that the identity token is an `evaluate` argument, so a spec that passes one must turn the trace off. I added it after the gates ran. It changes only a comment, and prettier passes on it.
+
+I ran the OpenAPI generator again. The document did not change, so I did not commit it.
+
+## Web e2e legs I converted
+- **`tests/device-approval.spec.ts` (5 legs, in the PR-required smoke slice):** this is the only spec that registers a device.
+  - The approver now signs in through `openDevice(browser, subject, identity)` → `VaultPage.coldStart(identity)` → `__CIPHERBOX_ENGINE__.signIn(secret, account, { token, expiresAt })`.
+  - The hook (`apps/web/src/engine/introspection.ts`) gives the token to `handOffLoginSecret`, so the login binds the account.
+  - I added a unit test in `introspection.test.ts`, and I updated the device-approval section of `tests/web-e2e/README.md`.
+- **Negative check:** I removed the token for one run. That leg then failed with `409: This account has no bound identity subject`. So the conversion is necessary.
+- **Legs I did not change:** these keep the raw-secret hook because they register no device.
+  - `link-first.spec.ts` and `cold-start-listing.spec.ts`, which use `devices.ts`: their "devices" are browser contexts.
+  - The staging specs: `second-device.spec.ts` stops before the rendezvous.
+
+## Gates (last lines)
+| Gate | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p cipherbox-engine` | 3021 passed, 0 failed |
+| `cargo test -p cipherbox-desktop` | 69 passed |
+| `cargo check --target wasm32-unknown-unknown -p cipherbox-wasm` | exit 0 |
+| api typecheck / test / test:integration | exit 0 / 499 passed / 287 passed |
+| client typecheck / test | exit 0 / 682 passed |
+| login typecheck / test | exit 0 / 63 passed |
+| `apps/web` test | 877 passed |
+| desktop typecheck / test | exit 0 / 113 passed |
+| `tests/web-e2e` typecheck | exit 0 |
+| eslint and prettier on all changed files | clean |
+| `pnpm lint:tracker-refs` | "No tracking-issue references in 1098 source files." |
+| markdownlint on changed `.md` | clean |
+| `pnpm build:wasm` | done |
+
+To typecheck `tests/web-e2e`, I first had to build `packages/client`, `login` and `auth-ui` to `dist`.
+
+## Live runs
+- **Contract suite:** 34 passed, 0 failed, on port 3307 against `cb_bind_int`. The database then had 37 accounts, 3 of them bound, so the suite did run against the live stack. The four bind legs passed. I stopped the API and dropped the database.
+- **Local web e2e smoke slice:** 28 of 28 passed, against its own API on port 3000 and database `cb_bind_e2e`. Port 4173 is in use by the preview server of another worktree, so I ran Playwright through a scratch config at `/tmp/cb-bind-int/pw.config.ts` on port 4183. I stopped the API and dropped the database.
+
+## Residuals
+- I did not run the e2e `release` project, which checks that the shipped bundle has no hook.
+- My local e2e API ran with `NODE_ENV=test`. The CI web-e2e job sets no `NODE_ENV`.
+- Two contract legs skipped because no production-mode instance was running (`CONTRACT_API_PROD_URL` not set): `test_login_is_hard_blocked_in_production` and the advertised-methods leg. They are not part of this slice.
+
+Logs are in `/tmp/cb-bind-int/`. Worktree: `/Users/myankelev/Code/random/cipher-box-wt/bind-api`.</result>
+<usage><subagent_tokens>165431</subagent_tokens><tool_uses>87</tool_uses><duration_ms>896757</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad458be5057c9cd97</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/ad458be5057c9cd97.output</output-file>
+<status>completed</status>
+<summary>Agent "Security review of bind PR" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Security review: PR #2210, the identity subject bind at login
+
+Scope: `git diff main...HEAD` in `/Users/myankelev/Code/random/cipher-box-wt/bind-api`, base `de1ac3f00`. I made no edits and ran no git write commands.
+
+## Findings
+
+I found no new vulnerability at confidence 8 or higher.
+
+## Checked, no finding
+
+**1. Bind integrity**
+
+- **First-claim race (ADR 0058 E1).** An attacker who has a leaked, unspent token can still log in with a fresh key and bind the member's subject first. This is the accepted residual. The window has three shapes:
+  - **New member:** the window is from the mint to the member's first login. That is seconds.
+  - **Login held at the factor policy:** `recoverWithPhrase` or `adoptApprovalFactor` then calls `handOff(true)`. The 30 s margin usually holds the token back, so that login does not bind. For that exchange, the window is the full token lifetime (300 s or less). The account binds at a later plain sign-in.
+  - **Account from before the deploy:** the window stays open until its next login through an exchange.
+
+  All three shapes are inside the accepted E1 residual. Do not describe the window as "seconds" only.
+- **No rewrite.** `bindSubject` in `apps/api/src/auth/services/auth.service.ts` is the only code that writes `identity_subject_id`. It writes with `update({ id, identitySubjectId: IsNull() })`. No code saves a full `User` entity, so no load-then-save path can put a stale `null` back. The `byo` change is an `update` by criteria.
+- **Two accounts, one subject.** Both logins take `subjectLockKey(subject)`. The transaction uses READ COMMITTED, so the second login's `existsBy` sees the first commit and skips the write. The `UNIQUE` constraint is a second barrier.
+- **One account, two subjects at the same time.** The `IS NULL` guard makes the second `UPDATE` re-check after it waits on the row lock. It then writes 0 rows.
+- **Lock key.** Login and registration use the same function, now moved to `apps/api/src/common/advisory-lock.ts`. The string is still `device-registry-subject:`, so the key does not change across the deploy.
+
+**2. Login refusal**
+
+- A token that does not verify throws 401 before `runLockGuardedTransaction` starts. So the request writes no user row, no `auth_methods` row and no bind.
+- A login without a token runs the same steps as before, now inside one transaction.
+- The challenge is consumed before the token check. That was already true before the signature check. It burns only the caller's own challenge, which is bound to the caller's `publicKey`. A replay is not possible, so this is harmless.
+- Non-security note: `jwtVerify` has no clock tolerance. A client clock more than 30 s behind the server can send a token that the server reads as expired, and the login is then refused with 401. This can occur only on slow held flows. It is an availability problem only.
+
+**3. Registration**
+
+- `spend` runs before both 409 checks, in the same transaction. A 409 rolls the spend back and writes no row.
+- On success with the bound subject, the transaction commits the spend.
+- `accountForIdentitySubject` no longer reads `account_devices.identity_subject_id`. It goes through `users.identity_subject_id`, then it checks that the account has at least one device. So an old row from before the bind cannot send a rendezvous to the wrong account. Such a row also blocks a re-registration under a new subject (409 "under another identity"), which is the intended result.
+
+**4. Token handling in clients**
+
+- **No logs.** No new code writes the token to a log in TS, in the worker, in Rust or in the API. API error messages do not echo the token.
+- **Not kept, not stored.**
+  - The engine calls `drop(identity_token)` right after `login_identity` returns.
+  - In `packages/login/src/flow.ts`, `exchanged` is in module memory only. `handOff` clears it before the start, and logout clears it too. No code writes it to a store.
+  - The follower path (`broadcastTransport.start`) does not pass the token on, and a failover re-start passes none.
+- **Desktop.** The header parse error does not contain the token value.
+- **e2e hook and traces.** The introspection hook runs only when `VITE_E2E_HOOK` is set. `device-approval.spec.ts` sets `trace: 'off'`. Only a comment in `vault.page.ts` makes other specs turn the trace off when they pass a token.
+- Consistency note, not a finding: registration carries the token as `Zeroizing&lt;String&gt;`, but the start path uses `Option&lt;String&gt;` and then `drop`.
+
+**5. Privacy: `users` holds the subject id only**
+
+- The migration adds one column, `identity_subject_id uuid`, with a unique constraint and a foreign key.
+- The bind writes only the subject id. It does not store the `method` claim, any hash or any display form.
+- This matches ADR 0058 consequence 12. The API now links every account that signs in through an exchange to its subject, as consequence 12 states.
+
+**6. Determinism**
+
+- `packages/login` reads time only through the injected `host.now`. The web and desktop hosts supply `() =&gt; new Date()`.
+- The only `new Date(...)` call in `packages/login` parses `grant.expiresAt`. An expiry that it cannot read gives an `Invalid Date`, and the token is then not sent. This fails closed.
+- The API's grant response sends `expiresAt` (`identity.controller.ts`).
+- The new Rust code in the engine reads no clock.
+
+**Not security:** `AuthService.boundSubjectOf` in `apps/api/src/auth/services/auth.service.ts` has no caller outside its unit test. It is dead code.
+
+## Relevant files
+
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/apps/api/src/auth/services/auth.service.ts`
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/apps/api/src/device-approval/services/account-device.service.ts`
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/apps/api/src/common/advisory-lock.ts`
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/apps/api/src/migrations/1790910095402-AddUserIdentitySubject.ts`
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/packages/login/src/flow.ts`
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/packages/login/src/secret.ts`
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/crates/engine/src/facade.rs`
+- `/Users/myankelev/Code/random/cipher-box-wt/bind-api/apps/desktop/src-tauri/src/session.rs`</result>
+<usage><subagent_tokens>125549</subagent_tokens><tool_uses>24</tool_uses><duration_ms>429151</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a954bc15d0c9b0b61</task-id>
+<tool-use-id>toolu_01SoYV1zhmhtTNrzWixr1Kei</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a954bc15d0c9b0b61.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review of bind PR" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I did not edit any file or run any git write. Branch `feat/identity-subject-bind-at-login`, diff `main...HEAD` (de1ac3f00). I read AGENTS.md and ADR 0058 first. There are 20 findings across the four angles. Paths are relative to `/Users/myankelev/Code/random/cipher-box-wt/bind-api`.
+
+## REUSE
+
+1. **`apps/api/src/auth/services/auth.service.ts:170`.** Nothing in production calls `boundSubjectOf`. Only its own unit test calls it, and `account-device.service.ts:138` writes the same query inline.
+   - Cost: dead public method plus one test.
+   - Change: delete `boundSubjectOf` and its test (`auth.service.test.ts` "boundSubjectOf returns…"). **SAFE**
+
+2. **`apps/api/src/auth/identity-bind.http.itest.ts:49,59`.** `newIdentity` and `signChallenge` copy `auth.http.itest.ts:55,64`. `signChallenge` now exists three times, the third in `auth.service.test.ts`. The provider wiring (about 40 lines) also copies `auth.http.itest.ts` and differs only in the Google key factory.
+   - Cost: three copies to keep the same.
+   - Change: move `signChallenge` and a small `newIdentity` into `apps/api/src/testing/`, next to `randomCompressedPublicKey` in `http-integration-app.ts`. **SAFE**
+
+3. **`apps/api/src/auth/identity-bind.http.itest.ts:184`.** `forgedToken` builds the API's claims and header by hand. `apps/api/src/testing/identity-tokens.ts` already has `identityTokenWithJti(encodedIdentitySigningKey(), clock, randomUUID())`.
+   - Caveat: that helper stamps `iat` and `exp` from a `FakeClock`. If that clock is not at the current time, the forged token fails on `exp`, not on the signature. Both failures give the same 401 message, so the test would prove less than its name says.
+   - Cost: a fourth hand-built identity token.
+   - Change: use the helper with a `FakeClock` set to the current instant. **SAFE**
+
+4. **`apps/api/src/device-approval/device-approval.http.itest.ts:145`.** `bind()` writes the bind with raw SQL. `seedAccount(db, jwt, { identitySubjectId })` already accepts `Partial&lt;User&gt;`. `identityToken(subject)` inserts the FK row first, so the order works.
+   - Cost: a second write path for the same row.
+   - Change: in `boundAccount`, call `identityToken` first, then `seedAccount` with the override, and delete `bind`. **SAFE**
+
+5. **`crates/contract/tests/contract.rs:2057`.** `register_device` writes the `cipherbox/device-registration/v1` payload by hand. `cipherbox_engine::devices::registration_payload(account, key)` is public (`pub mod devices`, `lib.rs:47`).
+   - Cost: a second copy of a payload format, which can drift from the format the engine signs.
+   - Change: call `registration_payload`. **SAFE**
+
+6. **`crates/contract/tests/contract.rs:1995`.** `wallet_identity_token` gets the nonce with a raw POST to `/auth/siwe/challenge`. `new_client(base).siwe_challenge().await` already exists, and the SIWE test at line 343 uses it. It also checks the nonce shape.
+   - Change: use the client method. **SAFE**
+
+7. **`crates/contract/Cargo.toml:39`.** The new `k256 = "0.13"` pin repeats the pin in `crates/core/Cargo.toml:24`.
+   - Cost: two version pins for one crate.
+   - Change: put `k256` in `[workspace.dependencies]` and use `workspace = true` in both crates. **SAFE**
+
+## SIMPLIFICATION
+
+1. **`apps/api/src/device-approval/device-approval.http.itest.ts:615`.** The new `register()` copies `registration()` and `post()` at lines 523 and 531 in the sibling describe. `enroll` and `registerDevice` also build the same `POST /devices` body.
+   - Cost: four copies of one request.
+   - Change: move `registration` and `post` to suite scope, and use them in all four places. **SAFE**
+
+2. **Two 409 messages in `account-device.service.ts:142,146`.** The test files repeat them as string literals: three times in `device-approval.http.itest.ts`, in the unit test, and as constants in `contract.rs:2089`. Keeping two refusals is correct: ADR D3 names both, and the messages tell the client different actions.
+   - Cost: a message change breaks the TS tests with no compile error.
+   - Change: export the two messages as constants from the service and import them in the TS tests. `contract.rs` keeps its own copy. **SAFE**
+
+3. **`packages/login/src/flow.ts:184,354`.** `handOff(followsExchange)` takes a boolean, and only `restore` passes `false`.
+   - Cost: one flag and one conditional.
+   - Change: in `restore`, inside the `exclusively` callback, set `exchanged = null` and then call `handOff()`. Delete the parameter. Clear it inside the callback so that it cannot clear a login that is still in flight. The behavior does not change. **SAFE**
+
+4. **`crates/engine/src/facade.rs:5327`.** `drop(identity_token)` and the doc text "The token drops as the login returns" suggest that the token is cleared. A dropped `String` is not zeroized.
+   - Cost: a line and a sentence that state a property the code does not have.
+   - Change: remove both, or use `Zeroizing&lt;String&gt;` if the intent is to clear the token. **SAFE**
+
+5. **`apps/api/src/device-approval/services/account-device.service.ts:161`, plus the `account_devices.identity_subject_id` column.**
+   - New rows always record the bound subject, so the column is now derivable from `users.identity_subject_id`.
+   - `accountForIdentitySubject` no longer reads it.
+   - The "registered under another identity" check is reachable only for rows written before the bind.
+   - Cost: a column that the API writes and never reads, plus one branch for old rows only.
+   - Change: drop the column and the branch.
+   - **RISKY.** ADR 0058 D3 ("The row records the bound subject") and the `blueprint/api.md` text both state it. The change needs an ADR amendment.
+
+6. **Login-bind cases at two layers.** `auth.service.test.ts` "AuthService login bind" repeats most of the `identity-bind.http.itest.ts` cases with a fake repo. The fake cannot test the lock or the unique constraint. The same happens with the two 409s: `account-device.service.test.ts`, the itest and `contract.rs` all prove them.
+   - Cost: test upkeep only.
+   - Change: optional. Keep the real-Postgres tests, and keep a unit case only where the itest does not cover it ("binds an existing unbound account"). **SAFE**
+
+## EFFICIENCY
+
+1. **`apps/api/src/auth/services/auth.service.ts:149–152` (`identityLogin`).** `findOne` loads the full user, so `identitySubjectId` is already known. `bindSubject` still runs `existsBy` and an `UPDATE … IS NULL` when the account is already bound. That is the usual case for a re-login after an exchange. For a new account, the code writes an `INSERT` and then a second `UPDATE`.
+   - Cost: two extra statements on each bound re-login, and one extra write on a first login.
+   - Change: skip `bindSubject` when `account.identitySubjectId !== null`. For a new account with an unbound subject, put `identitySubjectId` in the `save`. **SAFE**
+   - A second step is possible: take the subject lock only after a read shows the account is unbound. The column is write-once, so a non-null read is stable. **RISKY**, because it reorders the lock and the read.
+
+2. **`auth.service.ts:142` (deliberate cost, no change).** A login without a token now runs in `runLockGuardedTransaction`. `set_config` and the lock run only inside `boundedAcquire`, which only the token path calls. So the extra cost is BEGIN and COMMIT, and in return the find and the save are now atomic.
+
+3. **`account-device.service.ts:208` (`accountForIdentitySubject`).** It makes two round trips: a `users` lookup, then `account_devices` `existsBy`.
+   - Change: use one query, `SELECT id FROM users u WHERE u.identity_subject_id = $1 AND EXISTS (SELECT 1 FROM account_devices d WHERE d.user_id = u.id)`. **SAFE**
+
+4. **`account-device.service.ts:135` (recommend no change).** The spend (an INSERT plus a sweep DELETE) runs before the bind read. A refused registration pays both and then rolls them back.
+   - Moving the bind check first changes a replay from an unbound account from 401 to 409. The itest "401s a replay from another account before any identity check" fixes the current order.
+   - The cost falls only on the refusal path. **RISKY.** Keep the current order.
+
+5. **Clients: no findings.** In `useAuth.ts`, `now` is inside the `useMemo` that builds the flow, so it adds no renders. The `exchanged` latch is cleared at hand-off and at logout. The plumbing in `packages/client` adds no messages; the token goes in the existing `start` post.
+
+## ALTITUDE
+
+1. **The bind at login (right place).** The bind is in the login transaction under `subjectLockKey`. That is the right place, because the lock turns a concurrent same-subject bind into a wait, not a unique-violation 500.
+   - Finding, `account-device.service.ts:132`: the registration still takes `subjectLockKey`. The bind is write-once and `users.identity_subject_id` is unique, so the read does not need the lock to be correct. The lock only lets a registration that races an in-flight login wait for the bind.
+   - Change: drop the subject lock from `claim`. **RISKY.** ADR 0058 D2 and the blueprint both say "under the subject lock that registration also takes". The value is low, so keep it unless the ADR changes.
+
+2. **The 30-second margin in `packages/login/src/secret.ts:72`.** The layer is right: the sequence is host-agnostic and the same for both hosts. The injected `now` is the right seam. The problem is the comparison: the client's wall clock against an `expiresAt` that the server stamps. The server allows 60 s of skew (`CLOCK_SKEW_SECONDS`).
+   - A client clock more than 270 s fast never presents the token. The account never binds, without a sign, and every later registration gets a 409.
+   - A client clock more than 90 s slow can present an expired token on a slow start, for example after typing a recovery phrase. The whole login then fails with 401.
+   - ADR 0058 rejects locking a member out over a bind it does not need. A 401 for a genuine but expired token has the same effect.
+   - The general fix (a): the API tells an expired token from one that does not verify. On an expired token it binds nothing and lets the login continue. It gives 401 only for a bad signature or bad claims. With that, the client needs no margin and no clock. **RISKY**, because it changes the D2 wording.
+   - The smaller fix (b): the grant carries `expiresIn`, and the client measures from when it received the grant (`identity.controller.ts:92` already stamps `expiresAt`). This removes skew, but the margin stays. **SAFE**
+   - The margin as it is now is a patch.
+
+3. **The desktop header (`session.rs`, `facade.ts`): no finding.** The secret goes as a raw body (`InvokeBody::Raw`) so that no JSON copy of it is left behind. JSON arguments cannot travel beside a raw body, so a header is the only other channel. The header is the right shape.
+
+4. **`Engine::start` beside `start_with_identity_token` (`crates/engine/src/facade.rs:5265,5280`).** Both production callers use the new method: desktop `engine/mod.rs` and `crates/wasm/src/host.rs`. The old `start` stays only for about 60 test, bench and fuse-test call sites. ADR 0058 Consequence 4 says "the engine start command takes it as an optional parameter", which means one entry point.
+   - Cost: two public entry points.
+   - Change: fold into one `start(secret, identity_token: Option&lt;String&gt;)`, and add `, None` at the test call sites. **SAFE** (a mechanical change).
+
+5. **The e2e hook (`apps/web/src/engine/introspection.ts:178`, `vault.page.ts`, `deviceApproval.page.ts`): no blocking finding.** The hook already skips `createLoginFlow`, so passing `ExchangedIdentity` through `handOffLoginSecret` fits that bypass. It is a patch, not the general fix. The general fix is to drive the real flow, which is outside this PR.
+   - Minor: the hook builds a second `now: () =&gt; new Date()`. A slow CI run between the mint and the sign-in (more than 270 s) withholds the token without a sign. The test then fails later with a confusing "no bound identity subject" 409.
+   - The trace exposure is covered: `device-approval.spec.ts:81` sets `trace: 'off'`.</result>
+<usage><subagent_tokens>153174</subagent_tokens><tool_uses>27</tool_uses><duration_ms>462075</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a711b8c7874db9c8f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a711b8c7874db9c8f.output</output-file>
+<status>completed</status>
+<summary>Agent "Crypto-privacy review of bind PR" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Crypto and privacy review: PR #2210 (ADR 0058 D1 to D3)
+
+I found one Medium finding. It blocks the merge only if a deployed database holds `account_devices` rows that are older than this migration. The other findings are Low or Info, and the rest of the brief holds. No key or seed material changed. I wrote no files to the repository. My notes are in `/tmp/cb-bind-crypto/notes.md`.
+
+### Findings
+
+**F1 — Medium. After the migration, another account can bind a subject that a registration already claimed before the migration.**
+- **Location:** `apps/api/src/auth/services/auth.service.ts:338` (`bindSubject`), and `apps/api/src/device-approval/services/account-device.service.ts` `claim()`, where the PR removes the `claimedElsewhere` check.
+- **Invariant broken:** On `main`, an identity subject reaches at most one account (ADR 0039 D3). On `main`, the first registration made that claim in `account_devices`.
+- **Scenario:**
+  1. Account A registered a device under subject S before the migration. The migration does no backfill, so A is unbound.
+  2. A starts a sign-in on a new device. The Core Kit login holds at the factor policy. A gets no rendezvous because A is unbound, so A starts to type the recovery phrase. The token for S stays valid for up to 300 s.
+  3. The identity token goes to the Web3Auth verifier network by design (ADR 0008, `loginWithJWT`). A leak therefore needs no compromise of the client.
+  4. Attacker B logs in with a new key and that token. `bindSubject` sees that no `users` row holds S, so it binds S to B. B registers a device, and the registration passes because the subject matches the bind.
+  5. `accountForIdentitySubject(S)` now returns B. Each later rendezvous from A's devices goes to B, and A can never bind.
+- **On `main`:** `claimedElsewhere` refused B's registration.
+- **Scope:** After the bind, the mismatch 409 at `account-device.service.ts:144` stops all new rows under a different subject. The regression therefore applies only to rows that are older than the migration.
+- **Effect:** No key is disclosed. A wrong factor cannot reconstruct A's key. The result is a permanent denial of service on approval, and B sees A's request metadata.
+- **ADR status:** ADR 0058 E1 states a window for accounts that existed before the bind, "until its next login through an exchange". It does not state that this PR re-opens a claim that `main` had already closed.
+- **Recommendation:**
+  - (a) In this PR, add a refusal to `bindSubject`. Do not bind when an `account_devices` row holds this subject under a different `user_id`. This adds one query and keeps "no backfill". The column becomes a block signal, not a source for the subject-to-account mapping.
+  - (b) A one-time backfill for users with exactly one distinct device subject also closes the gap. ADR 0058 consequence 11 says "no backfill", so (b) needs an ADR amendment. The owner decides.
+- **Condition:** The severity is Medium only if a deployed database has these rows. That is a fact about the deployment, and I cannot check it from here.
+
+**F2 — Low. The 30 s margin compares the client clock with the server's expiry, and nothing else allows for clock skew.**
+- **Location:** `packages/login/src/secret.ts:72` and `:78`; `apps/api/src/auth/services/identity-token.service.ts:136`.
+- **How the check works:**
+  - The client reads its injected `now()` and compares it with `expiresAt`, which is a server-clock instant from the grant body.
+  - The server calls `jose.jwtVerify` with `currentDate: now` and no `clockTolerance`, so it refuses the token exactly at `exp`.
+  - `CLOCK_SKEW_SECONDS` (60) sets only the `latestExpiryMs` bound.
+  - So the 30 s margin is the only tolerance in the system. Its stated reason is expiry while the request is in flight. That reason covers latency. It does not cover clock skew.
+- **Scenario:** The client clock is more than 30 s behind the server. A phrase recovery or an approval starts the engine more than about 270 s after the mint. The client then sends an expired token. The login answers 401, and the whole start fails with an error that does not say why.
+- **Boundary:** The comparison is strict (`&lt;`). At exactly `expiresAt - 30 s` the client does not send the token. `flow.test.ts` covers this case. The comparison uses only the injected clock.
+- **Recommendation:** Make the deadline relative. Add `expiresIn` to the grant body. Record `receivedAt = now()` at the exchange. Send the token only while `now() &lt; receivedAt + expiresIn - 30 s`. Do not retry the login without the token on a 401: that hides a failed bind and gives no signal.
+
+**F3 — Low. No suite proves that concurrent first logins for one subject bind one account.**
+- The behavior holds by design:
+  - `runLockGuardedTransaction` uses the default READ COMMITTED isolation.
+  - The subject lock lasts for the transaction.
+  - After the lock, `existsBy` runs on a new snapshot.
+  - The unique constraint is a backstop.
+- But no test in the diff runs two logins that carry a token at the same time. Under `blueprint/testing.md` law 1, a claimed behavior needs a suite that gates the merge.
+
+**F4 — Info. `boundSubjectOf` (`auth.service.ts:170`) is dead code.** Only its own test calls it. It is an extra reader of the bind with no caller. Remove it in the `/simplify` pass.
+
+**F5 — Info. The two registration 409s tell attacker B whether S was already bound.** After B logs in with a leaked token, "no bound identity subject" means that the victim bound S first. This only confirms that the victim signed in through an exchange. Accept it, or merge the two messages into one.
+
+**F6 — Info. The identity token is not zeroized.** It is a `String` in Rust (`facade.rs:5327` drops it) and a string in JS. It is a 300 s bearer and not key material, so this is acceptable. `Zeroizing&lt;String&gt;` in the Rust start path would match how the secret is handled.
+
+**F7 — Info. `crates/contract/Cargo.toml` adds `k256` and `sha3` for a headless SIWE wallet.** Rule 4 is not broken, because this is the contract test crate. The versions are pinned directly and not through `workspace = true`, so they can drift from the workspace.
+
+### Checked, holds
+
+**Who reads the bind**
+- Registration (`claim`) reads `users.identity_subject_id` under the subject and registry locks. It refuses an unbound account (409) and a mismatched subject (409). Both refusals throw inside the transaction, so the spend rolls back. Unit tests prove "writes no row, token unspent".
+- `accountForIdentitySubject` reads the bind and then requires a device row on that account. `openSession` is its only caller.
+- No reader still uses `account_devices.identity_subject_id` alone to find an account. The column is now written only; re-touch still compares it.
+
+**The bind write**
+- Login takes the subject lock (`subjectLockKey` is now shared). Account creation or touch, the bind, and `touchAuthMethod` run in one transaction.
+- Retries are idempotent: `existsBy` returns early, and `IS NULL` stops a rewrite. A conflict changes nothing and the login continues.
+- The lock order cannot deadlock: login takes one key, and registration takes two keys in one acquire.
+
+**The login refusal**
+- The API verifies the token after the challenge signature, so an unauthenticated caller cannot use login to test a token.
+- An invalid token gives 401 before the transaction, so nothing is written. Only the in-memory challenge is consumed.
+- `verify` is local only (an in-memory JWK and the injected clock). The catch-all does not turn an availability fault into 401.
+
+**The migration**
+- It adds UNIQUE and an FK to `identity_subjects` (NO ACTION), with no backfill, under a migration advisory lock.
+- No code deletes `identity_subjects` rows, so the FK cannot block a delete. An account hard delete removes the `users` row and the bind with it.
+
+**Token lifecycle**
+- Path: exchange → `IdentityCredential` (in memory) → `exchanged` module latch → `handOffLoginSecret` → `facade.start` → worker `postMessage` (structured clone) → `EngineHost.start` → WASM `start_with_identity_token` → `login_identity` → `LoginRequest` body.
+- The token is dropped after the login. `exchanged` is cleared on every `handOff` and on sign-out.
+- Nothing persists the token: not the sealed store, not `authStore`, not the desktop model, not the op queue, not an export.
+- `LoginRequest` derives only `Serialize`, not `Debug`. The engine and the API log no request body.
+- The engine test proves that only the login request carries the token.
+- The `exchanged.session === session` guard stops a token from moving to a different session. A restore sends no token.
+
+**Desktop**
+- The token goes in an `x-cipherbox-identity-token` header.
+- `identity_token()` refuses an empty or non-ASCII value before it reads the secret.
+- The raw secret body path (`login_secret`, `InvokeBody::Raw`, `Zeroizing`) does not change.
+- The e2e hook sends `None`.
+
+**E2E trace**
+- The login secret hex is generated inside `evaluate`, so it never reaches a trace. The token is the only credential passed as an argument.
+- `device-approval.spec.ts` sets `test.use({ trace: 'off' })` at spec level, which overrides the project setting. The trace note is enough today.
+- Enforcement is a convention only. To harden it, make `coldStart(identity)` throw when tracing is on.
+
+**Privacy**
+- Only the subject UUID goes on `users`: no hash and no display form. The link to the unsalted provider hash is through the existing `identity_subjects` row (consequence 12, as stated).
+- A rendezvous through the bind shows a holder of a leaked token nothing new. `/device-approval/session` still answers 200 or 404 for "this subject reaches an account that has a device", as on `main`.
+
+**Key material:** No KDF edge, seal, wire format, KAT, or seed changes.
+
+### Test cases to add
+
+1. Two concurrent first logins with two keys and one subject's token give exactly one `users` row bound to the subject. The other row stays unbound. Seam: API itest, real Postgres, `Promise.all`.
+2. A login whose token `exp` is 1 s before the injected API clock answers 401, creates no `users` row, and writes no bind. Seam: API itest with the clock fake.
+3. Account A has an `account_devices` row under S from before the migration. A login by account B with a token for S binds nothing. Seam: API itest (with F1 fix (a)).
+4. A token received at t0 with `expiresIn` 300 s is sent at t0+269 s and withheld at t0+270 s, whatever the absolute `expiresAt`. Seam: `packages/login` unit test, fake clock (with the F2 fix).
+5. `/device-approval/session` with the subject of an account that has only pre-migration device rows answers 404 on the live API. Seam: contract suite. The unit test at `account-device.service.test.ts:506` exists, but no live proof does.</result>
+<usage><subagent_tokens>110071</subagent_tokens><tool_uses>22</tool_uses><duration_ms>502296</duration_ms></usage>
+</task-notification>
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/43763.sock" from-name="cipher-box-cf" from-mode="bypass">
+cipher-box-cf: the CodeRabbit request is posted on PR #2195 (head 0980048dd) at 2026-10-02T03:57:07Z: https://github.com/FSM1/cipher-box/pull/2195#issuecomment-5945334946. The PR stays a draft. To read the verdict: a clean result has no new review object and the status comment says "No actionable comments were generated" with `coveredCommitId` = the head and `kind":"reviewed"`. If CodeRabbit replies "rate limited", do not repost; the review can still run. A second request on this PR needs its own slot from me.
+</cross-session-message>
+
+---
+
+<task-notification>
+<task-id>a6a788f9632a4113b</task-id>
+<tool-use-id>toolu_01Sgf7bHx8L7o8f4hSHC3c9T</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a6a788f9632a4113b.output</output-file>
+<status>completed</status>
+<summary>Agent "Rebase link PR onto bind" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I merged rather than rebased, and the link now reads the bind. All the gates and the live contract suite pass on the final HEAD `04569e923`, a merge commit. Nothing is pushed, and no PR is opened or edited.
+
+**Merge, not rebase.** The link branch has its own merge commits from its sub-branches, so a rebase would replay them. I made one merge commit of `origin/feat/identity-subject-bind-at-login`. It has the default message, no parentheses and no trailer. I amended it once to remove the `# Conflicts:` list from the message; the tree did not change. I added no other commits. The test rework had to go into the merge itself: without it, the old `googleAccount()` registers a device from an unbound account, and that now answers 409.
+
+**Conflicts (19 files) and how I resolved them**
+- **`auth.service.ts`:**
+  - I kept the bind branch's `boundSubjectOf`, which reads `users.identity_subject_id`, and deleted the link branch's version that read the device registry, together with the "interim source" comment.
+  - The constructor takes both `EmailOtpService` and `IdentityTokenService`.
+  - The identity-row update in `identityLogin` stays inside the bind's transaction, with the link branch's `touchAuthMethod(repo, existing, …)` signature.
+- **`advisory-lock.ts`:** I took the bind branch's version (`subjectLockKey` exported once). The link no longer takes `registryLockKey`.
+- **`account-device.service.ts`:** the bind branch's version, plus the link branch's `isUniqueViolation`. I removed the duplicate local `subjectLockKey` and the unused `QueryFailedError` import.
+- **`integration-db.ts`:** both migrations, the link's `1790700000000` first. The bind's foreign key on `identity_subjects(id)` still works, because a subject is always the id of its first-sight row.
+- **`ops.http.itest.ts`, `trust-proxy.http.itest.ts`:** I kept the shared `authServiceProviders()`. In `testing/auth-providers.ts` I added `IdentityTokenService` and removed `AccountDevice` from `AUTH_SERVICE_ENTITIES`.
+- **`blueprint/api.md`:** the bind bullet comes first, then the method-link bullet, which now says the link "points the identity at the subject bound to the account at login (ADR 0058 D1)". The device-registry wording is gone.
+- **`contract.rs`:**
+  - The header names both the email link and the bind.
+  - There is one generic `assert_conflict&lt;T&gt;(&amp;Result&lt;T, ApiError&gt;, msg)`.
+  - The email-link cases use the `NO_BOUND_SUBJECT` constant.
+  - The bind branch's `register_device` now uses the engine's `registration_payload`.
+- **The 10 login, web and desktop files** (a sub-agent did these): the union of both sides. `display` comes from the link branch and fully replaces `email`. `expiresAt`, the clock, and the token handed to the start come from the bind branch. The sub-agent also fixed one auto-merged line in `flow.test.ts` that still had `email`.
+- **No change needed:** `Cargo.lock` and `openapi.json` merged automatically, and `pnpm openapi:generate` gave no diff.
+
+**Where `bound` comes from now.** In `linkMethod`, inside the transaction, `bound = await this.boundSubjectOf(manager, userId)` reads `users.identity_subject_id` on the transaction's manager. If it is null, the link refuses with 409 "This account has no bound identity subject" and writes nothing. It then takes one sorted lock batch, `[authMethodLockKey(userId), subjectLockKey(bound)]`. The device-registry read and `registryLockKey` are gone from the link.
+
+**Tests changed**
+- **Unit (`auth.service.test.ts`):** the account row is seeded with the bind, and the "no bound subject" cases set the column to null. I deleted the two tests about devices with two subjects and about another account's devices.
+- **`testing/auth-http.ts`:** `identityLogin(http, identity, identityToken?)` sends the token when one is given.
+- **`method-link.http.itest.ts`:**
+  - `googleAccount()` binds through a real Google exchange and a login that presents the token, and registers no device.
+  - The rendezvous-through-a-linked-wallet test registers one device first, because the rendezvous needs a device (ADR 0039 D3). It still passes, with devices `[S, S]`.
+  - "refuses the wallet the account was created through" binds through the wallet token.
+  - The two "no registered device" cases are now "logged in without an identity token".
+- **`auth.http.itest.ts`:** `boundLogin()` writes `users.identity_subject_id` instead of a device row.
+- **Contract:** `bound_account` does an email exchange, then `login_presenting_identity_token(Some(token))`. There is no device registration in it.
+
+**Gates on the final tree (last lines)**
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -D warnings` | `Finished dev profile … 27.84s` |
+| `cargo test -p cipherbox-engine` | 3026 passed, 0 failed (24 result lines) |
+| wasm32 check | `Finished dev profile … 34.47s` |
+| `pnpm build:wasm` | `Finished release profile` |
+| `packages/client` typecheck + test | 33 files, 684 passed |
+| `apps/api` typecheck | no errors |
+| `apps/api` test | 43 files, 528 passed |
+| `apps/api` test:integration | 21 files, 306 passed |
+| `packages/login` typecheck + test | 5 files, 63 passed |
+| `apps/web` test | 69 files, 886 passed |
+| `apps/desktop` typecheck + test | 9 files, 115 passed |
+| eslint (93 changed ts/tsx files) | exit 0 |
+| prettier --check | "All matched files use Prettier code style!" |
+| `lint:tracker-refs` | "No tracking-issue references in 1104 source files." |
+| markdownlint (5 changed md files) | 0 issues |
+
+**Live contract suite.** I ran the API on :3309 against the new `cb_link_rebase` database, with the CI job's env (plus `KUBO_API_URL` and `QUOTA_DEFAULT_BYTES`). Result: `test result: ok. 40 passed; 0 failed`. Two production-mode tests skip because they need `CONTRACT_API_PROD_URL`, which was not in the given env. Afterwards I stopped the API and dropped `cb_link_rebase`. Nothing was listening on :3200, and I dropped `cipherbox_contract_linkapi`.
+
+**Residuals**
+- PR #2203's base should become `feat/identity-subject-bind-at-login`, or #2210 should merge first.
+- I did not run the web e2e locally. `device-approval.spec.ts` and its page objects merged automatically. No e2e spec drives a method link.
+- ADR 0039 D1 still says "no link flow exists". It needs an "Amended by" sentence through the ADR process, which is outside this task.
+- Not caused by this merge: `blueprint/testing.md` maps no suites for `method-link.http.itest.ts` or the link contract tests.
+
+Worktree: `/Users/myankelev/Code/random/cipher-box-wt/link-api`. Main code file: `/Users/myankelev/Code/random/cipher-box-wt/link-api/apps/api/src/auth/services/auth.service.ts`.</result>
+<usage><subagent_tokens>184196</subagent_tokens><tool_uses>78</tool_uses><duration_ms>940443</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a405fc0fa1c9326ba</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/74f69241-2e4f-4dea-bf70-f65a06e0efa8/tasks/a405fc0fa1c9326ba.output</output-file>
+<status>completed</status>
+<summary>Agent "Fold reviews into bind PR" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I folded all five themes into four commits in `/Users/myankelev/Code/random/cipher-box-wt/bind-api` on `feat/identity-subject-bind-at-login`. I did not push. Every gate passes on the final HEAD `6f67f98c4`, and the live contract suite passes: 34 tests, 0 failed. Theme E needed no change.
+
+## Commits
+1. `94e01c50e fix(api): bind no subject that a device row of another account holds` (Theme A)
+2. `f56f34217 fix(login): time the identity token by its lifetime on the host clock` (Theme B)
+3. `739c681ee refactor: fold the engine start into one call and trim the login bind` (Theme C)
+4. `6f67f98c4 test: share the test identities and prove the bind under a race and an expiry` (Theme D)
+
+## Files per theme
+- **A:** `apps/api/src/auth/services/auth.service.ts`, `auth.service.test.ts`, `identity-bind.http.itest.ts`, `apps/api/src/testing/fake-repo.ts` (the fake now supports `Not`).
+- **B:**
+  - API: the DTO, `identity.controller.ts`, `identity-exchange.service.ts`, `identity-token.service.ts` and its test, and the regenerated `apps/api/openapi.json`. The OpenAPI diff is one hunk: `expiresIn` only.
+  - `packages/login`: `identity.ts`, `secret.ts`, `flow.ts` and the test files.
+  - Web, desktop and e2e: `apps/web/src/engine/introspection.ts`, the web and desktop test fixtures, and `tests/web-e2e/page-objects/deviceApproval.page.ts`.
+- **C:**
+  - Rust: `crates/engine/src/facade.rs` and all its callers in the engine tests, the fuse tests, `crates/fuse/src/adapters/windows.rs`, `crates/wasm/src/host.rs` and `apps/desktop/src-tauri/src/engine/mod.rs`. The benches do not call `start`.
+  - API: `auth.service.ts`, `account-device.service.ts` and its test, `device-approval.http.itest.ts`.
+  - Login: `packages/login/src/flow.ts` and `flow.test.ts`.
+- **D:**
+  - API tests: new `apps/api/src/testing/identities.ts`, `auth.http.itest.ts`, `identity-bind.http.itest.ts`, `auth.service.test.ts`, `device-approval.http.itest.ts`.
+  - Contract crate: `crates/contract/tests/contract.rs`, `crates/contract/Cargo.toml`, root `Cargo.toml`, `crates/core/Cargo.toml`.
+
+## Tests added
+- **Unit "binds nothing when a device row of another account holds the subject":** the login binds neither account.
+- **Itest "binds nothing when a device row from before the bind holds the subject for another account":** B's login binds nothing, A stays unbound, and `/device-approval/session` answers 404.
+- **Theme A tests fail without the fix:** I removed the check, and both tests failed.
+- **`secret.test` relative deadline:** a token received at t0 with 300 s goes out at t0+269 s. It is held back at t0+270 s, and when `expiresIn` is not a number.
+- **`hostAgnostic.test`:** the host clock runs one hour past the grant's `expiresAt`, and the token still goes out.
+- **`expiresIn`:** the itest and the token-service unit test assert `expiresIn === 300`.
+- **`flow.test` "presents none for a restore, even while a held login keeps a token":** protects the change that removed the `handOff` flag.
+- **Itest expiry:** a token that expired 1 s before the API clock gives 401, no `users` row and no bind. A live token from the same key then binds, which shows the refusal comes from the expiry.
+- **Itest race:** two concurrent first logins that present one subject give exactly one bound row, one unbound row, and two users.
+
+## Gate last lines
+- `cargo fmt --all --check`: exit 0, no output.
+- `cargo clippy --workspace --all-targets -- -D warnings`: `Finished dev profile ... in 0.30s`.
+- `cargo test -p cipherbox-engine`: the last line is one small test binary, `ok. 2 passed; 0 failed`. Across the whole run, 3021 passed and 0 failed.
+- `cargo test -p cipherbox-desktop`: `ok. 69 passed; 0 failed`.
+- `cargo check --target wasm32-unknown-unknown -p cipherbox-wasm`: `Finished ... in 0.12s`.
+- **API:** typecheck exit 0; unit `491 passed`; integration `290 passed (290)`.
+  - One earlier integration run failed once on `auth.http.itest.ts &gt; read accelerator token &gt; refuses a missing, malformed, or unminted credential`. That was 1 failure in 5 full runs, in a gateway-verify test this PR does not change. Treat it as a flaky test.
+- **`packages/client`:** `build:wasm` exit 0; typecheck exit 0; `682 passed`.
+- **`packages/login`:** typecheck exit 0; `64 passed`.
+- **`apps/web`:** `877 passed`.
+- **`apps/desktop`:** typecheck exit 0; `113 passed`.
+- **`tests/web-e2e`:** typecheck exit 0.
+- **eslint on the changed files:** exit 0.
+- **prettier --check:** `All matched files use Prettier code style!`
+- **`pnpm lint:tracker-refs`:** `No tracking-issue references in 1099 source files.`
+- **markdownlint:** no `.md` file changed, so I did not run it.
+
+## Live contract suite
+- **Result:** 34 passed, 0 failed, on PORT 3311 against database `cb_bind_fold`, with the CI env.
+- **Production-mode tests:** `CONTRACT_API_PROD_URL` was not set. So `test_login_is_hard_blocked_in_production` and `production_ignores_the_test_profile_auth_limit_override` skipped themselves inside tests that report "ok".
+- **Cleanup:** I stopped the API and dropped the database, and I confirmed both. The log is in `/tmp/cb-bind-fold/api.log`.
+
+## Skipped items and departures from the brief
+- **Theme A live contract case:** I could not add it. The harness reaches the API only over HTTP. No route can make a device row whose subject another account holds, because a registration writes a row only under the account's own bind.
+- **Where `receivedAt` lives:** `flow.ts` records it from `host.now` when the exchange returns, and keeps it beside the credential, not inside it. This keeps one clock seam: `createIdentityExchange` gets no second clock.
+- **`IdentityCredential.expiresAt`:** I removed the field, not only the comparison, because nothing else read it. The grant body still sends `expiresAt`.
+- **`accountForIdentitySubject`:** it is now one query, and the in-memory fakes cannot run it. So I deleted its three unit cases. Three device-approval itests cover the same paths:
+  - "opens a scoped session for the account bound to the subject"
+  - "404s a session for a bound subject whose account has no device"
+  - "404s a session for an unbound subject that a device row carries"
+- **`crates/core/Cargo.toml`:** k256 now comes from the workspace too, with the same version and features, so the workspace has one k256 line. `Cargo.lock` did not change.
+- **`introspection.ts`:** the file had no `now` before. Theme B needs two clock reads, so I added one `const now` for both.
+- **Theme E:** no blueprint sentence names `expiresAt` or `start_with_identity_token`. The `start(secret)` text in `desktop.md` and `web-client.md` is shorthand, so I left it.
+- **Optional thinning:** done. I removed six unit bind cases. "binds the subject to an existing unbound account", the device-row case and `boundSubjectOf` stay.
+
+## Decision for you
+`blueprint/api.md` "The identity subject bind" still says "when either is bound elsewhere". That sentence now leaves out the old device-row case from Theme A. I did not change it, because a blueprint correction goes through the ADR process. You decide whether to amend it.</result>
+<usage><subagent_tokens>224431</subagent_tokens><tool_uses>109</tool_uses><duration_ms>1212931</duration_ms></usage>
+</task-notification>
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/43763.sock" from-name="cipher-box-cf" from-mode="bypass">
+cipher-box-cf: PR #2210 (head 35b347142) is in the CodeRabbit queue. The slots before it are taken: 04:57:40Z, 05:58:15Z, 06:58:50Z, 07:59:25Z. A background job posts `@coderabbitai full review` on #2210 at 09:00:00Z, on the draft PR (no ready/draft toggle). Do not push to the branch before then. I reply with the comment URL after it is posted. #2203 is not queued; send it when it is ready.
+</cross-session-message>
