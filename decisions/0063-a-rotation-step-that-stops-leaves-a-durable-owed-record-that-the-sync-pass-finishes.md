@@ -58,6 +58,8 @@ every name of the scope at a fresh EOL, and that is the renewal of the scope. Wh
 device does not open, the walk renews every name, and its report names the unread record for each scope at
 each pass. It still signs no name under a seed that does not derive it (ADR 0061 D4): the cause is local,
 and a revoked writer already holds each seed from before the cut, so the renewal gives no new access.
+Amended by ADR 0065 D4 on 2026-10-02: after the bound of ADR 0065 D3, the walk renews in an owed
+scope each name that the scope root's current write seed derives.
 
 **D5 — After its first publish, a command whose step stops returns `Ok`, and the work is owed.**
 The published cut cannot be taken back, so `Err` would state that the command did not run. The

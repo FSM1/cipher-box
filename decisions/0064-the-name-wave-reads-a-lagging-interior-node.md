@@ -73,4 +73,5 @@ other refusal still stops the wave.
 
 - Which rule the name wave takes for an interior node that it cannot open or cannot reach: today
   the wave stops, and a re-drive meets the same node (FSM1/cipher-box#2157). That rule needs its
-  own ADR.
+  own ADR. Amended by ADR 0065 D1 to D3 on 2026-10-02: the wave drops a node that it refuses
+  for a cause in the record bytes at once, and a node that an endpoint can block after a bound.
