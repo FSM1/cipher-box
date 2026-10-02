@@ -110,7 +110,11 @@ let retired: CoreKitSession | 'any' | null = null;
  * it: a login held at the factor policy starts later, from a phrase or an
  * approval, and maybe from a flow the host rebuilt in between.
  */
-let exchanged: { session: CoreKitSession; credential: IdentityCredential } | null = null;
+let exchanged: {
+  session: CoreKitSession;
+  credential: IdentityCredential;
+  receivedAt: Date;
+} | null = null;
 
 /**
  * Clears the module-scoped latches. For a host's tests, which share one module
@@ -182,8 +186,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
    * whichever way the start goes.
    */
   const handOff = async (followsExchange: boolean): Promise<void> => {
-    const credential =
-      followsExchange && exchanged?.session === session ? exchanged.credential : null;
+    const held = followsExchange && exchanged?.session === session ? exchanged : null;
     exchanged = null;
     if (!facade || !session) throw new Error('the engine is not ready to accept a login');
     const method = session.method();
@@ -191,7 +194,16 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
 
     secrets?.use(session);
     try {
-      await handOffLoginSecret(facade, session, credential && { credential, now: host.now });
+      await handOffLoginSecret(
+        facade,
+        session,
+        held && {
+          token: held.credential.token,
+          receivedAt: held.receivedAt,
+          expiresIn: held.credential.expiresIn,
+          now: host.now,
+        }
+      );
       // The end latches while this export is in flight, and its own teardown is
       // the leg the serialization gate refuses; signing in here would re-enter
       // the session it retired, so the catch below ends that session instead.
@@ -217,7 +229,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       if (!session) throw new Error('the login provider is not ready');
       retired = null;
       const credential = await collect();
-      exchanged = { session, credential };
+      exchanged = { session, credential, receivedAt: host.now() };
       await session.login(credential);
       await handOff(true);
     });

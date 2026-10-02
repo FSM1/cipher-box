@@ -177,7 +177,7 @@ const credential = (overrides: Partial<IdentityCredential> = {}): IdentityCreden
   token: 'header.payload.signature',
   verifierId: SUBJECT,
   email: null,
-  expiresAt: new Date('2099-01-01T00:00:00Z'),
+  expiresIn: 300,
   ...overrides,
 });
 

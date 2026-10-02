@@ -139,7 +139,7 @@ describe('installIntrospection', () => {
 
       await window.__CIPHERBOX_ENGINE__?.signIn('11'.repeat(32), 'e2eaccount', {
         token: 'exchanged-token',
-        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        expiresIn: 300,
       });
 
       expect((start.mock.calls[0] as unknown[])[2]).toBe('exchanged-token');

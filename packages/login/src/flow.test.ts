@@ -12,7 +12,8 @@ import {
   FAKE_IDENTITY_TOKEN,
   FAKE_NONCE,
   FAKE_PHRASE,
-  FAKE_TOKEN_EXPIRY,
+  FAKE_NOW,
+  FAKE_TOKEN_LIFETIME_S,
   passThroughCollector,
   type WebCollected,
 } from './testFakes';
@@ -213,7 +214,9 @@ describe('the recovery phrase step', () => {
 });
 
 describe('the identity token a start presents', () => {
-  const lifetimeLeft = (parts: Parts) => FAKE_TOKEN_EXPIRY.getTime() - parts.clock.now().getTime();
+  // Every login here exchanges at `FAKE_NOW`, so the token was received then.
+  const lifetimeLeft = (parts: Parts) =>
+    FAKE_NOW.getTime() + FAKE_TOKEN_LIFETIME_S * 1000 - parts.clock.now().getTime();
 
   it('presents the token while more than 30 seconds of its lifetime are left', async () => {
     const parts = build({ session: fakeSession({ needsRecovery: true }) });
@@ -291,7 +294,7 @@ describe('the login flow', () => {
         token: FAKE_IDENTITY_TOKEN,
         verifierId: 'subject-for-google',
         email: 'user@example.test',
-        expiresAt: FAKE_TOKEN_EXPIRY,
+        expiresIn: FAKE_TOKEN_LIFETIME_S,
       },
     ]);
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);

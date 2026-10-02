@@ -92,23 +92,19 @@ describe('handOffLoginSecret', () => {
     expect(accounts).toEqual(['aa11-bb22']);
   });
 
-  it('passes the token only while 30 seconds of its lifetime are left', async () => {
+  it('passes the token only while 30 seconds of its lifetime on the host clock are left', async () => {
     const { facade, identityTokens } = fakeFacade(transferring);
 
-    const credential = { token: 'identity.jwt', expiresAt: new Date('2030-01-01T00:05:00Z') };
-    const at = (iso: string) => () => new Date(iso);
+    const receivedAt = new Date('2030-01-01T00:00:00Z');
+    const identity = { token: 'identity.jwt', receivedAt, expiresIn: 300 };
+    const after = (seconds: number) => () => new Date(receivedAt.getTime() + seconds * 1000);
 
+    await handOffLoginSecret(facade, exporter(SECRET_HEX), { ...identity, now: after(269) });
+    await handOffLoginSecret(facade, exporter(SECRET_HEX), { ...identity, now: after(270) });
     await handOffLoginSecret(facade, exporter(SECRET_HEX), {
-      credential,
-      now: at('2030-01-01T00:04:29.999Z'),
-    });
-    await handOffLoginSecret(facade, exporter(SECRET_HEX), {
-      credential,
-      now: at('2030-01-01T00:04:30Z'),
-    });
-    await handOffLoginSecret(facade, exporter(SECRET_HEX), {
-      credential: { ...credential, expiresAt: new Date('not a date') },
-      now: at('2030-01-01T00:00:00Z'),
+      ...identity,
+      expiresIn: Number.NaN,
+      now: after(0),
     });
     await handOffLoginSecret(facade, exporter(SECRET_HEX));
 

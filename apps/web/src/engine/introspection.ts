@@ -43,10 +43,10 @@ export interface IntrospectedView {
   settled: boolean;
 }
 
-/** The token of an identity exchange, and its expiry as an ISO string. */
+/** The token of an identity exchange, and its lifetime in seconds. */
 export interface ExchangedIdentity {
   token: string;
-  expiresAt: string;
+  expiresIn: number;
 }
 
 export interface EngineIntrospection {
@@ -154,6 +154,7 @@ export function installIntrospection(client: EngineClient, secrets?: SecretRearm
     seen.push(plain(event) as Plain<EventDescriptor>);
   });
 
+  const now = () => new Date();
   window.__CIPHERBOX_ENGINE__ = {
     signIn(loginSecretHex, accountId, identity) {
       const source = { accountId: () => accountId };
@@ -171,12 +172,7 @@ export function installIntrospection(client: EngineClient, secrets?: SecretRearm
       return handOffLoginSecret(
         client.facade,
         { ...source, _UNSAFE_exportTssKey: () => Promise.resolve(loginSecretHex) },
-        identity === undefined
-          ? null
-          : {
-              credential: { token: identity.token, expiresAt: new Date(identity.expiresAt) },
-              now: () => new Date(),
-            }
+        identity === undefined ? null : { ...identity, receivedAt: now(), now }
       );
     },
     async snapshot() {

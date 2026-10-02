@@ -8,7 +8,7 @@ import {
   FAKE_IDENTITY_TOKEN,
   FAKE_NONCE,
   FAKE_PHRASE,
-  FAKE_TOKEN_EXPIRY,
+  FAKE_TOKEN_LIFETIME_S,
   fakeCoreKitSession,
   fakeEngineClient,
   fakeIdentityExchange,
@@ -189,7 +189,7 @@ describe('useAuth', () => {
         token: FAKE_IDENTITY_TOKEN,
         verifierId: 'subject-for-google',
         email: 'user@example.test',
-        expiresAt: FAKE_TOKEN_EXPIRY,
+        expiresIn: FAKE_TOKEN_LIFETIME_S,
       },
     ]);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);

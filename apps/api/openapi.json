@@ -1896,13 +1896,19 @@
           "expiresAt": {
             "type": "string",
             "description": "Token expiry, ISO 8601"
+          },
+          "expiresIn": {
+            "type": "number",
+            "description": "Token lifetime in seconds; a client times the token on its own clock",
+            "example": 300
           }
         },
         "required": [
           "token",
           "verifierId",
           "email",
-          "expiresAt"
+          "expiresAt",
+          "expiresIn"
         ]
       },
       "EmailCodeRequestDto": {

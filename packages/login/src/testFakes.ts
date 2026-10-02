@@ -14,8 +14,8 @@ import {
 export const SECRET_HEX = '0f'.repeat(32);
 export const FAKE_NONCE = 'nonce123456789ab';
 export const FAKE_IDENTITY_TOKEN = 'header.payload.signature';
-/** When the fake exchange's token expires, 300 seconds after `FAKE_NOW`. */
-export const FAKE_TOKEN_EXPIRY = new Date('2030-01-01T00:05:00Z');
+/** The token lifetime the fake exchange grants, in seconds. */
+export const FAKE_TOKEN_LIFETIME_S = 300;
 export const FAKE_NOW = new Date('2030-01-01T00:00:00Z');
 
 /** A clock a test moves by hand. */
@@ -49,7 +49,7 @@ export function fakeExchange() {
     token: FAKE_IDENTITY_TOKEN,
     verifierId: `subject-for-${method}`,
     email,
-    expiresAt: FAKE_TOKEN_EXPIRY,
+    expiresIn: FAKE_TOKEN_LIFETIME_S,
   });
   const exchange: IdentityExchange = {
     fromGoogleToken(idToken) {

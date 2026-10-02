@@ -50,8 +50,8 @@ export const FAKE_NONCE = 'nonce123456789ab';
 
 /** The identity token the fake exchange mints, whichever method asked. */
 export const FAKE_IDENTITY_TOKEN = 'header.payload.signature';
-/** Far enough out that the wall clock the web flow reads never reaches it. */
-export const FAKE_TOKEN_EXPIRY = new Date('2099-01-01T00:00:00Z');
+/** The token lifetime the fake exchange grants, in seconds. */
+export const FAKE_TOKEN_LIFETIME_S = 300;
 
 /** The one phrase the fake session enrolls and accepts; 24 words, as a real one is. */
 export const FAKE_PHRASE = `${'word '.repeat(23)}last`;
@@ -615,7 +615,7 @@ export function fakeIdentityExchange(overrides: Partial<IdentityExchange> = {}):
     token: FAKE_IDENTITY_TOKEN,
     verifierId: `subject-for-${method}`,
     email,
-    expiresAt: FAKE_TOKEN_EXPIRY,
+    expiresIn: FAKE_TOKEN_LIFETIME_S,
   });
   const exchange: IdentityExchange = {
     fromGoogleToken(idToken) {

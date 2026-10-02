@@ -93,7 +93,7 @@ export async function openDevice(
   const vault = new VaultPage(page);
   await vault.open();
   if (signIn !== undefined) {
-    await vault.coldStart({ token: signIn.token, expiresAt: signIn.expiresAt.toISOString() });
+    await vault.coldStart({ token: signIn.token, expiresIn: signIn.expiresIn });
   }
   return new ApprovalDevice(page, subject);
 }

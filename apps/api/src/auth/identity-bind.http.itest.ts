@@ -155,6 +155,7 @@ describe('identity subject bind at login (real Postgres)', () => {
       .setExpirationTime('5m')
       .sign(googleSigningKey);
     const res = await request(http()).post('/auth/identity/google').send({ idToken }).expect(200);
+    expect(res.body.expiresIn).toBe(300);
     return { token: res.body.token, subject: res.body.verifierId };
   }
 

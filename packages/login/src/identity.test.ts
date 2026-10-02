@@ -8,6 +8,7 @@ const GRANT = {
   verifierId: 'subject-42',
   email: null,
   expiresAt: '2030-01-01T00:05:00.000Z',
+  expiresIn: 300,
 };
 
 function stubFetch(response: Response | (() => Promise<Response>)) {
@@ -48,7 +49,7 @@ describe('the identity exchange', () => {
       token: 'header.payload.signature',
       verifierId: 'subject-42',
       email: 'member@example.test',
-      expiresAt: new Date('2030-01-01T00:05:00.000Z'),
+      expiresIn: 300,
     });
   });
 

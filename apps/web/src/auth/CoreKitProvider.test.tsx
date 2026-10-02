@@ -123,7 +123,7 @@ describe('CoreKitProvider', () => {
           token: 'header.payload.signature',
           verifierId: 'subject-42',
           email: null,
-          expiresAt: new Date('2099-01-01T00:00:00Z'),
+          expiresIn: 300,
         });
       });
 

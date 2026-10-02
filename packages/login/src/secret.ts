@@ -4,8 +4,6 @@
  * transferred, and holds nothing.
  */
 
-import type { IdentityCredential } from './identity';
-
 /** A TSS public key point, as the Core Kit's key details carry it. */
 export interface TssPublicPoint {
   x?: { toString(radix: 'hex'): string } | null;
@@ -57,10 +55,15 @@ export interface LoginFacade {
 
 /**
  * The identity token a start may present, and the clock that decides whether
- * it still can.
+ * it still can. The deadline counts from `receivedAt` on the host's own clock,
+ * so skew between the host and the API does not move it.
  */
 export interface StartIdentity {
-  credential: Pick<IdentityCredential, 'token' | 'expiresAt'>;
+  token: string;
+  /** When the exchange that minted the token answered. */
+  receivedAt: Date;
+  /** The token lifetime in seconds from `receivedAt`. */
+  expiresIn: number;
   now: () => Date;
 }
 
@@ -74,8 +77,9 @@ const IDENTITY_TOKEN_MARGIN_MS = 30_000;
 /** The token, if the clock still leaves it the margin; `undefined` otherwise. */
 function presentableToken(identity: StartIdentity | null): string | undefined {
   if (identity === null) return undefined;
-  const deadline = identity.credential.expiresAt.getTime() - IDENTITY_TOKEN_MARGIN_MS;
-  return identity.now().getTime() < deadline ? identity.credential.token : undefined;
+  const deadline =
+    identity.receivedAt.getTime() + identity.expiresIn * 1000 - IDENTITY_TOKEN_MARGIN_MS;
+  return identity.now().getTime() < deadline ? identity.token : undefined;
 }
 
 /** The secp256k1 scalar length `crates/engine/src/session.rs` requires. */

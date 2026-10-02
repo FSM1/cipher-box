@@ -60,11 +60,14 @@ describe('a host-agnostic login', () => {
     const session = fakeSession();
     const facade = fakeFacade();
     const account = fakeAccount();
+    // The host clock runs an hour ahead of the API's, past `expiresAt`: the
+    // token is still presented, since its lifetime counts from receipt.
     const grant = {
       token: 'header.payload.signature',
       verifierId: 'subject-42',
       email: null,
       expiresAt: '2030-01-01T00:05:00.000Z',
+      expiresIn: 300,
     };
     const flow = createLoginFlow<WebCollected>({
       exchange: createIdentityExchange('https://api.example.test'),
@@ -74,7 +77,7 @@ describe('a host-agnostic login', () => {
       secrets: null,
       account: account.account,
       progress: fakeProgress().progress,
-      now: () => new Date('2030-01-01T00:00:00Z'),
+      now: () => new Date('2030-01-01T01:00:00Z'),
     });
 
     await withNoBrowserApi(async () => {
