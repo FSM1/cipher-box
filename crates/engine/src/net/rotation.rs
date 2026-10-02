@@ -4046,7 +4046,9 @@ impl WaveSubtree {
 
     /// Whether each of `names` is a name that the root's or the superseded
     /// write scope seed derives for a node below the root that this pass
-    /// gated: the only names the wave retires.
+    /// gated: the only names the wave retires. In a resumed wave the root's
+    /// seed is the new one, so a node that drops there retires a name that
+    /// seed derives (ADR 0065 D1, D2).
     fn retirable(&self, scope_id: &[u8; 16], names: &[IpnsName]) -> bool {
         let inner = self.inner.borrow();
         let seeds: Vec<&[u8; SECRET_LEN]> = [&inner.root_write_seed, &inner.superseded_write_seed]
@@ -4069,6 +4071,18 @@ impl WaveSubtree {
             })
             .collect();
         names.iter().all(|name| derived.contains(name.as_str()))
+    }
+
+    /// Whether the root's or the superseded write scope seed derives `name`
+    /// for `node_id`.
+    fn retires(&self, node_id: &[u8; 16], name: &IpnsName) -> bool {
+        self.derives(node_id, name)
+            || self
+                .inner
+                .borrow()
+                .superseded_write_seed
+                .as_ref()
+                .is_some_and(|seed| derive_write_name(seed, node_id) == *name)
     }
 
     fn record_anchor(&self, anchor: LaggingAnchor) {
@@ -5429,7 +5443,7 @@ where
         self.gated_reads.park(&current_name, source);
         Ok(WriteScopeNode {
             node_id: *node_id,
-            retirable: self.subtree.derives(node_id, &current_name),
+            retirable: self.subtree.retires(node_id, &current_name),
             current_name,
             child_node_ids: children.ids,
             second_refs: children.second_refs,
@@ -14156,6 +14170,64 @@ mod tests {
             staged.root.name,
             "the recovered seed derives the name this root succeeded"
         );
+    }
+
+    /// A second rotation retires the names the seed one epoch below it
+    /// derives, which a wave that crashed past its flip left registered.
+    #[test]
+    fn a_second_wave_retires_the_names_the_superseded_seed_derives() {
+        let harness = Harness::plain();
+        let staged = staged_scope(&harness);
+        let owner = owner_identity();
+        let first = {
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            block_on(rotate_scope_write(
+                &mut SeededEntropy::new(67),
+                &net,
+                &net,
+                &write_plan(&staged.root, &owner),
+            ))
+            .expect("the first wave completes")
+        };
+        let section = published_section(&harness, &first.new_root_name);
+        let before = retired_names(&harness).len();
+        // The device adopts the flip before it rotates again.
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            OWNER_ROOT_EPOCH + 1,
+        ))
+        .expect("the write epoch floor advances");
+
+        let net = wave(&harness, &owner, &first.new_root_name, &section.commitment);
+        let plan = RotateScopeWritePlan {
+            commitment: &section.commitment,
+            commitment_sig: &section.commitment_sig,
+            current_write_epoch: OWNER_ROOT_EPOCH + 1,
+            current_root_name: &first.new_root_name,
+            ..write_plan(&staged.root, &owner)
+        };
+        block_on(rotate_scope_write(
+            &mut SeededEntropy::new(71),
+            &net,
+            &net,
+            &plan,
+        ))
+        .expect("the second wave completes");
+
+        let retired = &retired_names(&harness)[before..];
+        for node in [MID, LEAF] {
+            let superseded = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &node);
+            assert!(
+                retired.contains(&superseded.as_str().to_owned()),
+                "the second wave retires {node:?} at its superseded name"
+            );
+        }
     }
 
     #[test]

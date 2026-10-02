@@ -202,7 +202,9 @@ bytes (FSM1/cipher-box-next#28 D2).
   EOL; the one carve-out is the vault settings resolve, whose reader is always
   its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
-  (FSM1/cipher-box-next#34 D4). Interior old names batch-retire at name-wave completion; the old
+  (FSM1/cipher-box-next#34 D4). Interior old names batch-retire at name-wave completion, each
+  only when the root's or the superseded write scope seed derives it for its node (ADR 0065 D1),
+  and any other old name stays registered to its EOL; the old
   scope-root name lingers until the migration window closes (open edge
   below). An abandoned op retires the **whole** set its
   publish charged — the name it registered and every block it uploaded, root
@@ -1023,7 +1025,10 @@ that does not land both stays owed (below) rather than leaving the
 cold-start anchor naming a root the scope has moved off. Inventory swap rides the
 normal paths: wave publishes enroll new names via register-first; interior old
 names batch-retire at completion; the old root lingers until the migration window
-closes (FSM1/cipher-box-next#34 D4).
+closes (FSM1/cipher-box-next#34 D4). The retire takes only a name that the root's
+write scope seed, or the seed one epoch below it, derives for a node the walk
+gated, and refuses the whole batch otherwise; an old name of a moved node that
+neither seed derives stays registered to its EOL (ADR 0065 D1).
 
 A node below the root that the wave cannot move is a **dropped node**
 ([ADR 0065](../decisions/0065-the-name-wave-drops-a-node-that-it-cannot-move-and-an-owed-cut-ends-within-a-bound.md)).
