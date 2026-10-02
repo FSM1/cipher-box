@@ -76,7 +76,7 @@ use crate::net::record_publish::{
 };
 use crate::net::retire::{
     Acknowledged, LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger,
-    drain_owed_retires, orphaned_head, retire,
+    drain_owed_retires, linked_nowhere, orphaned_head, retire,
 };
 use crate::net::{
     Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldKey, HeldRecord, HeldRecords, HeldValue,
@@ -6285,9 +6285,8 @@ where
     /// journals it only after the unlink is live, so the detachment is already a
     /// published fact. Reading the node instead would settle nothing — a hard
     /// delete leaves the record resolvable at its own name until its EOL lapses,
-    /// and it names its content the whole time. A retired node the base links
-    /// again is live elsewhere, and the name derived here may be its live
-    /// record's, so its debt waits: a leak, never a loss.
+    /// and it names its content the whole time. A tombstoned node the base
+    /// links again is not retired ([`linked_nowhere`]), so its debt waits.
     async fn live_owing_record(
         &self,
         scope: &DrainScope<'_>,
@@ -6303,7 +6302,7 @@ where
             })
         };
         if owing == OwingRecord::Retired {
-            if !self.cells.base.borrow().links_to(NodeId(node)).is_empty() {
+            if !linked_nowhere(&self.cells.base.borrow(), node) {
                 return None;
             }
             return reaching(BTreeSet::new());
