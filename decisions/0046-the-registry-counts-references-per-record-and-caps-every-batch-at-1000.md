@@ -273,7 +273,7 @@ more blocks in total also crosses the limit. The wave reads that failure as retr
 enforces the item caps and not the body size, and the Contract Suite sends short synthetic CIDs.
 This ADR records the blueprint rule of D4. The fix is a body limit sized to the caps, or a
 chunker that also bounds the request size. FSM1/cipher-box#2018 tracks the defect on both paths.
-Resolved on 2026-10-02: the registry routes accept 1 MiB, the server caps the total `contentCids`
+Resolved on 2026-10-02: the registry routes accept 1 MiB behind a verified, unexpired bearer, the server caps the total `contentCids`
 of one register request at 2000, and `net::register` also chunks at 1000 content CIDs in total.
 
 **E2 — The per-entry `contentCids` cap runs inside the per-item validation, and the OpenAPI
@@ -366,7 +366,7 @@ path.
   **Finding:** every test uses short CIDs or the CI framing, so no test crosses the body limit of
   E1. Resolved on 2026-10-02: the Contract Suite tests
   `a_register_request_at_the_chunk_bound_fits_the_body_limit` and
-  `a_register_request_past_the_body_limit_is_refused` send bodies at and past the limit.
+  `a_register_request_past_the_body_limit_is_refused` send bodies at the chunk bound and just past the limit.
 - **D5:** the Engine tests in `crates/engine/tests/write_plane.rs`
   `a_registration_the_registry_refuses_dead_letters_instead_of_holding_the_queue_head`,
   `a_registration_400_from_an_intermediary_is_charged_not_permanent`,

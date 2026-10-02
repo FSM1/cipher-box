@@ -1218,7 +1218,7 @@ async fn a_register_request_at_the_chunk_bound_fits_the_body_limit() {
 }
 
 /// A body just past [`REGISTRY_BODY_MAX_BYTES`] is refused with a `413`, so the
-/// engine's constant and the API's limit stay the same value.
+/// API's limit is not above the engine's constant.
 #[tokio::test]
 async fn a_register_request_past_the_body_limit_is_refused() {
     let base = require_stack!("a_register_request_past_the_body_limit_is_refused");

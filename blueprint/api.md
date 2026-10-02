@@ -138,8 +138,8 @@ decay) inverted into structure.
   client classifies on the gate's own discriminator rather than on a bare `400`
   an intermediary could have answered (ADR 0046). Register also caps the total
   `contentCids` of one request at 2000, with the same `400` and code. The
-  registry routes accept a JSON body of at most 1 MiB; every other route keeps
-  100 KiB. The engine chunks one register request at 1000 content CIDs in
+  registry routes accept a JSON body of at most 1 MiB behind a verified,
+  unexpired bearer; every other request keeps 100 KiB. The engine chunks one register request at 1000 content CIDs in
   total, so the widest request it sends is near 700 KB.
 - **Register-first, fail-closed**: registration precedes the first publish of a
   name, and publish is blocked on it. A live-but-uninventoried name is
