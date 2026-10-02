@@ -378,6 +378,7 @@ where
                     events: self.events,
                     scope_id: scope_root.0,
                     read_scope_seed: &current.override_seed,
+                    read_seed_epoch: current.current_read_epoch,
                     parent_node_seed: self.parent_node_seed,
                     owner: self.owner_signer,
                     owner_enc_secret: self.keys.enc_secret,

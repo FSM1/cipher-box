@@ -21,16 +21,16 @@ use cipherbox_engine::net::renewal_walk::cursor::{
 };
 use cipherbox_engine::net::retire::{NODE_TOMBSTONE_PREFIX, StagingRetireLedger};
 use cipherbox_engine::seams::{
-    BoxedTask, HttpMethod, HttpRequest, HttpResponse, RecordTransport, Scheduler, SnapshotCache,
-    StagingStore, UnixMillis,
+    BoxedTask, FloorStore, HttpMethod, HttpRequest, HttpResponse, RecordTransport, Scheduler,
+    SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::{BookkeepingSeal, doomed_journal_key, owner_tag};
-use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, seed_account};
+use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, floor_label, seed_account};
 use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{
-    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED,
-    OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED, SeededEntropy, block_on,
-    poll_tasks_until_parked,
+    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH,
+    OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
+    SeededEntropy, block_on, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, ContentProfile, Engine, Event, EventStream, GatewayConfig, LoginSecret,
@@ -569,6 +569,114 @@ fn a_link_cycle_ends_in_the_pass_that_meets_it() {
     let cursor = stored_cursor(&device).expect("the pass stored its cursor");
     assert_eq!(cursor.root, None, "the cycle finished in one pass");
     assert!(cursor.deferred.is_empty(), "the cycle defers no folder");
+}
+
+/// Another writer publishes `node`'s next record at `epoch`, under a read key
+/// no session holds: the record a cut at `epoch` seals under its fresh seed.
+fn seal_above(world: &FakeWorld, blocks: &Blocks, node: NodeId, epoch: u64) {
+    let name = write_name(node);
+    let current = record_at(world, &name);
+    let head = author_child_envelope(EnvelopeAuthoring {
+        node_id: node.0,
+        scope_id: SCOPE,
+        epoch,
+        read_key: &[0x5C; 32],
+        nonce: &[0x3F; 24],
+        body: &ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        },
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the other writer authors a valid record");
+    blocks.put(head.block.clone());
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
+    let record = IpnsRecord::create_v2(
+        &signer,
+        format!("/ipfs/{}", head.cid).as_bytes(),
+        current.sequence + 1,
+        current.ttl,
+        core::str::from_utf8(&current.validity).expect("an RFC 3339 EOL"),
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+}
+
+/// The detail of the abuse the walk reports for a record its gate refused.
+const WALK_REFUSED: &str = "the renewal walk's adoption gate refused the record";
+
+/// The abuse a session reports when the read-epoch floor rises to `epoch` while
+/// it reads a folder whose record a writer sealed at `epoch` under a key this
+/// device does not hold.
+fn walk_abuse_after_a_floor_rise(epoch: u64) -> Vec<String> {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        let outer = create_folder(&world, engine, tasks, ROOT, "outer");
+        vec![create_folder(&world, engine, tasks, outer, "inner")]
+    });
+    seal_above(&world, &blocks, nodes[0], epoch);
+    let device = world.device(b"a later session");
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    while events.try_next().is_some() {}
+    device.floor_store.raise_epoch_floor_on_sequence_read(
+        &floor_label(write_name(nodes[0]).as_str().as_bytes()),
+        &floor_label(&SCOPE),
+        epoch,
+    );
+
+    tick(&world, &engine, &mut tasks);
+
+    let floor_key = [
+        owner_tag(&kdf::enc_subkey(&SECRET)).as_slice(),
+        &floor_label(&SCOPE),
+    ]
+    .concat();
+    assert_eq!(
+        block_on(device.floor_store.epoch_floor(&floor_key)).expect("the floor reads"),
+        Some(epoch),
+        "a read of the record raised the floor",
+    );
+    core::iter::from_fn(|| events.try_next())
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A cut on this device raises the read-epoch floor after the walk admitted
+/// the scope root and took its read seed. A record at the new floor needs the
+/// seed the cut minted, so it accuses no writer.
+#[test]
+fn a_floor_rise_during_a_walk_read_accuses_no_record_at_the_new_floor() {
+    let abuse = walk_abuse_after_a_floor_rise(OWNER_ROOT_EPOCH + 1);
+    assert!(
+        !abuse
+            .iter()
+            .any(|description| description.ends_with(WALK_REFUSED)),
+        "earned {abuse:?}"
+    );
+}
+
+/// At the epoch of the walk's read seed, a body that does not open is
+/// tampering.
+#[test]
+fn a_walk_record_at_its_seeds_epoch_that_does_not_open_stays_a_violation() {
+    let abuse = walk_abuse_after_a_floor_rise(OWNER_ROOT_EPOCH);
+    assert!(
+        abuse
+            .iter()
+            .any(|description| description.ends_with(WALK_REFUSED)),
+        "earned {abuse:?}"
+    );
 }
 
 /// One hour of the virtual clock: the cadence of the walk's passes.
