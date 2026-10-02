@@ -5491,12 +5491,7 @@ impl CaptureScene {
         let alice = world.device(b"alice");
         let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
         for name in ["left", "right"] {
-            block_on(engine.command(Command::Create {
-                parent: ROOT,
-                name: name.into(),
-                kind: NodeKind::Folder,
-            }))
-            .unwrap();
+            create_under(&mut engine, ROOT, name);
         }
         tick(&world, &engine, &mut tasks);
         let left = child_id(&engine, ROOT, "left");
@@ -5510,12 +5505,7 @@ impl CaptureScene {
             &(0..200u8).collect::<Vec<u8>>(),
         )
         .unwrap();
-        block_on(engine.command(Command::Create {
-            parent: right,
-            name: "inner".into(),
-            kind: NodeKind::Folder,
-        }))
-        .unwrap();
+        create_under(&mut engine, right, "inner");
         tick(&world, &engine, &mut tasks);
         let leaf = child_id(&engine, left, "notes.txt");
         let inner = child_id(&engine, right, "inner");
@@ -5565,6 +5555,11 @@ impl CaptureScene {
 
     /// Another writer republishes `folder` naming `children`.
     fn plant(&self, folder: NodeId, children: Vec<ChildRef>) {
+        self.plant_sealed(folder, read_key_of(folder), children);
+    }
+
+    /// [`Self::plant`], sealed under `read_key`.
+    fn plant_sealed(&self, folder: NodeId, read_key: [u8; 32], children: Vec<ChildRef>) {
         let body = ReadBody::Folder {
             created_at: 0,
             modified_at: 1,
@@ -5578,7 +5573,7 @@ impl CaptureScene {
             Planted {
                 node_id: folder.0,
                 scope_id: SCOPE,
-                read_key: read_key_of(folder),
+                read_key,
                 body: &body,
             },
         );
@@ -5603,13 +5598,19 @@ impl CaptureScene {
         )
     }
 
+    /// The second device focuses `node` for one tick.
+    fn focus_second(&mut self, node: NodeId) {
+        block_on(
+            self.engine_b
+                .command(Command::SetFocus { node: Some(node) }),
+        )
+        .unwrap();
+        self.tick_second(1);
+    }
+
     /// The second device focuses `right` and reads the leaf there.
     fn assert_second_reads_the_leaf_under_right(&mut self) {
-        block_on(self.engine_b.command(Command::SetFocus {
-            node: Some(self.right),
-        }))
-        .unwrap();
-        tick(&self.world, &self.engine_b, &mut self.tasks_b);
+        self.focus_second(self.right);
         assert_eq!(
             child_id(&self.engine_b, self.right, "notes.txt"),
             self.leaf,
@@ -5641,16 +5642,8 @@ fn a_move_into_a_folder_this_device_never_loaded_is_never_captured() {
 #[test]
 fn a_move_into_a_folder_this_device_holds_stale_is_never_captured() {
     let mut scene = CaptureScene::new();
-    block_on(scene.engine_b.command(Command::SetFocus {
-        node: Some(scene.right),
-    }))
-    .unwrap();
-    scene.tick_second(1);
-    block_on(scene.engine_b.command(Command::SetFocus {
-        node: Some(scene.left),
-    }))
-    .unwrap();
-    scene.tick_second(1);
+    scene.focus_second(scene.right);
+    scene.focus_second(scene.left);
 
     scene.move_leaf_right();
     scene.tick_second(3);
@@ -5780,23 +5773,7 @@ fn a_folder_removed_while_it_does_not_read_does_not_stop_the_walk() {
 #[test]
 fn a_folder_the_gate_refuses_holds_the_capture() {
     let mut scene = CaptureScene::new();
-    let refused = ReadBody::Folder {
-        created_at: 0,
-        modified_at: 1,
-        children: Vec::new(),
-        unknown: PreservedFields::new(),
-    };
-    plant_record(
-        &scene.world.record_store,
-        &scene.blocks,
-        scene.inner,
-        Planted {
-            node_id: scene.inner.0,
-            scope_id: SCOPE,
-            read_key: read_key_of(scene.left),
-            body: &refused,
-        },
-    );
+    scene.plant_sealed(scene.inner, read_key_of(scene.left), Vec::new());
     scene.plant(scene.left, Vec::new());
     scene.tick_second(3);
     assert!(scene.binned().is_empty(), "a refused folder proves nothing");
@@ -5815,36 +5792,18 @@ fn a_destination_served_tied_proves_no_departure() {
     let right_name = write_name(scene.right);
     let endpoints = scene.world.record_store.endpoints();
     let (sequence, _) = published(&scene.world.record_store, scene.right);
-    let body = ReadBody::Folder {
-        created_at: 0,
-        modified_at: 1,
-        children: vec![child_ref(scene.inner.0, "inner", CoreNodeKind::Folder)],
-        unknown: PreservedFields::new(),
-    };
-    let head = author_child_envelope(EnvelopeAuthoring {
-        node_id: scene.right.0,
-        scope_id: SCOPE,
-        epoch: EPOCH,
-        read_key: &read_key_of(scene.right),
-        nonce: &[0x5B; 24],
-        body: &body,
-        carried_unknown: PreservedFields::new(),
-        carried_epoch_tag_unknown: PreservedFields::new(),
-    })
-    .expect("a well-formed child record");
-    scene.blocks.put(head.block.clone());
-    let fork = IpnsRecord::create_v2(
-        &write_signer(scene.right),
-        format!("/ipfs/{}", head.cid).as_bytes(),
+    let fork = folder_record_with(
+        &scene.world.record_store,
+        &scene.blocks,
+        scene.right,
+        vec![child_ref(scene.inner.0, "inner", CoreNodeKind::Folder)],
         sequence,
-        TTL_NANOS,
         EOL,
-    )
-    .marshal();
+    );
     scene
         .world
         .record_store
-        .seed_record(&endpoints[TIED_ENDPOINT], right_name.as_str(), fork);
+        .seed_record(&endpoints[0], right_name.as_str(), fork);
     scene.tick_second(3);
 
     assert!(
@@ -5853,9 +5812,6 @@ fn a_destination_served_tied_proves_no_departure() {
     );
     assert!(scene.leaf_opens_under_the_scope());
 }
-
-/// The endpoint that serves the fork in [`a_destination_served_tied_proves_no_departure`].
-const TIED_ENDPOINT: usize = 0;
 
 /// A true departure still bins on a device that never loaded every folder:
 /// the walk reads the folders the base lacks and finds no link.
