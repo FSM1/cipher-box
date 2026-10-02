@@ -6816,20 +6816,7 @@ where
         } else {
             self.served_child(plane, folder, name).await?
         };
-        if served
-            .as_ref()
-            .is_some_and(|served| served.moved_past(built_on))
-        {
-            return Err(Halt::LostRace);
-        }
-        let observed = match served {
-            Some(Served {
-                sequence,
-                observed: Some(gated),
-                ..
-            }) if sequence == built_on.0.sequence() => gated.map_err(|_| Halt::UploadAttempt)?,
-            _ => built_on.0.clone(),
-        };
+        let observed = publish_basis(served, built_on)?;
         let Some(commitment) = commitment else {
             return Ok(observed);
         };
@@ -7981,6 +7968,24 @@ fn resolved_bytes(
     }
 }
 
+/// The token a republish over `built_on` signs above, given what the name
+/// serves now: the gate's token for the record it passed at `built_on`'s
+/// sequence, else `built_on`'s own.
+fn publish_basis(served: Option<Served>, built_on: &(Observed, Vec<u8>)) -> Result<Observed, Halt> {
+    let Some(served) = served else {
+        return Ok(built_on.0.clone());
+    };
+    if served.moved_past(built_on) {
+        return Err(Halt::LostRace);
+    }
+    match served.observed {
+        Some(gated) if served.sequence == built_on.0.sequence() => {
+            gated.map_err(|_| Halt::UploadAttempt)
+        }
+        _ => Ok(built_on.0.clone()),
+    }
+}
+
 /// Report the gate's refusal of a record at `name` this pass must build on,
 /// and the halt it takes.
 fn refuse_record(
@@ -9111,6 +9116,37 @@ mod tests {
         }
     }
 
+    /// A fork at the sequence a pass built on, where the record the gate passed
+    /// carries another envelope version, is no basis for a publish over it.
+    /// At this build's version the pass builds on its own record.
+    #[test]
+    fn a_fork_at_another_envelope_version_is_no_publish_basis() {
+        let name = derive_write_name(&Zeroizing::new([4; 32]), &[5; 16]);
+        let ours = b"our record at 3".to_vec();
+        let built_on = (
+            Observed::gated(&name, 3, crate::net::author::ENVELOPE_V)
+                .expect("this build's version"),
+            ours.clone(),
+        );
+        let forked = |version| {
+            Some(Served::new(
+                3,
+                b"another record at 3".to_vec(),
+                vec![ours.clone()],
+                Some(Observed::gated(&name, 3, version)),
+            ))
+        };
+
+        assert_eq!(
+            publish_basis(forked(crate::net::author::ENVELOPE_V + 1), &built_on),
+            Err(Halt::UploadAttempt)
+        );
+        assert_eq!(
+            publish_basis(forked(crate::net::author::ENVELOPE_V), &built_on),
+            Ok(built_on.0.clone())
+        );
+    }
+
     /// This build's own refusal of the bytes it would sign repeats on every
     /// retry over the same inputs, so it spends the attempt budget and is never
     /// an outage.
@@ -9125,6 +9161,7 @@ mod tests {
             },
             PublishError::ForeignVersion { version: 2 },
             PublishError::EmptyHeadCid,
+            PublishError::EmptyInlineValue,
             PublishError::RecordTooLarge {
                 size: 10_241,
                 limit: 10_240,
@@ -9737,10 +9774,10 @@ mod tests {
         }
     }
 
-    /// A scope root at another envelope version is refused on every pass, so
-    /// the op it anchors spends attempts and never waits out the outage budget.
+    /// A scope root at another envelope version is a refusal of these bytes,
+    /// not an availability halt.
     #[test]
-    fn a_scope_root_at_another_envelope_version_costs_an_attempt() {
+    fn a_scope_root_at_another_envelope_version_is_an_upload_attempt_halt() {
         let mut newer = harness_root_envelope();
         newer.v = crate::net::author::ENVELOPE_V + 1;
         let harness = drain_harness(Some(newer));
