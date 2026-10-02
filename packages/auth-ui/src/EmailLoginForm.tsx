@@ -4,27 +4,24 @@ export interface EmailLoginFormProps {
   /** Asks CipherBox to deliver a code; resolves once it is on its way. */
   onSendCode: (email: string) => Promise<void>;
   onVerify: (email: string, code: string) => Promise<void>;
-  /** True while the tab cannot accept a login at all. */
+  /** True while the host cannot accept a login here: not ready, or busy elsewhere. */
   disabled?: boolean;
-  /** True while some auth transition is in flight. */
-  busy?: boolean;
 }
 
 /**
  * CipherBox's own passwordless email (ADR 0008 D1): the address is collected
  * here, and so is the code — there is no provider window in this flow.
  */
-export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLoginFormProps) {
+export function EmailLoginForm({ onSendCode, onVerify, disabled }: EmailLoginFormProps) {
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [sentTo, setSentTo] = useState<string | null>(null);
-  // This form's own step in flight; `busy` is any transition on the host.
-  const [pending, setPending] = useState<'send' | 'verify' | null>(null);
+  // This form's own step in flight, as distinct from the host being busy elsewhere.
+  const [pending, setPending] = useState(false);
 
   const codeInput = useRef<HTMLInputElement>(null);
 
   const trimmed = email.trim().toLowerCase();
-  const blocked = disabled || busy;
 
   // The step swaps the field out from under the focused button, so a member on
   // a keyboard or a screen reader would otherwise have to go hunting for it.
@@ -33,25 +30,19 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
   }, [sentTo]);
 
   // The page renders the failure; this form only advances on success.
+  const track = (step: Promise<void>) => {
+    setPending(true);
+    void step.catch(() => undefined).finally(() => setPending(false));
+  };
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (blocked) return;
+    if (disabled || pending) return;
     if (sentTo === null) {
-      if (!trimmed) return;
-      setPending('send');
-      void onSendCode(trimmed)
-        .then(
-          () => setSentTo(trimmed),
-          () => undefined
-        )
-        .finally(() => setPending(null));
+      if (trimmed) track(onSendCode(trimmed).then(() => setSentTo(trimmed)));
       return;
     }
-    if (code.length !== 6) return;
-    setPending('verify');
-    void onVerify(sentTo, code)
-      .catch(() => undefined)
-      .finally(() => setPending(null));
+    if (code.length === 6) track(onVerify(sentTo, code));
   };
 
   const restart = () => {
@@ -74,18 +65,18 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
             placeholder="enter email address"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
-            disabled={blocked}
+            disabled={disabled || pending}
             required
             autoComplete="email"
           />
           <button
             type="submit"
             data-testid="email-login-button"
-            className={filledButton(pending === 'send')}
-            disabled={blocked || !trimmed}
-            aria-busy={pending === 'send'}
+            className={filledButton(pending)}
+            disabled={disabled || pending || !trimmed}
+            aria-busy={pending}
           >
-            {pending === 'send' ? 'sending code...' : '[CONTINUE]'}
+            {pending ? 'sending code...' : '[CONTINUE]'}
           </button>
         </>
       ) : (
@@ -105,7 +96,7 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
             placeholder="enter 6-digit code"
             value={code}
             onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
-            disabled={blocked}
+            disabled={disabled || pending}
             required
             autoComplete="one-time-code"
             inputMode="numeric"
@@ -114,18 +105,18 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
           <button
             type="submit"
             data-testid="email-verify-button"
-            className={filledButton(pending === 'verify')}
-            disabled={blocked || code.length !== 6}
-            aria-busy={pending === 'verify'}
+            className={filledButton(pending)}
+            disabled={disabled || pending || code.length !== 6}
+            aria-busy={pending}
           >
-            {pending === 'verify' ? 'verifying...' : '[VERIFY]'}
+            {pending ? 'verifying...' : '[VERIFY]'}
           </button>
           <button
             type="button"
             data-testid="email-restart-button"
             className="email-login-restart"
             onClick={restart}
-            disabled={blocked}
+            disabled={disabled || pending}
           >
             // use a different address
           </button>

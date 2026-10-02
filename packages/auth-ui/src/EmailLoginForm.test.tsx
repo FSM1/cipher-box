@@ -28,18 +28,12 @@ function renderForm(
     onSendCode: (email: string) => Promise<void>;
     onVerify: (email: string, code: string) => Promise<void>;
     disabled: boolean;
-    busy: boolean;
   }> = {}
 ) {
   const onSendCode = vi.fn(overrides.onSendCode ?? (() => Promise.resolve()));
   const onVerify = vi.fn(overrides.onVerify ?? (() => Promise.resolve()));
   render(
-    <EmailLoginForm
-      onSendCode={onSendCode}
-      onVerify={onVerify}
-      disabled={overrides.disabled}
-      busy={overrides.busy}
-    />
+    <EmailLoginForm onSendCode={onSendCode} onVerify={onVerify} disabled={overrides.disabled} />
   );
   return { onSendCode, onVerify };
 }
@@ -150,9 +144,9 @@ describe('EmailLoginForm', () => {
     await waitFor(() => expect(onSendCode).toHaveBeenLastCalledWith('member@example.test'));
   });
 
-  // The host's flag covers every method; only this form's own send is a send.
+  // The host disables this form for any method's transition; only its own send is a send.
   it('does not claim a send that another method is making', () => {
-    renderForm({ busy: true });
+    renderForm({ disabled: true });
 
     const button = screen.getByTestId('email-login-button');
     expect(button.textContent).toBe('[CONTINUE]');

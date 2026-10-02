@@ -97,8 +97,7 @@ export function SignInPanel() {
           <EmailLoginForm
             onSendCode={sendEmailCode}
             onVerify={loginWithEmailCode}
-            disabled={!isReady}
-            busy={isBusy}
+            disabled={!isReady || isBusy}
           />
 
           <div className="login-divider">

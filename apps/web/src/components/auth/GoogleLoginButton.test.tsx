@@ -19,7 +19,7 @@ const gis = {
 };
 
 /** A login the host settles at once. */
-const resolvedLogin = () => () => Promise.resolve();
+const resolvedLogin = () => Promise.resolve();
 
 /**
  * The component loads the GIS script once per document, so each test takes a
@@ -76,7 +76,7 @@ describe('GoogleLoginButton', () => {
   it('presents a Google-rendered button and forwards the credential it yields', async () => {
     installGoogleIdentityServices();
     const GoogleLoginButton = await freshButton();
-    const onCredential = vi.fn(resolvedLogin());
+    const onCredential = vi.fn(resolvedLogin);
     render(<GoogleLoginButton clientId="google-client-id" onCredential={onCredential} />);
 
     await waitFor(() => expect(gis.rendered).toBeGreaterThan(0));
@@ -90,7 +90,7 @@ describe('GoogleLoginButton', () => {
     failGoogleIdentityServices();
     const GoogleLoginButton = await freshButton();
 
-    render(<GoogleLoginButton clientId="google-client-id" onCredential={resolvedLogin()} />);
+    render(<GoogleLoginButton clientId="google-client-id" onCredential={resolvedLogin} />);
 
     expect(await screen.findByText(/could not be loaded/)).toBeDefined();
   });
@@ -99,7 +99,7 @@ describe('GoogleLoginButton', () => {
     installGoogleIdentityServices();
     const GoogleLoginButton = await freshButton();
 
-    render(<GoogleLoginButton clientId={undefined} onCredential={resolvedLogin()} />);
+    render(<GoogleLoginButton clientId={undefined} onCredential={resolvedLogin} />);
 
     expect(screen.getByTestId('google-login-unavailable').textContent).toContain(
       'VITE_GOOGLE_CLIENT_ID'
@@ -134,9 +134,7 @@ describe('GoogleLoginButton', () => {
     installGoogleIdentityServices();
     const GoogleLoginButton = await freshButton();
 
-    render(
-      <GoogleLoginButton clientId="google-client-id" onCredential={resolvedLogin()} disabled />
-    );
+    render(<GoogleLoginButton clientId="google-client-id" onCredential={resolvedLogin} disabled />);
     await waitFor(() => expect(gis.rendered).toBeGreaterThan(0));
 
     expect(screen.queryByText(/authenticating with google/)).toBeNull();
@@ -146,7 +144,7 @@ describe('GoogleLoginButton', () => {
   it('still offers the button after a sign-in that came back', async () => {
     installGoogleIdentityServices();
     const GoogleLoginButton = await freshButton();
-    const onCredential = vi.fn(resolvedLogin());
+    const onCredential = vi.fn(resolvedLogin);
     const { rerender } = render(
       <GoogleLoginButton clientId="google-client-id" onCredential={onCredential} />
     );
@@ -169,8 +167,8 @@ describe('GoogleLoginButton', () => {
   it('delivers to the callback of the render that committed', async () => {
     installGoogleIdentityServices();
     const GoogleLoginButton = await freshButton();
-    const stale = vi.fn(resolvedLogin());
-    const current = vi.fn(resolvedLogin());
+    const stale = vi.fn(resolvedLogin);
+    const current = vi.fn(resolvedLogin);
     const { rerender } = render(
       <GoogleLoginButton clientId="google-client-id" onCredential={stale} />
     );
