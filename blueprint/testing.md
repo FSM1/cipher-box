@@ -122,14 +122,16 @@ scenario fails the meta-test):
   once, the next two past the bound, and the second ref goes with no report.
   The bound holds before T, for each node until its own K passes, and over a
   restart, and an honest node new to a wave past T does not drop on its first
-  stop; a new ref to nothing on each pass ends at the entry count, command
-  re-drives inside one pass count once, and a node that resolves starts its
-  count again; past T the renewal walk renews an owed scope, and within T it does not
+  stop; a new ref to nothing on each pass ends at the entry count, an honest
+  node that no endpoint answers waits past the entry count, command re-drives
+  inside one pass count once, and a node that resolves starts its count again;
+  past T the renewal walk renews an owed scope, and within T it does not
   (ADR 0065, `crates/engine/tests/owner_actions.rs`). The wave retires only a
   name the scope derives, waits for the bound on a wrong head block and on an
   endpoint that does not answer, and re-seals the record its walk gated, so a
-  record written at an old name after the walk does not stop it
-  (`crates/engine/src/net/rotation.rs`);
+  record written at an old name after the walk does not stop it; a body of many
+  outranking refs re-walks one time and reads nothing again, and a derived ref
+  met after two others is kept (`crates/engine/src/net/rotation.rs`);
 - the keyless re-PUT adversary (FSM1/cipher-box-next#38) — forged old-epoch records at old
   names, re-point adoption, the pin-window bound;
 - revocation classification (revocation-signal vs unresolvable vs epoch-lag)

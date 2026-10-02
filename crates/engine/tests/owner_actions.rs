@@ -13616,6 +13616,46 @@ fn a_new_ref_to_nothing_on_each_pass_does_not_hold_the_cut() {
     assert_revoke_finished(&mut fx, &revokee_seed, child);
 }
 
+/// ADR 0065 D3: past the entry count, a node held for a cause that a revokee
+/// cannot plant on a fresh id waits for its own passes.
+#[test]
+fn an_honest_node_no_endpoint_answers_waits_past_the_entry_count() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let honest = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "honest",
+    );
+    plant_a_ref_to_nothing(&fx, &revokee_seed, grandchild);
+    let read_key = granted_read_key(&fx, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    fx.world.scheduler.advance(DROP_BOUND);
+
+    for fresh in 0..DROP_BOUND_PASSES {
+        let ghost = NodeId([0x70 + u8::try_from(fresh).expect("a small count"); 16]);
+        plant_a_ref_to(&fx, &revokee_seed, grandchild, ghost, &read_key);
+        let run = passes(&mut fx, 1);
+        assert!(run.dropped.is_empty(), "the entry count is not yet K");
+    }
+    let honest_name = derive_write_name(&revokee_seed, &honest.0);
+    fx.world.record_store.fail_get_for(honest_name.as_str());
+    let run = passes(&mut fx, 1);
+    assert_eq!(
+        run.dropped,
+        Vec::new(),
+        "one pass with no endpoint answer does not drop the honest node"
+    );
+
+    fx.world.record_store.heal_get_for(honest_name.as_str());
+    let run = passes(&mut fx, usize::MAX);
+    assert_eq!(run.dropped.len(), 1);
+    assert_eq!(run.dropped[0].2, DropCause::NoRecord);
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
 /// A command run again inside one sync pass re-drives the cut, but adds no
 /// pass to a node's count.
 #[test]

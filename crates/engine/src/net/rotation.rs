@@ -3903,9 +3903,14 @@ struct Discovered {
     /// The write scope seed the gated root's own owner-write blob yielded: the
     /// seed whose names a second ref yields to (ADR 0065 D2).
     root_write_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
-    /// The name each node with a second ref keeps. It outlives a re-walk, so
-    /// each re-walk settles at least one more node.
+    /// The name each node with a second ref keeps. It outlives a re-walk. A
+    /// re-walk keeps a derived name for a node that kept another name, and no
+    /// later ref replaces a derived name, so the re-walks end; each body asks
+    /// for at most one.
     kept: BTreeMap<[u8; 16], IpnsName>,
+    /// Each node's gated read, by node id and name. It outlives a re-walk, so
+    /// a re-walk reads nothing from the network.
+    sources: BTreeMap<([u8; 16], String), WaveSource>,
     /// The directly-descendant scope roots the pass **proved**: each rotates
     /// under its own write scope seed, so the wave stops at them
     /// (`grants/child_index.rs`).
@@ -3934,15 +3939,28 @@ enum BodyStop {
 }
 
 impl WaveSubtree {
-    /// Start a walk again from the root: forget what the last walk read, and
-    /// keep the names it settled.
+    /// Start a walk again from the root: forget the names the last walk
+    /// took, and keep its reads, the root's plane, and the names it settled.
     fn restart(&self) {
         let mut inner = self.inner.borrow_mut();
-        let kept = core::mem::take(&mut inner.kept);
-        *inner = Discovered {
-            kept,
-            ..Discovered::default()
-        };
+        inner.names.clear();
+        inner.lowest_read_epoch = None;
+    }
+
+    /// The read this run already gated for `node_id` at `name`.
+    fn source(&self, node_id: &[u8; 16], name: &IpnsName) -> Option<WaveSource> {
+        self.inner
+            .borrow()
+            .sources
+            .get(&(*node_id, name.as_str().to_owned()))
+            .cloned()
+    }
+
+    fn record_source(&self, node_id: &[u8; 16], name: &IpnsName, source: &WaveSource) {
+        self.inner
+            .borrow_mut()
+            .sources
+            .insert((*node_id, name.as_str().to_owned()), source.clone());
     }
 
     /// Whether the root's write scope seed derives `name` for `node_id`.
@@ -3993,8 +4011,9 @@ impl WaveSubtree {
     ///
     /// Two refs naming one id at **different** names keep the one at the name
     /// the root's write scope seed derives for that id, else the first, and
-    /// drop the other (ADR 0065 D2). A drop of a ref the walk already took asks
-    /// for a re-walk.
+    /// drop the other (ADR 0065 D2). When a derived ref outranks a name the
+    /// walk took or kept, the body keeps every such derived name and asks for
+    /// one re-walk.
     fn record_children(&self, body: &ReadBody) -> Result<BodyChildren, BodyStop> {
         let mut found = BodyChildren {
             ids: Vec::new(),
@@ -4006,6 +4025,7 @@ impl WaveSubtree {
         // A body refused part way adds no name and settles no ref.
         let mut named: BTreeMap<[u8; 16], IpnsName> = BTreeMap::new();
         let mut settled: Vec<([u8; 16], IpnsName)> = Vec::new();
+        let mut outranked: Vec<([u8; 16], IpnsName)> = Vec::new();
         {
             let inner = self.inner.borrow();
             for child in children {
@@ -4013,28 +4033,19 @@ impl WaveSubtree {
                     continue;
                 }
                 let name = scope_name(&child.ipns_name).map_err(|_| BodyStop::Malformed)?;
-                if inner.kept.get(&child.id).is_some_and(|kept| *kept != name) {
-                    found.second_refs.push((child.id, name));
-                    continue;
-                }
-                let seen = inner
-                    .names
-                    .get(&child.id)
-                    .or_else(|| named.get(&child.id))
-                    .cloned();
-                match seen {
+                let taken = inner.names.get(&child.id).or_else(|| named.get(&child.id));
+                match inner.kept.get(&child.id).or(taken).cloned() {
                     Some(seen) if seen != name => {
-                        if self.derives(&child.id, &name) {
-                            drop(inner);
-                            self.inner.borrow_mut().kept.insert(child.id, name);
-                            return Err(BodyStop::Rewalk);
+                        if self.derives(&child.id, &name) && !self.derives(&child.id, &seen) {
+                            outranked.push((child.id, name));
+                        } else {
+                            settled.push((child.id, seen));
+                            found.second_refs.push((child.id, name));
                         }
-                        settled.push((child.id, seen));
-                        found.second_refs.push((child.id, name));
                         continue;
                     }
-                    Some(_) => {}
-                    None => {
+                    Some(_) if taken.is_some() => {}
+                    _ => {
                         named.insert(child.id, name);
                     }
                 }
@@ -4042,6 +4053,10 @@ impl WaveSubtree {
             }
         }
         let mut inner = self.inner.borrow_mut();
+        if !outranked.is_empty() {
+            inner.kept.extend(outranked);
+            return Err(BodyStop::Rewalk);
+        }
         inner.names.extend(named);
         inner.kept.extend(settled);
         Ok(found)
@@ -5228,44 +5243,49 @@ where
             },
             _ => NodeStop::Stop(reason),
         };
-        let record_bytes = match fanout_get_classified(self.transport, &current_name).await {
-            FanoutRecord::Found(_, bytes) => bytes,
-            FanoutRecord::Absent => {
-                return Err(refused(
-                    ResolveFailure::Unavailable,
-                    Some(DropCause::NoRecord),
-                ));
-            }
-            FanoutRecord::Unavailable(_) => {
-                return Err(refused(
-                    ResolveFailure::Unavailable,
-                    Some(DropCause::EndpointUnavailable),
-                ));
-            }
-        };
-        let source = if let Some((_, resumed_write_epoch)) = root {
-            self.root_source(&current_name, &record_bytes, resumed_write_epoch)
-                .await
-                .map_err(WaveRefusal::from)
+        let source = if let Some(source) = self.subtree.source(node_id, &current_name) {
+            source
         } else {
-            self.interior_source(*node_id, &current_name, &record_bytes)
-                .await
-        }
-        .map_err(|refusal| refused(subtree_verdict(refusal.error), refusal.cause))?;
-
+            let record_bytes = match fanout_get_classified(self.transport, &current_name).await {
+                FanoutRecord::Found(_, bytes) => bytes,
+                FanoutRecord::Absent => {
+                    return Err(refused(
+                        ResolveFailure::Unavailable,
+                        Some(DropCause::NoRecord),
+                    ));
+                }
+                FanoutRecord::Unavailable(_) => {
+                    return Err(refused(
+                        ResolveFailure::Unavailable,
+                        Some(DropCause::EndpointUnavailable),
+                    ));
+                }
+            };
+            let source = if let Some((_, resumed_write_epoch)) = root {
+                self.root_source(&current_name, &record_bytes, resumed_write_epoch)
+                    .await
+                    .map_err(WaveRefusal::from)
+            } else {
+                self.interior_source(*node_id, &current_name, &record_bytes)
+                    .await
+            }
+            .map_err(|refusal| refused(subtree_verdict(refusal.error), refusal.cause))?;
+            if let Some(plane) = &source.root {
+                self.subtree.record_root_write_seed(&plane.write_scope_seed);
+                self.subtree.record_anchor(LaggingAnchor {
+                    epoch: source.read_epoch,
+                    history_links: plane.section.history_links.clone(),
+                });
+                self.record_scope_boundary(
+                    &plane.write_body.direct_child_scope_index,
+                    &plane.read_scope_seed,
+                )
+                .await?;
+            }
+            self.subtree.record_source(node_id, &current_name, &source);
+            source
+        };
         self.subtree.record_read_epoch(source.read_epoch);
-        if let Some(plane) = &source.root {
-            self.subtree.record_root_write_seed(&plane.write_scope_seed);
-            self.subtree.record_anchor(LaggingAnchor {
-                epoch: source.read_epoch,
-                history_links: plane.section.history_links.clone(),
-            });
-            self.record_scope_boundary(
-                &plane.write_body.direct_child_scope_index,
-                &plane.read_scope_seed,
-            )
-            .await?;
-        }
         let children = match self.subtree.record_children(&source.read_body) {
             Ok(children) => children,
             Err(BodyStop::Rewalk) => return Err(NodeStop::Rewalk),
@@ -12834,13 +12854,54 @@ mod tests {
     struct PastBound;
 
     impl NodeBound for PastBound {
-        fn past(&self, _node_id: &[u8; 16]) -> bool {
+        fn past(&self, _node_id: &[u8; 16], _cause: DropCause) -> bool {
             true
         }
 
         fn held(&self, _node_id: &[u8; 16]) {}
 
         fn resolved(&self, _node_id: &[u8; 16]) {}
+    }
+
+    /// A bound no node is past, which records each node it counts.
+    #[derive(Default)]
+    struct HeldBound {
+        held: RefCell<Vec<[u8; 16]>>,
+    }
+
+    impl NodeBound for HeldBound {
+        fn past(&self, _node_id: &[u8; 16], _cause: DropCause) -> bool {
+            false
+        }
+
+        fn held(&self, node_id: &[u8; 16]) {
+            self.held.borrow_mut().push(*node_id);
+        }
+
+        fn resolved(&self, _node_id: &[u8; 16]) {}
+    }
+
+    /// A resolver that counts the walks: each starts at the scope root.
+    struct CountedWalks<'a, R> {
+        inner: &'a R,
+        walks: core::cell::Cell<usize>,
+    }
+
+    impl<R: WriteSubtreeResolver> WriteSubtreeResolver for CountedWalks<'_, R> {
+        async fn resolve_node(
+            &self,
+            node_id: &[u8; 16],
+            resumed: Option<&ResumedRoot>,
+        ) -> Result<WriteScopeNode, NodeStop> {
+            if *node_id == SCOPE {
+                self.walks.set(self.walks.get() + 1);
+            }
+            self.inner.resolve_node(node_id, resumed).await
+        }
+
+        async fn recover_wave(&self) -> Result<RecoveredWave, ResolveFailure> {
+            self.inner.recover_wave().await
+        }
     }
 
     /// Every name the harness's registry was asked to retire.
@@ -13048,15 +13109,20 @@ mod tests {
         );
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let mut entropy = SeededEntropy::new(13);
+        let before = HeldBound::default();
+        let plan = RotateScopeWritePlan {
+            bound: &before,
+            ..write_plan(&root, &owner)
+        };
 
-        let error = block_on(rotate_scope_write(
-            &mut entropy,
-            &net,
-            &net,
-            &write_plan(&root, &owner),
-        ))
-        .expect_err("the wave stops before the bound");
+        let error = block_on(rotate_scope_write(&mut entropy, &net, &net, &plan))
+            .expect_err("the wave stops before the bound");
         assert!(error.is_retryable());
+        assert_eq!(
+            before.held.into_inner(),
+            vec![MID],
+            "MID holds the wave for a bounded cause"
+        );
         let plan = RotateScopeWritePlan {
             bound: &PastBound,
             ..write_plan(&root, &owner)
@@ -13070,6 +13136,104 @@ mod tests {
                 cause: DropCause::EpochAboveRoot,
             }]
         );
+    }
+
+    /// ADR 0065 D2: a body whose derived refs outrank many refs the walk took
+    /// asks for one re-walk, and the re-walk reads no record or head block
+    /// again.
+    #[test]
+    fn a_body_of_many_outranking_refs_rewalks_once_and_reads_nothing_again() {
+        let harness = Harness::plain();
+        let leaves: Vec<[u8; 16]> = (0..8u8).map(|at| [0x40 + at; 16]).collect();
+        let derived: Vec<IpnsName> = leaves
+            .iter()
+            .map(|leaf| stage_node(&harness, *leaf, &folder(Vec::new())))
+            .collect();
+        let refs = leaves
+            .iter()
+            .zip(&derived)
+            .map(|(leaf, name)| ref_to(*leaf, name));
+        let (mid_name, mid_cid) = staged_head_cid(&harness, || {
+            stage_node(&harness, MID, &folder(refs.collect()))
+        });
+        let mut root_refs = vec![ref_to(MID, &mid_name)];
+        root_refs.extend(
+            leaves
+                .iter()
+                .map(|leaf| ref_to(*leaf, &derive_write_name(&[0x51; 32], leaf))),
+        );
+        let root = staged_root(&harness, root_refs, Vec::new(), Vec::new());
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        let walks = CountedWalks {
+            inner: &net,
+            walks: core::cell::Cell::new(0),
+        };
+        let mut entropy = SeededEntropy::new(13);
+
+        let outcome = block_on(rotate_scope_write(
+            &mut entropy,
+            &walks,
+            &net,
+            &write_plan(&root, &owner),
+        ))
+        .expect("the wave finishes");
+        assert!(outcome.dropped.is_empty());
+        assert_eq!(walks.walks.get(), 2, "one re-walk for MID's body");
+        assert_eq!(
+            harness.store.get_count(mid_name.as_str()),
+            harness.store.get_count(derived[0].as_str()),
+            "MID's record is read as often as a node the walk reads once"
+        );
+        assert_eq!(
+            harness
+                .http
+                .requests()
+                .iter()
+                .filter(|request| request.url.contains(&mid_cid))
+                .count(),
+            1,
+            "MID's head block is fetched once"
+        );
+    }
+
+    /// ADR 0065 D2: two refs at names the seed does not derive come before
+    /// the derived one, and the wave still keeps the derived one.
+    #[test]
+    fn a_derived_ref_met_after_two_others_is_kept() {
+        let harness = Harness::plain();
+        let (a, b, c) = ([0x31; 16], [0x32; 16], [0x33; 16]);
+        stage_node(&harness, LEAF, &folder(Vec::new()));
+        let bogus = |seed: u8| ref_to(LEAF, &derive_write_name(&[seed; 32], &LEAF));
+        let a_name = stage_node(&harness, a, &folder(vec![bogus(0x51)]));
+        let b_name = stage_node(&harness, b, &folder(vec![bogus(0x52)]));
+        let c_name = stage_node(
+            &harness,
+            c,
+            &folder(vec![ref_to(
+                LEAF,
+                &derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &LEAF),
+            )]),
+        );
+        let root = staged_root(
+            &harness,
+            vec![ref_to(a, &a_name), ref_to(b, &b_name), ref_to(c, &c_name)],
+            Vec::new(),
+            Vec::new(),
+        );
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        let mut entropy = SeededEntropy::new(13);
+
+        let outcome = block_on(rotate_scope_write(
+            &mut entropy,
+            &net,
+            &net,
+            &write_plan(&root, &owner),
+        ))
+        .expect("the wave keeps the derived ref and finishes");
+        assert!(outcome.dropped.is_empty());
+        assert_eq!(outcome.interior_node_count, 4);
     }
 
     /// The republish re-seals the record its own walk gated, so a refused

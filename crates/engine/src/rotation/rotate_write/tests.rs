@@ -1407,7 +1407,7 @@ struct CountingBound {
 }
 
 impl NodeBound for CountingBound {
-    fn past(&self, node_id: &[u8; 16]) -> bool {
+    fn past(&self, node_id: &[u8; 16], _cause: DropCause) -> bool {
         self.past.contains(node_id)
     }
 

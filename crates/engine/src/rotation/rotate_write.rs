@@ -135,6 +135,16 @@ impl DropCause {
                 | Self::EpochAboveRoot
         )
     }
+
+    /// Whether a revokee can plant this cause on a fresh node id, so the
+    /// entry count of ADR 0065 D3 drops it as well as the node's own count.
+    #[must_use]
+    pub fn plantable(self) -> bool {
+        matches!(
+            self,
+            Self::NoRecord | Self::NoHeadBlock | Self::EpochAboveRoot
+        )
+    }
 }
 
 /// Why [`WriteSubtreeResolver::resolve_node`] yields no node.
@@ -155,8 +165,8 @@ pub enum NodeStop {
         retire: Option<Box<IpnsName>>,
     },
     /// A ref met later outranks the one the walk took for a node (D2), so
-    /// the walk starts again from the root. The resolver asks for one only
-    /// when it keeps a ref it did not keep before.
+    /// the walk starts again from the root (`WaveSubtree` in
+    /// `net/rotation.rs` bounds the count).
     Rewalk,
 }
 
@@ -169,8 +179,8 @@ impl From<ResolveFailure> for NodeStop {
 /// The bound of ADR 0065 D3 for one owed cut: whether each node is past it,
 /// and the count of passes that a node held the wave.
 pub trait NodeBound {
-    /// Whether `node_id` may drop for a cause an endpoint can cause.
-    fn past(&self, node_id: &[u8; 16]) -> bool;
+    /// Whether `node_id` may drop for `cause`, a cause an endpoint can cause.
+    fn past(&self, node_id: &[u8; 16], cause: DropCause) -> bool;
     /// Count this pass toward `node_id`'s bound.
     fn held(&self, node_id: &[u8; 16]);
     /// `node_id` resolved, so its count starts again.
@@ -181,7 +191,7 @@ pub trait NodeBound {
 pub struct NoBound;
 
 impl NodeBound for NoBound {
-    fn past(&self, _node_id: &[u8; 16]) -> bool {
+    fn past(&self, _node_id: &[u8; 16], _cause: DropCause) -> bool {
         false
     }
 
@@ -1080,11 +1090,9 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
                     bound.resolved(&id);
                     node
                 }
-                // Each rewalk keeps one more ref, and a scope holds finitely
-                // many, so the walks end.
                 Err(NodeStop::Rewalk) => continue 'walk,
                 Err(NodeStop::Refused { cause, retire, .. })
-                    if id != root_id && (!cause.needs_bound() || bound.past(&id)) =>
+                    if id != root_id && (!cause.needs_bound() || bound.past(&id, cause)) =>
                 {
                     walk.dropped.push(DroppedNode { node_id: id, cause });
                     walk.dropped_names.extend(retire.map(|name| *name));
