@@ -321,25 +321,34 @@ describe('EngineClient leadership + transport swap', () => {
         (message) => (message as { type?: string }).type === 'start'
       ) as { identityToken?: string } | undefined;
       expect(start?.identityToken).toBe('identity.jwt');
-      const follower = tab({
-        secretSource: { provideSecret: () => Promise.resolve(fakeLoginSecret()) },
-      });
-      try {
-        await startTab(follower);
-        await client.dispose();
-        await tick();
-        await tick();
-        expect(follower.currentRole()).toBe('leader');
-        const failover = workers[1].posted.find(
-          (message) => (message as { type?: string }).type === 'start'
-        ) as { identityToken?: string } | undefined;
-        expect(failover).toBeDefined();
-        expect(failover?.identityToken).toBeUndefined();
-      } finally {
-        await follower.dispose();
-      }
     } finally {
       await client.dispose();
+    }
+
+    // A follower whose sign-in the leader adopted holds an established session,
+    // so its later failover must not replay the token it signed in with.
+    const established = origin();
+    const leader = established.tab();
+    const follower = established.tab({
+      secretSource: { provideSecret: () => Promise.resolve(fakeLoginSecret()) },
+    });
+    try {
+      await tick();
+      await startTab(leader);
+      await follower.facade.start(Uint8Array.from([9]).buffer, TEST_ACCOUNT_ID, 'identity.jwt');
+      expect(follower.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+      await leader.dispose();
+      await tick();
+      await tick();
+      expect(follower.currentRole()).toBe('leader');
+      const failover = established.workers[1].posted.find(
+        (message) => (message as { type?: string }).type === 'start'
+      ) as { identityToken?: string } | undefined;
+      expect(failover).toBeDefined();
+      expect(failover?.identityToken).toBeUndefined();
+    } finally {
+      await follower.dispose();
+      await leader.dispose();
     }
   });
 
