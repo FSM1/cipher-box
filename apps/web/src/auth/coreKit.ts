@@ -109,11 +109,11 @@ export interface RecoveryEnrollment {
 }
 
 /**
- * The sealed slot that keeps the signed-in address across a reload: the email
+ * The sealed slot that keeps the display label across a reload: the label
  * alone, never a token, bound to the subject it labels and cleared with the
  * session store.
  */
-const ACCOUNT_EMAIL_KEY = 'cipherbox_account_email';
+const ACCOUNT_LABELS_KEY = 'cipherbox_account_email';
 
 /**
  * How many factors an account with no policy carries. Past that count one has
@@ -143,8 +143,8 @@ function isRecoveryFactor(entry: string): boolean {
 
 /** Adapts the Web3Auth SDK to the narrow session seam the login flow drives. */
 class Web3AuthSession implements WebCoreKitSession {
-  /** The address the exchange reported; the token deliberately carries no PII. */
-  private signedInEmail: string | null = null;
+  /** The label the exchange reported; the token deliberately carries no PII. */
+  private signedInDisplay: string | null = null;
 
   /** The identity this sign-in used; kept through a login held at the policy,
    * which is the state a device-approval request is opened from. */
@@ -175,7 +175,7 @@ class Web3AuthSession implements WebCoreKitSession {
       if (await this.storeIsCorrupt()) await this.clearStore();
       throw failure;
     }
-    if (this.isLoggedIn()) this.signedInEmail = await this.keptEmail();
+    if (this.isLoggedIn()) this.signedInDisplay = await this.keptDisplay();
   }
 
   isLoggedIn(): boolean {
@@ -188,10 +188,10 @@ class Web3AuthSession implements WebCoreKitSession {
       verifierId: credential.verifierId,
       idToken: credential.token,
     });
-    this.signedInEmail = credential.email;
+    this.signedInDisplay = credential.display;
     this.signedInSubject = credential.verifierId;
     this.signedInToken = credential.token;
-    await this.keepEmail(credential.verifierId, credential.email);
+    await this.keepDisplay(credential.verifierId, credential.display);
     if (!this.isLoggedIn()) await this.useStoredDeviceFactor();
     if (this.isLoggedIn()) {
       await this.coreKit.commitChanges();
@@ -351,8 +351,8 @@ class Web3AuthSession implements WebCoreKitSession {
     return isIdentityMethod(claimed) ? claimed : null;
   }
 
-  email(): string | null {
-    return this.signedInEmail;
+  display(): string | null {
+    return this.signedInDisplay;
   }
 
   async logout(): Promise<void> {
@@ -360,7 +360,7 @@ class Web3AuthSession implements WebCoreKitSession {
       // A session held short of reconstruction is still a live credential.
       if (this.isLoggedIn() || this.needsRecovery()) await this.coreKit.logout();
     } finally {
-      this.signedInEmail = null;
+      this.signedInDisplay = null;
       this.signedInSubject = null;
       this.signedInToken = null;
       await this.clearStore();
@@ -486,32 +486,32 @@ class Web3AuthSession implements WebCoreKitSession {
   }
 
   /**
-   * Seals the address beside the session it labels. Best-effort: it is display
-   * chrome, and a refused write costs only the label after a reload.
+   * Seals the display label beside the session it labels. Best-effort: it is
+   * display chrome, and a refused write costs only the label after a reload.
    */
-  private async keepEmail(subject: string, email: string | null): Promise<void> {
+  private async keepDisplay(subject: string, display: string): Promise<void> {
     try {
-      if (email === null) await this.store.removeItem(ACCOUNT_EMAIL_KEY);
-      else await this.store.setItem(ACCOUNT_EMAIL_KEY, JSON.stringify({ subject, email }));
+      await this.store.setItem(ACCOUNT_LABELS_KEY, JSON.stringify({ subject, display }));
     } catch {
       // Display chrome only.
     }
   }
 
-  /** The kept address, if it labels the subject this session restored. */
-  private async keptEmail(): Promise<string | null> {
-    let kept: { subject?: unknown; email?: unknown } | null;
+  /** The kept display label, if it labels the subject this session restored. */
+  private async keptDisplay(): Promise<string | null> {
+    let kept: { subject?: unknown; display?: unknown; email?: unknown } | null;
     try {
-      const raw = await this.store.getItem(ACCOUNT_EMAIL_KEY);
+      const raw = await this.store.getItem(ACCOUNT_LABELS_KEY);
       if (raw === null) return null;
       kept = JSON.parse(raw) as typeof kept;
     } catch {
       return null;
     }
     const subject = this.subject();
-    return subject !== null && kept?.subject === subject && typeof kept.email === 'string'
-      ? kept.email
-      : null;
+    if (subject === null || kept?.subject !== subject) return null;
+    // A record the previous release sealed carries the label as `email`.
+    const display = typeof kept.display === 'string' ? kept.display : kept.email;
+    return typeof display === 'string' ? display : null;
   }
 
   /**
@@ -523,7 +523,7 @@ class Web3AuthSession implements WebCoreKitSession {
    */
   private async clearStore(): Promise<void> {
     try {
-      await this.store.removeItem(ACCOUNT_EMAIL_KEY);
+      await this.store.removeItem(ACCOUNT_LABELS_KEY);
     } finally {
       await this.store.purge(this.coreKit._storageKey);
     }

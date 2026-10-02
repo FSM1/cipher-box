@@ -1,16 +1,23 @@
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { secp256k1 } from '@noble/curves/secp256k1';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { createSiweMessage } from 'viem/siwe';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { authMethodLockKey } from '../common/advisory-lock';
 import { Clock, SystemClock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
+import {
+  identityLogin,
+  identityReproof,
+  jwtPayload,
+  link,
+  siweLinkBody,
+  siweSign,
+} from '../testing/auth-http';
 import { fakeConfig } from '../testing/fakes';
 import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
+import { newIdentity, signChallenge, type TestIdentity } from '../testing/identities';
 import {
   createIntegrationDatabase,
   IntegrationDatabase,
@@ -51,24 +58,6 @@ import { TokenService } from './services/token.service';
  * is off (`withOps: false`): these flows fire well past the auth surface's cap,
  * which is proven separately in the ops integration suite.
  */
-
-function newIdentity() {
-  const privateKey = secp256k1.utils.randomPrivateKey();
-  return {
-    privateKey,
-    publicKeyCompressed: Buffer.from(secp256k1.getPublicKey(privateKey, true)).toString('hex'),
-    publicKeyUncompressed: Buffer.from(secp256k1.getPublicKey(privateKey, false)).toString('hex'),
-  };
-}
-
-function signChallenge(challenge: string, privateKey: Uint8Array): string {
-  const hash = createHash('sha256').update(challenge, 'utf8').digest();
-  return secp256k1.sign(hash, privateKey).toCompactHex();
-}
-
-function jwtPayload(token: string): { sub: string; publicKey: string } {
-  return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
-}
 
 describe('auth HTTP flows (real Postgres)', () => {
   let db: IntegrationDatabase;
@@ -141,10 +130,10 @@ describe('auth HTTP flows (real Postgres)', () => {
     return db.dataSource.getRepository(User).count({ where: { publicKey } });
   }
 
-  async function freshChallenge(identity: ReturnType<typeof newIdentity>): Promise<string> {
+  async function freshChallenge(identity: TestIdentity): Promise<string> {
     const res = await request(http())
       .post('/auth/challenge')
-      .send({ publicKey: identity.publicKeyCompressed })
+      .send({ publicKey: identity.publicKey })
       .expect(200);
     return res.body.challenge;
   }
@@ -167,46 +156,41 @@ describe('auth HTTP flows (real Postgres)', () => {
     return (await stepUpRequest(accessToken, body).expect(200)).body.challenge;
   }
 
-  /** The account key's answer to a fresh step-up challenge, as link and unlink demand. */
-  async function identityReproof(
-    identity: ReturnType<typeof newIdentity>,
-    accessToken: string,
-    operation: StepUpOperation = 'link',
-    methodId?: string
-  ): Promise<{ challenge: string; challengeSignature: string }> {
-    const challenge = await stepUpChallenge(accessToken, operation, methodId);
-    return { challenge, challengeSignature: signChallenge(challenge, identity.privateKey) };
-  }
-
-  async function identityLogin(identity = newIdentity()) {
-    const challenge = await freshChallenge(identity);
-    const loginRes = await request(http())
-      .post('/auth/login')
-      .send({
-        publicKey: identity.publicKeyCompressed,
-        challenge,
-        signature: signChallenge(challenge, identity.privateKey),
-      })
-      .expect(200);
-    return { identity, loginRes };
+  /**
+   * A login whose account carries a bound identity subject. A link needs one,
+   * and this suite does not test the bind.
+   */
+  async function boundLogin() {
+    const login = await identityLogin(http());
+    const subject = randomUUID();
+    await db.dataSource.getRepository(IdentitySubject).insert({
+      id: subject,
+      subjectId: subject,
+      kind: 'google',
+      identifierHash: createHash('sha256').update(subject).digest('hex'),
+    });
+    await db.dataSource
+      .getRepository(User)
+      .update({ id: jwtPayload(login.accessToken).sub }, { identitySubjectId: subject });
+    return login;
   }
 
   describe('challenge-signature login', () => {
     it('creates the account implicitly at first login and not at the second', async () => {
       const identity = newIdentity();
-      const first = await identityLogin(identity);
+      const first = await identityLogin(http(), identity);
       expect(first.loginRes.body.isNewUser).toBe(true);
       expect(first.loginRes.body.accessToken).toBeTruthy();
       expect(first.loginRes.body.refreshToken).toMatch(/^[0-9a-f]{64}$/);
       expect(first.loginRes.headers['set-cookie']?.[0]).toContain('refreshToken=');
       expect(first.loginRes.headers['set-cookie']?.[0]).toContain('HttpOnly');
 
-      const second = await identityLogin(identity);
+      const second = await identityLogin(http(), identity);
       expect(second.loginRes.body.isNewUser).toBe(false);
       expect(jwtPayload(second.loginRes.body.accessToken).sub).toBe(
         jwtPayload(first.loginRes.body.accessToken).sub
       );
-      expect(await usersWithKey(identity.publicKeyCompressed)).toBe(1);
+      expect(await usersWithKey(identity.publicKey)).toBe(1);
     });
 
     it('keys the account by the canonical compressed publicKey regardless of encoding', async () => {
@@ -223,7 +207,7 @@ describe('auth HTTP flows (real Postgres)', () => {
           signature: signChallenge(challengeRes.body.challenge, identity.privateKey),
         })
         .expect(200);
-      expect(await usersWithKey(identity.publicKeyCompressed)).toBe(1);
+      expect(await usersWithKey(identity.publicKey)).toBe(1);
     });
 
     it('rejects a signature from the wrong key', async () => {
@@ -231,12 +215,12 @@ describe('auth HTTP flows (real Postgres)', () => {
       const wrongKey = newIdentity();
       const challengeRes = await request(http())
         .post('/auth/challenge')
-        .send({ publicKey: identity.publicKeyCompressed })
+        .send({ publicKey: identity.publicKey })
         .expect(200);
       await request(http())
         .post('/auth/login')
         .send({
-          publicKey: identity.publicKeyCompressed,
+          publicKey: identity.publicKey,
           challenge: challengeRes.body.challenge,
           signature: signChallenge(challengeRes.body.challenge, wrongKey.privateKey),
         })
@@ -247,10 +231,10 @@ describe('auth HTTP flows (real Postgres)', () => {
       const identity = newIdentity();
       const challengeRes = await request(http())
         .post('/auth/challenge')
-        .send({ publicKey: identity.publicKeyCompressed })
+        .send({ publicKey: identity.publicKey })
         .expect(200);
       const body = {
-        publicKey: identity.publicKeyCompressed,
+        publicKey: identity.publicKey,
         challenge: challengeRes.body.challenge,
         signature: signChallenge(challengeRes.body.challenge, identity.privateKey),
       };
@@ -263,12 +247,12 @@ describe('auth HTTP flows (real Postgres)', () => {
       const attacker = newIdentity();
       const challengeRes = await request(http())
         .post('/auth/challenge')
-        .send({ publicKey: victim.publicKeyCompressed })
+        .send({ publicKey: victim.publicKey })
         .expect(200);
       await request(http())
         .post('/auth/login')
         .send({
-          publicKey: attacker.publicKeyCompressed,
+          publicKey: attacker.publicKey,
           challenge: challengeRes.body.challenge,
           signature: signChallenge(challengeRes.body.challenge, attacker.privateKey),
         })
@@ -279,14 +263,14 @@ describe('auth HTTP flows (real Postgres)', () => {
       await request(http()).post('/auth/challenge').send({ publicKey: 'not-hex' }).expect(400);
       await request(http())
         .post('/auth/challenge')
-        .send({ publicKey: newIdentity().publicKeyCompressed, privateKey: 'never-send-this' })
+        .send({ publicKey: newIdentity().publicKey, privateKey: 'never-send-this' })
         .expect(400);
     });
   });
 
   describe('refresh rotation', () => {
     it('rotates via body, and reuse of the old token kills the family', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       const firstRefreshToken = loginRes.body.refreshToken;
 
       const rotated = await request(http())
@@ -307,7 +291,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('rotates via the HTTP-only cookie when the body is empty', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       await request(http())
         .post('/auth/refresh')
         .set('Cookie', `refreshToken=${loginRes.body.refreshToken}`)
@@ -335,7 +319,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     };
 
     it('mints a pseudonym at login that is neither the access nor the refresh token', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
 
       expect(loginRes.body.acceleratorToken).toMatch(/^[0-9a-f]{64}$/);
       expect(loginRes.body.acceleratorToken).not.toBe(loginRes.body.refreshToken);
@@ -344,7 +328,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('refuses the session access token at the gateway leg', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       await verify(loginRes.body.accessToken).expect(401);
     });
 
@@ -359,7 +343,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('rotates on refresh, and the superseded pseudonym stops verifying', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       const rotated = await request(http())
         .post('/auth/refresh')
         .send({ refreshToken: loginRes.body.refreshToken })
@@ -371,7 +355,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('dies with the session at logout', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       await request(http())
         .post('/auth/logout')
         .set('Authorization', `Bearer ${loginRes.body.accessToken}`)
@@ -381,7 +365,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('dies with the family that reuse detection revokes', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       const rotated = await request(http())
         .post('/auth/refresh')
         .send({ refreshToken: loginRes.body.refreshToken })
@@ -397,7 +381,7 @@ describe('auth HTTP flows (real Postgres)', () => {
 
   describe('logout', () => {
     it('revokes every refresh token for the account', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       await request(http())
         .post('/auth/logout')
         .set('Authorization', `Bearer ${loginRes.body.accessToken}`)
@@ -413,60 +397,6 @@ describe('auth HTTP flows (real Postgres)', () => {
       await request(http()).post('/auth/logout').set('Authorization', 'Bearer bogus').expect(401);
     });
   });
-
-  /**
-   * A nonce from the pool the intent names: the sign-in pool is
-   * unauthenticated, the link pool is owner-authenticated and serves no other
-   * route.
-   */
-  async function siweNonce(linkAccessToken?: string): Promise<string> {
-    const pending = linkAccessToken
-      ? request(http())
-          .post('/auth/siwe/link-challenge')
-          .set('Authorization', `Bearer ${linkAccessToken}`)
-      : request(http()).post('/auth/siwe/challenge');
-    return (await pending.send({}).expect(200)).body.nonce;
-  }
-
-  async function siweSign(
-    account: ReturnType<typeof privateKeyToAccount>,
-    statement: string,
-    signer: ReturnType<typeof privateKeyToAccount> = account,
-    linkAccessToken?: string
-  ) {
-    const message = createSiweMessage({
-      address: account.address,
-      chainId: 1,
-      domain: 'localhost:5173',
-      nonce: await siweNonce(linkAccessToken),
-      uri: 'http://localhost:5173',
-      version: '1',
-      statement,
-    });
-    const signature = await signer.signMessage({ message });
-    return { message, signature };
-  }
-
-  /** A complete `/auth/siwe/link` body: the SIWE pair plus the identity re-proof. */
-  async function siweLinkBody(
-    identity: ReturnType<typeof newIdentity>,
-    accessToken: string,
-    account: ReturnType<typeof privateKeyToAccount>,
-    statement: string = SIWE_LINK_STATEMENT
-  ) {
-    const [siwe, reproof] = await Promise.all([
-      siweSign(account, statement, account, accessToken),
-      identityReproof(identity, accessToken),
-    ]);
-    return { ...siwe, ...reproof };
-  }
-
-  function link(accessToken: string, body: Record<string, string>) {
-    return request(http())
-      .post('/auth/siwe/link')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send(body);
-  }
 
   /**
    * A challenge names the operation it authorises, so possession of a live
@@ -487,7 +417,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('refuses an operation it mints no pool for', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       await stepUpRequest(loginRes.body.accessToken, { operation: 'login' }).expect(400);
     });
 
@@ -496,7 +426,7 @@ describe('auth HTTP flows (real Postgres)', () => {
      * names its row at the mint, and no other operation may name one.
      */
     it('refuses an unlink mint with no row, and a link mint that names one', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       const accessToken = loginRes.body.accessToken as string;
       await stepUpRequest(accessToken, { operation: 'unlink' }).expect(400);
       await stepUpRequest(accessToken, {
@@ -506,10 +436,10 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('refuses a scoped token that carries no account key', async () => {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await identityLogin(http());
       const scoped = await ctx.app.get(JwtService).signAsync({
         sub: jwtPayload(loginRes.body.accessToken).sub,
-        publicKey: identity.publicKeyCompressed,
+        publicKey: identity.publicKey,
         scope: 'device-approval',
       });
       const refused = await stepUpRequest(scoped, {
@@ -520,7 +450,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('mints a distinct domain tag per operation, and never the login tag', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       const accessToken = loginRes.body.accessToken as string;
       const tags = await Promise.all([
         stepUpChallenge(accessToken, 'link'),
@@ -533,7 +463,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('refuses a step-up challenge at the login route', async () => {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await identityLogin(http());
       const challenge = await stepUpChallenge(
         loginRes.body.accessToken,
         'unlink',
@@ -542,7 +472,7 @@ describe('auth HTTP flows (real Postgres)', () => {
       await request(http())
         .post('/auth/login')
         .send({
-          publicKey: identity.publicKeyCompressed,
+          publicKey: identity.publicKey,
           challenge,
           signature: signChallenge(challenge, identity.privateKey),
         })
@@ -552,17 +482,19 @@ describe('auth HTTP flows (real Postgres)', () => {
 
   describe('SIWE secondary auth', () => {
     it('refuses to link a wallet already linked to another account', async () => {
-      const first = await identityLogin();
-      const second = await identityLogin();
+      const first = await boundLogin();
+      const second = await boundLogin();
       const account = privateKeyToAccount(generatePrivateKey());
 
       await link(
+        http(),
         first.loginRes.body.accessToken,
-        await siweLinkBody(first.identity, first.loginRes.body.accessToken, account)
+        await siweLinkBody(http(), first.identity, first.loginRes.body.accessToken, account)
       ).expect(201);
       await link(
+        http(),
         second.loginRes.body.accessToken,
-        await siweLinkBody(second.identity, second.loginRes.body.accessToken, account)
+        await siweLinkBody(http(), second.identity, second.loginRes.body.accessToken, account)
       ).expect(409);
     });
 
@@ -573,13 +505,20 @@ describe('auth HTTP flows (real Postgres)', () => {
      * `uq_auth_methods_kind_identifier` then denies the victim that wallet.
      */
     it('refuses a sign-in signature replayed as a link, and links nothing', async () => {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await identityLogin(http());
       const account = privateKeyToAccount(generatePrivateKey());
       const userId = jwtPayload(loginRes.body.accessToken).sub;
 
       await link(
+        http(),
         loginRes.body.accessToken,
-        await siweLinkBody(identity, loginRes.body.accessToken, account, SIWE_LOGIN_STATEMENT)
+        await siweLinkBody(
+          http(),
+          identity,
+          loginRes.body.accessToken,
+          account,
+          SIWE_LOGIN_STATEMENT
+        )
       ).expect(401);
 
       expect(
@@ -588,25 +527,27 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('refuses a link signature replayed as a sign-in', async () => {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await boundLogin();
       const account = privateKeyToAccount(generatePrivateKey());
       await link(
+        http(),
         loginRes.body.accessToken,
-        await siweLinkBody(identity, loginRes.body.accessToken, account)
+        await siweLinkBody(http(), identity, loginRes.body.accessToken, account)
       ).expect(201);
 
-      const replayed = await siweSign(account, SIWE_LINK_STATEMENT);
+      const replayed = await siweSign(http(), account, SIWE_LINK_STATEMENT);
       await request(http()).post('/auth/identity/wallet').send(replayed).expect(401);
     });
 
     it('refuses a link whose challenge was signed by another key, and links nothing', async () => {
-      const { loginRes } = await identityLogin();
+      const { loginRes } = await identityLogin(http());
       const account = privateKeyToAccount(generatePrivateKey());
       const userId = jwtPayload(loginRes.body.accessToken).sub;
 
       await link(
+        http(),
         loginRes.body.accessToken,
-        await siweLinkBody(newIdentity(), loginRes.body.accessToken, account)
+        await siweLinkBody(http(), newIdentity(), loginRes.body.accessToken, account)
       ).expect(401);
 
       expect(
@@ -615,15 +556,15 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('refuses a link whose challenge was already spent', async () => {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await boundLogin();
       const first = privateKeyToAccount(generatePrivateKey());
-      const body = await siweLinkBody(identity, loginRes.body.accessToken, first);
-      await link(loginRes.body.accessToken, body).expect(201);
+      const body = await siweLinkBody(http(), identity, loginRes.body.accessToken, first);
+      await link(http(), loginRes.body.accessToken, body).expect(201);
 
       const second = privateKeyToAccount(generatePrivateKey());
-      await link(loginRes.body.accessToken, {
+      await link(http(), loginRes.body.accessToken, {
         ...body,
-        ...(await siweSign(second, SIWE_LINK_STATEMENT)),
+        ...(await siweSign(http(), second, SIWE_LINK_STATEMENT)),
       }).expect(401);
     });
 
@@ -633,15 +574,15 @@ describe('auth HTTP flows (real Postgres)', () => {
      * only the pool a challenge was minted from can refuse it.
      */
     it('refuses a sign-in nonce spent as a link, statement notwithstanding', async () => {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await identityLogin(http());
       const accessToken = loginRes.body.accessToken as string;
       const account = privateKeyToAccount(generatePrivateKey());
       const userId = jwtPayload(accessToken).sub;
 
-      await link(accessToken, {
+      await link(http(), accessToken, {
         // A sign-in nonce: `siweSign` with no bearer reaches the open pool.
-        ...(await siweSign(account, SIWE_LINK_STATEMENT)),
-        ...(await identityReproof(identity, accessToken)),
+        ...(await siweSign(http(), account, SIWE_LINK_STATEMENT)),
+        ...(await identityReproof(http(), identity, accessToken)),
       }).expect(401);
 
       expect(
@@ -650,29 +591,39 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('refuses a link nonce spent as a wallet sign-in', async () => {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await boundLogin();
       const accessToken = loginRes.body.accessToken as string;
       const account = privateKeyToAccount(generatePrivateKey());
-      await link(accessToken, await siweLinkBody(identity, accessToken, account)).expect(201);
+      await link(
+        http(),
+        accessToken,
+        await siweLinkBody(http(), identity, accessToken, account)
+      ).expect(201);
 
-      const linkNonced = await siweSign(account, SIWE_LOGIN_STATEMENT, account, accessToken);
+      const linkNonced = await siweSign(
+        http(),
+        account,
+        SIWE_LOGIN_STATEMENT,
+        account,
+        accessToken
+      );
       await request(http()).post('/auth/identity/wallet').send(linkNonced).expect(401);
 
       // The same wallet and statement over a sign-in nonce still signs in, so
       // the pool is what refused the first attempt.
-      const loginNonced = await siweSign(account, SIWE_LOGIN_STATEMENT);
+      const loginNonced = await siweSign(http(), account, SIWE_LOGIN_STATEMENT);
       await request(http()).post('/auth/identity/wallet').send(loginNonced).expect(200);
     });
 
     it('refuses a link re-proved with a login challenge, and links nothing', async () => {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await identityLogin(http());
       const accessToken = loginRes.body.accessToken as string;
       const account = privateKeyToAccount(generatePrivateKey());
       const userId = jwtPayload(accessToken).sub;
       const challenge = await freshChallenge(identity);
 
-      await link(accessToken, {
-        ...(await siweSign(account, SIWE_LINK_STATEMENT, account, accessToken)),
+      await link(http(), accessToken, {
+        ...(await siweSign(http(), account, SIWE_LINK_STATEMENT, account, accessToken)),
         challenge,
         challengeSignature: signChallenge(challenge, identity.privateKey),
       }).expect(401);
@@ -683,17 +634,18 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('refuses a scoped token on the link route', async () => {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await identityLogin(http());
       const account = privateKeyToAccount(generatePrivateKey());
       const scoped = await ctx.app.get(JwtService).signAsync({
         sub: jwtPayload(loginRes.body.accessToken).sub,
-        publicKey: identity.publicKeyCompressed,
+        publicKey: identity.publicKey,
         scope: 'device-approval',
       });
 
       const refused = await link(
+        http(),
         scoped,
-        await siweLinkBody(identity, loginRes.body.accessToken, account)
+        await siweLinkBody(http(), identity, loginRes.body.accessToken, account)
       ).expect(403);
       expect(refused.body.message).toBe('Insufficient token scope');
     });
@@ -770,10 +722,14 @@ describe('auth HTTP flows (real Postgres)', () => {
 
     /** An account whose identity method is joined by a linked wallet. */
     async function accountWithTwoMethods() {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await boundLogin();
       const accessToken = loginRes.body.accessToken as string;
       const wallet = privateKeyToAccount(generatePrivateKey());
-      await link(accessToken, await siweLinkBody(identity, accessToken, wallet)).expect(201);
+      await link(
+        http(),
+        accessToken,
+        await siweLinkBody(http(), identity, accessToken, wallet)
+      ).expect(201);
       return { identity, accessToken, userId: jwtPayload(accessToken).sub };
     }
 
@@ -784,11 +740,15 @@ describe('auth HTTP flows (real Postgres)', () => {
      * can only be exercised from a state arranged out of band.
      */
     async function accountWithWalletsOnly(wallets: number) {
-      const { identity, loginRes } = await identityLogin();
+      const { identity, loginRes } = await boundLogin();
       const accessToken = loginRes.body.accessToken as string;
       for (let i = 0; i < wallets; i += 1) {
         const wallet = privateKeyToAccount(generatePrivateKey());
-        await link(accessToken, await siweLinkBody(identity, accessToken, wallet)).expect(201);
+        await link(
+          http(),
+          accessToken,
+          await siweLinkBody(http(), identity, accessToken, wallet)
+        ).expect(201);
       }
       const userId = jwtPayload(accessToken).sub;
       await authMethods().delete({ userId, kind: 'identity' });
@@ -807,7 +767,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     }
 
     async function signedUnlink(
-      identity: ReturnType<typeof newIdentity>,
+      identity: TestIdentity,
       accessToken: string,
       methodId: string
     ): Promise<Record<string, string>> {
@@ -985,7 +945,7 @@ describe('auth HTTP flows (real Postgres)', () => {
       const { identity, accessToken, userId } = await accountWithTwoMethods();
       const scoped = await ctx.app.get(JwtService).signAsync({
         sub: userId,
-        publicKey: identity.publicKeyCompressed,
+        publicKey: identity.publicKey,
         scope: 'device-approval',
       });
       const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } })).id;

@@ -40,7 +40,10 @@ export class DeviceController {
   })
   @ApiResponse({
     status: 409,
-    description: 'Key or identity already claimed elsewhere, or the device limit is reached',
+    description:
+      'The account has no bound identity subject, the identity token names a subject other ' +
+      'than the bound one, the key is registered elsewhere or under another subject, or the ' +
+      'device limit is reached',
   })
   @ApiResponse({ status: 429, description: 'Per-account registry rate limit exceeded' })
   @ApiResponse({ status: 503, description: 'Account serialization contended; retry shortly' })

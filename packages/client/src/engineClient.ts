@@ -220,7 +220,7 @@ class LeaderEngine implements EngineTransport {
     this.onFault(error);
   }
 
-  start(secret: ArrayBuffer, accountId: string): Promise<void> {
+  start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void> {
     let local: LocalTransport;
     try {
       local = this.engine();
@@ -229,7 +229,7 @@ class LeaderEngine implements EngineTransport {
       new Uint8Array(secret).fill(0);
       return Promise.reject(asError(error));
     }
-    return local.start(secret, accountId);
+    return local.start(secret, accountId, identityToken);
   }
 
   command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
@@ -327,6 +327,7 @@ export class EngineClient implements EngineTransport {
   // answers; together they are this tab's claim on one, which is what a
   // promotion cold-starts for and what stops a signed-in tab yielding.
   private pendingLogin: string | null = null;
+  private pendingIdentityToken: string | undefined;
   private readonly sessionListeners = new Set<() => void>();
   private readonly sessionEndListeners = new Set<() => void>();
   // Held here rather than read off `config`, because a session end drops it: the
@@ -428,7 +429,7 @@ export class EngineClient implements EngineTransport {
 
   // --- EngineTransport ---
 
-  start(secret: ArrayBuffer, accountId: string): Promise<void> {
+  start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void> {
     // This seam is the secret's terminal owner (security rule 7). On the leader
     // path the worker becomes the terminal owner — `LocalTransport.start`
     // transfers the buffer in (neutered), never copied. On the follower path the
@@ -442,7 +443,8 @@ export class EngineClient implements EngineTransport {
     // this account rather than take the lock as an engine-less leader, and a
     // greeting arriving while the worker spawns must not stand this tab down.
     this.pendingLogin = accountId;
-    return this.current.start(secret, accountId).then(
+    this.pendingIdentityToken = identityToken;
+    return this.current.start(secret, accountId, identityToken).then(
       () => {
         this.holdsAccount(accountId);
         this.relay?.serves(accountId);
@@ -475,6 +477,7 @@ export class EngineClient implements EngineTransport {
       // re-queues and is elected again, churning leadership for a session that
       // never was — and cold-starts for it on its own promotion.
       this.pendingLogin = null;
+      this.pendingIdentityToken = undefined;
       if (this.accountId === null && this.role === 'follower') {
         (this.current as BroadcastTransport).forgetAccount();
       }
@@ -562,6 +565,7 @@ export class EngineClient implements EngineTransport {
     // a session this tab has already ended.
     if (this.isClosed() && accountId !== null) return;
     this.pendingLogin = null;
+    this.pendingIdentityToken = undefined;
     if (this.accountId === accountId) return;
     this.accountId = accountId;
     fanOut(this.sessionListeners, undefined);
@@ -807,7 +811,9 @@ export class EngineClient implements EngineTransport {
             local.close();
             return;
           }
-          await local.start(secret, accountId);
+          const identityToken =
+            this.pendingLogin === accountId ? this.pendingIdentityToken : undefined;
+          await local.start(secret, accountId, identityToken);
           this.holdsAccount(accountId);
         } finally {
           // This frame owns the re-derived buffer until a transfer detaches it

@@ -39,8 +39,8 @@ export interface CoreKitSession extends LoginSecretExporter {
   login(credential: IdentityCredential): Promise<void>;
   /** How the live session was established; unknown after a bare restore. */
   method(): IdentityMethod | null;
-  /** The signed-in user's email, when the method carries one. */
-  email(): string | null;
+  /** What the member signed in as, for display; unknown when nothing kept it. */
+  display(): string | null;
   logout(): Promise<void>;
   /**
    * Drops this device's factor from the account, so what the logout then erases
@@ -59,7 +59,7 @@ export interface CoreKitSession extends LoginSecretExporter {
  * exists: that is the started engine's to report.
  */
 export interface AccountRecord {
-  signedIn(method: IdentityMethod | null, email: string | null): void;
+  signedIn(method: IdentityMethod | null, display: string | null): void;
   signedOut(): void;
 }
 

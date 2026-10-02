@@ -710,7 +710,7 @@
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 10
+      "count": 11
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",

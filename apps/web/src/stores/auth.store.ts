@@ -4,7 +4,8 @@
  * `useEngineAccount` — this store has no say in it, so there is no second
  * answer to desync from the first (blueprint/web-client.md "UI state law").
  * Vault state, tokens, and key material live below the facade. Memory only —
- * `email` is PII and this store is never persisted.
+ * `display` is PII for Google and email sign-ins, and this store is never
+ * persisted.
  */
 
 import { useSyncExternalStore } from 'react';
@@ -13,8 +14,8 @@ import { useSyncExternalStore } from 'react';
 export type LoginMethod = 'google' | 'email' | 'wallet';
 
 export interface AuthState {
-  /** Absent for wallet logins, which carry no email. */
-  readonly email: string | null;
+  /** What the member signed in as, for every method; a wallet's is truncated. */
+  readonly display: string | null;
   readonly method: LoginMethod | null;
   /**
    * A login reached this account's factor policy and stopped: the tab owes a
@@ -33,14 +34,21 @@ export interface AuthState {
    * What the enrollment control runs on, so the two cannot disagree.
    */
   readonly recoveryPhraseHeld: boolean;
+  /**
+   * The member asked at sign-in to register this browser's device key. It
+   * outlives `signedIn`, because the landing that registers reads it after the
+   * flow has already published the session.
+   */
+  readonly saveDevice: boolean;
 }
 
 const SIGNED_OUT: AuthState = Object.freeze({
-  email: null,
+  display: null,
   method: null,
   recoveryRequired: false,
   factorPolicy: false,
   recoveryPhraseHeld: false,
+  saveDevice: false,
 });
 
 let state: AuthState = SIGNED_OUT;
@@ -50,11 +58,12 @@ function set(next: AuthState): void {
   // `useSyncExternalStore` bails out on snapshot identity, so a repeat login
   // with identical values must not mint a new object and re-render consumers.
   if (
-    next.email === state.email &&
+    next.display === state.display &&
     next.method === state.method &&
     next.recoveryRequired === state.recoveryRequired &&
     next.factorPolicy === state.factorPolicy &&
-    next.recoveryPhraseHeld === state.recoveryPhraseHeld
+    next.recoveryPhraseHeld === state.recoveryPhraseHeld &&
+    next.saveDevice === state.saveDevice
   ) {
     return;
   }
@@ -71,15 +80,14 @@ export const authStore = {
   },
   getState: (): AuthState => state,
   /** `method` is `null` for a session established by a means the chrome does not name. */
-  signedIn(method: LoginMethod | null, email: string | null = null): void {
-    // Drop an email a wallet login had no business carrying rather than hold
-    // PII the state contract declares absent.
+  signedIn(method: LoginMethod | null, display: string | null = null): void {
     set({
-      email: method === 'wallet' ? null : email,
+      display,
       method,
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
+      saveDevice: state.saveDevice,
     });
   },
   signedOut(): void {
@@ -110,6 +118,9 @@ export const authStore = {
    */
   recoveryPhrase(held: boolean): void {
     set({ ...state, recoveryPhraseHeld: held });
+  },
+  saveDevice(save: boolean): void {
+    set({ ...state, saveDevice: save });
   },
 };
 

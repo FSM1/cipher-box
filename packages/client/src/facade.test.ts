@@ -97,6 +97,7 @@ function answerRead(read: ReadDescriptor): ReadResultValue {
 
 class FakeTransport implements EngineTransport {
   started: ArrayBuffer[] = [];
+  startTokens: Array<string | undefined> = [];
   commands: CommandDescriptor[] = [];
   /** Every read the facade issued, in call order. */
   readIntents: ReadDescriptor[] = [];
@@ -116,8 +117,9 @@ class FakeTransport implements EngineTransport {
 
   constructor(private readonly origin: { gone: string[] } = { gone: [] }) {}
 
-  start(secret: ArrayBuffer): Promise<void> {
+  start(secret: ArrayBuffer, _accountId: string, identityToken?: string): Promise<void> {
     this.started.push(secret);
+    this.startTokens.push(identityToken);
     return Promise.resolve();
   }
 
@@ -228,6 +230,15 @@ describe('EngineFacade', () => {
     const secret = new Uint8Array([9, 9, 9]).buffer;
     await new EngineFacade(transport).start(secret, TEST_ACCOUNT_ID);
     expect(transport.started).toEqual([secret]);
+    expect(transport.startTokens).toEqual([undefined]);
+  });
+
+  it('forwards the identity token beside the secret on start', async () => {
+    const transport = new FakeTransport();
+    const secret = new Uint8Array([9, 9, 9]).buffer;
+    await new EngineFacade(transport).start(secret, TEST_ACCOUNT_ID, 'identity.jwt');
+    expect(transport.started).toEqual([secret]);
+    expect(transport.startTokens).toEqual(['identity.jwt']);
   });
 
   it('sends logout then tears the transport down', async () => {
@@ -820,6 +831,26 @@ describe('EngineFacade', () => {
     await new EngineFacade(transport).siweLink('link me', signature);
 
     expect(transport.commands).toEqual([{ kind: 'siweLink', message: 'link me', signature }]);
+  });
+
+  it('sends a request for an email link code naming only the address', async () => {
+    const transport = new FakeTransport();
+
+    await new EngineFacade(transport).emailLinkSendCode('member@example.test');
+
+    expect(transport.commands).toEqual([
+      { kind: 'emailLinkSendCode', email: 'member@example.test' },
+    ]);
+  });
+
+  it('sends an email link as its own command, never as a login', async () => {
+    const transport = new FakeTransport();
+
+    await new EngineFacade(transport).emailLink('member@example.test', '123456');
+
+    expect(transport.commands).toEqual([
+      { kind: 'emailLink', email: 'member@example.test', code: '123456' },
+    ]);
   });
 
   it('sends an unlink naming only the method id', async () => {

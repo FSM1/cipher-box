@@ -13,9 +13,14 @@ export interface IdentityGrant {
   token: string;
   /** The Core Kit `verifierId` this token's `sub` names. */
   verifierId: string;
-  /** The signed-in address, when the method carries one; for display only. */
-  email: string | null;
+  /**
+   * What the member signed in as, for display only. A wallet's is the truncated
+   * address, so the full address never leaves the exchange that verified it.
+   */
+  display: string;
   expiresAt: Date;
+  /** The token lifetime in seconds, so a client times it on its own clock. */
+  expiresIn: number;
 }
 
 /**
@@ -43,11 +48,11 @@ export class IdentityExchangeService {
   }
 
   sendEmailCode(email: string): Promise<void> {
-    return this.emailOtp.send(email);
+    return this.emailOtp.send(email, 'login');
   }
 
   async fromEmailCode(email: string, code: string): Promise<IdentityGrant> {
-    const address = this.emailOtp.verify(email, code);
+    const address = this.emailOtp.verify(email, code, 'login');
     return this.mint('email', address, address);
   }
 
@@ -63,16 +68,19 @@ export class IdentityExchangeService {
       nonce,
       SIWE_LOGIN_STATEMENT
     );
-    return this.mint('wallet', address, null);
+    return this.mint('wallet', address, this.siwe.truncateWalletAddress(address));
   }
 
   private async mint(
     method: IdentitySubjectKind,
     identifier: string,
-    email: string | null
+    display: string
   ): Promise<IdentityGrant> {
     const verifierId = await this.subjects.resolve(method, identifier);
-    const { token, expiresAt } = await this.tokens.sign({ subject: verifierId, method });
-    return { token, verifierId, email, expiresAt };
+    const { token, expiresAt, expiresIn } = await this.tokens.sign({
+      subject: verifierId,
+      method,
+    });
+    return { token, verifierId, display, expiresAt, expiresIn };
   }
 }

@@ -23,7 +23,7 @@ use super::last_known_good::{
     cached_fork, keep_newest_last_known_good, keep_then_commit, outranks,
 };
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
-use super::publish::head_cid_from_value;
+use super::publish::{Observed, PublishError, head_cid_from_value};
 use crate::facade::NodeId;
 use crate::gate::floor::PendingSequenceRaise;
 use crate::gate::{Adopted, GateError, GateRejection, PendingAdoption, RejectionReason};
@@ -122,6 +122,8 @@ pub struct OwnScopeMaterial {
     /// The read-body the recovery unsealed, at the floor sequence and epoch it
     /// re-imposed — see [`Resolved::current_at_floor`].
     pub at_floor: Adopted,
+    /// The envelope version the record carries.
+    pub version: u64,
 }
 
 /// A gate pass, and where its floor-law advance stands.
@@ -179,6 +181,8 @@ pub struct AdoptOutcome {
     /// never on the public [`Resolved`]); the child read pipeline derives
     /// per-node read keys from it. `None` for a non-owner adopter.
     pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    /// The envelope version the gated record carries.
+    pub version: u64,
 }
 
 /// What a resolve produced for the freshest fetched record.
@@ -294,6 +298,9 @@ pub(crate) struct GatedResolve {
     pub(crate) tied: Vec<Vec<u8>>,
     /// No record was fetched, and the endpoints agree the name holds none.
     pub(crate) absent: bool,
+    /// [`Observed::gated`] for the record the gate passed. `None` when none
+    /// passed, or an own `Current` recovered no material.
+    pub(crate) observed: Option<Result<Observed, PublishError>>,
 }
 
 /// What one arm of the gate match yields beside its outcome. Named because four
@@ -304,6 +311,7 @@ struct GatedParts {
     held_record: Option<(VerifiedRecord, Vec<u8>)>,
     read_scope_seed: Option<Zeroizing<[u8; 32]>>,
     current_at_floor: Option<Adopted>,
+    observed: Option<Result<Observed, PublishError>>,
 }
 
 /// The gated resolve behind [`resolve`]/[`resolve_and_hold`] and the cold-start
@@ -344,6 +352,7 @@ where
                 write_scope_seed,
                 node_id,
                 read_scope_seed,
+                version,
             }) => {
                 // Only gate-passing records touch the snapshot; the same verified
                 // bytes ride out to the liveness hold, so no re-fetch/re-get.
@@ -357,6 +366,7 @@ where
                     }
                 })
                 .await?;
+                let observed = Some(Observed::gated(name, adopted.sequence, version));
                 (
                     ResolveOutcome::Adopted(adopted),
                     GatedParts {
@@ -364,6 +374,7 @@ where
                         held_record: Some((verified, bytes)),
                         read_scope_seed,
                         current_at_floor: None,
+                        observed,
                     },
                 )
             }
@@ -408,6 +419,11 @@ where
                                     .map(|seed| (material.node_id, seed)),
                                 held_record: None,
                                 read_scope_seed: Some(material.read_scope_seed),
+                                observed: Some(Observed::gated(
+                                    name,
+                                    material.at_floor.sequence,
+                                    material.version,
+                                )),
                                 current_at_floor: Some(material.at_floor),
                             });
                             let record_bytes = bytes.clone();
@@ -446,6 +462,7 @@ where
         held_record,
         read_scope_seed,
         current_at_floor,
+        observed,
     } = parts;
 
     Ok(GatedResolve {
@@ -459,6 +476,7 @@ where
         read_scope_seed,
         tied,
         absent,
+        observed,
     })
 }
 
@@ -649,6 +667,8 @@ mod tests {
 
     use super::super::eol;
     use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
+    use crate::net::author::ENVELOPE_V;
+    use crate::net::publish::PublishError;
     use crate::net::{HeldKey, HeldRecord, HeldRecords, HeldValue};
     use crate::seams::{RecordTransport, SnapshotCache, UnixMillis};
     use crate::session::SessionIdentity;
@@ -679,6 +699,8 @@ mod tests {
         /// equal-floor `Current` record — `None` models a non-owner record with
         /// no recoverable seed (held keyless).
         own_seed: Option<([u8; 16], [u8; 32])>,
+        /// The envelope version the gated record carries.
+        version: u64,
     }
 
     impl StubAdopter {
@@ -687,6 +709,7 @@ mod tests {
                 verdict,
                 grant: None,
                 own_seed: None,
+                version: ENVELOPE_V,
             }
         }
 
@@ -695,6 +718,7 @@ mod tests {
                 verdict: Verdict::Accept,
                 grant: Some((seed, node_id)),
                 own_seed: None,
+                version: ENVELOPE_V,
             }
         }
 
@@ -704,6 +728,7 @@ mod tests {
                 verdict: Verdict::EqualSequence,
                 grant: None,
                 own_seed: Some((node_id, seed)),
+                version: ENVELOPE_V,
             }
         }
     }
@@ -734,6 +759,7 @@ mod tests {
                     write_scope_seed: self.grant.map(|(seed, _)| Zeroizing::new(seed)),
                     node_id: self.grant.map(|(_, id)| id).unwrap_or([0u8; 16]),
                     read_scope_seed: None,
+                    version: self.version,
                 }),
                 Verdict::DeferSequence => Ok(super::AdoptOutcome {
                     pass: GatePass::DeferredSequence(PendingSequenceRaise::new(
@@ -752,6 +778,7 @@ mod tests {
                     write_scope_seed: None,
                     node_id: [0u8; 16],
                     read_scope_seed: None,
+                    version: self.version,
                 }),
                 Verdict::TrustViolation => Err(GateError::Rejected(GateRejection {
                     stage: GateStage::RecordVerify,
@@ -802,6 +829,7 @@ mod tests {
                     sequence: 1,
                     epoch: 0,
                 },
+                version: self.version,
             }))
         }
     }
@@ -1059,6 +1087,75 @@ mod tests {
             IpnsName::from_public_key(&record.signer.verifying_key()),
             name
         );
+    }
+
+    /// The gated resolve hands out the token of the record it gated, under the
+    /// version rule: a record at another envelope version is readable but is no
+    /// basis for a publish.
+    #[test]
+    fn the_gated_resolve_gives_the_token_of_the_record_it_gated() {
+        let signer = SessionIdentity::write_name_signer(&[9u8; 32], &[7u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        for (version, expected) in [
+            (ENVELOPE_V, Ok(4)),
+            (
+                ENVELOPE_V + 1,
+                Err(PublishError::ForeignVersion {
+                    version: ENVELOPE_V + 1,
+                }),
+            ),
+        ] {
+            let world = FakeWorld::new();
+            let device = world.device(b"me");
+            let endpoints = world.record_store.endpoints();
+            world
+                .record_store
+                .seed_record(&endpoints[0], name.as_str(), record(&signer, 4));
+            let adopter = StubAdopter {
+                version,
+                ..StubAdopter::new(Verdict::Accept)
+            };
+
+            let gated = block_on(resolve_gated(
+                &device.record_store,
+                &device.snapshot_cache,
+                &adopter,
+                &name,
+                ResolveMode::NoCache,
+            ))
+            .expect("the resolve runs");
+
+            let observed = gated.observed.expect("a record passed the gate");
+            assert_eq!(
+                observed.map(|observed| (observed.name().clone(), observed.sequence())),
+                expected.map(|sequence| (name.clone(), sequence)),
+                "version {version}"
+            );
+        }
+    }
+
+    /// A record the gate refuses gives no token.
+    #[test]
+    fn a_refused_record_gives_no_token() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let signer = SessionIdentity::write_name_signer(&[9u8; 32], &[7u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let endpoints = world.record_store.endpoints();
+        world
+            .record_store
+            .seed_record(&endpoints[0], name.as_str(), record(&signer, 4));
+
+        let gated = block_on(resolve_gated(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter::new(Verdict::TrustViolation),
+            &name,
+            ResolveMode::NoCache,
+        ))
+        .expect("the resolve runs");
+
+        assert!(gated.observed.is_none());
     }
 
     /// The drain registers a head's content CIDs; a re-hold of that same head

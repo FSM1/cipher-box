@@ -1,8 +1,9 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, IntersectionType } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
 import { HEX_32_BYTES_RE } from '../../common/patterns';
 import { AUTH_METHOD_KINDS, type AuthMethodKind } from '../entities/auth-method.entity';
 import { STEP_UP_OPERATIONS, type StepUpOperation } from '../services/challenge.service';
+import { EmailCodeVerifyRequestDto } from './identity.dto';
 
 const HEX_PUBLIC_KEY = /^(02|03)[0-9a-fA-F]{64}$|^04[0-9a-fA-F]{128}$/;
 const HEX_COMPACT_SIGNATURE = /^[0-9a-fA-F]{128}$/;
@@ -62,6 +63,16 @@ export class LoginRequestDto {
   @IsString()
   @Matches(HEX_COMPACT_SIGNATURE, { message: 'signature must be 64 bytes of hex' })
   signature!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The CipherBox identity token of the exchange that preceded this login. It binds an ' +
+      'unbound account to an unbound identity subject; the login does not spend it',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  identityToken?: string;
 }
 
 export class TokenResponseDto {
@@ -104,7 +115,8 @@ export class SiweLoginRequestDto {
   signature!: `0x${string}`;
 }
 
-export class SiweLinkRequestDto extends SiweLoginRequestDto {
+/** The account key's answer to a link step-up challenge, as every link route takes it. */
+class IdentityLinkProofDto {
   @ApiProperty({
     description: "A fresh challenge from POST /auth/challenge/step-up with operation 'link'",
   })
@@ -120,6 +132,16 @@ export class SiweLinkRequestDto extends SiweLoginRequestDto {
   @Matches(HEX_COMPACT_SIGNATURE, { message: 'challengeSignature must be 64 bytes of hex' })
   challengeSignature!: string;
 }
+
+export class SiweLinkRequestDto extends IntersectionType(
+  SiweLoginRequestDto,
+  IdentityLinkProofDto
+) {}
+
+export class EmailLinkRequestDto extends IntersectionType(
+  EmailCodeVerifyRequestDto,
+  IdentityLinkProofDto
+) {}
 
 export class AuthMethodDto {
   @ApiProperty({ description: 'Row id, the handle POST /auth/unlink takes', format: 'uuid' })

@@ -138,6 +138,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "A challenge or signature that does not verify, or an invalid identity token"
           }
         },
         "summary": "Challenge-signature login against the secp256k1 identity key; creates the account implicitly at first login",
@@ -227,6 +230,66 @@
           }
         ],
         "summary": "Link a SIWE wallet to the authenticated account, re-proving the account identity key",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/email/link/send-code": {
+      "post": {
+        "operationId": "AuthController_sendEmailLinkCode",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailCodeRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The code was sent; the body is empty"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Send a verification code that only POST /auth/email/link will accept",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/email/link": {
+      "post": {
+        "operationId": "AuthController_emailLink",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailLinkRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The address was linked; the body is empty"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Link a passwordless email address to the authenticated account, re-proving the account identity key",
         "tags": [
           "Auth"
         ]
@@ -1074,7 +1137,7 @@
             "description": "Missing token, an invalid or already-spent identity token, or a signature that does not verify"
           },
           "409": {
-            "description": "Key or identity already claimed elsewhere, or the device limit is reached"
+            "description": "The account has no bound identity subject, the identity token names a subject other than the bound one, the key is registered elsewhere or under another subject, or the device limit is reached"
           },
           "429": {
             "description": "Per-account registry rate limit exceeded"
@@ -1627,6 +1690,10 @@
           "signature": {
             "type": "string",
             "description": "Compact secp256k1 signature over sha256(challenge), 64 bytes hex"
+          },
+          "identityToken": {
+            "type": "string",
+            "description": "The CipherBox identity token of the exchange that preceded this login. It binds an unbound account to an unbound identity subject; the login does not spend it"
           }
         },
         "required": [
@@ -1716,6 +1783,45 @@
           "success"
         ]
       },
+      "EmailCodeRequestDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Address the verification code is sent to"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "EmailLinkRequestDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Address the verification code is sent to"
+          },
+          "code": {
+            "type": "string",
+            "description": "The six-digit code CipherBox delivered"
+          },
+          "challenge": {
+            "type": "string",
+            "description": "A fresh challenge from POST /auth/challenge/step-up with operation 'link'"
+          },
+          "challengeSignature": {
+            "type": "string",
+            "description": "Compact secp256k1 signature over sha256(challenge) by the account identity key, 64 bytes hex"
+          }
+        },
+        "required": [
+          "email",
+          "code",
+          "challenge",
+          "challengeSignature"
+        ]
+      },
       "AuthMethodDto": {
         "type": "object",
         "properties": {
@@ -1730,6 +1836,7 @@
             "enum": [
               "identity",
               "wallet",
+              "email",
               "test"
             ]
           },
@@ -1881,33 +1988,27 @@
             "type": "string",
             "description": "The Core Kit verifierId this token is bound to — pass it to loginWithJWT"
           },
-          "email": {
+          "display": {
             "type": "string",
-            "description": "The signed-in email, when the method carries one; null for wallet",
-            "nullable": true
+            "description": "What the member signed in as, for display only: the normalized address for email, the Google email for google, and the truncated EIP-55 address for wallet",
+            "example": "0xa29A...aF4d"
           },
           "expiresAt": {
             "type": "string",
             "description": "Token expiry, ISO 8601"
+          },
+          "expiresIn": {
+            "type": "number",
+            "description": "Token lifetime in seconds; a client times the token on its own clock",
+            "example": 300
           }
         },
         "required": [
           "token",
           "verifierId",
-          "email",
-          "expiresAt"
-        ]
-      },
-      "EmailCodeRequestDto": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string",
-            "description": "Address the verification code is sent to"
-          }
-        },
-        "required": [
-          "email"
+          "display",
+          "expiresAt",
+          "expiresIn"
         ]
       },
       "EmailCodeSentResponseDto": {
@@ -2052,6 +2153,7 @@
             "description": "Current head (metadata) CID this name publishes; omit to register the name only."
           },
           "contentCids": {
+            "maxItems": 1000,
             "description": "Content CIDs to pin/count under this account (idempotent upsert).",
             "type": "array",
             "items": {
@@ -2305,7 +2407,7 @@
           },
           "identityToken": {
             "type": "string",
-            "description": "CipherBox identity token this device signed in with; binds the account to the identity a pre-reconstruction device can present. A successful registration spends it"
+            "description": "CipherBox identity token this device signed in with. Its subject must be the one bound to this account at login. A successful registration spends it"
           },
           "label": {
             "type": "string",

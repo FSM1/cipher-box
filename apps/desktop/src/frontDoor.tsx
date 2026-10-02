@@ -36,8 +36,8 @@ export interface ShellModel {
   step: LoginStep | null;
   /** The methods the login flow offers, in the order to show them. */
   methods: readonly IdentityMethod[];
-  /** The signed-in address, when the method carried one. */
-  email: string | null;
+  /** What the member signed in as; a wallet's is truncated. */
+  display: string | null;
   error: string | null;
   /** The engine's last reported vault state; `null` until the first read lands. */
   vault: VaultStatus | null;
@@ -134,7 +134,7 @@ function emailForm(model: ShellModel, actions: ShellActions): ReactElement {
       <EmailLoginForm
         onSendCode={actions.sendEmailCode}
         onVerify={actions.submitEmailCode}
-        busy={model.busy}
+        disabled={model.busy}
       />
     </div>
   );
@@ -177,7 +177,7 @@ const SECURITY_LINES = [
 function SignedIn({ model, actions }: { model: ShellModel; actions: ShellActions }) {
   return (
     <section className="signed-in">
-      <p>{model.email ?? 'Signed in'}</p>
+      <p>{model.display ?? 'Signed in'}</p>
       <Vault model={model} />
       <section className="security" data-security="panel">
         {SECURITY_LINES.map((line) => (

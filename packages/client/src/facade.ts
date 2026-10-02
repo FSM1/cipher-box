@@ -67,10 +67,12 @@ export class EngineFacade {
    * caller's `secret` buffer is detached by the transfer). `accountId` names
    * whose durable state the engine opens. Resolves when the engine has run its
    * cold-start sequence (vault-pointer resolve, floor cold-seed, root adoption,
-   * first snapshot event).
+   * first snapshot event). `identityToken` is the token of the exchange this
+   * start follows, which the engine's login presents (ADR 0058 D2); a restored
+   * session passes none.
    */
-  start(secret: ArrayBuffer, accountId: string): Promise<void> {
-    return this.transport.start(secret, accountId);
+  start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void> {
+    return this.transport.start(secret, accountId, identityToken);
   }
 
   /**
@@ -504,6 +506,16 @@ export class EngineFacade {
   /** Links a signed EIP-4361 message to the account this session already holds. */
   siweLink(message: string, signature: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'siweLink', message, signature });
+  }
+
+  /** Asks the API to email a link code to `email` for the account this session holds. */
+  emailLinkSendCode(email: string): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'emailLinkSendCode', email });
+  }
+
+  /** Links the address `code` was sent to. The engine re-proves the account identity key. */
+  emailLink(email: string, code: string): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'emailLink', email, code });
   }
 
   /** Unlinks one login method. The engine re-proves the account identity key. */

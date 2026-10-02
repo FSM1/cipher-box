@@ -675,13 +675,32 @@ the grantee that removed it stops reading it.
 - **A capture outlives the pass that could not settle it.** The merge that saw
   the departure has already dropped the node from the base, so the next pass
   would see nothing; the session holds the unsettled captures and clears one
-  only when its entry lands. Each carries the `deletedAt` it was stamped with,
-  so a retry re-keys under the key its entry will name.
-- **A node the base still links is no capture.** A move and a dual-link loser
-  both depart one parent and stay named by another, and binning one would seal a
-  live node under a key no reader derives. A child that does not publish under a
-  name this scope's write seed derives is a scope root, which the authored
-  delete refuses for the same reason.
+  only when its entry lands, a folder names it, or its scope passes the walk
+  bound. Each carries the `deletedAt` it was stamped with, so a retry re-keys
+  under the key its entry will name.
+- **A node that a folder of its scope still links is no capture.** A move and
+  a dual-link loser both depart one parent and stay named by another, and
+  binning one would seal a live node under a key no reader derives. The base
+  cannot prove a departure: a folder this device did not load, or loaded before
+  the move, does not show the new link. So the drain holds the capture and walks
+  the scope: it reads every node fresh through the gate, then reads each one
+  again, from a read budget the tick shares across its passes. The walk starts
+  after the device saw the departure and proves only that departure. The walk
+  makes one attempt at a read on each pass, up to three attempts. A refused
+  record, a record served tied, a second read that shows another record, or a
+  third attempt with no answer starts the walk again on a later pass. The drain
+  bins only a capture that a settled walk proved, that no folder names and that
+  the base does not link just before its re-key, and a capture it gives back
+  needs a new walk. A scope past the walk bound drops its captures and is not
+  walked again in that session, and a scope that holds 1024 captures drops each
+  new one. Residual: such a scope re-keys no orphan, and the grantee that
+  unlinked it keeps its key. Residual: four scopes at 1024 fill the session's
+  set of 4096, so a peer with write access to four scopes can make every other
+  scope drop its new captures. Residual: a settled proof waits for an adoption
+  slot, so its snapshot ages; the risk is low, because an honest move publishes
+  the destination before the source. A child that does not publish under a name
+  this scope's write seed derives is a scope root, which the authored delete
+  refuses for the same reason.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.
@@ -1022,6 +1041,30 @@ normal paths: wave publishes enroll new names via register-first; interior old
 names batch-retire at completion; the old root lingers until the migration window
 closes (FSM1/cipher-box-next#34 D4).
 
+A node below the root that the wave cannot move is a **dropped node**
+([ADR 0065](../decisions/0065-the-name-wave-drops-a-node-that-it-cannot-move-and-an-owed-cut-ends-within-a-bound.md)).
+The wave drops at once a node whose record bytes it refuses: an adoption-gate
+refusal other than a sequence below the floor or a head block that does not
+match its CID, an epoch below the gated root's that no held history link
+reaches, or a malformed child ref in its body (D1). Of two refs to one node id
+at different names, it keeps the ref at the name that the root's write scope
+seed derives for that id, else the first ref the walk met, and removes the
+other ref; the node stays, so no node drops. A kept ref met after the walk took
+the other one starts the walk again from the root (D2). A stop that an endpoint
+can cause — every endpoint states that no record is at the name, no endpoint
+answers for the name, no endpoint serves the head block or one serves a block
+that does not match its CID, the record is below the sequence floor, or the
+record is at an epoch above the gated root's, which a read rotation on another
+owner device can publish — drops a node only past the bound below (D3). A drop
+removes the ref from the moved parent and does not walk below the node. It
+retires the old name only when the root's write scope seed derives that name
+for the node, so a ref to a name outside the scope retires nothing. The wave
+then moves the other nodes, re-points the root and finishes the cut. Each
+republish re-seals the record that the walk gated for that node, so a record
+written at an old name after the walk does not stop the wave. The wave never
+adopts or carries a refused record, and a stop at the scope root still stops
+the wave.
+
 ### Triggers
 
 Per FSM1/cipher-box-next#26 D7:
@@ -1065,6 +1108,33 @@ left is refused, retryably, until the move lands; a crossing the queue
 already holds waits for it, uncharged. At the entry's own cut epoch the published state does not tell a read cascade that
 landed from one that did not, so a re-drive after a lost advance runs one more.
 
+Each entry keeps the time that its current first step first stopped (ADR 0065
+D3); an advance to a new first step clears it. A node is **past the bound** when
+that time is at least T = 7 days old and either the node held the name wave on
+at least K = 3 earlier passes of the current session, or the entry held it on K
+earlier passes past T and the cause is one a revokee can plant on a fresh id (no
+record, no matching head block, an epoch above the root's, or no endpoint that
+answers when one endpoint said no record or served bytes that do not verify).
+The entry count stops a revokee that plants a new node on each pass. A pass is
+one sync pass, which each tick starts: its retries and any command re-drive
+inside it count once. Within one pass the wave reads each node one time, across
+its re-walks. A node that resolves starts its own
+count again. The counts live in the session and end with the write cut, so a
+restart sets them to zero again: a drop rests on stops this session saw, and a
+restart only delays it. A re-drive drops each node past the bound that a stop an
+endpoint can cause holds (rotateScopeWrite above).
+
+The renewal bound of ADR 0065 D4 rests on T alone. Once the entry's current
+step has stopped for T, the renewal walk renews in that scope each name that the
+scope root's current write seed derives; before it, ADR 0063 D4 stays. T is
+durable, so a restart does not delay the renewal.
+
+Each drop emits `nodeDropped` with the scope root, the node id and the cause
+(`record-refused`, `epoch-unreachable`, `no-record`, `endpoint-unavailable`,
+`no-head-block`, `below-sequence-floor` or `epoch-above-root`), after the cut
+lands. A removed second ref emits nothing. The command or the re-drive that
+drops a node returns `Ok`.
+
 The **expired-link sweep**
 ([ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)
 D2) runs in owner sessions on a cadence slower than the 30 s tick. It walks
@@ -1081,7 +1151,12 @@ rebases and signs above.
 
 - Write-grantee survivors: the forgery window stays wave-bounded. A wave that
   stops stays owed, so the bound is the next sync pass on the device that
-  started the cut (ADR 0063).
+  started the cut (ADR 0063). A node stop that a revokee plants ends at once,
+  or at the bound of ADR 0065 D3 for a stop an endpoint can cause; a planted
+  record at the scope root name is not covered.
+- Dropped nodes: the subtree under a dropped node leaves the tree and lapses at
+  its EOL, and an endpoint set that fails to serve a real node past the bound
+  drops it (ADR 0065).
 - Read-only survivors: a revokee can pin their view for at most ~one
   pointer-consult interval after the re-point publish — "bounded by wave
   duration" was wrong and is retired.

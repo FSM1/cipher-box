@@ -265,12 +265,13 @@ pub(crate) async fn assemble_candidate<H: Http>(
 
 impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError> {
-        let (_, pending, seeds) = self.gate_and_recover(name, record_bytes).await?;
+        let (candidate, pending, seeds) = self.gate_and_recover(name, record_bytes).await?;
         Ok(AdoptOutcome {
             pass: GatePass::Deferred(pending),
             write_scope_seed: seeds.write_scope_seed,
             node_id: seeds.node_id,
             read_scope_seed: Some(seeds.read_scope_seed),
+            version: candidate.envelope.v,
         })
     }
 
@@ -295,6 +296,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
                     sequence: root.sequence,
                     epoch: root.envelope.epoch,
                 },
+                version: root.envelope.v,
             }))
     }
 

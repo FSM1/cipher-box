@@ -22,6 +22,19 @@ const CID_OR_NAME = /^[A-Za-z0-9]{1,256}$/;
 export const MAX_BATCH = 1000;
 export const MAX_CONTENT_CIDS = 1000;
 
+/**
+ * The total `contentCids` of one register batch, which bounds its advisory
+ * locks. It is above the engine's chunk of 1000: an earlier engine release
+ * sends up to about 1650, and a refusal dead-letters that write.
+ */
+export const MAX_REGISTER_CONTENT_CIDS_TOTAL = 2000;
+
+/**
+ * The JSON body limit of the registry routes; the engine's
+ * `REGISTRY_BODY_MAX_BYTES` mirrors it (blueprint/api.md "Batch bounds").
+ */
+export const REGISTRY_BODY_LIMIT_BYTES = 1024 * 1024;
+
 export class RegisterEntryDto {
   @ApiProperty({
     description:
@@ -47,6 +60,7 @@ export class RegisterEntryDto {
 
   @ApiProperty({
     type: [String],
+    maxItems: MAX_CONTENT_CIDS,
     description: 'Content CIDs to pin/count under this account (idempotent upsert).',
   })
   @IsArray()

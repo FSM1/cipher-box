@@ -710,12 +710,15 @@ dependencies = [
 name = "cipherbox-contract"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "cipherbox-core",
  "cipherbox-engine",
  "getrandom 0.2.17",
  "hex",
+ "k256",
  "reqwest 0.13.4",
  "serde_json",
+ "sha3",
  "tokio",
  "zeroize",
 ]
@@ -770,6 +773,7 @@ dependencies = [
 name = "cipherbox-desktop-seams"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "cipherbox-core",
  "cipherbox-desktop-seams",
  "cipherbox-engine",
@@ -2664,6 +2668,15 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "sha2",
+]
+
+[[package]]
+name = "keccak"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
+dependencies = [
+ "cpufeatures 0.2.17",
 ]
 
 [[package]]
@@ -4574,6 +4587,16 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest",
+]
+
+[[package]]
+name = "sha3"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
+dependencies = [
+ "digest",
+ "keccak",
 ]
 
 [[package]]

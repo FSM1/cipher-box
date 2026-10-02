@@ -1,6 +1,5 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash } from 'node:crypto';
 import { getAddress, verifyMessage } from 'viem';
 import { parseSiweMessage, validateSiweMessage } from 'viem/siwe';
 
@@ -70,11 +69,6 @@ export class SiweService {
     }
 
     return getAddress(parsed.address);
-  }
-
-  /** SHA-256 hex of the EIP-55 checksummed address; plaintext is never stored. */
-  hashWalletAddress(address: string): string {
-    return createHash('sha256').update(getAddress(address)).digest('hex');
   }
 
   /** Truncated address for display, e.g. "0xAbCd...1234". */

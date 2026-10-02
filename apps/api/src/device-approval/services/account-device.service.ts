@@ -1,20 +1,23 @@
 import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
+import { User } from '../../auth/entities/user.entity';
 import {
   IdentityTokenService,
   type VerifiedIdentityToken,
 } from '../../auth/services/identity-token.service';
 import {
-  advisoryLockKey,
   boundedAcquire,
+  registryLockKey,
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
+  subjectLockKey,
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { UUID_RE } from '../../common/patterns';
+import { isUniqueViolation } from '../../common/pg-errors';
 import { deviceRegistrationPayload, verifyDeviceSignature } from '../device-signature';
 import { ACCOUNT_DEVICE_PUBLIC_KEY_UNIQUE, AccountDevice } from '../entities/account-device.entity';
 
@@ -24,8 +27,10 @@ const DEFAULT_DEVICE_CAP = 20;
 /** Ceiling on the configured cap; an over-range value falls back to the default. */
 const MAX_DEVICE_CAP = 100;
 
-/** Postgres `unique_violation`. */
-const UNIQUE_VIOLATION = '23505';
+/** The registration refusals of ADR 0058 D3. */
+export const UNBOUND_ACCOUNT_MESSAGE = 'This account has no bound identity subject';
+export const OTHER_SUBJECT_MESSAGE =
+  'The identity token names a subject other than the one bound to this account';
 
 export interface RegisterDeviceInput {
   publicKey: string;
@@ -113,10 +118,10 @@ export class AccountDeviceService {
   }
 
   /**
-   * The lock spans both invariants this claim rests on. `subject:` serializes
-   * the one-account-per-identity-subject check against a concurrent registration
-   * for the same subject; `account:` serializes the per-account cap, whose count
-   * and insert are separate statements and would otherwise both pass at cap - 1.
+   * The lock spans both invariants this claim rests on. `subject:` serializes the
+   * read of the bind against a login that writes it; `account:` serializes the
+   * per-account cap, whose count and insert are separate statements and would
+   * otherwise both pass at cap - 1.
    */
   private async claim(
     userId: string,
@@ -131,6 +136,18 @@ export class AccountDeviceService {
         this.lockTimeoutMs
       );
       await this.identityTokens.spend(manager, identity);
+
+      // ADR 0058 D3: the unique bind is what ties a subject to one account.
+      const account = await manager
+        .getRepository(User)
+        .findOne({ where: { id: userId }, select: ['id', 'identitySubjectId'] });
+      if (!account?.identitySubjectId) {
+        throw new ConflictException(UNBOUND_ACCOUNT_MESSAGE);
+      }
+      if (account.identitySubjectId !== identitySubjectId) {
+        throw new ConflictException(OTHER_SUBJECT_MESSAGE);
+      }
+
       const repo = manager.getRepository(AccountDevice);
       const now = this.clock.now();
 
@@ -139,18 +156,8 @@ export class AccountDeviceService {
         throw new ConflictException('Device key is registered to another account');
       }
 
-      // One identity subject reaches one account, or a pre-reconstruction device
-      // presenting that identity could be steered onto an account it is not for.
-      const claimedElsewhere = await repo.findOne({ where: { identitySubjectId } });
-      if (claimedElsewhere && claimedElsewhere.userId !== userId) {
-        throw new ConflictException('Identity is already linked to another account');
-      }
-
       if (existing) {
-        // The identity a device reaches its account through is fixed at
-        // registration. Letting a re-touch rewrite it would make
-        // `accountForIdentitySubject` last-writer-wins over the account's own
-        // rows, which is the mapping a pre-reconstruction device is steered by.
+        // The subject on a row is fixed at registration; a re-touch never rewrites it.
         if (existing.identitySubjectId !== identitySubjectId) {
           throw new ConflictException('Device key is registered under another identity');
         }
@@ -194,10 +201,20 @@ export class AccountDeviceService {
     await this.deviceRepository.delete({ id, userId });
   }
 
-  /** The account a pre-reconstruction device reaches by presenting this identity. */
+  /**
+   * The account a pre-reconstruction device reaches by presenting this identity:
+   * the account bound to the subject (ADR 0058 D1), and only while it has a
+   * registered device that can approve (ADR 0039 D3).
+   */
   async accountForIdentitySubject(identitySubjectId: string): Promise<string | null> {
-    const row = await this.deviceRepository.findOne({ where: { identitySubjectId } });
-    return row?.userId ?? null;
+    const account = await this.dataSource
+      .getRepository(User)
+      .createQueryBuilder('account')
+      .select('account.id', 'id')
+      .where('account.identitySubjectId = :identitySubjectId', { identitySubjectId })
+      .andWhere('EXISTS (SELECT 1 FROM account_devices d WHERE d.user_id = account.id)')
+      .getRawOne<{ id: string }>();
+    return account?.id ?? null;
   }
 
   /** Whether this account has registered exactly this device key. */
@@ -208,11 +225,7 @@ export class AccountDeviceService {
 
 /** The lost race above and nothing else; any other fault must surface, not read as success. */
 function isPublicKeyConflict(error: unknown): boolean {
-  if (!(error instanceof QueryFailedError)) return false;
-  const driver = error.driverError as { code?: string; constraint?: string } | undefined;
-  return (
-    driver?.code === UNIQUE_VIOLATION && driver?.constraint === ACCOUNT_DEVICE_PUBLIC_KEY_UNIQUE
-  );
+  return isUniqueViolation(error, ACCOUNT_DEVICE_PUBLIC_KEY_UNIQUE);
 }
 
 function present(row: AccountDevice): RegisteredDevice {
@@ -223,13 +236,4 @@ function present(row: AccountDevice): RegisteredDevice {
     createdAt: row.createdAt.toISOString(),
     lastSeenAt: row.lastSeenAt.toISOString(),
   };
-}
-
-/** Namespaced per `advisoryLockKey`'s shared bigint space. */
-function subjectLockKey(identitySubjectId: string): bigint {
-  return advisoryLockKey(`device-registry-subject:${identitySubjectId}`);
-}
-
-function registryLockKey(userId: string): bigint {
-  return advisoryLockKey(`device-registry:${userId}`);
 }

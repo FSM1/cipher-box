@@ -21,22 +21,33 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use crate::entropy::Entropy;
 use crate::facade::NodeId;
 use crate::grants::ledger::mint_grant_row;
+use crate::net::author::ENVELOPE_V;
+use crate::net::publish::Observed;
 use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget,
-    CommittedSet, GrantCutPlan, LaggingNode, NodeRef, PrevEpochSeed, RecoveredWave, RepointChannel,
-    RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, ResumedRoot,
-    RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError, RotateScopePlan,
-    RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError,
-    SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
-    WriteHistory, WritePublishError, WriteRevokeKind, WriteRotateError, WriteRotationOutcome,
-    WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, build_repoint_object,
-    cascade_rotate_scope, derive_write_name, reseal_scope_root, revoke_read_grant,
-    revoke_write_grant, rotate_on_cut, rotate_scope, rotate_scope_write, sweep_pass,
+    CommittedSet, GrantCutPlan, LaggingNode, NoBound, NodeRef, NodeStop, PrevEpochSeed,
+    RecoveredWave, RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot,
+    ResolveFailure, ResumedRoot, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
+    RotateScopePlan, RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity,
+    ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild,
+    SweptNode, SweptScope, WriteHistory, WritePublishError, WriteRevokeKind, WriteRotateError,
+    WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
+    build_repoint_object, cascade_rotate_scope, derive_write_name, reseal_scope_root,
+    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope, rotate_scope_write,
+    sweep_pass,
 };
 use crate::seams::{FloorStore, SeamError, SeamResult};
 use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
 use crate::testkit::reject::{RejectFamily, RejectVector, family, refusal};
 use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
+
+/// A gated read at `sequence` under a fixture name: what a scripted resolver
+/// hands back for a swept node whose name no publish reaches.
+#[must_use]
+pub fn swept_observed(sequence: u64) -> Observed {
+    let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5e; 32]).verifying_key());
+    Observed::gated(&name, sequence, ENVELOPE_V).expect("this build's envelope version")
+}
 
 /// Every rotation reject family, in a fixed order. Deterministic: two calls
 /// give byte-identical output.
@@ -645,7 +656,7 @@ impl WriteSubtreeResolver for UndrivenWave {
         &self,
         _node_id: &[u8; 16],
         _resumed: Option<&ResumedRoot>,
-    ) -> Result<WriteScopeNode, ResolveFailure> {
+    ) -> Result<WriteScopeNode, NodeStop> {
         panic!("the owner gate must refuse before the wave resolves")
     }
     async fn recover_wave(&self) -> Result<RecoveredWave, ResolveFailure> {
@@ -695,6 +706,7 @@ fn write_rotate_family() -> RejectFamily {
             min_read_epoch: CURRENT_READ_EPOCH,
             current_root_name: name,
             is_vault_anchor: false,
+            bound: &NoBound,
         };
         block_on(rotate_scope_write(
             &mut SeededEntropy::new(ENTROPY_SEED),
@@ -826,13 +838,13 @@ fn sweep_family() -> RejectFamily {
         children: vec![child.clone()],
         direct_child_scope_index,
     };
-    let lagging = SweptChild::Interior(SweptNode {
+    let lagging = SweptChild::Interior(Box::new(SweptNode {
         current_read_epoch: SWEEP_SCOPE_EPOCH - 1,
-        sequence: 7,
+        observed: swept_observed(7),
         read_body: empty_folder(),
         carried_unknown: PreservedFields::new(),
         carried_epoch_tag_unknown: PreservedFields::new(),
-    });
+    }));
 
     let run = |name: &'static str, seam: ScriptedSweep| {
         refusal!(
@@ -934,6 +946,7 @@ impl crate::rotation::CutRotator for PermissiveRotator {
             new_write_epoch: CURRENT_WRITE_EPOCH + 1,
             new_root_name: derive_write_name(&[0x58; 32], &SCOPE),
             interior_node_count: 0,
+            dropped: Vec::new(),
         })
     }
 }

@@ -71,25 +71,50 @@ What left the API relative to v1 — with the design that removed it:
 - **`account_devices`** (ADR 0039) is the registry that makes those signatures
   checkable: a device identity key registered under a full session, so the
   account is proven, with an Ed25519 signature over the account id, so
-  possession is proven. The row also records which identity subject the device
-  signed in through — the only path from the identity token a
-  pre-reconstruction device still holds back to the account whose devices can
-  approve it. An identity subject reaches at most one account, and an identity
-  with no registered device gets no rendezvous at all: that account's path is
-  the recovery phrase (ADR 0009 D2). Revocation is a hard delete, and it is
+  possession is proven. The row also records the identity subject bound to
+  the account. A pre-reconstruction device holds only its identity token, and
+  the session mint reaches the account through the bind. An identity subject
+  reaches at most one account, and an identity with no registered device gets
+  no rendezvous at all: that account's path is the recovery phrase (ADR 0009
+  D2). Revocation is a hard delete, and it is
   honest about what it does — the device stops approving from now on; nothing
   it already holds is un-shared (D5).
-- Tables: `users` (keyed by `publicKey`; carries quota-limit override and BYO flag),
+- Tables: `users` (keyed by `publicKey`; carries quota-limit override, BYO flag
+  and the identity subject bind),
   `auth_methods`, `refresh_tokens`, `accelerator_tokens`, `account_devices`,
   `device_approvals`, `identity_subjects`, `spent_identity_tokens`.
 - **`identity_subjects`** maps a verified provider identity — hashed, never
-  stored in the clear — to the stable subject id the identity token's `sub`
+  stored in the clear — to the stable `subject_id` the identity token's `sub`
   carries and `loginWithJWT` takes as its `verifierId`. A row holds the
-  provider kind, the SHA-256 hash of the provider identifier, and the first and
-  last use times, and no display form of the identifier. It holds no `user_id`:
+  provider kind, the SHA-256 hash of the provider identifier, the `subject_id`,
+  and the first and last use times, and no display form of the identifier. A
+  first sight mints a `subject_id` equal to the row id. It holds no `user_id`:
   the account still materializes at `POST /auth/login` against the derived key,
-  so this table cannot fork the account model, and linking a second method later
-  is pointing another provider identity at an existing subject (ADR 0039).
+  so this table cannot fork the account model (ADR 0039).
+- **The identity subject bind**
+  ([ADR 0058](../decisions/0058-the-identity-subject-binds-to-the-account-at-login-and-a-device-registration-reads-the-bind.md)):
+  `users.identity_subject_id` holds the one subject of an account. It is
+  nullable and unique, the bind writes it once, and nothing rewrites it (D1).
+  `POST /auth/login` takes an optional `identityToken` and refuses with 401 a
+  token that does not verify. When the account and the subject are both
+  unbound, the login writes the bind under the subject lock that registration
+  also takes; when either is bound elsewhere, or a device row from before the
+  bind holds the subject under another account, the login proceeds and changes
+  nothing (D2). `POST /devices` refuses with 409 a registration from an unbound
+  account and a registration whose token names another subject, and the row
+  records the bound subject (D3).
+- **Method link**: `POST /auth/siwe/link` and `POST /auth/email/link` (its code
+  comes from `POST /auth/email/link/send-code`, under a purpose a sign-in code
+  cannot satisfy) write the `auth_methods` display row and an `identity_subjects`
+  row that points the identity at the subject bound to the account at login
+  (ADR 0058 D1), in one transaction.
+  A link refuses with 409 and writes nothing when the account has no bound
+  subject, when the identifier is another account's, or when an
+  `identity_subjects` row for the identifier exists, whichever subject it opens.
+  An unlink deletes the display row and the subject row the link wrote, as a
+  pair. An unlink does not revoke an identity token already minted through the
+  method: the token stays valid for its lifetime, as ADR 0009 D5 states for
+  shares.
 - **`spent_identity_tokens`**: a device registration spends the identity token
   it presents, and records the token's `jti` and expiry here, and nothing else.
   A replay of a spent token answers 401. `POST /auth/login` and
@@ -123,7 +148,11 @@ decay) inverted into structure.
   one name row, and a bare re-register carrying no `headCid` leaves the stored
   head untouched. The refusal carries `code: REGISTRY_BATCH_REFUSED`, so a
   client classifies on the gate's own discriminator rather than on a bare `400`
-  an intermediary could have answered (ADR 0046).
+  an intermediary could have answered (ADR 0046). Register also caps the total
+  `contentCids` of one request at 2000, with the same `400` and code. The
+  registry routes accept a JSON body of at most 1 MiB behind a verified,
+  unexpired bearer; every other request keeps 100 KiB. The engine chunks one register request at 1000 content CIDs in
+  total, so the widest request it sends is near 700 KB.
 - **Register-first, fail-closed**: registration precedes the first publish of a
   name, and publish is blocked on it. A live-but-uninventoried name is
   structurally impossible; the worst failure is a registered-never-published
@@ -351,7 +380,8 @@ rate limiting must be verified effective in e2e); staging test hooks
 
 ## Data model (complete)
 
-`users`, `auth_methods`, `identity_subjects`, `spent_identity_tokens`,
+`users` (with the `identity_subject_id` bind), `auth_methods`,
+`identity_subjects`, `spent_identity_tokens`,
 `refresh_tokens`, `accelerator_tokens`, `account_devices`, `device_approvals`,
 `name_inventory (account, ipnsName)`,
 `pinned_cids (account, cid, size, advisory)`,

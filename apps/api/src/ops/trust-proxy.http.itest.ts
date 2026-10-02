@@ -1,22 +1,10 @@
 import { ConfigService } from '@nestjs/config';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { AuthMetricsInterceptor } from '../auth/auth-metrics.interceptor';
 import { AuthController } from '../auth/auth.controller';
-import { AuthMethod } from '../auth/entities/auth-method.entity';
-import { AcceleratorToken } from '../auth/entities/accelerator-token.entity';
-import { RefreshToken } from '../auth/entities/refresh-token.entity';
-import { User } from '../auth/entities/user.entity';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { AuthService } from '../auth/services/auth.service';
-import { ChallengeService } from '../auth/services/challenge.service';
-import { AcceleratorTokenService } from '../auth/services/accelerator-token.service';
-import { IdentityService } from '../auth/services/identity.service';
-import { SiweService } from '../auth/services/siwe.service';
-import { TestAuthService } from '../auth/services/test-auth.service';
-import { TokenService } from '../auth/services/token.service';
 import { Clock, SystemClock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
+import { AUTH_SERVICE_ENTITIES, authServiceProviders } from '../testing/auth-providers';
 import { fakeConfig } from '../testing/fakes';
 import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
@@ -62,18 +50,10 @@ describe('trust-proxy client-address resolution (real Postgres)', () => {
     }
     ctx = await createHttpIntegrationApp({
       db,
-      entities: [User, AuthMethod, RefreshToken, AcceleratorToken],
+      entities: AUTH_SERVICE_ENTITIES,
       controllers: [AuthController],
       providers: [
-        AuthMetricsInterceptor,
-        AuthService,
-        TestAuthService,
-        TokenService,
-        AcceleratorTokenService,
-        ChallengeService,
-        IdentityService,
-        SiweService,
-        JwtAuthGuard,
+        ...authServiceProviders(),
         { provide: Clock, useClass: SystemClock },
         { provide: Entropy, useClass: SystemEntropy },
         { provide: ConfigService, useValue: fakeConfig({ NODE_ENV: 'test' }).service },

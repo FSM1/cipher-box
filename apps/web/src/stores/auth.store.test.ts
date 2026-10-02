@@ -6,15 +6,16 @@ afterEach(() => authStore.signedOut());
 describe('auth.store', () => {
   it('starts signed out', () => {
     expect(authStore.getState()).toEqual({
-      email: null,
+      display: null,
       method: null,
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
+      saveDevice: false,
     });
   });
 
-  it('records the method and email a login carries, and nothing the last session left', () => {
+  it('records the method and labels a login carries, and nothing the last session left', () => {
     authStore.recoveryRequired();
     authStore.factorPolicy(true);
     authStore.recoveryPhrase(true);
@@ -24,11 +25,12 @@ describe('auth.store', () => {
     // Exact: a prompt or a factor policy carried over from whoever was signed
     // in last would be read against this account.
     expect(authStore.getState()).toEqual({
-      email: 'user@example.com',
+      display: 'user@example.com',
       method: 'google',
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
+      saveDevice: false,
     });
   });
 
@@ -62,17 +64,28 @@ describe('auth.store', () => {
     expect(authStore.getState()).toMatchObject({
       factorPolicy: true,
       recoveryPhraseHeld: false,
+      saveDevice: false,
     });
   });
 
-  it('accepts a wallet login with no email', () => {
-    authStore.signedIn('wallet');
-    expect(authStore.getState()).toMatchObject({ email: null, method: 'wallet' });
+  it('keeps the request to save this device across the sign-in, and drops it on sign-out', () => {
+    authStore.saveDevice(true);
+
+    authStore.signedIn('email', 'user@example.com');
+    expect(authStore.getState().saveDevice).toBe(true);
+
+    authStore.signedOut();
+    expect(authStore.getState().saveDevice).toBe(false);
   });
 
-  it('drops an email handed to a wallet login', () => {
-    authStore.signedIn('wallet', 'user@example.com');
-    expect(authStore.getState().email).toBeNull();
+  it('accepts a sign-in that kept no display', () => {
+    authStore.signedIn(null);
+    expect(authStore.getState()).toMatchObject({ display: null, method: null });
+  });
+
+  it('keeps the truncated display for a wallet login', () => {
+    authStore.signedIn('wallet', '0xa29A...aF4d');
+    expect(authStore.getState()).toMatchObject({ display: '0xa29A...aF4d', method: 'wallet' });
   });
 
   it('publishes frozen snapshots', () => {
@@ -90,11 +103,12 @@ describe('auth.store', () => {
     authStore.signedOut();
 
     expect(authStore.getState()).toEqual({
-      email: null,
+      display: null,
       method: null,
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
+      saveDevice: false,
     });
   });
 
@@ -111,9 +125,13 @@ describe('auth.store', () => {
     expect(changes).toBe(1);
     expect(authStore.getState()).toBe(snapshot);
 
+    // A different display is a different snapshot, though the method matches.
+    authStore.signedIn('google', 'other@example.com');
+    expect(changes).toBe(2);
+
     drop();
     authStore.signedOut();
-    expect(changes).toBe(1);
+    expect(changes).toBe(2);
   });
 
   it('persists nothing', () => {

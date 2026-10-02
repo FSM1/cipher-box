@@ -127,7 +127,7 @@ const notStubbed = (method: string): Promise<never> =>
  * in each double.
  */
 export class StubEngineHost implements EngineHostLike {
-  start(_secret: ArrayBuffer, _accountId: string): Promise<void> {
+  start(_secret: ArrayBuffer, _accountId: string, _identityToken?: string): Promise<void> {
     return notStubbed('start');
   }
 
@@ -495,6 +495,8 @@ export class FakeEngineTransport implements EngineTransport {
   readonly commits: WriteHandle[] = [];
   readonly aborts: WriteHandle[] = [];
   started: ArrayBuffer[] = [];
+  /** The identity token each start carried, `undefined` for a start with none. */
+  startTokens: Array<string | undefined> = [];
   closed = false;
   /** What `beginWrite` hands back and what `commitWrite` resolves with. */
   writeHandle: WriteHandle = 1n;
@@ -546,8 +548,9 @@ export class FakeEngineTransport implements EngineTransport {
     Promise.resolve(new ArrayBuffer(length));
   private readonly listeners = new Set<EngineEventListener>();
 
-  start(secret: ArrayBuffer): Promise<void> {
+  start(secret: ArrayBuffer, _accountId?: string, identityToken?: string): Promise<void> {
     this.started.push(secret);
+    this.startTokens.push(identityToken);
     return Promise.resolve();
   }
 

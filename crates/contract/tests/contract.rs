@@ -6,16 +6,17 @@
 //! identity, refresh rotation with reuse detection, test-login environment
 //! gating + deterministic keypair + cross-consistency with identity login, the
 //! production block on the test-profile auth-limit override,
-//! SIWE secondary surface, the login-method list and its unlink, logout
-//! revocation, the pin/name registry and quota, the mailbox lifecycle, and a raw
-//! endpoint round-trip.
+//! SIWE secondary surface, the email link (codes read from the test-mode API's
+//! log), the login-method list and its unlink, logout revocation, the identity
+//! subject bind at login and device registration, the pin/name registry and
+//! quota, the mailbox lifecycle, and a raw endpoint round-trip.
 //!
 //! Each test skips (loudly) when `CONTRACT_API_URL` is unset — there is no
 //! stack to hit locally. The merge-blocking `contract-suite` CI job always
 //! sets it (and boots the stack), so the assertions always run there.
 
 use cipherbox_contract::{
-    MemoryCredentialStore, ReqwestHttp, api_url, gateway_url, hex_to_scalar, prod_api_url,
+    MemoryCredentialStore, ReqwestHttp, api_log, api_url, gateway_url, hex_to_scalar, prod_api_url,
     random_identity_scalar, random_identity_signer, test_login_secret,
 };
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
@@ -28,16 +29,17 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_engine::api::{
     ApiClient, ApiError, AuthMethodKind, ChallengeSigner, IdentityChallengeSigner,
-    NameRegistration, REGISTRY_BATCH_REFUSED,
+    NameRegistration, REGISTRY_BATCH_REFUSED, RegisteredDevice,
 };
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
+use cipherbox_engine::devices::registration_payload;
 use cipherbox_engine::grants::{
     GrantRecipient, GrantResumeResolver, GranteeScopePlan, InteriorRecord, InteriorResealer,
     MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, ScopePointerVoucher,
     ScopeRootPromoter, SharePointer, create_grant, import_contact, post_share_pointer,
 };
 use cipherbox_engine::mailbox::poll_verified;
-use cipherbox_engine::net::REGISTRY_BATCH_MAX;
+use cipherbox_engine::net::{REGISTRY_BATCH_MAX, REGISTRY_BODY_MAX_BYTES};
 use cipherbox_engine::rotation::{
     CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, ResealSeeds,
     ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
@@ -48,6 +50,10 @@ use cipherbox_engine::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, Mailbox,
 };
 use cipherbox_engine::testkit::SeededEntropy;
+use cipherbox_engine::testkit::account::wide_token;
+use k256::ecdsa::SigningKey;
+use sha3::{Digest, Keccak256};
+use zeroize::Zeroizing;
 
 type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
 
@@ -101,7 +107,7 @@ async fn fresh_account_with_signer(base: &str) -> (Client, IdentityChallengeSign
     let signer = random_identity_signer();
     expect_auth(
         "identity login creates the account",
-        client.login_identity(&signer).await,
+        client.login_identity(&signer, None).await,
     );
     (client, signer)
 }
@@ -147,7 +153,7 @@ async fn challenge_signature_login_creates_and_reuses_the_account() {
     let signer = random_identity_signer();
 
     let first = new_client(&base);
-    let outcome = expect_auth("identity login", first.login_identity(&signer).await);
+    let outcome = expect_auth("identity login", first.login_identity(&signer, None).await);
     assert!(outcome.is_new_user, "a fresh random key creates an account");
     assert!(first.is_authenticated());
 
@@ -155,7 +161,7 @@ async fn challenge_signature_login_creates_and_reuses_the_account() {
     let second = new_client(&base);
     let outcome = expect_auth(
         "second identity login",
-        second.login_identity(&signer).await,
+        second.login_identity(&signer, None).await,
     );
     assert!(!outcome.is_new_user, "same identity key is one account");
 }
@@ -166,7 +172,7 @@ async fn refresh_rotates_and_reuse_kills_the_family() {
     let (client, store) = client_with_store(&base);
     expect_auth(
         "login",
-        client.login_identity(&random_identity_signer()).await,
+        client.login_identity(&random_identity_signer(), None).await,
     );
 
     let original = store
@@ -237,7 +243,7 @@ async fn test_login_gates_the_secret_and_derives_a_stable_keypair() {
     let signer = IdentityChallengeSigner::from_scalar(&scalar).expect("valid scalar");
     let identity = expect_auth(
         "identity login with the test key",
-        new_client(&base).login_identity(&signer).await,
+        new_client(&base).login_identity(&signer, None).await,
     );
     assert!(
         !identity.is_new_user,
@@ -294,7 +300,7 @@ async fn production_ignores_the_test_profile_auth_limit_override() {
                 method: HttpMethod::Post,
                 url: format!("{prod}/auth/challenge"),
                 headers: vec![("content-type".to_owned(), "application/json".to_owned())],
-                body: Some(b"{}".to_vec()),
+                body: Some(b"{}".to_vec().into()),
                 credentials: HttpCredentials::Include,
                 timeout_ms: Some(10_000),
             })
@@ -401,10 +407,261 @@ async fn siwe_link_without_a_fresh_challenge_is_refused() {
         matches!(error, ApiError::Unauthorized),
         "a challenge the account's own key did not answer is a 401, got {error:?}"
     );
+    assert_nothing_linked(&client).await;
+}
+
+// --- email link (blueprint/api.md) -----------------------------------------
+
+/// A fresh lowercase address, so the code read back from the log is this
+/// test's and the API's normalization leaves it unchanged.
+fn fresh_email() -> String {
+    let mut bytes = [0u8; 8];
+    getrandom::getrandom(&mut bytes).expect("os rng");
+    format!("link-{}@example.com", hex::encode(bytes))
+}
+
+/// The last code the test-mode API logged for `email`. A sign-in code and a
+/// link code log the same line, so a test reads one before it sends the next.
+async fn delivered_code(email: &str) -> String {
+    let path = api_log().expect(
+        "CONTRACT_API_LOG must be set alongside CONTRACT_API_URL; the suite reads email codes \
+         from the test-mode API's log",
+    );
+    let needle = format!("Verification code for {email}: ");
+    for _ in 0..20 {
+        let log = std::fs::read(&path).unwrap_or_else(|error| panic!("read {path}: {error}"));
+        let log = String::from_utf8_lossy(&log);
+        if let Some(at) = log.rfind(&needle) {
+            let code: String = log[at + needle.len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if code.len() == 6 {
+                return code;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("no verification code for {email} in {path}");
+}
+
+/// The email sign-in exchange, through the harness: it runs before an engine
+/// session exists.
+async fn email_exchange(base: &str, email: &str) -> serde_json::Value {
+    post_json_body(
+        base,
+        "/auth/identity/email/send-code",
+        None,
+        serde_json::json!({ "email": email }),
+    )
+    .await;
+    let code = delivered_code(email).await;
+    post_json_body(
+        base,
+        "/auth/identity/email/verify-code",
+        None,
+        serde_json::json!({ "email": email, "code": code }),
+    )
+    .await
+}
+
+/// Sends a link code to `email` and reads it back from the log.
+async fn link_code(client: &Client, email: &str) -> String {
+    expect_auth("link code", client.email_link_send_code(email).await);
+    delivered_code(email).await
+}
+
+async fn assert_nothing_linked(client: &Client) {
     assert_eq!(
         client.auth_methods().await.expect("methods").len(),
         1,
         "the refused link added nothing"
+    );
+}
+
+/// An account bound at login to the subject an email sign-in mints (ADR 0058
+/// D2). A link points the method at this subject. Returns the subject as the
+/// exchange named it.
+async fn bound_account(base: &str) -> (Client, IdentityChallengeSigner, String) {
+    let grant = email_exchange(base, &fresh_email()).await;
+    let signer = random_identity_signer();
+    let client = login_presenting_identity_token(
+        base,
+        &signer,
+        Some(grant["token"].as_str().expect("an identity token")),
+    )
+    .await;
+    let subject = grant["verifierId"].as_str().expect("a subject").to_string();
+    (client, signer, subject)
+}
+
+/// The link code is its own purpose: the sign-in route must not accept it.
+#[tokio::test]
+async fn email_link_send_code_delivers_a_code_the_sign_in_route_refuses() {
+    let base = require_stack!("email_link_send_code_delivers_a_code_the_sign_in_route_refuses");
+    let client = fresh_account(&base).await;
+    let email = fresh_email();
+
+    let code = link_code(&client, &email).await;
+
+    assert_eq!(
+        post_json(
+            &base,
+            "/auth/identity/email/verify-code",
+            None,
+            serde_json::json!({ "email": email, "code": code }),
+        )
+        .await,
+        401,
+        "a link code opens no sign-in"
+    );
+}
+
+#[tokio::test]
+async fn email_link_points_the_address_at_the_accounts_subject() {
+    let base = require_stack!("email_link_points_the_address_at_the_accounts_subject");
+    let (client, signer, subject) = bound_account(&base).await;
+    let email = fresh_email();
+
+    let code = link_code(&client, &email).await;
+    expect_auth(
+        "email link",
+        client.email_link(&email, &code, &signer).await,
+    );
+
+    let rows = client.auth_methods().await.expect("methods");
+    let linked = rows
+        .iter()
+        .find(|row| row.kind == AuthMethodKind::Email)
+        .expect("the linked address is listed");
+    assert_eq!(
+        linked.identifier_display.as_deref(),
+        Some("l***@example.com"),
+        "the row shows the masked address, never the address itself"
+    );
+
+    let signed_in = email_exchange(&base, &email).await;
+    assert_eq!(
+        signed_in["verifierId"].as_str(),
+        Some(subject.as_str()),
+        "the linked address signs in to the subject of the account it was linked to"
+    );
+
+    expect_auth(
+        "unlink the address",
+        client.unlink_auth_method(&linked.id, &signer).await,
+    );
+    assert!(
+        client
+            .auth_methods()
+            .await
+            .expect("methods")
+            .iter()
+            .all(|row| row.kind != AuthMethodKind::Email),
+        "the unlinked address is no longer listed"
+    );
+    assert_ne!(
+        email_exchange(&base, &email).await["verifierId"].as_str(),
+        Some(subject.as_str()),
+        "the unlinked address no longer opens the account"
+    );
+}
+
+/// A bearer alone must not add a login method: the link route re-proves the
+/// account identity key exactly as the wallet link does.
+#[tokio::test]
+async fn email_link_without_a_fresh_challenge_is_refused() {
+    let base = require_stack!("email_link_without_a_fresh_challenge_is_refused");
+    let (client, _signer, _subject) = bound_account(&base).await;
+    let email = fresh_email();
+
+    let code = link_code(&client, &email).await;
+    let error = client
+        .email_link(&email, &code, &random_identity_signer())
+        .await
+        .expect_err("a challenge bound to another key must not link");
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "a challenge the account's own key did not answer is a 401, got {error:?}"
+    );
+    assert_nothing_linked(&client).await;
+}
+
+#[tokio::test]
+async fn email_link_with_a_wrong_or_sign_in_code_is_refused() {
+    let base = require_stack!("email_link_with_a_wrong_or_sign_in_code_is_refused");
+    let (client, signer, _subject) = bound_account(&base).await;
+    let email = fresh_email();
+
+    let code = link_code(&client, &email).await;
+    let wrong = if code == "000000" { "000001" } else { "000000" };
+    let error = client
+        .email_link(&email, wrong, &signer)
+        .await
+        .expect_err("a wrong code must not link");
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "a wrong code is a 401, got {error:?}"
+    );
+
+    let other = fresh_email();
+    assert_eq!(
+        post_json(
+            &base,
+            "/auth/identity/email/send-code",
+            None,
+            serde_json::json!({ "email": other }),
+        )
+        .await,
+        200
+    );
+    let sign_in_code = delivered_code(&other).await;
+    let error = client
+        .email_link(&other, &sign_in_code, &signer)
+        .await
+        .expect_err("a sign-in code must not link");
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "a sign-in code is a 401 on the link route, got {error:?}"
+    );
+
+    assert_nothing_linked(&client).await;
+}
+
+/// A link points the method at the subject bound to the account at login, so
+/// an account that logged in without an identity token has nothing to point it
+/// at.
+#[tokio::test]
+async fn email_link_refused_without_a_bound_subject() {
+    let base = require_stack!("email_link_refused_without_a_bound_subject");
+    let (client, signer) = fresh_account_with_signer(&base).await;
+    let email = fresh_email();
+
+    let code = link_code(&client, &email).await;
+    assert_conflict(
+        &client.email_link(&email, &code, &signer).await,
+        NO_BOUND_SUBJECT,
+    );
+    assert_nothing_linked(&client).await;
+}
+
+#[tokio::test]
+async fn email_link_refused_for_an_address_that_opens_another_account() {
+    let base = require_stack!("email_link_refused_for_an_address_that_opens_another_account");
+    let (client, signer, _subject) = bound_account(&base).await;
+    let email = fresh_email();
+    let own = email_exchange(&base, &email).await;
+
+    let code = link_code(&client, &email).await;
+    assert_conflict(
+        &client.email_link(&email, &code, &signer).await,
+        "Email is already linked to another account",
+    );
+    assert_nothing_linked(&client).await;
+    assert_eq!(
+        email_exchange(&base, &email).await["verifierId"],
+        own["verifierId"],
+        "the address still opens its own subject"
     );
 }
 
@@ -501,7 +758,7 @@ async fn logout_revokes_the_refresh_token_server_side() {
     let (client, store) = client_with_store(&base);
     expect_auth(
         "login",
-        client.login_identity(&random_identity_signer()).await,
+        client.login_identity(&random_identity_signer(), None).await,
     );
     let token = store
         .load_refresh_token()
@@ -1181,6 +1438,70 @@ async fn an_oversize_register_entry_is_refused_fail_closed() {
         .expect("chunked entries at the cap are accepted");
 }
 
+/// The largest request the engine's chunker sends — [`REGISTRY_BATCH_MAX`]
+/// entries carrying [`REGISTRY_BATCH_MAX`] content CIDs in total, at the widest
+/// tokens the registry admits — fits the registry's JSON body limit.
+#[tokio::test]
+async fn a_register_request_at_the_chunk_bound_fits_the_body_limit() {
+    let base = require_stack!("a_register_request_at_the_chunk_bound_fits_the_body_limit");
+    let client = fresh_account(&base).await;
+
+    let entries: Vec<NameRegistration> = (0..REGISTRY_BATCH_MAX)
+        .map(|i| NameRegistration {
+            ipns_name: wide_token("k51contractWide", i, 128),
+            head_cid: Some(wide_token("bafyContractWideHead", i, 256)),
+            content_cids: vec![wide_token("bafyContractWideLeaf", i, 256)],
+        })
+        .collect();
+    let body = serde_json::to_vec(&entries).expect("entries serialize");
+    assert!(
+        body.len() > 100 * 1024,
+        "the request outgrows the default limit"
+    );
+    assert!(
+        body.len() <= REGISTRY_BODY_MAX_BYTES,
+        "the chunk bound fits the published limit"
+    );
+    client
+        .register(&entries)
+        .await
+        .expect("a request at the chunk bound is accepted");
+}
+
+/// A body just past [`REGISTRY_BODY_MAX_BYTES`] is refused with a `413`, so the
+/// API's limit is not above the engine's constant.
+#[tokio::test]
+async fn a_register_request_past_the_body_limit_is_refused() {
+    let base = require_stack!("a_register_request_past_the_body_limit_is_refused");
+    let client = fresh_account(&base).await;
+
+    let cid = |i: usize| format!("bafyContractPast{i:0>240}");
+    // Each CID adds its quotes and a comma to the body.
+    let per_cid = cid(0).len() + 3;
+    let entry = NameRegistration {
+        ipns_name: "k51contractPastLimit".to_owned(),
+        head_cid: None,
+        content_cids: (0..REGISTRY_BODY_MAX_BYTES / per_cid + 1)
+            .map(cid)
+            .collect(),
+    };
+    let size = serde_json::to_vec(std::slice::from_ref(&entry))
+        .expect("entry serializes")
+        .len();
+    assert!(
+        size > REGISTRY_BODY_MAX_BYTES && size < REGISTRY_BODY_MAX_BYTES + 1024,
+        "the body is just past the limit: {size}"
+    );
+    let error = client
+        .register(std::slice::from_ref(&entry))
+        .await
+        .expect_err("a body past the limit must be refused");
+    assert!(
+        matches!(&error, ApiError::Status { status: 413, .. }),
+        "the registry body limit is the engine's constant: {error:?}"
+    );
+}
+
 // --- mailbox (blueprint/api.md, Mailbox) ------------------------------------
 
 /// An account addressable as a mailbox recipient: the client plus its identity
@@ -1377,9 +1698,9 @@ impl SweepResolver for LocalNet {
         _scope: &ChildScopeRef,
         _child: &NodeRef,
     ) -> Result<SweptChild, SweepResolveFailure> {
-        Ok(SweptChild::Interior(SweptNode {
+        Ok(SweptChild::Interior(Box::new(SweptNode {
             current_read_epoch: LOCAL_NET_READ_EPOCH,
-            sequence: 1,
+            observed: cipherbox_engine::testkit::rotation::swept_observed(1),
             read_body: ReadBody::Folder {
                 created_at: 0,
                 modified_at: 0,
@@ -1388,7 +1709,7 @@ impl SweepResolver for LocalNet {
             },
             carried_unknown: PreservedFields::new(),
             carried_epoch_tag_unknown: PreservedFields::new(),
-        }))
+        })))
     }
 }
 
@@ -1509,6 +1830,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         recipient_client
             .login_identity(
                 &IdentityChallengeSigner::from_scalar(&recipient_scalar).expect("valid scalar"),
+                None,
             )
             .await,
     );
@@ -1683,7 +2005,7 @@ async fn post_json_response(
             method: HttpMethod::Post,
             url: format!("{base}{path}"),
             headers,
-            body: Some(serde_json::to_vec(&body).expect("serialize")),
+            body: Some(serde_json::to_vec(&body).expect("serialize").into()),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(10_000),
         })
@@ -1717,7 +2039,8 @@ async fn test_login_body(base: &str, handle: &str) -> serde_json::Value {
                 serde_json::to_vec(
                     &serde_json::json!({ "handle": handle, "secret": test_login_secret() }),
                 )
-                .expect("serialize"),
+                .expect("serialize")
+                .into(),
             ),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(10_000),
@@ -1836,9 +2159,8 @@ fn wrong_device_signature() -> String {
 /// This is the live-wire half of that guarantee: the routes are mounted in a
 /// really-booted API — which a suite that hand-lists controllers cannot show —
 /// and each fails closed. The full rendezvous, from a valid registration to an
-/// approval collected once and its row gone after, needs an identity token
-/// minted from a verified provider credential that no headless suite can
-/// produce, so it is proven against real Postgres in the API integration suite.
+/// approval collected once and its row gone after, is proven against real
+/// Postgres in the API integration suite.
 #[tokio::test]
 async fn the_device_approval_surface_is_mounted_and_fails_closed() {
     let base = require_stack!("the_device_approval_surface_is_mounted_and_fails_closed");
@@ -1931,4 +2253,239 @@ async fn the_device_approval_surface_is_mounted_and_fails_closed() {
         Some(0),
         "no refused registration left a row behind"
     );
+}
+
+// --- the identity subject bind (ADR 0058) -----------------------------------
+
+fn keccak256(bytes: &[u8]) -> [u8; 32] {
+    Keccak256::digest(bytes).into()
+}
+
+/// A fresh random wallet key.
+fn random_wallet() -> SigningKey {
+    SigningKey::from_slice(random_identity_scalar().as_ref()).expect("a valid secp256k1 scalar")
+}
+
+/// The EIP-55 checksummed address of `wallet`.
+fn wallet_address(wallet: &SigningKey) -> String {
+    let point = wallet.verifying_key().to_encoded_point(false);
+    let lower = hex::encode(&keccak256(&point.as_bytes()[1..])[12..]);
+    let hash = keccak256(lower.as_bytes());
+    let checksummed: String = lower
+        .chars()
+        .enumerate()
+        .map(|(i, c)| {
+            let nibble = if i % 2 == 0 {
+                hash[i / 2] >> 4
+            } else {
+                hash[i / 2] & 0x0f
+            };
+            if nibble >= 8 {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
+        })
+        .collect();
+    format!("0x{checksummed}")
+}
+
+/// An EIP-191 `personal_sign` signature over `message`: `r || s || v`, with `v`
+/// 27 or 28, as 0x-prefixed hex.
+fn personal_sign(wallet: &SigningKey, message: &str) -> String {
+    let mut prefixed = format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
+    prefixed.extend_from_slice(message.as_bytes());
+    let (signature, recovery) = wallet
+        .sign_prehash_recoverable(&keccak256(&prefixed))
+        .expect("sign the digest");
+    format!(
+        "0x{}{:02x}",
+        hex::encode(signature.to_bytes()),
+        27 + recovery.to_byte()
+    )
+}
+
+/// A fresh identity token for `wallet` from the wallet exchange, the one
+/// identity exchange a headless stack can complete. Returns the token and its
+/// subject.
+async fn wallet_identity_token(base: &str, wallet: &SigningKey) -> (String, String) {
+    let nonce = expect_auth("siwe nonce", new_client(base).siwe_challenge().await).nonce;
+    let message = format!(
+        "localhost:5173 wants you to sign in with your Ethereum account:\n\
+         {address}\n\n\
+         Sign in to CipherBox encrypted storage\n\n\
+         URI: http://localhost:5173\n\
+         Version: 1\n\
+         Chain ID: 1\n\
+         Nonce: {nonce}\n\
+         Issued At: 2026-01-01T00:00:00.000Z",
+        address = wallet_address(wallet),
+    );
+    let grant = post_json_body(
+        base,
+        "/auth/identity/wallet",
+        None,
+        serde_json::json!({
+            "message": message,
+            "signature": personal_sign(wallet, &message),
+        }),
+    )
+    .await;
+    (
+        grant["token"].as_str().expect("a token").to_string(),
+        grant["verifierId"].as_str().expect("a subject").to_string(),
+    )
+}
+
+/// Log in as `signer` through the engine client, presenting `identity_token`
+/// when given.
+async fn login_presenting_identity_token(
+    base: &str,
+    signer: &IdentityChallengeSigner,
+    identity_token: Option<&str>,
+) -> Client {
+    let client = new_client(base);
+    expect_auth(
+        "identity login",
+        client.login_identity(signer, identity_token).await,
+    );
+    client
+}
+
+/// A fresh random device identity key.
+fn random_device_key() -> Ed25519Signer {
+    let mut seed = Zeroizing::new([0u8; 32]);
+    getrandom::getrandom(seed.as_mut()).expect("os rng");
+    Ed25519Signer::from_seed(*seed)
+}
+
+/// `POST /devices` for `device` on the client's account, presenting
+/// `identity_token`. The signature is valid, so the answer turns on the bind.
+async fn register_device(
+    client: &Client,
+    device: &Ed25519Signer,
+    identity_token: &str,
+) -> Result<RegisteredDevice, ApiError> {
+    let public_key = hex::encode(device.verifying_key().to_bytes());
+    let payload = registration_payload(&client.account_id().expect("an account id"), &public_key)
+        .expect("a well-formed registration");
+    let signature = hex::encode(device.sign(&payload).to_bytes());
+    client
+        .register_device(&public_key, &signature, identity_token, None)
+        .await
+}
+
+/// Assert a 409 that carries `message`.
+fn assert_conflict<T: std::fmt::Debug>(result: &Result<T, ApiError>, message: &str) {
+    match result {
+        Err(ApiError::Status {
+            status: 409,
+            message: Some(actual),
+            ..
+        }) => assert_eq!(actual, message),
+        other => panic!("expected a 409 refusal ({message}), got {other:?}"),
+    }
+}
+
+/// The status of `POST /device-approval/session` for `identity_token`.
+async fn session_status(base: &str, identity_token: &str) -> u16 {
+    post_json(
+        base,
+        "/device-approval/session",
+        None,
+        serde_json::json!({ "identityToken": identity_token }),
+    )
+    .await
+}
+
+const NO_BOUND_SUBJECT: &str = "This account has no bound identity subject";
+const OTHER_SUBJECT: &str =
+    "The identity token names a subject other than the one bound to this account";
+
+/// ADR 0058 D2: the first login that presents an identity token binds its
+/// subject to the account. The registration and the rendezvous both reach the
+/// account through that bind.
+#[tokio::test]
+async fn the_first_login_that_presents_an_identity_token_binds_its_subject() {
+    let base = require_stack!("the_first_login_that_presents_an_identity_token_binds_its_subject");
+    let wallet = random_wallet();
+    let (bind_token, subject) = wallet_identity_token(&base, &wallet).await;
+    let account =
+        login_presenting_identity_token(&base, &random_identity_signer(), Some(&bind_token)).await;
+
+    let (register_token, register_subject) = wallet_identity_token(&base, &wallet).await;
+    assert_eq!(register_subject, subject, "one wallet has one subject");
+    register_device(&account, &random_device_key(), &register_token)
+        .await
+        .expect("the bound account registers a device under its subject");
+
+    let (session_token, _) = wallet_identity_token(&base, &wallet).await;
+    assert_eq!(
+        session_status(&base, &session_token).await,
+        200,
+        "the rendezvous finds the bound account"
+    );
+}
+
+/// ADR 0058 D2: a login does not move a subject that another account holds.
+/// The login proceeds, and the second account stays unbound.
+#[tokio::test]
+async fn a_login_does_not_rebind_a_subject_that_another_account_holds() {
+    let base = require_stack!("a_login_does_not_rebind_a_subject_that_another_account_holds");
+    let wallet = random_wallet();
+    let (bind_token, subject) = wallet_identity_token(&base, &wallet).await;
+    let first =
+        login_presenting_identity_token(&base, &random_identity_signer(), Some(&bind_token)).await;
+
+    let (conflict_token, conflict_subject) = wallet_identity_token(&base, &wallet).await;
+    assert_eq!(conflict_subject, subject, "one wallet has one subject");
+    let second =
+        login_presenting_identity_token(&base, &random_identity_signer(), Some(&conflict_token))
+            .await;
+
+    let (token, _) = wallet_identity_token(&base, &wallet).await;
+    assert_conflict(
+        &register_device(&second, &random_device_key(), &token).await,
+        NO_BOUND_SUBJECT,
+    );
+
+    let (token, _) = wallet_identity_token(&base, &wallet).await;
+    register_device(&first, &random_device_key(), &token)
+        .await
+        .expect("the first account keeps the bind");
+}
+
+/// ADR 0058 D3: an account that no login bound cannot register a device.
+#[tokio::test]
+async fn a_registration_from_an_unbound_account_is_refused() {
+    let base = require_stack!("a_registration_from_an_unbound_account_is_refused");
+    let account = login_presenting_identity_token(&base, &random_identity_signer(), None).await;
+    let (token, _) = wallet_identity_token(&base, &random_wallet()).await;
+    assert_conflict(
+        &register_device(&account, &random_device_key(), &token).await,
+        NO_BOUND_SUBJECT,
+    );
+}
+
+/// ADR 0058 D3: a registration whose token names a subject other than the
+/// bound one is refused, and the refusal writes nothing.
+#[tokio::test]
+async fn a_registration_whose_token_names_another_subject_is_refused() {
+    let base = require_stack!("a_registration_whose_token_names_another_subject_is_refused");
+    let bound_wallet = random_wallet();
+    let (bind_token, _) = wallet_identity_token(&base, &bound_wallet).await;
+    let account =
+        login_presenting_identity_token(&base, &random_identity_signer(), Some(&bind_token)).await;
+    let device = random_device_key();
+
+    let (other_token, _) = wallet_identity_token(&base, &random_wallet()).await;
+    assert_conflict(
+        &register_device(&account, &device, &other_token).await,
+        OTHER_SUBJECT,
+    );
+
+    let (token, _) = wallet_identity_token(&base, &bound_wallet).await;
+    register_device(&account, &device, &token)
+        .await
+        .expect("the refused registration left no row for this device key");
 }

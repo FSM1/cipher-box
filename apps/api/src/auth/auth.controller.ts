@@ -17,6 +17,7 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -27,6 +28,7 @@ import {
   AuthMethodDto,
   ChallengeRequestDto,
   ChallengeResponseDto,
+  EmailLinkRequestDto,
   HEX_REFRESH_TOKEN,
   LoginRequestDto,
   LogoutResponseDto,
@@ -39,6 +41,7 @@ import {
   TokenResponseDto,
   UnlinkMethodRequestDto,
 } from './dto/auth.dto';
+import { EmailCodeRequestDto } from './dto/identity.dto';
 import { AuthenticatedRequest, JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthService } from './services/auth.service';
 import { TestAuthService } from './services/test-auth.service';
@@ -119,6 +122,10 @@ export class AuthController {
       'Challenge-signature login against the secp256k1 identity key; creates the account implicitly at first login',
   })
   @ApiOkResponse({ type: TokenResponseDto })
+  @ApiResponse({
+    status: 401,
+    description: 'A challenge or signature that does not verify, or an invalid identity token',
+  })
   async login(
     @Body() body: LoginRequestDto,
     @Res({ passthrough: true }) response: Response
@@ -126,7 +133,8 @@ export class AuthController {
     const { pair, isNewUser } = await this.authService.identityLogin(
       body.publicKey,
       body.challenge,
-      body.signature
+      body.signature,
+      body.identityToken
     );
     this.setRefreshCookie(response, pair.refreshToken);
     return { ...pair, isNewUser };
@@ -181,6 +189,44 @@ export class AuthController {
       body.challengeSignature
     );
     return { success: true };
+  }
+
+  @Post('email/link/send-code')
+  @Throttle(THROTTLE_SURFACES.auth)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Send a verification code that only POST /auth/email/link will accept',
+  })
+  @ApiCreatedResponse({ description: 'The code was sent; the body is empty' })
+  async sendEmailLinkCode(
+    @Body() body: EmailCodeRequestDto,
+    @Req() request: AuthenticatedRequest
+  ): Promise<void> {
+    await this.authService.sendEmailLinkCode(request.user.userId, body.email);
+  }
+
+  @Post('email/link')
+  @Throttle(THROTTLE_SURFACES.auth)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Link a passwordless email address to the authenticated account, re-proving the account identity key',
+  })
+  @ApiCreatedResponse({ description: 'The address was linked; the body is empty' })
+  async emailLink(
+    @Body() body: EmailLinkRequestDto,
+    @Req() request: AuthenticatedRequest
+  ): Promise<void> {
+    await this.authService.emailLink(
+      request.user.userId,
+      accountKey(request),
+      body.email,
+      body.code,
+      body.challenge,
+      body.challengeSignature
+    );
   }
 
   @Get('methods')

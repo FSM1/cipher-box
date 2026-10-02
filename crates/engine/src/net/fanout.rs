@@ -245,17 +245,23 @@ pub async fn fanout_get_under<T: RecordTransport>(
     name: &IpnsName,
     rule: VacancyRule,
 ) -> FanoutRecord {
+    scan(transport, name).await.classify(rule)
+}
+
+/// [`fanout_get_classified`], and whether an endpoint answered for the name:
+/// with no record, or with bytes that it served. A transport failure is no
+/// answer.
+pub(crate) async fn fanout_get_answered<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> (FanoutRecord, bool) {
     let scan = scan(transport, name).await;
-    let absent = scan.absent(rule);
-    let Scan { best, failures, .. } = scan;
-    if let Some((verified, bytes)) = best {
-        return FanoutRecord::Found(verified, bytes);
-    }
-    if absent {
-        FanoutRecord::Absent
-    } else {
-        FanoutRecord::Unavailable(EndpointFailures(failures))
-    }
+    let answered = scan.vacant > 0
+        || scan
+            .failures
+            .iter()
+            .any(|(_, failure)| *failure != EndpointFailure::Transport);
+    (scan.classify(VacancyRule::Unanimous), answered)
 }
 
 /// The freshest verified record, and every other record another endpoint
@@ -304,6 +310,19 @@ impl Scan {
         self.best.is_none()
             && self.vacant > 0
             && (rule == VacancyRule::FirstRun || self.failures.is_empty())
+    }
+
+    fn classify(self, rule: VacancyRule) -> FanoutRecord {
+        let absent = self.absent(rule);
+        let Self { best, failures, .. } = self;
+        if let Some((verified, bytes)) = best {
+            return FanoutRecord::Found(verified, bytes);
+        }
+        if absent {
+            FanoutRecord::Absent
+        } else {
+            FanoutRecord::Unavailable(EndpointFailures(failures))
+        }
     }
 }
 

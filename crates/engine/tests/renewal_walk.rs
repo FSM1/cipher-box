@@ -90,7 +90,7 @@ fn boot_served(
     entropy_seed: u64,
 ) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
     let (mut engine, events) = engine_on(device, entropy_seed);
-    block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).expect("the session starts");
+    block_on(engine.start(LoginSecret::new(SECRET.to_vec()), None)).expect("the session starts");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     (engine, events, tasks)

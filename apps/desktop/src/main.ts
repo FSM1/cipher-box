@@ -36,7 +36,7 @@ function start(root: HTMLElement): void {
     busy: false,
     step: null,
     methods: [],
-    email: null,
+    display: null,
     error: null,
     vault: null,
     vaultError: null,
@@ -55,10 +55,11 @@ function start(root: HTMLElement): void {
     facade: shellFacade,
     // One process, one engine: there is no leader to re-export a secret to.
     secrets: null,
+    now: () => new Date(),
     account: {
-      signedIn: (_method, email) => {
+      signedIn: (_method, display) => {
         model.phase = 'signedIn';
-        model.email = email;
+        model.display = display;
         engineSession += 1;
         // This engine is not the last one, and neither is what was read off it:
         // a read that failed as the previous session ended would otherwise be
@@ -69,7 +70,7 @@ function start(root: HTMLElement): void {
       },
       signedOut: () => {
         model.phase = 'signedOut';
-        model.email = null;
+        model.display = null;
         // The engine behind them is gone, so neither outlives the session.
         engineSession += 1;
         model.vault = null;

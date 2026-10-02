@@ -32,11 +32,20 @@ describe('the settings route', () => {
     renderSettings();
 
     expect(screen.getByTestId('settings-method').textContent).toBe('google');
+    expect(screen.getByTestId('settings-identifier-label').textContent).toBe('address');
     expect(screen.getByTestId('settings-email').textContent).toBe('user@example.test');
   });
 
-  it('names a session that carries no email, as a wallet login does', () => {
-    authStore.signedIn('wallet', null);
+  it('names a wallet session by its truncated address, under a wallet label', () => {
+    authStore.signedIn('wallet', '0xa29A...aF4d');
+    renderSettings();
+
+    expect(screen.getByTestId('settings-identifier-label').textContent).toBe('wallet');
+    expect(screen.getByTestId('settings-email').textContent).toBe('0xa29A...aF4d');
+  });
+
+  it('names a session that kept no display', () => {
+    authStore.signedIn(null);
     renderSettings();
 
     expect(screen.getByTestId('settings-email').textContent).toBe('[an0n]');

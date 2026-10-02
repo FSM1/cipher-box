@@ -45,15 +45,19 @@ pub(crate) struct LoginRequest<'a> {
     pub public_key: &'a str,
     pub challenge: &'a str,
     pub signature: &'a str,
+    /// The token of the exchange this login follows, which binds the account
+    /// to its identity subject (ADR 0058 D2); omitted for every other start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_token: Option<&'a str>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RefreshRequest {
+pub(crate) struct RefreshRequest<'a> {
     /// Omitted entirely on web, where the HTTP-only refresh cookie rides the
     /// Http seam instead of a body field (blueprint/engine.md CredentialStore).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub refresh_token: Option<String>,
+    pub refresh_token: Option<&'a str>,
 }
 
 /// The link body for [`ApiClient::siwe_link`](super::ApiClient::siwe_link): the
@@ -64,6 +68,25 @@ pub(crate) struct RefreshRequest {
 pub(crate) struct SiweLinkRequest<'a> {
     pub message: &'a str,
     pub signature: &'a str,
+    pub challenge: &'a str,
+    pub challenge_signature: &'a str,
+}
+
+/// The body for
+/// [`ApiClient::email_link_send_code`](super::ApiClient::email_link_send_code).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EmailLinkSendCodeRequest<'a> {
+    pub email: &'a str,
+}
+
+/// The link body for [`ApiClient::email_link`](super::ApiClient::email_link):
+/// the emailed code plus the identity re-proof.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EmailLinkRequest<'a> {
+    pub email: &'a str,
+    pub code: &'a str,
     pub challenge: &'a str,
     pub challenge_signature: &'a str,
 }
@@ -221,6 +244,8 @@ pub enum AuthMethodKind {
     Identity,
     /// A linked SIWE wallet.
     Wallet,
+    /// A linked email code login.
+    Email,
     /// The staging-gated test login.
     Test,
     /// A kind this client does not know. Rendered as-is rather than refused —

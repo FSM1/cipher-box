@@ -51,7 +51,7 @@ use crate::scope_seeds::ScopeSeeds;
 use crate::seams::UnixMillis;
 use crate::settings::{SessionPlacement, VaultSettingsSummary};
 use crate::sync::cancel::UploadCancels;
-use crate::sync::drain::{BookkeepingCursors, DrainCells, QueueHold};
+use crate::sync::drain::{BookkeepingCursors, CaptureProofs, DrainCells, QueueHold};
 use crate::sync::model::Snapshot;
 use crate::sync::owed_rotation::OwedCell;
 use crate::sync::project::UnlinkedChild;
@@ -493,6 +493,9 @@ pub(crate) struct SessionState {
     /// the merge already dropped from the base is not lost on a failed pass
     /// (ADR 0010 item 5).
     pub(crate) observed_unlinks: Rc<RefCell<Vec<UnlinkedChild>>>,
+    /// Each own scope's capture walk, resumed across passes, and the captures a
+    /// complete walk proved no folder of the scope names.
+    pub(crate) capture_proofs: Rc<RefCell<BTreeMap<NodeId, CaptureProofs>>>,
     /// Whether this session has already held the account's `byo` flag to the
     /// vaulted mode. Latched per placement decision, not per write: the flag is
     /// account-wide, so re-deriving it on every write would let two devices flap
@@ -588,6 +591,7 @@ impl SessionState {
             placement: Rc::new(RefCell::new(None)),
             settings_summary: Rc::new(RefCell::new(None)),
             observed_unlinks: Rc::new(RefCell::new(Vec::new())),
+            capture_proofs: Rc::new(RefCell::new(BTreeMap::new())),
             byo_reconciled: Rc::new(Cell::new(false)),
             fork_sightings: Rc::new(ForkSightings::default()),
         }
@@ -609,6 +613,7 @@ impl SessionState {
             cancels: &self.cancels,
             dead_letters: &self.dead_letters,
             observed_unlinks: &self.observed_unlinks,
+            capture_proofs: &self.capture_proofs,
             pending_scope_exits: &self.pending_scope_exits,
             publishing: &self.publishing,
             forks: &self.fork_sightings,

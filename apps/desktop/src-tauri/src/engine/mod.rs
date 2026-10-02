@@ -265,13 +265,15 @@ pub struct EngineHost {
 
 impl EngineHost {
     /// Builds the engine for `secret` and starts it, resolving once cold start
-    /// has landed or refusing with why it did not.
+    /// has landed or refusing with why it did not. The login presents
+    /// `identity_token` when the start follows an exchange.
     pub async fn start(
         &self,
         secret: Zeroizing<Vec<u8>>,
+        identity_token: Option<String>,
         session: SessionEnv,
     ) -> Result<(), String> {
-        let started = self.spawn_engine(secret, session)?;
+        let started = self.spawn_engine(secret, identity_token.map(Zeroizing::new), session)?;
         let outcome = started
             .await
             .unwrap_or_else(|_| Err("the engine stopped before it started".to_owned()));
@@ -409,6 +411,7 @@ impl EngineHost {
     fn spawn_engine(
         &self,
         secret: Zeroizing<Vec<u8>>,
+        identity_token: Option<Zeroizing<String>>,
         session: SessionEnv,
     ) -> Result<oneshot::Receiver<Result<(), String>>, String> {
         let mut live = self.live.lock().map_err(|_| POISONED)?;
@@ -426,7 +429,9 @@ impl EngineHost {
             let account_dir = account_dir.clone();
             std::thread::Builder::new()
                 .name("cipherbox-engine".to_owned())
-                .spawn(move || host_engine(secret, session, account_dir, inbox, verdict))
+                .spawn(move || {
+                    host_engine(secret, identity_token, session, account_dir, inbox, verdict)
+                })
                 .map_err(|error| format!("the engine thread could not start: {error}"))?
         };
 
@@ -505,6 +510,7 @@ fn account_id(secret: &[u8]) -> Result<String, String> {
 /// closes.
 fn host_engine(
     secret: Zeroizing<Vec<u8>>,
+    identity_token: Option<Zeroizing<String>>,
     session: SessionEnv,
     account_dir: PathBuf,
     inbox: mpsc::UnboundedReceiver<Request>,
@@ -525,13 +531,14 @@ fn host_engine(
     // whole session runs inside this LocalSet.
     let local = tokio::task::LocalSet::new();
     local.block_on(&runtime, async move {
-        let (engine, events) = match start_engine(secret, &session, &account_dir).await {
-            Ok(started) => started,
-            Err(refusal) => {
-                let _ = verdict.send(Err(refusal));
-                return;
-            }
-        };
+        let (engine, events) =
+            match start_engine(secret, identity_token, &session, &account_dir).await {
+                Ok(started) => started,
+                Err(refusal) => {
+                    let _ = verdict.send(Err(refusal));
+                    return;
+                }
+            };
         // Settled before the mount is attempted: that is what leaves a mount
         // failure no way to fail the session it reports itself in.
         let _ = verdict.send(Ok(()));
@@ -552,6 +559,7 @@ fn host_engine(
 /// seam set is the engine's from here on.
 async fn start_engine(
     secret: Zeroizing<Vec<u8>>,
+    identity_token: Option<Zeroizing<String>>,
     session: &SessionEnv,
     account_dir: &std::path::Path,
 ) -> Result<(Engine<DesktopSeamTypes>, EventStream), String> {
@@ -579,7 +587,7 @@ async fn start_engine(
     // The engine copies the secret into its own zeroizing store; this frame's
     // owner scrubs on drop, whichever way the start goes.
     engine
-        .start(LoginSecret::new(secret.to_vec()))
+        .start(LoginSecret::new(secret.to_vec()), identity_token)
         .await
         .map_err(|error| error.to_string())?;
     Ok((engine, events))
@@ -895,15 +903,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("a temp dir");
         let host = EngineHost::default();
 
-        let first = host.spawn_engine(scalar(), session_env(dir.path()));
+        let first = host.spawn_engine(scalar(), None, session_env(dir.path()));
         assert!(first.is_ok());
-        let second = host.spawn_engine(scalar(), session_env(dir.path()));
+        let second = host.spawn_engine(scalar(), None, session_env(dir.path()));
         assert_eq!(second.err().as_deref(), Some(ALREADY_LIVE));
 
         host.stop();
 
         // …and the device takes a new session once the first has ended.
-        assert!(host.spawn_engine(scalar(), session_env(dir.path())).is_ok());
+        assert!(
+            host.spawn_engine(scalar(), None, session_env(dir.path()))
+                .is_ok()
+        );
         host.stop();
     }
 
@@ -997,7 +1008,7 @@ mod tests {
         for forget in [false, true] {
             let host = EngineHost::default();
             let started = host
-                .spawn_engine(scalar(), session_env(dir.path()))
+                .spawn_engine(scalar(), None, session_env(dir.path()))
                 .expect("the slot is free");
             // An op this device acked to the kernel and has not published.
             std::fs::create_dir_all(&account).expect("an account store");

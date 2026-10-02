@@ -172,6 +172,16 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
 /// The same root authored at `read_epoch`, for a test that must serve two
 /// epochs of one scope at one name — the shape a read rotation leaves behind.
 pub fn owner_root_fixture_at(spec: OwnerRootSpec<'_>, read_epoch: u64) -> OwnerRootFixture {
+    owner_root_fixture_sealed(spec, read_epoch, V)
+}
+
+/// [`owner_root_fixture_at`] under envelope version `v`: the root a newer
+/// client build wrote.
+pub fn owner_root_fixture_sealed(
+    spec: OwnerRootSpec<'_>,
+    read_epoch: u64,
+    v: u64,
+) -> OwnerRootFixture {
     let OwnerRootSpec {
         owner_identity,
         owner_enc,
@@ -199,7 +209,7 @@ pub fn owner_root_fixture_at(spec: OwnerRootSpec<'_>, read_epoch: u64) -> OwnerR
     };
     let sign = |tag: u8, ct: &[u8]| -> [u8; 64] { sign_for(tag, None, ct) };
     let aad = |epoch: u64, struct_tag: u8| AadContext {
-        v: V,
+        v,
         id: root_id,
         scope: scope_id,
         epoch,
@@ -345,7 +355,7 @@ pub fn owner_root_fixture_at(spec: OwnerRootSpec<'_>, read_epoch: u64) -> OwnerR
     let mut envelope = seal_read_body(
         &read_key,
         &NONCE_READ_BODY,
-        V,
+        v,
         root_id,
         scope_id,
         read_epoch,

@@ -4,6 +4,7 @@ import type { LoginSecretExporter } from './secret';
 import { RecoveryRequiredError, type CoreKitSession } from './session';
 import {
   fakeAccount,
+  fakeClock,
   fakeExchange,
   fakeFacade,
   fakeProgress,
@@ -11,6 +12,9 @@ import {
   FAKE_IDENTITY_TOKEN,
   FAKE_NONCE,
   FAKE_PHRASE,
+  FAKE_NOW,
+  FAKE_TOKEN_LIFETIME_S,
+  FAKE_WALLET_DISPLAY,
   passThroughCollector,
   type WebCollected,
 } from './testFakes';
@@ -25,9 +29,11 @@ function build(
     facade?: ReturnType<typeof fakeFacade>;
     session?: ReturnType<typeof fakeSession>;
     progress?: ReturnType<typeof fakeProgress>;
+    clock?: ReturnType<typeof fakeClock>;
   } = {}
 ) {
   const exchange = fakeExchange();
+  const clock = options.clock ?? fakeClock();
   const session = options.session ?? fakeSession();
   const facade = options.facade ?? fakeFacade();
   const account = fakeAccount();
@@ -50,6 +56,7 @@ function build(
     },
     account: account.account,
     progress: progress.progress,
+    now: clock.now,
     afterLogout: () => {
       rebuilds += 1;
       steps.push('rebuilt');
@@ -63,6 +70,7 @@ function build(
     facade,
     account,
     progress,
+    clock,
     armed,
     steps,
     rebuilds: () => rebuilds,
@@ -70,6 +78,7 @@ function build(
 }
 
 const loggedIn = (parts: Parts) => parts.account.calls.signedIn;
+const GOOGLE_SIGN_IN = { method: 'google', display: 'user@example.test' } as const;
 
 describe('the serialization gate', () => {
   // A latch left set refuses every later sign-in and every logout, so the host
@@ -118,7 +127,8 @@ describe('the recovery phrase step', () => {
 
     expect(parts.session.calls.phrases).toEqual([FAKE_PHRASE]);
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
-    expect(loggedIn(parts)).toEqual([{ method: 'google', email: 'user@example.test' }]);
+    expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
+    expect(loggedIn(parts)).toEqual([GOOGLE_SIGN_IN]);
   });
 
   it('rejects rather than reporting success when the engine refuses the secret', async () => {
@@ -147,7 +157,8 @@ describe('the recovery phrase step', () => {
 
     expect(parts.session.calls.adoptedFactors).toEqual([factorKey]);
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
-    expect(loggedIn(parts)).toEqual([{ method: 'google', email: 'user@example.test' }]);
+    expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
+    expect(loggedIn(parts)).toEqual([GOOGLE_SIGN_IN]);
   });
 
   it('leaves the login held when the approved factor opens nothing', async () => {
@@ -204,6 +215,85 @@ describe('the recovery phrase step', () => {
   });
 });
 
+describe('the identity token a start presents', () => {
+  // Every login here exchanges at `FAKE_NOW`, so the token was received then.
+  const lifetimeLeft = (parts: Parts) =>
+    FAKE_NOW.getTime() + FAKE_TOKEN_LIFETIME_S * 1000 - parts.clock.now().getTime();
+
+  it('presents the token while more than 30 seconds of its lifetime are left', async () => {
+    const parts = build({ session: fakeSession({ needsRecovery: true }) });
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+    parts.clock.advance(lifetimeLeft(parts) - 30_001);
+
+    await parts.flow.recoverWithPhrase(FAKE_PHRASE);
+
+    expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
+  });
+
+  it('presents none once the phrase comes within 30 seconds of the expiry', async () => {
+    const parts = build({ session: fakeSession({ needsRecovery: true }) });
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+    parts.clock.advance(lifetimeLeft(parts) - 30_000);
+
+    await parts.flow.recoverWithPhrase(FAKE_PHRASE);
+
+    expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(parts.facade.calls.identityTokens).toEqual([undefined]);
+    expect(loggedIn(parts)).toEqual([GOOGLE_SIGN_IN]);
+  });
+
+  it('presents none for an approval that lands after the token expired', async () => {
+    const parts = build({ session: fakeSession({ needsRecovery: true }) });
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+    parts.clock.advance(10 * 60_000);
+
+    await parts.flow.completeDeviceApproval(new Uint8Array(32).fill(9));
+
+    expect(parts.facade.calls.identityTokens).toEqual([undefined]);
+  });
+
+  it('keeps the token for a held login across a flow the host rebuilt', async () => {
+    const session = fakeSession({ needsRecovery: true });
+    const before = build({ session });
+    await expect(before.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+
+    const after = build({ session, facade: before.facade });
+    await after.flow.recoverWithPhrase(FAKE_PHRASE);
+
+    expect(before.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
+  });
+
+  it('presents none for a restore, even while a held login keeps a token', async () => {
+    const parts = build({ session: fakeSession({ loggedIn: true, needsRecovery: true }) });
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+
+    await parts.flow.resume();
+
+    expect(parts.facade.calls.identityTokens).toEqual([undefined]);
+  });
+
+  it('presents none for a restore that follows a sign-in', async () => {
+    const parts = build();
+    await parts.flow.loginWithGoogle('google.id.token');
+
+    const replaced = build({ session: parts.session, facade: fakeFacade() });
+    await replaced.flow.resume();
+
+    expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
+    expect(replaced.facade.calls.identityTokens).toEqual([undefined]);
+  });
+});
+
 describe('the login flow', () => {
   it('exchanges the collected google token, then hands the engine the login secret', async () => {
     const parts = build();
@@ -216,11 +306,13 @@ describe('the login flow', () => {
         method: 'google',
         token: FAKE_IDENTITY_TOKEN,
         verifierId: 'subject-for-google',
-        email: 'user@example.test',
+        display: 'user@example.test',
+        expiresIn: FAKE_TOKEN_LIFETIME_S,
       },
     ]);
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
-    expect(loggedIn(parts)).toEqual([{ method: 'google', email: 'user@example.test' }]);
+    expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
+    expect(loggedIn(parts)).toEqual([GOOGLE_SIGN_IN]);
   });
 
   it('asks CipherBox for the code, then redeems what the host collected', async () => {
@@ -232,6 +324,7 @@ describe('the login flow', () => {
     expect(parts.exchange.calls.sentCodes).toEqual(['user@example.test']);
     expect(parts.exchange.calls.verified).toEqual([{ email: 'user@example.test', code: '123456' }]);
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
   });
 
   it('carries the wallet proof to the API verbatim', async () => {
@@ -242,7 +335,8 @@ describe('the login flow', () => {
     await parts.flow.loginWithWallet({ message: 'siwe-message', signature });
 
     expect(parts.exchange.calls.wallet).toEqual([{ message: 'siwe-message', signature }]);
-    expect(loggedIn(parts)).toEqual([{ method: 'wallet', email: null }]);
+    expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
+    expect(loggedIn(parts)).toEqual([{ method: 'wallet', display: FAKE_WALLET_DISPLAY }]);
   });
 
   // Desktop reaches no wallet, and a build with no Google client ID renders no
@@ -289,9 +383,11 @@ describe('the login flow', () => {
 
     expect(parts.session.calls.logins).toEqual([]);
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
-    // The identity token carries no email claim, so a restored session has no
-    // address to show until the member signs in again.
-    expect(loggedIn(parts)).toEqual([{ method: null, email: null }]);
+    // A restore follows no exchange, so its login binds nothing.
+    expect(parts.facade.calls.identityTokens).toEqual([undefined]);
+    // The identity token carries no display claim, so a restored session has no
+    // label to show until the member signs in again.
+    expect(loggedIn(parts)).toEqual([{ method: null, display: null }]);
   });
 
   // The host rebuilds the flow whenever it replaces the engine facade, and a

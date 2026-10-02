@@ -15,6 +15,7 @@ import type {
   ByoKind,
   DeadLetterReason,
   DeviceRendezvousResult,
+  DropCause,
   EventDescriptor,
   GranteeNameSource,
   InvitePreviewDescriptor,
@@ -127,6 +128,7 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   scopeExitCutOwed: true,
   rotationWorkOwed: true,
   rotationWorkAbandoned: true,
+  nodeDropped: true,
   writeCutUnfinished: true,
   granteeJoined: true,
   opProgress: true,
@@ -254,9 +256,20 @@ const OWED_WORK_CLASSES: Record<OwedWorkClass, true> = {
   trust: true,
 };
 
+const DROP_CAUSES: Record<DropCause, true> = {
+  'record-refused': true,
+  'epoch-unreachable': true,
+  'no-record': true,
+  'endpoint-unavailable': true,
+  'no-head-block': true,
+  'below-sequence-floor': true,
+  'epoch-above-root': true,
+};
+
 const AUTH_METHOD_KINDS: Record<AuthMethodKind, true> = {
   identity: true,
   wallet: true,
+  email: true,
   test: true,
   unknown: true,
 };
@@ -289,6 +302,7 @@ export function readEvent(event: EventDescriptor): EventDescriptor {
   if (event.kind === 'deadLetter') known(DEAD_LETTER_REASONS, event.reason, 'dead letter reason');
   if (event.kind === 'opProgress') known(OP_PHASES, event.phase, 'op phase');
   if (event.kind === 'rotationWorkOwed') known(OWED_WORK_CLASSES, event.class, 'owed work class');
+  if (event.kind === 'nodeDropped') known(DROP_CAUSES, event.cause, 'drop cause');
   return event;
 }
 

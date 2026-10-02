@@ -47,14 +47,21 @@ export class IdentityTokenResponseDto {
   verifierId!: string;
 
   @ApiProperty({
-    description: 'The signed-in email, when the method carries one; null for wallet',
-    nullable: true,
-    type: String,
+    description:
+      'What the member signed in as, for display only: the normalized address for email, ' +
+      'the Google email for google, and the truncated EIP-55 address for wallet',
+    example: '0xa29A...aF4d',
   })
-  email!: string | null;
+  display!: string;
 
   @ApiProperty({ description: 'Token expiry, ISO 8601' })
   expiresAt!: string;
+
+  @ApiProperty({
+    description: 'Token lifetime in seconds; a client times the token on its own clock',
+    example: 300,
+  })
+  expiresIn!: number;
 }
 
 export class JwksResponseDto {

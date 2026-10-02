@@ -9,7 +9,7 @@ function model(over: Partial<ShellModel> = {}): ShellModel {
     busy: false,
     step: null,
     methods: [],
-    email: null,
+    display: null,
     error: null,
     vault: null,
     vaultError: null,

@@ -22,15 +22,15 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::{
     FakeDevice, FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec,
-    SeededEntropy, owner_root_fixture, requested_cid,
+    SeededEntropy, owner_root_fixture_sealed, requested_cid,
 };
 use crate::NodeId;
 use crate::api::{REGISTRY_BATCH_REFUSED, RetireEntry};
 use crate::content::DAG_ROOT_CODEC;
 use crate::grants::GrantRow;
-use crate::net::REGISTRY_BATCH_MAX;
 use crate::net::author::ENVELOPE_V;
 use crate::net::publish::Observed;
+use crate::net::{REGISTRY_BATCH_MAX, REGISTRY_BODY_MAX_BYTES};
 use crate::seams::{HttpRequest, HttpResponse, RecordTransport, SeamError, SeamResult};
 use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 
@@ -123,12 +123,27 @@ pub fn registry_batch_refused() -> Vec<u8> {
         .into_bytes()
 }
 
+/// A registry token padded to `len` characters, unique per `i`: a name is at
+/// most 128 characters and a CID at most 256.
+pub fn wide_token(prefix: &str, i: usize, len: usize) -> String {
+    let token = format!("{prefix}{i}");
+    format!("{token}{}", "a".repeat(len - token.len()))
+}
+
 /// Ack a registration, refusing one past the registry's bounds fail-closed —
-/// never truncated or partially applied (blueprint/api.md "Batch bounds").
+/// never truncated or partially applied (blueprint/api.md "Batch bounds"). A
+/// body past the API's JSON limit gets the body parser's `413`, with no `code`.
 fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
+    let body = body.expect("a register call carries a body");
+    if body.len() > REGISTRY_BODY_MAX_BYTES {
+        return Ok(HttpResponse {
+            status: 413,
+            headers: Vec::new(),
+            body: Vec::new(),
+        });
+    }
     let entries: Vec<serde_json::Value> =
-        serde_json::from_slice(body.expect("a register call carries a body"))
-            .expect("a register body is a JSON array");
+        serde_json::from_slice(body).expect("a register body is a JSON array");
     let over_cap = entries.len() > REGISTRY_BATCH_MAX
         || entries.iter().any(|entry| {
             entry["contentCids"]
@@ -435,7 +450,7 @@ impl Blocks {
                 .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
                 .map(|(_, value)| value.clone())
                 .expect("upload declares its CID");
-            let block = request.body.clone().unwrap_or_default();
+            let block = request.body.as_deref().cloned().unwrap_or_default();
             if let Some(hook) = self.on_upload.lock().expect("lock").as_mut()
                 && let Some(reply) = hook(&block)
             {
@@ -520,7 +535,7 @@ impl Blocks {
                     body,
                 });
             }
-            return register_reply(request.body.as_deref());
+            return register_reply(request.body.as_deref().map(Vec::as_slice));
         }
         if url.ends_with("/registry/retire") {
             if self.retire_down.load(Ordering::SeqCst) {
@@ -580,7 +595,18 @@ pub fn seed_account_with(
     grants: Vec<GrantRow>,
     children: Vec<ChildRef>,
 ) -> IpnsName {
-    let account = author_account(blocks, grants, children, 1);
+    seed_account_sealed(world, blocks, grants, children, ENVELOPE_V)
+}
+
+/// [`seed_account_with`] over a root sealed under envelope version `v`.
+pub fn seed_account_sealed(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    grants: Vec<GrantRow>,
+    children: Vec<ChildRef>,
+    v: u64,
+) -> IpnsName {
+    let account = author_account(blocks, grants, children, 1, v);
     for endpoint in world.record_store.endpoints() {
         world.record_store.seed_record(
             &endpoint,
@@ -607,7 +633,7 @@ pub fn seed_account_published_after_put(
     blocks: &Blocks,
     revealed_by: &IpnsName,
 ) -> IpnsName {
-    let account = author_account(blocks, Vec::new(), Vec::new(), 2);
+    let account = author_account(blocks, Vec::new(), Vec::new(), 2, ENVELOPE_V);
     for endpoint in world.record_store.endpoints() {
         world.record_store.seed_record(
             &endpoint,
@@ -631,31 +657,37 @@ struct AuthoredAccount {
     pointer_record: Vec<u8>,
 }
 
-/// Author the owner root and the re-point naming it, and put the root's head
-/// block on the block plane. The pointer publishes at `pointer_sequence`.
+/// Author the owner root under envelope version `v` and the re-point naming it,
+/// and put the root's head block on the block plane. The pointer publishes at
+/// `pointer_sequence`.
 fn author_account(
     blocks: &Blocks,
     grants: Vec<GrantRow>,
     children: Vec<ChildRef>,
     pointer_sequence: u64,
+    v: u64,
 ) -> AuthoredAccount {
-    let fixture = owner_root_fixture(OwnerRootSpec {
-        writer_pseudonym: &owner_pseudonym(),
-        pointer_read_key: owner_pointer_read_key(),
-        owner_identity: &owner_identity(),
-        owner_enc: &kdf::enc_subkey(&SECRET).public(),
-        scope_id: SCOPE,
-        root_id: ROOT.0,
-        children,
-        child_scope_index: Vec::new(),
-        parent_node_seed: None,
-        // At the read epoch, so the cold-seeded write floor opens the
-        // owner-write-blob and the owner recovers its scope write seed — the
-        // seed the drain derives every new node's name and signer from.
-        owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
-        write_history_link: Vec::new(),
-        grants,
-    });
+    let fixture = owner_root_fixture_sealed(
+        OwnerRootSpec {
+            writer_pseudonym: &owner_pseudonym(),
+            pointer_read_key: owner_pointer_read_key(),
+            owner_identity: &owner_identity(),
+            owner_enc: &kdf::enc_subkey(&SECRET).public(),
+            scope_id: SCOPE,
+            root_id: ROOT.0,
+            children,
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            // At the read epoch, so the cold-seeded write floor opens the
+            // owner-write-blob and the owner recovers its scope write seed — the
+            // seed the drain derives every new node's name and signer from.
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants,
+        },
+        OWNER_ROOT_EPOCH,
+        v,
+    );
     blocks.put(fixture.head_block.clone());
 
     let root_signer = {

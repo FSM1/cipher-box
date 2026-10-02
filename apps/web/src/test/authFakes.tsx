@@ -28,7 +28,7 @@ import type { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
 import type { WebCoreKitSession } from '../auth/coreKit';
-import { DeviceIdentity } from '../auth/deviceIdentity';
+import { DeviceIdentity, DeviceKeyUnusableError } from '../auth/deviceIdentity';
 import { MemoryDeviceKeys, SerialLocks } from './storeFakes';
 
 import { IdentityProvider } from '../auth/IdentityProvider';
@@ -50,6 +50,11 @@ export const FAKE_NONCE = 'nonce123456789ab';
 
 /** The identity token the fake exchange mints, whichever method asked. */
 export const FAKE_IDENTITY_TOKEN = 'header.payload.signature';
+/** The token lifetime the fake exchange grants, in seconds. */
+export const FAKE_TOKEN_LIFETIME_S = 300;
+
+/** The truncated form the exchange gives a wallet. */
+export const FAKE_WALLET_DISPLAY = '0xa29A...aF4d';
 
 /** The one phrase the fake session enrolls and accepts; 24 words, as a real one is. */
 export const FAKE_PHRASE = `${'word '.repeat(23)}last`;
@@ -148,9 +153,15 @@ export interface EngineCalls {
   started: ArrayBuffer[];
   /** What each buffer held on arrival, before the handoff scrubbed it. */
   secrets: Uint8Array[];
+  /** The identity token each start presented, `undefined` for one with none. */
+  startTokens: Array<string | undefined>;
   /** The wallet links, kept apart from `siwe`: a link is not a login. */
   siweLinks: { message: string; signature: Uint8Array }[];
   siweChallenges: number;
+  /** The address each email link code was asked for. */
+  emailLinkCodes: string[];
+  /** The email links, kept apart from any sign-in. */
+  emailLinks: { email: string; code: string }[];
   /** The intent each nonce mint named; a link must never mint from the sign-in pool. */
   siweChallengeIntents: SiweIntent[];
   logouts: number;
@@ -238,6 +249,8 @@ export function fakeEngineClient(
     logout: () => Promise<void>;
     saveVaultSettings: () => Promise<void>;
     unlinkAuthMethod: () => Promise<void>;
+    emailLinkSendCode: () => Promise<void>;
+    emailLink: () => Promise<void>;
     /** What the storage pane reads back; `null` stands for a probe that failed. */
     vaultStorage: () => Promise<VaultStorageDescriptor>;
     authMethods: () => Promise<AuthMethodDescriptor[]>;
@@ -260,9 +273,12 @@ export function fakeEngineClient(
   const calls: EngineCalls = {
     started: [],
     secrets: [],
+    startTokens: [],
     logouts: 0,
     siweLinks: [],
     siweChallenges: 0,
+    emailLinkCodes: [],
+    emailLinks: [],
     siweChallengeIntents: [],
     originSessionEnds: 0,
     vaultSettings: [],
@@ -300,9 +316,10 @@ export function fakeEngineClient(
       return () => sessionEndListeners.delete(listener);
     },
     facade: {
-      async start(secret: ArrayBuffer, accountId: string) {
+      async start(secret: ArrayBuffer, accountId: string, identityToken?: string) {
         calls.started.push(secret);
         calls.secrets.push(new Uint8Array(secret).slice());
+        calls.startTokens.push(identityToken);
         await (overrides.start?.() ?? Promise.resolve());
         holds(accountId);
       },
@@ -314,6 +331,14 @@ export function fakeEngineClient(
       siweLink(message: string, signature: Uint8Array) {
         calls.siweLinks.push({ message, signature });
         return Promise.resolve();
+      },
+      emailLinkSendCode(email: string) {
+        calls.emailLinkCodes.push(email);
+        return overrides.emailLinkSendCode?.() ?? Promise.resolve();
+      },
+      emailLink(email: string, code: string) {
+        calls.emailLinks.push({ email, code });
+        return overrides.emailLink?.() ?? Promise.resolve();
       },
       unlinkAuthMethod(methodId: string) {
         calls.unlinked.push(methodId);
@@ -461,11 +486,15 @@ export interface CoreKitCalls {
  * verifies one, and a test binds a dispatched signature to what was signed.
  */
 class FakeDeviceIdentity extends DeviceIdentity {
-  constructor(private readonly calls: CoreKitCalls) {
+  constructor(
+    private readonly calls: CoreKitCalls,
+    private readonly unusable: boolean
+  ) {
     super(new MemoryDeviceKeys(), new SerialLocks(), 'fake-device-identity');
   }
 
   override publicKeyHex(): Promise<string> {
+    if (this.unusable) return Promise.reject(new DeviceKeyUnusableError());
     return Promise.resolve(FAKE_DEVICE_PUBLIC_KEY);
   }
 
@@ -482,7 +511,7 @@ class FakeDeviceIdentity extends DeviceIdentity {
 export function fakeCoreKitSession(
   options: {
     loggedIn?: boolean;
-    email?: () => string | null;
+    display?: () => string | null;
     /** Stands in for the mount-time restore; omit for one that settles at once. */
     restore?: () => Promise<void>;
     /** Turns every login into one that stops at the factor policy. */
@@ -497,6 +526,8 @@ export function fakeCoreKitSession(
     identityToken?: string | null;
     /** A browser holding no identity key, as one is left after `forgetDevice`. */
     noDeviceIdentity?: boolean;
+    /** A browser whose WebCrypto holds no Ed25519, so reading the key refuses. */
+    deviceKeyUnusable?: boolean;
   } = {}
 ) {
   const calls: CoreKitCalls = {
@@ -511,14 +542,14 @@ export function fakeCoreKitSession(
     adopted: [],
     adoptedBytes: [],
   };
-  const device = new FakeDeviceIdentity(calls);
+  const device = new FakeDeviceIdentity(calls, options.deviceKeyUnusable ?? false);
   let identityToken =
     options.identityToken === undefined ? FAKE_IDENTITY_TOKEN : options.identityToken;
   let loggedIn = options.loggedIn ?? false;
-  // Both read off the redeemed credential, as the real session does: a bare
-  // restore knows neither, and a wallet login carries no address.
+  // Read off the redeemed credential, as the real session does: a bare restore
+  // knows none of them.
   let method: IdentityMethod | null = null;
-  let email: string | null = null;
+  let display: string | null = null;
   const session: WebCoreKitSession = {
     accountId: () => 'acct01',
     restore: options.restore ?? (() => Promise.resolve()),
@@ -526,7 +557,7 @@ export function fakeCoreKitSession(
     login(credential) {
       calls.logins.push(credential);
       method = credential.method;
-      email = credential.email;
+      display = credential.display;
       identityToken = credential.token;
       if (options.needsRecovery) return Promise.reject(new RecoveryRequiredError());
       loggedIn = true;
@@ -549,7 +580,7 @@ export function fakeCoreKitSession(
       return Promise.resolve({ phrase: FAKE_PHRASE, warning: options.enrollWarning ?? null });
     },
     method: () => method,
-    email: options.email ?? (() => email),
+    display: options.display ?? (() => display),
     logout() {
       calls.logouts += 1;
       loggedIn = false;
@@ -604,11 +635,12 @@ export function fakeIdentityExchange(overrides: Partial<IdentityExchange> = {}):
     nonces: 0,
     wallet: [],
   };
-  const grant = (method: IdentityMethod, email: string | null): IdentityCredential => ({
+  const grant = (method: IdentityMethod, display: string): IdentityCredential => ({
     method,
     token: FAKE_IDENTITY_TOKEN,
     verifierId: `subject-for-${method}`,
-    email,
+    display,
+    expiresIn: FAKE_TOKEN_LIFETIME_S,
   });
   const exchange: IdentityExchange = {
     fromGoogleToken(idToken) {
@@ -629,7 +661,7 @@ export function fakeIdentityExchange(overrides: Partial<IdentityExchange> = {}):
     },
     fromWalletSignature(message, signature) {
       calls.wallet.push({ message, signature });
-      return Promise.resolve(grant('wallet', null));
+      return Promise.resolve(grant('wallet', FAKE_WALLET_DISPLAY));
     },
     ...overrides,
   };

@@ -140,16 +140,11 @@ pub fn strip_deceptive(name: &str) -> Option<Zeroizing<String>> {
 /// dot entry. A name failing this is not a listing the user could act on — it
 /// is a malformed dirent, and every host protocol would mangle or misroute it.
 pub fn is_emittable(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= MAX_NODE_NAME_BYTES
-        && name != "."
-        && name != ".."
-        && !name.contains(['/', '\\'])
-        && !name.chars().any(char::is_control)
+    check_emittable(name).is_ok()
 }
 
-/// Admit a name for a create, a mkdir, or a rename destination.
-pub fn validate_name(name: &str) -> Result<(), NameError> {
+/// [`is_emittable`], naming the check a refused name fails.
+pub fn check_emittable(name: &str) -> Result<(), NameError> {
     if name.is_empty() {
         return Err(NameError::Empty);
     }
@@ -165,6 +160,12 @@ pub fn validate_name(name: &str) -> Result<(), NameError> {
     if name.chars().any(char::is_control) {
         return Err(NameError::Control);
     }
+    Ok(())
+}
+
+/// Admit a name for a create, a mkdir, or a rename destination.
+pub fn validate_name(name: &str) -> Result<(), NameError> {
+    check_emittable(name)?;
     if name.chars().any(is_deceptive) {
         return Err(NameError::DeceptiveCharacter);
     }

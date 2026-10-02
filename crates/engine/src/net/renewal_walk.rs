@@ -25,7 +25,8 @@ use super::eol::{self, renewal_eol_from};
 use super::fanout::{FanoutRecord, fanout_get_classified};
 use super::liveness::{EolRenewResult, HeldKey, HeldRecord, HeldRecords, hold_if_unchanged};
 use super::publish::{
-    Observed, PublishError, PublishOutcome, SignatureGate, head_cid_from_value, put_and_confirm,
+    Observed, PublishError, PublishOutcome, PublishVerdict, SignatureGate, head_cid_from_value,
+    put_and_confirm,
 };
 use super::register::register;
 use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger};
@@ -33,6 +34,7 @@ use super::rotation::{AdmittedScopeRoot, ScopeRootAdmission, admit_owned_scope_r
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::bin_index::BinIndexKeys;
 use crate::content::Gateway;
+use crate::facade::NodeId;
 use crate::gate::{GateError, GateStage};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
@@ -241,6 +243,12 @@ enum RootEnd {
     Stopped,
 }
 
+/// The scopes the owed rotation record names.
+struct OwedScopes {
+    all: BTreeSet<[u8; 16]>,
+    within_bound: BTreeSet<[u8; 16]>,
+}
+
 /// The state of one pass.
 struct Pass<'s> {
     cursor: RenewalCursor,
@@ -258,8 +266,8 @@ struct Pass<'s> {
     doomed: Doomed,
     /// A visit met a transient failure ([`KEEP_BACK_WINDOW`]).
     kept_back: bool,
-    /// The scopes with an owed rotation entry, whose names the walk does not
-    /// renew (ADR 0063 D4).
+    /// The scopes with an owed rotation entry within its bound, whose names
+    /// the walk does not renew (ADR 0063 D4, ADR 0065 D4).
     owed: BTreeSet<[u8; 16]>,
     owner_tag: [u8; 32],
     scopes: &'s [WalkScope],
@@ -348,7 +356,7 @@ where
             .as_ref()
             .map(|owed| {
                 self.unfinished_write_cuts
-                    .difference(owed)
+                    .difference(&owed.all)
                     .copied()
                     .collect()
             })
@@ -367,7 +375,7 @@ where
         // data under it, and `signer_for` signs only a name the current seed
         // derives (ADR 0061 D4).
         let (owed, owed_unread) = match owed {
-            Ok(owed) => (owed, false),
+            Ok(owed) => (owed.within_bound, false),
             Err(_) => (BTreeSet::new(), true),
         };
         let report = WalkReport {
@@ -456,12 +464,16 @@ where
         Some(doomed)
     }
 
-    /// The scopes this owner's owed rotation record names.
-    async fn owed_scopes(&self) -> SeamResult<BTreeSet<[u8; 16]>> {
-        let scopes = OwedRotation::new(self.staging, self.seal, self.enc_secret, self.owed)
-            .scopes()
-            .await?;
-        Ok(scopes.into_iter().map(|scope| scope.0).collect())
+    /// The scopes this owner's owed rotation record names, and those of them
+    /// whose entry is within the bound of ADR 0065 D3. Past it, the walk renews
+    /// each name the scope root's current write seed derives (ADR 0065 D4).
+    async fn owed_scopes(&self) -> SeamResult<OwedScopes> {
+        let owed = OwedRotation::new(self.staging, self.seal, self.enc_secret, self.owed);
+        let ids = |scopes: Vec<NodeId>| scopes.into_iter().map(|scope| scope.0).collect();
+        Ok(OwedScopes {
+            all: ids(owed.scopes().await?),
+            within_bound: ids(owed.scopes_within_bound(self.scheduler.now()).await?),
+        })
     }
 
     /// Admit `scope_id`'s root once per pass.
@@ -1012,21 +1024,15 @@ fn transient_renewal(outcome: &Result<Option<PublishOutcome>, PublishError>) -> 
         Ok(None | Some(PublishOutcome::Published { .. } | PublishOutcome::LostRace { .. })) => {
             false
         }
-        Err(PublishError::Register(error)) => transient_registration(error),
-        Err(
-            PublishError::AllEndpointsFailed
-            | PublishError::FloorRead(_)
-            | PublishError::MarkUnrecorded(_),
-        ) => true,
-        Err(
-            PublishError::AllEndpointsRefused
-            | PublishError::EmptyHeadCid
-            | PublishError::EmptyInlineValue
-            | PublishError::RecordTooLarge { .. }
-            | PublishError::BelowBar { .. }
-            | PublishError::ForeignVersion { .. }
-            | PublishError::SequenceExhausted,
-        ) => false,
+        Err(PublishError::Register(api)) => transient_registration(api),
+        Err(error) => match error.verdict() {
+            PublishVerdict::NotLanded | PublishVerdict::PutUnacknowledged => true,
+            PublishVerdict::RegistryRefused
+            | PublishVerdict::PutRefused
+            | PublishVerdict::Refused
+            | PublishVerdict::RefusedUnaddressed
+            | PublishVerdict::RefusedOversized => false,
+        },
     }
 }
 
