@@ -20,6 +20,7 @@ use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
+use cipherbox_engine::gate::floor;
 use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
@@ -883,7 +884,7 @@ fn the_owner_starts_again_after_its_session_adopts_the_cut_root(
 ) {
     tick(world, &engine, &mut tasks);
     assert!(
-        block_on(FloorStore::epoch_floor(&owner.floors(&SECRET), &SCOPE)).expect("the floor reads")
+        block_on(floor::read_epoch_floor(&owner.floors(&SECRET), &SCOPE)).expect("the floor reads")
             > Some(vouched_min_read_epoch(world)),
         "the session adopted the cut root above the epoch the anchor vouches"
     );
@@ -975,9 +976,7 @@ fn a_child_read_right_after_a_lag_start_has_the_root_seed() {
         &(0..200u8).collect::<Vec<_>>(),
     )
     .expect("a write at the vault root commits");
-    for _ in 0..4 {
-        tick(&world, &engine, &mut tasks);
-    }
+    tick_n(&world, &engine, &mut tasks, 4);
     let (_, file) = listed(&engine, ROOT)
         .into_iter()
         .find(|(name, _)| name == "notes.bin")
@@ -1002,10 +1001,7 @@ fn published_root_sequence(world: &FakeWorld, root_name: &IpnsName) -> u64 {
         .record_store
         .record_at(&world.record_store.endpoints()[0], root_name.as_str())
         .expect("the vault root is published");
-    IpnsRecord::unmarshal(&bytes)
-        .and_then(|record| record.verify(root_name))
-        .expect("the vault root verifies")
-        .sequence
+    record_sequence(root_name, &bytes)
 }
 
 /// After its session adopts the cut root, and before any vouch of the cut
@@ -1031,8 +1027,7 @@ fn a_session_refuses_a_pre_cut_root_above_the_cut_roots_sequence() {
             .record_store
             .seed_record(&endpoint, root_name.as_str(), stale.clone());
     }
-    tick(&world, &engine, &mut tasks);
-    tick(&world, &engine, &mut tasks);
+    tick_n(&world, &engine, &mut tasks, 2);
 
     assert_eq!(
         listed_names(&engine, ROOT),

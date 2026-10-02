@@ -251,16 +251,11 @@ where
     .map_err(ColdStartError::Seam)?;
     // Project the gate-passing root read-body to its direct children (E7); an
     // own current record at the floor paints from `Resolved::current_at_floor`.
-    let read_seed_epoch = match &resolved.outcome {
-        ResolveOutcome::Adopted(adopted) => Some(adopted.epoch),
-        _ => resolved.current_at_floor.as_ref().map(|at| at.epoch),
-    }
-    .filter(|_| read_scope_seed.is_some());
-    let (root_resolve, base) = match resolved.outcome {
+    let (root_resolve, base, painted_epoch) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
             let mut base = base;
             project_root(&mut base, params.root, &adopted);
-            (RootResolve::Adopted, base)
+            (RootResolve::Adopted, base, Some(adopted.epoch))
         }
         // Availability staleness, so it paints without claiming an adoption.
         ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => {
@@ -268,12 +263,14 @@ where
             if let Some(at_floor) = &resolved.current_at_floor {
                 project_root(&mut base, params.root, at_floor);
             }
-            (RootResolve::NoUpdate, base)
+            let at_floor_epoch = resolved.current_at_floor.as_ref().map(|at| at.epoch);
+            (RootResolve::NoUpdate, base, at_floor_epoch)
         }
         ResolveOutcome::TrustViolation(rejection) => {
             return Err(ColdStartError::RootAdoption(rejection));
         }
     };
+    let read_seed_epoch = painted_epoch.filter(|_| read_scope_seed.is_some());
 
     // Step 4 — first snapshot event with the pending-op overlay applied.
     let rendered = apply_overlay(&base, params.pending_ops);

@@ -19581,22 +19581,7 @@ mod tests {
         #[test]
         fn a_vouch_below_the_durable_floor_publishes_nothing() {
             let world = FakeWorld::new();
-            let device = world.device(&owner_identity().verifying_key().to_sec1());
-            let (head_block, head_cid, root_name) = owner_root();
-            seed_vault_pointer(&device, &root_name);
-            for endpoint in device.record_store.endpoints() {
-                seed_root_record_at(&device, &endpoint, &root_name, &head_cid);
-            }
-            let blocks = Blocks::default();
-            blocks.put(head_block);
-            serve_http(&device, &blocks, 600);
-            let (mut engine, _events) = engine_with_api(
-                &device,
-                ApiBaseUrl::parse("http://api.test").expect("a base"),
-            );
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
-                .expect("cold start adopts the owner root");
-            drop(world.scheduler.take_spawned_tasks());
+            let (engine, device, root_name) = started_owner(&world);
             block_on(
                 device
                     .floors(&CAP_SECRET)
@@ -19608,23 +19593,14 @@ mod tests {
             let voucher = engine
                 .vault_pointer_voucher(&api)
                 .expect("the session adopted a vault pointer");
-            let pointer = vault_pointer_name(&CAP_SECRET, 0);
-            let pointer_records = |device: &FakeDevice| {
-                device
-                    .record_store
-                    .endpoints()
-                    .iter()
-                    .map(|endpoint| device.record_store.record_at(endpoint, pointer.as_str()))
-                    .collect::<Vec<_>>()
-            };
-            let before = pointer_records(&device);
+            let before = pointer_records_of(&device);
             let refused =
                 block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), EPOCH + 1));
             assert!(
                 matches!(refused, Err(RotationPublishError::Rejected)),
                 "{refused:?}"
             );
-            assert_eq!(pointer_records(&device), before, "nothing was published");
+            assert_eq!(pointer_records_of(&device), before, "nothing was published");
             assert_eq!(
                 block_on(floor::vouched_floor(&device.floors(&CAP_SECRET), &SCOPE)).unwrap(),
                 Some(EPOCH),

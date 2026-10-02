@@ -91,13 +91,8 @@ refuses a pointer that only lags a root that this device adopted but did not vou
 
 1. `CONTEXT.md` "Floor law": "One exception, and the list of them is closed" becomes the three
    sources of D1 and the closed list of D2.
-2. `blueprint/engine.md` "Adoption gate and floors" names each raise by its D1 source. (a): the
-   boot cold seed, `PointerConsult::run`, the cut epoch, the clear in `effective_revoked_recipients`.
-   (b): `complete_cut` (from `flat_root_cut`, to a gated-resolve epoch), `rekey_one`, `record_cut_epochs`,
-   `record_revocation_floor` (pre-publish), `record_grant_floor`, `after_write_wave`, the
-   `claim_conversion.rs` `cut_write_scope`, `redrive_write_cut`, `rotate_cut`, the owed re-drive, both
-   raises of `rotate_owed_cut`, `publish_pointer_over`, `publish_bin_index`, `publish_settings_above`,
-   D3. (c): `promote_scope_root`, the mint's cold seed. The cold-start paragraph states D3, D4.
+2. `blueprint/engine.md` "Adoption gate and floors" names each raise by its D1 source. The
+   cold-start paragraph states D3 and D4.
 3. `blueprint/core.md`: no change. The new key takes the `name-label` of ADR 0016 D1 like every
    floor-store key.
 4. `blueprint/testing.md` floor-law matrix: a one-device owner restarts after a vouch that ran

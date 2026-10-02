@@ -6,12 +6,10 @@
 //! goes through this module's accessors, and it is the only place that advances
 //! them **from the record plane** — the owner-authored rotation cut raises the
 //! read-epoch floor directly ([`crate::rotation::rotate`],
-//! [`crate::rotation::cascade`]). A floor rises with no unseal only from the
-//! three sources of ADR 0067 D1: an owner-signed field bound to the scope, a
-//! value this device authored once its publish lands, or an epoch a minting
-//! device holds by construction. blueprint/engine.md "Adoption gate and floors"
-//! closes the list of sites (ADR 0067 D2). These are the record-plane advances
-//! the law admits, with the monotonicity every one of them keeps:
+//! [`crate::rotation::cascade`]). A floor rises with no unseal only at the sites
+//! blueprint/engine.md "Adoption gate and floors" lists (ADR 0067 D1, D2). These
+//! are the record-plane advances the law admits, with the monotonicity every one
+//! of them keeps:
 //!
 //! 1. **Advance on AAD-confirmed unseal** ([`advance_on_unseal`] for
 //!    gate-adopted roots, [`advance_sequence_on_unseal`] for child records) —
@@ -23,11 +21,8 @@
 //!    revocation boundary) and `writeEpoch` the write-epoch floor. The
 //!    [`RepointObject`] is authenticated by construction, so no floor moves on
 //!    an unsigned or non-owner re-point (see [`cold_seed`]). It also raises the
-//!    vouched floor ([`vouched_floor`]), which a landed vault-pointer vouch, or
-//!    a standing pointer that already vouches the epoch, raises too
-//!    ([`raise_vouched_floor`]). The cold-start guard reads it, so a
-//!    pointer that only lags a root this device adopted is no rollback
-//!    (ADR 0067 D3).
+//!    vouched floor the cold-start guard reads ([`raise_vouched_floor`], ADR
+//!    0067 D3).
 //! 3. **Pointer `writeEpoch` advances on sight** ([`advance_write_epoch_on_sight`])
 //!    — an owner-vouched write epoch above the durable floor raises it the
 //!    moment it is seen (#38 D4).
@@ -181,6 +176,20 @@ fn write_epoch_key(scope_id: &[u8; 16]) -> Vec<u8> {
     suffixed(scope_id, WRITE_EPOCH_SUFFIX)
 }
 
+/// The read-epoch floor, then the vouched floor, both to `min_read_epoch`. The
+/// vouched floor never rises alone, so the produce bar is never below the bar
+/// the cold start reads and no build signs a re-point its own cold start
+/// refuses (AGENTS.md rule 8, ADR 0067 D4).
+fn vouched_raises(root_scope_id: &[u8; 16], min_read_epoch: u64) -> [FloorRaise; 2] {
+    [
+        FloorRaise::epoch(root_scope_id.as_slice(), min_read_epoch),
+        FloorRaise::epoch(
+            suffixed(root_scope_id, VOUCHED_FLOOR_SUFFIX),
+            min_read_epoch,
+        ),
+    ]
+}
+
 /// The scope's durable read-epoch floor (the revocation boundary), if ever
 /// raised. This is the floor the adoption gate's epoch stage compares the
 /// envelope epoch tag against.
@@ -235,22 +244,15 @@ pub async fn vouched_floor<F: FloorStore>(
         .await
 }
 
-/// Record that the vault pointer vouches `min_read_epoch` for the root scope.
-/// The read-epoch floor rises with it, first, so the produce bar is never below
-/// the bar the cold start reads (ADR 0067 D4).
+/// Record that the vault pointer vouches `min_read_epoch` for the root scope,
+/// with the read-epoch floor ([`vouched_raises`]).
 pub async fn raise_vouched_floor<F: FloorStore>(
     floors: &F,
     root_scope_id: &[u8; 16],
     min_read_epoch: u64,
 ) -> SeamResult<()> {
     floors
-        .commit_floors(&[
-            FloorRaise::epoch(root_scope_id.as_slice(), min_read_epoch),
-            FloorRaise::epoch(
-                suffixed(root_scope_id, VOUCHED_FLOOR_SUFFIX),
-                min_read_epoch,
-            ),
-        ])
+        .commit_floors(&vouched_raises(root_scope_id, min_read_epoch))
         .await
 }
 
@@ -492,10 +494,11 @@ pub async fn mint_revision<F: FloorStore>(
 /// [`open_pointer_payload`](cipherbox_core::payload::open_pointer_payload),
 /// which authenticates the owner identity signature and the seal, or from the
 /// first-run mint, which builds it from values it derives and then signs it. So
-/// this function never runs on a field the network authored. As with [`advance_on_unseal`], the
-/// trust-critical read-epoch (revocation) floor commits before the write-epoch
-/// floor, so a partial seam failure leaves the fail-closed state (or none at
-/// all, on a backing with an atomic [`FloorStore::commit_floors`]).
+/// this function never runs on a field the network authored. As with
+/// [`advance_on_unseal`], the trust-critical read-epoch (revocation) floor
+/// commits before the write-epoch floor, so a partial seam failure leaves the
+/// fail-closed state (or none at all, on a backing with an atomic
+/// [`FloorStore::commit_floors`]).
 ///
 /// **No sequence floor.** [`RepointObject`] vouches no sequence, so
 /// nothing here anchors the sequence namespace and a cold device meets a
@@ -504,13 +507,11 @@ pub async fn mint_revision<F: FloorStore>(
 /// a sequence the way it vouches the epochs, which is a wire change.
 pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> SeamResult<()> {
     // Revocation floor first (fail-safe ordering).
+    let [read, vouched] = vouched_raises(&repoint.scope_id, repoint.min_read_epoch);
     floors
         .commit_floors(&[
-            FloorRaise::epoch(repoint.scope_id.as_slice(), repoint.min_read_epoch),
-            FloorRaise::epoch(
-                suffixed(&repoint.scope_id, VOUCHED_FLOOR_SUFFIX),
-                repoint.min_read_epoch,
-            ),
+            read,
+            vouched,
             FloorRaise::epoch(write_epoch_key(&repoint.scope_id), repoint.write_epoch),
         ])
         .await?;
@@ -551,10 +552,8 @@ enum ReadBar {
 /// The durable floor an owner-vouched re-point would roll back, if any — the
 /// one definition of the two-stage rule, read by the consume side
 /// ([`cold_seed_checked`]) and the produce side ([`repoint_regression`]).
-/// The two differ only in [`ReadBar`]. The produce bar is the read-epoch floor,
-/// and each raise of the vouched floor raises the read-epoch floor with it, so
-/// the produce bar is never below the bar the cold start reads and no build
-/// signs a re-point its own cold start refuses (AGENTS.md rule 8, ADR 0067 D4).
+/// The two differ only in [`ReadBar`]; [`vouched_raises`] keeps the produce bar
+/// at or above the cold-start bar.
 ///
 /// The read-epoch stage runs **only at the vault anchor**, selected from the
 /// re-point's own scope id against `session_root_scope_id`. At the vault anchor
@@ -580,14 +579,12 @@ async fn regression_below<F: FloorStore>(
 ) -> SeamResult<Option<FloorRegression>> {
     let floor = if repoint.scope_id != *session_root_scope_id {
         None
+    } else if matches!(bar, ReadBar::Vouched)
+        && let Some(vouched) = vouched_floor(floors, &repoint.scope_id).await?
+    {
+        Some(vouched)
     } else {
-        match bar {
-            ReadBar::Vouched => match vouched_floor(floors, &repoint.scope_id).await? {
-                Some(vouched) => Some(vouched),
-                None => read_epoch_floor(floors, &repoint.scope_id).await?,
-            },
-            ReadBar::ReadEpoch => read_epoch_floor(floors, &repoint.scope_id).await?,
-        }
+        read_epoch_floor(floors, &repoint.scope_id).await?
     };
     if let Some(floor) = floor
         && repoint.min_read_epoch < floor

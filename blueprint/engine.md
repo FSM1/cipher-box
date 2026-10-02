@@ -287,11 +287,10 @@ reject at decode in core (FSM1/cipher-box-next#39 D7); the gate surfaces them as
 The **floor law** (FSM1/cipher-box-next#39 D4, superseding FSM1/cipher-box-next#26 D4's blob-seeded floors): floors
 advance only on an AAD-confirmed unseal and cold-seed from the re-point
 object's owner-vouched epochs (`writeEpoch`, `minReadEpoch`); a grant blob's
-epoch field is an advisory routing hint. A floor rises with no unseal only
-from the three sources of
-[ADR 0067](../decisions/0067-the-floor-law-admits-a-closed-list-of-raises-and-the-cold-start-guard-reads-a-vouched-floor.md)
-D1, and the list of sites below is closed (D2): a new site needs an ADR. One of
-them: the `cutEpoch` of a grant-set commitment that passed stage 2 whole
+epoch field is an advisory routing hint. A floor rises with no unseal only at
+the closed list of sites below
+([ADR 0067](../decisions/0067-the-floor-law-admits-a-closed-list-of-raises-and-the-cold-start-guard-reads-a-vouched-floor.md)
+D1, D2): a new site needs an ADR. One of them: the `cutEpoch` of a grant-set commitment that passed stage 2 whole
 raises that scope's cut-epoch floor with no unseal, under the sharer-scoped key
 ([ADR 0014](../decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)
 D1–D5). The owner signs that field and the signed preimage names the scope root
