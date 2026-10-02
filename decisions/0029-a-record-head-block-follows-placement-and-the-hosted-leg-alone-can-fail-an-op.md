@@ -2,8 +2,8 @@
 
 - **Status:** Accepted on 2026-09-26 — retroactive for D2 to D15, which shipped in FSM1/cipher-box#932,
   FSM1/cipher-box#1072, FSM1/cipher-box#1338 and FSM1/cipher-box#1585, and which the blueprint
-  carries. D1 is an owner decision of 2026-09-26 that changes the shipped rule: FSM1/cipher-box#2234
-  moved the code to it on 2026-10-02 (E1); the `blueprint/*.md` and
+  carries. D1 is an owner decision of 2026-09-26 that changes the shipped rule; the code moved to
+  it on 2026-10-02 (E1); the `blueprint/*.md` and
   `CONTEXT.md` rewording in FSM1/cipher-box follows; trimmed on 2026-09-26 to the items that pass
   the three ADR hurdles — the removed items live in the blueprint
 - **Date:** 2026-09-26
@@ -39,7 +39,6 @@ nothing else. On every leg the record-plane publish compares the address the leg
 the head block's own address, and a mismatch publishes nothing. The owner decided this on
 2026-09-26 during the review of this ADR. It replaces the shipped rule (FSM1/cipher-box#1072),
 which sent every head block to the hosted path in every mode (alternative (i)).
-FSM1/cipher-box#2234 moved the code to this rule (E1).
 
 **D3 — Dual runs both legs, and only the hosted leg can fail the op.** Both legs retry inside the
 op. The op completes when the hosted leg succeeds and the external leg has succeeded or used all

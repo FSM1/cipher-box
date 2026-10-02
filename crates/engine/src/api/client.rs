@@ -115,8 +115,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         }
     }
 
-    /// Read the session's placement from the caller's cell, so every record
-    /// publish over this client follows each re-decide.
+    /// Record heads follow this cell, so a re-decide reaches every publish.
     #[must_use]
     pub fn with_placement(mut self, placement: Rc<RefCell<Option<SessionPlacement>>>) -> Self {
         self.placement = placement;

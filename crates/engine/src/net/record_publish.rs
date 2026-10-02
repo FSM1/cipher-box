@@ -436,6 +436,7 @@ mod tests {
     use super::*;
     use crate::net::author::{EnvelopeAuthoring, author_child_envelope};
     use crate::seams::{HttpResponse, RecordTransport};
+    use crate::testkit::account::MEMBER_NODE;
     use crate::testkit::{FakeWorld, block_on};
     use cipherbox_core::ipns::IpnsName;
     use cipherbox_core::seal::{PreservedFields, ReadBody};
@@ -536,7 +537,7 @@ mod tests {
         let authored = head(&binding);
         let preflighted = preflight(&binding, &READ_KEY, &authored).expect("dry run");
         let config = ByoIpfsConfig {
-            endpoint: "https://kubo.member.test".to_owned(),
+            endpoint: MEMBER_NODE.to_owned(),
             kind: crate::content::ByoKind::Kubo,
             access_token: crate::content::ByoBearer::None,
         };
@@ -579,7 +580,7 @@ mod tests {
         assert!(
             requests
                 .iter()
-                .all(|request| request.url.starts_with("https://kubo.member.test")),
+                .all(|request| request.url.starts_with(MEMBER_NODE)),
             "only the member's node was asked"
         );
         assert!(

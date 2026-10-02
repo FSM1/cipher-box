@@ -13286,9 +13286,8 @@ fn an_external_device_saves_its_way_back_to_hosted() {
             block_on(engine.command(Command::SaveVaultSettings {
                 settings: VaultSettings {
                     pin_mode: PinMode::Hosted,
-                    byo: None,
                     retention: RetentionPolicy::KeepAll,
-                    bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+                    ..VaultSettings::default()
                 },
             })),
             Ok(CommandOutcome::Done),
@@ -13460,12 +13459,7 @@ fn a_hold_under_an_external_placement_clears_without_a_quota_probe() {
 
     blocks.accept_uploads();
     block_on(engine.command(Command::SaveVaultSettings {
-        settings: VaultSettings {
-            pin_mode: PinMode::External,
-            byo: Some(member_node(ByoKind::Kubo)),
-            retention: RetentionPolicy::KeepAll,
-            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
-        },
+        settings: external_settings(),
     }))
     .expect("the move to External lands");
     blocks.set_quota_down(true);

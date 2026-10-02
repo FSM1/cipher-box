@@ -1741,8 +1741,7 @@ struct UploadedVersion {
     content_cids: Vec<String>,
 }
 
-/// One op's dual-write mirror: the leg its content blocks and record heads
-/// share, and whether a previous pass already left it short
+/// One op's mirror leg, and whether a previous pass left it short
 /// ([`Resume::mirror_gap`]).
 #[derive(Default)]
 struct OpMirror {
