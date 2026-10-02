@@ -5821,37 +5821,63 @@ fn a_walk_that_read_the_destination_before_the_move_starts_again() {
 /// The walk's first read of the destination shows a fork at the sequence the
 /// move published, which does not name the node. The second read shows the
 /// move's record at that same sequence, so the walk is no snapshot and starts
-/// again.
+/// again. The served record is the pick whichever side carries the higher
+/// signed `data` (ADR 0066 D2).
 #[test]
 fn a_walk_whose_second_read_shows_another_record_at_one_sequence_starts_again() {
-    let mut scene = CaptureScene::new();
-    scene.tick_second(2);
-    scene.move_leaf_right();
-    let right_name = write_name(scene.right);
-    let endpoints = scene.world.record_store.endpoints();
-    let (sequence, _) = published(&scene.world.record_store, scene.right);
-    let fork = folder_record_with(
-        &scene.world.record_store,
-        &scene.blocks,
-        scene.right,
-        vec![child_ref(scene.inner.0, "inner", CoreNodeKind::Folder)],
-        sequence,
-        EOL,
-    );
-    scene.world.record_store.serve_gets_for_after(
-        right_name.as_str(),
-        0,
-        endpoints.len(),
-        Some(fork),
-    );
-    scene.tick_second(4);
+    let signed_data = |name: &IpnsName, bytes: &[u8]| {
+        IpnsRecord::unmarshal(bytes)
+            .and_then(|record| record.verify(name))
+            .expect("the record verifies")
+            .data
+    };
+    for fork_ranks_higher in [true, false] {
+        let mut scene = CaptureScene::new();
+        scene.tick_second(2);
+        scene.move_leaf_right();
+        let right_name = write_name(scene.right);
+        let endpoints = scene.world.record_store.endpoints();
+        let (sequence, _) = published(&scene.world.record_store, scene.right);
+        let moved = scene
+            .world
+            .record_store
+            .record_at(&endpoints[0], right_name.as_str())
+            .expect("the move is published");
+        let fork = (0..64)
+            .map(|variant| {
+                folder_record_with(
+                    &scene.world.record_store,
+                    &scene.blocks,
+                    scene.right,
+                    vec![child_ref(
+                        scene.inner.0,
+                        &format!("inner-{variant}"),
+                        CoreNodeKind::Folder,
+                    )],
+                    sequence,
+                    EOL,
+                )
+            })
+            .find(|fork| {
+                (signed_data(&right_name, fork) > signed_data(&right_name, &moved))
+                    == fork_ranks_higher
+            })
+            .expect("a variant on each side of the order");
+        scene.world.record_store.serve_gets_for_after(
+            right_name.as_str(),
+            0,
+            endpoints.len(),
+            Some(fork),
+        );
+        scene.tick_second(4);
 
-    assert!(
-        scene.binned().is_empty(),
-        "two records at one sequence prove no departure"
-    );
-    assert!(scene.leaf_opens_under_the_scope());
-    scene.assert_second_reads_the_leaf_under_right();
+        assert!(
+            scene.binned().is_empty(),
+            "two records at one sequence prove no departure (fork higher: {fork_ranks_higher})"
+        );
+        assert!(scene.leaf_opens_under_the_scope());
+        scene.assert_second_reads_the_leaf_under_right();
+    }
 }
 
 /// A proof is spent when its bin publish does not land. A node relinked before

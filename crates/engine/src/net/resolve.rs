@@ -15,13 +15,12 @@
 
 use core::cell::RefCell;
 
-use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
+use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 use zeroize::Zeroizing;
 
 use super::fanout::fanout_get_tied_classified;
-use super::last_known_good::{
-    cached_fork, keep_newest_last_known_good, keep_then_commit, outranks,
-};
+use super::fork::{Fork, cached_fork, fork_of, served_fork};
+use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::{Observed, PublishError, head_cid_from_value};
 use crate::facade::NodeId;
@@ -105,6 +104,23 @@ pub trait Adopter {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError>;
+
+    /// Whether `record_bytes`, tied with a pick this read already gated, passes
+    /// the gate at the durable floor the pick left: only such a tie is the
+    /// other side of a same-sequence fork (ADR 0066 D1). A tie that fails
+    /// accuses nobody here. Moves no floor and caches nothing.
+    async fn gates_tie(&self, name: &IpnsName, record_bytes: &[u8]) -> bool {
+        matches!(
+            self.adopt(name, record_bytes).await,
+            Err(GateError::Rejected(GateRejection {
+                reason: RejectionReason::SequenceNotNewer { floor, sequence },
+                ..
+            })) if floor == sequence
+        ) && matches!(
+            self.recover_own_scope_material(name, record_bytes).await,
+            Ok(Some(_))
+        )
+    }
 }
 
 /// The owner's own-scope seeds, recovered from a record already at the durable
@@ -199,15 +215,6 @@ pub enum ResolveOutcome {
         /// The verified record bytes, byte-stable for a keyless re-PUT.
         record_bytes: Vec<u8>,
     },
-    /// A same-sequence fork at the floor (ADR 0066): another record at this
-    /// sequence is served or cached. Not a trust violation; consumers treat it
-    /// as [`Current`](Self::Current), and `record_bytes` is the pick.
-    Forked {
-        /// The verified record bytes the total order picked.
-        record_bytes: Vec<u8>,
-        /// The forked sequence.
-        sequence: u64,
-    },
     /// The freshest fetched record failed the gate — a fail-closed trust
     /// violation. Last-known-good is pinned; the rejected record is never
     /// rendered.
@@ -227,12 +234,14 @@ pub struct Resolved {
     pub last_known_good: Option<Vec<u8>>,
     /// The gate verdict on the freshest fetched record.
     pub outcome: ResolveOutcome,
-    /// The read-body an own root carries when it resolves
-    /// [`ResolveOutcome::Current`] or [`ResolveOutcome::Forked`] (the pick's),
+    /// The read-body an own [`ResolveOutcome::Current`] root carries,
     /// recovered at the floor by the same stages an adopt runs. A quarantine
     /// release rests on an absence a poll of this session established, so a
-    /// root at the floor must still paint the base (ADR 0011 D4).
+    /// root that resolves `Current` must still paint the base (ADR 0011 D4).
     pub current_at_floor: Option<Adopted>,
+    /// The same-sequence fork the gated record met, which is never a trust
+    /// violation (ADR 0066 D1).
+    pub fork: Option<Fork>,
 }
 
 #[cfg(test)]
@@ -244,6 +253,7 @@ impl Resolved {
             last_known_good: None,
             outcome,
             current_at_floor: None,
+            fork: None,
         }
     }
 }
@@ -312,6 +322,7 @@ struct GatedParts {
     read_scope_seed: Option<Zeroizing<[u8; 32]>>,
     current_at_floor: Option<Adopted>,
     observed: Option<Result<Observed, PublishError>>,
+    fork: Option<Fork>,
 }
 
 /// The gated resolve behind [`resolve`]/[`resolve_and_hold`] and the cold-start
@@ -367,6 +378,12 @@ where
                 })
                 .await?;
                 let observed = Some(Observed::gated(name, adopted.sequence, version));
+                // The adopt left the floor at the pick, so a tie gates there.
+                let fork = fork_of(
+                    &verified,
+                    served_fork(adopter, name, &verified, &tied).await,
+                    false,
+                );
                 (
                     ResolveOutcome::Adopted(adopted),
                     GatedParts {
@@ -375,6 +392,7 @@ where
                         read_scope_seed,
                         current_at_floor: None,
                         observed,
+                        fork,
                     },
                 )
             }
@@ -394,25 +412,18 @@ where
                     // adopts nothing. A non-owner adopter yields neither.
                     match adopter.recover_own_scope_material(name, &bytes).await {
                         Ok(material) => {
-                            let held = match material {
+                            let cached = match material {
                                 Some(_) => {
-                                    keep_newest_last_known_good(snapshot_cache, name, &bytes)
+                                    keep_served_last_known_good(snapshot_cache, name, &bytes)
                                         .await?
                                 }
                                 None => last_known_good.clone(),
                             };
-                            let cached = cached_fork(name, held, &bytes);
-                            let forked = !tied.is_empty() || cached.is_some();
-                            // The cached side of a fork can be the order's pick.
-                            let (verified, bytes, material) = match cached {
-                                Some(cached) if outranks(name, &cached, &bytes) => {
-                                    match readmit_at_floor(adopter, name, &cached).await {
-                                        Some((verified, material)) => (verified, cached, material),
-                                        None => (verified, bytes, material),
-                                    }
-                                }
-                                _ => (verified, bytes, material),
-                            };
+                            let fork = fork_of(
+                                &verified,
+                                served_fork(adopter, name, &verified, &tied).await,
+                                cached_fork(name, cached.as_deref(), &verified),
+                            );
                             let recovered = material.map(|material| GatedParts {
                                 hold: material
                                     .write_scope_seed
@@ -425,19 +436,15 @@ where
                                     material.version,
                                 )),
                                 current_at_floor: Some(material.at_floor),
+                                fork: None,
                             });
-                            let record_bytes = bytes.clone();
                             (
-                                if forked {
-                                    ResolveOutcome::Forked {
-                                        record_bytes,
-                                        sequence: verified.sequence,
-                                    }
-                                } else {
-                                    ResolveOutcome::Current { record_bytes }
+                                ResolveOutcome::Current {
+                                    record_bytes: bytes.clone(),
                                 },
                                 GatedParts {
                                     held_record: Some((verified, bytes)),
+                                    fork,
                                     ..recovered.unwrap_or_default()
                                 },
                             )
@@ -463,6 +470,7 @@ where
         read_scope_seed,
         current_at_floor,
         observed,
+        fork,
     } = parts;
 
     Ok(GatedResolve {
@@ -470,6 +478,7 @@ where
             last_known_good,
             outcome,
             current_at_floor,
+            fork,
         },
         hold,
         held_record,
@@ -478,30 +487,6 @@ where
         absent,
         observed,
     })
-}
-
-/// Gate `record_bytes` again at the durable sequence floor: its verified record
-/// and the owner material it recovers there, or `None` when it no longer
-/// admits there.
-async fn readmit_at_floor<A: Adopter>(
-    adopter: &A,
-    name: &IpnsName,
-    record_bytes: &[u8],
-) -> Option<(VerifiedRecord, Option<OwnScopeMaterial>)> {
-    let verified = IpnsRecord::unmarshal(record_bytes)
-        .and_then(|record| record.verify(name))
-        .ok()?;
-    match adopter.adopt(name, record_bytes).await {
-        Err(GateError::Rejected(GateRejection {
-            reason: RejectionReason::SequenceNotNewer { floor, sequence },
-            ..
-        })) if floor == sequence => adopter
-            .recover_own_scope_material(name, record_bytes)
-            .await
-            .ok()
-            .map(|material| (verified, material)),
-        _ => None,
-    }
 }
 
 /// The transient insert-time input for a held record: the resolve/gate path has
@@ -642,9 +627,7 @@ pub(crate) fn refresh_base_from_resolved(
 ) -> FolderMerge {
     let adopted = match (&resolved.outcome, &resolved.current_at_floor) {
         (ResolveOutcome::Adopted(adopted), _) => adopted,
-        (ResolveOutcome::Current { .. } | ResolveOutcome::Forked { .. }, Some(at_floor)) => {
-            at_floor
-        }
+        (ResolveOutcome::Current { .. }, Some(at_floor)) => at_floor,
         _ => return FolderMerge::unchanged(),
     };
     merge_root(&mut base.borrow_mut(), root, adopted)
@@ -654,7 +637,7 @@ pub(crate) fn refresh_base_from_resolved(
 mod tests {
     use super::{
         GatePass, HeldMaterial, OwnScopeMaterial, PendingSequenceRaise, ResolveMode,
-        ResolveOutcome, head_cid_from_value, resolve_and_hold, resolve_gated,
+        ResolveOutcome, Resolved, head_cid_from_value, resolve_and_hold, resolve_gated,
     };
 
     use core::cell::RefCell;
@@ -666,6 +649,7 @@ mod tests {
     use zeroize::Zeroizing;
 
     use super::super::eol;
+    use super::super::fork::Fork;
     use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
     use crate::net::author::ENVELOPE_V;
     use crate::net::publish::PublishError;
@@ -701,6 +685,9 @@ mod tests {
         own_seed: Option<([u8; 16], [u8; 32])>,
         /// The envelope version the gated record carries.
         version: u64,
+        /// A record the floor re-check refuses, as a tied record that fails
+        /// the gate.
+        refused: Option<Vec<u8>>,
     }
 
     impl StubAdopter {
@@ -710,6 +697,7 @@ mod tests {
                 grant: None,
                 own_seed: None,
                 version: ENVELOPE_V,
+                refused: None,
             }
         }
 
@@ -719,6 +707,7 @@ mod tests {
                 grant: Some((seed, node_id)),
                 own_seed: None,
                 version: ENVELOPE_V,
+                refused: None,
             }
         }
 
@@ -729,6 +718,7 @@ mod tests {
                 grant: None,
                 own_seed: Some((node_id, seed)),
                 version: ENVELOPE_V,
+                refused: None,
             }
         }
     }
@@ -807,9 +797,11 @@ mod tests {
         async fn recover_own_scope_material(
             &self,
             _name: &IpnsName,
-            _record_bytes: &[u8],
+            record_bytes: &[u8],
         ) -> Result<Option<OwnScopeMaterial>, GateError> {
-            if matches!(self.verdict, Verdict::RefusedAtFloor) {
+            if matches!(self.verdict, Verdict::RefusedAtFloor)
+                || self.refused.as_deref() == Some(record_bytes)
+            {
                 return Err(GateError::Rejected(GateRejection {
                     stage: GateStage::Unseal,
                     reason: RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),
@@ -881,87 +873,179 @@ mod tests {
         IpnsRecord::create_v2(signer, value, sequence, TTL_NANOS, &validity).marshal()
     }
 
-    /// Two endpoints serve two records at the floor sequence: the resolve
-    /// reports a fork, not our own current record.
-    #[test]
-    fn two_records_served_at_the_floor_resolve_as_a_fork() {
-        let world = FakeWorld::new();
-        let device = world.device(b"me");
-        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[6u8; 16]);
-        let name = IpnsName::from_public_key(&signer.verifying_key());
-        let endpoints = device.record_store.endpoints();
-        let ours = record_of(&signer, b"/ipfs/ours", 3);
-        let theirs = record_of(&signer, b"/ipfs/theirs", 3);
-        device
-            .record_store
-            .seed_record(&endpoints[0], name.as_str(), ours.clone());
-        device
-            .record_store
-            .seed_record(&endpoints[1], name.as_str(), theirs.clone());
+    /// The signed `data` of `record_bytes`, the key the tie order ranks by.
+    fn data_of(name: &IpnsName, record_bytes: &[u8]) -> Vec<u8> {
+        IpnsRecord::unmarshal(record_bytes)
+            .and_then(|record| record.verify(name))
+            .expect("the fixture verifies")
+            .data
+    }
 
-        let resolved = block_on(resolve_gated(
+    /// `record_bytes` with an unsigned field 2 put after field 1: a copy that
+    /// anyone can make without the key, and that still verifies.
+    fn with_unsigned_field(record_bytes: &[u8]) -> Vec<u8> {
+        let end_of_value = 2 + usize::from(record_bytes[1]);
+        let mut copy = record_bytes[..end_of_value].to_vec();
+        copy.extend_from_slice(&[0x12, 0x01, 0x00]);
+        copy.extend_from_slice(&record_bytes[end_of_value..]);
+        copy
+    }
+
+    /// One resolve at the floor of `name` with `served[i]` on endpoint `i`.
+    fn resolve_served(
+        device: &crate::testkit::FakeDevice,
+        adopter: &StubAdopter,
+        name: &IpnsName,
+        served: &[&Vec<u8>],
+        mode: ResolveMode,
+    ) -> Resolved {
+        let endpoints = device.record_store.endpoints();
+        for (endpoint, record) in endpoints.iter().zip(served.iter().cycle()) {
+            device
+                .record_store
+                .seed_record(endpoint, name.as_str(), (*record).clone());
+        }
+        block_on(resolve_gated(
             &device.record_store,
             &device.snapshot_cache,
-            &StubAdopter::new(Verdict::EqualSequence),
-            &name,
-            ResolveMode::NoCache,
+            adopter,
+            name,
+            mode,
         ))
         .expect("the resolve settles")
-        .resolved;
-        assert_eq!(
-            resolved.outcome,
-            ResolveOutcome::Forked {
-                record_bytes: ours.min(theirs),
-                sequence: 3,
-            },
-            "a fork is neither our own current record nor a trust violation"
-        );
+        .resolved
+    }
+
+    /// Two endpoints serve two records of other values at the floor sequence:
+    /// the resolve reports a served fork, never a trust violation, and takes
+    /// the record with the higher signed `data` on either endpoint order.
+    #[test]
+    fn two_records_served_at_the_floor_resolve_as_a_fork() {
+        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[6u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let ours = record_of(&signer, b"/ipfs/ours", 3);
+        let theirs = record_of(&signer, b"/ipfs/theirs", 3);
+        let pick = if data_of(&name, &ours) > data_of(&name, &theirs) {
+            &ours
+        } else {
+            &theirs
+        };
+
+        for served in [[&ours, &theirs], [&theirs, &ours]] {
+            let world = FakeWorld::new();
+            let device = world.device(b"me");
+            let resolved = resolve_served(
+                &device,
+                &StubAdopter::own_current([5u8; 32], [6u8; 16]),
+                &name,
+                &served,
+                ResolveMode::NoCache,
+            );
+            assert_eq!(
+                resolved.outcome,
+                ResolveOutcome::Current {
+                    record_bytes: pick.clone()
+                }
+            );
+            assert_eq!(
+                resolved.fork,
+                Some(Fork {
+                    sequence: 3,
+                    served: true
+                })
+            );
+        }
+    }
+
+    /// A tie is no fork when it signs the pick's own value, when it is the
+    /// pick with an unsigned field added, or when it fails the gate.
+    #[test]
+    fn a_tie_of_one_value_an_altered_copy_or_a_refused_record_is_no_fork() {
+        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[6u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let ours = record_of(&signer, b"/ipfs/ours", 3);
+        let renewed = record_at_eol(&signer, b"/ipfs/ours", 3, UnixMillis(0));
+        let mut values = [ours.clone(), record_of(&signer, b"/ipfs/theirs", 3)];
+        values.sort_by_key(|record| data_of(&name, record));
+        let [theirs, ours_higher] = values;
+        let refusing = StubAdopter {
+            refused: Some(theirs.clone()),
+            ..StubAdopter::own_current([5u8; 32], [6u8; 16])
+        };
+
+        for (case, adopter, tie) in [
+            (
+                "one value",
+                StubAdopter::own_current([5u8; 32], [6u8; 16]),
+                renewed,
+            ),
+            (
+                "an unsigned field",
+                StubAdopter::own_current([5u8; 32], [6u8; 16]),
+                with_unsigned_field(&ours),
+            ),
+            ("a refused tie", refusing, theirs.clone()),
+        ] {
+            let world = FakeWorld::new();
+            let device = world.device(b"me");
+            let pick = if tie == theirs { &ours_higher } else { &ours };
+            let resolved = resolve_served(
+                &device,
+                &adopter,
+                &name,
+                &[pick, &tie],
+                ResolveMode::NoCache,
+            );
+            assert!(
+                matches!(resolved.outcome, ResolveOutcome::Current { .. }),
+                "{case}"
+            );
+            assert_eq!(resolved.fork, None, "{case}");
+        }
     }
 
     /// The endpoints serve one record at the floor, and the cache holds
-    /// another at that sequence: a cache-first read reports a fork and takes
-    /// the order's pick, the cached side when it ranks above the served one.
+    /// another value at that sequence: a cache-first read reports a fork that
+    /// is not served and paints the served record, whichever ranks higher.
     #[test]
     fn a_record_at_the_floor_that_differs_from_the_cached_one_is_a_fork() {
-        let world = FakeWorld::new();
-        let device = world.device(b"me");
         let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[6u8; 16]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
         let served = record_of(&signer, b"/ipfs/served", 3);
-        for endpoint in device.record_store.endpoints() {
-            device
-                .record_store
-                .seed_record(&endpoint, name.as_str(), served.clone());
-        }
         let below = record_at_eol(&signer, b"/ipfs/cached", 3, UnixMillis(0));
-        let above = record_of(&signer, b"/ipfs/cached", 3);
-        assert!(above < served, "at one EOL the cached bytes rank above");
+        let above = record_at_eol(&signer, b"/ipfs/cached", 3, UnixMillis(2 * DAY_MILLIS));
 
-        for (cached, pick) in [(&below, &served), (&above, &above)] {
+        for cached in [&below, &above] {
+            let world = FakeWorld::new();
+            let device = world.device(b"me");
             block_on(device.snapshot_cache.put(name.as_str().as_bytes(), cached))
                 .expect("seed the cached copy");
-            let outcome = block_on(resolve_gated(
-                &device.record_store,
-                &device.snapshot_cache,
+            let resolved = resolve_served(
+                &device,
                 &StubAdopter::new(Verdict::EqualSequence),
                 &name,
+                &[&served],
                 ResolveMode::CacheFirst,
-            ))
-            .expect("the resolve settles")
-            .resolved
-            .outcome;
+            );
             assert_eq!(
-                outcome,
-                ResolveOutcome::Forked {
-                    record_bytes: pick.clone(),
-                    sequence: 3,
+                resolved.outcome,
+                ResolveOutcome::Current {
+                    record_bytes: served.clone()
                 }
+            );
+            assert_eq!(
+                resolved.fork,
+                Some(Fork {
+                    sequence: 3,
+                    served: false
+                })
             );
         }
     }
 
     /// A forced refresh renders nothing from the cache, but the copy the
-    /// keeper replaces is still evidence of a fork.
+    /// keeper replaces with the served record is still evidence of a fork,
+    /// and the next read finds none.
     #[test]
     fn a_forced_refresh_reports_the_fork_its_keeper_write_replaces() {
         let world = FakeWorld::new();
@@ -970,33 +1054,26 @@ mod tests {
         let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
         let name = IpnsName::from_public_key(&signer.verifying_key());
         let served = record_of(&signer, b"/ipfs/served", 3);
-        for endpoint in device.record_store.endpoints() {
-            device
-                .record_store
-                .seed_record(&endpoint, name.as_str(), served.clone());
-        }
         let key = name.as_str().as_bytes();
-        let cached = record_at_eol(&signer, b"/ipfs/cached", 3, UnixMillis(0));
+        let cached = record_at_eol(&signer, b"/ipfs/cached", 3, UnixMillis(2 * DAY_MILLIS));
         block_on(device.snapshot_cache.put(key, &cached)).expect("seed the cached copy");
+        let adopter = StubAdopter::own_current(write_scope_seed, node_id);
 
-        let outcome = block_on(resolve_gated(
-            &device.record_store,
-            &device.snapshot_cache,
-            &StubAdopter::own_current(write_scope_seed, node_id),
-            &name,
-            ResolveMode::NoCache,
-        ))
-        .expect("the resolve settles")
-        .resolved
-        .outcome;
+        let resolved = resolve_served(&device, &adopter, &name, &[&served], ResolveMode::NoCache);
         assert_eq!(
-            outcome,
-            ResolveOutcome::Forked {
-                record_bytes: served.clone(),
+            resolved.fork,
+            Some(Fork {
                 sequence: 3,
-            }
+                served: false
+            })
         );
-        assert_eq!(device.snapshot_cache.peek(key), Some(served));
+        assert_eq!(device.snapshot_cache.peek(key), Some(served.clone()));
+
+        let again = resolve_served(&device, &adopter, &name, &[&served], ResolveMode::NoCache);
+        assert_eq!(
+            again.fork, None,
+            "the fork clears once the cache holds the served record"
+        );
     }
 
     /// A fork does not excuse a record at the floor that fails the floor
@@ -2073,6 +2150,7 @@ mod tests {
                             record_bytes: vec![9, 9, 9],
                         },
                         current_at_floor: Some(adopted_with_one_child(child_id)),
+                        fork: None,
                     },
                 )
                 .changed

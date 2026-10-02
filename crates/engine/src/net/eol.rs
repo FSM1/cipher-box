@@ -93,15 +93,15 @@ pub fn renewal_eol_from(now: UnixMillis) -> String {
 }
 
 /// Whether the record `candidate` ranks above `held` at one sequence, each
-/// given as its signed EOL and its bytes: the later EOL wins (ADR 0061 D3 step
-/// 7), then the lower bytes (ADR 0066 D2), so every reader takes one record
-/// whatever the endpoints serve. An EOL that does not parse is never later
-/// than one that does.
+/// given as its signed EOL and its signed `data`: the later EOL wins (ADR 0061
+/// D3 step 7), then the higher `data` bytes (ADR 0066 D2), so every reader
+/// takes one record whatever the endpoints serve. An EOL that does not parse
+/// is never later than one that does.
 pub fn ranks_above(candidate: (&[u8], &[u8]), held: (&[u8], &[u8])) -> bool {
     match parse_rfc3339(candidate.0).cmp(&parse_rfc3339(held.0)) {
         core::cmp::Ordering::Greater => true,
         core::cmp::Ordering::Less => false,
-        core::cmp::Ordering::Equal => candidate.1 < held.1,
+        core::cmp::Ordering::Equal => candidate.1 > held.1,
     }
 }
 
@@ -447,5 +447,18 @@ mod tests {
             parse_rfc3339(b"1900-02-29T00:00:00Z").is_none(),
             "1900 is not a leap year (century, not 400)"
         );
+    }
+
+    /// At one EOL the higher signed `data` ranks above; a later EOL ranks
+    /// above whatever its `data`; an EOL that does not parse ranks below one
+    /// that does; and a record never ranks above itself.
+    #[test]
+    fn ranks_above_takes_the_later_eol_then_the_higher_data() {
+        let (eol, later) = (b"2099-01-01T00:00:00Z", b"2099-01-02T00:00:00Z");
+        assert!(ranks_above((eol, b"b"), (eol, b"a")));
+        assert!(!ranks_above((eol, b"a"), (eol, b"b")));
+        assert!(ranks_above((later, b"a"), (eol, b"b")));
+        assert!(!ranks_above((b"not-a-time", b"z"), (eol, b"a")));
+        assert!(!ranks_above((eol, b"a"), (eol, b"a")));
     }
 }

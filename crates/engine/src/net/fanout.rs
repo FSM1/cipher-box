@@ -364,11 +364,18 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
             continue;
         };
         match &scan.best {
-            Some((current, held)) if verified.sequence == current.sequence => {
-                if bytes == *held || scan.tied.contains(&bytes) {
+            Some((current, _)) if verified.sequence == current.sequence => {
+                // One signed `data` is one record, whatever unsigned fields an
+                // endpoint adds to its envelope.
+                let seen =
+                    |bytes: &[u8]| signed_data(name, bytes).as_deref() == Some(&verified.data[..]);
+                if verified.data == current.data || scan.tied.iter().any(|tie| seen(tie)) {
                     continue;
                 }
-                if ranks_above((&verified.validity, &bytes), (&current.validity, held)) {
+                if ranks_above(
+                    (&verified.validity, &verified.data),
+                    (&current.validity, &current.data),
+                ) {
                     if let Some((_, displaced)) = scan.best.replace((verified, bytes)) {
                         scan.tied.push(displaced);
                     }
@@ -384,6 +391,14 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
         }
     }
     scan
+}
+
+/// The signed `data` of `record_bytes`, when it verifies under `name`.
+fn signed_data(name: &IpnsName, record_bytes: &[u8]) -> Option<Vec<u8>> {
+    IpnsRecord::unmarshal(record_bytes)
+        .and_then(|record| record.verify(name))
+        .ok()
+        .map(|verified| verified.data)
 }
 
 #[cfg(test)]
@@ -490,10 +505,10 @@ mod tests {
         }
     }
 
-    /// At one sequence and one EOL, every reader takes the lower record bytes,
-    /// whatever endpoint serves them (ADR 0066 D2).
+    /// At one sequence and one EOL, every reader takes the record with the
+    /// higher signed `data`, whatever endpoint serves it (ADR 0066 D2).
     #[test]
-    fn at_one_sequence_and_one_eol_the_lower_bytes_win_on_any_endpoint() {
+    fn at_one_sequence_and_one_eol_the_higher_signed_data_wins_on_any_endpoint() {
         use crate::net::eol::eol_from;
         use crate::seams::UnixMillis;
 
@@ -504,7 +519,7 @@ mod tests {
             IpnsRecord::create_v2(&signer, b"/ipfs/one", 4, 1, &eol).marshal(),
             IpnsRecord::create_v2(&signer, b"/ipfs/two", 4, 1, &eol).marshal(),
         ];
-        records.sort();
+        records.sort_by_key(|record| signed_data(&name, record));
         let [lower, higher] = records;
         for order in [[&lower, &higher], [&higher, &lower]] {
             let eps = vec![EndpointId::new("a"), EndpointId::new("b")];
@@ -513,8 +528,34 @@ mod tests {
             store.seed_record(&eps[1], name.as_str(), order[1].clone());
 
             let (_, best, tied) = block_on(fanout_get_tied(&store, &name)).expect("a record");
-            assert_eq!(best, lower, "the lower bytes win the tie");
-            assert_eq!(tied, vec![higher.clone()]);
+            assert_eq!(best, higher, "the higher signed data wins the tie");
+            assert_eq!(tied, vec![lower.clone()]);
+        }
+    }
+
+    /// A copy of the record with an unsigned field added carries the same
+    /// signed `data`: it is the same record, not a tie, on either endpoint.
+    #[test]
+    fn a_copy_with_an_unsigned_field_added_is_the_same_record() {
+        let signer = Ed25519Signer::from_seed([3u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let record =
+            IpnsRecord::create_v2(&signer, b"/ipfs/one", 4, 1, "2099-01-01T00:00:00Z").marshal();
+        let end_of_value = 2 + usize::from(record[1]);
+        let mut copy = record[..end_of_value].to_vec();
+        copy.extend_from_slice(&[0x12, 0x01, 0x00]);
+        copy.extend_from_slice(&record[end_of_value..]);
+        assert_ne!(copy, record);
+
+        for order in [[&record, &copy], [&copy, &record]] {
+            let eps = vec![EndpointId::new("a"), EndpointId::new("b")];
+            let store = InMemoryRecordStore::new(eps.clone());
+            store.seed_record(&eps[0], name.as_str(), order[0].clone());
+            store.seed_record(&eps[1], name.as_str(), order[1].clone());
+
+            let (best, _, tied) = block_on(fanout_get_tied(&store, &name)).expect("a record");
+            assert_eq!(Some(best.data), signed_data(&name, &record));
+            assert!(tied.is_empty());
         }
     }
 

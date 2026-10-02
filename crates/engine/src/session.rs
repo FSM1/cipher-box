@@ -616,7 +616,6 @@ impl SessionState {
             capture_proofs: &self.capture_proofs,
             pending_scope_exits: &self.pending_scope_exits,
             publishing: &self.publishing,
-            forks: &self.fork_sightings,
         }
     }
 }

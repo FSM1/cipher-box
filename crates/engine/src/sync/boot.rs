@@ -249,10 +249,7 @@ where
     )
     .await
     .map_err(ColdStartError::Seam)?;
-    let forked = match resolved.outcome {
-        ResolveOutcome::Forked { sequence, .. } => Some(sequence),
-        _ => None,
-    };
+    let forked = resolved.fork.map(|fork| fork.sequence);
     // Project the gate-passing root read-body to its direct children (E7); an
     // own current record at the floor paints from `Resolved::current_at_floor`.
     let (root_resolve, base) = match resolved.outcome {
@@ -262,9 +259,7 @@ where
             (RootResolve::Adopted, base)
         }
         // Availability staleness, so it paints without claiming an adoption.
-        ResolveOutcome::NoUpdate
-        | ResolveOutcome::Current { .. }
-        | ResolveOutcome::Forked { .. } => {
+        ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => {
             let mut base = base;
             if let Some(at_floor) = &resolved.current_at_floor {
                 project_root(&mut base, params.root, at_floor);

@@ -1789,8 +1789,9 @@ fn the_tick_resolves_the_material_of_an_owner_minted_interior_scope() {
     );
 }
 
-/// The boundary walk reads an owner-minted scope root that one endpoint serves
-/// forked, and the session reports that fork once.
+/// The boundary walk reads an owner-minted scope root whose cached copy is
+/// another value at its sequence: the session reports that fork once, and the
+/// served record replaces the cached copy, so the fork clears.
 #[test]
 fn a_walk_that_reads_an_owned_scope_root_forked_reports_it_once() {
     let mut fx = GrantScenario::new();
@@ -1809,15 +1810,18 @@ fn a_walk_that_reads_an_owned_scope_root_forked_reports_it_once() {
     let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &fx.folder.0).as_bytes());
     let other = IpnsRecord::create_v2(
         &signer,
-        &held.value,
+        b"/ipfs/bafyanotherscoperoot",
         held.sequence,
         held.ttl,
         "2098-01-01T00:00:00Z",
     )
     .marshal();
-    fx.world
-        .record_store
-        .seed_record(&endpoints[1], name.as_str(), other);
+    block_on(
+        fx.owner_device
+            .snapshot_cache
+            .put(name.as_str().as_bytes(), &other),
+    )
+    .expect("seed the cached copy");
     drop(events_so_far(&mut fx._events));
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);

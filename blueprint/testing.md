@@ -161,20 +161,23 @@ scenario fails the meta-test):
   time ahead of the clock, and one window for each cycle; a publish during the
   registration wait makes the walk refuse; at one
   sequence the later EOL wins in the resolve and in the last-known-good
-  keeper, and at one EOL the lower record bytes win. A same-sequence fork
-  (ADR 0066): a resolve at the floor reports a fork when the fan-out serves a
-  second record at that sequence or the cache holds one, a cache-first read
-  paints the order's pick, and a record at the floor that fails the floor
-  check stays a trust violation (`net::resolve`); the boundary walk marks a
-  scope whose root is served or cached forked (`net::rotation`) and reports
-  it once (`sync::pass`, `tests/owner_actions.rs`); the folder leg and the
-  lagging arm report a forked child (`net::focus`, `net::child`); a device
-  that reads a fork at the vault
-  root on two ticks, or on a restart against its cached root, sends one fork
-  event and no abuse event (`tests/write_plane.rs`); the walk renews neither
-  a forked file nor a forked vault root and reports the file's fork, and the
-  renewal set does not renew a name the endpoints serve forked
-  (`tests/renewal_walk.rs`, `net::liveness`). `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
+  keeper, and at one EOL the higher signed `data` wins (`net::eol`,
+  `net::fanout`, `net::last_known_good`). A same-sequence fork (ADR 0066): a
+  resolve at the floor reports a fork when the fan-out serves a second value
+  that gates or the cache holds one, paints the served record, and reports
+  no fork for a tie of one value, a copy with an unsigned field, or a tie that
+  fails the gate; a record at the floor that fails the floor check stays a
+  trust violation (`net::resolve`); the boundary walk marks a scope whose root
+  is served or cached forked (`net::rotation`) and reports it once
+  (`sync::pass`, `tests/owner_actions.rs`); the folder leg and the lagging arm
+  report a forked child (`net::focus`, `net::child`); a device that reads a
+  fork at the vault root on two ticks, or on a restart against its cached
+  root, sends one fork event and no abuse event, and a walk whose second read
+  shows another record starts again on either order of the two records
+  (`tests/write_plane.rs`); the walk holds a served fork of a file or of the
+  vault root back with 45 days left and reports it, renews over it with 25
+  days left, and renews over a tie of one value, and the renewal set renews
+  over a fork inside 30 days (`tests/renewal_walk.rs`, `net::liveness`). `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
   wave left at its old name, which nothing renews; `tests/write_plane.rs`
   covers a renewal inside the drain's window, and a lost race on a scope root
   or an interior folder healed after a restart or a re-read.

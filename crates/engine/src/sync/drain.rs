@@ -55,7 +55,7 @@ use crate::content::{
 use crate::deadlines::DeadlinePolicy;
 use crate::entropy::{Entropy, SharedEntropy, fresh_ephemeral, fresh_nonce};
 use crate::facade::{
-    BlockProgress, Event, ForkSightings, MAX_NODE_NAME_BYTES, NodeId, OpPhase, RetainedDeadLetters,
+    BlockProgress, Event, MAX_NODE_NAME_BYTES, NodeId, OpPhase, RetainedDeadLetters,
     emit_trust_violation,
 };
 use crate::gate::GateStage;
@@ -1343,8 +1343,6 @@ pub(crate) struct DrainCells<'a> {
     /// The names this drain is publishing right now, which the renewal walk
     /// stays clear of (ADR 0061 D3 step 2).
     pub(crate) publishing: &'a RefCell<BTreeSet<String>>,
-    /// The session's reported same-sequence forks.
-    pub(crate) forks: &'a ForkSightings,
 }
 
 /// Holds one name in [`DrainCells::publishing`] while its publish runs.
@@ -2687,8 +2685,7 @@ where
             .gated_scope_root(scope, end, ResolveMode::CacheFirst)
             .await?;
         let served: Vec<Vec<u8>> = match &gated.resolved.outcome {
-            ResolveOutcome::Current { record_bytes }
-            | ResolveOutcome::Forked { record_bytes, .. } => {
+            ResolveOutcome::Current { record_bytes } => {
                 gated.tied.iter().chain([record_bytes]).cloned().collect()
             }
             _ => Vec::new(),
@@ -2913,7 +2910,7 @@ where
     ) -> Result<GatedResolve, Halt> {
         let floors = end.floors(&self.seams.floors);
         let adopter = self.root_adopter(scope, &floors, end);
-        let gated = resolve_gated(
+        resolve_gated(
             &self.seams.transport,
             &self.seams.snapshot_cache,
             &adopter,
@@ -2921,18 +2918,7 @@ where
             mode,
         )
         .await
-        .map_err(seam)?;
-        self.report_fork(end.root_name, &gated);
-        Ok(gated)
-    }
-
-    /// Report a same-sequence fork that one resolve of `name` met.
-    fn report_fork(&self, name: &IpnsName, gated: &GatedResolve) {
-        if let ResolveOutcome::Forked { sequence, .. } = gated.resolved.outcome {
-            self.cells
-                .forks
-                .report(&self.seams.events, name.as_str(), sequence);
-        }
+        .map_err(seam)
     }
 
     /// Resolve one non-root node's own record through the child pipeline and
@@ -2957,7 +2943,6 @@ where
         )
         .await
         .map_err(seam)?;
-        self.report_fork(&name, &resolved);
         let tied = !resolved.tied.is_empty();
         // A drain publish is an ordinary write, so it carries the lazy wave
         // rather than refusing what a cut left behind: a record the epoch floor
@@ -6862,7 +6847,6 @@ where
         )
         .await
         .map_err(seam)?;
-        self.report_fork(name, &resolved);
         let tied = resolved.tied;
         match &resolved.resolved.outcome {
             ResolveOutcome::TrustViolation(rejection) => match rejection.reason {
@@ -7360,9 +7344,7 @@ where
             // soft delete re-keyed into the bin. An earlier stage says nothing
             // about what stands at the name.
             ResolveOutcome::TrustViolation(rejection) => rejection.stage == GateStage::Unseal,
-            ResolveOutcome::Current { .. }
-            | ResolveOutcome::Forked { .. }
-            | ResolveOutcome::NoUpdate => false,
+            ResolveOutcome::Current { .. } | ResolveOutcome::NoUpdate => false,
         })
     }
 
@@ -7979,13 +7961,11 @@ fn resolved_bytes(
             .held_record
             .map(|(_, bytes)| bytes)
             .ok_or(Halt::Unclassified),
-        ResolveOutcome::Current { record_bytes } | ResolveOutcome::Forked { record_bytes, .. } => {
-            Ok(gated
-                .resolved
-                .last_known_good
-                .filter(|cached| gated.tied.contains(cached))
-                .unwrap_or(record_bytes))
-        }
+        ResolveOutcome::Current { record_bytes } => Ok(gated
+            .resolved
+            .last_known_good
+            .filter(|cached| gated.tied.contains(cached))
+            .unwrap_or(record_bytes)),
         ResolveOutcome::NoUpdate => gated.resolved.last_known_good.ok_or(Halt::Unclassified),
         ResolveOutcome::TrustViolation(rejection) => Err(refuse_record(events, name, &rejection)),
     }
@@ -8171,6 +8151,7 @@ mod tests {
                     epoch: 0,
                 }),
                 current_at_floor: None,
+                fork: None,
             },
             hold: None,
             held_record: Some((
@@ -8179,6 +8160,7 @@ mod tests {
                     validity: Vec::new(),
                     sequence: 6,
                     ttl: 0,
+                    data: Vec::new(),
                 },
                 gated.clone(),
             )),
@@ -8207,6 +8189,7 @@ mod tests {
                     record_bytes: first.clone(),
                 },
                 current_at_floor: None,
+                fork: None,
             },
             hold: None,
             held_record: None,
@@ -8240,6 +8223,7 @@ mod tests {
                     last_known_good: None,
                     outcome,
                     current_at_floor: None,
+                    fork: None,
                 },
                 hold: None,
                 held_record: None,

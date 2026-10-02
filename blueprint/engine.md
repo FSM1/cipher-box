@@ -115,17 +115,17 @@ bytes (FSM1/cipher-box-next#28 D2).
   At one sequence, the fan-out resolve (`fanout::scan`) and the last-known-good
   keeper (`keep_newest_last_known_good`) take one record by a total order: the
   later EOL wins, so a real write wins over a renewal walk's re-signature
-  (ADR 0061 D3 step 7), then the lower record bytes in byte order (ADR 0066
-  D2). At the sequence floor, another record the fan-out serves at that
-  sequence, or a fetched record whose bytes differ from the cached copy at
-  that sequence, is a same-sequence fork. The vault root resolve, the gated
-  child resolve, the drain's gated reads, and the root admit of the boundary
-  walk and the renewal walk report it as its own outcome, never as a trust
-  violation: the reader paints the pick, which can be the cached side, as it
-  paints a record at the floor, and sends one `sameSequenceFork` event for
-  each name and sequence in a session, the boot read included (ADR 0066 D1,
-  D2). A forced refresh renders nothing from the cache, but the copy its
-  last-known-good write replaces is still evidence of a fork.
+  (ADR 0061 D3 step 7), then the higher signed `data` (ADR 0066 D2). A record
+  is its signed `data`, so a copy with an unsigned field added is the same
+  record. Another value at the pick's sequence that the fan-out serves and
+  that passes the gate at the floor, or that the snapshot cache holds, is a
+  same-sequence fork; a record of the pick's own value is none. The vault root
+  resolve, whether it adopts or reads at the floor, the gated child resolve,
+  and the root admit of the boundary walk and the renewal walk report it
+  beside their outcome, never as a trust violation: the reader paints the
+  served pick, the served record replaces a cached copy at its sequence, and
+  the session sends one `sameSequenceFork` event for each name and sequence,
+  the boot read included (ADR 0066 D1, D2).
   The keeper can then hold the drain's own losing record, so at a split at the
   floor the drain rebases onto a gated record of the scope root, or of a
   folder the head op writes, on which its head op does not read as applied.
@@ -153,11 +153,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   walk** (ADR 0061 D1 to D4), which reaches every other name of the vault. A
   session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
-  set. Neither the renewal walk nor the renewal set renews a name that
-  resolved as a same-sequence fork in that pass, or that the endpoints still
-  serve forked, because a record at `S + 1` buries the side the order did not
-  pick; the keyless re-PUT holds the pick, and a later cycle renews the name
-  when the fork has gone (ADR 0066 D3).
+  set. The renewal walk holds back the renewal of a name the endpoints serve
+  forked while more than 30 days of its EOL are left, because a record at
+  `S + 1` buries the side the order did not pick, and sends `RenewalFailed`
+  for it; inside 30 days the walk and the renewal set renew over the fork, so
+  liveness wins (ADR 0066 D3).
   The API republisher (~12 h inventory walk) re-PUTs the same bytes and
   extends no validity; it backstops dormant vaults only — no client depends on
   the background re-PUT loop, and no client resolve path ever touches the API's

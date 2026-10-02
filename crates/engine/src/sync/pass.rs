@@ -533,16 +533,15 @@ where
         }
         let resolved = held_resolve.map(|surfaced| surfaced.resolved);
         if let Ok(resolved) = &resolved {
-            match &resolved.outcome {
-                ResolveOutcome::TrustViolation(rejection) => {
-                    emit_trust_violation(&self.seams.events, pass.root_name.as_str(), rejection);
-                }
-                ResolveOutcome::Forked { sequence, .. } => state.fork_sightings.report(
+            if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
+                emit_trust_violation(&self.seams.events, pass.root_name.as_str(), rejection);
+            }
+            if let Some(fork) = resolved.fork {
+                state.fork_sightings.report(
                     &self.seams.events,
                     pass.root_name.as_str(),
-                    *sequence,
-                ),
-                _ => {}
+                    fork.sequence,
+                );
             }
             let merged =
                 refresh_base_from_resolved(&state.snapshot, NodeId(self.root_id), resolved);
@@ -809,9 +808,9 @@ where
         // trust verdict, never the staleness the other failures are.
         let root_verdict = match resolved {
             Ok(r) => match &r.outcome {
-                ResolveOutcome::Adopted(_)
-                | ResolveOutcome::Current { .. }
-                | ResolveOutcome::Forked { .. } => RefreshVerdict::Reconciled,
+                ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. } => {
+                    RefreshVerdict::Reconciled
+                }
                 ResolveOutcome::TrustViolation(_) => RefreshVerdict::Rejected,
                 ResolveOutcome::NoUpdate => RefreshVerdict::Unreachable,
             },
@@ -1724,8 +1723,11 @@ fn report_forked_scopes(
     events: &mpsc::UnboundedSender<Event>,
     proved: &[DescendantScopeRoot],
 ) {
-    for scope in proved.iter().filter(|scope| scope.forked) {
-        forks.report(events, scope.name.as_str(), scope.adopted.sequence);
+    for (scope, fork) in proved
+        .iter()
+        .filter_map(|scope| scope.fork.map(|fork| (scope, fork)))
+    {
+        forks.report(events, scope.name.as_str(), fork.sequence);
     }
 }
 
@@ -2046,7 +2048,7 @@ mod tests {
                 read_scope_seed: Zeroizing::new(READ_SCOPE_SEED),
                 write,
                 write_cut_unfinished: false,
-                forked: false,
+                fork: None,
             }
         }
 
@@ -2056,7 +2058,10 @@ mod tests {
             let forks = ForkSightings::default();
             let (events, mut rx) = mpsc::unbounded();
             let forked = DescendantScopeRoot {
-                forked: true,
+                fork: Some(crate::net::fork::Fork {
+                    sequence: 1,
+                    served: true,
+                }),
                 ..proved(Err(WritePlaneDark::Keyless))
             };
             let plain = DescendantScopeRoot {
@@ -2071,7 +2076,10 @@ mod tests {
                 &forks,
                 &events,
                 &[DescendantScopeRoot {
-                    forked: true,
+                    fork: Some(crate::net::fork::Fork {
+                        sequence: 1,
+                        served: false,
+                    }),
                     ..proved(Err(WritePlaneDark::Keyless))
                 }],
             );

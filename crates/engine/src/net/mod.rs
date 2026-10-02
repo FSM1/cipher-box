@@ -35,6 +35,7 @@ pub const REGISTRY_BODY_MAX_BYTES: usize = 1024 * 1024;
 pub mod author;
 pub(crate) mod cut;
 pub mod eol;
+pub mod fork;
 pub mod liveness;
 pub(crate) mod provision;
 pub mod publish;

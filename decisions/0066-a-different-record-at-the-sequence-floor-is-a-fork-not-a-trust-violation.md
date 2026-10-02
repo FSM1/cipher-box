@@ -9,7 +9,7 @@
   [ADR 0034](./0034-a-degraded-settings-load-falls-back-to-the-last-verified-copy-and-never-widens-placement.md) D6,
   [ADR 0061](./0061-a-renewal-walk-over-every-owned-scope-renews-each-name-through-the-adoption-gate.md) D3,
   `blueprint/engine.md` "Resolve/publish pipeline"
-- **Implemented by:** not yet implemented
+- **Implemented by:** FSM1/cipher-box#2209
 - **Amends:** ADR 0061 D3 (steps 2 and 7)
 
 ## Context
@@ -27,9 +27,12 @@ devices of the owner, and the drain rebase heals them.
 ## Decision
 
 **D1 — At the sequence floor, a different record is a same-sequence fork, and the resolve reports
-it as its own outcome.** A fork is one of two things: a non-empty `tied` set from the fan-out, or a
-fetched record whose bytes differ from the bytes that the snapshot cache holds for that name at
-that sequence. Two read paths take this rule. The first is `resolve_gated`: the vault root, and
+it beside its outcome.** A fork is one of two things: a tied record of another signed value that
+passes the gate at the floor the pick left, or a record of another signed value that the snapshot
+cache holds for that name at that sequence. A record is its signed `data`: a copy with an unsigned
+field added is the same record, and a tie of the pick's own value is no fork. The read checks
+`tied` when it adopts the pick too, so a device with no floor for the name sees the fork on its
+first read. Two read paths take this rule. The first is `resolve_gated`: the vault root, and
 each node that `resolve_child_record` resolves. The second is the root admit `gate_root_pass`
 (`net::rotation`), which admits a scope root at the floor through `reread_at_floor`, where the
 tick's boundary walk (`ScopeWalk::descend`) and the renewal walk (`admit_owned_scope_root`) read
@@ -39,12 +42,19 @@ and their sealed body revision keeps its own rule (ADR 0034 D6, ADR 0031).
 
 **D2 — A fork is not a trust violation.** The gate still runs on each record. The reader picks
 one gate-passing record by a fixed total order, paints it as it paints a record at the floor, and
-sends one event for each name and sequence in a session. The drain reads the other records from
+sends one event for each name and sequence in a session. The tie goes to the higher signed `data`
+bytes; boxo `selectRecord` also takes the higher bytes, but over the full record, so a pick can
+still differ when an endpoint adds unsigned fields. A cached record that no endpoint serves is
+evidence but never the pick: the served record replaces it as last-known-good, and the fork
+clears. The drain reads the other records from
 the fork outcome, and its rebase heals the fork as it does today.
 
-**D3 — The renewal walk does not renew a name that resolved as a fork in this cycle.** A renewal
-at `S + 1` buries the record that the order did not pick, on each reader. The keyless re-PUT of
-the republisher holds the pick alive. A later cycle renews the name when the fork has gone.
+**D3 — The renewal walk holds back the renewal of a name that the endpoints serve forked, until
+30 days of EOL are left.** A renewal at `S + 1` buries the record that the order did not pick, on
+each reader. While the pick has more than `EOL_RENEW_THRESHOLD` (30 days) left, the walk does not
+renew the name and sends `RenewalFailed` for it, so the drain rebase or a re-PUT can heal the fork
+first. Inside the threshold the walk and the renewal set renew over the fork, because a lapse
+loses the name. A fork that only the cache shows holds nothing back.
 
 ## Alternatives considered
 
@@ -71,13 +81,14 @@ the republisher holds the pick alive. A later cycle renews the name when the for
 1. `CONTEXT.md` "Adoption gate": a different record at the floor is a same-sequence fork, not a
    failure (D1, D2). `CONTEXT.md` adds the term "Same-sequence fork" with the scope of D1.
 2. `blueprint/engine.md` "Resolve/publish pipeline" states the total order of D2: the later EOL
-   wins, then the lower record bytes in byte order. It replaces two different tie rules:
+   wins, then the higher signed `data` bytes. It replaces two different tie rules:
    `fanout::scan` takes the first endpoint at one EOL, and `keep_newest_last_known_good` keeps the
    held copy at one EOL. The Liveness bullet states D3.
 3. `blueprint/engine.md` "Facade" adds the fork event. It carries the routing key alone. The
    event crosses the WASM seam, and `packages/client` adds its type.
-4. `blueprint/testing.md` adds four tests: a fork through `tied`, a fork through the cache, one
-   event for two resolves of one fork, and a walk that does not renew a forked name.
+4. `blueprint/testing.md` adds the tests: a fork through `tied` and through the cache, a tie of
+   one value, a copy with an unsigned field and a tie that fails the gate as no fork, one event
+   for two resolves of one fork, and a walk that holds a served fork back until the threshold.
 5. Accepted residual: a device with a cold or cleared snapshot cache sees a fork only through
    `tied`. When the endpoints serve one record, that device keeps the present rule.
 6. ADR 0061 D3 steps 2 and 7 carry an "Amended by ADR 0066" sentence.

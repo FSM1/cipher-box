@@ -289,10 +289,10 @@ where
         )
         .await
         {
-            Ok(ChildRecord::Admitted(adopted, _)) => Some((name, adopted)),
-            Ok(ChildRecord::Forked(adopted)) => {
-                self.forks
-                    .report(self.events, name.as_str(), adopted.sequence);
+            Ok(ChildRecord::Admitted(adopted, _, fork)) => {
+                if let Some(fork) = fork {
+                    self.forks.report(self.events, name.as_str(), fork.sequence);
+                }
                 Some((name, adopted))
             }
             // Availability: the base keeps rendering last-known-good.
@@ -643,9 +643,9 @@ mod tests {
         assert!(reported, "a body that names a vault node is attributable");
     }
 
-    /// A forced refresh of a folder it already adopted, whose cached copy is the
-    /// other side of a same-sequence fork: the leg reports the fork, renders the
-    /// folder, and accuses nobody.
+    /// A forced refresh of a folder it already adopted, whose cached copy is
+    /// another value at its sequence: the leg reports the fork once, renders
+    /// the served folder, and accuses nobody. A copy of one value is no fork.
     #[test]
     fn a_folder_whose_cached_copy_is_the_other_fork_side_is_reported() {
         let leg = FolderLeg::new(SCOPE_A, vec![child_ref(HONEST, "a-photo", 1)]);
@@ -661,26 +661,38 @@ mod tests {
             .and_then(|record| record.verify(&folder_name()))
             .expect("the cached record verifies");
         let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &FOLDER);
-        let other_side = IpnsRecord::create_v2(
-            &kdf::ipns_keypair(write_seed.as_bytes()),
-            &served.value,
-            1,
-            2_000_000_000,
-            "2098-01-01T00:00:00Z",
-        )
-        .marshal();
-        block_on(
-            leg.snapshot_cache
-                .put(folder_name().as_str().as_bytes(), &other_side),
-        )
-        .expect("cache write");
+        let other_side = |value: &[u8]| {
+            IpnsRecord::create_v2(
+                &kdf::ipns_keypair(write_seed.as_bytes()),
+                value,
+                1,
+                2_000_000_000,
+                "2098-01-01T00:00:00Z",
+            )
+            .marshal()
+        };
+        let one_value = other_side(&served.value);
+        let another_value = other_side(b"/ipfs/bafyanotherfolder");
 
-        assert!(
-            !leg.run(SCOPE_A, Some(&scope_roots())),
-            "a fork accuses nobody"
-        );
-        assert_eq!(leg.forks_reported.get(), 1);
-        assert_eq!(leg.listing(FOLDER), vec!["a-photo".to_owned()]);
+        for (case, cached, reported) in [
+            ("one value", Some(&one_value), 0),
+            ("another value", Some(&another_value), 1),
+            ("the fork cleared", None, 0),
+        ] {
+            if let Some(cached) = cached {
+                block_on(
+                    leg.snapshot_cache
+                        .put(folder_name().as_str().as_bytes(), cached),
+                )
+                .expect("cache write");
+            }
+            assert!(
+                !leg.run(SCOPE_A, Some(&scope_roots())),
+                "a fork accuses nobody ({case})"
+            );
+            assert_eq!(leg.forks_reported.get(), reported, "{case}");
+            assert_eq!(leg.listing(FOLDER), vec!["a-photo".to_owned()], "{case}");
+        }
     }
 
     /// A refusal is not a removal. An id a later bookmark contests is already
