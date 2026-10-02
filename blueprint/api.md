@@ -98,7 +98,8 @@ What left the API relative to v1 — with the design that removed it:
   `POST /auth/login` takes an optional `identityToken` and refuses with 401 a
   token that does not verify. When the account and the subject are both
   unbound, the login writes the bind under the subject lock that registration
-  also takes; when either is bound elsewhere, the login proceeds and changes
+  also takes; when either is bound elsewhere, or a device row from before the
+  bind holds the subject under another account, the login proceeds and changes
   nothing (D2). `POST /devices` refuses with 409 a registration from an unbound
   account and a registration whose token names another subject, and the row
   records the bound subject (D3).
