@@ -7610,8 +7610,7 @@ fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     }
 }
 
-/// [`classify_publish`] for a failure past the upload, and for a gated token
-/// ([`Observed::gated`]) this build refuses to sign above.
+/// [`classify_publish`] for a failure past the upload.
 fn classify_publish_error(error: PublishError) -> Halt {
     match error {
         PublishError::Register(error) => classify_register(error),
@@ -7981,7 +7980,7 @@ fn publish_basis(served: Option<Served>, built_on: &(Observed, Vec<u8>)) -> Resu
     }
     match served.observed {
         Some(gated) if served.sequence == built_on.0.sequence() => {
-            gated.map_err(classify_publish_error)
+            gated.map_err(|_| Halt::Unclassified)
         }
         _ => Ok(built_on.0.clone()),
     }
@@ -9141,7 +9140,7 @@ mod tests {
 
         assert_eq!(
             publish_basis(forked(ENVELOPE_V + 1), &built_on),
-            Err(Halt::UploadAttempt)
+            Err(Halt::Unclassified)
         );
         assert_eq!(
             publish_basis(forked(ENVELOPE_V), &built_on),
