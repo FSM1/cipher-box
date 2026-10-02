@@ -310,6 +310,48 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
   });
 
+  it('carries the identity token when the first sign-in races the initial election', async () => {
+    const { tab, workers } = origin();
+    const client = tab({
+      secretSource: { provideSecret: () => Promise.resolve(fakeLoginSecret()) },
+    });
+    try {
+      await client.facade.start(Uint8Array.from([1]).buffer, TEST_ACCOUNT_ID, 'identity.jwt');
+      const start = workers[0].posted.find(
+        (message) => (message as { type?: string }).type === 'start'
+      ) as { identityToken?: string } | undefined;
+      expect(start?.identityToken).toBe('identity.jwt');
+    } finally {
+      await client.dispose();
+    }
+
+    // A follower whose sign-in the leader adopted holds an established session,
+    // so its later failover must not replay the token it signed in with.
+    const established = origin();
+    const leader = established.tab();
+    const follower = established.tab({
+      secretSource: { provideSecret: () => Promise.resolve(fakeLoginSecret()) },
+    });
+    try {
+      await tick();
+      await startTab(leader);
+      await follower.facade.start(Uint8Array.from([9]).buffer, TEST_ACCOUNT_ID, 'identity.jwt');
+      expect(follower.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+      await leader.dispose();
+      await tick();
+      await tick();
+      expect(follower.currentRole()).toBe('leader');
+      const failover = established.workers[1].posted.find(
+        (message) => (message as { type?: string }).type === 'start'
+      ) as { identityToken?: string } | undefined;
+      expect(failover).toBeDefined();
+      expect(failover?.identityToken).toBeUndefined();
+    } finally {
+      await follower.dispose();
+      await leader.dispose();
+    }
+  });
+
   it('refuses a stream handle minted by a leadership that has been replaced', async () => {
     const { tab, workers } = origin();
     const secretSource = {
