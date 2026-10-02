@@ -697,6 +697,19 @@ describe('a Core Kit login', () => {
     expect(window.localStorage.getItem('cipherbox_account_email')).not.toContain('member@');
   });
 
+  it('reads back the email a record from the previous release kept as its display', async () => {
+    await store.setItem(
+      'cipherbox_account_email',
+      JSON.stringify({ subject: SUBJECT, email: 'earlier@example.test' })
+    );
+    sdk.userInfo = { verifierId: SUBJECT };
+
+    const restored = session();
+    await restored.restore();
+
+    expect(restored.display()).toBe('earlier@example.test');
+  });
+
   it('reads back no display a different subject left', async () => {
     await session().login(credential());
     sdk.userInfo = { verifierId: 'another-subject' };

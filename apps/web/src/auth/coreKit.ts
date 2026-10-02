@@ -499,7 +499,7 @@ class Web3AuthSession implements WebCoreKitSession {
 
   /** The kept display label, if it labels the subject this session restored. */
   private async keptDisplay(): Promise<string | null> {
-    let kept: { subject?: unknown; display?: unknown } | null;
+    let kept: { subject?: unknown; display?: unknown; email?: unknown } | null;
     try {
       const raw = await this.store.getItem(ACCOUNT_LABELS_KEY);
       if (raw === null) return null;
@@ -508,9 +508,10 @@ class Web3AuthSession implements WebCoreKitSession {
       return null;
     }
     const subject = this.subject();
-    return subject !== null && kept?.subject === subject && typeof kept.display === 'string'
-      ? kept.display
-      : null;
+    if (subject === null || kept?.subject !== subject) return null;
+    // A record the previous release sealed carries the label as `email`.
+    const display = typeof kept.display === 'string' ? kept.display : kept.email;
+    return typeof display === 'string' ? display : null;
   }
 
   /**

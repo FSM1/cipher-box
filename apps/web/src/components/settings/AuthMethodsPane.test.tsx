@@ -210,6 +210,54 @@ describe('the login methods pane', () => {
     expect(screen.getByTestId('settings-link-email-code')).toBeTruthy();
   });
 
+  it('retires a link refusal once the member edits the code', async () => {
+    await renderPane([IDENTITY], {
+      emailLink: () => Promise.reject(new Error('the code is wrong')),
+    });
+
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email')));
+    fireEvent.change(screen.getByTestId('settings-link-email-input'), {
+      target: { value: 'member@example.test' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-send')));
+    fireEvent.change(screen.getByTestId('settings-link-email-code'), {
+      target: { value: '123456' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-link')));
+    expect(screen.getByTestId('settings-auth-error').textContent).toContain('the code is wrong');
+
+    fireEvent.change(screen.getByTestId('settings-link-email-code'), {
+      target: { value: '12345' },
+    });
+
+    expect(screen.queryByTestId('settings-auth-error')).toBeNull();
+  });
+
+  it('closes the form on a landed link even when the re-read fails, and shows that failure', async () => {
+    let reads = 0;
+    const engine = await renderPane([], {
+      authMethods: () =>
+        reads++ === 0
+          ? Promise.resolve([IDENTITY])
+          : Promise.reject(new Error('api returned status 503')),
+    });
+
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email')));
+    fireEvent.change(screen.getByTestId('settings-link-email-input'), {
+      target: { value: 'member@example.test' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-send')));
+    fireEvent.change(screen.getByTestId('settings-link-email-code'), {
+      target: { value: '123456' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-link')));
+
+    expect(engine.calls.emailLinks).toHaveLength(1);
+    // The code is spent, so no step may offer to submit it again.
+    expect(screen.queryByTestId('settings-link-email-form')).toBeNull();
+    expect(screen.getByTestId('settings-auth-error').textContent).toContain('503');
+  });
+
   it('stays on the address step when the code is refused', async () => {
     const engine = await renderPane([IDENTITY], {
       emailLinkSendCode: () => Promise.reject(new Error('api returned status 429')),

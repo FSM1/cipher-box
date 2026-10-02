@@ -49,11 +49,13 @@ function EmailLinkForm({
   busy,
   sendCode,
   link,
+  clearError,
   onClose,
 }: {
   busy: AuthMethodsRead['busy'];
   sendCode: (email: string) => Promise<boolean>;
   link: (email: string, code: string) => Promise<boolean>;
+  clearError: () => void;
   onClose: () => void;
 }) {
   const [email, setEmail] = useState('');
@@ -84,8 +86,14 @@ function EmailLinkForm({
   };
 
   const restart = () => {
+    clearError();
     setSentTo(null);
     setCode('');
+  };
+
+  const cancel = () => {
+    clearError();
+    onClose();
   };
 
   return (
@@ -107,7 +115,10 @@ function EmailLinkForm({
             className="email-login-input"
             placeholder="enter email address"
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            onChange={(event) => {
+              clearError();
+              setEmail(event.target.value);
+            }}
             disabled={blocked}
             required
             autoComplete="email"
@@ -125,7 +136,7 @@ function EmailLinkForm({
             type="button"
             data-testid="settings-link-email-cancel"
             className="email-login-restart"
-            onClick={onClose}
+            onClick={cancel}
             disabled={blocked}
           >
             // cancel
@@ -147,7 +158,10 @@ function EmailLinkForm({
             className="email-login-input"
             placeholder="enter 6-digit code"
             value={code}
-            onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+            onChange={(event) => {
+              clearError();
+              setCode(event.target.value.replace(/\D/g, '').slice(0, 6));
+            }}
             disabled={blocked}
             required
             autoComplete="one-time-code"
@@ -193,8 +207,17 @@ function filledButton(loading: boolean): string {
  * here is the one the member types into the email link form.
  */
 export function AuthMethodsPane() {
-  const { methods, busy, error, challenge, link, linkEmailSendCode, linkEmail, unlink } =
-    useAuthMethods();
+  const {
+    methods,
+    busy,
+    error,
+    clearError,
+    challenge,
+    link,
+    linkEmailSendCode,
+    linkEmail,
+    unlink,
+  } = useAuthMethods();
   const [walletError, setWalletError] = useState<string | null>(null);
   const [linkingEmail, setLinkingEmail] = useState(false);
   const linkEmailTrigger = useRef<HTMLButtonElement>(null);
@@ -281,6 +304,7 @@ export function AuthMethodsPane() {
           busy={busy}
           sendCode={linkEmailSendCode}
           link={linkEmail}
+          clearError={clearError}
           onClose={() => setLinkingEmail(false)}
         />
       )}
