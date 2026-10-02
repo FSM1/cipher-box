@@ -2,8 +2,8 @@
 
 - **Status:** Accepted on 2026-09-26 — retroactive for D2 to D15, which shipped in FSM1/cipher-box#932,
   FSM1/cipher-box#1072, FSM1/cipher-box#1338 and FSM1/cipher-box#1585, and which the blueprint
-  carries. D1 is an owner decision of 2026-09-26 that changes the shipped rule: the code and the
-  blueprint lag it (E1, FSM1/cipher-box#2006); the `blueprint/*.md` and
+  carries. D1 is an owner decision of 2026-09-26 that changes the shipped rule: FSM1/cipher-box#2234
+  moved the code to it on 2026-10-02 (E1); the `blueprint/*.md` and
   `CONTEXT.md` rewording in FSM1/cipher-box follows; trimmed on 2026-09-26 to the items that pass
   the three ADR hurdles — the removed items live in the blueprint
 - **Date:** 2026-09-26
@@ -38,8 +38,8 @@ Under `External` it goes to the member's own node only, and the API sees the reg
 nothing else. On every leg the record-plane publish compares the address the leg returns against
 the head block's own address, and a mismatch publishes nothing. The owner decided this on
 2026-09-26 during the review of this ADR. It replaces the shipped rule (FSM1/cipher-box#1072),
-which sent every head block to the hosted path in every mode (alternative (i)). The code lags
-this rule (E1).
+which sent every head block to the hosted path in every mode (alternative (i)).
+FSM1/cipher-box#2234 moved the code to this rule (E1).
 
 **D3 — Dual runs both legs, and only the hosted leg can fail the op.** Both legs retry inside the
 op. The op completes when the hosted leg succeeds and the external leg has succeeded or used all
@@ -130,6 +130,9 @@ resolution of FSM1/cipher-box#822, section 7, decided an order for mode changes:
 when the member leaves `External`, last when the member enters it. Neither the blueprint nor the
 code carries that order. The owner ruled on 2026-09-26: D1 stands, and the code moves to it.
 FSM1/cipher-box#2006 tracks the fix.
+
+Resolved on 2026-10-02 by FSM1/cipher-box#2234: a record head block follows placement, and a save
+that leaves `External` clears `byo` first.
 
 **E3 — An assumed placement on a `Dual` account drops the mirror without a signal.** A `Dual`
 account runs `byo=false` (D11). So on a fresh device whose settings record is withheld, the

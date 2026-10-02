@@ -25,7 +25,7 @@ use cipherbox_engine::seams::{
     BoxedTask, EndpointId, FloorStore, HttpResponse, RecordTransport, Scheduler, SnapshotCache,
     UnixMillis,
 };
-use cipherbox_engine::testkit::account::{Blocks, serve_http};
+use cipherbox_engine::testkit::account::{Blocks, MEMBER_NODE, serve_http};
 use cipherbox_engine::testkit::fakes::{
     InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache, SlotFillingRecordStore,
     VirtualScheduler,
@@ -891,7 +891,7 @@ fn external_only() -> VaultSettings {
     VaultSettings {
         pin_mode: PinMode::External,
         byo: Some(ByoIpfsConfig {
-            endpoint: "https://kubo.example".to_owned(),
+            endpoint: MEMBER_NODE.to_owned(),
             kind: ByoKind::Kubo,
             access_token: ByoBearer::None,
         }),
@@ -2584,7 +2584,7 @@ fn a_head_upload_the_api_refuses_leaves_the_mint_and_the_next_start_refuses_the_
         }))
     }));
     let refused_save = block_on(engine.command(Command::SaveVaultSettings {
-        settings: external_only(),
+        settings: configured(),
     }));
     assert!(
         matches!(refused_save, Err(EngineError::Seam { .. })),

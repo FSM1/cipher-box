@@ -265,13 +265,78 @@ where
 {
     let placement = api.placement().unwrap_or(Placement::Hosted);
     publish_record_placed(
-        transport, api, floors, scheduler, profile, request, &placement, mark,
+        transport,
+        api,
+        floors,
+        scheduler,
+        profile,
+        request,
+        &placement,
+        &mut MirrorLeg::once(),
+        mark,
     )
     .await
 }
 
+/// Attempts one op may spend on the member's own provider before its mirror is
+/// abandoned for that version. A dual write completes when hosted succeeds and
+/// external has either succeeded or exhausted its attempts (#34 D1), so the leg
+/// needs attempts to spend — one refusal is a blip, not a verdict.
+const MIRROR_ATTEMPTS: u32 = 3;
+
+/// A dual write's best-effort mirror leg, carried across one op's blocks and
+/// record heads.
+///
+/// The budget is per op rather than per block because a provider that is down
+/// refuses every block alike: spending a fresh budget on each would stall the
+/// whole pass behind one dead endpoint, and a version the mirror has already
+/// missed a block of is not one it can serve whatever the rest do.
+pub(crate) struct MirrorLeg {
+    /// Attempts left to spend. Reaching zero is what abandons the mirror: the
+    /// block that spent the last one never landed on it.
+    attempts: u32,
+    /// The first refusal, reported once the leg is abandoned.
+    refusal: Option<ProviderError>,
+}
+
+impl Default for MirrorLeg {
+    fn default() -> Self {
+        Self {
+            attempts: MIRROR_ATTEMPTS,
+            refusal: None,
+        }
+    }
+}
+
+impl MirrorLeg {
+    /// A leg for one publish outside an op, which no later block retries.
+    pub(crate) fn once() -> Self {
+        Self {
+            attempts: 1,
+            refusal: None,
+        }
+    }
+
+    /// Whether the mirror is short of this version. Refusals a later attempt
+    /// recovered from are not: the block reached the provider.
+    pub(crate) fn missed(&self) -> bool {
+        self.attempts == 0
+    }
+
+    pub(crate) fn refused(&mut self, error: ProviderError) {
+        self.attempts = self.attempts.saturating_sub(1);
+        self.refusal.get_or_insert(error);
+    }
+
+    /// The refusal to report, which is one only where the mirror stayed short.
+    pub(crate) fn failure(&self) -> Option<ProviderError> {
+        self.missed().then_some(self.refusal).flatten()
+    }
+}
+
 /// [`publish_record_marked`], with the head block placed on the legs of
-/// `placement` rather than the session's.
+/// `placement` rather than the session's, and a dual write's mirror attempts
+/// spent from `mirror`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn publish_record_placed<T, H, C, F, Sch>(
     transport: &T,
@@ -281,6 +346,7 @@ pub(crate) async fn publish_record_placed<T, H, C, F, Sch>(
     profile: &SyncTimingProfile,
     request: &RecordPublishRequest<'_>,
     placement: &Placement,
+    mirror: &mut MirrorLeg,
     mark: Option<PutMark<'_>>,
 ) -> Result<PublishReceipt, RecordPublishError>
 where
@@ -290,7 +356,7 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    place_head(api, placement, request.head).await?;
+    place_head(api, placement, mirror, request.head).await?;
 
     publish_marked(
         transport,
@@ -316,6 +382,7 @@ where
 async fn place_head<H: Http, C: CredentialStore>(
     api: &ApiClient<H, C>,
     placement: &Placement,
+    mirror: &mut MirrorLeg,
     head: &PreflightedHead,
 ) -> Result<(), RecordPublishError> {
     match placement {
@@ -325,8 +392,12 @@ async fn place_head<H: Http, C: CredentialStore>(
             .map_err(RecordPublishError::Placement),
         Placement::Dual(config) => {
             hosted_head(api, head).await?;
-            // The mirror is best effort: a miss leaves the hosted copy to serve.
-            let _ = member_head(api, config, head).await;
+            while !mirror.missed() {
+                match member_head(api, config, head).await {
+                    Ok(()) => break,
+                    Err(error) => mirror.refused(error),
+                }
+            }
             Ok(())
         }
     }

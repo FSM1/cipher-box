@@ -88,9 +88,9 @@ use cipherbox_engine::{
     EventStream, GatewayConfig, LapsedHead, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
     MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpKind, OpPhase, OverBudgetCause, Permission,
     Placement, PlacementRefusal, PrevEpochSeed, QueueHold, QueueHoldReason, RecordReader,
-    RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, SessionPlacement, StoragePolicy,
-    SyncTimingProfile, Unopened, WriteHistory, WriteTarget, decode_queue, load_bin_index,
-    publish_bin_index, reseal_scope_root, stage_op,
+    RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
+    Unopened, WriteHistory, WriteTarget, decode_queue, load_bin_index, publish_bin_index,
+    reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -13178,17 +13178,15 @@ fn seed_vault_settings(
     settings: &VaultSettings,
 ) {
     serve_http(device, blocks, 8);
-    // A device on a BYO account writes under `External`, so its head bypasses
-    // the hosted refusal.
-    let session = blocks
-        .advisory()
-        .then(|| SessionPlacement::member(Ok(Placement::External(member_node(ByoKind::Kubo)))));
+    // Another device's save, which clears the account flag before a hosted
+    // head; the flag stays where this device left it.
+    let flagged = blocks.advisory();
+    blocks.set_advisory(false);
     let api = ApiClient::new(
         device.http.clone(),
         device.credential_store.clone(),
         String::new(),
-    )
-    .with_placement(std::rc::Rc::new(RefCell::new(session)));
+    );
     block_on(publish_settings(
         &device.record_store,
         &api,
@@ -13202,6 +13200,7 @@ fn seed_vault_settings(
         settings,
     ))
     .expect("the settings record publishes");
+    blocks.set_advisory(flagged);
 }
 
 /// `External` means what it says: not one byte reaches CipherBox's store, and
@@ -13257,64 +13256,111 @@ fn an_external_write_places_every_block_on_the_members_node_and_none_on_the_host
 }
 
 /// A device that writes under `External` has set the account's BYO flag, so the
-/// hosted ingress refuses it. The save back to `Hosted` must still land, or the
+/// hosted ingress refuses it. The save back to `Hosted` must land, also while
+/// the member's node is down, and the next op of any kind must publish, or the
 /// device can never leave `External` from the app.
 #[test]
 fn an_external_device_saves_its_way_back_to_hosted() {
+    for node_down in [false, true] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        seed_settings(&world, &alice, &blocks, PinMode::External);
+
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &(0..200u8).collect::<Vec<_>>(),
+        )
+        .expect("the write commits");
+        tick(&world, &engine, &mut tasks);
+        assert!(blocks.advisory(), "the External write flagged the account");
+        blocks.set_member_node_down(node_down);
+
+        assert_eq!(
+            block_on(engine.command(Command::SaveVaultSettings {
+                settings: VaultSettings {
+                    pin_mode: PinMode::Hosted,
+                    byo: None,
+                    retention: RetentionPolicy::KeepAll,
+                    bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+                },
+            })),
+            Ok(CommandOutcome::Done),
+            "node down {node_down}: the save back to Hosted lands"
+        );
+        assert!(!blocks.advisory(), "the save cleared the account flag");
+        // The folder's current head lives on the member's node, so the drain
+        // reads it there.
+        blocks.set_member_node_down(false);
+
+        create(&mut engine, "docs");
+        tick(&world, &engine, &mut tasks);
+        assert!(
+            published_names(&world.record_store, &blocks, ROOT).contains(&"docs".to_owned()),
+            "node down {node_down}: a folder made after the save publishes"
+        );
+        let docs = child_id(&engine, ROOT, "docs");
+        assert!(
+            uploaded_cids(&alice).contains(&published(&world.record_store, docs).1),
+            "and its head block took the hosted path"
+        );
+    }
+}
+
+/// Under `Dual` a record head spends the op's mirror budget like a content
+/// block: a dead node costs the op a bounded number of attempts, and the op
+/// reports the head its mirror does not hold.
+#[test]
+fn a_dual_folder_op_spends_one_mirror_budget_and_reports_the_missed_head() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    seed_settings(&world, &alice, &blocks, PinMode::External);
-    let seeded = uploaded_cids(&alice);
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
 
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "photo.bin".into(),
-        },
-        &(0..200u8).collect::<Vec<_>>(),
-    )
-    .expect("the write commits");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.set_member_node_down(true);
+    let node_attempts = || {
+        alice
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.starts_with(MEMBER_NODE))
+            .count()
+    };
+    let before = node_attempts();
+    let op_id = create(&mut engine, "docs");
     tick(&world, &engine, &mut tasks);
-    assert!(blocks.advisory(), "the External write flagged the account");
 
     assert_eq!(
-        block_on(engine.command(Command::SaveVaultSettings {
-            settings: VaultSettings {
-                pin_mode: PinMode::Hosted,
-                byo: None,
-                retention: RetentionPolicy::KeepAll,
-                bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
-            },
-        })),
-        Ok(CommandOutcome::Done),
-        "the save back to Hosted lands"
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["docs".to_owned()],
+        "the hosted leg landed, so the folder published"
     );
-    assert_eq!(
-        uploaded_cids(&alice),
-        seeded,
-        "the save placed its head where the session still writes"
-    );
-
-    write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "after.bin".into(),
-        },
-        &(0..50u8).collect::<Vec<_>>(),
-    )
-    .expect("a Hosted write commits");
-    tick(&world, &engine, &mut tasks);
-    let after = child_id(&engine, ROOT, "after.bin");
-    let (sequence, head) = published(&world.record_store, after);
-    assert_eq!(sequence, 1, "the next write publishes under Hosted");
     assert!(
-        uploaded_cids(&alice).contains(&head),
-        "and its head block took the hosted path"
+        node_attempts() - before <= 3,
+        "the op's heads shared one mirror budget"
+    );
+    assert_eq!(
+        events_so_far(&mut events)
+            .iter()
+            .filter(|event| matches!(
+                event,
+                Event::OpProgress {
+                    op_id: Some(id),
+                    phase: OpPhase::ExternalPinFailed,
+                    ..
+                } if *id == op_id
+            ))
+            .count(),
+        1,
+        "the missed heads are reported once for the op"
     );
 }
 
@@ -14355,7 +14401,7 @@ fn external_settings() -> VaultSettings {
 }
 
 /// Queue a content write on `alice`, then save `External` settings while the
-/// head upload fails, and leave. The save raised the mint counter and nothing
+/// member's node is down, and leave. The save raised the mint counter and nothing
 /// landed, so the next cold start loads a stranded mint.
 fn queue_a_write_and_strand_a_settings_save(
     world: &FakeWorld,
@@ -14365,7 +14411,7 @@ fn queue_a_write_and_strand_a_settings_save(
     let (mut engine, _events, _tasks) = boot(world, blocks, alice, 42);
     let op_id = write_photo(&mut engine, "photo.bin");
     let photo = child_id(&engine, ROOT, "photo.bin");
-    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    blocks.set_member_node_down(true);
     assert!(
         block_on(engine.command(Command::SaveVaultSettings {
             settings: external_settings(),
@@ -14373,7 +14419,7 @@ fn queue_a_write_and_strand_a_settings_save(
         .is_err(),
         "the save does not reach the network"
     );
-    blocks.accept_uploads();
+    blocks.set_member_node_down(false);
     let (root_cid, _) = staged_version(alice);
     (op_id, photo, root_cid)
 }
@@ -14511,7 +14557,7 @@ fn a_failed_settings_save_holds_the_queued_write_in_the_same_session() {
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     let op_id = write_photo(&mut engine, "photo.bin");
     let photo = child_id(&engine, ROOT, "photo.bin");
-    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    blocks.set_member_node_down(true);
     assert!(
         block_on(engine.command(Command::SaveVaultSettings {
             settings: external_settings(),
@@ -14519,7 +14565,7 @@ fn a_failed_settings_save_holds_the_queued_write_in_the_same_session() {
         .is_err(),
         "the save does not reach the network"
     );
-    blocks.accept_uploads();
+    blocks.set_member_node_down(false);
     serve_http(&alice, &blocks, 400);
     let hosted_before = uploaded_cids(&alice).len();
     for _ in 0..PASSES_PAST_THE_BUDGET {
@@ -14689,7 +14735,11 @@ fn a_settings_recheck_reads_the_marks_again_after_an_unread_floor() {
     }));
     assert!(
         block_on(engine.command(Command::SaveVaultSettings {
-            settings: external_settings(),
+            settings: VaultSettings {
+                // A hosted leg, so the head meets the failing store.
+                pin_mode: PinMode::Dual,
+                ..external_settings()
+            },
         }))
         .is_err(),
         "the save does not reach the network"

@@ -71,7 +71,8 @@ use crate::net::author::{
 use crate::net::last_known_good::keep_then_commit;
 use crate::net::publish::{Observed, PublishError, PublishOutcome, PublishReceipt, PublishVerdict};
 use crate::net::record_publish::{
-    HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record_placed,
+    HeadBinding, MirrorLeg, RecordPublishError, RecordPublishRequest, preflight,
+    publish_record_placed,
 };
 use crate::net::retire::{
     Acknowledged, LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger,
@@ -1420,6 +1421,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// What this tick may still read for capture walks, shared out across its
     /// scope passes ([`MAX_CAPTURE_WALK_READS`]).
     capture_reads: RefCell<TickShare>,
+    /// The mirror of the op this pass publishes now.
+    mirror: RefCell<OpMirror>,
     /// The nodes one capture walk may hold ([`MAX_CAPTURE_WALK_NODES`]).
     capture_walk_nodes: usize,
 }
@@ -1438,6 +1441,7 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),
             capture_reads: RefCell::new(TickShare::new(MAX_CAPTURE_WALK_READS, 1)),
             capture_walk_nodes: MAX_CAPTURE_WALK_NODES,
+            mirror: RefCell::default(),
         }
     }
 
@@ -1735,57 +1739,15 @@ struct UploadedVersion {
     /// Every content CID the registration names: the root first, then the
     /// leaves in file order.
     content_cids: Vec<String>,
-    /// A dual write's external leg that did not take the bytes, reported rather
-    /// than swallowed ([`OpPhase::ExternalPinFailed`]).
-    external_failure: Option<ProviderError>,
-    /// The mirror is short of blocks a previous pass released to a provider
-    /// this session's settings no longer name ([`Resume::mirror_gap`]).
-    mirror_gap: bool,
 }
 
-/// Attempts one op may spend on the member's own provider before its mirror is
-/// abandoned for that version. A dual write completes when hosted succeeds and
-/// external has either succeeded or exhausted its attempts (#34 D1), so the leg
-/// needs attempts to spend — one refusal is a blip, not a verdict.
-const MIRROR_ATTEMPTS: u32 = 3;
-
-/// A dual write's best-effort mirror leg, carried across one op's blocks.
-///
-/// The budget is per op rather than per block because a provider that is down
-/// refuses every block alike: spending a fresh budget on each would stall the
-/// whole pass behind one dead endpoint, and a version the mirror has already
-/// missed a block of is not one it can serve whatever the rest do.
-struct MirrorLeg {
-    /// Attempts left to spend. Reaching zero is what abandons the mirror: the
-    /// block that spent the last one never landed on it.
-    attempts: u32,
-    /// The first refusal, reported once the leg is abandoned.
-    refusal: Option<ProviderError>,
-}
-
-impl MirrorLeg {
-    fn new() -> Self {
-        Self {
-            attempts: MIRROR_ATTEMPTS,
-            refusal: None,
-        }
-    }
-
-    /// Whether the mirror is short of this version. Refusals a later attempt
-    /// recovered from are not: the block reached the provider.
-    fn missed(&self) -> bool {
-        self.attempts == 0
-    }
-
-    fn refused(&mut self, error: ProviderError) {
-        self.attempts = self.attempts.saturating_sub(1);
-        self.refusal.get_or_insert(error);
-    }
-
-    /// The refusal to report, which is one only where the mirror stayed short.
-    fn failure(self) -> Option<ProviderError> {
-        self.missed().then_some(self.refusal).flatten()
-    }
+/// One op's dual-write mirror: the leg its content blocks and record heads
+/// share, and whether a previous pass already left it short
+/// ([`Resume::mirror_gap`]).
+#[derive(Default)]
+struct OpMirror {
+    leg: MirrorLeg,
+    gap: bool,
 }
 
 /// One record as this pass published it.
@@ -3164,8 +3126,23 @@ where
     // The per-op publish plans.
     // -----------------------------------------------------------------------
 
-    /// Publish one applied op's records, referent before reference.
+    /// Publish one applied op's records, referent before reference, and report
+    /// once what its mirror is short of.
     async fn publish_applied(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        applied: &AppliedOp,
+        rebased: &Snapshot,
+    ) -> Result<(), Halt> {
+        self.mirror.take();
+        self.publish_op(scope, pass, applied, rebased).await?;
+        let shortfall = mirror_shortfall(&self.mirror.borrow());
+        self.emit_mirror_shortfall(applied, shortfall);
+        Ok(())
+    }
+
+    async fn publish_op(
         &self,
         scope: &DrainScope<'_>,
         pass: &mut Pass,
@@ -3289,7 +3266,6 @@ where
             return Err(Halt::Permanent(DeadLetterReason::AlreadyPublished));
         }
 
-        let mut shortfall = None;
         let (body, content_cids) = match node {
             NewNode::Folder => (NewNodeBody::Folder, Vec::new()),
             NewNode::File { content: None } => (
@@ -3302,7 +3278,6 @@ where
                 content: Some(staged),
             } => {
                 let uploaded = self.upload_version(scope, applied, staged).await?;
-                shortfall = mirror_shortfall(&uploaded);
                 (
                     NewNodeBody::File {
                         versions: vec![uploaded.version],
@@ -3347,7 +3322,6 @@ where
             .await
             .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
-        self.emit_mirror_shortfall(applied, shortfall);
         // The parent's repaint lifts the child in without what its own record
         // carries; the first edit of this file anchors on the version its
         // create published.
@@ -5678,7 +5652,6 @@ where
         if versions.first().map(|head| head.content_cid.as_slice()) != base_version_cid {
             return Err(Halt::Permanent(DeadLetterReason::BaseSuperseded));
         }
-        let shortfall = mirror_shortfall(&uploaded);
         // Newest first, head is current (`crates/core/src/seal/body.rs`).
         versions.insert(0, uploaded.version);
         // The retention rule applies where history grows (blueprint/engine.md
@@ -5730,7 +5703,6 @@ where
             .await
             .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
-        self.emit_mirror_shortfall(applied, shortfall);
         self.project_published_file(
             target,
             staged.plaintext_size,
@@ -6384,7 +6356,7 @@ where
         // What the mark may claim, narrowed as the mirror misses blocks the mark
         // covers ([`Destinations::mirror_missed`]).
         let mut reached = placement.destinations();
-        let mut mirror = MirrorLeg::new();
+        let mut mirror = core::mem::take(&mut self.mirror.borrow_mut().leg);
         let root_block = self
             .staged_block(&staged.root_cid)
             .await?
@@ -6490,11 +6462,12 @@ where
             content.leaf_cids().iter().map(|cid| cid.as_slice()),
             RootPlacement::First,
         );
+        let mut op = self.mirror.borrow_mut();
+        op.leg = mirror;
+        op.gap |= mirror_gap;
         Ok(UploadedVersion {
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
-            external_failure: mirror.failure(),
-            mirror_gap,
         })
     }
 
@@ -7066,11 +7039,8 @@ where
             .map_err(|_| Halt::UploadAttempt)?;
         let signer = SessionIdentity::write_name_signer(plane.end.write_scope_seed, node_id);
         let _publishing = PublishingName::hold(self.cells.publishing, observed.name());
-        let PublishReceipt {
-            outcome,
-            record_bytes,
-            winner,
-        } = publish_record_placed(
+        let mut mirror = core::mem::take(&mut self.mirror.borrow_mut().leg);
+        let published = publish_record_placed(
             &self.seams.transport,
             &self.seams.api,
             &plane.end.floors(&self.seams.floors),
@@ -7083,10 +7053,16 @@ where
                 content_cids,
             },
             self.inputs.placement.as_ref().unwrap_or(&Placement::Hosted),
+            &mut mirror,
             None,
         )
-        .await
-        .map_err(|error| {
+        .await;
+        self.mirror.borrow_mut().leg = mirror;
+        let PublishReceipt {
+            outcome,
+            record_bytes,
+            winner,
+        } = published.map_err(|error| {
             if orphaned_head(&error) {
                 self.record_orphan_head(preflighted.cid());
             }
@@ -7808,12 +7784,13 @@ const MIRROR_GAP: &str = "your own IPFS provider changed while this upload was i
 
 /// What this version's mirror is short by. A live refusal outranks the standing
 /// gap: it is the condition the member can still act on.
-fn mirror_shortfall(uploaded: &UploadedVersion) -> Option<&'static str> {
-    uploaded
-        .external_failure
+fn mirror_shortfall(mirror: &OpMirror) -> Option<&'static str> {
+    mirror
+        .leg
+        .failure()
         .as_ref()
         .map(provider_failure)
-        .or_else(|| uploaded.mirror_gap.then_some(MIRROR_GAP))
+        .or_else(|| mirror.gap.then_some(MIRROR_GAP))
 }
 
 /// The key-free classification an [`OpPhase::ExternalPinFailed`] carries. It

@@ -276,7 +276,12 @@ impl Blocks {
     /// reaches the member's own node too.
     pub fn get(&self, cid: &str) -> Option<Vec<u8>> {
         let hosted = self.store.lock().expect("lock").get(cid).cloned();
-        hosted.or_else(|| self.member_node.lock().expect("lock").get(cid).cloned())
+        hosted.or_else(|| {
+            if self.member_node_down.load(Ordering::Relaxed) {
+                return None;
+            }
+            self.member_node.lock().expect("lock").get(cid).cloned()
+        })
     }
 
     /// Serve `block` under `cid` whatever it hashes to: a plane that answers

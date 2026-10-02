@@ -45,7 +45,8 @@ use crate::gate::floor::RevisionMintError;
 use crate::net::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue, hold_if_unchanged};
 use crate::net::publish::{Observed, PublishOutcome};
 use crate::net::record_publish::{
-    PreflightError, RecordPublishError, RecordPublishRequest, preflight_settings, publish_record,
+    MirrorLeg, PreflightError, RecordPublishError, RecordPublishRequest, preflight_settings,
+    publish_record_placed,
 };
 use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
@@ -1054,7 +1055,7 @@ where
     // mode with no usable byte destination, so a record carrying one would be a
     // durable, account-wide refusal of every content write. Release-active, and
     // the reader's own predicate rather than a restatement of it.
-    placement_of(settings).map_err(SettingsPublishError::Placement)?;
+    let placement = placement_of(settings).map_err(SettingsPublishError::Placement)?;
     let signer = kdf::settings_ipns_keypair(login_secret);
     let name = IpnsName::from_public_key(&signer.verifying_key());
     let revision = next_revision(floors, &name).await?;
@@ -1066,7 +1067,9 @@ where
     let head =
         preflight_settings(&enc_secret, block.clone()).map_err(SettingsPublishError::Preflight)?;
 
-    let receipt = match publish_record(
+    // The head goes where the record it carries says, so a save that leaves
+    // `External` does not depend on the provider the member leaves.
+    let receipt = match publish_record_placed(
         transport,
         api,
         floors,
@@ -1081,6 +1084,9 @@ where
             head: &head,
             content_cids: Vec::new(),
         },
+        &placement,
+        &mut MirrorLeg::once(),
+        None,
     )
     .await
     {

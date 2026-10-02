@@ -9462,6 +9462,15 @@ where {
             .map_err(|e| EngineError::from_settings_publish(SettingsPublishError::Byo(e)))?;
         let observed = sign_above(self.state.placement.borrow().as_ref())
             .map_err(|refusal| EngineError::NoPlacement { refusal })?;
+        // A save with a hosted leg clears the account flag before its head goes
+        // to the hosted store, which refuses a BYO account (ADR 0029 D11).
+        if placement_of(settings).is_ok_and(|placement| placement.has_hosted_leg())
+            && api.quota().await.is_ok_and(|quota| quota.advisory)
+            && api.set_byo(false).await.is_ok()
+        {
+            // The next pre-flight sets the flag again if the save does not land.
+            self.state.byo_reconciled.set(false);
+        }
         let held = match publish_settings_above(
             &self.record_transport,
             api,
