@@ -115,10 +115,14 @@ scenario fails the meta-test):
   grantee flat, sweep idempotence, concurrent sweepers, resumed name waves
   via the history link; a write revoke over a nested subtree, a downgrade just
   after a manual read rotation, and a write grant just after a read revoke move
-  each lagging node at the root's epoch, a lagging grandchild that does not
-  open under the ratchet's seed is a trust violation, and a child whose epoch
-  no held link reaches is reported unreachable, not as a trust violation
-  (ADR 0064, `crates/engine/tests/owner_actions.rs`);
+  each lagging node at the root's epoch (ADR 0064); the five ways a revokee
+  plants a stop — a record that does not unseal, an epoch that no held link
+  reaches, a ref to an id with no record, a record with no served head block,
+  and a second ref to one id — each finish the revoke and report the dropped
+  node, the first two and the last at once and the other two past the bound,
+  which holds before T, before K passes, and over a restart; past the bound
+  the renewal walk renews an owed scope (ADR 0065,
+  `crates/engine/tests/owner_actions.rs`);
 - the keyless re-PUT adversary (FSM1/cipher-box-next#38) — forged old-epoch records at old
   names, re-point adoption, the pin-window bound;
 - revocation classification (revocation-signal vs unresolvable vs epoch-lag)

@@ -23,9 +23,9 @@ use crate::facade::NodeId;
 use crate::grants::ledger::mint_grant_row;
 use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget,
-    CommittedSet, GrantCutPlan, LaggingNode, NodeRef, PrevEpochSeed, RecoveredWave, RepointChannel,
-    RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, ResumedRoot,
-    RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError, RotateScopePlan,
+    CommittedSet, GrantCutPlan, LaggingNode, NodeRef, NodeStop, PrevEpochSeed, RecoveredWave,
+    RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
+    ResumedRoot, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError, RotateScopePlan,
     RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError,
     SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
     WriteHistory, WritePublishError, WriteRevokeKind, WriteRotateError, WriteRotationOutcome,
@@ -645,7 +645,7 @@ impl WriteSubtreeResolver for UndrivenWave {
         &self,
         _node_id: &[u8; 16],
         _resumed: Option<&ResumedRoot>,
-    ) -> Result<WriteScopeNode, ResolveFailure> {
+    ) -> Result<WriteScopeNode, NodeStop> {
         panic!("the owner gate must refuse before the wave resolves")
     }
     async fn recover_wave(&self) -> Result<RecoveredWave, ResolveFailure> {
@@ -695,6 +695,7 @@ fn write_rotate_family() -> RejectFamily {
             min_read_epoch: CURRENT_READ_EPOCH,
             current_root_name: name,
             is_vault_anchor: false,
+            past_bound: false,
         };
         block_on(rotate_scope_write(
             &mut SeededEntropy::new(ENTROPY_SEED),
@@ -934,6 +935,7 @@ impl crate::rotation::CutRotator for PermissiveRotator {
             new_write_epoch: CURRENT_WRITE_EPOCH + 1,
             new_root_name: derive_write_name(&[0x58; 32], &SCOPE),
             interior_node_count: 0,
+            dropped: Vec::new(),
         })
     }
 }

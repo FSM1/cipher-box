@@ -29,6 +29,8 @@ fn a_wave_order_and_a_resumed_root_withhold_every_name_they_carry() {
         current_name: current.clone(),
         new_name: new.clone(),
         child_names: BTreeMap::from([(nid(2), child.clone())]),
+        dropped_children: BTreeSet::new(),
+        second_refs: Vec::new(),
         signer: kdf::ipns_keypair(&[7u8; 32]),
         write_scope_seed: None,
         write_epoch: ROTATED_WRITE_EPOCH,
@@ -151,7 +153,7 @@ impl WriteSubtreeResolver for FakeResolver {
         &self,
         node_id: &[u8; 16],
         resumed: Option<&ResumedRoot>,
-    ) -> Result<WriteScopeNode, ResolveFailure> {
+    ) -> Result<WriteScopeNode, NodeStop> {
         let children = self
             .nodes
             .get(node_id)
@@ -159,13 +161,14 @@ impl WriteSubtreeResolver for FakeResolver {
             .clone();
         let current_name = match self.resumed_seed(resumed) {
             Some(seed) => derive_write_name(&seed, node_id),
-            None if self.below_floor.get() => return Err(ResolveFailure::Rejected),
+            None if self.below_floor.get() => return Err(ResolveFailure::Rejected.into()),
             None => old_name_of(node_id),
         };
         Ok(WriteScopeNode {
             node_id: *node_id,
             current_name,
             child_node_ids: children,
+            second_refs: Vec::new(),
         })
     }
 
@@ -188,9 +191,9 @@ impl WriteSubtreeResolver for FailingResolver {
         &self,
         node_id: &[u8; 16],
         resumed: Option<&ResumedRoot>,
-    ) -> Result<WriteScopeNode, ResolveFailure> {
+    ) -> Result<WriteScopeNode, NodeStop> {
         if *node_id == self.fail_on {
-            return Err(ResolveFailure::Rejected);
+            return Err(ResolveFailure::Rejected.into());
         }
         self.inner.resolve_node(node_id, resumed).await
     }
@@ -385,6 +388,7 @@ fn plan<'a>(
         min_read_epoch: 7,
         current_root_name: current_root,
         is_vault_anchor: true,
+        past_bound: false,
     }
 }
 

@@ -92,6 +92,15 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
         }
     }
 
+    /// The epoch tag of the head an adopt assembled, `None` before the head
+    /// block was fetched.
+    pub(crate) fn assembled_epoch(&self) -> Option<u64> {
+        self.assembled
+            .borrow()
+            .as_ref()
+            .map(|head| head.envelope.epoch)
+    }
+
     /// Supply a head block the caller already holds, so a self-adopt of our own
     /// just-published record skips the fetch. The CID the signed record anchors
     /// still decides: a block that does not match it is ignored.

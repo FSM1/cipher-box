@@ -1006,6 +1006,23 @@ normal paths: wave publishes enroll new names via register-first; interior old
 names batch-retire at completion; the old root lingers until the migration window
 closes (FSM1/cipher-box-next#34 D4).
 
+A node below the root that the wave cannot move is a **dropped node**
+([ADR 0065](../decisions/0065-the-name-wave-drops-a-node-that-it-cannot-move-and-an-owed-cut-ends-within-a-bound.md)).
+The wave drops at once a node whose record bytes it refuses: an adoption-gate
+refusal other than a sequence below the floor, or an epoch below the gated
+root's that no held history link reaches (D1). Of two refs to one
+node id at different names, it keeps the ref at the name that the root's write
+scope seed derives for that id, else the first ref the walk met, and drops the
+other; a kept ref met after the walk took the other one starts the walk again
+from the root (D2). A stop that an endpoint can cause — every endpoint states
+that no record is at the name, no endpoint serves the head block, or the record
+is below the sequence floor — drops only once the owed entry is past the bound
+below (D3). So does a node at an epoch above the gated root's: a read rotation
+on another owner device can publish one before this device reads its root. A drop removes the ref from the moved parent, does not walk below
+the node, and retires its old name; the wave then moves the other nodes,
+re-points the root and finishes the cut. The wave never adopts or carries a
+refused record, and a stop at the scope root still stops the wave.
+
 ### Triggers
 
 Per FSM1/cipher-box-next#26 D7:
@@ -1049,6 +1066,19 @@ left is refused, retryably, until the move lands; a crossing the queue
 already holds waits for it, uncharged. At the entry's own cut epoch the published state does not tell a read cascade that
 landed from one that did not, so a re-drive after a lost advance runs one more.
 
+Each entry keeps the time of its first stop (ADR 0065 D3). The entry is
+**past the bound** when its first stop is at least T = 7 days old and at least
+K = 3 passes of the current session stopped at it. The count lives in the
+session, so a restart sets it to zero again: a drop rests on stops this session
+saw, and a restart only delays it. A re-drive past the bound drops each node
+that a stop an endpoint can cause holds (rotateScopeWrite above). Past the
+bound, the renewal walk renews in that scope each name the scope root's current
+write seed derives (ADR 0065 D4); before it, ADR 0063 D4 stays. Each drop emits
+`nodeDropped` with the scope root, the node id and the cause (`record-refused`,
+`epoch-unreachable`, `second-ref`, `no-record`, `no-head-block`,
+`below-sequence-floor` or `epoch-above-root`), after the cut lands; the command or the re-drive that
+drops a node returns `Ok`.
+
 The **expired-link sweep**
 ([ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)
 D2) runs in owner sessions on a cadence slower than the 30 s tick. It walks
@@ -1065,7 +1095,12 @@ rebases and signs above.
 
 - Write-grantee survivors: the forgery window stays wave-bounded. A wave that
   stops stays owed, so the bound is the next sync pass on the device that
-  started the cut (ADR 0063).
+  started the cut (ADR 0063). A node stop that a revokee plants ends at once,
+  or at the bound of ADR 0065 D3 for a stop an endpoint can cause; a planted
+  record at the scope root name is not covered.
+- Dropped nodes: the subtree under a dropped node leaves the tree and lapses at
+  its EOL, and an endpoint set that fails to serve a real node past the bound
+  drops it (ADR 0065).
 - Read-only survivors: a revokee can pin their view for at most ~one
   pointer-consult interval after the re-point publish — "bounded by wave
   duration" was wrong and is retired.

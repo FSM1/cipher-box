@@ -189,7 +189,23 @@ where
     /// leaves the entry holding the steps before them, which still re-drive.
     pub(crate) async fn stop_owed(&self, scope: NodeId, steps: Vec<OwedStep>, stop: OwedStop) {
         let _ = self.owed().leave(scope, steps).await;
+        self.note_owed_stop(scope).await;
         self.report_owed(scope, stop);
+    }
+
+    /// Count a stop at `scope`'s entry toward the bound of ADR 0065 D3. A
+    /// store that refuses leaves the first stop unset, so a later stop sets it.
+    async fn note_owed_stop(&self, scope: NodeId) {
+        let _ = self.owed().note_stop(scope, self.scheduler.now()).await;
+    }
+
+    /// Whether the entry at `scope` is past the bound of ADR 0065 D3. A record
+    /// that does not read is not.
+    pub(super) async fn owed_past_bound(&self, scope: NodeId) -> bool {
+        self.owed()
+            .past_bound(scope, self.scheduler.now())
+            .await
+            .unwrap_or(false)
     }
 
     /// Settle one re-drive of `scope`'s entry. An entry whose work can never
@@ -206,6 +222,7 @@ where
                 Redriven::Dropped
             }
             Err(stop) => {
+                self.note_owed_stop(scope).await;
                 self.report_owed(scope, stop);
                 Redriven::StillOwed
             }

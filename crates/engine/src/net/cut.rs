@@ -92,6 +92,9 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     /// durable. Nullary: a cut is anchored at one scope root, and the task needs
     /// the name and ancestor seed that scope was read under, not just its id.
     pub sweep: &'a dyn Fn() -> BoxedTask,
+    /// Whether the cut's owed entry is past the bound of ADR 0065 D3
+    /// ([`RotateScopeWritePlan::past_bound`]).
+    pub past_bound: bool,
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerCutNet<'_, T, H, C, F, Sch, E, S>
@@ -337,76 +340,86 @@ where
             reason,
         };
         let scope = self.scope(scope_root).map_err(resolve_failed)?;
-        self.bounded(async || {
-            // Re-read after the read arm: a full revoke re-keyed the scope, and
-            // the wave derives every per-node read key from the seed that cut
-            // published.
-            let current = self
-                .rotation_net()
-                .resolve_anchored(&scope)
-                .await
-                .map_err(resolve_failed)?;
-            // The durable floor is the owner-vouched `minReadEpoch` the re-point
-            // carries; a scope that has never been rotated has none, and its record's
-            // own epoch is the floor a reader would derive.
-            let min_read_epoch = floor::read_epoch_floor(self.floors, &scope_root.0)
-                .await
-                .map_err(|_| resolve_failed(ResolveFailure::Unavailable))?
-                .unwrap_or(current.current_read_epoch);
+        let outcome = self
+            .bounded(async || {
+                // Re-read after the read arm: a full revoke re-keyed the scope, and
+                // the wave derives every per-node read key from the seed that cut
+                // published.
+                let current = self
+                    .rotation_net()
+                    .resolve_anchored(&scope)
+                    .await
+                    .map_err(resolve_failed)?;
+                // The durable floor is the owner-vouched `minReadEpoch` the re-point
+                // carries; a scope that has never been rotated has none, and its record's
+                // own epoch is the floor a reader would derive.
+                let min_read_epoch = floor::read_epoch_floor(self.floors, &scope_root.0)
+                    .await
+                    .map_err(|_| resolve_failed(ResolveFailure::Unavailable))?
+                    .unwrap_or(current.current_read_epoch);
 
-            // The vault pointer names the session's root scope, so the anchor is
-            // decided by which scope is under cut — never by whether this session
-            // happens to hold the signer. A cold start that could not reach the
-            // chain leaves the signer absent, and inferring "no anchor" from that
-            // would report a wave complete with the anchor still on the old root.
-            let is_vault_anchor = scope_root.0 == self.session_root_scope_id;
-            let vault_pointer_signer = self.vault_pointer_signer.filter(|_| is_vault_anchor);
-            let net = WriteWaveNet {
-                transport: self.transport,
-                api: self.api,
-                gateway: self.gateway,
-                http: self.http,
-                floors: self.floors,
-                snapshot_cache: self.snapshot_cache,
-                scheduler: self.scheduler,
-                profile: self.profile,
-                entropy: self.entropy,
-                events: self.events,
-                scope_id: scope_root.0,
-                read_scope_seed: &current.override_seed,
-                parent_node_seed: self.parent_node_seed,
-                owner: self.owner_signer,
-                owner_enc_secret: self.keys.enc_secret,
-                scope_keys: self.keys.scope_keys,
-                authorized_commitment: &cut.commitment,
-                owner_pointer_seed: self.owner_pointer_seed,
-                vault_pointer_signer,
-                held: self.held,
-                payload_version: self.payload_version,
-                current_root_name: self.scope_root_name,
-                session_root_scope_id: self.session_root_scope_id,
-                gated_root: GatedWaveRoot::default(),
-                subtree: WaveSubtree::default(),
-            };
-            rotate_scope_write(
-                &mut SharedEntropy(self.entropy),
-                &net,
-                &net,
-                &RotateScopeWritePlan {
+                // The vault pointer names the session's root scope, so the anchor is
+                // decided by which scope is under cut — never by whether this session
+                // happens to hold the signer. A cold start that could not reach the
+                // chain leaves the signer absent, and inferring "no anchor" from that
+                // would report a wave complete with the anchor still on the old root.
+                let is_vault_anchor = scope_root.0 == self.session_root_scope_id;
+                let vault_pointer_signer = self.vault_pointer_signer.filter(|_| is_vault_anchor);
+                let net = WriteWaveNet {
+                    transport: self.transport,
+                    api: self.api,
+                    gateway: self.gateway,
+                    http: self.http,
+                    floors: self.floors,
+                    snapshot_cache: self.snapshot_cache,
+                    scheduler: self.scheduler,
+                    profile: self.profile,
+                    entropy: self.entropy,
+                    events: self.events,
                     scope_id: scope_root.0,
-                    payload_version: self.payload_version,
+                    read_scope_seed: &current.override_seed,
+                    parent_node_seed: self.parent_node_seed,
+                    owner: self.owner_signer,
+                    owner_enc_secret: self.keys.enc_secret,
+                    scope_keys: self.keys.scope_keys,
+                    authorized_commitment: &cut.commitment,
                     owner_pointer_seed: self.owner_pointer_seed,
-                    commitment: &cut.commitment,
-                    commitment_sig: &cut.commitment_sig,
-                    owner_identity_signer: self.owner_signer,
-                    current_write_epoch: current.write_epoch,
-                    min_read_epoch,
+                    vault_pointer_signer,
+                    held: self.held,
+                    payload_version: self.payload_version,
                     current_root_name: self.scope_root_name,
-                    is_vault_anchor,
-                },
-            )
-            .await
-        })
-        .await
+                    session_root_scope_id: self.session_root_scope_id,
+                    gated_root: GatedWaveRoot::default(),
+                    subtree: WaveSubtree::default(),
+                };
+                rotate_scope_write(
+                    &mut SharedEntropy(self.entropy),
+                    &net,
+                    &net,
+                    &RotateScopeWritePlan {
+                        scope_id: scope_root.0,
+                        payload_version: self.payload_version,
+                        owner_pointer_seed: self.owner_pointer_seed,
+                        commitment: &cut.commitment,
+                        commitment_sig: &cut.commitment_sig,
+                        owner_identity_signer: self.owner_signer,
+                        current_write_epoch: current.write_epoch,
+                        min_read_epoch,
+                        current_root_name: self.scope_root_name,
+                        is_vault_anchor,
+                        past_bound: self.past_bound,
+                    },
+                )
+                .await
+            })
+            .await?;
+        for dropped in &outcome.dropped {
+            let _ = self.events.unbounded_send(Event::NodeDropped {
+                scope_root,
+                node_id: NodeId(dropped.node_id),
+                cause: dropped.cause.check().to_owned(),
+            });
+        }
+        Ok(outcome)
     }
 }

@@ -131,6 +131,7 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   scopeExitCutOwed: true,
   rotationWorkOwed: true,
   rotationWorkAbandoned: true,
+  nodeDropped: true,
   writeCutUnfinished: true,
   granteeJoined: true,
   opProgress: true,

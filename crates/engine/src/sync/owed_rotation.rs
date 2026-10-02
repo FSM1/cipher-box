@@ -12,6 +12,7 @@
 //! through, so a command and the tick never write back each other's stale copy.
 
 use core::cell::RefCell;
+use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::seal::OwnerLocalKind;
@@ -38,6 +39,15 @@ pub const OWED_ROTATION_PREFIX: &[u8] = b"cbx/or/";
 /// decodes with none recorded (ADR 0065 D3, ADR 0020 D2).
 const FORMAT_V1: u8 = 1;
 const FORMAT_V2: u8 = 2;
+
+/// How long an entry stops before a stop that an endpoint can cause drops its
+/// node, and before the renewal walk renews in its scope (ADR 0065 D3, D4).
+pub const DROP_BOUND: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// The fewest passes of the current session that must stop at an entry
+/// before the bound holds. The count is the session's own, so a drop rests on
+/// stops this session saw.
+pub const DROP_BOUND_PASSES: u32 = 3;
 
 /// The most scopes the record holds. A command that would owe one more refuses
 /// before its first publish (ADR 0063 D2).
@@ -169,6 +179,8 @@ pub const ROTATION_WORK_OWED: &str = "rotation-work-owed";
 pub struct OwedCell {
     record: RefCell<Option<OwedRecord>>,
     held: RefCell<BTreeSet<NodeId>>,
+    /// The passes of this session that stopped at each entry.
+    stops: RefCell<BTreeMap<NodeId, u32>>,
     writer: futures_util::lock::Mutex<()>,
 }
 
@@ -178,6 +190,13 @@ impl OwedCell {
         if let Ok(mut cell) = self.record.try_borrow_mut() {
             *cell = None;
         }
+        if let Ok(mut stops) = self.stops.try_borrow_mut() {
+            stops.clear();
+        }
+    }
+
+    fn reset_stops(&self, scope: NodeId) {
+        self.stops.borrow_mut().remove(&scope);
     }
 
     /// Take `scope` for one driver until the hold drops, or `None` while
@@ -262,6 +281,61 @@ impl<St: StagingStore> OwedRotation<'_, St> {
         self.read(|record| record.keys().copied().collect()).await
     }
 
+    /// Whether the entry at `scope` is past the bound at `now`: its first stop
+    /// is [`DROP_BOUND`] old, and [`DROP_BOUND_PASSES`] passes of this session
+    /// stopped at it (ADR 0065 D3).
+    pub async fn past_bound(&self, scope: NodeId, now: UnixMillis) -> SeamResult<bool> {
+        let first_stop = self
+            .read(|record| record.get(&scope).and_then(|entry| entry.first_stop))
+            .await?;
+        Ok(self.bound_reached(scope, first_stop, now))
+    }
+
+    /// The scopes whose entry is not past the bound at `now`.
+    pub async fn scopes_within_bound(&self, now: UnixMillis) -> SeamResult<Vec<NodeId>> {
+        let entries = self
+            .read(|record| {
+                record
+                    .iter()
+                    .map(|(scope, entry)| (*scope, entry.first_stop))
+                    .collect::<Vec<_>>()
+            })
+            .await?;
+        Ok(entries
+            .into_iter()
+            .filter(|(scope, first_stop)| !self.bound_reached(*scope, *first_stop, now))
+            .map(|(scope, _)| scope)
+            .collect())
+    }
+
+    fn bound_reached(
+        &self,
+        scope: NodeId,
+        first_stop: Option<UnixMillis>,
+        now: UnixMillis,
+    ) -> bool {
+        let stops = self.cell.stops.borrow().get(&scope).copied().unwrap_or(0);
+        stops >= DROP_BOUND_PASSES
+            && now.reached(first_stop.map(|first| first.saturating_add(DROP_BOUND)))
+    }
+
+    /// Count one stop at the entry at `scope`, and keep `now` as its first
+    /// stop when it holds none.
+    pub async fn note_stop(&self, scope: NodeId, now: UnixMillis) -> Result<(), OwedRecordError> {
+        self.write(|record| {
+            let Some(entry) = record.get_mut(&scope) else {
+                return Ok(false);
+            };
+            *self.cell.stops.borrow_mut().entry(scope).or_default() += 1;
+            if entry.first_stop.is_some() {
+                return Ok(false);
+            }
+            entry.first_stop = Some(now);
+            Ok(true)
+        })
+        .await
+    }
+
     /// `view` over the record, loading it into the cell the first time.
     async fn read<R>(&self, view: impl FnOnce(&OwedRecord) -> R) -> SeamResult<R> {
         if let Some(record) = self.cell.record.borrow().as_ref() {
@@ -291,6 +365,7 @@ impl<St: StagingStore> OwedRotation<'_, St> {
                 return Err(OwedRecordError::Full);
             }
             record.insert(scope, entry);
+            self.cell.reset_stops(scope);
             Ok(true)
         })
         .await
@@ -307,6 +382,7 @@ impl<St: StagingStore> OwedRotation<'_, St> {
         self.write(|record| match record.get_mut(&scope) {
             Some(current) if current == standing => {
                 *current = entry;
+                self.cell.reset_stops(scope);
                 Ok(true)
             }
             _ => Err(OwedRecordError::Standing),
@@ -367,8 +443,11 @@ impl<St: StagingStore> OwedRotation<'_, St> {
 
     /// Remove the entry at `scope`: its last step and its post-steps landed.
     pub async fn clear(&self, scope: NodeId) -> Result<(), OwedRecordError> {
-        self.write(|record| Ok(record.remove(&scope).is_some()))
-            .await
+        self.write(|record| {
+            self.cell.reset_stops(scope);
+            Ok(record.remove(&scope).is_some())
+        })
+        .await
     }
 
     /// Apply `edit` to the record under the cell's writer, and store the
@@ -423,7 +502,8 @@ pub fn open_owed_record(seal: BookkeepingSeal<'_>, blob: &[u8]) -> Option<OwedRe
 
 /// The record's own encoding, inside the seal: the format tag, the entry
 /// count, then each entry in scope order — the scope id, the cut epoch, the
-/// step count and each step's tag and payload.
+/// first stop (a flag, then the time when set), the step count and each step's
+/// tag and payload.
 ///
 /// Refuses, release-active, every shape [`decode_owed`] refuses (AGENTS.md
 /// rule 8): more than [`MAX_OWED_ENTRIES`] entries, and steps that are not in
@@ -432,7 +512,7 @@ fn encode_owed(record: &OwedRecord) -> Result<Zeroizing<Vec<u8>>, OwedRecordErro
     if record.len() > MAX_OWED_ENTRIES {
         return Err(OwedRecordError::Full);
     }
-    let mut out = Zeroizing::new(vec![FORMAT_V1]);
+    let mut out = Zeroizing::new(vec![FORMAT_V2]);
     out.push(u8::try_from(record.len()).map_err(|_| OwedRecordError::Full)?);
     for (scope, entry) in record {
         if !in_command_order(&entry.steps) {
@@ -440,6 +520,13 @@ fn encode_owed(record: &OwedRecord) -> Result<Zeroizing<Vec<u8>>, OwedRecordErro
         }
         out.extend_from_slice(&scope.0);
         out.extend_from_slice(&entry.cut_epoch.to_be_bytes());
+        match entry.first_stop {
+            None => out.push(0),
+            Some(first_stop) => {
+                out.push(1);
+                out.extend_from_slice(&first_stop.0.to_be_bytes());
+            }
+        }
         out.push(u8::try_from(entry.steps.len()).map_err(|_| OwedRecordError::StepsOutOfOrder)?);
         for step in &entry.steps {
             out.push(step.tag());
@@ -919,5 +1006,105 @@ mod tests {
             owed_rotation_key(&secret(10))
         );
         assert!(owed_rotation_key(&secret(9)).starts_with(OWED_ROTATION_PREFIX));
+    }
+
+    /// The encoder writes the first stop, and the decoder reads it back.
+    #[test]
+    fn a_first_stop_round_trips_through_the_encoding() {
+        let stopped = OwedRecord::from([(
+            node(1),
+            OwedEntry {
+                first_stop: Some(UnixMillis(1_234_567)),
+                ..revoke()
+            },
+        )]);
+        let bytes = encode_owed(&stopped).expect("the record encodes");
+        assert_eq!(bytes[0], FORMAT_V2, "the encoder writes the field's format");
+        assert_eq!(decode_owed(&bytes), Some(stopped));
+    }
+
+    /// The `owed-rotation` bodies the core KAT pins at both formats decode to
+    /// the entry they spell, the older one with no stop recorded.
+    #[test]
+    fn the_kat_owed_rotation_bodies_decode_at_both_formats() {
+        let vectors: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../core/kat/vectors/owner_local/owner_local_accept.json"
+        ))
+        .expect("the KAT file parses");
+        let body = |name: &str| -> Vec<u8> {
+            let hex = vectors
+                .iter()
+                .find(|vector| vector["name"] == name)
+                .and_then(|vector| vector["body"].as_str())
+                .unwrap_or_else(|| panic!("the KAT pins {name}"));
+            (0..hex.len())
+                .step_by(2)
+                .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex"))
+                .collect()
+        };
+        let entry = |first_stop| OwedEntry {
+            first_stop,
+            ..revoke()
+        };
+        let scope = NodeId([0xc1; 16]);
+
+        assert_eq!(
+            decode_owed(&body("owed-rotation-body")),
+            Some(OwedRecord::from([(
+                scope,
+                entry(Some(UnixMillis(1_700_000_000_000)))
+            )]))
+        );
+        assert_eq!(
+            decode_owed(&body("owed-rotation-v1-body")),
+            Some(OwedRecord::from([(scope, entry(None))]))
+        );
+    }
+
+    /// A stop sets the first stop once, and the bound holds until both its
+    /// time and its passes of this session are reached.
+    #[test]
+    fn the_bound_needs_both_its_time_and_its_passes() {
+        let entropy = RefCell::new(SeededEntropy::new(7));
+        let mine = secret(9);
+        let store = InMemoryStagingStore::default();
+        let cell = OwedCell::default();
+        let owed = OwedRotation::new(&store, BookkeepingSeal::new(&mine, &entropy), &mine, &cell);
+        let start = UnixMillis(1_000);
+        let after = start.saturating_add(DROP_BOUND);
+        block_on(async {
+            owed.owe(node(1), revoke()).await.expect("the entry lands");
+            for pass in 0..DROP_BOUND_PASSES {
+                assert_eq!(owed.past_bound(node(1), after).await, Ok(false));
+                owed.note_stop(
+                    node(1),
+                    start.saturating_add(Duration::from_secs(u64::from(pass))),
+                )
+                .await
+                .expect("the stop lands");
+            }
+            assert_eq!(
+                owed.entry(node(1))
+                    .await
+                    .expect("the store answers")
+                    .and_then(|e| e.first_stop),
+                Some(start),
+                "only the first stop is kept"
+            );
+            assert_eq!(
+                owed.past_bound(node(1), UnixMillis(after.0 - 1)).await,
+                Ok(false),
+                "before its time"
+            );
+            assert_eq!(owed.past_bound(node(1), after).await, Ok(true));
+            assert_eq!(owed.scopes_within_bound(after).await, Ok(Vec::new()));
+
+            cell.forget();
+            assert_eq!(
+                owed.past_bound(node(1), after).await,
+                Ok(false),
+                "a new session counts its own passes"
+            );
+        });
     }
 }

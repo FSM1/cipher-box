@@ -407,6 +407,7 @@ where
         vault_pointer_signer: Option<&Ed25519Signer>,
     ) -> Result<CutRotationReport, RotateOnCutError> {
         let sweep = self.cut.sweep;
+        let past_bound = self.owed_past_bound(node).await;
         let rotator = OwnerCutNet {
             transport: self.transport,
             api: self.api,
@@ -430,6 +431,7 @@ where
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.cut.vault_root.0,
             sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
+            past_bound,
         };
         rotate_on_cut(&rotator, node, cut).await
     }

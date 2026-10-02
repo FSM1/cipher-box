@@ -220,6 +220,15 @@ fn each_event_kind_crosses_as_its_stable_name() {
             3,
         ),
         (
+            Event::NodeDropped {
+                scope_root: node,
+                node_id: node,
+                cause: String::new(),
+            },
+            "nodeDropped",
+            4,
+        ),
+        (
             Event::WriteCutUnfinished { scope_root: node },
             "writeCutUnfinished",
             2,
