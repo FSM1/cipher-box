@@ -291,6 +291,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::author::ENVELOPE_V;
     use crate::seams::UnixMillis;
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -430,6 +431,7 @@ mod tests {
                     write_scope_seed: None,
                     node_id: [0u8; 16],
                     read_scope_seed: None,
+                    version: ENVELOPE_V,
                 })
         }
 
@@ -467,6 +469,7 @@ mod tests {
                     sequence: 1,
                     epoch: 1,
                 },
+                version: ENVELOPE_V,
             }))
         }
     }

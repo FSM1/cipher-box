@@ -300,7 +300,7 @@ async fn production_ignores_the_test_profile_auth_limit_override() {
                 method: HttpMethod::Post,
                 url: format!("{prod}/auth/challenge"),
                 headers: vec![("content-type".to_owned(), "application/json".to_owned())],
-                body: Some(b"{}".to_vec()),
+                body: Some(b"{}".to_vec().into()),
                 credentials: HttpCredentials::Include,
                 timeout_ms: Some(10_000),
             })
@@ -2005,7 +2005,7 @@ async fn post_json_response(
             method: HttpMethod::Post,
             url: format!("{base}{path}"),
             headers,
-            body: Some(serde_json::to_vec(&body).expect("serialize")),
+            body: Some(serde_json::to_vec(&body).expect("serialize").into()),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(10_000),
         })
@@ -2039,7 +2039,8 @@ async fn test_login_body(base: &str, handle: &str) -> serde_json::Value {
                 serde_json::to_vec(
                     &serde_json::json!({ "handle": handle, "secret": test_login_secret() }),
                 )
-                .expect("serialize"),
+                .expect("serialize")
+                .into(),
             ),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(10_000),
