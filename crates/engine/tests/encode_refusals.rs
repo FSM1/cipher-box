@@ -28,6 +28,7 @@ use cipherbox_engine::net::renewal_walk::cursor::{
 use cipherbox_engine::net::{
     BarFloor, Observed, PublishBar, PublishError, PublishOutcome, PublishRequest, publish,
 };
+use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpResponse, RecordTransport, StagingStore, UnixMillis,
 };
@@ -326,6 +327,8 @@ fn an_owed_rotation_record_the_decoder_refuses_is_refused_at_encode() {
 // Each author's publish goes through that gate.
 // ---------------------------------------------------------------------------
 
+type Session = (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>);
+
 /// A started session on a seeded account, its loops parked.
 fn booted(world: &FakeWorld, blocks: &Blocks, device: &FakeDevice) -> Session {
     serve_http(device, blocks, 400);
@@ -347,18 +350,9 @@ fn booted(world: &FakeWorld, blocks: &Blocks, device: &FakeDevice) -> Session {
     (engine, events, tasks)
 }
 
-type Session = (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>);
-
 fn tick(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTask]) {
     world.scheduler.advance(engine.profile().poll_cadence);
     poll_tasks_until_parked(tasks);
-}
-
-fn write_name(node: NodeId) -> IpnsName {
-    IpnsName::from_public_key(
-        &kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &node.0).as_bytes())
-            .verifying_key(),
-    )
 }
 
 fn record_at(world: &FakeWorld, name: &IpnsName) -> Option<Vec<u8>> {
@@ -389,7 +383,7 @@ fn a_drain_publish_whose_scope_floor_rises_inside_its_window_publishes_nothing()
         .find(|child| child.name == "photos")
         .expect("the staged folder renders")
         .id;
-    let name = write_name(folder);
+    let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &folder.0);
     device.floor_store.raise_epoch_floor_on_sequence_read(
         &floor_label(name.as_str().as_bytes()),
         &floor_label(&ACCOUNT_SCOPE),
@@ -397,9 +391,8 @@ fn a_drain_publish_whose_scope_floor_rises_inside_its_window_publishes_nothing()
     );
     tick(&world, &engine, &mut tasks);
 
-    assert_eq!(
-        record_at(&world, &name),
-        None,
+    assert!(
+        nothing_reached_the_transport(&device, &name),
         "the record sealed below the risen floor never reached the plane"
     );
     assert_eq!(queued(&device), 1, "and the create is still queued");
@@ -444,7 +437,7 @@ fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let folder = NodeId([0x6f; 16]);
-    let name = write_name(folder);
+    let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &folder.0);
     let body = ReadBody::Folder {
         created_at: 0,
         modified_at: 0,

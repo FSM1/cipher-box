@@ -3915,17 +3915,7 @@ fn a_second_end_the_record_plane_moved_past_publishes_nothing() {
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     converge_into_granted_scope(&fx, holiday);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let granted_root = write_name(fx.folder);
-    let walked = fx
-        .world
-        .record_store
-        .record_at(&fx.world.record_store.endpoints()[0], granted_root.as_str());
-    let (mut other, _other_events, _other_tasks) = fx.second_owner_device();
-    assert_eq!(
-        block_on(other.command(Command::RotateNow { node: fx.folder })),
-        Ok(CommandOutcome::Done),
-        "another device cuts the granted scope"
-    );
+    let (granted_root, walked, _other) = cut_from_another_device(&fx);
 
     let album_sequence = sequence_at(&fx.world, &write_name(album));
     let holiday_sequence = sequence_at(&fx.world, &write_name(holiday));
@@ -3934,15 +3924,7 @@ fn a_second_end_the_record_plane_moved_past_publishes_nothing() {
         new_parent: album,
     }))
     .expect("a move out of the granted scope journals its crossing");
-    // The walk's fan-out GET, one per endpoint, still reads the record it proved
-    // last tick, so the second end it hands the pass is one cut behind the
-    // record the end proof reads.
-    fx.world.record_store.serve_gets_for_after(
-        granted_root.as_str(),
-        0,
-        fx.world.record_store.endpoints().len(),
-        walked,
-    );
+    serve_the_walk_one_cut_behind(&fx, &granted_root, walked);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     assert_eq!(
@@ -4063,28 +4045,11 @@ fn a_bin_re_key_under_a_superseded_end_publishes_nothing() {
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     converge_into_granted_scope(&fx, holiday);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let granted_root = write_name(fx.folder);
-    let walked = fx
-        .world
-        .record_store
-        .record_at(&fx.world.record_store.endpoints()[0], granted_root.as_str());
-    let (mut other, _other_events, _other_tasks) = fx.second_owner_device();
-    assert_eq!(
-        block_on(other.command(Command::RotateNow { node: fx.folder })),
-        Ok(CommandOutcome::Done),
-        "another device cuts the granted scope"
-    );
+    let (granted_root, walked, _other) = cut_from_another_device(&fx);
 
     let holiday_sequence = sequence_at(&fx.world, &write_name(holiday));
     block_on(fx.engine.command(Command::Delete { node: holiday })).expect("the delete stages");
-    // As in the crossing case: the walk's fan-out GET reads the record it
-    // proved last tick, so the end it hands the pass is one cut behind.
-    fx.world.record_store.serve_gets_for_after(
-        granted_root.as_str(),
-        0,
-        fx.world.record_store.endpoints().len(),
-        walked,
-    );
+    serve_the_walk_one_cut_behind(&fx, &granted_root, walked);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     assert_eq!(queued_ops(&fx.owner_device), 1, "the delete is held");
@@ -4092,6 +4057,38 @@ fn a_bin_re_key_under_a_superseded_end_publishes_nothing() {
         sequence_at(&fx.world, &write_name(holiday)),
         holiday_sequence,
         "and nothing was re-sealed under the superseded end"
+    );
+}
+
+type Session = (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>);
+
+/// Another owner device cuts the granted scope. Returns the granted root's
+/// name, the record this device's walk proved before the cut, and the other
+/// device's session.
+fn cut_from_another_device(fx: &GrantScenario) -> (IpnsName, Option<Vec<u8>>, Session) {
+    let granted_root = write_name(fx.folder);
+    let walked = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], granted_root.as_str());
+    let (mut other, other_events, other_tasks) = fx.second_owner_device();
+    assert_eq!(
+        block_on(other.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done),
+        "another device cuts the granted scope"
+    );
+    (granted_root, walked, (other, other_events, other_tasks))
+}
+
+/// The walk's fan-out GET, one per endpoint, still reads the record it proved
+/// last tick, so the end it hands the pass is one cut behind the record the
+/// end proof reads.
+fn serve_the_walk_one_cut_behind(fx: &GrantScenario, root: &IpnsName, walked: Option<Vec<u8>>) {
+    fx.world.record_store.serve_gets_for_after(
+        root.as_str(),
+        0,
+        fx.world.record_store.endpoints().len(),
+        walked,
     );
 }
 

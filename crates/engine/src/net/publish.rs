@@ -14,7 +14,6 @@
 //! confirm-by-re-resolve detects a lost CAS race for the caller to rebase.
 
 use core::time::Duration;
-use std::borrow::Cow;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -367,40 +366,32 @@ pub enum PublishVerdict {
 impl PublishError {
     /// The verdict every author's own translation folds from.
     pub fn verdict(&self) -> PublishVerdict {
-        self.translate().0
-    }
-
-    /// The one translation of a publish failure: its verdict and its message.
-    fn translate(&self) -> (PublishVerdict, Cow<'static, str>) {
         match self {
-            Self::Register(_) => (
-                PublishVerdict::RegistryRefused,
-                "register-first publish failed".into(),
-            ),
-            Self::AllEndpointsFailed => (
-                PublishVerdict::PutUnacknowledged,
-                "all record endpoints failed".into(),
-            ),
-            Self::AllEndpointsRefused => (
-                PublishVerdict::PutRefused,
-                "every record endpoint refused the record".into(),
-            ),
-            Self::FloorRead(_) => (
-                PublishVerdict::NotLanded,
-                "durable floor read failed".into(),
-            ),
-            Self::EmptyHeadCid => (
-                PublishVerdict::RefusedUnaddressed,
-                "empty head CID (never published)".into(),
-            ),
-            Self::EmptyInlineValue => (
-                PublishVerdict::RefusedUnaddressed,
-                "empty inline value (never published)".into(),
-            ),
-            Self::RecordTooLarge { size, limit } => (
-                PublishVerdict::RefusedOversized,
-                format!("record of {size} bytes over the {limit}-byte cap (never published)")
-                    .into(),
+            Self::Register(_) => PublishVerdict::RegistryRefused,
+            Self::EmptyHeadCid | Self::EmptyInlineValue => PublishVerdict::RefusedUnaddressed,
+            Self::RecordTooLarge { .. } => PublishVerdict::RefusedOversized,
+            Self::BelowBar { .. } | Self::ForeignVersion { .. } | Self::SequenceExhausted => {
+                PublishVerdict::Refused
+            }
+            Self::FloorRead(_) | Self::MarkUnrecorded(_) => PublishVerdict::NotLanded,
+            Self::AllEndpointsFailed => PublishVerdict::PutUnacknowledged,
+            Self::AllEndpointsRefused => PublishVerdict::PutRefused,
+        }
+    }
+}
+
+impl core::fmt::Display for PublishError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Register(_) => f.write_str("register-first publish failed"),
+            Self::AllEndpointsFailed => f.write_str("all record endpoints failed"),
+            Self::AllEndpointsRefused => f.write_str("every record endpoint refused the record"),
+            Self::FloorRead(_) => f.write_str("durable floor read failed"),
+            Self::EmptyHeadCid => f.write_str("empty head CID (never published)"),
+            Self::EmptyInlineValue => f.write_str("empty inline value (never published)"),
+            Self::RecordTooLarge { size, limit } => write!(
+                f,
+                "record of {size} bytes over the {limit}-byte cap (never published)"
             ),
             Self::BelowBar { floor, at, epoch } => {
                 let axis = match floor {
@@ -408,34 +399,20 @@ impl PublishError {
                     BarFloor::Write => "write",
                     BarFloor::Cut => "cut",
                 };
-                (
-                    PublishVerdict::Refused,
-                    format!("{axis} epoch {epoch} below the durable floor {at} (never published)")
-                        .into(),
+                write!(
+                    f,
+                    "{axis} epoch {epoch} below the durable floor {at} (never published)"
                 )
             }
-            Self::ForeignVersion { version } => (
-                PublishVerdict::Refused,
-                format!(
-                    "envelope version {version} is not the one this build authors (never published)"
-                )
-                .into(),
+            Self::ForeignVersion { version } => write!(
+                f,
+                "envelope version {version} is not the one this build authors (never published)"
             ),
-            Self::SequenceExhausted => (
-                PublishVerdict::Refused,
-                "no sequence above the durable floor (never published)".into(),
-            ),
-            Self::MarkUnrecorded(_) => (
-                PublishVerdict::NotLanded,
-                "durable mark write failed (never published)".into(),
-            ),
+            Self::SequenceExhausted => {
+                f.write_str("no sequence above the durable floor (never published)")
+            }
+            Self::MarkUnrecorded(_) => f.write_str("durable mark write failed (never published)"),
         }
-    }
-}
-
-impl core::fmt::Display for PublishError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.translate().1)
     }
 }
 

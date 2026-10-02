@@ -3155,8 +3155,9 @@ where
                     read_scope_seed: &source.read_scope_seed,
                     history_links: &source.history_links,
                 },
-                &observed,
+                name,
                 record_bytes,
+                sequence,
                 &envelope,
             )
             .await?;
@@ -3182,8 +3183,7 @@ where
         sequence: u64,
         envelope: &Envelope,
     ) -> Result<ReadBody, SweepResolveFailure> {
-        let observed = Observed::gated(name, sequence, envelope.v)
-            .map_err(|_| SweepResolveFailure::VersionSkew)?;
+        refuse_foreign_version(envelope.v).map_err(|_| SweepResolveFailure::VersionSkew)?;
         if envelope.id != node.node_id {
             return Err(SweepResolveFailure::Rejected);
         }
@@ -3198,8 +3198,9 @@ where
                 read_scope_seed: &override_seed,
                 history_links: &root.section.history_links,
             },
-            &observed,
+            name,
             record_bytes,
+            sequence,
             envelope,
         )
         .await
@@ -3212,11 +3213,11 @@ where
     async fn open_interior_record(
         &self,
         scope: &InteriorReadScope<'_>,
-        observed: &Observed,
+        name: &IpnsName,
         record_bytes: &[u8],
+        sequence: u64,
         envelope: &Envelope,
     ) -> Result<ReadBody, SweepResolveFailure> {
-        let (name, sequence) = (observed.name(), observed.sequence());
         floor::check_sequence(
             self.floors,
             name.as_str().as_bytes(),
@@ -9950,11 +9951,8 @@ mod tests {
             block_on(net.republish(&moved)),
             Err(WritePublishError::Rejected),
         );
-        assert_eq!(
-            harness
-                .store
-                .record_at(&harness.store.endpoints()[0], moved.new_name.as_str()),
-            None,
+        assert!(
+            !published_at(&harness, &moved.new_name),
             "nothing reached the new name"
         );
     }
@@ -13874,14 +13872,13 @@ mod tests {
     /// One interior node handed over verbatim, read at `observed`.
     fn interior_record_of<'a>(
         node_id: [u8; 16],
-        ipns_name: &'a [u8],
         observed: &'a Observed,
         body: &'a ReadBody,
         empty: &'a PreservedFields,
     ) -> InteriorRecord<'a> {
         InteriorRecord {
             node_id,
-            ipns_name,
+            ipns_name: observed.name().as_str().as_bytes(),
             observed,
             read_body: body,
             carried_unknown: empty,
@@ -13967,13 +13964,7 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(
-                    root.scope_id,
-                    name.as_str().as_bytes(),
-                    &gated_at(&name),
-                    &body,
-                    &empty
-                ),
+                &interior_record_of(root.scope_id, &gated_at(&name), &body, &empty),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -14007,13 +13998,7 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(
-                    node_id,
-                    elsewhere.as_str().as_bytes(),
-                    &gated_at(&elsewhere),
-                    &body,
-                    &empty
-                ),
+                &interior_record_of(node_id, &gated_at(&elsewhere), &body, &empty),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -14043,13 +14028,7 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(
-                    node_id,
-                    name.as_str().as_bytes(),
-                    &gated_at(&name),
-                    &body,
-                    &empty
-                ),
+                &interior_record_of(node_id, &gated_at(&name), &body, &empty),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -14157,13 +14136,7 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(
-                    node_id,
-                    name.as_str().as_bytes(),
-                    &gated_at(&name),
-                    &body,
-                    &empty
-                ),
+                &interior_record_of(node_id, &gated_at(&name), &body, &empty),
             )),
             Err(RotationPublishError::Rejected),
         );

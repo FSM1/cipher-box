@@ -996,12 +996,11 @@ fn transient_renewal(outcome: &Result<Option<PublishOutcome>, PublishError>) -> 
         Ok(None | Some(PublishOutcome::Published { .. } | PublishOutcome::LostRace { .. })) => {
             false
         }
+        Err(PublishError::Register(api)) => transient_registration(api),
         Err(error) => match error.verdict() {
-            PublishVerdict::RegistryRefused => {
-                matches!(error, PublishError::Register(api) if transient_registration(api))
-            }
             PublishVerdict::NotLanded | PublishVerdict::PutUnacknowledged => true,
-            PublishVerdict::PutRefused
+            PublishVerdict::RegistryRefused
+            | PublishVerdict::PutRefused
             | PublishVerdict::Refused
             | PublishVerdict::RefusedUnaddressed
             | PublishVerdict::RefusedOversized => false,
