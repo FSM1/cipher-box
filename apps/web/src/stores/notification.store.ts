@@ -1,7 +1,9 @@
 /**
  * The warning-notice surface: a trust violation or a withheld-update escalation
  * renders here, as its own class, and never on the staleness ladder
- * (blueprint/web-client.md "Staleness ladder rendering").
+ * (blueprint/web-client.md "Staleness ladder rendering"). A plain notice that
+ * outlives the screen that raised it, such as a sign-in that could not save
+ * this device, renders here too.
  *
  * Memory only, and cleared when the engine that raised the notices goes away —
  * a notice names the scope it came from, so it must not outlive that session.

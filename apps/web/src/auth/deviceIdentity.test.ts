@@ -15,7 +15,8 @@ const SIGNATURE_HEX = /^[0-9a-f]{128}$/;
 const MESSAGE = new TextEncoder().encode('cipherbox/device-approval/request/v1');
 
 /** The guidance a browser that cannot hold this key must give the member. */
-const UNUSABLE = 'this browser cannot hold a device identity key — use your recovery phrase';
+const UNUSABLE =
+  'this browser has no Ed25519 in WebCrypto; use a current Chrome, Firefox or Safari';
 
 /** SPKI DER header for an id-Ed25519 subjectPublicKey (RFC 8410 §4). */
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
