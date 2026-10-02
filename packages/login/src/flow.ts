@@ -28,6 +28,8 @@ export interface LoginHost<C extends CollectedMaterial = CollectedMaterial> {
   secrets: SecretRearm | null;
   account: AccountRecord;
   progress: LoginProgress;
+  /** The host's clock, which decides whether an exchange's token is still worth presenting. */
+  now: () => Date;
   /** Runs once a logout has torn the facade down, so the host can replace it. */
   afterLogout?: () => void;
   /**
@@ -103,6 +105,12 @@ let restore: { session: CoreKitSession; facade: LoginFacade | null; done: Promis
  * that just ended and, after a forget, re-seeding what it erased.
  */
 let retired: CoreKitSession | 'any' | null = null;
+/**
+ * The credential the provider session last redeemed, kept until a start spends
+ * it: a login held at the factor policy starts later, from a phrase or an
+ * approval, and maybe from a flow the host rebuilt in between.
+ */
+let exchanged: { session: CoreKitSession; credential: IdentityCredential } | null = null;
 
 /**
  * Clears the module-scoped latches. For a host's tests, which share one module
@@ -113,6 +121,7 @@ export function resetLoginFlowLatches(): void {
   inFlight = false;
   restore = null;
   retired = null;
+  exchanged = null;
 }
 
 /**
@@ -168,15 +177,21 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
    * leadership failover mid-start can re-export it; every step after that stays
    * inside the failure envelope, so nothing can leave it armed over a host that
    * renders signed out.
+   *
+   * `followsExchange` is false for a restore. The credential is spent here,
+   * whichever way the start goes.
    */
-  const handOff = async (): Promise<void> => {
+  const handOff = async (followsExchange: boolean): Promise<void> => {
+    const credential =
+      followsExchange && exchanged?.session === session ? exchanged.credential : null;
+    exchanged = null;
     if (!facade || !session) throw new Error('the engine is not ready to accept a login');
     const method = session.method();
     const email = session.email();
 
     secrets?.use(session);
     try {
-      await handOffLoginSecret(facade, session);
+      await handOffLoginSecret(facade, session, credential && { credential, now: host.now });
       // The end latches while this export is in flight, and its own teardown is
       // the leg the serialization gate refuses; signing in here would re-enter
       // the session it retired, so the catch below ends that session instead.
@@ -201,8 +216,10 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     exclusively(async () => {
       if (!session) throw new Error('the login provider is not ready');
       retired = null;
-      await session.login(await collect());
-      await handOff();
+      const credential = await collect();
+      exchanged = { session, credential };
+      await session.login(credential);
+      await handOff(true);
     });
 
   /**
@@ -237,6 +254,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     retired = session ?? 'any';
     secrets?.use(null);
     restore = null;
+    exchanged = null;
     account.signedOut();
     endsSessionElsewhere?.();
     return exclusively(async () => {
@@ -300,7 +318,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
           throw new Error('recovery is not available on this device');
         retired = null;
         await session.recoverWithPhrase(phrase);
-        await handOff();
+        await handOff(true);
       });
     },
 
@@ -310,7 +328,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
           throw new Error('device approval is not available on this device');
         retired = null;
         await session.adoptApprovalFactor(factorKey);
-        await handOff();
+        await handOff(true);
       });
     },
 
@@ -333,7 +351,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       if (restore !== null && restore.session === session && restore.facade === facade) {
         return restore.done;
       }
-      const done = exclusively(handOff).catch(() => undefined);
+      const done = exclusively(() => handOff(false)).catch(() => undefined);
       restore = { session, facade, done };
       return done;
     },

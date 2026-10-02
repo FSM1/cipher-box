@@ -22,15 +22,17 @@ function exporter(key: string | Error, accountId = 'acct01'): LoginSecretExporte
 function fakeFacade(start: (secret: ArrayBuffer) => Promise<void>) {
   const received: ArrayBuffer[] = [];
   const accounts: string[] = [];
+  const identityTokens: Array<string | undefined> = [];
   const facade: LoginFacade = {
-    start(secret, accountId) {
+    start(secret, accountId, identityToken) {
       received.push(secret);
       accounts.push(accountId);
+      identityTokens.push(identityToken);
       return start(secret);
     },
     logout: () => Promise.resolve(),
   };
-  return { facade, received, accounts };
+  return { facade, received, accounts, identityTokens };
 }
 
 /** `postMessage(msg, [secret])` detaches the sender's buffer; so does this. */
@@ -88,6 +90,29 @@ describe('handOffLoginSecret', () => {
     await handOffLoginSecret(facade, exporter(SECRET_HEX, 'aa11-bb22'));
 
     expect(accounts).toEqual(['aa11-bb22']);
+  });
+
+  it('passes the token only while 30 seconds of its lifetime are left', async () => {
+    const { facade, identityTokens } = fakeFacade(transferring);
+
+    const credential = { token: 'identity.jwt', expiresAt: new Date('2030-01-01T00:05:00Z') };
+    const at = (iso: string) => () => new Date(iso);
+
+    await handOffLoginSecret(facade, exporter(SECRET_HEX), {
+      credential,
+      now: at('2030-01-01T00:04:29.999Z'),
+    });
+    await handOffLoginSecret(facade, exporter(SECRET_HEX), {
+      credential,
+      now: at('2030-01-01T00:04:30Z'),
+    });
+    await handOffLoginSecret(facade, exporter(SECRET_HEX), {
+      credential: { ...credential, expiresAt: new Date('not a date') },
+      now: at('2030-01-01T00:00:00Z'),
+    });
+    await handOffLoginSecret(facade, exporter(SECRET_HEX));
+
+    expect(identityTokens).toEqual(['identity.jwt', undefined, undefined, undefined]);
   });
 
   it('never exports the secret for a session that cannot name its account', async () => {
