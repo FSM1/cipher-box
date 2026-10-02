@@ -7,6 +7,7 @@ import { createSiweMessage } from 'viem/siwe';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { FakeRepository } from '../../testing/fake-repo';
+import { AccountDevice } from '../../device-approval/entities/account-device.entity';
 import { AuthMethod, type AuthMethodKind } from '../entities/auth-method.entity';
 import { User } from '../entities/user.entity';
 import { AuthService } from './auth.service';
@@ -41,7 +42,8 @@ function authServiceOver(
   challenges: ChallengeService,
   users: FakeRepository<User>,
   authMethods: FakeRepository<AuthMethod>,
-  identityTokens: IdentityTokenService
+  identityTokens: IdentityTokenService,
+  devices = new FakeRepository<AccountDevice>()
 ): AuthService {
   return new AuthService(
     challenges,
@@ -59,6 +61,7 @@ function authServiceOver(
     fakeDataSource([
       [User, users],
       [AuthMethod, authMethods],
+      [AccountDevice, devices],
     ])
   );
 }
@@ -281,6 +284,7 @@ describe('AuthService auth-method surface', () => {
 
 describe('AuthService login bind (ADR 0058 D2)', () => {
   let users: FakeRepository<User>;
+  let devices: FakeRepository<AccountDevice>;
   let challenges: ChallengeService;
   let service: AuthService;
   let subjects: Map<string, string>;
@@ -290,6 +294,7 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
 
   beforeEach(() => {
     users = new FakeRepository<User>();
+    devices = new FakeRepository<AccountDevice>();
     challenges = new ChallengeService(new FakeClock(), new FakeEntropy(), fakeConfig({}).service);
     subjects = new Map();
     spend = vi.fn();
@@ -303,7 +308,13 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
       },
       spend,
     } as unknown as IdentityTokenService;
-    service = authServiceOver(challenges, users, new FakeRepository<AuthMethod>(), identityTokens);
+    service = authServiceOver(
+      challenges,
+      users,
+      new FakeRepository<AuthMethod>(),
+      identityTokens,
+      devices
+    );
 
     privateKey = secp256k1.utils.randomPrivateKey();
     publicKey = Buffer.from(secp256k1.getPublicKey(privateKey, true)).toString('hex');
@@ -390,6 +401,18 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
     expect(isNewUser).toBe(false);
     expect(bindOf(OTHER_KEY)).toBe(subject);
     expect(bindOf(publicKey)).toBeNull();
+  });
+
+  it('binds nothing when a device row of another account holds the subject', async () => {
+    const subject = randomUUID();
+    const holder = await seedAccount(OTHER_KEY, null);
+    await devices.save({ userId: holder.id, identitySubjectId: subject });
+
+    const { isNewUser } = await login(tokenFor(subject));
+
+    expect(isNewUser).toBe(true);
+    expect(bindOf(publicKey)).toBeNull();
+    expect(bindOf(OTHER_KEY)).toBeNull();
   });
 
   it('does not spend the token', async () => {

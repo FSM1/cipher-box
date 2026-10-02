@@ -9,7 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { parseSiweMessage } from 'viem/siwe';
-import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
+import { DataSource, EntityManager, IsNull, Not, Repository } from 'typeorm';
 import {
   authMethodLockKey,
   boundedAcquire,
@@ -18,6 +18,7 @@ import {
   subjectLockKey,
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
+import { AccountDevice } from '../../device-approval/entities/account-device.entity';
 import { AuthMethod, type AuthMethodKind } from '../entities/auth-method.entity';
 import { User } from '../entities/user.entity';
 import {
@@ -338,6 +339,14 @@ export class AuthService {
 async function bindSubject(manager: EntityManager, userId: string, subject: string): Promise<void> {
   const users = manager.getRepository(User);
   if (await users.existsBy({ identitySubjectId: subject })) {
+    return;
+  }
+  // Device rows from before the bind landed still claim their subject.
+  if (
+    await manager
+      .getRepository(AccountDevice)
+      .existsBy({ identitySubjectId: subject, userId: Not(userId) })
+  ) {
     return;
   }
   await users.update({ id: userId, identitySubjectId: IsNull() }, { identitySubjectId: subject });

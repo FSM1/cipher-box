@@ -6,7 +6,13 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Clock, SystemClock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
+import { DeviceApprovalSessionController } from '../device-approval/device-approval-session.controller';
+import { AccountDevice } from '../device-approval/entities/account-device.entity';
+import { DeviceApproval } from '../device-approval/entities/device-approval.entity';
+import { AccountDeviceService } from '../device-approval/services/account-device.service';
+import { DeviceApprovalService } from '../device-approval/services/device-approval.service';
 import { MetricsService } from '../ops/metrics.service';
+import { createTestDeviceKey } from '../testing/device-keys';
 import { fakeConfig } from '../testing/fakes';
 import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
@@ -79,8 +85,16 @@ describe('identity subject bind at login (real Postgres)', () => {
     ctx = await createHttpIntegrationApp({
       db,
       withOps: false,
-      entities: [User, AuthMethod, RefreshToken, AcceleratorToken, IdentitySubject],
-      controllers: [AuthController, IdentityController],
+      entities: [
+        User,
+        AuthMethod,
+        RefreshToken,
+        AcceleratorToken,
+        IdentitySubject,
+        AccountDevice,
+        DeviceApproval,
+      ],
+      controllers: [AuthController, IdentityController, DeviceApprovalSessionController],
       providers: [
         MetricsService,
         AuthMetricsInterceptor,
@@ -95,6 +109,8 @@ describe('identity subject bind at login (real Postgres)', () => {
         IdentityExchangeService,
         IdentitySubjectService,
         IdentityTokenService,
+        AccountDeviceService,
+        DeviceApprovalService,
         EmailOtpService,
         {
           provide: MailProvider,
@@ -121,7 +137,7 @@ describe('identity subject bind at login (real Postgres)', () => {
   });
 
   beforeEach(async () => {
-    await db.dataSource.query('TRUNCATE TABLE users CASCADE');
+    await db.dataSource.query('TRUNCATE TABLE users, account_devices, device_approvals CASCADE');
     await db.dataSource.query('TRUNCATE TABLE identity_subjects CASCADE');
     await db.dataSource.query('TRUNCATE TABLE spent_identity_tokens');
   });
@@ -165,6 +181,12 @@ describe('identity subject bind at login (real Postgres)', () => {
       .getRepository(User)
       .findOneBy({ publicKey: identity.publicKey });
     return user ? user.identitySubjectId : undefined;
+  }
+
+  async function accountId(identity: Identity): Promise<string> {
+    return (
+      await db.dataSource.getRepository(User).findOneByOrFail({ publicKey: identity.publicKey })
+    ).id;
   }
 
   const userCount = () => db.dataSource.getRepository(User).count();
@@ -228,6 +250,31 @@ describe('identity subject bind at login (real Postgres)', () => {
     expect(await boundSubject(other)).toBeNull();
     expect(await boundSubject(holder)).toBe(subject);
     expect(await accountsBoundTo(subject)).toBe(1);
+  });
+
+  it('binds nothing when a device row from before the bind holds the subject for another account', async () => {
+    const holder = newIdentity();
+    await login(holder, 200);
+    const { token, subject } = await exchange('google-a');
+    const now = ctx.app.get(Clock).now();
+    await db.dataSource.getRepository(AccountDevice).insert({
+      userId: await accountId(holder),
+      identitySubjectId: subject,
+      publicKey: createTestDeviceKey().publicKey,
+      label: null,
+      createdAt: now,
+      lastSeenAt: now,
+    });
+    const other = newIdentity();
+
+    await login(other, 200, token);
+
+    expect(await boundSubject(other)).toBeNull();
+    expect(await boundSubject(holder)).toBeNull();
+    await request(http())
+      .post('/device-approval/session')
+      .send({ identityToken: token })
+      .expect(404);
   });
 
   describe('a bad identity token', () => {
