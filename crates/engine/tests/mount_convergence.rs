@@ -224,7 +224,7 @@ fn boot(
 ) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
     serve_http(device, blocks, 600);
     let (mut engine, events) = engine_on_api(device, entropy_seed);
-    block_on(engine.start(secret())).expect("cold start adopts the owner root");
+    block_on(engine.start(secret(), None)).expect("cold start adopts the owner root");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     (engine, events, tasks)
@@ -891,7 +891,7 @@ fn the_owner_starts_again_after_its_session_adopts_the_cut_root(
 
     serve_http(owner, blocks, 600);
     let (mut engine, _events) = engine_on_api(owner, 45);
-    let started = block_on(engine.start(secret()));
+    let started = block_on(engine.start(secret(), None));
     assert!(
         started.is_ok(),
         "the device that cut the vault root starts again: {started:?}"
@@ -988,7 +988,7 @@ fn a_child_read_right_after_a_lag_start_has_the_root_seed() {
 
     serve_http(&owner, &blocks, 600);
     let (mut engine, _events) = engine_on_api(&owner, 45);
-    block_on(engine.start(secret())).expect("the lag start passes");
+    block_on(engine.start(secret(), None)).expect("the lag start passes");
     let versions = block_on(engine.file_versions(file));
     assert!(
         versions.is_ok(),
@@ -1062,7 +1062,7 @@ fn assert_start_refuses_a_rolled_back_pointer(
 ) {
     serve_http(device, blocks, 600);
     let (mut engine, _events) = engine_on_api(device, entropy_seed);
-    let started = block_on(engine.start(secret()));
+    let started = block_on(engine.start(secret(), None));
     assert!(
         matches!(
             &started,
@@ -1542,7 +1542,7 @@ fn recipient_with_the_share(
     let device = world.device(&recipient_identity().verifying_key().to_sec1());
     serve_http(&device, blocks, 2_000);
     let (mut engine, events) = engine_on_api(&device, 21);
-    block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec())))
+    block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec()), None))
         .expect("the recipient's own session starts");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);

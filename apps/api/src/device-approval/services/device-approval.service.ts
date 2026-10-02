@@ -125,10 +125,9 @@ export class DeviceApprovalService {
   /**
    * Mint the scoped pre-reconstruction token from a CipherBox identity token —
    * the only credential a device that cannot derive its key still holds. The
-   * account is reached through a device already registered against that identity,
-   * so an account nobody can approve for refuses here rather than opening a
-   * rendezvous with no counterparty (the recovery phrase is that account's path,
-   * ADR 0009 D2).
+   * account is the one bound to the token's subject, and an account with no
+   * registered device refuses here rather than opening a rendezvous with no
+   * counterparty (the recovery phrase is that account's path, ADR 0009 D2).
    */
   async openSession(identityToken: string): Promise<ScopedToken> {
     let subject: string;

@@ -47,8 +47,11 @@ import {
  * exercise transport ordering and out-of-order correlation deterministically.
  */
 export interface EngineHostLike {
-  /** Cold-starts the engine for `accountId`, whose durable state it opens. */
-  start(secret: ArrayBuffer, accountId: string): Promise<void>;
+  /**
+   * Cold-starts the engine for `accountId`, whose durable state it opens. The
+   * login presents `identityToken` when the start follows an exchange.
+   */
+  start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void>;
   /** Runs one command; resolves with what it produced. */
   command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor>;
   /** Opens a write handle for `size` plaintext bytes; the engine reserves them. */
@@ -177,11 +180,11 @@ export class EngineHost implements EngineHostLike {
     }
   }
 
-  async start(secret: ArrayBuffer, accountId: string): Promise<void> {
+  async start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void> {
     // Inside `scrubbing`: a refused account still leaves this frame the
     // secret's terminal owner (security rule 7).
     return this.scrubbing(buffer(secret, 'secret'), (view) =>
-      this.engineFor(accountId).start(view)
+      this.engineFor(accountId).start(view, identityToken)
     );
   }
 

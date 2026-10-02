@@ -33,6 +33,12 @@ export interface AuthState {
    * What the enrollment control runs on, so the two cannot disagree.
    */
   readonly recoveryPhraseHeld: boolean;
+  /**
+   * The member asked at sign-in to register this browser's device key. It
+   * outlives `signedIn`, because the landing that registers reads it after the
+   * flow has already published the session.
+   */
+  readonly saveDevice: boolean;
 }
 
 const SIGNED_OUT: AuthState = Object.freeze({
@@ -41,6 +47,7 @@ const SIGNED_OUT: AuthState = Object.freeze({
   recoveryRequired: false,
   factorPolicy: false,
   recoveryPhraseHeld: false,
+  saveDevice: false,
 });
 
 let state: AuthState = SIGNED_OUT;
@@ -54,7 +61,8 @@ function set(next: AuthState): void {
     next.method === state.method &&
     next.recoveryRequired === state.recoveryRequired &&
     next.factorPolicy === state.factorPolicy &&
-    next.recoveryPhraseHeld === state.recoveryPhraseHeld
+    next.recoveryPhraseHeld === state.recoveryPhraseHeld &&
+    next.saveDevice === state.saveDevice
   ) {
     return;
   }
@@ -80,6 +88,7 @@ export const authStore = {
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
+      saveDevice: state.saveDevice,
     });
   },
   signedOut(): void {
@@ -110,6 +119,9 @@ export const authStore = {
    */
   recoveryPhrase(held: boolean): void {
     set({ ...state, recoveryPhraseHeld: held });
+  },
+  saveDevice(save: boolean): void {
+    set({ ...state, saveDevice: save });
   },
 };
 

@@ -220,7 +220,7 @@ class LeaderEngine implements EngineTransport {
     this.onFault(error);
   }
 
-  start(secret: ArrayBuffer, accountId: string): Promise<void> {
+  start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void> {
     let local: LocalTransport;
     try {
       local = this.engine();
@@ -229,7 +229,7 @@ class LeaderEngine implements EngineTransport {
       new Uint8Array(secret).fill(0);
       return Promise.reject(asError(error));
     }
-    return local.start(secret, accountId);
+    return local.start(secret, accountId, identityToken);
   }
 
   command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
@@ -428,7 +428,7 @@ export class EngineClient implements EngineTransport {
 
   // --- EngineTransport ---
 
-  start(secret: ArrayBuffer, accountId: string): Promise<void> {
+  start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void> {
     // This seam is the secret's terminal owner (security rule 7). On the leader
     // path the worker becomes the terminal owner — `LocalTransport.start`
     // transfers the buffer in (neutered), never copied. On the follower path the
@@ -442,7 +442,7 @@ export class EngineClient implements EngineTransport {
     // this account rather than take the lock as an engine-less leader, and a
     // greeting arriving while the worker spawns must not stand this tab down.
     this.pendingLogin = accountId;
-    return this.current.start(secret, accountId).then(
+    return this.current.start(secret, accountId, identityToken).then(
       () => {
         this.holdsAccount(accountId);
         this.relay?.serves(accountId);

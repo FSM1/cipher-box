@@ -134,8 +134,9 @@ use crate::rotation::{
 };
 use crate::rotation::{FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloor, cached_seed, deposit_seed, deposit_write_seed, own_descendant_scopes,
-    refresh_seed_floor, refresh_seed_floors, seed_names, walked_boundary_material,
+    ScopeSeeds, SeedFloor, StampedSeed, cached_seed, current_seed, deposit_seed,
+    deposit_write_seed, own_descendant_scopes, refresh_seed_floors, seed_names,
+    walked_boundary_material,
 };
 use crate::seams::{
     ContactLabel, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId,
@@ -5262,7 +5263,15 @@ impl<T: SeamTypes> Engine<T> {
     /// instance, and the secret is zeroized on consumption — derivation is the
     /// only reader, and the secret is dropped at its terminal owner the moment
     /// the identity is built.
-    pub async fn start(&mut self, secret: LoginSecret) -> Result<(), EngineError>
+    ///
+    /// A start that follows an identity exchange passes that exchange's token,
+    /// which binds the account to its identity subject (ADR 0058 D2). A
+    /// restored session passes `None`.
+    pub async fn start(
+        &mut self,
+        secret: LoginSecret,
+        identity_token: Option<Zeroizing<String>>,
+    ) -> Result<(), EngineError>
     where
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
@@ -5301,7 +5310,7 @@ impl<T: SeamTypes> Engine<T> {
         );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
-            api.login_identity(&signer)
+            api.login_identity(&signer, identity_token.as_deref().map(String::as_str))
                 .await
                 .map_err(EngineError::from_api)?;
         }
@@ -9443,23 +9452,24 @@ where {
     }
 
     /// The scope's cached read seed, evicted first if the durable read-epoch
-    /// floor has risen past the one it was recovered under. Every on-demand
-    /// read goes through here; the resolve tick evicts once per pass.
-    async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
+    /// floor has risen past the one it was recovered under, or if no authority
+    /// answers for the scope any more. The resolve tick evicts once per pass,
+    /// and each navigation leg evicts its scope's seed ([`Self::navigation_legs`]).
+    /// The seed comes with the stamp the cache holds it under.
+    async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<StampedSeed> {
         // Every arm that serves no seed also drops the one it holds, so no
         // cached seed outlives the authority that entitles it.
         let Some(floors) = self.scope_floors(scope_id) else {
             self.state.scope_read_seeds.borrow_mut().remove(scope_id);
             return None;
         };
-        refresh_seed_floor(
+        current_seed(
             &floors,
             &self.state.scope_read_seeds,
             scope_id,
             SeedFloor::Read,
         )
-        .await;
-        cached_seed(&self.state.scope_read_seeds, scope_id)
+        .await
     }
 
     /// The namespace `scope_id`'s floors live in ([`floor_view`]), or `None`
@@ -9691,23 +9701,22 @@ where {
         );
         let scope_read_seed = self.scope_read_seed(&root.0).await;
         let root_name = self.state.current_root_name.borrow().clone();
-        let leg = scope_read_seed
-            .as_ref()
-            .map(|scope_read_seed| FolderRefresh {
-                transport: &self.record_transport,
-                snapshot_cache: &self.seams.snapshot_cache,
-                http: &self.seams.http,
-                floors: &self.seams.floor_store,
-                gateway: &self.gateway,
-                base: &self.state.snapshot,
-                events: &self.events,
-                scope_id: root.0,
-                scope_read_seed,
-                scope_root_name: root_name.as_ref(),
-                plane: None,
-                mode: ResolveMode::CacheFirst,
-                observed_at: now.0,
-            });
+        let leg = scope_read_seed.as_ref().map(|stamped| FolderRefresh {
+            transport: &self.record_transport,
+            snapshot_cache: &self.seams.snapshot_cache,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            gateway: &self.gateway,
+            base: &self.state.snapshot,
+            events: &self.events,
+            scope_id: root.0,
+            scope_read_seed: &stamped.seed,
+            seed_stamp: Some(stamped.stamp),
+            scope_root_name: root_name.as_ref(),
+            plane: None,
+            mode: ResolveMode::CacheFirst,
+            observed_at: now.0,
+        });
         if let Some(leg) = &leg
             && !due.is_empty()
         {
@@ -9866,7 +9875,12 @@ where {
             root_name: root_name.as_ref(),
         };
         for (scope, nodes) in by_scope {
-            let Ok(material) = legs.material(scope, self.scope_read_seed(&scope.0)).await else {
+            // The leg context knows only the proved set, so the seed of a scope
+            // no authority answers for, such as a forgotten share, goes here.
+            if self.scope_floors(&scope.0).is_none() {
+                self.state.scope_read_seeds.borrow_mut().remove(&scope.0);
+            }
+            let Ok(material) = legs.material(scope, &self.state.scope_read_seeds).await else {
                 unread = true;
                 continue;
             };
@@ -9879,7 +9893,8 @@ where {
                 base: &self.state.snapshot,
                 events: &self.events,
                 scope_id: scope.0,
-                scope_read_seed: &material.seed,
+                scope_read_seed: &material.seed.seed,
+                seed_stamp: Some(material.seed.stamp),
                 scope_root_name: material.scope_root_name.as_ref(),
                 plane: (!material.own).then_some(GraftedLeg {
                     scope_roots: &bookmarked,
@@ -11420,9 +11435,10 @@ where {
             &self.seams.http,
             &floors,
             scope_id,
-            scope_read_seed,
+            scope_read_seed.seed,
             node.0,
-        );
+        )
+        .with_seed_stamp(Some(scope_read_seed.stamp));
         let adopted = resolve_child(
             &self.record_transport,
             &self.seams.snapshot_cache,
@@ -12291,7 +12307,7 @@ where {
         &self,
         scope: NodeId,
     ) -> Option<crate::rotation::scope_material::ScopeMaterial> {
-        let read_scope_seed = self.scope_read_seed(&scope.0).await?;
+        let read_scope_seed = self.scope_read_seed(&scope.0).await?.seed;
         Some(crate::rotation::scope_material::ScopeMaterial {
             read_scope_seed,
             write_scope_seed: cached_seed(&self.state.scope_write_seeds, &scope.0)?,
@@ -13477,7 +13493,7 @@ mod tests {
             ApiBaseUrl::offline(),
             GatewayConfig::disabled(),
         );
-        block_on(engine.start(LoginSecret::new(vec![secret_byte; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![secret_byte; 32]), None)).unwrap();
         engine
     }
 
@@ -13504,7 +13520,7 @@ mod tests {
             .http
             .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
 
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32])))
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
             .expect("a mint that did not land is not a failed start");
         assert!(
             !engine.is_provisioned(),
@@ -13544,7 +13560,7 @@ mod tests {
         device
             .http
             .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32])))
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
             .expect("a mint that did not land is not a failed start");
         assert!(!engine.is_provisioned(), "the write path starts dark");
         let _ = device.scheduler.take_spawned_tasks();
@@ -13583,7 +13599,8 @@ mod tests {
         device
             .http
             .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start survives the mint");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
+            .expect("start survives the mint");
 
         device
             .http
@@ -13650,7 +13667,8 @@ mod tests {
             first_run_engine(UNREGISTERED, &["fake:public-routing"]);
         serve_provisioning(&device);
 
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the first run starts");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
+            .expect("the first run starts");
 
         assert!(engine.is_provisioned(), "the first run minted its vault");
         let pointer = vault_pointer_name(&[7u8; 32], GENESIS_VAULT_POINTER_INDEX);
@@ -13670,7 +13688,7 @@ mod tests {
             first_run_engine(UNREGISTERED, &["fake:someguy", "fake:public-routing"]);
         serve_provisioning(&device);
 
-        let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+        let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None));
 
         assert_eq!(
             refused,
@@ -13700,7 +13718,7 @@ mod tests {
                 first_run_engine(registry, &["fake:public-routing"]);
             serve_provisioning(&device);
 
-            let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+            let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None));
 
             assert_eq!(
                 refused,
@@ -13731,7 +13749,7 @@ mod tests {
         ))
         .expect("the floor store accepts the mark");
 
-        let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+        let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None));
 
         assert!(
             matches!(refused, Err(EngineError::Seam { .. })),
@@ -13751,7 +13769,7 @@ mod tests {
         let (mut engine, _events) = new_engine();
         assert!(engine.session().is_none(), "no identity before start");
 
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let session = engine
             .session()
             .expect("start derives the session identity");
@@ -13804,7 +13822,7 @@ mod tests {
         // A configured base URL means the empty pointer chain provisions.
         serve_provisioning(&device);
 
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("start logs in");
 
         // The refresh token from the token response persisted via CredentialStore.
         let stored = block_on(device.credential_store.load_refresh_token())
@@ -13824,6 +13842,47 @@ mod tests {
                 .to_compact(),
         );
         assert_eq!(login_body["signature"], expected);
+        assert!(
+            login_body.get("identityToken").is_none(),
+            "a start that follows no exchange presents no identity token"
+        );
+    }
+
+    #[test]
+    fn start_presents_the_identity_token_at_login() {
+        let (mut engine, _events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
+        ));
+        serve_provisioning(&device);
+
+        block_on(engine.start(
+            LoginSecret::new(vec![7u8; 32]),
+            Some(Zeroizing::new("identity.jwt".to_owned())),
+        ))
+        .expect("start logs in");
+
+        let requests = device.http.requests();
+        assert_eq!(requests[1].url, "http://api.test/auth/login");
+        let login_body: Value = serde_json::from_slice(requests[1].body.as_ref().unwrap()).unwrap();
+        assert_eq!(login_body["identityToken"], "identity.jwt");
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request
+                    .body
+                    .as_deref()
+                    .is_some_and(|body| body.windows(12).any(|w| w == b"identity.jwt")))
+                .count(),
+            1,
+            "only the login request carries the token"
+        );
     }
 
     /// What gates the accelerator is the login-minted pseudonym, never the
@@ -13857,7 +13916,7 @@ mod tests {
             new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
         ));
         serve_provisioning(&device);
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("start logs in");
 
         let held = engine
             .gateway
@@ -13900,7 +13959,7 @@ mod tests {
         // Clear any pre-start bookkeeping so the spawn assertion is unambiguous.
         let _ = device.scheduler.take_spawned_tasks();
 
-        let out = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+        let out = block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None));
 
         assert!(
             matches!(out, Err(EngineError::Auth { .. })),
@@ -13942,7 +14001,7 @@ mod tests {
     #[test]
     fn siwe_link_command_forwards_message_and_hex_signature() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let before = device.http.requests().len();
         device.http.enqueue_response(json_response(
             200,
@@ -13977,7 +14036,7 @@ mod tests {
     #[test]
     fn siwe_link_command_reproves_the_identity_key() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let before = device.http.requests().len();
         device.http.enqueue_response(json_response(
             200,
@@ -14015,7 +14074,7 @@ mod tests {
     #[test]
     fn unlink_auth_method_command_reproves_the_identity_key() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let before = device.http.requests().len();
         device.http.enqueue_response(json_response(
             200,
@@ -14075,7 +14134,7 @@ mod tests {
             ),
         ] {
             let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
             let before = device.http.requests().len();
             device
                 .http
@@ -14104,7 +14163,7 @@ mod tests {
             (SiweIntent::Link, "/auth/siwe/link-challenge"),
         ] {
             let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
             let before = device.http.requests().len();
             device.http.enqueue_response(json_response(
                 200,
@@ -14138,7 +14197,7 @@ mod tests {
         };
         let (key, block) = cached_settings_block(&[7u8; 32], &settings, &mut SeededEntropy::new(9));
         block_on(device.snapshot_cache.put(&key, &block)).expect("seed last-known-good");
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         // The account flag lags the vaulted mode, so the server says the rows
         // are authoritative while this vault already places bytes off them.
         device.http.enqueue_response(json_response(
@@ -14182,7 +14241,7 @@ mod tests {
     #[test]
     fn vault_storage_keeps_an_advisory_flag_a_hosted_vault_cannot_see() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         device.http.enqueue_response(json_response(
             200,
             json!({ "usedBytes": 10, "limitBytes": 100, "advisory": true }),
@@ -14211,7 +14270,7 @@ mod tests {
     #[test]
     fn vault_storage_prices_a_stalled_reclaim_above_zero() {
         let (mut engine, _events, _device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let stall = ReclaimStall {
             node: [3u8; 16],
             target: "bafystalledroot".to_owned(),
@@ -14231,7 +14290,7 @@ mod tests {
     #[test]
     fn vault_storage_degrades_when_the_quota_probe_fails() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let before = device.http.requests().len();
 
         // Nothing is scripted, so the quota probe fails at the seam.
@@ -14954,7 +15013,7 @@ mod tests {
 
     fn started() -> (Engine<FakeSeamTypes>, EventStream) {
         let (mut engine, events) = new_engine();
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         (engine, events)
     }
 
@@ -15545,7 +15604,7 @@ mod tests {
     fn a_second_identity_on_one_device_inherits_no_floor_from_the_first() {
         const ROOT_SCOPE: [u8; 16] = [0u8; 16];
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         block_on(engine.seams.floor_store.raise_epoch_floor(&ROOT_SCOPE, 9)).unwrap();
 
         assert_eq!(
@@ -15592,7 +15651,7 @@ mod tests {
         /// The same, with a live session over it.
         fn started_and_loaded() -> (Engine<FakeSeamTypes>, FakeDevice, EventStream) {
             let (mut engine, device, events) = loaded();
-            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
             (engine, device, events)
         }
 
@@ -15666,7 +15725,7 @@ mod tests {
                 Err(EngineError::NotStarted)
             );
             assert_eq!(
-                block_on(engine.start(LoginSecret::new(vec![7u8; 32]))),
+                block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)),
                 Err(EngineError::AlreadyStarted),
                 "the alive latch is never re-armed, so a host builds a new engine"
             );
@@ -15748,7 +15807,7 @@ mod tests {
                 Err(EngineError::Forgotten)
             ));
             assert_eq!(
-                block_on(engine.start(LoginSecret::new(vec![7u8; 32]))),
+                block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)),
                 Err(EngineError::Forgotten)
             );
         }
@@ -15823,7 +15882,7 @@ mod tests {
                 new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
             ));
             serve_provisioning(&device);
-            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("start logs in");
             let session_bearer = engine.session_bearer.clone();
 
             block_on(engine.command(Command::ForgetDevice)).unwrap();
@@ -16734,7 +16793,7 @@ mod tests {
                 ApiBaseUrl::offline(),
                 GatewayConfig::disabled(),
             );
-            block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).unwrap();
+            block_on(engine.start(LoginSecret::new(SECRET.to_vec()), None)).unwrap();
             // `start` runs its own cold start over the (unseeded) record store: an
             // empty vault-pointer chain paints once. These tests then drive
             // `cold_start_data_path` directly against the scripted pointers, so
@@ -17371,7 +17430,7 @@ mod tests {
             let world = FakeWorld::new();
             let device = world.device(b"alice-pk");
             let (mut engine, _events) = engine_on(&device);
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                 .expect("empty seams start cleanly");
             assert_eq!(engine.root(), ROOT);
             assert!(
@@ -17393,7 +17452,7 @@ mod tests {
             device.http.enqueue_response(head_response(&head_block));
 
             let (mut engine, _events) = engine_on(&device);
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                 .expect("cold start adopts the owner root");
 
             let view = block_on(engine.view()).unwrap();
@@ -17425,7 +17484,7 @@ mod tests {
                 .enqueue_response(head_response(b"forged head block"));
 
             let (mut engine, _events) = engine_on(&device);
-            let out = block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())));
+            let out = block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None));
 
             assert!(
                 matches!(out, Err(EngineError::ColdStart { .. })),
@@ -17503,7 +17562,7 @@ mod tests {
                 .enqueue_response(head_response(b"forged head block"));
 
             let (mut engine, _events) = engine_on(&device);
-            let out = block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())));
+            let out = block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None));
 
             assert!(
                 matches!(out, Err(EngineError::ColdStart { .. })),
@@ -17532,7 +17591,7 @@ mod tests {
                 }
                 device.http.enqueue_response(head_response(&head_block));
                 let (mut engine, _events) = engine_on(&device);
-                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None)).unwrap();
                 block_on(engine.view()).unwrap().children(ROOT)
             }
             // Two engines whose virtual clocks sit far apart reach the identical
@@ -17558,7 +17617,7 @@ mod tests {
             }
             device.http.enqueue_response(head_response(&head_block));
             let (mut engine, events) = engine_on(device);
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None)).unwrap();
             let mut tasks = world.scheduler.take_spawned_tasks();
             poll_tasks_once(&mut tasks);
             (engine, events, tasks)
@@ -17754,7 +17813,7 @@ mod tests {
                 &device,
                 ApiBaseUrl::parse("http://api.test").expect("a base"),
             );
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                 .expect("cold start adopts the owner root");
             let mut tasks = world.scheduler.take_spawned_tasks();
             poll_tasks_once(&mut tasks);
@@ -17880,7 +17939,7 @@ mod tests {
                     &device,
                     ApiBaseUrl::parse("http://api.test").expect("a base"),
                 );
-                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                     .expect("cold start adopts the owner root");
                 let mut tasks = world.scheduler.take_spawned_tasks();
                 poll_tasks_once(&mut tasks);
@@ -18620,7 +18679,7 @@ mod tests {
             let (head_block, head_cid, root_name) = owner_root();
             seed_vault_pointer(&device, &root_name);
             let (mut engine, _events) = engine_on(&device);
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None)).unwrap();
 
             let mut tasks = world.scheduler.take_spawned_tasks();
             assert_eq!(
@@ -18780,7 +18839,7 @@ mod tests {
                 }
                 device.http.enqueue_response(head_response(&head_block));
                 let (mut engine, mut events) = engine_on(device);
-                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None)).unwrap();
                 assert_eq!(drain(&mut events), vec![Event::SnapshotUpdated]);
                 (engine, events)
             }
@@ -18949,6 +19008,53 @@ mod tests {
                 assert!(
                     matches!(err, EngineError::TrustViolation { .. }),
                     "a grant-section-bearing child rejects fail-closed: {err:?}"
+                );
+            }
+
+            /// A rotation on this device raises the floor while the version read
+            /// waits on the network. The record at the new floor is honest, so
+            /// the read is availability, not a trust verdict.
+            #[test]
+            fn a_floor_raised_during_a_version_read_is_unavailable() {
+                const NEW_READ_SEED: [u8; 32] = [0x99; 32];
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+                let mut floor_key = crate::sync::owner_tag(&kdf::enc_subkey(&CAP_SECRET)).to_vec();
+                floor_key.extend_from_slice(&kdf::name_label(
+                    kdf::contact_label_seed(&CAP_SECRET).as_bytes(),
+                    &SCOPE,
+                ));
+                assert!(
+                    device.floor_store.epoch_keys().contains(&floor_key),
+                    "the start raised the scope's read-epoch floor"
+                );
+                let node_seed = kdf::node_seed(&NEW_READ_SEED, &CHILD_ID);
+                let envelope = seal_read_body(
+                    kdf::read_key(node_seed.as_bytes()).as_bytes(),
+                    &[14u8; 24],
+                    1,
+                    CHILD_ID,
+                    SCOPE,
+                    EPOCH + 1,
+                    &file_body(Vec::new()),
+                )
+                .unwrap();
+                let head_block = encode_envelope(&envelope).unwrap();
+                let head_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+                seed_child_record(&device, &head_cid, 1);
+                let backing = device.floor_store.clone();
+                device.http.enqueue_derived(move |_| {
+                    block_on(backing.raise_epoch_floor(&floor_key, EPOCH + 1))
+                        .expect("the rotation raises the floor");
+                    Ok(head_response(&head_block))
+                });
+
+                let read = block_on(engine.file_versions(NodeId(CHILD_ID)));
+
+                assert!(
+                    matches!(read, Err(EngineError::ContentUnavailable { .. })),
+                    "a record above the seed's stamp is availability: {read:?}"
                 );
             }
 
@@ -19357,7 +19463,7 @@ mod tests {
                 &device,
                 ApiBaseUrl::parse("http://api.test").expect("a base"),
             );
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                 .expect("cold start adopts the owner root");
             drop(world.scheduler.take_spawned_tasks());
             block_on(
@@ -19411,7 +19517,7 @@ mod tests {
                 &device,
                 ApiBaseUrl::parse("http://api.test").expect("a base"),
             );
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                 .expect("cold start adopts the owner root");
             drop(world.scheduler.take_spawned_tasks());
             (engine, device, root_name)
@@ -19501,7 +19607,7 @@ mod tests {
     /// every one of them runs behind.
     fn started_device_engine() -> (Engine<FakeSeamTypes>, FakeDevice) {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("start");
         (engine, device)
     }
 
@@ -19527,7 +19633,7 @@ mod tests {
             ),
         ));
         serve_provisioning(&device);
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("start logs in");
         (engine, device)
     }
 
@@ -19898,7 +20004,8 @@ mod focus_access_tests {
     /// than recovered.
     fn started_engine() -> Engine<FakeSeamTypes> {
         let (mut engine, _clock) = engine();
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
+            .expect("the offline start logs in");
         engine.state.boundary_walk_landed.set(true);
         let scope_id = engine.state.snapshot.borrow().root.0;
         deposit_seed(
@@ -19913,7 +20020,8 @@ mod focus_access_tests {
     /// A started engine whose first boundary walk has not landed, and its clock.
     fn engine_before_the_walk() -> (Engine<FakeSeamTypes>, VirtualScheduler) {
         let (mut engine, clock) = engine();
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
+            .expect("the offline start logs in");
         engine.state.boundary_walk_landed.set(false);
         // A running sync loop, whose pass is what lands a walk.
         drop(engine.tick_loop_spawner.borrow_mut().take());
@@ -19959,7 +20067,8 @@ mod focus_access_tests {
     #[test]
     fn a_route_does_not_wait_on_a_walk_no_sync_loop_will_run() {
         let (mut engine, _clock) = engine();
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
+            .expect("the offline start logs in");
 
         let mut route = Box::pin(engine.set_focus(Some(UNLISTED)));
 
@@ -20347,6 +20456,40 @@ mod focus_access_tests {
             engine.queued_focus_files(),
             vec![shared_file],
             "it stays queued for the tick's leg for that scope"
+        );
+    }
+
+    /// A forgotten share leaves no authority for its scope, so a navigation
+    /// before the next tick drops that scope's seed.
+    #[test]
+    fn a_navigation_drops_the_seed_of_a_forgotten_share() {
+        let engine = started_engine();
+        let grafted = NodeId([0x4C; 16]);
+        let row = file_id(3);
+        {
+            let mut base = engine.state.snapshot.borrow_mut();
+            base.upsert_node(NodeMeta::new(grafted, "shared", NodeKind::Folder));
+            base.upsert_node(NodeMeta::new(row, "theirs.bin", NodeKind::File));
+            base.link(grafted, row, 1);
+        }
+        deposit_seed(
+            &engine.state.scope_read_seeds,
+            grafted.0,
+            Zeroizing::new([6u8; 32]),
+            Some(0),
+        );
+        engine.note_focus_file(row);
+
+        let now = engine.seams.scheduler.now();
+        block_on(engine.refresh_focus_on_access(now, Some(grafted)));
+
+        assert!(
+            !engine
+                .state
+                .scope_read_seeds
+                .borrow()
+                .contains_key(&grafted.0),
+            "no cached seed outlives the share that entitles it"
         );
     }
 

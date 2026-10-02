@@ -19,6 +19,7 @@ import { AddPinReferences1788134400000 } from '../migrations/1788134400000-AddPi
 import { AddRecordCache1784600557946 } from '../migrations/1784600557946-AddRecordCache';
 import { AddRefreshTokenExpiresAtIndex1789358810000 } from '../migrations/1789358810000-AddRefreshTokenExpiresAtIndex';
 import { AddSpentIdentityTokens1790640000001 } from '../migrations/1790640000001-AddSpentIdentityTokens';
+import { AddUserIdentitySubject1790910095402 } from '../migrations/1790910095402-AddUserIdentitySubject';
 import { DropIdentitySubjectDisplay1790640000000 } from '../migrations/1790640000000-DropIdentitySubjectDisplay';
 import { InitAuthSchema1784513040045 } from '../migrations/1784513040045-InitAuthSchema';
 import { NameInventory } from '../registry/entities/name-inventory.entity';
@@ -68,6 +69,7 @@ const MIGRATIONS = [
   AddRefreshTokenExpiresAtIndex1789358810000,
   DropIdentitySubjectDisplay1790640000000,
   AddSpentIdentityTokens1790640000001,
+  AddUserIdentitySubject1790910095402,
 ];
 
 export interface IntegrationDatabase {

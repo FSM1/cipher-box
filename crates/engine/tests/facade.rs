@@ -141,7 +141,7 @@ fn the_view_resolves_a_name_folded_or_exactly_and_never_confuses_the_two() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let root = block_on(engine.view()).expect("view").root();
     block_on(engine.command(Command::Create {
         parent: root,
@@ -174,7 +174,7 @@ fn a_manual_refresh_with_no_sync_loop_reports_a_failed_refresh() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
 
     // No vault pointer resolved a root, so no tick loop is running to force a
     // pass: the refresh must fail rather than park or silently succeed.
@@ -211,7 +211,7 @@ fn a_started_engine_serves_the_nonce_from_its_api_client() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).expect("start");
+    block_on(engine.start(secret(), None)).expect("start");
 
     device.http.enqueue_response(HttpResponse {
         status: 200,
@@ -233,9 +233,9 @@ fn start_succeeds_once_and_only_once() {
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
 
-    assert_eq!(block_on(engine.start(secret())), Ok(()));
+    assert_eq!(block_on(engine.start(secret(), None)), Ok(()));
     assert_eq!(
-        block_on(engine.start(secret())),
+        block_on(engine.start(secret(), None)),
         Err(EngineError::AlreadyStarted),
         "one live instance is the single writer — no second start"
     );
@@ -248,11 +248,11 @@ fn an_empty_secret_is_rejected() {
     let (mut engine, _events) = new_engine(&device);
 
     assert_eq!(
-        block_on(engine.start(LoginSecret::new(Vec::new()))),
+        block_on(engine.start(LoginSecret::new(Vec::new()), None)),
         Err(EngineError::InvalidSecret)
     );
     // A rejected start does not consume the lifecycle.
-    assert_eq!(block_on(engine.start(secret())), Ok(()));
+    assert_eq!(block_on(engine.start(secret(), None)), Ok(()));
 }
 
 /// The session slice was the last on the typed-unimplemented catch-all: logout
@@ -262,7 +262,7 @@ fn logout_ends_the_session_rather_than_reporting_itself_unimplemented() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
 
     assert_eq!(
         block_on(engine.command(Command::Logout)),
@@ -281,7 +281,7 @@ fn the_owner_action_arms_refuse_with_their_own_verdicts() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
 
     for (command, expected) in wired_owner_commands() {
         let name = command.name();
@@ -300,7 +300,7 @@ fn minting_an_invite_link_refuses_the_vault_root() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let root = block_on(engine.view()).expect("view").root();
 
     assert_eq!(
@@ -325,7 +325,7 @@ fn minting_an_invite_link_on_an_unresolved_vault_reports_availability() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
 
     for permission in [Permission::Read, Permission::Write] {
         assert!(
@@ -356,7 +356,7 @@ fn importing_a_contact_returns_the_bound_public_keys() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let scalar = [3u8; 32];
 
     let outcome = block_on(engine.command(Command::ImportContact {
@@ -379,7 +379,7 @@ fn an_imported_contact_survives_a_session_restart() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let scalar = [3u8; 32];
     block_on(engine.command(Command::ImportContact {
         contact_code: contact_code(scalar),
@@ -411,7 +411,7 @@ fn an_import_the_book_cannot_take_is_not_reported_as_imported() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
 
     let enc_subkey = kdf::enc_subkey(&SECRET);
     let entropy = RefCell::new(SeededEntropy::new(7));
@@ -442,7 +442,7 @@ fn a_contact_code_that_fails_its_binding_is_refused() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let mut code = contact_code([3u8; 32]);
     let honest = kdf::enc_subkey(&[3u8; 32]).public().to_bytes();
     let forged = kdf::enc_subkey(&[4u8; 32]).public().to_bytes();
@@ -467,7 +467,7 @@ fn a_malformed_contact_code_is_refused_without_a_trust_verdict() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
 
     let result = block_on(engine.command(Command::ImportContact {
         contact_code: b"not a contact bundle".to_vec(),
@@ -486,7 +486,7 @@ fn an_oversized_contact_code_is_refused_before_it_is_decoded() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
 
     assert_eq!(
         block_on(engine.command(Command::ImportContact {
@@ -521,7 +521,7 @@ fn set_focus_records_a_window_with_nothing_to_resolve() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
 
     assert_eq!(
         block_on(engine.command(Command::SetFocus {
@@ -559,7 +559,7 @@ fn cold_start_spawns_the_hourly_liveness_loop_and_the_idle_sweep_job() {
         "no background loop is spawned before start"
     );
 
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let tasks = scheduler.take_spawned_tasks();
     assert_eq!(
         tasks.len(),
@@ -589,7 +589,7 @@ fn a_rejected_start_spawns_no_liveness_loop() {
     let (mut engine, _events) = new_engine(&device);
 
     assert_eq!(
-        block_on(engine.start(LoginSecret::new(Vec::new()))),
+        block_on(engine.start(LoginSecret::new(Vec::new()), None)),
         Err(EngineError::InvalidSecret)
     );
     assert!(

@@ -9,6 +9,7 @@ import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { User } from '../auth/entities/user.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AuthService } from '../auth/services/auth.service';
+import { IdentityTokenService } from '../auth/services/identity-token.service';
 import { ChallengeService } from '../auth/services/challenge.service';
 import { AcceleratorTokenService } from '../auth/services/accelerator-token.service';
 import { IdentityService } from '../auth/services/identity.service';
@@ -68,6 +69,7 @@ describe('trust-proxy client-address resolution (real Postgres)', () => {
         AuthMetricsInterceptor,
         AuthService,
         TestAuthService,
+        IdentityTokenService,
         TokenService,
         AcceleratorTokenService,
         ChallengeService,

@@ -2,12 +2,15 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  JoinColumn,
+  ManyToOne,
   OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { AuthMethod } from './auth-method.entity';
 import { AcceleratorToken } from './accelerator-token.entity';
+import { IdentitySubject } from './identity-subject.entity';
 import { RefreshToken } from './refresh-token.entity';
 
 /**
@@ -32,6 +35,17 @@ export class User {
   /** BYO-IPFS account: pin rows are advisory, never quota-enforced. */
   @Column({ name: 'byo', type: 'boolean', default: false })
   byo: boolean;
+
+  /**
+   * The one identity subject of this account (ADR 0058 D1). A login that
+   * presents an identity token writes it once; nothing rewrites it.
+   */
+  @Column({ name: 'identity_subject_id', type: 'uuid', nullable: true, unique: true })
+  identitySubjectId: string | null;
+
+  @ManyToOne(() => IdentitySubject)
+  @JoinColumn({ name: 'identity_subject_id' })
+  identitySubject: IdentitySubject | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

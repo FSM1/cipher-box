@@ -128,6 +128,21 @@ describe('installIntrospection', () => {
 
       expect(start).toHaveBeenCalledOnce();
       expect((start.mock.calls[0] as unknown[])[1]).toBe('e2eaccount');
+      expect((start.mock.calls[0] as unknown[])[2]).toBeUndefined();
+    });
+
+    it('presents the token of the exchange a sign-in follows', async () => {
+      const engine = fakeEngine();
+      const start = vi.fn().mockResolvedValue(undefined);
+      (engine.client.facade as unknown as { start: unknown }).start = start;
+      installIntrospection(engine.client);
+
+      await window.__CIPHERBOX_ENGINE__?.signIn('11'.repeat(32), 'e2eaccount', {
+        token: 'exchanged-token',
+        expiresIn: 300,
+      });
+
+      expect((start.mock.calls[0] as unknown[])[2]).toBe('exchanged-token');
     });
 
     it('refuses a secret that is not a 32-byte scalar, starting no engine', async () => {

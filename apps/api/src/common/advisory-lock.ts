@@ -109,6 +109,20 @@ export function authMethodLockKey(userId: string): bigint {
 }
 
 /**
+ * Namespaced per-subject key. A login that binds the subject and a device
+ * registration that reads the bind both take it, so the one-account-per-subject
+ * check and its write serialize (ADR 0058 D2).
+ */
+export function subjectLockKey(identitySubjectId: string): bigint {
+  return advisoryLockKey(`device-registry-subject:${identitySubjectId}`);
+}
+
+/** Namespaced per-account key for the device registry's cap count and insert. */
+export function registryLockKey(userId: string): bigint {
+  return advisoryLockKey(`device-registry:${userId}`);
+}
+
+/**
  * Namespaced per-CID key for the SESSION lock that guards a durability window:
  * the upload path holds it across commit → pin, and retire (and the account
  * hard-delete cascade's post-commit unpin) holds it across commit → unpin.

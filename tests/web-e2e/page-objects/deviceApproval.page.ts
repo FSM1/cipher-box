@@ -1,5 +1,6 @@
 import type { Browser, Page } from '@playwright/test';
 import type { PendingApprovalDescriptor } from '@cipherbox/client';
+import type { IdentityCredential } from '@cipherbox/login';
 import { openApprovalSession, type ApprovalSession } from '@web/auth/deviceApprovalApi';
 import type { CutRendezvous } from '@web/engine/introspection';
 import { apiBaseUrl } from '../identity';
@@ -78,19 +79,22 @@ export class ApprovalDevice {
 }
 
 /**
- * A device in its own browser context. `signIn` cold-starts a vault, which the
- * approver needs and the requester — a device that cannot yet reconstruct —
- * deliberately does not.
+ * A device in its own browser context. With `signIn`, it cold-starts a vault
+ * through the exchange of that credential, which binds the account to the
+ * subject a registration needs (ADR 0058 D3). The approver signs in; the
+ * requester, a device that cannot yet reconstruct, does not.
  */
 export async function openDevice(
   browser: Browser,
   subject: string,
-  signIn = false
+  signIn?: IdentityCredential
 ): Promise<ApprovalDevice> {
   const page = await (await browser.newContext()).newPage();
   const vault = new VaultPage(page);
   await vault.open();
-  if (signIn) await vault.coldStart();
+  if (signIn !== undefined) {
+    await vault.coldStart({ token: signIn.token, expiresIn: signIn.expiresIn });
+  }
   return new ApprovalDevice(page, subject);
 }
 

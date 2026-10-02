@@ -2,6 +2,7 @@ import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { QueryFailedError } from 'typeorm';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { User } from '../../auth/entities/user.entity';
 import { IdentityTokenService } from '../../auth/services/identity-token.service';
 import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
@@ -15,7 +16,12 @@ import {
 } from '../../testing/identity-tokens';
 import { deviceRegistrationPayload } from '../device-signature';
 import { AccountDevice } from '../entities/account-device.entity';
-import { AccountDeviceService, RegisterDeviceInput } from './account-device.service';
+import {
+  AccountDeviceService,
+  OTHER_SUBJECT_MESSAGE,
+  RegisterDeviceInput,
+  UNBOUND_ACCOUNT_MESSAGE,
+} from './account-device.service';
 
 /** The service's own default; an over-range DEVICE_REGISTRY_CAP falls back to it. */
 const DEFAULT_DEVICE_CAP = 20;
@@ -26,6 +32,7 @@ function queryFailure(driverError: Record<string, string>): QueryFailedError {
 
 describe('AccountDeviceService', () => {
   let devices: FakeRepository<AccountDevice>;
+  let users: FakeRepository<User>;
   let clock: FakeClock;
   let service: AccountDeviceService;
   let subjects: Map<string, string>;
@@ -43,6 +50,11 @@ describe('AccountDeviceService', () => {
 
   function subjectOf(identityToken: string): string {
     return subjects.get(identityToken) as string;
+  }
+
+  /** Seeds the bind that a login writes (ADR 0058 D2): `userId` bound to `subject`. */
+  async function bind(userId: string, subject: string | null = subjectOf(token)): Promise<void> {
+    await users.save({ id: userId, publicKey: `key-${userId}`, identitySubjectId: subject });
   }
 
   /**
@@ -64,6 +76,7 @@ describe('AccountDeviceService', () => {
 
   function build(config: Record<string, string | undefined> = {}) {
     devices = new FakeRepository<AccountDevice>();
+    users = new FakeRepository<User>();
     clock = new FakeClock();
     subjects = new Map();
     spent = new Set();
@@ -91,18 +104,40 @@ describe('AccountDeviceService', () => {
   ) {
     return new AccountDeviceService(
       devices as never,
-      new FakeDataSource(devices as never) as never,
+      rollingBackDataSource() as never,
       identityTokens,
       clock,
       fakeConfig(config).service
     );
   }
 
-  beforeEach(() => {
+  /**
+   * The fake transaction does not roll back. This one restores the spent set
+   * when the work throws, as Postgres does for the spent-token row.
+   */
+  function rollingBackDataSource() {
+    const inner = new FakeDataSource(devices as never, [[User, users as never]]);
+    return {
+      getRepository: (entity: unknown) => (entity === User ? users : devices),
+      transaction: async <T>(work: (manager: unknown) => Promise<T>): Promise<T> => {
+        const spentBefore = [...spent];
+        try {
+          return await inner.transaction(work);
+        } catch (error) {
+          spent.clear();
+          spentBefore.forEach((id) => spent.add(id));
+          throw error;
+        }
+      },
+    };
+  }
+
+  beforeEach(async () => {
     build();
     account = randomUUID();
     device = createTestDeviceKey();
     token = mintIdentityToken();
+    await bind(account);
   });
 
   describe('register', () => {
@@ -274,18 +309,21 @@ describe('AccountDeviceService', () => {
       expect(again.label).toBe('laptop');
     });
 
-    it('refuses a re-touch presenting a different identity, and rewrites nothing', async () => {
-      await service.register(account, registration(device, account, { label: 'A' }));
+    it('refuses a re-touch of a row under another subject, and rewrites nothing', async () => {
+      const recorded = randomUUID();
+      await devices.save({
+        userId: account,
+        identitySubjectId: recorded,
+        publicKey: device.publicKey,
+        label: 'A',
+      });
 
       await expect(
-        service.register(
-          account,
-          registration(device, account, { identityToken: mintIdentityToken(), label: 'B' })
-        )
-      ).rejects.toBeInstanceOf(ConflictException);
+        service.register(account, registration(device, account, { label: 'B' }))
+      ).rejects.toThrow(new ConflictException('Device key is registered under another identity'));
 
       expect(devices.rows).toHaveLength(1);
-      expect(devices.rows[0].identitySubjectId).toBe(subjectOf(token));
+      expect(devices.rows[0].identitySubjectId).toBe(recorded);
       expect(devices.rows[0].label).toBe('A');
     });
 
@@ -294,24 +332,44 @@ describe('AccountDeviceService', () => {
 
       const otherAccount = randomUUID();
       token = mintIdentityToken();
+      await bind(otherAccount);
       await expect(
         service.register(otherAccount, registration(device, otherAccount))
-      ).rejects.toBeInstanceOf(ConflictException);
+      ).rejects.toThrow(new ConflictException('Device key is registered to another account'));
       expect(devices.rows).toHaveLength(1);
       expect(devices.rows[0].userId).toBe(account);
     });
 
-    it('rejects an identity subject already linked to another account', async () => {
-      // A pre-reconstruction device presenting this identity must not be
-      // steerable onto an account it is not for.
-      await service.register(account, registration(device, account));
+    it('records the bound subject and spends the token for a bound account', async () => {
+      const presented = mintIdentityToken(subjectOf(token));
 
-      const otherAccount = randomUUID();
-      const otherDevice = createTestDeviceKey();
-      await expect(
-        service.register(otherAccount, registration(otherDevice, otherAccount))
-      ).rejects.toBeInstanceOf(ConflictException);
+      await service.register(account, registration(device, account, { identityToken: presented }));
+
       expect(devices.rows).toHaveLength(1);
+      expect(devices.rows[0].identitySubjectId).toBe(subjectOf(token));
+      expect(spent.has(presented)).toBe(true);
+    });
+
+    it('refuses an unbound account with 409, writes no row, and leaves the token unspent', async () => {
+      const unbound = randomUUID();
+      await bind(unbound, null);
+      const presented = mintIdentityToken(subjectOf(token));
+
+      await expect(
+        service.register(unbound, registration(device, unbound, { identityToken: presented }))
+      ).rejects.toThrow(new ConflictException(UNBOUND_ACCOUNT_MESSAGE));
+      expect(devices.rows).toHaveLength(0);
+      expect(spent.has(presented)).toBe(false);
+    });
+
+    it('refuses a token for another subject with 409, writes no row, and leaves the token unspent', async () => {
+      const presented = mintIdentityToken();
+
+      await expect(
+        service.register(account, registration(device, account, { identityToken: presented }))
+      ).rejects.toThrow(new ConflictException(OTHER_SUBJECT_MESSAGE));
+      expect(devices.rows).toHaveLength(0);
+      expect(spent.has(presented)).toBe(false);
     });
 
     it('allows a second device on the same account under the same identity', async () => {
@@ -324,6 +382,7 @@ describe('AccountDeviceService', () => {
     it('rejects a registration past the per-account cap', async () => {
       build({ DEVICE_REGISTRY_CAP: '2' });
       token = mintIdentityToken();
+      await bind(account);
       const first = createTestDeviceKey();
       const second = createTestDeviceKey();
       await service.register(account, registration(first, account));
@@ -338,6 +397,7 @@ describe('AccountDeviceService', () => {
     it('holds the default cap when the configured one is over range', async () => {
       build({ DEVICE_REGISTRY_CAP: '100000' });
       token = mintIdentityToken();
+      await bind(account);
       for (let i = 0; i < DEFAULT_DEVICE_CAP; i += 1) {
         await service.register(account, registration(createTestDeviceKey(), account));
       }
@@ -374,6 +434,7 @@ describe('AccountDeviceService', () => {
     it('lets an already-registered key re-touch at the cap', async () => {
       build({ DEVICE_REGISTRY_CAP: '1' });
       token = mintIdentityToken();
+      await bind(account);
       await service.register(account, registration(device, account, { label: 'only' }));
       clock.advanceMs(1000);
 
@@ -398,6 +459,7 @@ describe('AccountDeviceService', () => {
       const otherAccount = randomUUID();
       const foreign = createTestDeviceKey();
       token = mintIdentityToken();
+      await bind(otherAccount);
       await service.register(otherAccount, registration(foreign, otherAccount));
 
       const listed = await service.list(account);
@@ -429,17 +491,6 @@ describe('AccountDeviceService', () => {
       await expect(service.revoke(account, 'not-a-uuid')).resolves.toBeUndefined();
       await expect(service.revoke(account, randomUUID())).resolves.toBeUndefined();
       expect(devices.rows).toHaveLength(1);
-    });
-  });
-
-  describe('accountForIdentitySubject', () => {
-    it('resolves a linked subject to its account', async () => {
-      await service.register(account, registration(device, account));
-      await expect(service.accountForIdentitySubject(subjectOf(token))).resolves.toBe(account);
-    });
-
-    it('returns null for a subject no device is registered under', async () => {
-      await expect(service.accountForIdentitySubject(randomUUID())).resolves.toBeNull();
     });
   });
 

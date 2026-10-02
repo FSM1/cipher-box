@@ -55,6 +55,7 @@ function start(root: HTMLElement): void {
     facade: shellFacade,
     // One process, one engine: there is no leader to re-export a secret to.
     secrets: null,
+    now: () => new Date(),
     account: {
       signedIn: (_method, email) => {
         model.phase = 'signedIn';

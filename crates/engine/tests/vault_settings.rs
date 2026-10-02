@@ -2081,7 +2081,7 @@ fn boot_resolving(
             public_fallbacks: vec!["http://gateway.test".to_owned()],
         },
     );
-    block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).expect("cold start");
+    block_on(engine.start(LoginSecret::new(SECRET.to_vec()), None)).expect("cold start");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     (engine, events, tasks)
@@ -2096,7 +2096,7 @@ fn boot(
 ) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
     serve_http(device, blocks, 40);
     let (mut engine, events) = engine_on(device);
-    block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).expect("cold start");
+    block_on(engine.start(LoginSecret::new(SECRET.to_vec()), None)).expect("cold start");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     (engine, events, tasks)

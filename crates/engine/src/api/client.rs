@@ -143,10 +143,12 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
 
     /// Engine-native challenge-signature login: request a challenge for the
     /// signer's identity key, sign it, and exchange it for tokens. Creates the
-    /// account implicitly at first login (`is_new_user`).
+    /// account implicitly at first login (`is_new_user`). `identity_token` is
+    /// the token of the exchange this login follows, if any (ADR 0058 D2).
     pub async fn login_identity(
         &self,
         signer: &impl ChallengeSigner,
+        identity_token: Option<&str>,
     ) -> Result<LoginOutcome, ApiError> {
         let public_key = signer.public_key_hex();
         let challenge = self.identity_challenge(&public_key).await?;
@@ -158,6 +160,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
                     public_key: &public_key,
                     challenge: &challenge,
                     signature: &signature,
+                    identity_token,
                 },
             )
             .await?;
@@ -1100,7 +1103,7 @@ mod tests {
             200,
             new_user_login_response(access_token, &"a".repeat(64), "gw-a"),
         ));
-        block_on(client.login_identity(&StubSigner)).expect("login");
+        block_on(client.login_identity(&StubSigner, None)).expect("login");
     }
 
     #[test]
@@ -1130,6 +1133,34 @@ mod tests {
 
         let stored = block_on(creds.load_refresh_token()).unwrap().unwrap();
         assert_eq!(stored, "a".repeat(64).as_bytes());
+        assert!(
+            login_body.get("identityToken").is_none(),
+            "a login that follows no exchange sends no token field"
+        );
+    }
+
+    #[test]
+    fn identity_login_after_an_exchange_sends_its_identity_token() {
+        let (http, _creds, client) = fakes();
+        http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": challenge(), "expiresAt": "2026-01-01T00:00:00Z" }),
+        ));
+        http.enqueue_response(json_response(
+            200,
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
+        ));
+        block_on(client.login_identity(&StubSigner, Some("identity.jwt"))).expect("login");
+
+        let requests = http.requests();
+        assert_eq!(requests[1].url, "http://api.test/auth/login");
+        let login_body = body_json(&requests[1]);
+        assert_eq!(login_body["identityToken"], "identity.jwt");
+        assert_eq!(login_body["signature"], format!("sig-for-{}", challenge()));
+        assert!(
+            body_json(&requests[0]).get("identityToken").is_none(),
+            "the challenge request does not carry the token"
+        );
     }
 
     /// Every shape the API could not have issued. Each breaks a different part
@@ -1215,7 +1246,7 @@ mod tests {
                 json!({ "challenge": challenge, "expiresAt": "2026-01-01T00:00:00Z" }),
             ));
             assert_eq!(
-                block_on(client.login_identity(&PanickingSigner)).unwrap_err(),
+                block_on(client.login_identity(&PanickingSigner, None)).unwrap_err(),
                 ApiError::Decode("unusable login challenge".into()),
                 "challenge {challenge:?} must be refused"
             );
@@ -1238,7 +1269,7 @@ mod tests {
             json!({ "message": "Invalid challenge signature" }),
         ));
         assert_eq!(
-            block_on(client.login_identity(&StubSigner)).unwrap_err(),
+            block_on(client.login_identity(&StubSigner, None)).unwrap_err(),
             ApiError::Unauthorized
         );
         assert!(!client.is_authenticated());
@@ -2008,7 +2039,7 @@ mod tests {
             200,
             login_response("jwt-1\r\nX-Injected: yes", &"a".repeat(64), "gw-a"),
         ));
-        block_on(client.login_identity(&StubSigner)).expect("login");
+        block_on(client.login_identity(&StubSigner, None)).expect("login");
 
         assert_eq!(
             block_on(client.quota()).unwrap_err(),

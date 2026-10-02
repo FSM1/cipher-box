@@ -150,7 +150,7 @@ fn started_engine_over_queue(entries: &[&[u8]]) -> Started {
         ApiBaseUrl::offline(),
         GatewayConfig::disabled(),
     );
-    block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");
+    block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("engine starts");
     let root = block_on(engine.view()).expect("view").root();
     Started {
         engine,
@@ -2610,7 +2610,7 @@ mod published {
         let device = world.device(b"alice");
         serve_http(&device, &blocks, 1_000);
         let (mut engine, events) = engine_on(&device);
-        block_on(engine.start(LoginSecret::new(SECRET.to_vec())))
+        block_on(engine.start(LoginSecret::new(SECRET.to_vec()), None))
             .expect("the cold start adopts the owner root");
         let mut tasks = world.scheduler.take_spawned_tasks();
         poll_tasks_until_parked(&mut tasks);
@@ -2677,7 +2677,7 @@ mod published {
         let device = mount.world.device(b"alice-second-device");
         serve_http(&device, &mount.blocks, 1_000);
         let (mut engine, _events) = engine_seeded(&device, seed);
-        block_on(engine.start(LoginSecret::new(SECRET.to_vec())))
+        block_on(engine.start(LoginSecret::new(SECRET.to_vec()), None))
             .expect("the second device adopts the same owner root");
         let mut tasks = mount.world.scheduler.take_spawned_tasks();
         poll_tasks_until_parked(&mut tasks);

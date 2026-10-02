@@ -7,8 +7,9 @@
 //! gating + deterministic keypair + cross-consistency with identity login, the
 //! production block on the test-profile auth-limit override,
 //! SIWE secondary surface, the login-method list and its unlink, logout
-//! revocation, the pin/name registry and quota, the mailbox lifecycle, and a raw
-//! endpoint round-trip.
+//! revocation, the identity subject bind at login and device registration, the
+//! pin/name registry and quota, the mailbox lifecycle, and a raw endpoint
+//! round-trip.
 //!
 //! Each test skips (loudly) when `CONTRACT_API_URL` is unset — there is no
 //! stack to hit locally. The merge-blocking `contract-suite` CI job always
@@ -28,9 +29,10 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_engine::api::{
     ApiClient, ApiError, AuthMethodKind, ChallengeSigner, IdentityChallengeSigner,
-    NameRegistration, REGISTRY_BATCH_REFUSED,
+    NameRegistration, REGISTRY_BATCH_REFUSED, RegisteredDevice,
 };
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
+use cipherbox_engine::devices::registration_payload;
 use cipherbox_engine::grants::{
     GrantRecipient, GrantResumeResolver, GranteeScopePlan, InteriorRecord, InteriorResealer,
     MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, ScopePointerVoucher,
@@ -48,6 +50,9 @@ use cipherbox_engine::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, Mailbox,
 };
 use cipherbox_engine::testkit::SeededEntropy;
+use k256::ecdsa::SigningKey;
+use sha3::{Digest, Keccak256};
+use zeroize::Zeroizing;
 
 type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
 
@@ -101,7 +106,7 @@ async fn fresh_account_with_signer(base: &str) -> (Client, IdentityChallengeSign
     let signer = random_identity_signer();
     expect_auth(
         "identity login creates the account",
-        client.login_identity(&signer).await,
+        client.login_identity(&signer, None).await,
     );
     (client, signer)
 }
@@ -147,7 +152,7 @@ async fn challenge_signature_login_creates_and_reuses_the_account() {
     let signer = random_identity_signer();
 
     let first = new_client(&base);
-    let outcome = expect_auth("identity login", first.login_identity(&signer).await);
+    let outcome = expect_auth("identity login", first.login_identity(&signer, None).await);
     assert!(outcome.is_new_user, "a fresh random key creates an account");
     assert!(first.is_authenticated());
 
@@ -155,7 +160,7 @@ async fn challenge_signature_login_creates_and_reuses_the_account() {
     let second = new_client(&base);
     let outcome = expect_auth(
         "second identity login",
-        second.login_identity(&signer).await,
+        second.login_identity(&signer, None).await,
     );
     assert!(!outcome.is_new_user, "same identity key is one account");
 }
@@ -166,7 +171,7 @@ async fn refresh_rotates_and_reuse_kills_the_family() {
     let (client, store) = client_with_store(&base);
     expect_auth(
         "login",
-        client.login_identity(&random_identity_signer()).await,
+        client.login_identity(&random_identity_signer(), None).await,
     );
 
     let original = store
@@ -237,7 +242,7 @@ async fn test_login_gates_the_secret_and_derives_a_stable_keypair() {
     let signer = IdentityChallengeSigner::from_scalar(&scalar).expect("valid scalar");
     let identity = expect_auth(
         "identity login with the test key",
-        new_client(&base).login_identity(&signer).await,
+        new_client(&base).login_identity(&signer, None).await,
     );
     assert!(
         !identity.is_new_user,
@@ -501,7 +506,7 @@ async fn logout_revokes_the_refresh_token_server_side() {
     let (client, store) = client_with_store(&base);
     expect_auth(
         "login",
-        client.login_identity(&random_identity_signer()).await,
+        client.login_identity(&random_identity_signer(), None).await,
     );
     let token = store
         .load_refresh_token()
@@ -1509,6 +1514,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         recipient_client
             .login_identity(
                 &IdentityChallengeSigner::from_scalar(&recipient_scalar).expect("valid scalar"),
+                None,
             )
             .await,
     );
@@ -1836,9 +1842,8 @@ fn wrong_device_signature() -> String {
 /// This is the live-wire half of that guarantee: the routes are mounted in a
 /// really-booted API — which a suite that hand-lists controllers cannot show —
 /// and each fails closed. The full rendezvous, from a valid registration to an
-/// approval collected once and its row gone after, needs an identity token
-/// minted from a verified provider credential that no headless suite can
-/// produce, so it is proven against real Postgres in the API integration suite.
+/// approval collected once and its row gone after, is proven against real
+/// Postgres in the API integration suite.
 #[tokio::test]
 async fn the_device_approval_surface_is_mounted_and_fails_closed() {
     let base = require_stack!("the_device_approval_surface_is_mounted_and_fails_closed");
@@ -1931,4 +1936,239 @@ async fn the_device_approval_surface_is_mounted_and_fails_closed() {
         Some(0),
         "no refused registration left a row behind"
     );
+}
+
+// --- the identity subject bind (ADR 0058) -----------------------------------
+
+fn keccak256(bytes: &[u8]) -> [u8; 32] {
+    Keccak256::digest(bytes).into()
+}
+
+/// A fresh random wallet key.
+fn random_wallet() -> SigningKey {
+    SigningKey::from_slice(random_identity_scalar().as_ref()).expect("a valid secp256k1 scalar")
+}
+
+/// The EIP-55 checksummed address of `wallet`.
+fn wallet_address(wallet: &SigningKey) -> String {
+    let point = wallet.verifying_key().to_encoded_point(false);
+    let lower = hex::encode(&keccak256(&point.as_bytes()[1..])[12..]);
+    let hash = keccak256(lower.as_bytes());
+    let checksummed: String = lower
+        .chars()
+        .enumerate()
+        .map(|(i, c)| {
+            let nibble = if i % 2 == 0 {
+                hash[i / 2] >> 4
+            } else {
+                hash[i / 2] & 0x0f
+            };
+            if nibble >= 8 {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
+        })
+        .collect();
+    format!("0x{checksummed}")
+}
+
+/// An EIP-191 `personal_sign` signature over `message`: `r || s || v`, with `v`
+/// 27 or 28, as 0x-prefixed hex.
+fn personal_sign(wallet: &SigningKey, message: &str) -> String {
+    let mut prefixed = format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
+    prefixed.extend_from_slice(message.as_bytes());
+    let (signature, recovery) = wallet
+        .sign_prehash_recoverable(&keccak256(&prefixed))
+        .expect("sign the digest");
+    format!(
+        "0x{}{:02x}",
+        hex::encode(signature.to_bytes()),
+        27 + recovery.to_byte()
+    )
+}
+
+/// A fresh identity token for `wallet` from the wallet exchange, the one
+/// identity exchange a headless stack can complete. Returns the token and its
+/// subject.
+async fn wallet_identity_token(base: &str, wallet: &SigningKey) -> (String, String) {
+    let nonce = expect_auth("siwe nonce", new_client(base).siwe_challenge().await).nonce;
+    let message = format!(
+        "localhost:5173 wants you to sign in with your Ethereum account:\n\
+         {address}\n\n\
+         Sign in to CipherBox encrypted storage\n\n\
+         URI: http://localhost:5173\n\
+         Version: 1\n\
+         Chain ID: 1\n\
+         Nonce: {nonce}\n\
+         Issued At: 2026-01-01T00:00:00.000Z",
+        address = wallet_address(wallet),
+    );
+    let grant = post_json_body(
+        base,
+        "/auth/identity/wallet",
+        None,
+        serde_json::json!({
+            "message": message,
+            "signature": personal_sign(wallet, &message),
+        }),
+    )
+    .await;
+    (
+        grant["token"].as_str().expect("a token").to_string(),
+        grant["verifierId"].as_str().expect("a subject").to_string(),
+    )
+}
+
+/// Log in as `signer` through the engine client, presenting `identity_token`
+/// when given.
+async fn login_presenting_identity_token(
+    base: &str,
+    signer: &IdentityChallengeSigner,
+    identity_token: Option<&str>,
+) -> Client {
+    let client = new_client(base);
+    expect_auth(
+        "identity login",
+        client.login_identity(signer, identity_token).await,
+    );
+    client
+}
+
+/// A fresh random device identity key.
+fn random_device_key() -> Ed25519Signer {
+    let mut seed = Zeroizing::new([0u8; 32]);
+    getrandom::getrandom(seed.as_mut()).expect("os rng");
+    Ed25519Signer::from_seed(*seed)
+}
+
+/// `POST /devices` for `device` on the client's account, presenting
+/// `identity_token`. The signature is valid, so the answer turns on the bind.
+async fn register_device(
+    client: &Client,
+    device: &Ed25519Signer,
+    identity_token: &str,
+) -> Result<RegisteredDevice, ApiError> {
+    let public_key = hex::encode(device.verifying_key().to_bytes());
+    let payload = registration_payload(&client.account_id().expect("an account id"), &public_key)
+        .expect("a well-formed registration");
+    let signature = hex::encode(device.sign(&payload).to_bytes());
+    client
+        .register_device(&public_key, &signature, identity_token, None)
+        .await
+}
+
+/// Assert a 409 that carries `message`.
+fn assert_conflict(result: &Result<RegisteredDevice, ApiError>, message: &str) {
+    match result {
+        Err(ApiError::Status {
+            status: 409,
+            message: Some(actual),
+            ..
+        }) => assert_eq!(actual, message),
+        other => panic!("expected a 409 refusal ({message}), got {other:?}"),
+    }
+}
+
+/// The status of `POST /device-approval/session` for `identity_token`.
+async fn session_status(base: &str, identity_token: &str) -> u16 {
+    post_json(
+        base,
+        "/device-approval/session",
+        None,
+        serde_json::json!({ "identityToken": identity_token }),
+    )
+    .await
+}
+
+const NO_BOUND_SUBJECT: &str = "This account has no bound identity subject";
+const OTHER_SUBJECT: &str =
+    "The identity token names a subject other than the one bound to this account";
+
+/// ADR 0058 D2: the first login that presents an identity token binds its
+/// subject to the account. The registration and the rendezvous both reach the
+/// account through that bind.
+#[tokio::test]
+async fn the_first_login_that_presents_an_identity_token_binds_its_subject() {
+    let base = require_stack!("the_first_login_that_presents_an_identity_token_binds_its_subject");
+    let wallet = random_wallet();
+    let (bind_token, subject) = wallet_identity_token(&base, &wallet).await;
+    let account =
+        login_presenting_identity_token(&base, &random_identity_signer(), Some(&bind_token)).await;
+
+    let (register_token, register_subject) = wallet_identity_token(&base, &wallet).await;
+    assert_eq!(register_subject, subject, "one wallet has one subject");
+    register_device(&account, &random_device_key(), &register_token)
+        .await
+        .expect("the bound account registers a device under its subject");
+
+    let (session_token, _) = wallet_identity_token(&base, &wallet).await;
+    assert_eq!(
+        session_status(&base, &session_token).await,
+        200,
+        "the rendezvous finds the bound account"
+    );
+}
+
+/// ADR 0058 D2: a login does not move a subject that another account holds.
+/// The login proceeds, and the second account stays unbound.
+#[tokio::test]
+async fn a_login_does_not_rebind_a_subject_that_another_account_holds() {
+    let base = require_stack!("a_login_does_not_rebind_a_subject_that_another_account_holds");
+    let wallet = random_wallet();
+    let (bind_token, subject) = wallet_identity_token(&base, &wallet).await;
+    let first =
+        login_presenting_identity_token(&base, &random_identity_signer(), Some(&bind_token)).await;
+
+    let (conflict_token, conflict_subject) = wallet_identity_token(&base, &wallet).await;
+    assert_eq!(conflict_subject, subject, "one wallet has one subject");
+    let second =
+        login_presenting_identity_token(&base, &random_identity_signer(), Some(&conflict_token))
+            .await;
+
+    let (token, _) = wallet_identity_token(&base, &wallet).await;
+    assert_conflict(
+        &register_device(&second, &random_device_key(), &token).await,
+        NO_BOUND_SUBJECT,
+    );
+
+    let (token, _) = wallet_identity_token(&base, &wallet).await;
+    register_device(&first, &random_device_key(), &token)
+        .await
+        .expect("the first account keeps the bind");
+}
+
+/// ADR 0058 D3: an account that no login bound cannot register a device.
+#[tokio::test]
+async fn a_registration_from_an_unbound_account_is_refused() {
+    let base = require_stack!("a_registration_from_an_unbound_account_is_refused");
+    let account = login_presenting_identity_token(&base, &random_identity_signer(), None).await;
+    let (token, _) = wallet_identity_token(&base, &random_wallet()).await;
+    assert_conflict(
+        &register_device(&account, &random_device_key(), &token).await,
+        NO_BOUND_SUBJECT,
+    );
+}
+
+/// ADR 0058 D3: a registration whose token names a subject other than the
+/// bound one is refused, and the refusal writes nothing.
+#[tokio::test]
+async fn a_registration_whose_token_names_another_subject_is_refused() {
+    let base = require_stack!("a_registration_whose_token_names_another_subject_is_refused");
+    let bound_wallet = random_wallet();
+    let (bind_token, _) = wallet_identity_token(&base, &bound_wallet).await;
+    let account =
+        login_presenting_identity_token(&base, &random_identity_signer(), Some(&bind_token)).await;
+    let device = random_device_key();
+
+    let (other_token, _) = wallet_identity_token(&base, &random_wallet()).await;
+    assert_conflict(
+        &register_device(&account, &device, &other_token).await,
+        OTHER_SUBJECT,
+    );
+
+    let (token, _) = wallet_identity_token(&base, &bound_wallet).await;
+    register_device(&account, &device, &token)
+        .await
+        .expect("the refused registration left no row for this device key");
 }

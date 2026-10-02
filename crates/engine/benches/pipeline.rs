@@ -81,7 +81,7 @@ fn armed_device(
     );
     serve_http(&device, blocks, 2);
     let signer = IdentityChallengeSigner::from_signer(owner_identity());
-    block_on(api.login_identity(&signer)).expect("the fixture answers the handshake");
+    block_on(api.login_identity(&signer, None)).expect("the fixture answers the handshake");
     for ack in acks {
         device.http.enqueue_response(ack);
     }

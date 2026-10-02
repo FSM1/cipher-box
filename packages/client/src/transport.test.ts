@@ -232,6 +232,25 @@ describe('LocalTransport', () => {
     const posted = worker.posted[0];
     expect(posted.message.type).toBe('start');
     expect(posted.transfer).toEqual([secret]);
+    expect((posted.message as { identityToken?: string }).identityToken).toBeUndefined();
+  });
+
+  it('posts the identity token beside the secret, outside the transfer list', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+
+    const secret = new Uint8Array([1, 2, 3, 4]).buffer;
+    void transport.start(secret, TEST_ACCOUNT_ID, 'identity.jwt');
+    await tick();
+
+    const posted = worker.posted[0];
+    expect(posted.message).toMatchObject({
+      type: 'start',
+      accountId: TEST_ACCOUNT_ID,
+      identityToken: 'identity.jwt',
+    });
+    expect(posted.transfer).toEqual([secret]);
   });
 
   it.each([

@@ -90,5 +90,6 @@ function present(grant: IdentityGrant): IdentityTokenResponseDto {
     verifierId: grant.verifierId,
     email: grant.email,
     expiresAt: grant.expiresAt.toISOString(),
+    expiresIn: grant.expiresIn,
   };
 }

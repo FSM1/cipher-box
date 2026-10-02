@@ -62,6 +62,16 @@ export class LoginRequestDto {
   @IsString()
   @Matches(HEX_COMPACT_SIGNATURE, { message: 'signature must be 64 bytes of hex' })
   signature!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The CipherBox identity token of the exchange that preceded this login. It binds an ' +
+      'unbound account to an unbound identity subject; the login does not spend it',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  identityToken?: string;
 }
 
 export class TokenResponseDto {

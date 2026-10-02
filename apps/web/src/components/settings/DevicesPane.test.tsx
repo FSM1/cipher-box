@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { RegisteredDeviceDescriptor } from '@cipherbox/client';
+import { EngineRequestError, type RegisteredDeviceDescriptor } from '@cipherbox/client';
 import { authStore } from '../../stores/auth.store';
 import {
   authWrapper,
@@ -11,6 +11,7 @@ import {
   fakeSignatureOver,
   type EngineCalls,
 } from '../../test/authFakes';
+import { DeviceKeyUnusableError } from '../../auth/deviceIdentity';
 import { DevicesPane } from './DevicesPane';
 
 const OTHER = {
@@ -97,6 +98,7 @@ describe('the authorized devices pane', () => {
     ]);
     // The re-read is what puts the new key in the list, so the offer retires.
     await waitFor(() => expect(screen.queryByTestId('settings-device-register')).toBeNull());
+    expect(screen.getByTestId('settings-device-own').textContent).toBe('this device');
   });
 
   it('asks before it revokes, and revokes nothing until the member confirms', async () => {
@@ -159,6 +161,9 @@ describe('the authorized devices pane', () => {
 
     expect(register.getAttribute('disabled')).not.toBeNull();
     expect(register.getAttribute('aria-label')).toContain('sign in again');
+    expect(screen.getByTestId('settings-device-register-closed').textContent).toBe(
+      'sign in again with "save this device" checked'
+    );
 
     await act(async () => {
       fireEvent.click(register);
@@ -195,7 +200,7 @@ describe('the authorized devices pane', () => {
 
   // `forgetDevice` leaves the session holding no key. Keeping the last answer
   // would mark a listed row as this device and hide the way back in.
-  it('offers registration again once this browser holds no identity key', async () => {
+  it('unmarks the row and names the missing key once this browser holds none', async () => {
     const engine = fakeEngineClient({ devices: () => Promise.resolve([OWN]) });
     const session = fakeCoreKitSession({ loggedIn: true, noDeviceIdentity: true }).session;
     render(<DevicesPane />, { wrapper: authWrapper(engine.client, session) });
@@ -203,6 +208,127 @@ describe('the authorized devices pane', () => {
 
     await waitFor(() => expect(rows()).toHaveLength(1));
     expect(screen.getByTestId('settings-device-own').textContent).toBe('');
-    expect(screen.getByTestId('settings-device-register')).toBeTruthy();
+    expect(screen.getByTestId('settings-device-register').getAttribute('disabled')).not.toBeNull();
+    expect(screen.getByTestId('settings-device-register-closed').textContent).toBe(
+      'this browser holds no device identity key; sign in again to create one'
+    );
+  });
+
+  // A sign-in cannot give a browser a key its WebCrypto cannot hold, so the
+  // pane names the browser as the cause instead.
+  it('names an unusable device key as the cause, not the sign-in', async () => {
+    const unusable = new DeviceKeyUnusableError().message;
+    const engine = fakeEngineClient({ devices: () => Promise.resolve([]) });
+    const session = fakeCoreKitSession({ loggedIn: true, deviceKeyUnusable: true }).session;
+    render(<DevicesPane />, { wrapper: authWrapper(engine.client, session) });
+    await act(async () => undefined);
+
+    const register = await waitFor(() => screen.getByTestId('settings-device-register'));
+    await waitFor(() =>
+      expect(screen.getByTestId('settings-device-register-closed').textContent).toBe(unusable)
+    );
+    expect(register.getAttribute('disabled')).not.toBeNull();
+    expect(register.getAttribute('title')).toBe(unusable);
+  });
+
+  it('closes the control once the API refuses this sign-in as unauthorized', async () => {
+    const engine = fakeEngineClient({
+      devices: () => Promise.resolve([]),
+      registerDevice: () =>
+        Promise.reject(new EngineRequestError('auth error: refused as unauthorized', 'auth')),
+    });
+    const session = fakeCoreKitSession({ loggedIn: true }).session;
+    render(<DevicesPane />, { wrapper: authWrapper(engine.client, session) });
+    await act(async () => undefined);
+    const register = await waitFor(() => screen.getByTestId('settings-device-register'));
+    await waitFor(() => expect(register.getAttribute('disabled')).toBeNull());
+
+    await act(async () => {
+      fireEvent.click(register);
+    });
+
+    expect(register.getAttribute('disabled')).not.toBeNull();
+    expect(screen.getByTestId('settings-device-register-closed').textContent).toContain(
+      'can no longer register a device'
+    );
+    // The reason line names the cause; the engine's own line would repeat it.
+    expect(screen.queryByTestId('settings-devices-error')).toBeNull();
+    for (const said of [register.getAttribute('title'), register.getAttribute('aria-label')]) {
+      expect(said).not.toContain(FAKE_IDENTITY_TOKEN);
+    }
+    await act(async () => {
+      fireEvent.click(register);
+    });
+    expect(engine.calls.registered).toHaveLength(1);
+  });
+
+  it('marks this device when a refused registration finds its key already listed', async () => {
+    let firstRead = true;
+    const engine = fakeEngineClient({
+      devices: () => {
+        const listed = firstRead ? [] : [OWN];
+        firstRead = false;
+        return Promise.resolve(listed);
+      },
+      registerDevice: () =>
+        Promise.reject(new EngineRequestError('auth error: refused as unauthorized', 'auth')),
+    });
+    const session = fakeCoreKitSession({ loggedIn: true }).session;
+    render(<DevicesPane />, { wrapper: authWrapper(engine.client, session) });
+    await act(async () => undefined);
+    const register = await waitFor(() => screen.getByTestId('settings-device-register'));
+    await waitFor(() => expect(register.getAttribute('disabled')).toBeNull());
+
+    await act(async () => {
+      fireEvent.click(register);
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('settings-device-own').textContent).toBe('this device')
+    );
+    expect(screen.queryByTestId('settings-device-register')).toBeNull();
+    expect(screen.queryByTestId('settings-devices-error')).toBeNull();
+  });
+
+  it('names the refusal when the list cannot be read again either', async () => {
+    const refused = new EngineRequestError('auth error: refused as unauthorized', 'auth');
+    let firstRead = true;
+    const engine = fakeEngineClient({
+      devices: () => {
+        if (firstRead) {
+          firstRead = false;
+          return Promise.resolve([]);
+        }
+        return Promise.reject(refused);
+      },
+      registerDevice: () => Promise.reject(refused),
+    });
+    const session = fakeCoreKitSession({ loggedIn: true }).session;
+    render(<DevicesPane />, { wrapper: authWrapper(engine.client, session) });
+    await act(async () => undefined);
+    const register = await waitFor(() => screen.getByTestId('settings-device-register'));
+    await waitFor(() => expect(register.getAttribute('disabled')).toBeNull());
+
+    await act(async () => {
+      fireEvent.click(register);
+    });
+
+    expect(screen.getByTestId('settings-device-register-closed').textContent).toContain(
+      'can no longer register a device'
+    );
+    expect(screen.queryByTestId('settings-devices-error')).toBeNull();
+  });
+
+  it('shows no closed reason while it still reads this browser key', async () => {
+    const engine = fakeEngineClient({ devices: () => Promise.resolve([]) });
+    const coreKit = fakeCoreKitSession({ loggedIn: true, identityToken: null });
+    const identity = coreKit.session.deviceIdentity();
+    if (identity) identity.publicKeyHex = () => new Promise(() => undefined);
+    render(<DevicesPane />, { wrapper: authWrapper(engine.client, coreKit.session) });
+    await act(async () => undefined);
+
+    const register = await waitFor(() => screen.getByTestId('settings-device-register'));
+    expect(register.getAttribute('disabled')).not.toBeNull();
+    expect(screen.queryByTestId('settings-device-register-closed')).toBeNull();
   });
 });
