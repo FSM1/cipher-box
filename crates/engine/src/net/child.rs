@@ -156,8 +156,9 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
     /// availability: this device holds no seed for that epoch, so the record
     /// accuses nobody by failing to open, and the root leg that recovers the
     /// seed repaints it. At or below both, this seed is the one the record must
-    /// open under, so the failure stays the fail-closed trust verdict. With
-    /// neither, nothing is proved above and the verdict stands.
+    /// open under, so the failure stays the fail-closed trust verdict. An
+    /// absent floor proves nothing above it and keeps the verdict, whatever
+    /// the stamp.
     ///
     /// Accepted: the epoch tag attests nothing (ADR 0017), so a party that can
     /// sign at this name buys unreachability instead of an accusation. It can
@@ -169,11 +170,9 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         match open_read_body(envelope, read_key.as_bytes()) {
             Ok(read_body) => Ok(read_body),
             Err(_)
-                if epoch_floor
-                    .into_iter()
-                    .chain(self.seed_stamp)
-                    .min()
-                    .is_some_and(|bound| envelope.epoch > bound) =>
+                if epoch_floor.is_some_and(|floor| {
+                    envelope.epoch > self.seed_stamp.map_or(floor, |stamp| stamp.min(floor))
+                }) =>
             {
                 Err(GateError::Seam(SeamError::new(format!(
                     "record at epoch {} is above the epoch of the read seed this device holds",
@@ -1020,6 +1019,28 @@ mod tests {
             "a seed the record was not sealed under must open nothing",
         );
         assert_eq!(refused.stage, GateStage::Unseal);
+    }
+
+    /// A scope with no read-epoch floor authenticated no epoch, so the stamp
+    /// alone proves nothing above it. The verdict stands.
+    #[test]
+    fn a_failed_unseal_under_no_floor_stays_a_trust_verdict_whatever_the_stamp() {
+        let published = publish(Spec {
+            epoch: CURRENT_EPOCH,
+            ..Spec::default()
+        });
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let floors = InMemoryFloorStore::default();
+        let adopter = seeded_adopter(&gw, &http, &floors, &published, NODE, LAGGING_EPOCH)
+            .with_seed_stamp(Some(LAGGING_EPOCH));
+
+        let refused = refusal(
+            block_on(adopter.adopt(&published.name, &published.record_bytes)),
+            "a seed the record was not sealed under must open nothing",
+        );
+        assert_eq!(refused.stage, GateStage::Unseal);
+        assert_eq!(read_epoch_floor(&floors), None, "the floor stayed absent");
     }
 
     /// At the floor this device holds the seed the record must open under, so a
