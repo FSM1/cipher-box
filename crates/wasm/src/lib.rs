@@ -176,13 +176,9 @@ pub mod rendezvous {
     const SEAL_SCALAR: &str = "sealScalar";
     const FACTOR_KEY: &str = "factorKey";
 
-    /// The JS name of every secret field on any step. [`decode_rendezvous_step`]
-    /// puts the empty placeholder in each before serde reads the step.
-    pub(crate) const SECRET_FIELDS: [&str; 3] = [SCALAR, SEAL_SCALAR, FACTOR_KEY];
-
     /// Refuses real bytes. Serde has buffered them unwiped by the time this
-    /// runs, so a secret field left off [`SECRET_FIELDS`] fails every decode
-    /// rather than passing silently.
+    /// runs, so a secret that skipped its placeholder fails the decode rather
+    /// than passing silently.
     fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Secret, D::Error> {
         let placeholder = Zeroizing::new(cipherbox_engine::wire::bytes::deserialize(deserializer)?);
         if !placeholder.is_empty() {
@@ -265,6 +261,8 @@ pub mod rendezvous {
 
     impl DeviceRendezvousStep {
         /// Each secret slot of this step, by its JS field name.
+        /// [`decode_rendezvous_step`] refuses a step whose slots differ from
+        /// its bytes fields.
         pub(crate) fn secrets_mut(&mut self) -> Vec<(&'static str, &mut Secret)> {
             match self {
                 Self::Open { scalar, .. } | Self::OpenFactor { scalar, .. } => {

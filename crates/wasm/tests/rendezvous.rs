@@ -4,8 +4,8 @@
 #![cfg(all(target_family = "wasm", target_os = "unknown"))]
 
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_wasm::boundary::decode_rendezvous_step;
-use cipherbox_wasm::rendezvous::{DeviceRendezvousStep, device_rendezvous};
+use cipherbox_wasm::boundary::{decode_rendezvous_step, take_rendezvous_secrets};
+use cipherbox_wasm::rendezvous::{DeviceRendezvousStep, Secret, device_rendezvous};
 use js_sys::{Object, Reflect, Uint8Array};
 use tsify::Ts;
 use wasm_bindgen::{JsCast, JsValue};
@@ -204,4 +204,39 @@ fn a_scalar_of_the_wrong_length_is_refused() {
         run(&open(&[4u8; 31])).unwrap_err(),
         "a rendezvous scalar is 32 bytes"
     );
+}
+
+/// An empty secret is the placeholder itself, so no step decodes with one.
+#[wasm_bindgen_test]
+fn an_empty_secret_is_refused() {
+    assert!(decode_rendezvous_step(&approve(REQUESTER, "02beef", bytes(&[]))).is_err());
+    assert!(decode_rendezvous_step(&open(&[])).is_err());
+}
+
+/// A slot list that drifts from the bytes fields of a step would leave a
+/// secret slot holding the empty placeholder, so the take refuses it.
+#[wasm_bindgen_test]
+fn slots_that_drift_from_the_placeheld_fields_are_refused() {
+    let step = approve(REQUESTER, "02beef", bytes(FACTOR));
+    let placeheld = ["sealScalar".to_owned(), "factorKey".to_owned()];
+    let (mut seal, mut factor) = (Secret::default(), Secret::default());
+
+    assert!(take_rendezvous_secrets(&step, &placeheld, vec![("sealScalar", &mut seal)]).is_err());
+    assert!(
+        take_rendezvous_secrets(
+            &step,
+            &placeheld,
+            vec![("sealScalar", &mut seal), ("sealScalar", &mut factor)]
+        )
+        .is_err()
+    );
+    assert!(
+        take_rendezvous_secrets(
+            &step,
+            &placeheld,
+            vec![("sealScalar", &mut seal), ("factorKey", &mut factor)]
+        )
+        .is_ok()
+    );
+    assert_eq!(factor.as_slice(), FACTOR);
 }

@@ -37,7 +37,12 @@ import { EngineRequestError, unknownHandle, type HandleKind } from './correlated
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
-import { commandTransfer, READ_KINDS, rendezvousTransfer } from './worker/protocol.js';
+import {
+  commandTransfer,
+  READ_KINDS,
+  RENDEZVOUS_SECRET_FIELDS,
+  rendezvousTransfer,
+} from './worker/protocol.js';
 import type {
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -85,16 +90,14 @@ function wipeChunk(payload: unknown): void {
 }
 
 /**
- * Wipes the secret scalars a rendezvous step carries. Every kind is covered,
+ * Wipes every secret a rendezvous step carries. Every kind is covered,
  * `open` included: the step reached this realm by structured clone, so these
  * bytes are a copy the sender does not share and this frame is their last
  * owner. Takes the step unvalidated: an off-shape one carries none.
  */
 function wipeStep(step: unknown): void {
-  const held = step as { scalar?: unknown; sealScalar?: unknown; factorKey?: unknown } | null;
-  wipeBytes(held?.scalar);
-  wipeBytes(held?.sealScalar);
-  wipeBytes(held?.factorKey);
+  if (typeof step !== 'object' || step === null) return;
+  for (const field of RENDEZVOUS_SECRET_FIELDS) wipeBytes((step as Record<string, unknown>)[field]);
 }
 
 /**

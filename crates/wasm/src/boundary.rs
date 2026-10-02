@@ -10,7 +10,7 @@
 //! (AGENTS.md rule 7). A refusal names no field value: a value can be a name
 //! the member typed.
 
-use crate::rendezvous::{DeviceRendezvousStep, SECRET_FIELDS};
+use crate::rendezvous::{DeviceRendezvousStep, Secret};
 use cipherbox_engine::content::ByoBearer;
 use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
 use cipherbox_engine::facade::{Command, CommandOutcome, Event, SiweIntent, WriteTarget};
@@ -108,30 +108,60 @@ pub fn decode_write_target(target: JsValue) -> Result<WriteTarget, JsError> {
         .map_err(|_| JsError::new("the write target does not decode"))
 }
 
-/// Decodes one device-rendezvous step. Each scalar and factor key decodes as an
-/// empty placeholder, then is taken into its zeroizing slot. Refuses an
-/// unknown `kind`, an unknown field, and a field of the wrong type.
+/// Decodes one device-rendezvous step. Every bytes field of a step is a secret:
+/// each decodes as an empty placeholder, then is taken into its zeroizing slot.
+/// Refuses an unknown `kind`, an unknown field, and a field of the wrong type.
 pub fn decode_rendezvous_step(step: &JsValue) -> Result<DeviceRendezvousStep, JsError> {
-    let refused = || JsError::new("the rendezvous step does not decode");
     if !step.is_object() {
-        return Err(refused());
+        return Err(rendezvous_refused());
     }
     // An absent secret stays absent, so serde refuses it as a missing field.
-    let placeheld = SECRET_FIELDS
-        .into_iter()
-        .filter(|key| Object::has_own(step.unchecked_ref::<Object>(), &(*key).into()))
+    let placeheld: Vec<String> = Object::keys(step.unchecked_ref::<Object>())
+        .iter()
+        .filter_map(|key| key.as_string())
+        .filter(|key| is_bytes(&field(step, key)))
+        .collect();
+    let value = placeheld
+        .iter()
         .try_fold(step.clone(), |value, key| {
             with_placeholder(&value, &[key], &Uint8Array::new_with_length(0).into())
         })
-        .map_err(|_| refused())?;
+        .map_err(|_| rendezvous_refused())?;
     let mut decoded: DeviceRendezvousStep =
-        serde_wasm_bindgen::from_value(placeheld).map_err(|_| refused())?;
-    for (key, slot) in decoded.secrets_mut() {
+        serde_wasm_bindgen::from_value(value).map_err(|_| rendezvous_refused())?;
+    take_rendezvous_secrets(step, &placeheld, decoded.secrets_mut())?;
+    Ok(decoded)
+}
+
+/// Takes the secret at each of `placeheld` from `step` into its slot. Refuses
+/// unless the slots name exactly the placeheld fields, and refuses an empty
+/// secret: either would leave a slot that holds the placeholder.
+pub fn take_rendezvous_secrets(
+    step: &JsValue,
+    placeheld: &[String],
+    slots: Vec<(&str, &mut Secret)>,
+) -> Result<(), JsError> {
+    let named = |key: &String| slots.iter().any(|(slot, _)| slot == key);
+    if slots.len() != placeheld.len() || !placeheld.iter().all(named) {
+        return Err(rendezvous_refused());
+    }
+    for (key, slot) in slots {
         let bytes = field(step, key);
-        let bytes = bytes.dyn_ref::<Uint8Array>().ok_or_else(refused)?;
+        let bytes = bytes
+            .dyn_ref::<Uint8Array>()
+            .filter(|bytes| bytes.length() > 0)
+            .ok_or_else(rendezvous_refused)?;
         *slot = Zeroizing::new(bytes.to_vec());
     }
-    Ok(decoded)
+    Ok(())
+}
+
+fn rendezvous_refused() -> JsError {
+    JsError::new("the rendezvous step does not decode")
+}
+
+fn is_bytes(value: &JsValue) -> bool {
+    value.is_instance_of::<ArrayBuffer>() || ArrayBuffer::is_view(value)
 }
 
 /// Encodes one view, or one list of view rows.
@@ -168,7 +198,7 @@ fn tag_bigints(value: &JsValue, depth: usize) -> Result<JsValue, JsError> {
     if Array::is_array(value) {
         return Err(refused());
     }
-    if !value.is_object() || value.is_instance_of::<ArrayBuffer>() || ArrayBuffer::is_view(value) {
+    if !value.is_object() || is_bytes(value) {
         return Ok(value.clone());
     }
     if depth >= MAX_COMMAND_DEPTH {
