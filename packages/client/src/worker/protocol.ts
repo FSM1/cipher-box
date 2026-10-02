@@ -239,26 +239,41 @@ export function commandTransfer(command: unknown): Transferable[] {
   return isBuffer(token) ? [token] : [];
 }
 
-/** The name of each `Uint8Array` field on any rendezvous step. */
-type RendezvousBytesField = DeviceRendezvousStep extends infer Step
-  ? Step extends unknown
-    ? { [K in keyof Step]: Step[K] extends Uint8Array ? K : never }[keyof Step]
-    : never
+/** The name of each `Uint8Array` field on any member of the union `T`. */
+type BytesField<T> = T extends unknown
+  ? { [K in keyof T]: T[K] extends Uint8Array ? K : never }[keyof T]
   : never;
 
 /**
- * Every buffer a rendezvous step carries is a secret, and the result's opened
- * factor shares the `factorKey` name. A new buffer field on a step fails the
- * build here until it is listed, so it cannot cross unscrubbed.
+ * Every buffer a rendezvous step carries is a secret. A new buffer field on a
+ * step fails the build here until it is listed, so it cannot cross unscrubbed.
  */
-const RENDEZVOUS_SECRETS: Record<RendezvousBytesField, true> = {
+const STEP_SECRETS: Record<BytesField<DeviceRendezvousStep>, true> = {
   scalar: true,
   sealScalar: true,
   factorKey: true,
 };
 
+/**
+ * Whether each buffer a rendezvous result carries is a secret. A new buffer
+ * field on a result fails the build here until it is classified, so a secret
+ * cannot be cloned rather than moved.
+ */
+const RESULT_SECRETS: Record<BytesField<DeviceRendezvousResult>, boolean> = {
+  requestPayload: false,
+  payload: false,
+  factorKey: true,
+};
+
 /** The fields of a rendezvous step or result that hold a secret. */
-export const RENDEZVOUS_SECRET_FIELDS = Object.keys(RENDEZVOUS_SECRETS) as RendezvousBytesField[];
+export const RENDEZVOUS_SECRET_FIELDS: readonly string[] = [
+  ...new Set([
+    ...Object.keys(STEP_SECRETS),
+    ...Object.keys(RESULT_SECRETS).filter(
+      (field) => RESULT_SECRETS[field as keyof typeof RESULT_SECRETS]
+    ),
+  ]),
+];
 
 /**
  * The secret buffers a rendezvous step or its result hands over for good, for

@@ -163,7 +163,7 @@ pub fn read_ipns_record(ipns_name: &str, record: &[u8]) -> Result<IpnsRecordRead
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 pub mod rendezvous {
     use super::*;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
     use tsify::Ts;
     use zeroize::Zeroizing;
 
@@ -172,10 +172,23 @@ pub mod rendezvous {
     /// A scalar or a factor key the host handed in.
     pub type Secret = Zeroizing<Vec<u8>>;
 
-    /// Reads only the empty placeholder [`decode_rendezvous_step`] puts in a
-    /// secret's place.
+    const SCALAR: &str = "scalar";
+    const SEAL_SCALAR: &str = "sealScalar";
+    const FACTOR_KEY: &str = "factorKey";
+
+    /// The JS name of every secret field on any step. [`decode_rendezvous_step`]
+    /// puts the empty placeholder in each before serde reads the step.
+    pub(crate) const SECRET_FIELDS: [&str; 3] = [SCALAR, SEAL_SCALAR, FACTOR_KEY];
+
+    /// Refuses real bytes. Serde has buffered them unwiped by the time this
+    /// runs, so a secret field left off [`SECRET_FIELDS`] fails every decode
+    /// rather than passing silently.
     fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Secret, D::Error> {
-        cipherbox_engine::wire::bytes::deserialize(deserializer).map(Zeroizing::new)
+        let placeholder = cipherbox_engine::wire::bytes::deserialize(deserializer)?;
+        if !placeholder.is_empty() {
+            return Err(de::Error::custom("a secret field skipped its placeholder"));
+        }
+        Ok(Zeroizing::new(placeholder))
     }
 
     fn as_bytes<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
@@ -255,13 +268,13 @@ pub mod rendezvous {
         pub(crate) fn secrets_mut(&mut self) -> Vec<(&'static str, &mut Secret)> {
             match self {
                 Self::Open { scalar, .. } | Self::OpenFactor { scalar, .. } => {
-                    vec![("scalar", scalar)]
+                    vec![(SCALAR, scalar)]
                 }
                 Self::Approve {
                     seal_scalar,
                     factor_key,
                     ..
-                } => vec![("sealScalar", seal_scalar), ("factorKey", factor_key)],
+                } => vec![(SEAL_SCALAR, seal_scalar), (FACTOR_KEY, factor_key)],
                 Self::Deny { .. } => Vec::new(),
             }
         }

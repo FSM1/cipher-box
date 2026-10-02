@@ -10,7 +10,7 @@
 //! (AGENTS.md rule 7). A refusal names no field value: a value can be a name
 //! the member typed.
 
-use crate::rendezvous::DeviceRendezvousStep;
+use crate::rendezvous::{DeviceRendezvousStep, SECRET_FIELDS};
 use cipherbox_engine::content::ByoBearer;
 use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
 use cipherbox_engine::facade::{Command, CommandOutcome, Event, SiweIntent, WriteTarget};
@@ -116,15 +116,16 @@ pub fn decode_rendezvous_step(step: &JsValue) -> Result<DeviceRendezvousStep, Js
     if !step.is_object() {
         return Err(refused());
     }
-    let copy = Object::assign(&Object::new(), step.unchecked_ref::<Object>());
-    for key in RENDEZVOUS_SECRETS {
-        if Object::has_own(&copy, &key.into()) {
-            Reflect::set(&copy, &key.into(), &Uint8Array::new_with_length(0))
-                .map_err(|_| refused())?;
-        }
-    }
+    // An absent secret stays absent, so serde refuses it as a missing field.
+    let placeheld = SECRET_FIELDS
+        .into_iter()
+        .filter(|key| Object::has_own(step.unchecked_ref::<Object>(), &(*key).into()))
+        .try_fold(step.clone(), |value, key| {
+            with_placeholder(&value, &[key], &Uint8Array::new_with_length(0).into())
+        })
+        .map_err(|_| refused())?;
     let mut decoded: DeviceRendezvousStep =
-        serde_wasm_bindgen::from_value(copy.into()).map_err(|_| refused())?;
+        serde_wasm_bindgen::from_value(placeheld).map_err(|_| refused())?;
     for (key, slot) in decoded.secrets_mut() {
         let bytes = field(step, key);
         let bytes = bytes.dyn_ref::<Uint8Array>().ok_or_else(refused)?;
@@ -132,8 +133,6 @@ pub fn decode_rendezvous_step(step: &JsValue) -> Result<DeviceRendezvousStep, Js
     }
     Ok(decoded)
 }
-
-const RENDEZVOUS_SECRETS: [&str; 3] = ["scalar", "sealScalar", "factorKey"];
 
 /// Encodes one view, or one list of view rows.
 pub fn encode_view<T: Serialize + ?Sized>(view: &T) -> Result<JsValue, JsError> {

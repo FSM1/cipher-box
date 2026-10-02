@@ -183,6 +183,21 @@ fn a_step_off_the_generated_shape_is_refused() {
     refused(approve(REQUESTER, "02beef", JsValue::from(42)));
 }
 
+/// A secret field that skipped the placeholder would sit in serde's unwiped
+/// buffer, so the step type itself refuses real bytes there.
+#[wasm_bindgen_test]
+fn a_secret_that_reaches_serde_unplaced_is_refused() {
+    assert!(serde_wasm_bindgen::from_value::<DeviceRendezvousStep>(open(&[4u8; 32])).is_err());
+    assert!(
+        serde_wasm_bindgen::from_value::<DeviceRendezvousStep>(approve(
+            REQUESTER,
+            "02beef",
+            bytes(FACTOR)
+        ))
+        .is_err()
+    );
+}
+
 #[wasm_bindgen_test]
 fn a_scalar_of_the_wrong_length_is_refused() {
     assert_eq!(

@@ -51,12 +51,6 @@ function invalidField(field: string, value: unknown): Error {
   return new Error(`invalid request field ${field}: ${value === null ? 'null' : typeof value}`);
 }
 
-/** An untrusted wire object; a non-object carries no fields at all. */
-export function record(value: unknown, field: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null) throw invalidField(field, value);
-  return value as Record<string, unknown>;
-}
-
 export function bytes(value: unknown, field: string): Uint8Array {
   if (!(value instanceof Uint8Array)) throw invalidField(field, value);
   return value;
