@@ -806,11 +806,11 @@ pub(crate) fn hold_captures(set: &RefCell<Vec<UnlinkedChild>>, observed: Vec<Unl
 /// spends a bounded share and resumes on the next tick.
 const MAX_CAPTURE_WALK_READS: usize = 128;
 
-/// The folders one capture walk may hold. A walk past this bound cannot prove
+/// The nodes one capture walk may hold. A walk past this bound cannot prove
 /// any capture, and holding the scope's captures would fill
 /// [`MAX_HELD_CAPTURES`] for every other scope, so the session drops them and
 /// walks that scope no more (blueprint/engine.md "Owner capture").
-const MAX_CAPTURE_WALK_FOLDERS: usize = 65_536;
+const MAX_CAPTURE_WALK_NODES: usize = 65_536;
 
 /// A held capture as a proof names it: the node and the stamp its merge minted,
 /// so a later departure of the same node needs a proof of its own.
@@ -832,7 +832,7 @@ pub(crate) struct CaptureProofs {
     proved: BTreeSet<CaptureKey>,
     /// The walk under way, if any.
     walk: Option<CaptureWalk>,
-    /// A walk of this scope passed [`MAX_CAPTURE_WALK_FOLDERS`].
+    /// A walk of this scope passed [`MAX_CAPTURE_WALK_NODES`].
     overflowed: bool,
 }
 
@@ -860,7 +860,7 @@ enum WalkStep {
     Settled,
     /// A read failed or a folder moved: the next pass starts again.
     Restart,
-    /// The walk passed its folder bound.
+    /// The walk passed its node bound.
     Overflowed,
 }
 
@@ -876,19 +876,17 @@ impl CaptureWalk {
         }
     }
 
-    /// Record what one folder names: a cohort node it links, and each folder of
-    /// this scope still to read. Answers `false` when the walk holds more than
-    /// `bound` folders.
+    /// Record what one folder names: a cohort node it links, and each child of
+    /// this scope still to read. A child's kind is wire data, so a child marked
+    /// as a file is read too: its body, not its ref, says if it names children.
+    /// Answers `false` when the walk holds more than `bound` nodes.
     fn visit(&mut self, end: &ScopeEnd<'_>, children: &[ChildRef], bound: usize) -> bool {
         for child in children {
             let id = NodeId(child.id);
             if names_node(&self.cohort, id) {
                 self.linked.insert(id);
             }
-            if child.kind == NodeKind::Folder
-                && names_this_scope(end, child)
-                && self.seen.insert(id)
-            {
+            if names_this_scope(end, child) && self.seen.insert(id) {
                 self.pending.push(id);
             }
         }
@@ -1369,8 +1367,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// What this tick may still read for capture walks, shared out across its
     /// scope passes ([`MAX_CAPTURE_WALK_READS`]).
     capture_reads: RefCell<TickShare>,
-    /// The folders one capture walk may hold ([`MAX_CAPTURE_WALK_FOLDERS`]).
-    capture_walk_folders: usize,
+    /// The nodes one capture walk may hold ([`MAX_CAPTURE_WALK_NODES`]).
+    capture_walk_nodes: usize,
 }
 
 impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S, St, Sch> {
@@ -1386,16 +1384,16 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             established_bin_index: RefCell::new(None),
             bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),
             capture_reads: RefCell::new(TickShare::new(MAX_CAPTURE_WALK_READS, 1)),
-            capture_walk_folders: MAX_CAPTURE_WALK_FOLDERS,
+            capture_walk_nodes: MAX_CAPTURE_WALK_NODES,
         }
     }
 
     /// The same drain under capture walk bounds a fixture can reach.
     #[cfg(test)]
-    fn with_capture_walk_bounds(self, reads: usize, folders: usize) -> Self {
+    fn with_capture_walk_bounds(self, reads: usize, nodes: usize) -> Self {
         Self {
             capture_reads: RefCell::new(TickShare::new(reads, 1)),
-            capture_walk_folders: folders,
+            capture_walk_nodes: nodes,
             ..self
         }
     }
@@ -4075,7 +4073,7 @@ where
         // the sharer never derives. The captures are dropped rather than put
         // back: no pass of this vault will ever adopt them, and the owner's own
         // device bins what it unlinked. An overflowed scope's captures can never
-        // be proved ([`MAX_CAPTURE_WALK_FOLDERS`]).
+        // be proved ([`MAX_CAPTURE_WALK_NODES`]).
         if scope.is_grafted() || overflowed {
             self.take_captures(scope, &eligible);
             return;
@@ -4392,7 +4390,7 @@ where
                     break WalkStep::Restart;
                 };
                 walk.read.push((folder, sequence));
-                if !walk.visit(&plane.end, &children, self.capture_walk_folders) {
+                if !walk.visit(&plane.end, &children, self.capture_walk_nodes) {
                     break WalkStep::Overflowed;
                 }
             } else {
@@ -10303,7 +10301,7 @@ mod tests {
         let target = capture(&harness.write_scope_seed).node;
 
         for _ in 0..3 {
-            walk_pass(&harness, 1, MAX_CAPTURE_WALK_FOLDERS);
+            walk_pass(&harness, 1, MAX_CAPTURE_WALK_NODES);
         }
         assert_eq!(
             reads_of(&harness, HARNESS_ROOT),
@@ -10313,13 +10311,13 @@ mod tests {
         assert_eq!(reads_of(&harness, WALK_FOLDER), 1);
 
         publish_harness_folder(&mut harness, &mut blocks, WALK_FOLDER, 2);
-        walk_pass(&harness, 1, MAX_CAPTURE_WALK_FOLDERS);
+        walk_pass(&harness, 1, MAX_CAPTURE_WALK_NODES);
         assert_eq!(
             reads_of(&harness, target),
             0,
             "a moved folder proves nothing"
         );
-        walk_pass(&harness, 1, MAX_CAPTURE_WALK_FOLDERS);
+        walk_pass(&harness, 1, MAX_CAPTURE_WALK_NODES);
         assert_eq!(
             reads_of(&harness, HARNESS_ROOT),
             3,
@@ -10327,7 +10325,7 @@ mod tests {
         );
 
         for _ in 0..3 {
-            walk_pass(&harness, 1, MAX_CAPTURE_WALK_FOLDERS);
+            walk_pass(&harness, 1, MAX_CAPTURE_WALK_NODES);
         }
         assert!(
             reads_of(&harness, target) > 0,
@@ -10341,11 +10339,11 @@ mod tests {
     #[test]
     fn a_new_departure_of_a_node_needs_a_walk_of_its_own() {
         let (harness, _) = walk_harness();
-        walk_pass(&harness, 1, MAX_CAPTURE_WALK_FOLDERS);
+        walk_pass(&harness, 1, MAX_CAPTURE_WALK_NODES);
         assert_eq!(reads_of(&harness, HARNESS_ROOT), 1);
 
         harness.state.observed_unlinks.borrow_mut()[0].deleted_at = 10;
-        walk_pass(&harness, 1, MAX_CAPTURE_WALK_FOLDERS);
+        walk_pass(&harness, 1, MAX_CAPTURE_WALK_NODES);
         assert_eq!(
             reads_of(&harness, HARNESS_ROOT),
             2,
@@ -10358,11 +10356,11 @@ mod tests {
     #[test]
     fn a_scope_whose_captures_left_the_set_keeps_no_walk() {
         let (harness, _) = walk_harness();
-        walk_pass(&harness, 1, MAX_CAPTURE_WALK_FOLDERS);
+        walk_pass(&harness, 1, MAX_CAPTURE_WALK_NODES);
         assert!(!harness.state.capture_proofs.borrow().is_empty());
 
         harness.state.observed_unlinks.borrow_mut().clear();
-        walk_pass(&harness, 1, MAX_CAPTURE_WALK_FOLDERS);
+        walk_pass(&harness, 1, MAX_CAPTURE_WALK_NODES);
         assert!(harness.state.capture_proofs.borrow().is_empty());
     }
 

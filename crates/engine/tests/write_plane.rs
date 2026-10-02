@@ -5813,6 +5813,27 @@ fn a_destination_served_tied_proves_no_departure() {
     assert!(scene.leaf_opens_under_the_scope());
 }
 
+/// A child ref's kind is wire data. A folder that a ref marks as a file still
+/// names its children, so the walk reads it and the node it links is no
+/// capture.
+#[test]
+fn a_folder_marked_as_a_file_still_links_the_node_for_the_walk() {
+    let mut scene = CaptureScene::new();
+    scene.plant(
+        scene.right,
+        vec![child_ref(scene.inner.0, "inner", CoreNodeKind::File)],
+    );
+    scene.plant(scene.inner, vec![file_ref(scene.leaf.0, "notes.txt")]);
+    scene.plant(scene.left, Vec::new());
+    scene.tick_second(3);
+
+    assert!(
+        scene.binned().is_empty(),
+        "a folder behind a file ref still links the node"
+    );
+    assert!(scene.leaf_opens_under_the_scope());
+}
+
 /// A true departure still bins on a device that never loaded every folder:
 /// the walk reads the folders the base lacks and finds no link.
 #[test]
