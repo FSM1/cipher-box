@@ -101,8 +101,7 @@ impl Http for ReqwestHttp {
             .bytes()
             .await
             .map_err(|err| SeamError::new(format!("http body: {err}")))?;
-        // `Vec::from` takes over the buffer that reqwest filled when it owns it
-        // alone, and copies it only when it does not.
+        // `Vec::from` reuses the reqwest buffer when it owns it alone.
         Ok(HttpResponse {
             status,
             headers,
@@ -123,18 +122,15 @@ impl Http for ReqwestHttp {
         // Reject a body that declares itself over the cap before reading a byte;
         // a missing or lying Content-Length is still bounded by the streaming
         // drain below.
-        let declared = response.content_length();
-        if let Some(declared) = declared {
-            if declared > max_bytes as u64 {
-                return Err(CappedFetchError::BodyTooLarge {
-                    observed: usize::try_from(declared).unwrap_or(usize::MAX),
-                    limit: max_bytes,
-                });
-            }
+        let declared = response.content_length().unwrap_or(0);
+        if declared > max_bytes as u64 {
+            return Err(CappedFetchError::BodyTooLarge {
+                observed: usize::try_from(declared).unwrap_or(usize::MAX),
+                limit: max_bytes,
+            });
         }
 
-        let declared = declared.map_or(0, |declared| declared as usize);
-        let mut body = Zeroizing::new(Vec::with_capacity(declared));
+        let mut body = Zeroizing::new(Vec::with_capacity(declared as usize));
         while let Some(chunk) = response.chunk().await.map_err(|err| {
             CappedFetchError::Transport(SeamError::new(format!("http body: {err}")))
         })? {

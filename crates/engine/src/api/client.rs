@@ -1517,32 +1517,24 @@ mod tests {
     /// accelerator token), so each token decodes straight into a wiping string.
     #[test]
     fn the_tokens_of_a_login_response_decode_into_wiping_strings() {
-        fn wiping(tokens: &TokenResponse) -> [&Zeroizing<String>; 3] {
-            [
-                &tokens.access_token,
-                &tokens.refresh_token,
-                &tokens.accelerator_token,
-            ]
-        }
-        fn wiping_test_login(body: &TestLoginResponse) -> [&Zeroizing<String>; 4] {
-            [
-                &body.access_token,
-                &body.refresh_token,
-                &body.accelerator_token,
-                &body.private_key,
-            ]
-        }
         let mut body = login_response("jwt", "refresh", "gw");
         let tokens: TokenResponse = serde_json::from_value(body.clone()).expect("decodes");
-        assert!(wiping(&tokens).iter().all(|token| !token.is_empty()));
+        let wiping: [&Zeroizing<String>; 3] = [
+            &tokens.access_token,
+            &tokens.refresh_token,
+            &tokens.accelerator_token,
+        ];
+        assert!(wiping.iter().all(|token| !token.is_empty()));
         body["publicKey"] = json!("02cafe");
         body["privateKey"] = json!("11");
         let test_login: TestLoginResponse = serde_json::from_value(body).expect("decodes");
-        assert!(
-            wiping_test_login(&test_login)
-                .iter()
-                .all(|token| !token.is_empty())
-        );
+        let wiping: [&Zeroizing<String>; 4] = [
+            &test_login.access_token,
+            &test_login.refresh_token,
+            &test_login.accelerator_token,
+            &test_login.private_key,
+        ];
+        assert!(wiping.iter().all(|token| !token.is_empty()));
     }
 
     #[test]

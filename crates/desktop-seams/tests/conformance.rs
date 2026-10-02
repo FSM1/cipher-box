@@ -21,7 +21,7 @@ use cipherbox_desktop_seams::{
 };
 use cipherbox_engine::seams::{
     CappedFetchError, CredentialStore, FloorStore, Http, HttpCredentials, HttpMethod, HttpRequest,
-    HttpResponse, RecordTransport, SeamResult, StagingStore,
+    RecordTransport, SeamResult, StagingStore,
 };
 use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::testkit::conformance::staging_store::Backing;
@@ -857,9 +857,6 @@ async fn reqwest_http_capped_fetch_admits_a_chunked_body_at_the_cap() {
 /// across the chunks.
 #[tokio::test]
 async fn reqwest_http_hands_the_response_body_over_in_a_wiping_buffer() {
-    fn wiping(response: &HttpResponse) -> &Zeroizing<Vec<u8>> {
-        &response.body
-    }
     const LEN: usize = 300 * 1024;
     let server = MockServer::start();
     let http = ReqwestHttp::new().expect("client builds");
@@ -874,7 +871,8 @@ async fn reqwest_http_hands_the_response_body_over_in_a_wiping_buffer() {
         .expect("the cap is inclusive");
 
     for response in [&buffered, &capped] {
-        assert_eq!(**wiping(response), vec![b'x'; LEN]);
+        let body: &Zeroizing<Vec<u8>> = &response.body;
+        assert_eq!(**body, vec![b'x'; LEN]);
     }
 }
 
