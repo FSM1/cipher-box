@@ -291,12 +291,6 @@ fn bound_elapsed(first_stop: Option<UnixMillis>, now: UnixMillis) -> bool {
     now.reached(first_stop.map(|first| first.saturating_add(DROP_BOUND)))
 }
 
-/// Whether `before` and `after` differ in their first step, so the entry
-/// advanced and the bound of its current step starts again.
-fn first_step_changed(before: &[OwedStep], after: &[OwedStep]) -> bool {
-    before.first().map(OwedStep::tag) != after.first().map(OwedStep::tag)
-}
-
 /// Whether the entry owes its write cut, whose name wave the held passes
 /// count.
 fn owes_write_cut(steps: &[OwedStep]) -> bool {
@@ -502,12 +496,14 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
             let Some(entry) = record.get_mut(&scope) else {
                 return Ok(false);
             };
-            let before = entry.steps.clone();
+            let first_before = entry.steps.first().map(OwedStep::tag);
+            let owed_write_cut = owes_write_cut(&entry.steps);
             edit(&mut entry.steps);
-            if first_step_changed(&before, &entry.steps) {
+            // A changed first step advanced the entry, so its bound starts again.
+            if entry.steps.first().map(OwedStep::tag) != first_before {
                 entry.first_stop = None;
             }
-            write_cut_left = owes_write_cut(&before) && !owes_write_cut(&entry.steps);
+            write_cut_left = owed_write_cut && !owes_write_cut(&entry.steps);
             Ok(true)
         })
         .await?;

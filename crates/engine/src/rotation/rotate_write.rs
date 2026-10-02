@@ -848,6 +848,7 @@ where
     //    then level order; the wave processes descendants child-first (reversed) and
     //    the root last.
     let walk = collect_subtree(resolver, scope_id, resumed_root.as_ref(), plan.bound).await?;
+    let dropped_ids: BTreeSet<[u8; 16]> = walk.dropped.iter().map(|d| d.node_id).collect();
     let (root, descendants) = walk
         .order
         .split_first()
@@ -862,7 +863,7 @@ where
             publisher,
             &write_scope_seed,
             node,
-            &walk.dropped_ids,
+            &dropped_ids,
             &new_name,
             new_write_epoch,
             false,
@@ -893,7 +894,7 @@ where
         publisher,
         &write_scope_seed,
         root,
-        &walk.dropped_ids,
+        &dropped_ids,
         &new_root_name,
         new_write_epoch,
         true,
@@ -1011,11 +1012,11 @@ async fn republish_node<P: WriteWavePublisher>(
         return Ok(());
     }
 
-    let (dropped, kept): (Vec<[u8; 16]>, Vec<[u8; 16]>) = node
+    let (dropped_children, kept): (BTreeSet<[u8; 16]>, BTreeSet<[u8; 16]>) = node
         .child_node_ids
         .iter()
-        .partition(|child| dropped_ids.contains(*child));
-    let dropped_children = dropped.into_iter().collect();
+        .copied()
+        .partition(|child| dropped_ids.contains(child));
     let child_names = kept
         .iter()
         .map(|child| (*child, derive_write_name(write_scope_seed, child)))
@@ -1048,11 +1049,10 @@ fn repoint_stage(channel: RepointChannel) -> &'static str {
 
 /// The subtree one walk enumerated: its nodes in BFS order, root first, and
 /// what it left out.
+#[derive(Default)]
 struct Walk {
     order: Vec<WriteScopeNode>,
     dropped: Vec<DroppedNode>,
-    /// The nodes the walk dropped, whose refs each parent removes.
-    dropped_ids: BTreeSet<[u8; 16]>,
     /// The names of the dropped nodes that the wave retires.
     dropped_names: Vec<IpnsName>,
 }
@@ -1079,12 +1079,7 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
     let mut met: BTreeSet<[u8; 16]> = BTreeSet::new();
     let mut rewalks = 0usize;
     'walk: loop {
-        let mut walk = Walk {
-            order: Vec::new(),
-            dropped: Vec::new(),
-            dropped_ids: BTreeSet::new(),
-            dropped_names: Vec::new(),
-        };
+        let mut walk = Walk::default();
         let mut held: Option<([u8; 16], ResolveFailure)> = None;
         let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
         let mut queue: VecDeque<[u8; 16]> = VecDeque::new();
@@ -1109,7 +1104,6 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
                     if id != root_id && (!cause.needs_bound() || bound.past(&id)) =>
                 {
                     walk.dropped.push(DroppedNode { node_id: id, cause });
-                    walk.dropped_ids.insert(id);
                     walk.dropped_names.extend(retire.map(|name| *name));
                     continue;
                 }

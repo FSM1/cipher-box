@@ -9918,8 +9918,6 @@ fn owed_work_whose_recipient_is_unknown_is_abandoned_once() {
     );
 }
 
-/// Seal `record` as the owner's owed rotation record on the owner device, for
-/// the next session to read.
 /// The owed record the owner device holds now.
 fn staged_owed_record(fx: &GrantScenario) -> OwedRecord {
     let enc = kdf::enc_subkey(&SECRET);
@@ -9952,6 +9950,8 @@ fn a_share_re_run_over_its_standing_mint_keeps_the_first_stop() {
     assert_eq!(staged_owed_record(&fx)[&fx.folder].first_stop, first);
 }
 
+/// Seal `record` as the owner's owed rotation record on the owner device, for
+/// the next session to read.
 fn stage_owed_record(fx: &GrantScenario, record: &OwedRecord) {
     let enc = kdf::enc_subkey(&SECRET);
     let entropy = RefCell::new(SeededEntropy::new(11));
@@ -12971,19 +12971,21 @@ fn a_node_a_stopped_wave_did_not_reach_is_not_renewed_at_its_old_name() {
 // ADR 0065: the name wave drops a node it cannot move
 // ---------------------------------------------------------------------------
 
-/// The nodes the stream reports a write cut dropped: scope root, node, cause.
+/// A drop the stream reports: scope root, node, cause.
+fn as_drop(event: &Event) -> Option<(NodeId, NodeId, String)> {
+    match event {
+        Event::NodeDropped {
+            scope_root,
+            node_id,
+            cause,
+        } => Some((*scope_root, *node_id, cause.check().to_owned())),
+        _ => None,
+    }
+}
+
+/// The nodes the stream reports a write cut dropped.
 fn dropped_nodes(events: &mut EventStream) -> Vec<(NodeId, NodeId, String)> {
-    events_so_far(events)
-        .into_iter()
-        .filter_map(|event| match event {
-            Event::NodeDropped {
-                scope_root,
-                node_id,
-                cause,
-            } => Some((scope_root, node_id, cause.check().to_owned())),
-            _ => None,
-        })
-        .collect()
+    events_so_far(events).iter().filter_map(as_drop).collect()
 }
 
 /// The revokee signs a record for `node` at the name `signer_seed` derives,
@@ -13045,18 +13047,6 @@ fn folder_body(children: Vec<ChildRef>) -> ReadBody {
     }
 }
 
-/// A folder ref to `id` at `name`.
-fn folder_ref(id: NodeId, display: &str, name: &IpnsName) -> ChildRef {
-    ChildRef {
-        id: id.0,
-        name: display.to_owned(),
-        ipns_name: name.as_str().as_bytes().to_vec(),
-        kind: CoreNodeKind::Folder,
-        link_counter: 1,
-        unknown: PreservedFields::new(),
-    }
-}
-
 /// The read key of `node` in the granted scope at read epoch 1, which the
 /// write grantee holds before the revoke.
 fn granted_read_key(fx: &GrantScenario, node: NodeId) -> [u8; 32] {
@@ -13075,16 +13065,9 @@ fn assert_revoke_finished(fx: &mut GrantScenario, revokee_seed: &[u8; 32], child
         after.current_root,
         "the revokee's seed no longer derives the root"
     );
-    let child_name = published_child_name(
-        &fx.world,
-        &fx.blocks,
-        &after.current_root,
-        &read_key_under(&granted_override_seed(fx, 2), fx.folder),
-        "child",
-    );
     assert_ne!(
         derive_write_name(revokee_seed, &child.0),
-        child_name,
+        moved_child_name(fx, "child"),
         "nor the child the moved root names"
     );
 }
@@ -13104,14 +13087,14 @@ fn moved_children(fx: &GrantScenario, parent_name: &IpnsName, parent: NodeId) ->
     }
 }
 
-/// The name the moved root gives `child`.
-fn moved_child_name(fx: &GrantScenario) -> IpnsName {
+/// The name the moved root gives its child named `display`.
+fn moved_child_name(fx: &GrantScenario, display: &str) -> IpnsName {
     published_child_name(
         &fx.world,
         &fx.blocks,
         &fx.granted_scope_repoint().current_root,
         &read_key_under(&granted_override_seed(fx, 2), fx.folder),
-        "child",
+        display,
     )
 }
 
@@ -13143,7 +13126,7 @@ fn a_write_revoke_drops_a_planted_node_that_does_not_unseal() {
     );
     assert_revoke_finished(&mut fx, &revokee_seed, child);
     assert!(
-        moved_children(&fx, &moved_child_name(&fx), child).is_empty(),
+        moved_children(&fx, &moved_child_name(&fx, "child"), child).is_empty(),
         "the moved child names no ref to the dropped node"
     );
     assert!(
@@ -13220,7 +13203,7 @@ fn a_write_revoke_drops_a_planted_second_ref_to_a_real_node() {
         &fx,
         &revokee_seed,
         sibling,
-        &folder_body(vec![folder_ref(grandchild, "grand", &elsewhere)]),
+        &folder_body(vec![named_child(grandchild, "grand", &elsewhere)]),
         &granted_read_key(&fx, sibling),
         1,
         true,
@@ -13233,19 +13216,11 @@ fn a_write_revoke_drops_a_planted_second_ref_to_a_real_node() {
 
     assert_eq!(dropped_nodes(&mut fx._events), Vec::new());
     assert_revoke_finished(&mut fx, &revokee_seed, child);
-    let after = fx.granted_scope_repoint();
-    let sibling_name = published_child_name(
-        &fx.world,
-        &fx.blocks,
-        &after.current_root,
-        &read_key_under(&granted_override_seed(&fx, 2), fx.folder),
-        "a",
-    );
     assert!(
-        moved_children(&fx, &sibling_name, sibling).is_empty(),
+        moved_children(&fx, &moved_child_name(&fx, "a"), sibling).is_empty(),
         "the moved sibling drops the second ref"
     );
-    let grand = moved_children(&fx, &moved_child_name(&fx), child);
+    let grand = moved_children(&fx, &moved_child_name(&fx, "child"), child);
     assert_eq!(grand.len(), 1, "the moved child keeps its ref");
     assert_ne!(
         grand[0].ipns_name,
@@ -13271,7 +13246,7 @@ fn plant_a_ref_to_nothing(
         fx,
         revokee_seed,
         grandchild,
-        &folder_body(vec![folder_ref(
+        &folder_body(vec![named_child(
             ghost,
             "ghost",
             &derive_write_name(&[0x55; 32], &ghost.0),
@@ -13350,17 +13325,10 @@ fn run_passes(
         }
         tick(world, engine, tasks);
         for event in events_so_far(events) {
-            match event {
-                Event::RotationWorkOwed { .. } => run.stops += 1,
-                Event::NodeDropped {
-                    scope_root,
-                    node_id,
-                    cause,
-                } => run
-                    .dropped
-                    .push((scope_root, node_id, cause.check().to_owned())),
-                _ => {}
+            if matches!(event, Event::RotationWorkOwed { .. }) {
+                run.stops += 1;
             }
+            run.dropped.extend(as_drop(&event));
         }
     }
     panic!("the passes never settled");

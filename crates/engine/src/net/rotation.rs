@@ -4024,11 +4024,7 @@ impl WaveSubtree {
                     .cloned();
                 match seen {
                     Some(seen) if seen != name => {
-                        let derived = inner
-                            .root_write_seed
-                            .as_ref()
-                            .map(|seed| derive_write_name(seed, &child.id));
-                        if derived.as_ref() == Some(&name) && derived.as_ref() != Some(&seen) {
+                        if self.derives(&child.id, &name) {
                             drop(inner);
                             self.inner.borrow_mut().kept.insert(child.id, name);
                             return Err(BodyStop::Rewalk);
@@ -5739,7 +5735,6 @@ mod tests {
     use super::*;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
 
-    use crate::api::RetireEntry;
     use crate::content::limits::{MAX_RESOLVED_RECORD_BYTES, resealable_root_rest_bytes};
     use crate::content::{ContentKey, ContentProfile, GatewaySource, assemble, frame_and_seal};
     use crate::grants::create::MINT_EPOCH;
@@ -12828,12 +12823,10 @@ mod tests {
             .iter()
             .filter(|request| request.url.ends_with("/registry/retire"))
             .flat_map(|request| {
-                serde_json::from_slice::<Vec<RetireEntry>>(
+                crate::testkit::account::retire_targets(
                     request.body.as_deref().expect("a retire call has a body"),
                 )
-                .expect("a retire body is a JSON array of entries")
             })
-            .flat_map(|entry| entry.targets)
             .collect()
     }
 
