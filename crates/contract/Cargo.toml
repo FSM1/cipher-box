@@ -36,5 +36,5 @@ serde_json.workspace = true
 cipherbox-engine = { workspace = true, features = ["test-kit"] }
 # A headless wallet for the identity exchange: secp256k1 recoverable ECDSA over
 # an EIP-191 Keccak-256 digest.
-k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
-sha3 = "0.10"
+k256 = { workspace = true, features = ["ecdsa"] }
+sha3.workspace = true

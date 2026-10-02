@@ -145,53 +145,49 @@ describe('device-approval HTTP surface (real Postgres)', () => {
     return (await identityTokens.sign({ subject, method: 'google' })).token;
   }
 
-  /** Writes the bind a login with an identity token writes (ADR 0058 D2). */
-  async function bind(userId: string, subject: string): Promise<void> {
-    await db.dataSource.query('UPDATE users SET identity_subject_id = $1 WHERE id = $2', [
-      subject,
-      userId,
-    ]);
-  }
-
-  /** A seeded account bound to a fresh subject, with a token for that subject. */
+  /** A seeded account bound to a fresh subject, as a login with its token binds it (ADR 0058 D2). */
   async function boundAccount() {
-    const account = await seedAccount(db, jwt);
     const identitySubject = randomUUID();
     const subjectToken = await identityToken(identitySubject);
-    await bind(account.userId, identitySubject);
+    const account = await seedAccount(db, jwt, { identitySubjectId: identitySubject });
     return { ...account, identitySubject, subjectToken };
+  }
+
+  /** A `POST /devices` body for `device` on `account`. */
+  function registration(
+    account: { userId: string },
+    device: TestDeviceKey,
+    token: string,
+    label?: string
+  ) {
+    return {
+      publicKey: device.publicKey,
+      signature: device.sign(deviceRegistrationPayload(account.userId, device.publicKey)),
+      identityToken: token,
+      label,
+    };
+  }
+
+  function post(account: { token: string }, body: object) {
+    return request(http())
+      .post('/devices')
+      .set('Authorization', `Bearer ${account.token}`)
+      .send(body);
   }
 
   /** An account with one registered approver device, reachable by its identity. */
   async function enroll(label = 'approver'): Promise<Enrolled> {
     const { subjectToken, ...account } = await boundAccount();
     const device = createTestDeviceKey();
-    await request(http())
-      .post('/devices')
-      .set('Authorization', `Bearer ${account.token}`)
-      .send({
-        publicKey: device.publicKey,
-        signature: device.sign(deviceRegistrationPayload(account.userId, device.publicKey)),
-        identityToken: subjectToken,
-        label,
-      })
-      .expect(201);
+    await post(account, registration(account, device, subjectToken, label)).expect(201);
     return { ...account, device };
   }
 
   /** A second approver on an existing account, with a new token for its bound subject. */
   async function registerDevice(account: Enrolled, label: string): Promise<TestDeviceKey> {
     const device = createTestDeviceKey();
-    await request(http())
-      .post('/devices')
-      .set('Authorization', `Bearer ${account.token}`)
-      .send({
-        publicKey: device.publicKey,
-        signature: device.sign(deviceRegistrationPayload(account.userId, device.publicKey)),
-        identityToken: await identityToken(account.identitySubject),
-        label,
-      })
-      .expect(201);
+    const token = await identityToken(account.identitySubject);
+    await post(account, registration(account, device, token, label)).expect(201);
     return device;
   }
 
@@ -524,21 +520,6 @@ describe('device-approval HTTP surface (real Postgres)', () => {
   });
 
   describe('the identity token a registration spends', () => {
-    function registration(account: { userId: string }, device: TestDeviceKey, token: string) {
-      return {
-        publicKey: device.publicKey,
-        signature: device.sign(deviceRegistrationPayload(account.userId, device.publicKey)),
-        identityToken: token,
-      };
-    }
-
-    function post(account: { token: string }, body: object) {
-      return request(http())
-        .post('/devices')
-        .set('Authorization', `Bearer ${account.token}`)
-        .send(body);
-    }
-
     it('401s a second registration that replays a spent token, and writes nothing', async () => {
       const account = await boundAccount();
       const token = account.subjectToken;
@@ -615,15 +596,7 @@ describe('device-approval HTTP surface (real Postgres)', () => {
 
   describe('the registration rule (ADR 0058 D3)', () => {
     function register(account: { userId: string; token: string }, token: string) {
-      const device = createTestDeviceKey();
-      return request(http())
-        .post('/devices')
-        .set('Authorization', `Bearer ${account.token}`)
-        .send({
-          publicKey: device.publicKey,
-          signature: device.sign(deviceRegistrationPayload(account.userId, device.publicKey)),
-          identityToken: token,
-        });
+      return post(account, registration(account, createTestDeviceKey(), token));
     }
 
     async function spentTokenIds(): Promise<string[]> {
@@ -806,15 +779,10 @@ describe('device-approval HTTP surface (real Postgres)', () => {
           })
         )
         .expect(403);
-      await request(http())
-        .post('/devices')
-        .set('Authorization', `Bearer ${scoped}`)
-        .send({
-          publicKey: newDevice.publicKey,
-          signature: newDevice.sign(deviceRegistrationPayload(account.userId, newDevice.publicKey)),
-          identityToken: await identityToken(account.identitySubject),
-        })
-        .expect(403);
+      await post(
+        { token: scoped },
+        registration(account, newDevice, await identityToken(account.identitySubject))
+      ).expect(403);
       await request(http()).get('/devices').set('Authorization', `Bearer ${scoped}`).expect(403);
       await request(http())
         .delete(`/devices/${randomUUID()}`)

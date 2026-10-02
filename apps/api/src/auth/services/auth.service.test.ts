@@ -1,12 +1,12 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
-import { secp256k1 } from '@noble/curves/secp256k1';
 import { createHash, randomUUID } from 'node:crypto';
 import { DataSource, EntityManager } from 'typeorm';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { FakeRepository } from '../../testing/fake-repo';
+import { newIdentity, signChallenge } from '../../testing/identities';
 import { AccountDevice } from '../../device-approval/entities/account-device.entity';
 import { AuthMethod, type AuthMethodKind } from '../entities/auth-method.entity';
 import { User } from '../entities/user.entity';
@@ -66,12 +66,6 @@ function authServiceOver(
   );
 }
 
-/** The account key's signature over a challenge, in the form the login routes take. */
-function signChallenge(challenge: string, privateKey: Uint8Array): string {
-  const hash = createHash('sha256').update(challenge, 'utf8').digest();
-  return secp256k1.sign(hash, privateKey).toCompactHex();
-}
-
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 /** A second account's identity key, for the cross-account refusals. */
 const OTHER_KEY = '02'.padEnd(66, 'c');
@@ -90,8 +84,7 @@ describe('AuthService auth-method surface', () => {
     challenges = new ChallengeService(new FakeClock(), new FakeEntropy(), fakeConfig({}).service);
     service = authServiceOver(challenges, users, authMethods, {} as IdentityTokenService);
 
-    privateKey = secp256k1.utils.randomPrivateKey();
-    publicKey = Buffer.from(secp256k1.getPublicKey(privateKey, true)).toString('hex');
+    ({ privateKey, publicKey } = newIdentity());
   });
 
   /** The account key's answer to a fresh challenge of one operation's kind. */
@@ -288,7 +281,6 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
   let challenges: ChallengeService;
   let service: AuthService;
   let subjects: Map<string, string>;
-  let spend: ReturnType<typeof vi.fn>;
   let privateKey: Uint8Array;
   let publicKey: string;
 
@@ -297,7 +289,6 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
     devices = new FakeRepository<AccountDevice>();
     challenges = new ChallengeService(new FakeClock(), new FakeEntropy(), fakeConfig({}).service);
     subjects = new Map();
-    spend = vi.fn();
     const identityTokens = {
       verify: async (token: string): Promise<VerifiedIdentityToken> => {
         const subject = subjects.get(token);
@@ -306,7 +297,6 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
         }
         return { subject, method: 'google', tokenId: randomUUID(), expiresAt: new Date(0) };
       },
-      spend,
     } as unknown as IdentityTokenService;
     service = authServiceOver(
       challenges,
@@ -316,8 +306,7 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
       devices
     );
 
-    privateKey = secp256k1.utils.randomPrivateKey();
-    publicKey = Buffer.from(secp256k1.getPublicKey(privateKey, true)).toString('hex');
+    ({ privateKey, publicKey } = newIdentity());
   });
 
   /** Mints a token that the fake verifier resolves to `subject`. */
@@ -345,16 +334,6 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
     return users.rows.find((row) => row.publicKey === key)?.identitySubjectId ?? null;
   }
 
-  it('binds the subject to the account that the first login creates', async () => {
-    const subject = randomUUID();
-
-    const { isNewUser } = await login(tokenFor(subject));
-
-    expect(isNewUser).toBe(true);
-    expect(users.rows).toHaveLength(1);
-    expect(bindOf(publicKey)).toBe(subject);
-  });
-
   it('binds the subject to an existing unbound account', async () => {
     await seedAccount(publicKey, null);
     const subject = randomUUID();
@@ -364,43 +343,6 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
     expect(isNewUser).toBe(false);
     expect(users.rows).toHaveLength(1);
     expect(bindOf(publicKey)).toBe(subject);
-  });
-
-  it('refuses a token that does not verify with 401, and creates no account', async () => {
-    await expect(login('forged')).rejects.toThrow(
-      new UnauthorizedException('Invalid identity token')
-    );
-    expect(users.rows).toHaveLength(0);
-  });
-
-  it('binds nothing when the login has no token', async () => {
-    await login();
-
-    expect(users.rows).toHaveLength(1);
-    expect(bindOf(publicKey)).toBeNull();
-  });
-
-  it('keeps the bind of a bound account that logs in with the token of another subject', async () => {
-    const bound = randomUUID();
-    const other = randomUUID();
-    await seedAccount(publicKey, bound);
-
-    await login(tokenFor(other));
-
-    expect(bindOf(publicKey)).toBe(bound);
-    expect(await users.count({ where: { identitySubjectId: other } })).toBe(0);
-  });
-
-  it('lets the login continue when another account has the subject, and changes neither row', async () => {
-    const subject = randomUUID();
-    await seedAccount(OTHER_KEY, subject);
-    await seedAccount(publicKey, null);
-
-    const { isNewUser } = await login(tokenFor(subject));
-
-    expect(isNewUser).toBe(false);
-    expect(bindOf(OTHER_KEY)).toBe(subject);
-    expect(bindOf(publicKey)).toBeNull();
   });
 
   it('binds nothing when a device row of another account holds the subject', async () => {
@@ -413,11 +355,6 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
     expect(isNewUser).toBe(true);
     expect(bindOf(publicKey)).toBeNull();
     expect(bindOf(OTHER_KEY)).toBeNull();
-  });
-
-  it('does not spend the token', async () => {
-    await login(tokenFor(randomUUID()));
-    expect(spend).not.toHaveBeenCalled();
   });
 
   it('boundSubjectOf returns the bind of the account, or null', async () => {

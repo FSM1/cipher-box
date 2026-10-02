@@ -1,7 +1,6 @@
 import { ConfigService } from '@nestjs/config';
-import { secp256k1 } from '@noble/curves/secp256k1';
 import * as jose from 'jose';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Clock, SystemClock } from '../common/clock';
@@ -13,8 +12,14 @@ import { AccountDeviceService } from '../device-approval/services/account-device
 import { DeviceApprovalService } from '../device-approval/services/device-approval.service';
 import { MetricsService } from '../ops/metrics.service';
 import { createTestDeviceKey } from '../testing/device-keys';
-import { fakeConfig } from '../testing/fakes';
+import { FakeClock, fakeConfig } from '../testing/fakes';
 import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
+import { newIdentity, signChallenge, type TestIdentity } from '../testing/identities';
+import {
+  bootedIdentityTokenService,
+  encodedIdentitySigningKey,
+  identityTokenWithJti,
+} from '../testing/identity-tokens';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { AuthController } from './auth.controller';
@@ -33,12 +38,7 @@ import { GoogleOAuthService } from './services/google-oauth.service';
 import { IdentityExchangeService } from './services/identity-exchange.service';
 import { IdentityService } from './services/identity.service';
 import { IdentitySubjectService } from './services/identity-subject.service';
-import {
-  IDENTITY_TOKEN_AUDIENCE,
-  IDENTITY_TOKEN_ISSUER,
-  IDENTITY_TOKEN_KID,
-  IdentityTokenService,
-} from './services/identity-token.service';
+import { IdentityTokenService } from './services/identity-token.service';
 import { MailProvider } from './services/mail.provider';
 import { SiweService } from './services/siwe.service';
 import { TestAuthService } from './services/test-auth.service';
@@ -52,35 +52,24 @@ import { TokenService } from './services/token.service';
 const GOOGLE_CLIENT_ID = 'cipherbox.apps.googleusercontent.com';
 const GOOGLE_ISSUER = 'https://accounts.google.com';
 
-function newIdentity() {
-  const privateKey = secp256k1.utils.randomPrivateKey();
-  return {
-    privateKey,
-    publicKey: Buffer.from(secp256k1.getPublicKey(privateKey, true)).toString('hex'),
-  };
-}
-
-type Identity = ReturnType<typeof newIdentity>;
-
-function signChallenge(challenge: string, privateKey: Uint8Array): string {
-  const hash = createHash('sha256').update(challenge, 'utf8').digest();
-  return secp256k1.sign(hash, privateKey).toCompactHex();
-}
-
 describe('identity subject bind at login (real Postgres)', () => {
   let db: IntegrationDatabase;
   let ctx: HttpIntegrationApp;
   let googleSigningKey: jose.CryptoKey;
-  let forgerySigningKey: jose.CryptoKey;
+  /** The API's own identity-token key, so a test can mint what the API mints. */
+  const identitySigningKey = encodedIdentitySigningKey();
 
   beforeAll(async () => {
     db = await createIntegrationDatabase({ poolMax: 10 });
 
     const google = await jose.generateKeyPair('RS256', { modulusLength: 2048 });
     googleSigningKey = google.privateKey;
-    forgerySigningKey = (await jose.generateKeyPair('RS256', { modulusLength: 2048 })).privateKey;
 
-    const config = fakeConfig({ NODE_ENV: 'test', GOOGLE_CLIENT_ID });
+    const config = fakeConfig({
+      NODE_ENV: 'test',
+      GOOGLE_CLIENT_ID,
+      IDENTITY_JWT_PRIVATE_KEY: identitySigningKey,
+    });
 
     ctx = await createHttpIntegrationApp({
       db,
@@ -160,7 +149,7 @@ describe('identity subject bind at login (real Postgres)', () => {
   }
 
   /** A challenge-signature login. Each call gets a fresh challenge. */
-  async function login(identity: Identity, status: number, identityToken?: string) {
+  async function login(identity: TestIdentity, status: number, identityToken?: string) {
     const challengeRes = await request(http())
       .post('/auth/challenge')
       .send({ publicKey: identity.publicKey })
@@ -177,14 +166,14 @@ describe('identity subject bind at login (real Postgres)', () => {
       .expect(status);
   }
 
-  async function boundSubject(identity: Identity): Promise<string | null | undefined> {
+  async function boundSubject(identity: TestIdentity): Promise<string | null | undefined> {
     const user = await db.dataSource
       .getRepository(User)
       .findOneBy({ publicKey: identity.publicKey });
     return user ? user.identitySubjectId : undefined;
   }
 
-  async function accountId(identity: Identity): Promise<string> {
+  async function accountId(identity: TestIdentity): Promise<string> {
     return (
       await db.dataSource.getRepository(User).findOneByOrFail({ publicKey: identity.publicKey })
     ).id;
@@ -203,17 +192,20 @@ describe('identity subject bind at login (real Postgres)', () => {
     return row.count;
   }
 
+  const apiNow = () => ctx.app.get(Clock).now();
+
   /** The claims this API stamps, signed with a key this API does not hold. */
-  function forgedToken(subject: string): Promise<string> {
-    return new jose.SignJWT({ method: 'google' })
-      .setProtectedHeader({ alg: 'RS256', kid: IDENTITY_TOKEN_KID })
-      .setSubject(subject)
-      .setJti(randomUUID())
-      .setIssuer(IDENTITY_TOKEN_ISSUER)
-      .setAudience(IDENTITY_TOKEN_AUDIENCE)
-      .setIssuedAt()
-      .setExpirationTime('5m')
-      .sign(forgerySigningKey);
+  function forgedToken(): Promise<string> {
+    return identityTokenWithJti(encodedIdentitySigningKey(), new FakeClock(apiNow()), randomUUID());
+  }
+
+  /** A token for `subject` that the API's own key signs, issued at `issuedAt`. */
+  async function tokenIssuedAt(subject: string, issuedAt: Date): Promise<string> {
+    const minter = await bootedIdentityTokenService(
+      { NODE_ENV: 'test', IDENTITY_JWT_PRIVATE_KEY: identitySigningKey },
+      new FakeClock(issuedAt)
+    );
+    return (await minter.sign({ subject, method: 'google' })).token;
   }
 
   it('binds a new account to the subject at the first login that presents a token', async () => {
@@ -280,12 +272,27 @@ describe('identity subject bind at login (real Postgres)', () => {
 
   describe('a bad identity token', () => {
     it('refuses a token this API did not mint, and creates no account', async () => {
-      const { subject } = await exchange('google-a');
-
-      const res = await login(newIdentity(), 401, await forgedToken(subject));
+      const res = await login(newIdentity(), 401, await forgedToken());
 
       expect(res.body.message).toBe('Invalid identity token');
       expect(await userCount()).toBe(0);
+    });
+
+    it('refuses a token that expired 1 s before the API clock, and creates no account', async () => {
+      const { subject } = await exchange('google-a');
+      // The lifetime is 300 s, so a token issued 301 s ago expired 1 s ago.
+      const expired = await tokenIssuedAt(subject, new Date(apiNow().getTime() - 301_000));
+
+      const res = await login(newIdentity(), 401, expired);
+
+      expect(res.body.message).toBe('Invalid identity token');
+      expect(await userCount()).toBe(0);
+      expect(await accountsBoundTo(subject)).toBe(0);
+
+      // The same key with a live token binds, so the refusal above is the expiry.
+      const live = newIdentity();
+      await login(live, 200, await tokenIssuedAt(subject, apiNow()));
+      expect(await boundSubject(live)).toBe(subject);
     });
 
     it('refuses a string that is not a token, and creates no account', async () => {
@@ -294,6 +301,19 @@ describe('identity subject bind at login (real Postgres)', () => {
       expect(res.body.message).toBe('Invalid identity token');
       expect(await userCount()).toBe(0);
     });
+  });
+
+  it('binds exactly one of two concurrent first logins that present one subject', async () => {
+    const { token, subject } = await exchange('google-a');
+    const first = newIdentity();
+    const second = newIdentity();
+
+    await Promise.all([login(first, 200, token), login(second, 200, token)]);
+
+    const binds = [await boundSubject(first), await boundSubject(second)];
+    expect(binds.filter((bind) => bind === subject)).toHaveLength(1);
+    expect(binds.filter((bind) => bind === null)).toHaveLength(1);
+    expect(await userCount()).toBe(2);
   });
 
   it('binds nothing at a login without a token', async () => {

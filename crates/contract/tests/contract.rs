@@ -32,6 +32,7 @@ use cipherbox_engine::api::{
     NameRegistration, REGISTRY_BATCH_REFUSED, RegisteredDevice,
 };
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
+use cipherbox_engine::devices::registration_payload;
 use cipherbox_engine::grants::{
     GrantRecipient, GrantResumeResolver, GranteeScopePlan, InteriorRecord, InteriorResealer,
     MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, ScopePointerVoucher,
@@ -1991,11 +1992,7 @@ fn personal_sign(wallet: &SigningKey, message: &str) -> String {
 /// identity exchange a headless stack can complete. Returns the token and its
 /// subject.
 async fn wallet_identity_token(base: &str, wallet: &SigningKey) -> (String, String) {
-    let nonce =
-        post_json_body(base, "/auth/siwe/challenge", None, serde_json::json!({})).await["nonce"]
-            .as_str()
-            .expect("a nonce")
-            .to_string();
+    let nonce = expect_auth("siwe nonce", new_client(base).siwe_challenge().await).nonce;
     let message = format!(
         "localhost:5173 wants you to sign in with your Ethereum account:\n\
          {address}\n\n\
@@ -2053,11 +2050,9 @@ async fn register_device(
     identity_token: &str,
 ) -> Result<RegisteredDevice, ApiError> {
     let public_key = hex::encode(device.verifying_key().to_bytes());
-    let payload = format!(
-        "cipherbox/device-registration/v1\n{}\n{public_key}",
-        client.account_id().expect("an account id")
-    );
-    let signature = hex::encode(device.sign(payload.as_bytes()).to_bytes());
+    let payload = registration_payload(&client.account_id().expect("an account id"), &public_key)
+        .expect("a well-formed registration");
+    let signature = hex::encode(device.sign(&payload).to_bytes());
     client
         .register_device(&public_key, &signature, identity_token, None)
         .await
