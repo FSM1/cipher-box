@@ -16,11 +16,16 @@ import {
 import { errorMessage } from '../lib/errorMessage';
 import { useEngineAccount } from '../engine/useEngineSession';
 import { authStore, useAuthState } from '../stores/auth.store';
+import { notificationStore } from '../stores/notification.store';
 import { useEngine, useLoginSecretSource, useRebuildEngine } from '../providers/EngineProvider';
 import type { RecoveryEnrollment } from './coreKit';
 import { useCoreKit } from './CoreKitProvider';
 import { useIdentity } from './IdentityProvider';
+import { registerThisDevice } from './registerThisDevice';
 import type { WebCollected } from './webCollector';
+
+const NOT_SAVED =
+  'this browser was not saved as a device. sign in again with "save this device" checked.';
 
 /** The origin's engine belongs to another account; `heldBy` names it. */
 export interface HeldElsewhere {
@@ -152,18 +157,36 @@ export function useAuth(): Auth {
     authStore.factorPolicy(session?.hasFactorPolicy() ?? false);
   }, [session]);
 
+  /**
+   * Registers this browser when the member asked to at sign-in, while the
+   * identity token of that sign-in is still fresh. The login has landed either
+   * way, so a refusal is a notice and never a failed login.
+   */
+  const saveDeviceIfAsked = useCallback(async (): Promise<void> => {
+    if (!authStore.getState().saveDevice) return;
+    authStore.saveDevice(false);
+    try {
+      if (!session || !client) throw new Error('the engine is not ready');
+      await registerThisDevice(session, client.facade);
+    } catch (failure) {
+      notificationStore.warn('save-device', `${NOT_SAVED} ${errorMessage(failure)}`);
+    }
+  }, [client, session]);
+
   /** The recovery prompt is a transition, not a failure the host renders. */
   const attempt = useCallback(
     async (login: Promise<void>): Promise<void> => {
       try {
         await login;
-        readFactors();
       } catch (failure) {
         if (!(failure instanceof RecoveryRequiredError)) throw failure;
         authStore.recoveryRequired();
+        return;
       }
+      readFactors();
+      await saveDeviceIfAsked();
     },
-    [readFactors]
+    [readFactors, saveDeviceIfAsked]
   );
 
   const loginWithGoogle = useCallback(
@@ -188,8 +211,9 @@ export function useAuth(): Auth {
       // and proof that this member holds the phrase.
       authStore.factorPolicy(true);
       authStore.recoveryPhrase(true);
+      await saveDeviceIfAsked();
     },
-    [flow]
+    [flow, saveDeviceIfAsked]
   );
 
   const completeDeviceApproval = useCallback(
@@ -198,8 +222,9 @@ export function useAuth(): Auth {
       // An approval answers the same factor policy a phrase would, and it hands
       // this device no phrase: the enrollment control stays on offer (D2).
       authStore.factorPolicy(true);
+      await saveDeviceIfAsked();
     },
-    [flow]
+    [flow, saveDeviceIfAsked]
   );
 
   const cancelRecovery = useCallback(async (): Promise<void> => {

@@ -5,14 +5,28 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import type { EngineFacade, RegisteredDeviceDescriptor } from '@cipherbox/client';
+import {
+  EngineRequestError,
+  type EngineFacade,
+  type RegisteredDeviceDescriptor,
+} from '@cipherbox/client';
 import { useCoreKit } from '../auth/CoreKitProvider';
+import {
+  AUTH_REFUSAL,
+  NO_IDENTITY,
+  NO_TOKEN,
+  registerThisDevice,
+} from '../auth/registerThisDevice';
+import { errorMessage } from '../lib/errorMessage';
 import { useCommandRunner } from './useCommandRunner';
 
-/** A registration signs an identity token, which only a fresh sign-in carries. */
-const NO_TOKEN = 'sign in again on this browser before you register it';
+const READING = 'reading the device key of this browser';
 
-const NO_IDENTITY = 'this browser holds no device identity key';
+const REFUSED =
+  'this sign-in can no longer register a device. sign in again with "save this device" checked';
+
+/** Whether a registration can run now, and if not, the cause a member can act on. */
+export type Registration = { state: 'open' } | { state: 'closed'; reason: string };
 
 export interface DevicesRead {
   devices: RegisteredDeviceDescriptor[];
@@ -20,11 +34,7 @@ export interface DevicesRead {
   thisDevice: string | null;
   busy: boolean;
   error: string | null;
-  /**
-   * Whether a registration can run now. It signs the identity token of this
-   * sign-in, which a session restored across a reload no longer carries.
-   */
-  canRegister: boolean;
+  registration: Registration;
   /** Registers this browser's key, so it can approve a sign-in elsewhere. */
   register(): void;
   revoke(deviceId: string): void;
@@ -34,6 +44,8 @@ export function useDevices(): DevicesRead {
   const { session } = useCoreKit();
   const [devices, setDevices] = useState<RegisteredDeviceDescriptor[]>([]);
   const [thisDevice, setThisDevice] = useState<string | null>(null);
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [refused, setRefused] = useState(false);
   const { busy, error, run } = useCommandRunner<'devices' | 'registerDevice' | 'revokeDevice'>();
 
   const read = useCallback(async (facade: EngineFacade) => setDevices(await facade.devices()), []);
@@ -48,17 +60,18 @@ export function useDevices(): DevicesRead {
     const identity = session?.deviceIdentity();
     // A session holding no key must not keep the last one's answer: the pane
     // would go on marking a row as this device and offer no way to register.
-    if (!identity) {
-      setThisDevice(null);
-      return;
-    }
+    setThisDevice(null);
+    setKeyError(null);
+    if (!identity) return;
     let live = true;
     void identity.publicKeyHex().then(
       (publicKey) => {
         if (live) setThisDevice(publicKey);
       },
       // A browser that can hold no key still lists the account's other devices.
-      () => undefined
+      (failure: unknown) => {
+        if (live) setKeyError(errorMessage(failure));
+      }
     );
     return () => {
       live = false;
@@ -68,18 +81,15 @@ export function useDevices(): DevicesRead {
   const register = useCallback(
     () =>
       void run('registerDevice', async (facade) => {
-        const identity = session?.deviceIdentity();
-        if (!identity) throw new Error(NO_IDENTITY);
-        const identityToken = session?.identityToken() ?? null;
-        if (identityToken === null) throw new Error(NO_TOKEN);
-        const publicKey = await identity.publicKeyHex();
-        const challenge = await facade.deviceRegistrationChallenge(publicKey);
-        const signature = await identity.sign(Uint8Array.from(challenge));
-        await facade.registerDevice(publicKey, signature, identityToken, null);
-        // The API refuses a spent token, so a second registration in this
-        // sign-in could only fail; the pane then asks for a fresh sign-in.
-        session?.dropIdentityToken();
-        setThisDevice(publicKey);
+        if (!session) throw new Error(NO_IDENTITY);
+        try {
+          setThisDevice(await registerThisDevice(session, facade));
+        } catch (refusal) {
+          if (refusal instanceof EngineRequestError && refusal.code === AUTH_REFUSAL) {
+            setRefused(true);
+          }
+          throw refusal;
+        }
         await read(facade);
       }),
     [run, read, session]
@@ -94,10 +104,19 @@ export function useDevices(): DevicesRead {
     [run, read]
   );
 
+  const registration = ((): Registration => {
+    if (keyError !== null) return { state: 'closed', reason: keyError };
+    if (!session?.deviceIdentity()) return { state: 'closed', reason: NO_IDENTITY };
+    if (refused) return { state: 'closed', reason: REFUSED };
+    if (session.identityToken() === null) return { state: 'closed', reason: NO_TOKEN };
+    if (thisDevice === null) return { state: 'closed', reason: READING };
+    return { state: 'open' };
+  })();
+
   return {
     devices,
     thisDevice,
-    canRegister: thisDevice !== null && (session?.identityToken() ?? null) !== null,
+    registration,
     busy: busy !== null,
     error,
     register,

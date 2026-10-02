@@ -1,10 +1,12 @@
-import { EngineHeldElsewhereError } from '@cipherbox/client';
+import { EngineHeldElsewhereError, EngineRequestError } from '@cipherbox/client';
 import { resetLoginFlowLatches } from '@cipherbox/login';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { authStore } from '../stores/auth.store';
+import { notificationStore } from '../stores/notification.store';
 import {
   authWrapper,
+  FAKE_DEVICE_PUBLIC_KEY,
   FAKE_IDENTITY_TOKEN,
   FAKE_NONCE,
   FAKE_PHRASE,
@@ -467,5 +469,87 @@ describe('useAuth against an engine another account holds', () => {
 
     expect(result.current.auth.heldElsewhere).toBeNull();
     expect(result.current.auth.isAuthenticated).toBe(true);
+  });
+});
+
+describe('useAuth with "save this device" checked', () => {
+  beforeEach(() => {
+    resetLoginFlowLatches();
+    authStore.signedOut();
+    notificationStore.clear();
+  });
+
+  const registeredKeys = (engine: ReturnType<typeof fakeEngineClient>) =>
+    engine.calls.registered.map((registration) => registration.publicKey);
+
+  it('registers this browser once a login lands, and clears the request', async () => {
+    const engine = fakeEngineClient();
+    const { result } = mount(engine, fakeCoreKitSession());
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    authStore.saveDevice(true);
+
+    await act(() => result.current.auth.loginWithEmailCode('user@example.test', '123456'));
+
+    expect(registeredKeys(engine)).toEqual([FAKE_DEVICE_PUBLIC_KEY]);
+    expect(engine.calls.registered[0].identityToken).toBe(FAKE_IDENTITY_TOKEN);
+    expect(authStore.getState().saveDevice).toBe(false);
+  });
+
+  it('registers nothing when the box is unchecked', async () => {
+    const engine = fakeEngineClient();
+    const { result } = mount(engine, fakeCoreKitSession());
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+
+    await act(() => result.current.auth.loginWithEmailCode('user@example.test', '123456'));
+
+    expect(engine.calls.registrationChallenges).toEqual([]);
+    expect(engine.calls.registered).toEqual([]);
+  });
+
+  it('lands the login and raises a notice when the API refuses the registration', async () => {
+    const engine = fakeEngineClient({
+      registerDevice: () =>
+        Promise.reject(new EngineRequestError('auth error: refused as unauthorized', 'auth')),
+    });
+    const { result } = mount(engine, fakeCoreKitSession());
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    authStore.saveDevice(true);
+
+    await act(() => result.current.auth.loginWithEmailCode('user@example.test', '123456'));
+
+    expect(result.current.auth.isAuthenticated).toBe(true);
+    expect(result.current.auth.error).toBeNull();
+    const [notice] = notificationStore.getState();
+    expect(notice.message).toContain('not saved as a device');
+    expect(notice.message).toContain('auth error: refused as unauthorized');
+    expect(authStore.getState().saveDevice).toBe(false);
+  });
+
+  it('waits out the factor policy, then registers once the phrase opens the account', async () => {
+    const engine = fakeEngineClient();
+    const { result } = mount(engine, fakeCoreKitSession({ needsRecovery: true }));
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    authStore.saveDevice(true);
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+    expect(engine.calls.registered).toEqual([]);
+    expect(authStore.getState().saveDevice).toBe(true);
+
+    await act(() => result.current.auth.loginWithRecoveryPhrase(FAKE_PHRASE));
+
+    expect(registeredKeys(engine)).toEqual([FAKE_DEVICE_PUBLIC_KEY]);
+    expect(authStore.getState().saveDevice).toBe(false);
+  });
+
+  it('registers once another device approves this sign-in', async () => {
+    const engine = fakeEngineClient();
+    const { result } = mount(engine, fakeCoreKitSession({ needsRecovery: true }));
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    authStore.saveDevice(true);
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+
+    await act(() => result.current.auth.completeDeviceApproval(new Uint8Array(32).fill(3)));
+
+    expect(registeredKeys(engine)).toEqual([FAKE_DEVICE_PUBLIC_KEY]);
+    expect(authStore.getState().saveDevice).toBe(false);
   });
 });

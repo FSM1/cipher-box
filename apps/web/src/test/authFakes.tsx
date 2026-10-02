@@ -461,11 +461,15 @@ export interface CoreKitCalls {
  * verifies one, and a test binds a dispatched signature to what was signed.
  */
 class FakeDeviceIdentity extends DeviceIdentity {
-  constructor(private readonly calls: CoreKitCalls) {
+  constructor(
+    private readonly calls: CoreKitCalls,
+    private readonly unusable: string | undefined
+  ) {
     super(new MemoryDeviceKeys(), new SerialLocks(), 'fake-device-identity');
   }
 
   override publicKeyHex(): Promise<string> {
+    if (this.unusable !== undefined) return Promise.reject(new Error(this.unusable));
     return Promise.resolve(FAKE_DEVICE_PUBLIC_KEY);
   }
 
@@ -497,6 +501,8 @@ export function fakeCoreKitSession(
     identityToken?: string | null;
     /** A browser holding no identity key, as one is left after `forgetDevice`. */
     noDeviceIdentity?: boolean;
+    /** What reading the key refuses with, on a browser whose WebCrypto holds no Ed25519. */
+    deviceKeyUnusable?: string;
   } = {}
 ) {
   const calls: CoreKitCalls = {
@@ -511,7 +517,7 @@ export function fakeCoreKitSession(
     adopted: [],
     adoptedBytes: [],
   };
-  const device = new FakeDeviceIdentity(calls);
+  const device = new FakeDeviceIdentity(calls, options.deviceKeyUnusable);
   let identityToken =
     options.identityToken === undefined ? FAKE_IDENTITY_TOKEN : options.identityToken;
   let loggedIn = options.loggedIn ?? false;

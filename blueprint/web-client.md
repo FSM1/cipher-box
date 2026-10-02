@@ -282,7 +282,7 @@ all living in `packages/client` and running inside the engine worker realm:
 
 | Route             | View                                                                                                                                                                                                        |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`               | Login (Core Kit methods + SIWE), recovery/approval UI                                                                                                                                                       |
+| `/`               | Login (Core Kit methods + SIWE), recovery/approval UI; a "save this device" checkbox registers the device identity key at sign-in (ADR 0009)                                                                |
 | `/files/:nodeId?` | Vault browser (absent id = current root)                                                                                                                                                                    |
 | `/shared`         | Received shares, each shown with its folder name and `from <owner name>`; a link-held share shows its link-holder state until conversion; browsing shared scopes is the same browser over the same snapshot |
 | `/bin`            | Recycle bin (kept per FSM1/cipher-box-next#5), restore/purge ops via facade                                                                                                                                 |

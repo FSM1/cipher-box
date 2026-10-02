@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { EmailLoginForm, LoginError } from '@cipherbox/auth-ui';
 import { useIdentity } from '../../auth/IdentityProvider';
 import { useAuth } from '../../auth/useAuth';
+import { authStore, useAuthState } from '../../stores/auth.store';
 import { DeviceApprovalWait } from './DeviceApprovalWait';
 import { GoogleLoginButton } from './GoogleLoginButton';
 import { RecoveryPhraseLogin } from './RecoveryPhraseLogin';
@@ -32,6 +33,7 @@ export function SignInPanel() {
     recoveryRequired,
   } = useAuth();
   const { googleClientId } = useIdentity();
+  const { saveDevice } = useAuthState();
   const [route, setRoute] = useState<RecoveryRoute>('choose');
 
   // A resolved prompt leaves no route behind, so the next one starts at the ask.
@@ -87,6 +89,21 @@ export function SignInPanel() {
         heldAtPolicy()
       ) : (
         <div className="login-methods" data-testid="sign-in-methods">
+          <div>
+            <label className="recovery-ack">
+              <input
+                type="checkbox"
+                data-testid="save-device-checkbox"
+                checked={saveDevice}
+                onChange={(event) => authStore.saveDevice(event.target.checked)}
+              />
+              save this device
+            </label>
+            <p className="sharing-note">
+              {'// a saved device can approve your sign-in on a new browser'}
+            </p>
+          </div>
+
           <GoogleLoginButton
             clientId={googleClientId}
             onCredential={(idToken) => dispatch(loginWithGoogle(idToken))}

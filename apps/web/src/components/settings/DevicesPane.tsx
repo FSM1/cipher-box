@@ -10,9 +10,6 @@ const KEY_PREFIX = 12;
 /** The registry bounds a label, but the row is server text and is cut anyway. */
 const LABEL_MAX = 64;
 
-/** Why the register control is closed: the token it signs comes from a login. */
-const NEEDS_FRESH_SIGN_IN = 'sign in again on this browser to register it';
-
 /** What a revoke does and does not do (ADR 0009 D5). */
 const REVOKE_MEANS =
   'this device can no longer approve a sign-in. it does not un-share anything the device already holds.';
@@ -41,7 +38,8 @@ function on(timestamp: string): string {
  * comparison value on the approval prompt is what an approval rests on.
  */
 export function DevicesPane() {
-  const { devices, thisDevice, canRegister, busy, error, register, revoke } = useDevices();
+  const { devices, thisDevice, registration, busy, error, register, revoke } = useDevices();
+  const closed = registration.state === 'closed' ? registration.reason : null;
   const [revoking, setRevoking] = useState<RegisteredDeviceDescriptor | null>(null);
   const registered = thisDevice !== null && devices.some((row) => row.publicKey === thisDevice);
 
@@ -88,19 +86,26 @@ export function DevicesPane() {
       </ul>
 
       {!registered && (
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="terminal-btn"
-            onClick={register}
-            disabled={busy || !canRegister}
-            title={canRegister ? undefined : NEEDS_FRESH_SIGN_IN}
-            aria-label={canRegister ? undefined : `register this device — ${NEEDS_FRESH_SIGN_IN}`}
-            data-testid="settings-device-register"
-          >
-            register this device
-          </button>
-        </div>
+        <>
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="terminal-btn"
+              onClick={register}
+              disabled={busy || closed !== null}
+              title={closed ?? undefined}
+              aria-label={closed === null ? undefined : `register this device — ${closed}`}
+              data-testid="settings-device-register"
+            >
+              register this device
+            </button>
+          </div>
+          {closed !== null && (
+            <p className="sharing-note" data-testid="settings-device-register-closed">
+              {closed}
+            </p>
+          )}
+        </>
       )}
 
       {error !== null && (
