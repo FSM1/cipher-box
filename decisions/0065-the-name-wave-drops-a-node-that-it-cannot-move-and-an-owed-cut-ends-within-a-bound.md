@@ -1,6 +1,6 @@
 # ADR 0065 — The name wave drops a node that it cannot move, and an owed cut ends within a bound
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-02
 - **Date:** 2026-10-02
 - **Relates to:** FSM1/cipher-box#2157 (the revokee can block its own revocation),
   [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md) D2,
