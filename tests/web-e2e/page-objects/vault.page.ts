@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import type { IntrospectedView, Plain } from '@web/engine/introspection';
+import type { ExchangedIdentity, IntrospectedView, Plain } from '@web/engine/introspection';
 import { fromHex, type EventDescriptor } from '@cipherbox/client';
 
 /**
@@ -40,13 +40,15 @@ export class VaultPage {
    * creates its account on first challenge login — so per-test isolation costs
    * no fixture setup. It is minted in the page because an `evaluate` argument is
    * recorded verbatim in the trace this suite uploads from a public repo.
+   * `identity` binds the account to its subject, as a sign-in that follows an
+   * exchange does.
    */
-  async coldStart(): Promise<string> {
+  async coldStart(identity?: ExchangedIdentity): Promise<string> {
     // Its own store namespace, so a second cold start in one context never
     // inherits the first account's epoch floor. Not secret — the account id is
     // a namespace, which is what lets a second tab join this vault by name.
     const accountId = crypto.randomUUID();
-    await this.joinAs(accountId);
+    await this.joinAs(accountId, identity);
     return accountId;
   }
 
@@ -56,8 +58,8 @@ export class VaultPage {
    * account name alone (`EngineClient.start`) — which is why each tab mints its
    * own and none is ever an `evaluate` argument in the uploaded trace.
    */
-  async joinAs(accountId: string): Promise<void> {
-    await this.signInHere(accountId);
+  async joinAs(accountId: string, identity?: ExchangedIdentity): Promise<void> {
+    await this.signInHere(accountId, identity);
     await this.page.waitForURL('**/files');
   }
 
@@ -66,12 +68,15 @@ export class VaultPage {
    * `RequireAuth` and holds the capability in its address, so a claimant signs
    * in there rather than being carried to the vault first.
    */
-  async signInHere(accountId: string): Promise<void> {
-    await this.page.evaluate(async (account) => {
-      const secret = crypto.getRandomValues(new Uint8Array(32));
-      const hex = Array.from(secret, (byte) => byte.toString(16).padStart(2, '0')).join('');
-      await window.__CIPHERBOX_ENGINE__!.signIn(hex, account);
-    }, accountId);
+  async signInHere(accountId: string, identity?: ExchangedIdentity): Promise<void> {
+    await this.page.evaluate(
+      async ({ account, exchanged }) => {
+        const secret = crypto.getRandomValues(new Uint8Array(32));
+        const hex = Array.from(secret, (byte) => byte.toString(16).padStart(2, '0')).join('');
+        await window.__CIPHERBOX_ENGINE__!.signIn(hex, account, exchanged);
+      },
+      { account: accountId, exchanged: identity }
+    );
   }
 
   /** The nocache manual refresh, the barrier `EngineIntrospection.refresh` documents. */

@@ -43,9 +43,19 @@ export interface IntrospectedView {
   settled: boolean;
 }
 
+/** The token of an identity exchange, and its expiry as an ISO string. */
+export interface ExchangedIdentity {
+  token: string;
+  expiresAt: string;
+}
+
 export interface EngineIntrospection {
-  /** Cold-starts the engine from a 32-byte hex login secret. */
-  signIn(loginSecretHex: string, accountId: string): Promise<void>;
+  /**
+   * Cold-starts the engine from a 32-byte hex login secret. With `identity`,
+   * the start follows an exchange and its login binds the account to the
+   * token's subject (ADR 0058 D2), which a device registration needs.
+   */
+  signIn(loginSecretHex: string, accountId: string, identity?: ExchangedIdentity): Promise<void>;
   /** The engine's view of the vault root. */
   snapshot(): Promise<IntrospectedView>;
   /** One node's plaintext as the engine reads it back, hex like every other tap. */
@@ -145,7 +155,7 @@ export function installIntrospection(client: EngineClient, secrets?: SecretRearm
   });
 
   window.__CIPHERBOX_ENGINE__ = {
-    signIn(loginSecretHex, accountId) {
+    signIn(loginSecretHex, accountId, identity) {
       const source = { accountId: () => accountId };
       // Armed as the real flow arms it (`createLoginFlow`), so a promotion in
       // this tab re-exports rather than failing for want of a source the suite
@@ -158,10 +168,16 @@ export function installIntrospection(client: EngineClient, secrets?: SecretRearm
           return Promise.resolve(loginSecretHex);
         },
       });
-      return handOffLoginSecret(client.facade, {
-        ...source,
-        _UNSAFE_exportTssKey: () => Promise.resolve(loginSecretHex),
-      });
+      return handOffLoginSecret(
+        client.facade,
+        { ...source, _UNSAFE_exportTssKey: () => Promise.resolve(loginSecretHex) },
+        identity === undefined
+          ? null
+          : {
+              credential: { token: identity.token, expiresAt: new Date(identity.expiresAt) },
+              now: () => new Date(),
+            }
+      );
     },
     async snapshot() {
       const view = await client.facade.snapshot(null);
