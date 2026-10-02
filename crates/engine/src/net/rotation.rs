@@ -9747,6 +9747,13 @@ mod tests {
             RotationPublishError::NotPublished,
             "a member node that stores under another address is a provider fault, so it retries",
         );
+        assert_eq!(
+            publish_record_verdict(RecordPublishError::Placement(
+                crate::content::ProviderError::AddressMismatch,
+            )),
+            WritePublishError::NotLanded,
+            "the name wave and provisioning retry it too",
+        );
     }
 
     /// A transport that snapshots the HTTP calls already made the first time a

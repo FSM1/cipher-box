@@ -232,6 +232,10 @@ fn halt_for_bin_publish(error: &BinIndexPublishError) -> Halt {
         // frees one, and no retry of this op shrinks the body. Its own reason,
         // so the host reads a full bin rather than a spent attempt budget.
         BinIndexPublishError::Full => Halt::Permanent(DeadLetterReason::BinIndexFull),
+        // The member's own provider fails the bin head as it fails a record head.
+        BinIndexPublishError::Publish(RecordPublishError::Placement(error)) => {
+            classify_placement(*error)
+        }
         // A lost CAS race is the ordinary outcome of two devices soft-deleting
         // at once, and a confirm the plane could not answer is availability
         // ([`PublishOutcome`](crate::net::publish::PublishOutcome)). Charging
@@ -8776,6 +8780,16 @@ mod tests {
         assert_eq!(
             halt_for_bin_publish(&BinIndexPublishError::Floor(SeamError::new("offline"))),
             Halt::Unclassified
+        );
+        assert_eq!(
+            halt_for_bin_publish(&BinIndexPublishError::Publish(
+                RecordPublishError::Placement(ProviderError::AddressMismatch)
+            )),
+            classify_publish(
+                RecordPublishError::Placement(ProviderError::AddressMismatch),
+                0
+            ),
+            "the member's node fails a bin head as it fails a record head",
         );
     }
 

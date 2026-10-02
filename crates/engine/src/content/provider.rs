@@ -430,9 +430,9 @@ impl ProviderError {
     /// The class label used in reject vectors. A policy verdict on the member's
     /// own config is a `capability` limit of this client — no retry converges,
     /// and the provider is not accused — where an answer the provider gave, or
-    /// failed to give, is an `availability` stall. Only
-    /// [`AddressMismatch`](Self::AddressMismatch) accuses the provider: it
-    /// stored the block under an address other than the one it was given.
+    /// failed to give, is an `availability` stall. That covers
+    /// [`AddressMismatch`](Self::AddressMismatch): a node that ignores the codec
+    /// or hash it was given is most often misconfigured, so the member fixes it.
     pub fn class(&self) -> &'static str {
         match self {
             ProviderError::InvalidEndpoint
@@ -445,8 +445,8 @@ impl ProviderError {
             | ProviderError::MalformedBlockAddress => "capability",
             ProviderError::Unreachable
             | ProviderError::NoVerdict
-            | ProviderError::Rejected { .. } => "availability",
-            ProviderError::AddressMismatch => "trust",
+            | ProviderError::Rejected { .. }
+            | ProviderError::AddressMismatch => "availability",
         }
     }
 }

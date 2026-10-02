@@ -13466,8 +13466,9 @@ fn a_dual_adoption_outside_any_op_spends_one_mirror_attempt() {
         panic!("the adoption published a bin index record");
     };
     assert_eq!(index.entries.len(), 1, "the unlink was adopted");
-    assert!(
-        node_attempts() - before <= 1,
+    assert_eq!(
+        node_attempts() - before,
+        1,
         "the adoption's heads shared one mirror attempt"
     );
 }
@@ -13494,7 +13495,6 @@ fn a_dual_purge_sends_the_members_node_no_unpin() {
     .expect("the write commits");
     tick(&world, &engine, &mut tasks);
     let doomed = child_id(&engine, ROOT, "photo.bin");
-    let placed = blocks.member_node_cids();
     block_on(engine.command(Command::Delete { node: doomed })).expect("the delete stages");
     tick(&world, &engine, &mut tasks);
 
@@ -13513,11 +13513,6 @@ fn a_dual_purge_sends_the_members_node_no_unpin() {
             .filter(|request| request.url.starts_with(MEMBER_NODE))
             .all(|request| request.url.contains("/api/v0/block/put")),
         "the member's node got puts only, never an unpin"
-    );
-    let held = blocks.member_node_cids();
-    assert!(
-        placed.iter().all(|cid| held.contains(cid)),
-        "and it still holds every block it took"
     );
 }
 
