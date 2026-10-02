@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "66745bfb9690",
+  "session_id": "2074cd51-eaea-489e-933c-9eef4b9d8c76",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-02T01:39:15.029579Z",
+  "branch": "fix/login-busy-labels-per-method",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5[1m]",
+  "turn_id": "5c1533c8b05c",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 4770,
+    "cache_creation_tokens": 5000208,
+    "cache_read_tokens": 616767521,
+    "output_tokens": 1219409,
+    "api_call_count": 2300
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_011uLVvXQK18JkcVnh2t3i9z",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "wizard"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5c1533c8b05c",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2273,
+        "end": 2274,
+        "entry_ids": [
+          "60f0df12-69e8-44e0-aca4-8fa4549ddb8d"
+        ],
+        "tool_use_id": "toolu_011uLVvXQK18JkcVnh2t3i9z"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_011uLVvXQK18JkcVnh2t3i9z"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: wizard",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 723
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

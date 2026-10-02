@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "66745bfb9690",
+  "strategy": "manual-commit",
+  "branch": "fix/login-busy-labels-per-method",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/66/745bfb9690/0/metadata.json",
+      "transcript": "/66/745bfb9690/0/full.jsonl",
+      "compact_transcript": "/66/745bfb9690/0/transcript.jsonl",
+      "content_hash": "/66/745bfb9690/0/content_hash.txt",
+      "prompt": "/66/745bfb9690/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4770,
+    "cache_creation_tokens": 5000208,
+    "cache_read_tokens": 616767521,
+    "output_tokens": 1219409,
+    "api_call_count": 2300
+  }
+}
