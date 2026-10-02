@@ -468,14 +468,16 @@ fn in_command_order(steps: &[OwedStep]) -> bool {
 }
 
 /// The record an encoding names, or `None` for a tag this build does not
-/// read, a first-stop flag that is neither 0 nor 1, a count past the bound, scopes out of order, steps out of command
-/// order, an unknown step, or bytes left over.
+/// read, a first-stop flag that is neither 0 nor 1, a count past the bound,
+/// scopes out of order, steps out of command order, an unknown step, or bytes
+/// left over.
 fn decode_owed(bytes: &[u8]) -> Option<OwedRecord> {
-    let (&format, rest) = bytes.split_first()?;
-    if format != FORMAT_V1 && format != FORMAT_V2 {
-        return None;
-    }
-    let mut reader = Reader(rest);
+    let mut reader = Reader(bytes);
+    let has_first_stop = match reader.byte()? {
+        FORMAT_V1 => false,
+        FORMAT_V2 => true,
+        _ => return None,
+    };
     let count = usize::from(reader.byte()?);
     if count > MAX_OWED_ENTRIES {
         return None;
@@ -489,13 +491,14 @@ fn decode_owed(bytes: &[u8]) -> Option<OwedRecord> {
         }
         last = Some(scope);
         let cut_epoch = u64::from_be_bytes(reader.array()?);
-        let first_stop = match format {
-            FORMAT_V1 => None,
-            _ => match reader.byte()? {
+        let first_stop = if has_first_stop {
+            match reader.byte()? {
                 0 => None,
                 1 => Some(UnixMillis(u64::from_be_bytes(reader.array()?))),
                 _ => return None,
-            },
+            }
+        } else {
+            None
         };
         let steps = (0..reader.byte()?)
             .map(|_| match reader.byte()? {
