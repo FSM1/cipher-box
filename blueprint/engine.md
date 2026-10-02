@@ -1722,6 +1722,9 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   cannot be undone, so a device whose settings load carried no member choice
   keeps every version rather than applying the documented default — the same
   rule the bin's expiry sweep follows.
+- **Retire and prune never reach the member's own node** (ADR 0029 D16). They
+  release registry rows only; the member prunes their own provider with their
+  own tools, so under `External` and `Dual` that node grows without bound.
 - **A restore is a write, never a rewind.** Putting a prior version back
   publishes a new record whose head is that version, with the outgoing head as
   the newest prior version. It moves no byte: the version's blocks were
