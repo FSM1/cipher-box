@@ -9,6 +9,7 @@ use cipherbox_core::seal::{PreservedFields, ReadBody};
 use zeroize::Zeroizing;
 
 use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
+use crate::net::author::ENVELOPE_V;
 use crate::net::{AdoptOutcome, Adopter, GatePass};
 
 /// The verdict a [`ScriptedAdopter`] returns for every record it is handed.
@@ -72,6 +73,7 @@ impl Adopter for ScriptedAdopter {
                 write_scope_seed: None,
                 node_id: [0u8; 16],
                 read_scope_seed: None,
+                version: ENVELOPE_V,
             }),
             AdoptVerdict::TrustViolation => Err(GateError::Rejected(GateRejection {
                 stage: GateStage::RecordVerify,
