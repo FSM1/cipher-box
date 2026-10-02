@@ -199,7 +199,7 @@ describe('the authorized devices pane', () => {
 
   // `forgetDevice` leaves the session holding no key. Keeping the last answer
   // would mark a listed row as this device and hide the way back in.
-  it('offers registration again once this browser holds no identity key', async () => {
+  it('unmarks the row and names the missing key once this browser holds none', async () => {
     const engine = fakeEngineClient({ devices: () => Promise.resolve([OWN]) });
     const session = fakeCoreKitSession({ loggedIn: true, noDeviceIdentity: true }).session;
     render(<DevicesPane />, { wrapper: authWrapper(engine.client, session) });
@@ -207,7 +207,10 @@ describe('the authorized devices pane', () => {
 
     await waitFor(() => expect(rows()).toHaveLength(1));
     expect(screen.getByTestId('settings-device-own').textContent).toBe('');
-    expect(screen.getByTestId('settings-device-register')).toBeTruthy();
+    expect(screen.getByTestId('settings-device-register').getAttribute('disabled')).not.toBeNull();
+    expect(screen.getByTestId('settings-device-register-closed').textContent).toBe(
+      'this browser holds no device identity key; sign in again to create one'
+    );
   });
 
   // A sign-in cannot give a browser a key its WebCrypto cannot hold, so the
@@ -227,8 +230,6 @@ describe('the authorized devices pane', () => {
     expect(register.getAttribute('title')).toBe(unusable);
   });
 
-  // An expired token fails every later try the same way, so the control closes
-  // on the refusal rather than invite a second click that repeats it.
   it('closes the control once the API refuses this sign-in as unauthorized', async () => {
     const engine = fakeEngineClient({
       devices: () => Promise.resolve([]),
@@ -249,9 +250,51 @@ describe('the authorized devices pane', () => {
     expect(screen.getByTestId('settings-device-register-closed').textContent).toContain(
       'can no longer register a device'
     );
+    // The reason line names the cause; the engine's own line would repeat it.
+    expect(screen.queryByTestId('settings-devices-error')).toBeNull();
+    for (const said of [register.getAttribute('title'), register.getAttribute('aria-label')]) {
+      expect(said).not.toContain(FAKE_IDENTITY_TOKEN);
+    }
     await act(async () => {
       fireEvent.click(register);
     });
     expect(engine.calls.registered).toHaveLength(1);
+  });
+
+  it('marks this device when a refused registration finds its key already listed', async () => {
+    const reads = [[], [OWN]];
+    const engine = fakeEngineClient({
+      devices: () => Promise.resolve(reads.length > 1 ? (reads.shift() ?? []) : reads[0]),
+      registerDevice: () =>
+        Promise.reject(new EngineRequestError('auth error: refused as unauthorized', 'auth')),
+    });
+    const session = fakeCoreKitSession({ loggedIn: true }).session;
+    render(<DevicesPane />, { wrapper: authWrapper(engine.client, session) });
+    await act(async () => undefined);
+    const register = await waitFor(() => screen.getByTestId('settings-device-register'));
+    await waitFor(() => expect(register.getAttribute('disabled')).toBeNull());
+
+    await act(async () => {
+      fireEvent.click(register);
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('settings-device-own').textContent).toBe('this device')
+    );
+    expect(screen.queryByTestId('settings-device-register')).toBeNull();
+    expect(screen.queryByTestId('settings-devices-error')).toBeNull();
+  });
+
+  it('shows no closed reason while it still reads this browser key', async () => {
+    const engine = fakeEngineClient({ devices: () => Promise.resolve([]) });
+    const coreKit = fakeCoreKitSession({ loggedIn: true, identityToken: null });
+    const identity = coreKit.session.deviceIdentity();
+    if (identity) identity.publicKeyHex = () => new Promise(() => undefined);
+    render(<DevicesPane />, { wrapper: authWrapper(engine.client, coreKit.session) });
+    await act(async () => undefined);
+
+    const register = await waitFor(() => screen.getByTestId('settings-device-register'));
+    expect(register.getAttribute('disabled')).not.toBeNull();
+    expect(screen.queryByTestId('settings-device-register-closed')).toBeNull();
   });
 });

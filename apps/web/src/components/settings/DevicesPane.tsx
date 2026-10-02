@@ -92,7 +92,7 @@ export function DevicesPane() {
               type="button"
               className="terminal-btn"
               onClick={register}
-              disabled={busy || closed !== null}
+              disabled={busy || registration.state !== 'open'}
               title={closed ?? undefined}
               aria-label={closed === null ? undefined : `register this device — ${closed}`}
               data-testid="settings-device-register"

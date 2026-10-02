@@ -21,11 +21,24 @@ import { useEngine, useLoginSecretSource, useRebuildEngine } from '../providers/
 import type { RecoveryEnrollment } from './coreKit';
 import { useCoreKit } from './CoreKitProvider';
 import { useIdentity } from './IdentityProvider';
-import { registerThisDevice } from './registerThisDevice';
+import { DeviceKeyUnusableError } from './deviceIdentity';
+import { isAuthRefusal, registerThisDevice, SIGN_IN_TO_SAVE } from './registerThisDevice';
 import type { WebCollected } from './webCollector';
 
-const NOT_SAVED =
-  'this browser was not saved as a device. sign in again with "save this device" checked.';
+const NOT_SAVED = 'this browser was not saved as a device.';
+
+/**
+ * The notice for a registration that failed at a sign-in. Only a spent or
+ * expired token needs a fresh sign-in; after any other failure the token stays
+ * and the settings pane can still register.
+ */
+function notSaved(failure: unknown): string {
+  if (failure instanceof DeviceKeyUnusableError) return failure.message;
+  const cause = errorMessage(failure);
+  return isAuthRefusal(failure)
+    ? `${NOT_SAVED} ${SIGN_IN_TO_SAVE}. ${cause}`
+    : `${NOT_SAVED} ${cause}`;
+}
 
 /** The origin's engine belongs to another account; `heldBy` names it. */
 export interface HeldElsewhere {
@@ -169,7 +182,7 @@ export function useAuth(): Auth {
       if (!session || !client) throw new Error('the engine is not ready');
       await registerThisDevice(session, client.facade);
     } catch (failure) {
-      notificationStore.warn('save-device', `${NOT_SAVED} ${errorMessage(failure)}`);
+      notificationStore.warn('save-device', notSaved(failure));
     }
   }, [client, session]);
 
@@ -179,7 +192,11 @@ export function useAuth(): Auth {
       try {
         await login;
       } catch (failure) {
-        if (!(failure instanceof RecoveryRequiredError)) throw failure;
+        if (!(failure instanceof RecoveryRequiredError)) {
+          // A shared browser must not hand the choice to whoever signs in next.
+          authStore.saveDevice(false);
+          throw failure;
+        }
         authStore.recoveryRequired();
         return;
       }

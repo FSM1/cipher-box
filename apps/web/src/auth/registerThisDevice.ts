@@ -1,21 +1,25 @@
-/**
- * Registers this browser's device identity key on the account (ADR 0009 D4), so
- * it can approve a sign-in on a new browser. The settings pane and the landing
- * of a sign-in both run it.
- */
-
 import { EngineRequestError, type EngineFacade } from '@cipherbox/client';
 import type { WebCoreKitSession } from './coreKit';
 
+/** The remedy for every refusal that a fresh sign-in token cures. */
+export const SIGN_IN_TO_SAVE = 'sign in again with "save this device" checked';
+
 /** A registration signs an identity token, which only a fresh sign-in carries. */
-export const NO_TOKEN = 'sign in again with "save this device" checked';
+export const NO_TOKEN = SIGN_IN_TO_SAVE;
 
-export const NO_IDENTITY = 'this browser holds no device identity key';
+/** A sign-in names the member, and the key is minted on its first use. */
+export const NO_IDENTITY = 'this browser holds no device identity key; sign in again to create one';
 
-/** The engine's code for a request the API refused as unauthorized. */
-export const AUTH_REFUSAL = 'auth';
+/** Whether the API refused the request as unauthorized: the token is spent or expired. */
+export function isAuthRefusal(failure: unknown): boolean {
+  return failure instanceof EngineRequestError && failure.code === 'auth';
+}
 
-/** Resolves to the registered public key, in the hex the registry carries. */
+/**
+ * Registers this browser's device identity key on the account (ADR 0009 D4), so
+ * it can approve a sign-in on a new browser. Resolves to the registered public
+ * key, in the hex the registry carries.
+ */
 export async function registerThisDevice(
   session: WebCoreKitSession,
   facade: EngineFacade
@@ -30,10 +34,8 @@ export async function registerThisDevice(
   try {
     await facade.registerDevice(publicKey, signature, identityToken, null);
   } catch (refusal) {
-    // The API refuses an expired token, and every later try with it fails too.
-    if (refusal instanceof EngineRequestError && refusal.code === AUTH_REFUSAL) {
-      session.dropIdentityToken();
-    }
+    // An expired token fails every later try the same way.
+    if (isAuthRefusal(refusal)) session.dropIdentityToken();
     throw refusal;
   }
   // The API spends the token, so a second registration in this sign-in fails.

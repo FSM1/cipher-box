@@ -5,28 +5,28 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import {
-  EngineRequestError,
-  type EngineFacade,
-  type RegisteredDeviceDescriptor,
-} from '@cipherbox/client';
+import type { EngineFacade, RegisteredDeviceDescriptor } from '@cipherbox/client';
 import { useCoreKit } from '../auth/CoreKitProvider';
 import {
-  AUTH_REFUSAL,
+  isAuthRefusal,
   NO_IDENTITY,
   NO_TOKEN,
   registerThisDevice,
+  SIGN_IN_TO_SAVE,
 } from '../auth/registerThisDevice';
 import { errorMessage } from '../lib/errorMessage';
 import { useCommandRunner } from './useCommandRunner';
 
-const READING = 'reading the device key of this browser';
+const REFUSED = `this sign-in can no longer register a device. ${SIGN_IN_TO_SAVE}`;
 
-const REFUSED =
-  'this sign-in can no longer register a device. sign in again with "save this device" checked';
-
-/** Whether a registration can run now, and if not, the cause a member can act on. */
-export type Registration = { state: 'open' } | { state: 'closed'; reason: string };
+/**
+ * Whether a registration can run now. `reading` holds the control shut while
+ * this browser's key is read; `closed` names a cause the member can act on.
+ */
+export type Registration =
+  | { state: 'open' }
+  | { state: 'reading' }
+  | { state: 'closed'; reason: string };
 
 export interface DevicesRead {
   devices: RegisteredDeviceDescriptor[];
@@ -48,7 +48,11 @@ export function useDevices(): DevicesRead {
   const [refused, setRefused] = useState(false);
   const { busy, error, run } = useCommandRunner<'devices' | 'registerDevice' | 'revokeDevice'>();
 
-  const read = useCallback(async (facade: EngineFacade) => setDevices(await facade.devices()), []);
+  const read = useCallback(async (facade: EngineFacade) => {
+    const listed = await facade.devices();
+    setDevices(listed);
+    return listed;
+  }, []);
 
   const reload = useCallback(() => run('devices', read), [run, read]);
 
@@ -68,7 +72,7 @@ export function useDevices(): DevicesRead {
       (publicKey) => {
         if (live) setThisDevice(publicKey);
       },
-      // A browser that can hold no key still lists the account's other devices.
+      // The failure is the closed reason; the list still renders.
       (failure: unknown) => {
         if (live) setKeyError(errorMessage(failure));
       }
@@ -81,18 +85,22 @@ export function useDevices(): DevicesRead {
   const register = useCallback(
     () =>
       void run('registerDevice', async (facade) => {
-        if (!session) throw new Error(NO_IDENTITY);
+        if (!session) throw new Error('no session');
         try {
           setThisDevice(await registerThisDevice(session, facade));
         } catch (refusal) {
-          if (refusal instanceof EngineRequestError && refusal.code === AUTH_REFUSAL) {
-            setRefused(true);
-          }
-          throw refusal;
+          if (!isAuthRefusal(refusal)) throw refusal;
+          // A spent token can mean the key already landed: the sign-in did it,
+          // or the response to an earlier try was lost.
+          const listed = await read(facade);
+          if (thisDevice !== null && listed.some((row) => row.publicKey === thisDevice)) return;
+          // The closed reason names the cause, so no error line repeats it.
+          setRefused(true);
+          return;
         }
         await read(facade);
       }),
-    [run, read, session]
+    [run, read, session, thisDevice]
   );
 
   const revoke = useCallback(
@@ -107,9 +115,9 @@ export function useDevices(): DevicesRead {
   const registration = ((): Registration => {
     if (keyError !== null) return { state: 'closed', reason: keyError };
     if (!session?.deviceIdentity()) return { state: 'closed', reason: NO_IDENTITY };
+    if (thisDevice === null) return { state: 'reading' };
     if (refused) return { state: 'closed', reason: REFUSED };
     if (session.identityToken() === null) return { state: 'closed', reason: NO_TOKEN };
-    if (thisDevice === null) return { state: 'closed', reason: READING };
     return { state: 'open' };
   })();
 

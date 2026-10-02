@@ -280,14 +280,14 @@ all living in `packages/client` and running inside the engine worker realm:
 
 ## Composition (apps/web)
 
-| Route             | View                                                                                                                                                                                                        |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`               | Login (Core Kit methods + SIWE), recovery/approval UI; a "save this device" checkbox registers the device identity key at sign-in (ADR 0009)                                                                |
-| `/files/:nodeId?` | Vault browser (absent id = current root)                                                                                                                                                                    |
-| `/shared`         | Received shares, each shown with its folder name and `from <owner name>`; a link-held share shows its link-holder state until conversion; browsing shared scopes is the same browser over the same snapshot |
-| `/bin`            | Recycle bin (kept per FSM1/cipher-box-next#5), restore/purge ops via facade                                                                                                                                 |
-| `/settings`       | Auth methods, MFA enrollment and recovery phrase (Core Kit UX), authorized devices and approval (ADR 0009), BYO pinning (sealed `ByoIpfsConfig` via facade), vault settings, export                         |
-| `/invite#…`       | Invite page — sign-in, then the preview, then "join" as its own press; fragment secret handed to the facade unread                                                                                          |
+| Route             | View                                                                                                                                                                                                                                                                             |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`               | Login (Core Kit methods + SIWE), recovery/approval UI; a "save this device" checkbox registers the device identity key at sign-in (ADR 0009); after a held-at-policy wait it registers only while the sign-in token is live, otherwise a notice asks the member to sign in again |
+| `/files/:nodeId?` | Vault browser (absent id = current root)                                                                                                                                                                                                                                         |
+| `/shared`         | Received shares, each shown with its folder name and `from <owner name>`; a link-held share shows its link-holder state until conversion; browsing shared scopes is the same browser over the same snapshot                                                                      |
+| `/bin`            | Recycle bin (kept per FSM1/cipher-box-next#5), restore/purge ops via facade                                                                                                                                                                                                      |
+| `/settings`       | Auth methods, MFA enrollment and recovery phrase (Core Kit UX), authorized devices and approval (ADR 0009), BYO pinning (sealed `ByoIpfsConfig` via facade), vault settings, export                                                                                              |
+| `/invite#…`       | Invite page — sign-in, then the preview, then "join" as its own press; fragment secret handed to the facade unread                                                                                                                                                               |
 
 - **Invite page** (ADR 0028 D1, D4–D6): sign-in comes first and never spends a
   link. The preview then runs with no press and shows one card:

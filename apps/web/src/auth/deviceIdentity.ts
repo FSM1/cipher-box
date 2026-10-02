@@ -61,11 +61,16 @@ export async function deviceKeyPlace(
   };
 }
 
-/**
- * What a device with no usable Ed25519 is told. Its way in is still open: the
- * recovery phrase is every account's guaranteed path (ADR 0009 D2).
- */
-const UNUSABLE = 'this browser cannot hold a device identity key — use your recovery phrase';
+const UNUSABLE =
+  'this browser has no Ed25519 in WebCrypto; use a current Chrome, Firefox or Safari';
+
+/** This browser cannot hold a device identity key, whatever the member does. */
+export class DeviceKeyUnusableError extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super(UNUSABLE, options);
+    this.name = 'DeviceKeyUnusableError';
+  }
+}
 
 /** What a stored pair is proved against. Ed25519 signs deterministically, so this seeds nothing. */
 const PROBE = new TextEncoder().encode('cipherbox/device-identity/probe/v1');
@@ -161,7 +166,7 @@ async function mint(): Promise<CryptoKeyPair> {
       'verify',
     ])) as CryptoKeyPair;
   } catch (cause) {
-    throw new Error(UNUSABLE, { cause });
+    throw new DeviceKeyUnusableError({ cause });
   }
 }
 
@@ -190,7 +195,7 @@ async function heldInCustody(pair: CryptoKeyPair): Promise<boolean> {
   } catch (cause) {
     // A key of another algorithm, or without the usage, is refused this way.
     if (cause instanceof DOMException && cause.name === 'InvalidAccessError') return false;
-    throw new Error(UNUSABLE, { cause });
+    throw new DeviceKeyUnusableError({ cause });
   }
 }
 
@@ -200,6 +205,6 @@ async function heldInCustody(pair: CryptoKeyPair): Promise<boolean> {
  * the raw Ed25519 size would otherwise be reported as a rejected registration.
  */
 function toHex(bytes: Uint8Array, expected: number): string {
-  if (bytes.length !== expected) throw new Error(UNUSABLE);
+  if (bytes.length !== expected) throw new DeviceKeyUnusableError();
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }

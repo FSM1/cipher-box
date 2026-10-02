@@ -16,6 +16,7 @@ import {
   SECRET_HEX,
 } from '../test/authFakes';
 import { useLoginSecretSource } from '../providers/EngineProvider';
+import { DeviceKeyUnusableError } from './deviceIdentity';
 import { useAuth } from './useAuth';
 
 const SECRET_BYTES = Uint8Array.from({ length: 32 }, () => 0x0f);
@@ -521,8 +522,61 @@ describe('useAuth with "save this device" checked', () => {
     expect(result.current.auth.error).toBeNull();
     const [notice] = notificationStore.getState();
     expect(notice.message).toContain('not saved as a device');
+    expect(notice.message).toContain('sign in again with "save this device" checked');
     expect(notice.message).toContain('auth error: refused as unauthorized');
+    expect(notice.message).not.toContain(FAKE_IDENTITY_TOKEN);
     expect(authStore.getState().saveDevice).toBe(false);
+  });
+
+  // The token survives any other refusal, so the settings pane can still register.
+  it('names only the cause when the refusal leaves the token live', async () => {
+    const engine = fakeEngineClient({
+      registerDevice: () => Promise.reject(new EngineRequestError('the network is down', 'seam')),
+    });
+    const { result } = mount(engine, fakeCoreKitSession());
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    authStore.saveDevice(true);
+
+    await act(() => result.current.auth.loginWithEmailCode('user@example.test', '123456'));
+
+    expect(notificationStore.getState().map((notice) => notice.message)).toEqual([
+      'this browser was not saved as a device. the network is down',
+    ]);
+  });
+
+  it('names only the browser requirement when this browser cannot hold a key', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession();
+    const identity = coreKit.session.deviceIdentity();
+    if (identity) identity.publicKeyHex = () => Promise.reject(new DeviceKeyUnusableError());
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    authStore.saveDevice(true);
+
+    await act(() => result.current.auth.loginWithEmailCode('user@example.test', '123456'));
+
+    expect(notificationStore.getState().map((notice) => notice.message)).toEqual([
+      new DeviceKeyUnusableError().message,
+    ]);
+  });
+
+  it('drops the choice when the login fails, so the next sign-in starts unchecked', async () => {
+    const engine = fakeEngineClient();
+    const identity = fakeIdentityExchange({
+      fromEmailCode: () => Promise.reject(new Error('that code is wrong')),
+    });
+    const { result } = mount(engine, fakeCoreKitSession(), identity);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    authStore.saveDevice(true);
+
+    await act(async () => {
+      await expect(
+        result.current.auth.loginWithEmailCode('user@example.test', '000000')
+      ).rejects.toThrow();
+    });
+
+    expect(authStore.getState().saveDevice).toBe(false);
+    expect(engine.calls.registered).toEqual([]);
   });
 
   it('waits out the factor policy, then registers once the phrase opens the account', async () => {

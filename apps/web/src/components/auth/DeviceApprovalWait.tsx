@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EngineFacade } from '@cipherbox/client';
 import type { WebCoreKitSession } from '../../auth/coreKit';
 import { useCoreKit } from '../../auth/CoreKitProvider';
+import { DeviceKeyUnusableError } from '../../auth/deviceIdentity';
 import { openApprovalSession, type ApprovalSession } from '../../auth/deviceApprovalApi';
 import { useAuth } from '../../auth/useAuth';
 import { apiBaseUrl } from '../../engine/config';
@@ -121,7 +122,13 @@ export function DeviceApprovalWait({ onUseRecoveryPhrase, onCancel }: DeviceAppr
       },
       (failure: unknown) => {
         wipe();
-        if (!disposed.current) setError(errorMessage(failure));
+        if (disposed.current) return;
+        // The phrase is every account's guaranteed path (ADR 0009 D2).
+        setError(
+          failure instanceof DeviceKeyUnusableError
+            ? `${failure.message} — or use your recovery phrase`
+            : errorMessage(failure)
+        );
       }
     );
 
