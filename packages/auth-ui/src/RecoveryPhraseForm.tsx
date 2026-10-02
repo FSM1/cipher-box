@@ -40,7 +40,7 @@ export function RecoveryPhraseForm({ onSubmit, onCancel, busy, error }: Recovery
 
   const submit = async () => {
     const input = field.current;
-    if (input === null) return;
+    if (input === null || pending) return;
     const phrase = normalizeRecoveryPhrase(input.value);
     // Read once and dropped, whatever the attempt turns out to be.
     input.value = '';
@@ -80,7 +80,7 @@ export function RecoveryPhraseForm({ onSubmit, onCancel, busy, error }: Recovery
         autoCorrect="off"
         autoCapitalize="off"
         aria-label="recovery phrase"
-        disabled={busy}
+        disabled={busy || pending}
       />
       <div className="recovery-actions">
         <button
@@ -91,7 +91,7 @@ export function RecoveryPhraseForm({ onSubmit, onCancel, busy, error }: Recovery
               : 'terminal-btn terminal-btn--filled'
           }
           data-testid="recovery-submit"
-          disabled={busy}
+          disabled={busy || pending}
           aria-busy={pending}
           onClick={() => void submit()}
         >
@@ -101,7 +101,7 @@ export function RecoveryPhraseForm({ onSubmit, onCancel, busy, error }: Recovery
           type="button"
           className="email-login-restart"
           data-testid="recovery-cancel"
-          disabled={busy}
+          disabled={busy || pending}
           onClick={onCancel}
         >
           cancel

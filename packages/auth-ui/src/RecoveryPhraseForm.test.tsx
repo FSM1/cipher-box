@@ -124,6 +124,25 @@ describe('the recovery phrase form', () => {
     expect(button.classList.contains('terminal-btn--loading')).toBe(false);
   });
 
+  // The first submit blanks the field, so a second click would send an empty phrase.
+  it('takes no second submit while its own attempt is in flight', async () => {
+    let finish!: () => void;
+    const attempt = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const onSubmit = vi.fn(() => attempt);
+    renderForm({ onSubmit });
+
+    fireEvent.change(field(), { target: { value: PHRASE } });
+    submit();
+    expect((screen.getByTestId('recovery-submit') as HTMLButtonElement).disabled).toBe(true);
+    submit();
+
+    await act(async () => finish());
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('reports its own attempt until it settles', async () => {
     let finish!: () => void;
     const attempt = new Promise<void>((resolve) => {
