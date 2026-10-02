@@ -243,26 +243,6 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    publish_record_marked(transport, api, floors, scheduler, profile, request, None).await
-}
-
-/// [`publish_record`], raising `mark` just before the PUT ([`PutMark`]).
-pub(crate) async fn publish_record_marked<T, H, C, F, Sch>(
-    transport: &T,
-    api: &ApiClient<H, C>,
-    floors: &F,
-    scheduler: &Sch,
-    profile: &SyncTimingProfile,
-    request: &RecordPublishRequest<'_>,
-    mark: Option<PutMark<'_>>,
-) -> Result<PublishReceipt, RecordPublishError>
-where
-    T: RecordTransport + Clone + 'static,
-    H: Http,
-    C: CredentialStore,
-    F: FloorStore,
-    Sch: Scheduler + Clone + 'static,
-{
     let placement = api.placement().unwrap_or(Placement::Hosted);
     publish_record_placed(
         transport,
@@ -273,7 +253,7 @@ where
         request,
         &placement,
         &mut MirrorLeg::once(),
-        mark,
+        None,
     )
     .await
 }
@@ -334,7 +314,8 @@ impl MirrorLeg {
     }
 }
 
-/// [`publish_record_marked`], with the head block placed on the legs of
+/// [`publish_record`], raising `mark` just before the PUT ([`PutMark`]), with
+/// the head block placed on the legs of
 /// `placement` rather than the session's, and a dual write's mirror attempts
 /// spent from `mirror`.
 #[allow(clippy::too_many_arguments)]

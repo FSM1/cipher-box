@@ -2606,24 +2606,25 @@ fn a_head_upload_the_api_refuses_leaves_the_mint_and_the_next_start_refuses_the_
     );
 }
 
-/// The API answering about a block other than the one uploaded is a fail-closed
-/// verdict on that answer, never an outage a host should retry.
+/// A store answering about a block other than the one placed is a fail-closed
+/// verdict on that answer, never an outage a host should retry. The hosted
+/// ingress and the member's node get the same verdict.
 #[test]
 fn a_settings_save_the_api_answered_about_another_block_is_a_trust_violation() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    let device = world.device(b"me");
-    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
-    blocks.echo_other_address();
+    for settings in [configured(), external_only()] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        let device = world.device(b"me");
+        let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+        blocks.echo_other_address();
 
-    let outcome = block_on(engine.command(Command::SaveVaultSettings {
-        settings: configured(),
-    }));
+        let outcome = block_on(engine.command(Command::SaveVaultSettings { settings }));
 
-    assert!(
-        matches!(outcome, Err(EngineError::TrustViolation { .. })),
-        "got {outcome:?}",
-    );
+        assert!(
+            matches!(outcome, Err(EngineError::TrustViolation { .. })),
+            "got {outcome:?}",
+        );
+    }
 }
 
 /// Whether the events so far accuse anybody.

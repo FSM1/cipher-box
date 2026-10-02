@@ -13363,6 +13363,58 @@ fn a_dual_folder_op_spends_one_mirror_budget_and_reports_the_missed_head() {
     );
 }
 
+/// A soft delete publishes the bin index inside the op, so that head spends the
+/// same mirror budget as the op's folder heads.
+#[test]
+fn a_dual_soft_delete_spends_one_mirror_budget_across_its_bin_index_head() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    create(&mut engine, "docs");
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "docs");
+    blocks.set_member_node_down(true);
+    let node_attempts = || {
+        alice
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.starts_with(MEMBER_NODE))
+            .count()
+    };
+    let before = node_attempts();
+    let _ = events_so_far(&mut events);
+    block_on(engine.command(Command::Delete { node: doomed })).expect("the delete stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        published_names(&world.record_store, &blocks, ROOT).is_empty(),
+        "the hosted leg landed, so the delete published"
+    );
+    assert!(
+        node_attempts() - before <= 3,
+        "the bin index head shared the op's mirror budget"
+    );
+    assert_eq!(
+        events_so_far(&mut events)
+            .iter()
+            .filter(|event| matches!(
+                event,
+                Event::OpProgress {
+                    phase: OpPhase::ExternalPinFailed,
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "the op reports its missed heads once"
+    );
+}
+
 /// Leaves already released from staging can never be placed again, so a
 /// placement changed mid-upload is decided on one question: does the leg this
 /// version must now publish from already hold them?

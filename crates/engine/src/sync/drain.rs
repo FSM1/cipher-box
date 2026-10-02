@@ -44,7 +44,7 @@ use zeroize::Zeroizing;
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 use crate::bin_index::{
     BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinnedNode, cached_bin_index, load_bin_index,
-    publish_bin_index,
+    publish_bin_index_placed,
 };
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::{
@@ -4582,7 +4582,8 @@ where
         // A publish that does not confirm leaves the standing index unknown, so
         // the next rewrite resolves rather than building on this attempt.
         *self.established_bin_index.borrow_mut() = None;
-        let held = publish_bin_index(
+        let mut mirror = core::mem::take(&mut self.mirror.borrow_mut().leg);
+        let held = publish_bin_index_placed(
             &self.seams.transport,
             &self.seams.api,
             &self.seams.floors,
@@ -4593,9 +4594,12 @@ where
             self.cells.orphan_heads,
             self.inputs.bin_keys,
             &index,
+            self.head_placement(),
+            &mut mirror,
         )
-        .await
-        .map_err(|error| halt_for_bin_publish(&error))?;
+        .await;
+        self.mirror.borrow_mut().leg = mirror;
+        let held = held.map_err(|error| halt_for_bin_publish(&error))?;
         self.cells.held.borrow_mut().insert(HeldKey::BinIndex, held);
         // The confirm re-resolved this session's own bytes at its own sequence,
         // so the published entries are the standing index.
@@ -6601,6 +6605,12 @@ where
         Ok(())
     }
 
+    /// Where this tick puts a record head. A refused decision keeps the hosted
+    /// leg, as a publish with no decided placement does.
+    fn head_placement(&self) -> &Placement {
+        self.inputs.placement.as_ref().unwrap_or(&Placement::Hosted)
+    }
+
     /// Record one block as on the network for `op_id`, which is the only
     /// evidence a cancel has that this upload charged for it
     /// ([`UploadCancels`]). Written the instant the leg that charges confirms,
@@ -7051,7 +7061,7 @@ where
                 head: &preflighted,
                 content_cids,
             },
-            self.inputs.placement.as_ref().unwrap_or(&Placement::Hosted),
+            self.head_placement(),
             &mut mirror,
             None,
         )
@@ -7582,9 +7592,11 @@ async fn yield_now() {
 fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     match error {
         RecordPublishError::Upload(error) => classify_upload(error, refused_bytes),
+        // Either leg answering about another address is one verdict.
+        RecordPublishError::HeadCidMismatch { .. }
+        | RecordPublishError::Placement(ProviderError::AddressMismatch) => Halt::Unclassified,
         RecordPublishError::Placement(error) => classify_placement(error),
         RecordPublishError::Publish(error) => classify_publish_error(error),
-        RecordPublishError::HeadCidMismatch { .. } => Halt::Unclassified,
     }
 }
 
@@ -9093,6 +9105,7 @@ mod tests {
                 expected: "a".to_owned(),
                 returned: "b".to_owned(),
             },
+            RecordPublishError::Placement(ProviderError::AddressMismatch),
             RecordPublishError::Publish(crate::net::PublishError::AllEndpointsFailed),
         ] {
             assert_eq!(classify_publish(error, 4096), Halt::Unclassified);

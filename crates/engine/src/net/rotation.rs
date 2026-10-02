@@ -69,7 +69,7 @@ use crate::content::Gateway;
 use crate::content::dag::decode_root;
 use crate::content::read::{ContentPlane, read_block};
 use crate::content::retention::{RootPlacement, version_cids};
-use crate::content::root_block_cid;
+use crate::content::{ProviderError, root_block_cid};
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row};
 use crate::gate::floor::PointerPlane;
@@ -710,7 +710,10 @@ fn author_verdict(refusal: AuthorError) -> RotationPublishError {
 /// verdict on them would let anyone who can grow a record block the rotation.
 fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
-        RecordPublishError::HeadCidMismatch { .. } => RotationPublishError::Rejected,
+        RecordPublishError::HeadCidMismatch { .. }
+        | RecordPublishError::Placement(ProviderError::AddressMismatch) => {
+            RotationPublishError::Rejected
+        }
         RecordPublishError::Upload(_) | RecordPublishError::Placement(_) => {
             RotationPublishError::NotPublished
         }
@@ -4351,7 +4354,10 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
 /// forever without converging.
 pub(super) fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
     match error {
-        RecordPublishError::HeadCidMismatch { .. } => WritePublishError::Rejected,
+        RecordPublishError::HeadCidMismatch { .. }
+        | RecordPublishError::Placement(ProviderError::AddressMismatch) => {
+            WritePublishError::Rejected
+        }
         RecordPublishError::Upload(_) | RecordPublishError::Placement(_) => {
             WritePublishError::NotLanded
         }
@@ -9725,6 +9731,7 @@ mod tests {
                 expected: "bafy-ours".to_owned(),
                 returned: "bafy-theirs".to_owned(),
             },
+            RecordPublishError::Placement(ProviderError::AddressMismatch),
             RecordPublishError::Publish(PublishError::EmptyHeadCid),
         ] {
             assert_eq!(

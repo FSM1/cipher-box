@@ -57,6 +57,12 @@ Private and link-local ranges stay allowed; self-hosting on a LAN is the feature
 no resolver, so the cloud-metadata refusal is a legibility rule, not SSRF containment. The rule
 list is the `blueprint/engine.md` "BYO endpoint policy" bullet (FSM1/cipher-box#932).
 
+**D16 — The member's own node keeps what the member puts on it.** For v2.0, retire and prune
+release only the registry rows. They send no unpin to the member's provider, and the member prunes
+that node with their own tools. The node has no reference count, so an unpin for each op can
+remove a block that a live version still names. Owner decision of 2026-10-02
+(FSM1/cipher-box#2007), added in FSM1/cipher-box#2234.
+
 Items D2, D4 to D10, D12, D13 and D14 moved to `blueprint/engine.md` "Content plane" on 2026-09-26.
 
 ## Alternatives rejected
@@ -80,6 +86,9 @@ refusal.** Under `External` CipherBox Kubo is then the only provider of the head
 outage blocks every BYO write and every uncached BYO read, and the vault settings record stops
 being server-free. The exemption also needs a new signal on the wire, because the ingress cannot
 tell a record head from a DAG root by codec. The owner rejected it on 2026-09-26 for D1.
+
+**(j) Unpin on the member's Kubo when the retire ledger settles a target.** It needs a durable
+member-leg flag on each ledger entry, and PSA and Pinata stay out of reach. Deferred for D16.
 
 ## Trust argument
 
@@ -136,6 +145,9 @@ that leaves `External` clears `byo` first.
 **E3 — An assumed placement on a `Dual` account drops the mirror without a signal.** A `Dual`
 account runs `byo=false` (D11). So on a fresh device whose settings record is withheld, the
 assumed `Hosted` default writes one copy, and nothing tells the member that the mirror dropped.
+
+**E4 — Under `External` and `Dual` the member's node grows without bound (D16).** A deleted or
+pruned version stays pinned on the member's node until the member removes it.
 
 ## Gate
 

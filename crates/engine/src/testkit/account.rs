@@ -310,7 +310,8 @@ impl Blocks {
         *self.on_upload.lock().expect("lock") = None;
     }
 
-    /// Answer the upload with an address other than the one the bytes hash to.
+    /// Answer an upload, on the hosted ingress and on the member's node, with an
+    /// address other than the one the bytes hash to.
     pub fn echo_other_address(&self) {
         self.echo_other_address.store(true, Ordering::Relaxed);
     }
@@ -430,6 +431,10 @@ impl Blocks {
             .lock()
             .expect("lock")
             .insert(cid.clone(), block);
+        let cid = match self.echo_other_address.load(Ordering::Relaxed) {
+            true => encode_content_cid_str(&compute_cid(codec, b"another block")),
+            false => cid,
+        };
         Ok(HttpResponse {
             status: 200,
             headers: Vec::new(),
