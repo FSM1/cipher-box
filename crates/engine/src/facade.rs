@@ -9427,14 +9427,8 @@ where {
     /// floor has risen past the one it was recovered under, or if no authority
     /// answers for the scope any more. The resolve tick evicts once per pass,
     /// and each navigation leg evicts its scope's seed ([`Self::navigation_legs`]).
-    async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
-        self.stamped_scope_read_seed(scope_id)
-            .await
-            .map(|stamped| stamped.seed)
-    }
-
-    /// [`Self::scope_read_seed`] with the stamp the cache holds it under.
-    async fn stamped_scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<StampedSeed> {
+    /// The seed comes with the stamp the cache holds it under.
+    async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<StampedSeed> {
         // Every arm that serves no seed also drops the one it holds, so no
         // cached seed outlives the authority that entitles it.
         let Some(floors) = self.scope_floors(scope_id) else {
@@ -9677,7 +9671,7 @@ where {
                 &self.profile,
             ),
         );
-        let scope_read_seed = self.stamped_scope_read_seed(&root.0).await;
+        let scope_read_seed = self.scope_read_seed(&root.0).await;
         let root_name = self.state.current_root_name.borrow().clone();
         let leg = scope_read_seed.as_ref().map(|stamped| FolderRefresh {
             transport: &self.record_transport,
@@ -11406,10 +11400,7 @@ where {
             self.state.current_root_name.borrow().as_ref(),
             &scope_id,
         );
-        let scope_read_seed = self
-            .stamped_scope_read_seed(&scope_id)
-            .await
-            .ok_or_else(no_seed)?;
+        let scope_read_seed = self.scope_read_seed(&scope_id).await.ok_or_else(no_seed)?;
         let floors = self.scope_floors(&scope_id).ok_or_else(no_seed)?;
         let adopter = ChildAdopter::new(
             &self.gateway,
@@ -12288,7 +12279,7 @@ where {
         &self,
         scope: NodeId,
     ) -> Option<crate::rotation::scope_material::ScopeMaterial> {
-        let read_scope_seed = self.scope_read_seed(&scope.0).await?;
+        let read_scope_seed = self.scope_read_seed(&scope.0).await?.seed;
         Some(crate::rotation::scope_material::ScopeMaterial {
             read_scope_seed,
             write_scope_seed: cached_seed(&self.state.scope_write_seeds, &scope.0)?,
