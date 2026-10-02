@@ -215,6 +215,7 @@ describe('registry HTTP surface (real Postgres)', () => {
       expect(cids).toEqual(['bafyChunkA', 'bafyChunkB', 'bafyChunkedHead']);
     });
 
+    const DEFAULT_JSON_LIMIT_BYTES = 100 * 1024;
     // The widest tokens the DTO admits, unique per index.
     const wide = (prefix: string, i: number, length: number) => `${prefix}${i}`.padEnd(length, 'a');
 
@@ -228,7 +229,7 @@ describe('registry HTTP surface (real Postgres)', () => {
         contentCids: [wide('bafyWideLeaf', i, 256)],
       }));
       expect(MAX_CONTENT_CIDS).toBe(MAX_BATCH);
-      expect(Buffer.byteLength(JSON.stringify(entries))).toBeGreaterThan(100 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(entries))).toBeGreaterThan(DEFAULT_JSON_LIMIT_BYTES);
       await request(http())
         .post('/registry/register')
         .set('Authorization', `Bearer ${acct.token}`)
@@ -274,7 +275,7 @@ describe('registry HTTP surface (real Postgres)', () => {
       expect(await namesFor(acct.id)).toHaveLength(0);
     });
 
-    // Past the 100 KiB default, inside the registry limit.
+    // Past the default limit, inside the registry limit.
     const midSizeBody = () =>
       Array.from({ length: 400 }, (_, i) => ({
         ipnsName: wide('k51mid', i, 128),
@@ -283,7 +284,7 @@ describe('registry HTTP surface (real Postgres)', () => {
 
     it('parses an unauthenticated registry body at the default limit only', async () => {
       const body = midSizeBody();
-      expect(Buffer.byteLength(JSON.stringify(body))).toBeGreaterThan(100 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(body))).toBeGreaterThan(DEFAULT_JSON_LIMIT_BYTES);
       await request(http()).post('/registry/register').send(body).expect(413);
     });
 

@@ -1,6 +1,6 @@
 import { ArgumentMetadata, BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
-import { MAX_BATCH, MAX_REGISTER_CONTENT_CIDS_TOTAL } from './dto/registry.dto';
+import { MAX_BATCH, MAX_CONTENT_CIDS, MAX_REGISTER_CONTENT_CIDS_TOTAL } from './dto/registry.dto';
 import { REGISTRY_BATCH_REFUSED } from './registry-error-codes';
 import { registerBodyPipes, retireBodyPipes } from './registry.pipes';
 
@@ -65,11 +65,12 @@ describe('registry batch gates', () => {
   });
 
   // Split into entries under the per-entry cap, so only the total can refuse it.
+  const perEntry = MAX_CONTENT_CIDS / 2;
   const registerWithCids = (total: number) =>
-    Array.from({ length: Math.ceil(total / 500) }, (_, entry) => ({
+    Array.from({ length: Math.ceil(total / perEntry) }, (_, entry) => ({
       ipnsName: `k51total${entry}`,
       contentCids: Array.from(
-        { length: Math.min(500, total - entry * 500) },
+        { length: Math.min(perEntry, total - entry * perEntry) },
         (_, i) => `bafy${entry}x${i}`
       ),
     }));

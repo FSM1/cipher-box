@@ -67,6 +67,7 @@ mod tests {
     use super::*;
     use crate::net::REGISTRY_BODY_MAX_BYTES;
     use crate::seams::{HttpMethod, HttpResponse};
+    use crate::testkit::account::wide_token;
     use crate::testkit::block_on;
     use crate::testkit::fakes::{InMemoryCredentialStore, ScriptedHttp};
 
@@ -268,24 +269,18 @@ mod tests {
     fn every_request_fits_the_registry_body_limit_at_the_widest_tokens() {
         let (http, client) = client();
         ack(&http, 64);
-        // The widest tokens the registry DTOs admit: a 128-character name and
-        // 256-character CIDs.
-        let wide = |prefix: &str, i: usize, len: usize| {
-            let token = format!("{prefix}{i}");
-            format!("{token}{}", "a".repeat(len - token.len()))
-        };
         let mut entries: Vec<NameRegistration> = (0..REGISTRY_BATCH_MAX + 500)
             .map(|i| NameRegistration {
-                ipns_name: wide("k51name", i, 128),
-                head_cid: Some(wide("bafyhead", i, 256)),
-                content_cids: vec![wide("bafyleaf", i, 256)],
+                ipns_name: wide_token("k51name", i, 128),
+                head_cid: Some(wide_token("bafyhead", i, 256)),
+                content_cids: vec![wide_token("bafyleaf", i, 256)],
             })
             .collect();
         entries.push(NameRegistration {
-            ipns_name: wide("k51large", 0, 128),
-            head_cid: Some(wide("bafyhead", 0, 256)),
+            ipns_name: wide_token("k51large", 0, 128),
+            head_cid: Some(wide_token("bafyhead", 0, 256)),
             content_cids: (0..20 * REGISTRY_BATCH_MAX)
-                .map(|i| wide("bafylarge", i, 256))
+                .map(|i| wide_token("bafylarge", i, 256))
                 .collect(),
         });
         block_on(register(&client, &entries)).expect("register");
