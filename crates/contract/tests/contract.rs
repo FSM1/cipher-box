@@ -6,17 +6,17 @@
 //! identity, refresh rotation with reuse detection, test-login environment
 //! gating + deterministic keypair + cross-consistency with identity login, the
 //! production block on the test-profile auth-limit override,
-//! SIWE secondary surface, the login-method list and its unlink, logout
-//! revocation, the identity subject bind at login and device registration, the
-//! pin/name registry and quota, the mailbox lifecycle, and a raw endpoint
-//! round-trip.
+//! SIWE secondary surface, the email link (codes read from the test-mode API's
+//! log), the login-method list and its unlink, logout revocation, the identity
+//! subject bind at login and device registration, the pin/name registry and
+//! quota, the mailbox lifecycle, and a raw endpoint round-trip.
 //!
 //! Each test skips (loudly) when `CONTRACT_API_URL` is unset — there is no
 //! stack to hit locally. The merge-blocking `contract-suite` CI job always
 //! sets it (and boots the stack), so the assertions always run there.
 
 use cipherbox_contract::{
-    MemoryCredentialStore, ReqwestHttp, api_url, gateway_url, hex_to_scalar, prod_api_url,
+    MemoryCredentialStore, ReqwestHttp, api_log, api_url, gateway_url, hex_to_scalar, prod_api_url,
     random_identity_scalar, random_identity_signer, test_login_secret,
 };
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
@@ -406,10 +406,261 @@ async fn siwe_link_without_a_fresh_challenge_is_refused() {
         matches!(error, ApiError::Unauthorized),
         "a challenge the account's own key did not answer is a 401, got {error:?}"
     );
+    assert_nothing_linked(&client).await;
+}
+
+// --- email link (blueprint/api.md) -----------------------------------------
+
+/// A fresh lowercase address, so the code read back from the log is this
+/// test's and the API's normalization leaves it unchanged.
+fn fresh_email() -> String {
+    let mut bytes = [0u8; 8];
+    getrandom::getrandom(&mut bytes).expect("os rng");
+    format!("link-{}@example.com", hex::encode(bytes))
+}
+
+/// The last code the test-mode API logged for `email`. A sign-in code and a
+/// link code log the same line, so a test reads one before it sends the next.
+async fn delivered_code(email: &str) -> String {
+    let path = api_log().expect(
+        "CONTRACT_API_LOG must be set alongside CONTRACT_API_URL; the suite reads email codes \
+         from the test-mode API's log",
+    );
+    let needle = format!("Verification code for {email}: ");
+    for _ in 0..20 {
+        let log = std::fs::read(&path).unwrap_or_else(|error| panic!("read {path}: {error}"));
+        let log = String::from_utf8_lossy(&log);
+        if let Some(at) = log.rfind(&needle) {
+            let code: String = log[at + needle.len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if code.len() == 6 {
+                return code;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("no verification code for {email} in {path}");
+}
+
+/// The email sign-in exchange, through the harness: it runs before an engine
+/// session exists.
+async fn email_exchange(base: &str, email: &str) -> serde_json::Value {
+    post_json_body(
+        base,
+        "/auth/identity/email/send-code",
+        None,
+        serde_json::json!({ "email": email }),
+    )
+    .await;
+    let code = delivered_code(email).await;
+    post_json_body(
+        base,
+        "/auth/identity/email/verify-code",
+        None,
+        serde_json::json!({ "email": email, "code": code }),
+    )
+    .await
+}
+
+/// Sends a link code to `email` and reads it back from the log.
+async fn link_code(client: &Client, email: &str) -> String {
+    expect_auth("link code", client.email_link_send_code(email).await);
+    delivered_code(email).await
+}
+
+async fn assert_nothing_linked(client: &Client) {
     assert_eq!(
         client.auth_methods().await.expect("methods").len(),
         1,
         "the refused link added nothing"
+    );
+}
+
+/// An account bound at login to the subject an email sign-in mints (ADR 0058
+/// D2). A link points the method at this subject. Returns the subject as the
+/// exchange named it.
+async fn bound_account(base: &str) -> (Client, IdentityChallengeSigner, String) {
+    let grant = email_exchange(base, &fresh_email()).await;
+    let signer = random_identity_signer();
+    let client = login_presenting_identity_token(
+        base,
+        &signer,
+        Some(grant["token"].as_str().expect("an identity token")),
+    )
+    .await;
+    let subject = grant["verifierId"].as_str().expect("a subject").to_string();
+    (client, signer, subject)
+}
+
+/// The link code is its own purpose: the sign-in route must not accept it.
+#[tokio::test]
+async fn email_link_send_code_delivers_a_code_the_sign_in_route_refuses() {
+    let base = require_stack!("email_link_send_code_delivers_a_code_the_sign_in_route_refuses");
+    let client = fresh_account(&base).await;
+    let email = fresh_email();
+
+    let code = link_code(&client, &email).await;
+
+    assert_eq!(
+        post_json(
+            &base,
+            "/auth/identity/email/verify-code",
+            None,
+            serde_json::json!({ "email": email, "code": code }),
+        )
+        .await,
+        401,
+        "a link code opens no sign-in"
+    );
+}
+
+#[tokio::test]
+async fn email_link_points_the_address_at_the_accounts_subject() {
+    let base = require_stack!("email_link_points_the_address_at_the_accounts_subject");
+    let (client, signer, subject) = bound_account(&base).await;
+    let email = fresh_email();
+
+    let code = link_code(&client, &email).await;
+    expect_auth(
+        "email link",
+        client.email_link(&email, &code, &signer).await,
+    );
+
+    let rows = client.auth_methods().await.expect("methods");
+    let linked = rows
+        .iter()
+        .find(|row| row.kind == AuthMethodKind::Email)
+        .expect("the linked address is listed");
+    assert_eq!(
+        linked.identifier_display.as_deref(),
+        Some("l***@example.com"),
+        "the row shows the masked address, never the address itself"
+    );
+
+    let signed_in = email_exchange(&base, &email).await;
+    assert_eq!(
+        signed_in["verifierId"].as_str(),
+        Some(subject.as_str()),
+        "the linked address signs in to the subject of the account it was linked to"
+    );
+
+    expect_auth(
+        "unlink the address",
+        client.unlink_auth_method(&linked.id, &signer).await,
+    );
+    assert!(
+        client
+            .auth_methods()
+            .await
+            .expect("methods")
+            .iter()
+            .all(|row| row.kind != AuthMethodKind::Email),
+        "the unlinked address is no longer listed"
+    );
+    assert_ne!(
+        email_exchange(&base, &email).await["verifierId"].as_str(),
+        Some(subject.as_str()),
+        "the unlinked address no longer opens the account"
+    );
+}
+
+/// A bearer alone must not add a login method: the link route re-proves the
+/// account identity key exactly as the wallet link does.
+#[tokio::test]
+async fn email_link_without_a_fresh_challenge_is_refused() {
+    let base = require_stack!("email_link_without_a_fresh_challenge_is_refused");
+    let (client, _signer, _subject) = bound_account(&base).await;
+    let email = fresh_email();
+
+    let code = link_code(&client, &email).await;
+    let error = client
+        .email_link(&email, &code, &random_identity_signer())
+        .await
+        .expect_err("a challenge bound to another key must not link");
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "a challenge the account's own key did not answer is a 401, got {error:?}"
+    );
+    assert_nothing_linked(&client).await;
+}
+
+#[tokio::test]
+async fn email_link_with_a_wrong_or_sign_in_code_is_refused() {
+    let base = require_stack!("email_link_with_a_wrong_or_sign_in_code_is_refused");
+    let (client, signer, _subject) = bound_account(&base).await;
+    let email = fresh_email();
+
+    let code = link_code(&client, &email).await;
+    let wrong = if code == "000000" { "000001" } else { "000000" };
+    let error = client
+        .email_link(&email, wrong, &signer)
+        .await
+        .expect_err("a wrong code must not link");
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "a wrong code is a 401, got {error:?}"
+    );
+
+    let other = fresh_email();
+    assert_eq!(
+        post_json(
+            &base,
+            "/auth/identity/email/send-code",
+            None,
+            serde_json::json!({ "email": other }),
+        )
+        .await,
+        200
+    );
+    let sign_in_code = delivered_code(&other).await;
+    let error = client
+        .email_link(&other, &sign_in_code, &signer)
+        .await
+        .expect_err("a sign-in code must not link");
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "a sign-in code is a 401 on the link route, got {error:?}"
+    );
+
+    assert_nothing_linked(&client).await;
+}
+
+/// A link points the method at the subject bound to the account at login, so
+/// an account that logged in without an identity token has nothing to point it
+/// at.
+#[tokio::test]
+async fn email_link_refused_without_a_bound_subject() {
+    let base = require_stack!("email_link_refused_without_a_bound_subject");
+    let (client, signer) = fresh_account_with_signer(&base).await;
+    let email = fresh_email();
+
+    let code = link_code(&client, &email).await;
+    assert_conflict(
+        &client.email_link(&email, &code, &signer).await,
+        NO_BOUND_SUBJECT,
+    );
+    assert_nothing_linked(&client).await;
+}
+
+#[tokio::test]
+async fn email_link_refused_for_an_address_that_opens_another_account() {
+    let base = require_stack!("email_link_refused_for_an_address_that_opens_another_account");
+    let (client, signer, _subject) = bound_account(&base).await;
+    let email = fresh_email();
+    let own = email_exchange(&base, &email).await;
+
+    let code = link_code(&client, &email).await;
+    assert_conflict(
+        &client.email_link(&email, &code, &signer).await,
+        "Email is already linked to another account",
+    );
+    assert_nothing_linked(&client).await;
+    assert_eq!(
+        email_exchange(&base, &email).await["verifierId"],
+        own["verifierId"],
+        "the address still opens its own subject"
     );
 }
 
@@ -2059,7 +2310,7 @@ async fn register_device(
 }
 
 /// Assert a 409 that carries `message`.
-fn assert_conflict(result: &Result<RegisteredDevice, ApiError>, message: &str) {
+fn assert_conflict<T: std::fmt::Debug>(result: &Result<T, ApiError>, message: &str) {
     match result {
         Err(ApiError::Status {
             status: 409,

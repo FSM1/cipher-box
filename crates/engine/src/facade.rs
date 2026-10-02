@@ -1986,6 +1986,19 @@ pub enum Command {
         )]
         signature: Vec<u8>,
     },
+    /// Ask the API to email a link code to `email` for the signed-in account.
+    EmailLinkSendCode {
+        /// The address to link.
+        email: String,
+    },
+    /// Link an email code login to the signed-in account. Re-proves the
+    /// account identity key, as [`Command::SiweLink`] does.
+    EmailLink {
+        /// The address the code went to.
+        email: String,
+        /// The code the member read from that address.
+        code: String,
+    },
     /// Unlink one login method. Re-proves the account identity key server-side.
     UnlinkAuthMethod {
         /// The row `/auth/methods` served.
@@ -2077,6 +2090,8 @@ impl Command {
             Command::RotateNow { .. } => "rotateNow",
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
             Command::SiweLink { .. } => "siweLink",
+            Command::EmailLinkSendCode { .. } => "emailLinkSendCode",
+            Command::EmailLink { .. } => "emailLink",
             Command::UnlinkAuthMethod { .. } => "unlinkAuthMethod",
             Command::RegisterDevice { .. } => "registerDevice",
             Command::RevokeDevice { .. } => "revokeDevice",
@@ -7037,6 +7052,22 @@ where {
                 let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
                 let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
                 api.siwe_link(&message, &eth_signature_hex(&signature), &signer)
+                    .await
+                    .map_err(EngineError::from_api)?;
+                Ok(CommandOutcome::Done)
+            }
+            Command::EmailLinkSendCode { email } => {
+                let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+                api.email_link_send_code(&email)
+                    .await
+                    .map_err(EngineError::from_api)?;
+                Ok(CommandOutcome::Done)
+            }
+            Command::EmailLink { email, code } => {
+                let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+                let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+                let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
+                api.email_link(&email, &code, &signer)
                     .await
                     .map_err(EngineError::from_api)?;
                 Ok(CommandOutcome::Done)
@@ -14074,6 +14105,66 @@ mod tests {
     }
 
     #[test]
+    fn email_link_send_code_command_forwards_the_address() {
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
+        let before = device.http.requests().len();
+        device.http.enqueue_response(json_response(201, json!({})));
+
+        block_on(engine.command(Command::EmailLinkSendCode {
+            email: "member@example.test".to_owned(),
+        }))
+        .expect("send code");
+
+        let requests = device.http.requests();
+        let sent = &requests[before..];
+        assert_eq!(sent.len(), 1, "a send mints no step-up challenge");
+        assert_eq!(sent[0].url, "/auth/email/link/send-code");
+        let body: Value = serde_json::from_slice(sent[0].body.as_ref().unwrap()).unwrap();
+        assert_eq!(body, json!({ "email": "member@example.test" }));
+    }
+
+    #[test]
+    fn email_link_command_forwards_the_code_and_reproves_the_identity_key() {
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
+        let before = device.http.requests().len();
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LINK_CHALLENGE_FIXTURE }),
+        ));
+        device.http.enqueue_response(json_response(201, json!({})));
+
+        block_on(engine.command(Command::EmailLink {
+            email: "member@example.test".to_owned(),
+            code: "123456".to_owned(),
+        }))
+        .expect("email link");
+
+        let signer = IdentityChallengeSigner::from_signer(
+            engine.session().expect("live").identity().clone(),
+        );
+        let requests = device.http.requests();
+        let sent = &requests[before..];
+        assert_eq!(sent.len(), 2, "one challenge, then one link");
+        assert_eq!(sent[0].url, "/auth/challenge/step-up");
+        let mint: Value = serde_json::from_slice(sent[0].body.as_ref().unwrap()).unwrap();
+        assert_eq!(mint["operation"], "link");
+        assert_eq!(sent[1].url, "/auth/email/link");
+        let body: Value = serde_json::from_slice(sent[1].body.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            body,
+            json!({
+                "email": "member@example.test",
+                "code": "123456",
+                "challenge": LINK_CHALLENGE_FIXTURE,
+                "challengeSignature": signer.sign_challenge(LINK_CHALLENGE_FIXTURE),
+            }),
+            "the account identity key signed the challenge the server issued"
+        );
+    }
+
+    #[test]
     fn unlink_auth_method_command_reproves_the_identity_key() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
@@ -14131,6 +14222,13 @@ mod tests {
                 Command::SiweLink {
                     message: "siwe-link-message".to_owned(),
                     signature: WALLET_SIGNATURE_FIXTURE.to_vec(),
+                },
+                UNLINK_CHALLENGE_FIXTURE,
+            ),
+            (
+                Command::EmailLink {
+                    email: "member@example.test".to_owned(),
+                    code: "123456".to_owned(),
                 },
                 UNLINK_CHALLENGE_FIXTURE,
             ),

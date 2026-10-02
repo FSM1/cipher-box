@@ -35,7 +35,7 @@ const SPENT_SWEEP_BATCH = 100;
 const SPENT_ROW_GRACE_MS = CLOCK_SKEW_SECONDS * 1000;
 
 export interface IdentityTokenClaims {
-  /** The `identity_subjects` row id — the Core Kit `verifierId`. */
+  /** The `identity_subjects` subject id — the Core Kit `verifierId`. */
   subject: string;
   method: IdentitySubjectKind;
 }

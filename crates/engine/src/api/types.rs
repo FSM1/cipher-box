@@ -72,6 +72,25 @@ pub(crate) struct SiweLinkRequest<'a> {
     pub challenge_signature: &'a str,
 }
 
+/// The body for
+/// [`ApiClient::email_link_send_code`](super::ApiClient::email_link_send_code).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EmailLinkSendCodeRequest<'a> {
+    pub email: &'a str,
+}
+
+/// The link body for [`ApiClient::email_link`](super::ApiClient::email_link):
+/// the emailed code plus the identity re-proof.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EmailLinkRequest<'a> {
+    pub email: &'a str,
+    pub code: &'a str,
+    pub challenge: &'a str,
+    pub challenge_signature: &'a str,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TestLoginRequest<'a> {
@@ -225,6 +244,8 @@ pub enum AuthMethodKind {
     Identity,
     /// A linked SIWE wallet.
     Wallet,
+    /// A linked email code login.
+    Email,
     /// The staging-gated test login.
     Test,
     /// A kind this client does not know. Rendered as-is rather than refused —

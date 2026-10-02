@@ -138,8 +138,8 @@ describe('device-approval HTTP surface (real Postgres)', () => {
    */
   async function identityToken(subject: string): Promise<string> {
     await db.dataSource.query(
-      `INSERT INTO identity_subjects (id, kind, identifier_hash) VALUES ($1, 'google', $2)
-       ON CONFLICT ("id") DO NOTHING`,
+      `INSERT INTO identity_subjects (id, subject_id, kind, identifier_hash)
+       VALUES ($1, $1, 'google', $2) ON CONFLICT ("id") DO NOTHING`,
       [subject, createHash('sha256').update(subject).digest('hex')]
     );
     return (await identityTokens.sign({ subject, method: 'google' })).token;

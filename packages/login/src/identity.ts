@@ -21,8 +21,8 @@ export interface IdentityCredential {
   token: string;
   /** Passed to `loginWithJWT`; with the verifier it selects the derived key. */
   verifierId: string;
-  /** For display only — absent for wallet, which carries no address. */
-  email: string | null;
+  /** What the member signed in as, for display only; a wallet's is truncated. */
+  display: string;
   /** The token lifetime in seconds, counted from when the exchange answered. */
   expiresIn: number;
 }
@@ -39,7 +39,7 @@ export interface IdentityExchange {
 interface GrantBody {
   token: string;
   verifierId: string;
-  email: string | null;
+  display: string;
   expiresIn: number;
 }
 
@@ -66,7 +66,7 @@ export function createIdentityExchange(apiBaseUrl: string): IdentityExchange {
     method,
     token: grant.token,
     verifierId: grant.verifierId,
-    email: grant.email,
+    display: grant.display,
     expiresIn: grant.expiresIn,
   });
 

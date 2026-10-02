@@ -10,7 +10,7 @@ function model(over: Partial<ShellModel> = {}): ShellModel {
     busy: false,
     step: null,
     methods: ['google', 'email'],
-    email: null,
+    display: null,
     error: null,
     vault: null,
     vaultError: null,
@@ -92,7 +92,7 @@ describe('the front door', () => {
 
   it('signs out when the signed-in affordance is clicked', () => {
     const acted = actions();
-    draw(model({ phase: 'signedIn', email: 'member@example.com' }), acted);
+    draw(model({ phase: 'signedIn', display: 'member@example.com' }), acted);
     fireEvent.click(find('[data-action="logout"]'));
     expect(acted.logout).toHaveBeenCalled();
   });
@@ -196,7 +196,7 @@ describe('the front door', () => {
   });
 
   it('waits for the first vault read rather than reporting an empty vault', () => {
-    draw(model({ phase: 'signedIn', email: 'member@example.com' }), actions());
+    draw(model({ phase: 'signedIn', display: 'member@example.com' }), actions());
     expect(root.textContent).toContain('member@example.com');
     expect(root.textContent).toContain('Opening your vault…');
     expect(root.querySelector('[data-vault="items"]')).toBeNull();

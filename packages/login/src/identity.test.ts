@@ -3,13 +3,15 @@ import { createIdentityExchange, isIdentityMethod } from './identity';
 
 const BASE = 'https://api.example.test';
 
+const WALLET_DISPLAY = '0xa29A...aF4d';
 const GRANT = {
   token: 'header.payload.signature',
   verifierId: 'subject-42',
-  email: null,
+  display: WALLET_DISPLAY,
   expiresAt: '2030-01-01T00:05:00.000Z',
   expiresIn: 300,
 };
+const EMAIL_GRANT = { ...GRANT, display: 'member@example.test' };
 
 function stubFetch(response: Response | (() => Promise<Response>)) {
   const fetchMock = vi.fn(
@@ -36,7 +38,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('the identity exchange', () => {
   it('posts a Google credential and reads back the minted grant', async () => {
-    const fetchMock = stubFetch(jsonResponse({ ...GRANT, email: 'member@example.test' }));
+    const fetchMock = stubFetch(jsonResponse(EMAIL_GRANT));
 
     const credential = await createIdentityExchange(BASE).fromGoogleToken('google.id.token');
 
@@ -48,13 +50,13 @@ describe('the identity exchange', () => {
       method: 'google',
       token: 'header.payload.signature',
       verifierId: 'subject-42',
-      email: 'member@example.test',
+      display: 'member@example.test',
       expiresIn: 300,
     });
   });
 
   it('posts an email code and marks the grant as the email method', async () => {
-    const fetchMock = stubFetch(jsonResponse({ ...GRANT, email: 'member@example.test' }));
+    const fetchMock = stubFetch(jsonResponse(EMAIL_GRANT));
 
     const credential = await createIdentityExchange(BASE).fromEmailCode(
       'member@example.test',
@@ -80,7 +82,7 @@ describe('the identity exchange', () => {
       url: `${BASE}/auth/identity/wallet`,
       body: { message: 'siwe-message', signature: '0xab' },
     });
-    expect(credential).toMatchObject({ method: 'wallet', email: null });
+    expect(credential).toMatchObject({ method: 'wallet', display: WALLET_DISPLAY });
   });
 
   it('reads the SIWE nonce from the API, which the engine cannot answer pre-start', async () => {

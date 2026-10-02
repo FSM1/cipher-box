@@ -21,15 +21,20 @@ const { RecoveryRequired } = vi.hoisted(() => ({
 
 const shell = vi.hoisted(() => {
   const redraws: Redraw[] = [];
+  /** The label each redraw carried, beside its snapshot. */
+  const displays: (string | null)[] = [];
   const vaultListeners: (() => void)[] = [];
   let release = (): void => {};
   return {
     redraws,
+    displays,
     vaultListeners,
     restore: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
     finishRestore: (): void => release(),
     /** The login flow's host, so a test can drive the account transitions. */
-    host: null as { account: { signedIn(method: null, email: string | null): void } } | null,
+    host: null as {
+      account: { signedIn(method: string | null, display: string | null): void };
+    } | null,
     /** The last actions the window rendered, so a test can drive them. */
     actions: null as ShellActions | null,
     loginWithGoogle: vi.fn((): Promise<void> => Promise.resolve()),
@@ -83,6 +88,7 @@ vi.mock('./frontDoor', () => ({
   renderShell: (_root: HTMLElement, model: ShellModel, actions: ShellActions) => {
     shell.actions = actions;
     shell.redraws.push({ phase: model.phase, busy: model.busy, step: model.step });
+    shell.displays.push(model.display);
   },
 }));
 
@@ -120,6 +126,12 @@ describe('the shell bootstrap', () => {
 
     shell.vaultListeners.forEach((emitted) => emitted());
     await vi.waitFor(() => expect(shell.readVaultStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it('labels a wallet sign-in with the truncated address the exchange gave', async () => {
+    shell.host!.account.signedIn('wallet', '0xa29A...aF4d');
+
+    await vi.waitFor(() => expect(shell.displays.at(-1)).toBe('0xa29A...aF4d'));
   });
 
   /**
