@@ -138,6 +138,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "A challenge or signature that does not verify, or an invalid identity token"
           }
         },
         "summary": "Challenge-signature login against the secp256k1 identity key; creates the account implicitly at first login",
@@ -1074,7 +1077,7 @@
             "description": "Missing token, an invalid or already-spent identity token, or a signature that does not verify"
           },
           "409": {
-            "description": "Key or identity already claimed elsewhere, or the device limit is reached"
+            "description": "The account has no bound identity subject, the identity token names a subject other than the bound one, the key is registered elsewhere or under another subject, or the device limit is reached"
           },
           "429": {
             "description": "Per-account registry rate limit exceeded"
@@ -1627,6 +1630,10 @@
           "signature": {
             "type": "string",
             "description": "Compact secp256k1 signature over sha256(challenge), 64 bytes hex"
+          },
+          "identityToken": {
+            "type": "string",
+            "description": "The CipherBox identity token of the exchange that preceded this login. It binds an unbound account to an unbound identity subject; the login does not spend it"
           }
         },
         "required": [
@@ -2305,7 +2312,7 @@
           },
           "identityToken": {
             "type": "string",
-            "description": "CipherBox identity token this device signed in with; binds the account to the identity a pre-reconstruction device can present. A successful registration spends it"
+            "description": "CipherBox identity token this device signed in with. Its subject must be the one bound to this account at login. A successful registration spends it"
           },
           "label": {
             "type": "string",
