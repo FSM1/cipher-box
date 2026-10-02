@@ -153,6 +153,10 @@ const WRITE_EPOCH_SUFFIX: &[u8] = b"/write-epoch";
 /// back onto an abandoned index ([`vault_pointer_index_floor`]).
 const VAULT_POINTER_INDEX_SUFFIX: &[u8] = b"/vault-pointer-index";
 
+/// Suffix for the vouched floor: the highest `minReadEpoch` a vault pointer
+/// vouched to this device (ADR 0067 D3).
+const VOUCHED_FLOOR_SUFFIX: &[u8] = b"/vouched-read-epoch";
+
 /// `scope_id` under a fixed suffix. The store matches keys exactly and the
 /// scope id is fixed-width, so two keys collide only if their suffixes are
 /// equal; the suffixes here are distinct literals and nothing appends past
@@ -209,6 +213,36 @@ pub async fn advance_vault_pointer_index<F: FloorStore>(
 ) -> SeamResult<u64> {
     floors
         .raise_epoch_floor(&suffixed(root_scope_id, VAULT_POINTER_INDEX_SUFFIX), index)
+        .await
+}
+
+/// The highest `minReadEpoch` a vault pointer vouched to this device for the
+/// root scope, if one was ever recorded (ADR 0067 D3).
+pub async fn vouched_floor<F: FloorStore>(
+    floors: &F,
+    root_scope_id: &[u8; 16],
+) -> SeamResult<Option<u64>> {
+    floors
+        .epoch_floor(&suffixed(root_scope_id, VOUCHED_FLOOR_SUFFIX))
+        .await
+}
+
+/// Record that the vault pointer vouches `min_read_epoch` for the root scope.
+/// The read-epoch floor rises with it, first, so the produce bar is never below
+/// the bar the cold start reads (ADR 0067 D4).
+pub async fn raise_vouched_floor<F: FloorStore>(
+    floors: &F,
+    root_scope_id: &[u8; 16],
+    min_read_epoch: u64,
+) -> SeamResult<()> {
+    floors
+        .commit_floors(&[
+            FloorRaise::epoch(root_scope_id.as_slice(), min_read_epoch),
+            FloorRaise::epoch(
+                suffixed(root_scope_id, VOUCHED_FLOOR_SUFFIX),
+                min_read_epoch,
+            ),
+        ])
         .await
 }
 
@@ -443,9 +477,8 @@ pub async fn mint_revision<F: FloorStore>(
 }
 
 /// Cold-seed a scope's floors from an owner-vouched re-point object. Raises the
-/// read-epoch floor to `minReadEpoch` (the revocation boundary) and the
-/// write-epoch floor to `writeEpoch`, both monotonic-max — the two epoch floors
-/// only.
+/// read-epoch floor and the vouched floor to `minReadEpoch` (the revocation
+/// boundary) and the write-epoch floor to `writeEpoch`, all monotonic-max.
 ///
 /// The [`RepointObject`] argument is only obtainable from a successful
 /// [`open_pointer_payload`](cipherbox_core::payload::open_pointer_payload),
@@ -456,7 +489,7 @@ pub async fn mint_revision<F: FloorStore>(
 /// floor, so a partial seam failure leaves the fail-closed state (or none at
 /// all, on a backing with an atomic [`FloorStore::commit_floors`]).
 ///
-/// **The two epoch floors only.** [`RepointObject`] vouches no sequence, so
+/// **No sequence floor.** [`RepointObject`] vouches no sequence, so
 /// nothing here anchors the sequence namespace and a cold device meets a
 /// long-lived name with a bar of 0 — the within-epoch staleness
 /// blueprint/engine.md's floor law accepts. Closing it needs the owner to vouch
@@ -466,6 +499,10 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
     floors
         .commit_floors(&[
             FloorRaise::epoch(repoint.scope_id.as_slice(), repoint.min_read_epoch),
+            FloorRaise::epoch(
+                suffixed(&repoint.scope_id, VOUCHED_FLOOR_SUFFIX),
+                repoint.min_read_epoch,
+            ),
             FloorRaise::epoch(write_epoch_key(&repoint.scope_id), repoint.write_epoch),
         ])
         .await?;
@@ -498,8 +535,47 @@ pub async fn repoint_regression<F: FloorStore>(
     session_root_scope_id: &[u8; 16],
     plane: PointerPlane,
 ) -> SeamResult<Option<FloorRegression>> {
-    if repoint.scope_id == *session_root_scope_id
-        && let Some(floor) = read_epoch_floor(floors, &repoint.scope_id).await?
+    regression_below(
+        floors,
+        repoint,
+        session_root_scope_id,
+        plane,
+        ReadBar::ReadEpoch,
+    )
+    .await
+}
+
+/// Which durable value the read-epoch stage of a regression check compares a
+/// vouched `minReadEpoch` with.
+#[derive(Clone, Copy)]
+enum ReadBar {
+    /// The read-epoch floor: the produce side (ADR 0067 D4).
+    ReadEpoch,
+    /// The vouched floor, or the read-epoch floor on a device without one: the
+    /// cold start, which must not refuse a pointer that only lags a root this
+    /// device adopted (ADR 0067 D3).
+    Vouched,
+}
+
+async fn regression_below<F: FloorStore>(
+    floors: &F,
+    repoint: &RepointObject,
+    session_root_scope_id: &[u8; 16],
+    plane: PointerPlane,
+    bar: ReadBar,
+) -> SeamResult<Option<FloorRegression>> {
+    let floor = if repoint.scope_id != *session_root_scope_id {
+        None
+    } else {
+        match bar {
+            ReadBar::Vouched => match vouched_floor(floors, &repoint.scope_id).await? {
+                Some(vouched) => Some(vouched),
+                None => read_epoch_floor(floors, &repoint.scope_id).await?,
+            },
+            ReadBar::ReadEpoch => read_epoch_floor(floors, &repoint.scope_id).await?,
+        }
+    };
+    if let Some(floor) = floor
         && repoint.min_read_epoch < floor
     {
         return Ok(Some(FloorRegression::ReadEpoch {
@@ -536,7 +612,8 @@ pub async fn write_epoch_regression<F: FloorStore>(
 /// the single checked cold-seed seam production uses.
 ///
 /// Reads the durable floors and rejects before any write if the re-point
-/// regresses one ([`repoint_regression`]) — a replay past a revocation
+/// regresses one ([`repoint_regression`], with the vouched floor as the read
+/// bar at the vault anchor, ADR 0067 D3) — a replay past a revocation
 /// boundary, a trust violation and never mere staleness. Only when nothing
 /// regresses does it advance the floors via the monotonic-max [`cold_seed`].
 ///
@@ -550,9 +627,15 @@ pub async fn cold_seed_checked<F: FloorStore>(
 ) -> Result<(), ColdSeedError> {
     // Cold-seeding *is* the vault-pointer path — both callers read that plane.
     let plane = PointerPlane::VaultPointer;
-    if let Some(regression) = repoint_regression(floors, repoint, session_root_scope_id, plane)
-        .await
-        .map_err(ColdSeedError::Seam)?
+    if let Some(regression) = regression_below(
+        floors,
+        repoint,
+        session_root_scope_id,
+        plane,
+        ReadBar::Vouched,
+    )
+    .await
+    .map_err(ColdSeedError::Seam)?
     {
         return Err(ColdSeedError::Regression(regression));
     }
@@ -1045,6 +1128,97 @@ mod tests {
                     vouched: 1
                 }),
                 "a scope pointer below the floor it authors is a rollback"
+            );
+        });
+    }
+
+    /// A session adopted a vault root above the epoch the pointer vouched: the
+    /// cold start admits that pointer, and the produce side still refuses to
+    /// sign one below the read-epoch floor.
+    #[test]
+    fn the_cold_start_reads_the_vouched_floor_and_the_produce_side_the_read_floor() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            cold_seed_checked(&floors, &repoint(SCOPE, 1, 1), &SCOPE)
+                .await
+                .expect("the first seed");
+            advance_on_unseal(&floors, &SCOPE, NAME, 2, 2)
+                .await
+                .unwrap();
+
+            cold_seed_checked(&floors, &repoint(SCOPE, 1, 1), &SCOPE)
+                .await
+                .expect("a pointer that only lags an adopted root is no rollback");
+            assert_eq!(
+                repoint_regression(
+                    &floors,
+                    &repoint(SCOPE, 1, 1),
+                    &SCOPE,
+                    PointerPlane::VaultPointer
+                )
+                .await
+                .unwrap(),
+                Some(FloorRegression::ReadEpoch {
+                    floor: 2,
+                    vouched: 1
+                }),
+                "no re-point below the read-epoch floor is signed"
+            );
+        });
+    }
+
+    /// A pointer below the highest epoch a pointer vouched to this device is a
+    /// rollback at the cold start.
+    #[test]
+    fn the_cold_start_refuses_a_pointer_below_the_vouched_floor() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            cold_seed_checked(&floors, &repoint(SCOPE, 1, 1), &SCOPE)
+                .await
+                .expect("the first seed");
+            raise_vouched_floor(&floors, &SCOPE, 3).await.unwrap();
+
+            assert_eq!(
+                cold_seed_checked(&floors, &repoint(SCOPE, 2, 1), &SCOPE).await,
+                Err(ColdSeedError::Regression(FloorRegression::ReadEpoch {
+                    floor: 3,
+                    vouched: 2
+                }))
+            );
+        });
+    }
+
+    /// The vouched floor never rises past the read-epoch floor, so the produce
+    /// bar is never below the bar the cold start reads.
+    #[test]
+    fn a_vouched_floor_raise_raises_the_read_epoch_floor_with_it() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            raise_vouched_floor(&floors, &SCOPE, 4).await.unwrap();
+            assert_eq!(vouched_floor(&floors, &SCOPE).await.unwrap(), Some(4));
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(4));
+
+            cold_seed(&floors, &repoint(SCOPE, 6, 1)).await.unwrap();
+            assert_eq!(vouched_floor(&floors, &SCOPE).await.unwrap(), Some(6));
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(6));
+        });
+    }
+
+    /// A device with no vouched floor, as after an upgrade, compares with the
+    /// read-epoch floor.
+    #[test]
+    fn without_a_vouched_floor_the_cold_start_compares_with_the_read_floor() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            advance_on_unseal(&floors, &SCOPE, NAME, 2, 5)
+                .await
+                .unwrap();
+            assert_eq!(
+                cold_seed_checked(&floors, &repoint(SCOPE, 4, 1), &SCOPE).await,
+                Err(ColdSeedError::Regression(FloorRegression::ReadEpoch {
+                    floor: 5,
+                    vouched: 4
+                }))
             );
         });
     }

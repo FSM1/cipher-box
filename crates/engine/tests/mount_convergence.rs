@@ -1001,6 +1001,82 @@ fn a_session_refuses_a_pre_cut_root_above_the_cut_roots_sequence() {
     );
 }
 
+/// Serve the seeded re-point again, which vouches the pre-cut epoch, above
+/// every sequence the vault pointer has reached.
+fn replay_pre_cut_vault_pointer(world: &FakeWorld, root_name: &IpnsName) {
+    let pre_cut = RepointObject {
+        scope_id: SCOPE,
+        current_root: root_name.clone(),
+        write_epoch: EPOCH,
+        min_read_epoch: EPOCH,
+        prev_root: None,
+    };
+    republish_vault_pointer(world, &pre_cut, 100);
+}
+
+/// A cold start of `device` that must refuse the vault pointer as rolled back.
+fn assert_start_refuses_a_rolled_back_pointer(
+    blocks: &Blocks,
+    device: &FakeDevice,
+    entropy_seed: u64,
+) {
+    serve_http(device, blocks, 600);
+    let (mut engine, _events) = engine_on_api(device, entropy_seed);
+    let started = block_on(engine.start(secret()));
+    assert!(
+        matches!(
+            &started,
+            Err(EngineError::ColdStart { message }) if message.contains("read-epoch floor regression")
+        ),
+        "a pointer below the epoch it vouched to this device is a rollback: {started:?}"
+    );
+}
+
+/// The cut's vouch lands, so this device holds the cut epoch as vouched: a
+/// replay of the pre-cut pointer is refused at the next start.
+#[test]
+fn a_replayed_pre_cut_pointer_is_refused_after_a_landed_vouch() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    cut_vault_root(&world, &mut engine);
+    drop((engine, tasks));
+
+    replay_pre_cut_vault_pointer(&world, &root_name);
+    assert_start_refuses_a_rolled_back_pointer(&blocks, &owner, 43);
+}
+
+/// The start after a cut whose vouch ran out lands the vouch at its catch-up,
+/// so a later replay of the pre-cut pointer is refused.
+#[test]
+fn a_replayed_pre_cut_pointer_is_refused_after_the_catch_up_vouch() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    let cut_epoch = cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+    tick(&world, &engine, &mut tasks);
+    drop((engine, tasks));
+
+    let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 43);
+    assert_eq!(
+        vouched_min_read_epoch(&world),
+        cut_epoch,
+        "the start vouches the epoch its session adopted"
+    );
+    drop(engine);
+
+    replay_pre_cut_vault_pointer(&world, &root_name);
+    assert_start_refuses_a_rolled_back_pointer(&blocks, &owner, 44);
+}
+
 /// Every other owner action that could reach the vault root is refused there or
 /// leaves its read epoch alone, so none of them owes the anchor a vouch.
 #[test]

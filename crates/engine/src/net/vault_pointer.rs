@@ -107,15 +107,26 @@ where
     }
 
     /// Raise `standing`'s `minReadEpoch` to `read_epoch` under a CAS over its
-    /// sequence. A standing re-point already at or past it is left alone.
+    /// sequence. A standing re-point already at or past it is left alone. Once
+    /// the vault pointer vouches `read_epoch`, the vouched floor records it.
     pub(crate) async fn vouch_over(
         &self,
         standing: StandingVouch,
         read_epoch: u64,
     ) -> Result<(), RotationPublishError> {
-        if standing.repoint.min_read_epoch >= read_epoch {
-            return Ok(());
+        if standing.repoint.min_read_epoch < read_epoch {
+            self.publish_vouch(standing, read_epoch).await?;
         }
+        floor::raise_vouched_floor(self.floors, &self.scope_id, read_epoch)
+            .await
+            .map_err(|_| RotationPublishError::NotPublished)
+    }
+
+    async fn publish_vouch(
+        &self,
+        standing: StandingVouch,
+        read_epoch: u64,
+    ) -> Result<(), RotationPublishError> {
         let repoint = RepointObject {
             min_read_epoch: read_epoch,
             ..standing.repoint
