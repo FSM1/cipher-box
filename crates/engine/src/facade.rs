@@ -71,7 +71,7 @@ use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::accept::JoinStanding;
 use crate::grants::create::MINT_EPOCH;
-use crate::grants::grafted::floor_view;
+use crate::grants::grafted::{FloorNamespace, floor_view};
 use crate::grants::inbox::{OwnedClaim, owned_claims};
 use crate::grants::link_read::{
     JoinRead, JoinSeams, LinkReadRefusal, LinkReader, PreviewRead, join_read,
@@ -98,7 +98,7 @@ use crate::grants::{
     rename_grantee, seal_fragment, set_permission,
 };
 use crate::mailbox::poll_verified;
-use crate::name::{NameError, is_emittable, validate_name};
+use crate::name::{check_emittable, validate_name};
 use crate::net::VaultPointerVoucher;
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
@@ -134,7 +134,7 @@ use crate::rotation::{
 };
 use crate::rotation::{FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloor, StampedSeed, cached_seed, current_seed, deposit_seed,
+    ScopeSeeds, SeedFloor, StampedSeed, cached_seed, cached_seed_in, current_seed, deposit_seed,
     deposit_write_seed, own_descendant_scopes, refresh_seed_floors, seed_names,
     walked_boundary_material,
 };
@@ -3862,17 +3862,9 @@ fn refuse_unlawful_name(name: &str) -> Result<(), EngineError> {
 /// no kernel can carry strands it just as surely — restored into a live folder,
 /// it is invisible and unremovable through every projection.
 fn refuse_unemittable_name(name: &str) -> Result<(), EngineError> {
-    if name.len() > MAX_NODE_NAME_BYTES {
-        return Err(EngineError::MalformedInput {
-            check: NameError::TooLong.check(),
-        });
-    }
-    if !is_emittable(name) {
-        return Err(EngineError::MalformedInput {
-            check: "node-name-unemittable",
-        });
-    }
-    Ok(())
+    check_emittable(name).map_err(|reason| EngineError::MalformedInput {
+        check: reason.check(),
+    })
 }
 
 /// A folder gaining a child, held to [`MAX_FOLDER_CHILDREN`] and to the byte
@@ -5528,6 +5520,7 @@ impl<T: SeamTypes> Engine<T> {
                 root_scope_id,
                 seed,
                 vouched.map(|repoint| repoint.min_read_epoch),
+                FloorNamespace::Own,
             );
         }
         let root_name = outcome
@@ -5544,6 +5537,7 @@ impl<T: SeamTypes> Engine<T> {
                 seed,
                 root_name.as_ref(),
                 vouched.map(|repoint| repoint.write_epoch),
+                FloorNamespace::Own,
             );
         }
         *self.state.snapshot.borrow_mut() = outcome.base;
@@ -5602,6 +5596,7 @@ impl<T: SeamTypes> Engine<T> {
             vault.repoint.scope_id,
             vault.read_scope_seed,
             Some(vault.repoint.min_read_epoch),
+            FloorNamespace::Own,
         );
         deposit_write_seed(
             &self.state.scope_write_seeds,
@@ -5609,6 +5604,7 @@ impl<T: SeamTypes> Engine<T> {
             vault.write_scope_seed,
             Some(&vault.root_name),
             Some(vault.repoint.write_epoch),
+            FloorNamespace::Own,
         );
         *self.state.current_root_name.borrow_mut() = Some(vault.root_name);
     }
@@ -8229,6 +8225,7 @@ where {
             node.0,
             granted_read_scope.seed,
             Some(granted_read_scope.epoch),
+            FloorNamespace::Own,
         );
 
         if let ScopeShare::Contact {
@@ -11708,7 +11705,16 @@ where {
         let WriteHome::Graft(graft) = home else {
             return Ok(home);
         };
-        let seed = cached_seed(&self.state.scope_write_seeds, &graft.0).ok_or_else(out_of_scope)?;
+        let seed = self
+            .scope_floors(&graft.0)
+            .and_then(|floors| {
+                cached_seed_in(
+                    &self.state.scope_write_seeds,
+                    &graft.0,
+                    FloorNamespace::of(&floors),
+                )
+            })
+            .ok_or_else(out_of_scope)?;
         let chain = core::iter::once(node).chain(rendered.ancestors(node));
         for below in chain.take_while(|below| *below != graft) {
             let Some(published) = rendered.node(below).and_then(|meta| meta.ipns_name.clone())
@@ -14747,12 +14753,16 @@ mod tests {
         );
         // The narrow tier still holds: restored into a live folder, a name no
         // kernel can carry is invisible and unremovable through the mount.
-        for name in ["", "a/b", "a\0b", "..", "a\nb"] {
+        for (name, check) in [
+            ("", "node-name-empty"),
+            ("a/b", "node-name-separator"),
+            ("a\0b", "node-name-control"),
+            ("..", "node-name-dot-entry"),
+            ("a\nb", "node-name-control"),
+        ] {
             assert_eq!(
                 refuse_unemittable_name(name),
-                Err(EngineError::MalformedInput {
-                    check: "node-name-unemittable",
-                }),
+                Err(EngineError::MalformedInput { check }),
                 "{name:?} must not be restored into a listing"
             );
         }
@@ -17354,14 +17364,28 @@ mod tests {
             let stale = derive_write_name(&[0x9e; 32], &ROOT_SCOPE);
 
             let kept = RefCell::new(ScopeSeeds::new());
-            deposit_write_seed(&kept, ROOT_SCOPE, seed.clone(), Some(&moved), Some(3));
+            deposit_write_seed(
+                &kept,
+                ROOT_SCOPE,
+                seed.clone(),
+                Some(&moved),
+                Some(3),
+                FloorNamespace::Own,
+            );
             assert!(
                 kept.borrow().contains_key(&ROOT_SCOPE),
                 "the anchor names the root this seed derives"
             );
 
             let dropped = RefCell::new(ScopeSeeds::new());
-            deposit_write_seed(&dropped, ROOT_SCOPE, seed, Some(&stale), Some(3));
+            deposit_write_seed(
+                &dropped,
+                ROOT_SCOPE,
+                seed,
+                Some(&stale),
+                Some(3),
+                FloorNamespace::Own,
+            );
             assert!(
                 !dropped.borrow().contains_key(&ROOT_SCOPE),
                 "an anchor left at the pre-rotation root declines the seed"
@@ -20066,6 +20090,7 @@ mod focus_access_tests {
             scope_id,
             Zeroizing::new([5u8; 32]),
             Some(0),
+            FloorNamespace::Own,
         );
         engine
     }
@@ -20530,6 +20555,10 @@ mod focus_access_tests {
             grafted.0,
             Zeroizing::new([6u8; 32]),
             Some(0),
+            FloorNamespace::GrantedBy(crate::seams::ContactLabel::of(
+                &cipherbox_core::kdf::contact_label_seed(&[0x4c; 32]),
+                &[0x02; 33],
+            )),
         );
         engine.note_focus_file(row);
 
@@ -20546,6 +20575,56 @@ mod focus_access_tests {
         );
     }
 
+    /// A write seed the cache holds under another sharer's namespace authors
+    /// nothing in the scope that a new sharer now answers for.
+    #[test]
+    fn a_write_into_a_graft_refuses_a_seed_held_under_another_sharer() {
+        const SHARER: [u8; 33] = [0x02; 33];
+        const PREVIOUS: [u8; 33] = [0x03; 33];
+        let engine = started_engine();
+        let graft = NodeId([0x4D; 16]);
+        let mut rendered = engine.state.snapshot.borrow().clone();
+        rendered.upsert_node(NodeMeta::new(graft, "shared", NodeKind::Folder));
+        engine.state.grafted_write_roots.borrow_mut().insert(graft);
+        engine
+            .state
+            .bookmarked_permissions
+            .borrow_mut()
+            .insert(graft.0, CommittedPermission::Write);
+        engine
+            .state
+            .grafted_sharers
+            .borrow_mut()
+            .insert(graft.0, SHARER);
+        let label_seed = engine
+            .session
+            .as_ref()
+            .expect("a live session")
+            .contact_label_seed();
+        let deposit = |sharer: &[u8; 33]| {
+            deposit_seed(
+                &engine.state.scope_write_seeds,
+                graft.0,
+                Zeroizing::new([7u8; 32]),
+                Some(0),
+                FloorNamespace::GrantedBy(crate::seams::ContactLabel::of(label_seed, sharer)),
+            );
+        };
+
+        deposit(&SHARER);
+        assert_eq!(
+            engine.write_home(&rendered, graft, TargetRole::Parent),
+            Ok(WriteHome::Graft(graft)),
+            "the sharer that answers for the scope supplies the seed"
+        );
+
+        deposit(&PREVIOUS);
+        assert_eq!(
+            engine.write_home(&rendered, graft, TargetRole::Parent),
+            Err(out_of_scope())
+        );
+    }
+
     /// A shared scope whose seed is held runs a leg of its own. The vault's
     /// seed is withheld, so only that scope's seed can have attempted its row.
     #[test]
@@ -20559,6 +20638,7 @@ mod focus_access_tests {
             FOLDER.0,
             Zeroizing::new([6u8; 32]),
             Some(0),
+            FloorNamespace::Own,
         );
 
         let now = engine.seams.scheduler.now();

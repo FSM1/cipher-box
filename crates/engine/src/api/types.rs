@@ -53,11 +53,11 @@ pub(crate) struct LoginRequest<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RefreshRequest {
+pub(crate) struct RefreshRequest<'a> {
     /// Omitted entirely on web, where the HTTP-only refresh cookie rides the
     /// Http seam instead of a body field (blueprint/engine.md CredentialStore).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub refresh_token: Option<String>,
+    pub refresh_token: Option<&'a str>,
 }
 
 /// The link body for [`ApiClient::siwe_link`](super::ApiClient::siwe_link): the

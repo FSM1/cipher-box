@@ -62,7 +62,7 @@ impl ReqwestHttp {
             builder = builder.header(name, value);
         }
         if let Some(body) = request.body {
-            builder = builder.body(body);
+            builder = builder.body(bytes::Bytes::from_owner(body));
         }
         if let Some(timeout_ms) = request.timeout_ms {
             builder = builder.timeout(Duration::from_millis(timeout_ms));
