@@ -229,12 +229,23 @@ pub struct WriteHandle(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamHandle(pub u64);
 
-/// What a write handle is writing to.
+/// What a write handle is writing to. At the WASM boundary the field set alone
+/// tells the variants apart, so a target that carries both is refused.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Deserialize, tsify::Tsify))]
+#[cfg_attr(
+    feature = "wasm",
+    serde(untagged, rename_all_fields = "camelCase", deny_unknown_fields)
+)]
 pub enum WriteTarget {
     /// A new file under `parent`, created by the same commit.
     NewFile {
         /// Parent folder.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         parent: NodeId,
         /// Name as entered (uniqueness uses the strict comparator).
         name: String,
@@ -242,11 +253,21 @@ pub enum WriteTarget {
     /// A new version of a file that already exists.
     Version {
         /// Target file node.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
         node: NodeId,
         /// The version the caller's bytes were derived from, when the caller
         /// read one. The conditional-edit anchor is otherwise derived from this
         /// device's own rendered view, which a refresh between the read and the
         /// open can advance past what the caller actually holds.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(default, with = "crate::wire::opt_bytes"),
+            tsify(type = "Uint8Array", optional)
+        )]
         expected_version: Option<Vec<u8>>,
     },
 }
