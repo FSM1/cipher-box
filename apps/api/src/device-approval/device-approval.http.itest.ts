@@ -141,10 +141,26 @@ describe('device-approval HTTP surface (real Postgres)', () => {
     return (await identityTokens.sign({ subject, method: 'google' })).token;
   }
 
-  /** An account with one registered approver device, reachable by its identity. */
-  async function enroll(label = 'approver'): Promise<Enrolled> {
+  /** Writes the bind a login with an identity token writes (ADR 0058 D2). */
+  async function bind(userId: string, subject: string): Promise<void> {
+    await db.dataSource.query('UPDATE users SET identity_subject_id = $1 WHERE id = $2', [
+      subject,
+      userId,
+    ]);
+  }
+
+  /** A seeded account bound to a fresh subject, with a token for that subject. */
+  async function boundAccount() {
     const account = await seedAccount(db, jwt);
     const identitySubject = randomUUID();
+    const subjectToken = await identityToken(identitySubject);
+    await bind(account.userId, identitySubject);
+    return { ...account, identitySubject, subjectToken };
+  }
+
+  /** An account with one registered approver device, reachable by its identity. */
+  async function enroll(label = 'approver'): Promise<Enrolled> {
+    const { subjectToken, ...account } = await boundAccount();
     const device = createTestDeviceKey();
     await request(http())
       .post('/devices')
@@ -152,14 +168,14 @@ describe('device-approval HTTP surface (real Postgres)', () => {
       .send({
         publicKey: device.publicKey,
         signature: device.sign(deviceRegistrationPayload(account.userId, device.publicKey)),
-        identityToken: await identityToken(identitySubject),
+        identityToken: subjectToken,
         label,
       })
       .expect(201);
-    return { ...account, identitySubject, device };
+    return { ...account, device };
   }
 
-  /** A second approver on an existing account, under its own identity subject. */
+  /** A second approver on an existing account, with a new token for its bound subject. */
   async function registerDevice(account: Enrolled, label: string): Promise<TestDeviceKey> {
     const device = createTestDeviceKey();
     await request(http())
@@ -168,7 +184,7 @@ describe('device-approval HTTP surface (real Postgres)', () => {
       .send({
         publicKey: device.publicKey,
         signature: device.sign(deviceRegistrationPayload(account.userId, device.publicKey)),
-        identityToken: await identityToken(randomUUID()),
+        identityToken: await identityToken(account.identitySubject),
         label,
       })
       .expect(201);
@@ -520,8 +536,8 @@ describe('device-approval HTTP surface (real Postgres)', () => {
     }
 
     it('401s a second registration that replays a spent token, and writes nothing', async () => {
-      const account = await seedAccount(db, jwt);
-      const token = await identityToken(randomUUID());
+      const account = await boundAccount();
+      const token = account.subjectToken;
       await post(account, registration(account, createTestDeviceKey(), token)).expect(201);
 
       await post(account, registration(account, createTestDeviceKey(), token)).expect(401);
@@ -529,17 +545,18 @@ describe('device-approval HTTP surface (real Postgres)', () => {
     });
 
     it('401s a replay from another account before any identity check', async () => {
-      const member = await seedAccount(db, jwt);
-      const token = await identityToken(randomUUID());
+      const member = await boundAccount();
+      const token = member.subjectToken;
       await post(member, registration(member, createTestDeviceKey(), token)).expect(201);
 
+      // Unbound, so the bind check would answer 409 if it ran before the spend.
       const other = await seedAccount(db, jwt);
       await post(other, registration(other, createTestDeviceKey(), token)).expect(401);
     });
 
     it('still opens a rendezvous session with a token a registration spent', async () => {
-      const account = await seedAccount(db, jwt);
-      const token = await identityToken(randomUUID());
+      const account = await boundAccount();
+      const token = account.subjectToken;
       await post(account, registration(account, createTestDeviceKey(), token)).expect(201);
 
       await request(http())
@@ -551,15 +568,20 @@ describe('device-approval HTTP surface (real Postgres)', () => {
     it('leaves the token unspent when the registration is refused', async () => {
       const member = await enroll('member');
       const token = await identityToken(member.identitySubject);
-      const other = await seedAccount(db, jwt);
-      await post(other, registration(other, createTestDeviceKey(), token)).expect(409);
+      const other = await boundAccount();
+      const refused = await post(other, registration(other, createTestDeviceKey(), token)).expect(
+        409
+      );
+      expect(refused.body.message).toBe(
+        'The identity token names a subject other than the one bound to this account'
+      );
 
       await post(member, registration(member, createTestDeviceKey(), token)).expect(201);
     });
 
     it('lets exactly one of two simultaneous registrations spend one token', async () => {
-      const account = await seedAccount(db, jwt);
-      const token = await identityToken(randomUUID());
+      const account = await boundAccount();
+      const token = account.subjectToken;
       const results = await Promise.all([
         post(account, registration(account, createTestDeviceKey(), token)),
         post(account, registration(account, createTestDeviceKey(), token)),
@@ -578,14 +600,113 @@ describe('device-approval HTTP surface (real Postgres)', () => {
         { tokenId: recent, expiresAt: new Date(clock.now().getTime() - 1_000) },
       ]);
 
-      const account = await seedAccount(db, jwt);
-      const token = await identityToken(randomUUID());
+      const account = await boundAccount();
+      const token = account.subjectToken;
       await post(account, registration(account, createTestDeviceKey(), token)).expect(201);
 
       const kept = (await spent.find()).map((row) => row.tokenId);
       expect(kept).not.toContain(stale);
       expect(kept).toContain(recent);
       expect(kept).toHaveLength(2);
+    });
+  });
+
+  describe('the registration rule (ADR 0058 D3)', () => {
+    function register(account: { userId: string; token: string }, token: string) {
+      const device = createTestDeviceKey();
+      return request(http())
+        .post('/devices')
+        .set('Authorization', `Bearer ${account.token}`)
+        .send({
+          publicKey: device.publicKey,
+          signature: device.sign(deviceRegistrationPayload(account.userId, device.publicKey)),
+          identityToken: token,
+        });
+    }
+
+    async function spentTokenIds(): Promise<string[]> {
+      return (await db.dataSource.getRepository(SpentIdentityToken).find()).map(
+        (row) => row.tokenId
+      );
+    }
+
+    async function deviceRowCount(): Promise<number> {
+      return db.dataSource.getRepository(AccountDevice).count();
+    }
+
+    it('409s a registration from an unbound account, writes no row, and spends no token', async () => {
+      const account = await seedAccount(db, jwt);
+      const token = await identityToken(randomUUID());
+
+      const res = await register(account, token).expect(409);
+      expect(res.body.message).toBe('This account has no bound identity subject');
+      expect(await deviceRowCount()).toBe(0);
+      expect(await spentTokenIds()).toEqual([]);
+    });
+
+    it('409s a token for another subject, writes no row, and spends no token', async () => {
+      const account = await boundAccount();
+      const token = await identityToken(randomUUID());
+
+      const res = await register(account, token).expect(409);
+      expect(res.body.message).toBe(
+        'The identity token names a subject other than the one bound to this account'
+      );
+      expect(await deviceRowCount()).toBe(0);
+      expect(await spentTokenIds()).toEqual([]);
+    });
+
+    it('records the bound subject on the row and spends the token', async () => {
+      const account = await boundAccount();
+      const { tokenId } = await identityTokens.verify(account.subjectToken);
+
+      await register(account, account.subjectToken).expect(201);
+      const rows = await db.dataSource.getRepository(AccountDevice).find();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        userId: account.userId,
+        identitySubjectId: account.identitySubject,
+      });
+      expect(await spentTokenIds()).toEqual([tokenId]);
+    });
+
+    it('opens a scoped session for the account bound to the subject', async () => {
+      const account = await enroll();
+
+      const scoped = await scopedToken(account.identitySubject);
+      expect(jwt.decode(scoped)).toMatchObject({
+        sub: account.userId,
+        scope: 'device-approval',
+      });
+    });
+
+    it('404s a session for a bound subject whose account has no device', async () => {
+      const account = await boundAccount();
+
+      await request(http())
+        .post('/device-approval/session')
+        .send({ identityToken: account.subjectToken })
+        .expect(404);
+    });
+
+    it('404s a session for an unbound subject that a device row carries', async () => {
+      // A row from before the bind: the subject is on the device, not on the account.
+      const account = await seedAccount(db, jwt);
+      const subject = randomUUID();
+      const token = await identityToken(subject);
+      await db.dataSource.getRepository(AccountDevice).insert({
+        userId: account.userId,
+        identitySubjectId: subject,
+        publicKey: createTestDeviceKey().publicKey,
+        label: null,
+        createdAt: clock.now(),
+        lastSeenAt: clock.now(),
+      });
+
+      await request(http())
+        .post('/device-approval/session')
+        .send({ identityToken: token })
+        .expect(404);
     });
   });
 
