@@ -190,16 +190,20 @@ fn admissible_staged_block(key: &[u8], block: Vec<u8>) -> Result<Vec<u8>, Halt> 
 
 /// Whether `child` publishes under the name this scope's write seed derives.
 ///
-/// This tests the name only. A write scope root fails it, but a granted root
-/// keeps the name its parent derives, so a caller that must stop at every scope
-/// root also checks the pass's `scope_roots`. A scope root's subtree is sealed
-/// under a grantee's own seed, and cutting that grantee needs a re-key the bin
-/// does not carry, so a delete of it stays hard (ADR 0010 item 3). Every other
-/// reader in the delete path derives the child's name the same way and never
-/// reads this field, so a child the comparison rejects is one this scope's
-/// write plane does not name either.
+/// A child that does not is a scope root: its subtree is sealed under a
+/// grantee's own seed, and cutting that grantee needs a re-key the bin does not
+/// carry, so a delete of it stays hard (ADR 0010 item 3). Every other reader in
+/// the delete path derives the child's name the same way and never reads this
+/// field, so a child the comparison rejects is one this scope's write plane
+/// does not name either.
 fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
     end.write_name(&child.id).as_str().as_bytes() == child.ipns_name
+}
+
+/// Whether `child` is a node of this scope rather than a scope root. A granted
+/// root keeps the name its parent derives, so only `scope_roots` marks it.
+fn in_this_scope(end: &ScopeEnd<'_>, scope_roots: &[NodeId], child: &ChildRef) -> bool {
+    !scope_roots.contains(&NodeId(child.id)) && names_this_scope(end, child)
 }
 
 /// A bin index load that did not establish the current index.
@@ -865,9 +869,8 @@ struct CaptureWalk {
     seen: BTreeSet<NodeId>,
     /// Cohort nodes some folder names.
     linked: BTreeSet<NodeId>,
-    /// Each node read, with the scope root whose end read it and the record
-    /// read.
-    read: Vec<(NodeId, NodeId, RecordMark)>,
+    /// Each node read, as `pending` holds it, with the record read.
+    read: Vec<((NodeId, NodeId), RecordMark)>,
     /// The anchor of each scope below the walked one, from its root's read.
     anchors: BTreeMap<NodeId, WalkAnchor>,
     /// How many of `read` the second read has confirmed.
@@ -952,9 +955,8 @@ impl CaptureWalk {
     /// Record what one folder of the scope at `end` names: a cohort node it
     /// links, and each child still to read. A child's kind is wire data, so a
     /// child marked as a file is read too: its body, not its ref, says if it
-    /// names children. A granted scope root keeps the name its parent derives,
-    /// so only `scope_roots` marks it, and the walk reads it under its own end
-    /// from `ends`. Answers `false` when the walk holds more than `bound` nodes.
+    /// names children. A scope root with an end in `ends` is read under that
+    /// end. Answers `false` when the walk holds more than `bound` nodes.
     fn visit(
         &mut self,
         end: &ScopeEnd<'_>,
@@ -968,11 +970,11 @@ impl CaptureWalk {
             if names_node(&self.cohort, id) {
                 self.linked.insert(id);
             }
-            if ends.iter().any(|end| end.root == id) {
+            if ends.iter().any(|below| below.root == id) {
                 if self.seen.insert(id) {
                     self.pending.push((id, id));
                 }
-            } else if scope_roots.contains(&id) || !names_this_scope(end, child) {
+            } else if !in_this_scope(end, scope_roots, child) {
                 self.blind = true;
             } else if self.seen.insert(id) {
                 self.pending.push((id, end.root));
@@ -4358,11 +4360,9 @@ where
     /// this scope may still bin. A node held twice keeps its first capture.
     ///
     /// A node the base still links did not leave the tree, and binning it would
-    /// seal a live node under a key no reader derives. A proved scope root, or a
-    /// child that does not publish under a name this scope's write seed derives,
-    /// is a scope root, which the authored delete refuses for the same reason.
-    /// A name longer than this build ever authors is a peer's, and no entry
-    /// carries it.
+    /// seal a live node under a key no reader derives. A scope root, proved or
+    /// by its name, stays hard ([`names_this_scope`]). A name longer than this
+    /// build ever authors is a peer's, and no entry carries it.
     fn prune_captures(&self, scope: &DrainScope<'_>) -> BTreeSet<CaptureKey> {
         let base = self.cells.base.borrow();
         let mut eligible = BTreeSet::new();
@@ -4497,26 +4497,24 @@ where
             let second = walk.pending.is_empty();
             let (node, at) = match walk.pending.last() {
                 Some(next) => *next,
-                None => {
-                    let (node, at, _) = walk.read[walk.confirmed];
-                    (node, at)
-                }
+                None => walk.read[walk.confirmed].0,
             };
-            let end = if at == scope.source.root {
-                Some(scope.source)
+            let (end, anchor) = if at == scope.source.root {
+                (Some(scope.source), Some(root.anchor()))
             } else {
-                ends.iter().find(|end| end.root == at).copied()
-            };
-            let anchor = if at == scope.source.root {
-                Some(root.anchor())
-            } else {
-                walk.anchors.get(&at).map(WalkAnchor::anchor)
+                (
+                    ends.iter().find(|end| end.root == at).copied(),
+                    walk.anchors.get(&at).map(WalkAnchor::anchor),
+                )
             };
             let read = match end {
-                Some(end) => self.walk_read(scope, &end, anchor, node).await,
+                Some(end) => self
+                    .walk_read(scope, &end, anchor, node)
+                    .await
+                    .map(|read| (end, read)),
                 None => Err(WalkReadFault::Unanswered),
             };
-            let read = match read {
+            let (end, read) = match read {
                 Ok(read) => read,
                 Err(WalkReadFault::Untrusted) => break WalkStep::Restart,
                 Err(WalkReadFault::Unanswered) => {
@@ -4530,22 +4528,19 @@ where
             };
             walk.unanswered = 0;
             if second {
-                if read.mark != walk.read[walk.confirmed].2 {
+                if read.mark != walk.read[walk.confirmed].1 {
                     break WalkStep::Restart;
                 }
                 walk.confirmed += 1;
                 continue;
             }
             walk.pending.pop();
-            walk.read.push((node, at, read.mark));
+            walk.read.push(((node, at), read.mark));
             if let Some(anchor) = read.anchor
                 && at != scope.source.root
             {
                 walk.anchors.insert(at, anchor);
             }
-            let Some(end) = end else {
-                break WalkStep::Restart;
-            };
             if !walk.visit(
                 &end,
                 ends,
@@ -4778,10 +4773,7 @@ where
                     pending.extend(
                         children
                             .iter()
-                            .filter(|child| {
-                                names_this_scope(&from.end, child)
-                                    && !scope.scope_roots.contains(&NodeId(child.id))
-                            })
+                            .filter(|child| in_this_scope(&from.end, scope.scope_roots, child))
                             .map(|child| NodeId(child.id)),
                     );
                     Vec::new()

@@ -2250,7 +2250,7 @@ fn assert_a_capture_walk_stops_at_a_granted_folder(permission: Permission) {
     let mut fx = GrantScenario::new();
     let (mut engine, mut events, mut tasks) = fx.second_owner_device();
     assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
-    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |_| {});
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |_, _| {});
     events_so_far(&mut events);
     for _ in 0..4 {
         tick(&fx.world, &engine, &mut tasks);
@@ -2280,7 +2280,7 @@ fn unlinked_by_another_writer(
     fx: &mut GrantScenario,
     second: &mut Engine<FakeSeamTypes>,
     tasks: &mut [BoxedTask],
-    before_unlink: impl FnOnce(&mut GrantScenario),
+    before_unlink: impl FnOnce(&mut GrantScenario, NodeId),
 ) -> NodeId {
     let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
     let doomed =
@@ -2288,7 +2288,7 @@ fn unlinked_by_another_writer(
     block_on(second.command(Command::SetFocus { node: Some(plain) })).unwrap();
     tick(&fx.world, second, tasks);
     assert_eq!(block_on(second.view()).unwrap().children(plain).len(), 1);
-    before_unlink(fx);
+    before_unlink(fx, doomed);
     concurrent_edit(
         &fx.world,
         &fx.blocks,
@@ -2309,59 +2309,47 @@ fn a_folder_at_a_name_the_scope_does_not_derive_holds_the_capture() {
     let (mut engine, _events, mut tasks) = fx.second_owner_device();
     let top = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "top");
     let stray = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, top, "stray");
-    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
-    let doomed =
-        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, plain, "doomed");
-    block_on(engine.command(Command::SetFocus { node: Some(plain) })).unwrap();
-    tick(&fx.world, &engine, &mut tasks);
-    assert_eq!(block_on(engine.view()).unwrap().children(plain).len(), 1);
-    concurrent_add(
-        &fx.world,
-        &fx.blocks,
-        stray,
-        &read_key_of(stray),
-        SCOPE,
-        named_child(doomed, "doomed", &write_name(doomed)),
-    );
-    let old_seed = [0x5a; 32];
-    let record = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&old_seed, &stray.0).as_bytes()),
-        &published_value(&fx.world, &write_name(stray)),
-        1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-    for endpoint in fx.world.record_store.endpoints() {
-        fx.world.record_store.seed_record(
-            &endpoint,
-            derive_write_name(&old_seed, &stray.0).as_str(),
-            record.clone(),
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |fx, doomed| {
+        concurrent_add(
+            &fx.world,
+            &fx.blocks,
+            stray,
+            &read_key_of(stray),
+            SCOPE,
+            named_child(doomed, "doomed", &write_name(doomed)),
         );
-    }
-    concurrent_edit(
-        &fx.world,
-        &fx.blocks,
-        top,
-        &read_key_of(top),
-        SCOPE,
-        |children| {
-            for child in children.iter_mut().filter(|child| child.id == stray.0) {
-                child.ipns_name = derive_write_name(&old_seed, &stray.0)
-                    .as_str()
-                    .as_bytes()
-                    .to_vec();
-            }
-        },
-    );
-    concurrent_edit(
-        &fx.world,
-        &fx.blocks,
-        plain,
-        &read_key_of(plain),
-        SCOPE,
-        |children| children.retain(|child| child.id != doomed.0),
-    );
+        let old_seed = [0x5a; 32];
+        let record = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(kdf::write_seed(&old_seed, &stray.0).as_bytes()),
+            &published_value(&fx.world, &write_name(stray)),
+            1,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal();
+        for endpoint in fx.world.record_store.endpoints() {
+            fx.world.record_store.seed_record(
+                &endpoint,
+                derive_write_name(&old_seed, &stray.0).as_str(),
+                record.clone(),
+            );
+        }
+        concurrent_edit(
+            &fx.world,
+            &fx.blocks,
+            top,
+            &read_key_of(top),
+            SCOPE,
+            |children| {
+                for child in children.iter_mut().filter(|child| child.id == stray.0) {
+                    child.ipns_name = derive_write_name(&old_seed, &stray.0)
+                        .as_str()
+                        .as_bytes()
+                        .to_vec();
+                }
+            },
+        );
+    });
     for _ in 0..4 {
         tick(&fx.world, &engine, &mut tasks);
     }
