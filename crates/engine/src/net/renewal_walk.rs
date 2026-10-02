@@ -25,7 +25,8 @@ use super::eol::{self, renewal_eol_from};
 use super::fanout::{FanoutRecord, fanout_get_classified};
 use super::liveness::{EolRenewResult, HeldKey, HeldRecord, HeldRecords, hold_if_unchanged};
 use super::publish::{
-    Observed, PublishError, PublishOutcome, SignatureGate, head_cid_from_value, put_and_confirm,
+    Observed, PublishError, PublishOutcome, PublishVerdict, SignatureGate, head_cid_from_value,
+    put_and_confirm,
 };
 use super::register::register;
 use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger};
@@ -995,21 +996,16 @@ fn transient_renewal(outcome: &Result<Option<PublishOutcome>, PublishError>) -> 
         Ok(None | Some(PublishOutcome::Published { .. } | PublishOutcome::LostRace { .. })) => {
             false
         }
-        Err(PublishError::Register(error)) => transient_registration(error),
-        Err(
-            PublishError::AllEndpointsFailed
-            | PublishError::FloorRead(_)
-            | PublishError::MarkUnrecorded(_),
-        ) => true,
-        Err(
-            PublishError::AllEndpointsRefused
-            | PublishError::EmptyHeadCid
-            | PublishError::EmptyInlineValue
-            | PublishError::RecordTooLarge { .. }
-            | PublishError::BelowBar { .. }
-            | PublishError::ForeignVersion { .. }
-            | PublishError::SequenceExhausted,
-        ) => false,
+        Err(error) => match error.verdict() {
+            PublishVerdict::RegistryRefused => {
+                matches!(error, PublishError::Register(api) if transient_registration(api))
+            }
+            PublishVerdict::NotLanded | PublishVerdict::PutUnacknowledged => true,
+            PublishVerdict::PutRefused
+            | PublishVerdict::Refused
+            | PublishVerdict::RefusedUnaddressed
+            | PublishVerdict::RefusedOversized => false,
+        },
     }
 }
 

@@ -31,6 +31,9 @@ struct Inner {
     raise_budget: Option<u64>,
     /// Added to the floor a raise settles on before it is reported back.
     raise_report_skew: u64,
+    /// An epoch raise the next sequence-floor read of a name fires: the name,
+    /// the epoch floor key, and the epoch.
+    raise_on_sequence_read: Option<(Vec<u8>, Vec<u8>, u64)>,
 }
 
 impl Inner {
@@ -152,6 +155,21 @@ impl InMemoryFloorStore {
             .insert(key.to_vec());
     }
 
+    /// Raise the epoch floor at `epoch_key` to `epoch` on the first
+    /// sequence-floor read naming `ipns_name`: a floor that moves inside a
+    /// publish window, after every check an author makes and before the bar the
+    /// signature reads. Both keys match as the read-fault injectors do; a raise
+    /// fired through an owner tag lands under that tag.
+    pub fn raise_epoch_floor_on_sequence_read(
+        &self,
+        ipns_name: &[u8],
+        epoch_key: &[u8],
+        epoch: u64,
+    ) {
+        self.inner.lock().expect("lock").raise_on_sequence_read =
+            Some((ipns_name.to_vec(), epoch_key.to_vec(), epoch));
+    }
+
     /// Restore every injected floor fault, the clear's and the commit's
     /// included — one heal for every injector this fake offers.
     pub fn heal_floors(&self) {
@@ -166,6 +184,7 @@ impl InMemoryFloorStore {
         inner.failing_commit = false;
         inner.raise_budget = None;
         inner.raise_report_skew = 0;
+        inner.raise_on_sequence_read = None;
     }
 
     /// Let `budget` raises through, on any key, and fail every raise after, so
@@ -275,7 +294,27 @@ impl FloorStore for InMemoryFloorStore {
     }
 
     async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
-        let inner = self.inner.lock().expect("lock");
+        let mut inner = self.inner.lock().expect("lock");
+        if let Some((name, epoch_key, epoch)) = inner.raise_on_sequence_read.take() {
+            let tag = if ipns_name == name.as_slice() {
+                Some(&[][..])
+            } else {
+                ipns_name
+                    .split_at_checked(OWNER_TAG_LEN)
+                    .filter(|(_, label)| *label == name.as_slice())
+                    .map(|(tag, _)| tag)
+            };
+            match tag {
+                Some(tag) => {
+                    raise(
+                        &mut inner.epoch,
+                        &[tag, epoch_key.as_slice()].concat(),
+                        epoch,
+                    );
+                }
+                None => inner.raise_on_sequence_read = Some((name, epoch_key, epoch)),
+            }
+        }
         if inner.failing_reads {
             return Err(SeamError::new("floor read injected to fail"));
         }

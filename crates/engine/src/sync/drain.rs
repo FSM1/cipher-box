@@ -69,9 +69,7 @@ use crate::net::author::{
     author_scope_root_envelope, new_child, report_carried_cut,
 };
 use crate::net::last_known_good::keep_then_commit;
-use crate::net::publish::{
-    Observed, PublishError, PublishOutcome, PublishReceipt, refuse_foreign_version,
-};
+use crate::net::publish::{Observed, PublishError, PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
@@ -2627,7 +2625,8 @@ where
         )
         .await
         .map_err(|_| Halt::UploadAttempt)?;
-        refuse_foreign_version(envelope.v).map_err(|_| Halt::Unclassified)?;
+        let observed = Observed::gated(source.root_name, sequence, envelope.v)
+            .map_err(|_| Halt::Unclassified)?;
         let read_key = source.read_key(&source.root.0);
         let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::UploadAttempt)?;
         let ReadBody::Folder {
@@ -2657,7 +2656,7 @@ where
                 modified_at,
                 children,
                 body_unknown: unknown,
-                sequence,
+                sequence: observed.sequence(),
             },
             epoch,
             history_links: section.history_links,

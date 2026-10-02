@@ -14,6 +14,7 @@
 //! confirm-by-re-resolve detects a lost CAS race for the caller to rebase.
 
 use core::time::Duration;
+use std::borrow::Cow;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -340,8 +341,8 @@ pub enum PublishError {
     MarkUnrecorded(SeamError),
 }
 
-/// A publish failure on rule 6's retryable-versus-trust axis
-/// ([`PublishError::verdict`]).
+/// A publish failure on rule 6's retryable-versus-trust axis, split as finely
+/// as any author reads it ([`PublishError::verdict`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublishVerdict {
     /// The registry refused the register-first step.
@@ -349,41 +350,56 @@ pub enum PublishVerdict {
     /// This build's own release-active refusal of the bytes it would sign: a
     /// retry over the same inputs reaches it again.
     Refused,
-    /// Nothing durable is proven; a retry may land.
+    /// [`Self::Refused`], reached before the request addressed any head block.
+    RefusedUnaddressed,
+    /// [`Self::Refused`] for size: the record is over the cap, and its size
+    /// follows a body a committed writer can grow.
+    RefusedOversized,
+    /// Stopped before the PUT; a retry may land.
     NotLanded,
+    /// The PUT left and no endpoint acknowledged it.
+    PutUnacknowledged,
+    /// Every endpoint stated a refusal of the PUT.
+    PutRefused,
 }
 
 impl PublishError {
-    /// The one translation every author's own verdict folds from.
+    /// The verdict every author's own translation folds from.
     pub fn verdict(&self) -> PublishVerdict {
-        match self {
-            Self::Register(_) => PublishVerdict::RegistryRefused,
-            Self::EmptyHeadCid
-            | Self::EmptyInlineValue
-            | Self::RecordTooLarge { .. }
-            | Self::BelowBar { .. }
-            | Self::ForeignVersion { .. }
-            | Self::SequenceExhausted => PublishVerdict::Refused,
-            Self::AllEndpointsFailed
-            | Self::AllEndpointsRefused
-            | Self::FloorRead(_)
-            | Self::MarkUnrecorded(_) => PublishVerdict::NotLanded,
-        }
+        self.translate().0
     }
-}
 
-impl core::fmt::Display for PublishError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    /// The one translation of a publish failure: its verdict and its message.
+    fn translate(&self) -> (PublishVerdict, Cow<'static, str>) {
         match self {
-            Self::Register(_) => f.write_str("register-first publish failed"),
-            Self::AllEndpointsFailed => f.write_str("all record endpoints failed"),
-            Self::AllEndpointsRefused => f.write_str("every record endpoint refused the record"),
-            Self::FloorRead(_) => f.write_str("durable floor read failed"),
-            Self::EmptyHeadCid => f.write_str("empty head CID (never published)"),
-            Self::EmptyInlineValue => f.write_str("empty inline value (never published)"),
-            Self::RecordTooLarge { size, limit } => write!(
-                f,
-                "record of {size} bytes over the {limit}-byte cap (never published)"
+            Self::Register(_) => (
+                PublishVerdict::RegistryRefused,
+                "register-first publish failed".into(),
+            ),
+            Self::AllEndpointsFailed => (
+                PublishVerdict::PutUnacknowledged,
+                "all record endpoints failed".into(),
+            ),
+            Self::AllEndpointsRefused => (
+                PublishVerdict::PutRefused,
+                "every record endpoint refused the record".into(),
+            ),
+            Self::FloorRead(_) => (
+                PublishVerdict::NotLanded,
+                "durable floor read failed".into(),
+            ),
+            Self::EmptyHeadCid => (
+                PublishVerdict::RefusedUnaddressed,
+                "empty head CID (never published)".into(),
+            ),
+            Self::EmptyInlineValue => (
+                PublishVerdict::RefusedUnaddressed,
+                "empty inline value (never published)".into(),
+            ),
+            Self::RecordTooLarge { size, limit } => (
+                PublishVerdict::RefusedOversized,
+                format!("record of {size} bytes over the {limit}-byte cap (never published)")
+                    .into(),
             ),
             Self::BelowBar { floor, at, epoch } => {
                 let axis = match floor {
@@ -391,20 +407,34 @@ impl core::fmt::Display for PublishError {
                     BarFloor::Write => "write",
                     BarFloor::Cut => "cut",
                 };
-                write!(
-                    f,
-                    "{axis} epoch {epoch} below the durable floor {at} (never published)"
+                (
+                    PublishVerdict::Refused,
+                    format!("{axis} epoch {epoch} below the durable floor {at} (never published)")
+                        .into(),
                 )
             }
-            Self::ForeignVersion { version } => write!(
-                f,
-                "envelope version {version} is not the one this build authors (never published)"
+            Self::ForeignVersion { version } => (
+                PublishVerdict::Refused,
+                format!(
+                    "envelope version {version} is not the one this build authors (never published)"
+                )
+                .into(),
             ),
-            Self::SequenceExhausted => {
-                f.write_str("no sequence above the durable floor (never published)")
-            }
-            Self::MarkUnrecorded(_) => f.write_str("durable mark write failed (never published)"),
+            Self::SequenceExhausted => (
+                PublishVerdict::Refused,
+                "no sequence above the durable floor (never published)".into(),
+            ),
+            Self::MarkUnrecorded(_) => (
+                PublishVerdict::NotLanded,
+                "durable mark write failed (never published)".into(),
+            ),
         }
+    }
+}
+
+impl core::fmt::Display for PublishError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.translate().1)
     }
 }
 
