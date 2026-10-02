@@ -345,7 +345,7 @@ fn booted(world: &FakeWorld, blocks: &Blocks, device: &FakeDevice) -> Session {
             public_fallbacks: Vec::new(),
         },
     );
-    block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).expect("the session starts");
+    block_on(engine.start(LoginSecret::new(SECRET.to_vec()), None)).expect("the session starts");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     (engine, events, tasks)
@@ -435,6 +435,35 @@ fn a_drain_publish_never_re_authors_a_scope_root_at_another_envelope_version() {
 /// newer client last wrote is never re-sealed under this build's version.
 #[test]
 fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
+    let (served, after, queued) = create_under_a_folder_at_newer_version(1);
+
+    assert_eq!(
+        after, served,
+        "the folder at the newer version was never republished"
+    );
+    assert_eq!(queued, 1, "and the create is still queued");
+}
+
+/// The version refusal repeats on every pass, so the op spends its attempt
+/// budget and leaves the queue rather than holding the head for the outage
+/// budget.
+#[test]
+fn a_drain_op_under_a_folder_at_another_envelope_version_spends_its_attempts() {
+    let (served, after, queued) = create_under_a_folder_at_newer_version(8);
+
+    assert_eq!(queued, 0, "the attempt budget ends the retries");
+    assert_eq!(
+        after, served,
+        "and the folder at the newer version was never republished"
+    );
+}
+
+/// Stage a create under a folder sealed at the next envelope version and run
+/// `passes` drain passes: the folder's record before and after, and the ops
+/// still queued.
+fn create_under_a_folder_at_newer_version(
+    passes: usize,
+) -> (Option<Vec<u8>>, Option<Vec<u8>>, usize) {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let folder = NodeId([0x6f; 16]);
@@ -491,12 +520,8 @@ fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
         kind: NodeKind::Folder,
     }))
     .expect("the create stages");
-    tick(&world, &engine, &mut tasks);
-
-    assert_eq!(
-        record_at(&world, &name),
-        Some(record),
-        "the folder at the newer version was never republished"
-    );
-    assert_eq!(queued(&device), 1, "and the create is still queued");
+    for _ in 0..passes {
+        tick(&world, &engine, &mut tasks);
+    }
+    (Some(record), record_at(&world, &name), queued(&device))
 }

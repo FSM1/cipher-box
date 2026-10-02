@@ -608,26 +608,35 @@ enum HeadPublish {
     Unconfirmed { sequence: u64 },
 }
 
-/// What a name serves at its freshest sequence: that sequence, and every
-/// distinct record the endpoints serve at it.
+/// What a name serves at its freshest sequence: that sequence, every distinct
+/// record the endpoints serve at it, and the token of the record the gate
+/// passed there, if any.
 struct Served {
     sequence: u64,
     records: Vec<Vec<u8>>,
+    observed: Option<Result<Observed, PublishError>>,
 }
 
 impl Served {
-    fn new(sequence: u64, freshest: Vec<u8>, mut tied: Vec<Vec<u8>>) -> Self {
+    fn new(
+        sequence: u64,
+        freshest: Vec<u8>,
+        mut tied: Vec<Vec<u8>>,
+        observed: Option<Result<Observed, PublishError>>,
+    ) -> Self {
         tied.push(freshest);
         Self {
             sequence,
             records: tied,
+            observed,
         }
     }
 
     /// Whether the name moved past the record a pass built on: a higher
     /// sequence, or that record's sequence served only with other bytes.
-    fn moved_past(&self, (sequence, record): &(u64, Vec<u8>)) -> bool {
-        self.sequence > *sequence || (self.sequence == *sequence && !self.records.contains(record))
+    fn moved_past(&self, (built_on, record): &(Observed, Vec<u8>)) -> bool {
+        let sequence = built_on.sequence();
+        self.sequence > sequence || (self.sequence == sequence && !self.records.contains(record))
     }
 }
 
@@ -1464,8 +1473,9 @@ struct FolderState {
     modified_at: u64,
     children: Vec<ChildRef>,
     body_unknown: PreservedFields,
-    /// The record sequence this folder was last loaded or published at.
-    sequence: u64,
+    /// The gated read this folder was last loaded or published at, which a
+    /// republish builds on.
+    observed: Observed,
 }
 
 /// The `modified_at` a plan republishes `folder` with: the op's authored time on
@@ -1780,8 +1790,8 @@ impl MirrorLeg {
 
 /// One record as this pass published it.
 struct Published {
-    /// The sequence the self-adopt authenticated.
-    sequence: u64,
+    /// The token of the record the self-adopt gated.
+    observed: Observed,
     /// The live-set entry, held once something references the record.
     held: HeldRecord,
 }
@@ -2647,7 +2657,7 @@ where
                 &mut trial,
                 folder,
                 &state.children,
-                state.sequence,
+                state.observed.sequence(),
                 state.modified_at,
             );
             let rebased = replay_on(scope, &trial, queued);
@@ -2700,7 +2710,7 @@ where
             scope,
             scope.source.root,
             &state.children,
-            state.sequence,
+            state.observed.sequence(),
             state.modified_at,
         );
         pass.insert(scope.source.root, state);
@@ -2784,7 +2794,7 @@ where
         .await
         .map_err(|_| Halt::UploadAttempt)?;
         let observed = Observed::gated(source.root_name, sequence, envelope.v)
-            .map_err(|_| Halt::Unclassified)?;
+            .map_err(|_| Halt::UploadAttempt)?;
         let read_key = source.read_key(&source.root.0);
         let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::UploadAttempt)?;
         let ReadBody::Folder {
@@ -2814,7 +2824,7 @@ where
                 modified_at,
                 children,
                 body_unknown: unknown,
-                sequence: observed.sequence(),
+                observed,
             },
             epoch,
             history_links: section.history_links,
@@ -2969,8 +2979,8 @@ where
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, adopter, &name, &record_bytes, lagging)
             .await?;
-        let observed =
-            Observed::gated(&name, adopted.sequence, envelope.v).map_err(|_| Halt::Unclassified)?;
+        let observed = Observed::gated(&name, adopted.sequence, envelope.v)
+            .map_err(|_| Halt::UploadAttempt)?;
         // Re-sealing a node at an epoch above the scope's would cross the AAD
         // epoch binding.
         if adopted.epoch > anchor.epoch {
@@ -3073,7 +3083,7 @@ where
                 scope,
                 node,
                 &state.children,
-                state.sequence,
+                state.observed.sequence(),
                 state.modified_at,
             );
             pass.insert(node, state);
@@ -4499,7 +4509,7 @@ where
                 .map_err(fault)?;
             return Ok(WalkRead {
                 mark: RecordMark {
-                    sequence: root.state.sequence,
+                    sequence: root.state.observed.sequence(),
                     digest: cipherbox_core::suite::hash::hash(&record),
                 },
                 children: root.state.children,
@@ -5599,7 +5609,7 @@ where
             scope,
             folder,
             &state.children,
-            state.sequence,
+            state.observed.sequence(),
             state.modified_at,
         );
         *pass.folder_mut(folder)? = state;
@@ -5753,7 +5763,7 @@ where
             Some(head_cid),
         );
         if let Some(node) = self.cells.base.borrow_mut().node_mut(target) {
-            node.record_sequence = published.sequence;
+            node.record_sequence = published.observed.sequence();
         }
         self.hold(target.0, published.held);
     }
@@ -6727,7 +6737,7 @@ where
             (
                 state.name.clone(),
                 state.commitment.clone(),
-                (state.sequence, state.record.clone()),
+                (state.observed.clone(), state.record.clone()),
                 ReadBody::Folder {
                     created_at: state.created_at,
                     modified_at,
@@ -6760,14 +6770,15 @@ where
             )
             .await?;
 
+        let sequence = published.observed.sequence();
         let state = pass.folder_mut(folder).map_err(PublishHalt::past_the_put)?;
-        state.sequence = published.sequence;
+        state.observed = published.observed;
         state.record.clone_from(&published.held.record_bytes);
         state.modified_at = modified_at;
         let children = state.children.clone();
-        self.repaint_folder(scope, folder, &children, published.sequence, modified_at);
+        self.repaint_folder(scope, folder, &children, sequence, modified_at);
         self.hold(folder.0, published.held);
-        Ok(published.sequence)
+        Ok(sequence)
     }
 
     /// Re-resolve a folder just before signing over it, so the signature is
@@ -6776,6 +6787,9 @@ where
     /// publish mints above. A record above `built_on`, or a sequence the
     /// endpoints serve only with other bytes, halts this attempt so the next
     /// pass rebases onto what they serve.
+    ///
+    /// The publish builds on the token the gate gave for the record it passed
+    /// at `built_on`'s sequence, and on `built_on` where it passed none there.
     ///
     /// A scope root's `commitment` is then held to the cut-epoch floor
     /// ([`refuse_below_cut_floor`]).
@@ -6786,7 +6800,7 @@ where
         folder: NodeId,
         name: &IpnsName,
         commitment: Option<&GrantSetCommitment>,
-        built_on: &(u64, Vec<u8>),
+        built_on: &(Observed, Vec<u8>),
     ) -> Result<Observed, Halt> {
         let served = if commitment.is_some() {
             let resolved = self
@@ -6795,16 +6809,27 @@ where
             if let ResolveOutcome::TrustViolation(rejection) = &resolved.resolved.outcome {
                 return Err(refuse_record(&self.seams.events, name, rejection));
             }
+            let observed = resolved.observed;
             resolved
                 .held_record
-                .map(|(record, bytes)| Served::new(record.sequence, bytes, resolved.tied))
+                .map(|(record, bytes)| Served::new(record.sequence, bytes, resolved.tied, observed))
         } else {
             self.served_child(plane, folder, name).await?
         };
-        if served.is_some_and(|served| served.moved_past(built_on)) {
+        if served
+            .as_ref()
+            .is_some_and(|served| served.moved_past(built_on))
+        {
             return Err(Halt::LostRace);
         }
-        let observed = Observed::record(name, built_on.0);
+        let observed = match served {
+            Some(Served {
+                sequence,
+                observed: Some(gated),
+                ..
+            }) if sequence == built_on.0.sequence() => gated.map_err(|_| Halt::UploadAttempt)?,
+            _ => built_on.0.clone(),
+        };
         let Some(commitment) = commitment else {
             return Ok(observed);
         };
@@ -6849,13 +6874,16 @@ where
                     let lagging = IpnsRecord::unmarshal(&bytes)
                         .and_then(|record| record.verify(name))
                         .map_err(|_| Halt::Unclassified)?;
-                    Ok(Some(Served::new(lagging.sequence, bytes, tied)))
+                    Ok(Some(Served::new(lagging.sequence, bytes, tied, None)))
                 }
                 _ => Err(refuse_record(&self.seams.events, name, rejection)),
             },
-            _ => Ok(resolved
-                .held_record
-                .map(|(record, bytes)| Served::new(record.sequence, bytes, tied))),
+            _ => {
+                let observed = resolved.observed;
+                Ok(resolved
+                    .held_record
+                    .map(|(record, bytes)| Served::new(record.sequence, bytes, tied, observed)))
+            }
         }
     }
 
@@ -6973,7 +7001,7 @@ where
             self.mark_published(scope, op_id).await;
         }
         // The record is live from here: everything below is a local step.
-        let sequence = self
+        let observed = self
             .adopt_node_record(
                 scope,
                 plane,
@@ -6984,9 +7012,11 @@ where
                 Some(local_head(&head)),
             )
             .await
-            .map_err(|_| PublishHalt::past_the_put(Halt::Unclassified))?;
+            .ok()
+            .and_then(Result::ok)
+            .ok_or(PublishHalt::past_the_put(Halt::Unclassified))?;
         Ok(Published {
-            sequence,
+            observed,
             held: HeldRecord {
                 routing_key: name.as_str().to_owned(),
                 record_bytes,
@@ -7000,8 +7030,9 @@ where
     }
 
     /// Gate one record at a node's name, leave it last-known-good, then move
-    /// the floor (durable-first), and answer the adopted sequence. `local` is
-    /// the head this device just authored, so the gate need not fetch it back.
+    /// the floor (durable-first), and answer the token of the adopted record.
+    /// `local` is the head this device just authored, so the gate need not
+    /// fetch it back.
     #[expect(clippy::too_many_arguments, reason = "one node's full gate context")]
     async fn adopt_node_record(
         &self,
@@ -7012,7 +7043,7 @@ where
         is_scope_root: bool,
         record_bytes: &[u8],
         local: Option<LocalHead>,
-    ) -> Result<u64, GateError> {
+    ) -> Result<Result<Observed, PublishError>, GateError> {
         let floors = plane.end.floors(&self.seams.floors);
         let adopted = if is_scope_root {
             let adopter = self.root_adopter(scope, &floors, &plane.end);
@@ -7027,6 +7058,7 @@ where
             }
             adopter.adopt(name, record_bytes).await?
         };
+        let version = adopted.version;
         keep_then_commit(
             &self.seams.snapshot_cache,
             name,
@@ -7034,7 +7066,7 @@ where
             adopted.pass.commit(&floors),
         )
         .await
-        .map(|adopted| adopted.sequence)
+        .map(|adopted| Observed::gated(name, adopted.sequence, version))
         .map_err(GateError::Seam)
     }
 
@@ -7888,7 +7920,7 @@ fn folder_state(plane: &SealPlane<'_>, loaded: LoadedNode) -> Result<FolderState
         modified_at,
         children,
         body_unknown: unknown,
-        sequence: loaded.observed.sequence(),
+        observed: loaded.observed,
     })
 }
 
@@ -8064,6 +8096,7 @@ mod tests {
     /// One folder as a pass holds it, loaded under the plane rooted at
     /// `plane_root`.
     fn pass_holding(folder: NodeId, plane_root: NodeId) -> Pass {
+        let name = derive_write_name(&Zeroizing::new([4; 32]), &folder.0);
         Pass {
             root: SOURCE_ROOT,
             epoch: SOURCE_EPOCH,
@@ -8073,7 +8106,9 @@ mod tests {
                 folder,
                 FolderState {
                     plane_root,
-                    name: derive_write_name(&Zeroizing::new([4; 32]), &folder.0),
+                    observed: Observed::gated(&name, 1, crate::net::author::ENVELOPE_V)
+                        .expect("this build's envelope version"),
+                    name,
                     record: Vec::new(),
                     commitment: None,
                     envelope_unknown: PreservedFields::new(),
@@ -8082,7 +8117,6 @@ mod tests {
                     modified_at: 1,
                     children: Vec::new(),
                     body_unknown: PreservedFields::new(),
-                    sequence: 1,
                 },
             )],
             journalled: Vec::new(),
@@ -8122,6 +8156,7 @@ mod tests {
             read_scope_seed: None,
             tied: Vec::new(),
             absent: false,
+            observed: None,
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
@@ -8149,6 +8184,7 @@ mod tests {
             read_scope_seed: None,
             tied,
             absent: false,
+            observed: None,
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
@@ -8181,6 +8217,7 @@ mod tests {
                 read_scope_seed: None,
                 tied: Vec::new(),
                 absent: false,
+                observed: None,
             },
             &refused_name(),
             &events,
@@ -9698,6 +9735,22 @@ mod tests {
                 "{case}",
             );
         }
+    }
+
+    /// A scope root at another envelope version is refused on every pass, so
+    /// the op it anchors spends attempts and never waits out the outage budget.
+    #[test]
+    fn a_scope_root_at_another_envelope_version_costs_an_attempt() {
+        let mut newer = harness_root_envelope();
+        newer.v = crate::net::author::ENVELOPE_V + 1;
+        let harness = drain_harness(Some(newer));
+        let drain = harness.drain();
+        let scope = harness.scope();
+
+        assert_eq!(
+            block_on(drain.load_scope_root(&scope.source)).err(),
+            Some(Halt::UploadAttempt),
+        );
     }
 
     /// A quota hold's exit is a probe, and a placement the session cannot use

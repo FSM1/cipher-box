@@ -16746,6 +16746,7 @@ mod tests {
                     write_scope_seed: None,
                     node_id: [0u8; 16],
                     read_scope_seed: None,
+                    version: crate::net::author::ENVELOPE_V,
                 })
             }
 

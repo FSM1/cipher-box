@@ -650,6 +650,7 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
             write_scope_seed: None,
             node_id: envelope.id,
             read_scope_seed: None,
+            version: envelope.v,
         })
     }
 
