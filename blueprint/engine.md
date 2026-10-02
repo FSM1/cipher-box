@@ -667,17 +667,22 @@ the grantee that removed it stops reading it.
   binning one would seal a live node under a key no reader derives. The base
   cannot prove a departure: a folder this device did not load, or loaded before
   the move, does not show the new link. So the drain holds the capture and walks
-  the scope: it reads every folder fresh through the gate, then reads each one
+  the scope: it reads every node fresh through the gate, then reads each one
   again, from a read budget the tick shares across its passes. The walk starts
   after the device saw the departure and proves only that departure. A read
-  that fails, a record served tied, or a second read at another sequence starts
-  the walk again on a later pass. The drain bins only a capture that a settled
-  walk proved, that no folder names and that the base does not link, and a
-  capture it gives back needs a new walk. A scope past the walk bound drops its
-  captures and is not walked again in that session. Residual: such a scope
-  re-keys no orphan, and the grantee that unlinked it keeps its key. A child
-  that does not publish under a name this scope's write seed derives is a scope
-  root, which the authored delete refuses for the same reason.
+  with no answer is tried again on the next pass, up to three passes. A refused
+  record, a record served tied, a second read that shows another record, or a
+  read that stays unanswered starts the walk again on a later pass. The drain
+  bins only a capture that a settled walk proved, that no folder names and that
+  the base does not link just before its re-key, and a capture it gives back
+  needs a new walk. A scope past the walk bound drops its captures and is not
+  walked again in that session, and a scope that holds 1024 captures drops each
+  new one. Residual: such a scope re-keys no orphan, and the grantee that
+  unlinked it keeps its key. Residual: a settled proof waits for an adoption
+  slot, so its snapshot ages; the risk is low, because an honest move publishes
+  the destination before the source. A child that does not publish under a name
+  this scope's write seed derives is a scope root, which the authored delete
+  refuses for the same reason.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.

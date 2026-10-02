@@ -2445,4 +2445,42 @@ mod report_tests {
         );
         assert!(report.converged());
     }
+
+    /// A vault that keeps no bin drops every held capture and every proof, so
+    /// a later bin turned on starts each capture with a fresh walk.
+    #[test]
+    fn a_pass_at_retention_zero_drops_the_held_captures_and_their_proofs() {
+        let (transport, blocks) = published_root();
+        let harness = harness(transport, &blocks, true);
+        *harness.state.settings_summary.borrow_mut() = Some(
+            crate::settings::VaultSettings {
+                bin_retention_days: 0,
+                ..crate::settings::VaultSettings::default()
+            }
+            .summary(crate::settings::SettingsOrigin::Resolved),
+        );
+        harness
+            .state
+            .observed_unlinks
+            .borrow_mut()
+            .push(crate::sync::project::UnlinkedChild {
+                scope_id: ROOT.0,
+                parent: ROOT,
+                node: NodeId([0x43; 16]),
+                name: "departed.txt".to_owned(),
+                kind: cipherbox_core::seal::NodeKind::File,
+                ipns_name: Vec::new(),
+                deleted_at: 9,
+            });
+        harness
+            .state
+            .capture_proofs
+            .borrow_mut()
+            .insert(ROOT, crate::sync::drain::CaptureProofs::default());
+
+        block_on(harness.pass.run(&harness.state, TickCause::Poll));
+
+        assert!(harness.state.observed_unlinks.borrow().is_empty());
+        assert!(harness.state.capture_proofs.borrow().is_empty());
+    }
 }

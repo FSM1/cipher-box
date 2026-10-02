@@ -5479,7 +5479,7 @@ struct CaptureScene {
     inner: NodeId,
     leaf: NodeId,
     engine_b: Engine<FakeSeamTypes>,
-    _events_b: EventStream,
+    events_b: EventStream,
     tasks_b: Vec<BoxedTask>,
 }
 
@@ -5511,7 +5511,7 @@ impl CaptureScene {
         let inner = child_id(&engine, right, "inner");
 
         let second = world.device(b"alice-second-device");
-        let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &second, 7);
+        let (mut engine_b, events_b, mut tasks_b) = boot(&world, &blocks, &second, 7);
         block_on(engine_b.command(Command::SetFocus { node: Some(left) })).unwrap();
         tick(&world, &engine_b, &mut tasks_b);
         assert_eq!(
@@ -5531,7 +5531,7 @@ impl CaptureScene {
             inner,
             leaf,
             engine_b,
-            _events_b,
+            events_b,
             tasks_b,
         }
     }
@@ -5688,6 +5688,42 @@ fn a_walk_that_read_the_destination_before_the_move_starts_again() {
     scene.assert_second_reads_the_leaf_under_right();
 }
 
+/// The walk's first read of the destination shows a fork at the sequence the
+/// move published, which does not name the node. The second read shows the
+/// move's record at that same sequence, so the walk is no snapshot and starts
+/// again.
+#[test]
+fn a_walk_whose_second_read_shows_another_record_at_one_sequence_starts_again() {
+    let mut scene = CaptureScene::new();
+    scene.tick_second(2);
+    scene.move_leaf_right();
+    let right_name = write_name(scene.right);
+    let endpoints = scene.world.record_store.endpoints();
+    let (sequence, _) = published(&scene.world.record_store, scene.right);
+    let fork = folder_record_with(
+        &scene.world.record_store,
+        &scene.blocks,
+        scene.right,
+        vec![child_ref(scene.inner.0, "inner", CoreNodeKind::Folder)],
+        sequence,
+        EOL,
+    );
+    scene.world.record_store.serve_gets_for_after(
+        right_name.as_str(),
+        0,
+        endpoints.len(),
+        Some(fork),
+    );
+    scene.tick_second(4);
+
+    assert!(
+        scene.binned().is_empty(),
+        "two records at one sequence prove no departure"
+    );
+    assert!(scene.leaf_opens_under_the_scope());
+    scene.assert_second_reads_the_leaf_under_right();
+}
+
 /// A proof is spent when its bin publish does not land. A node relinked before
 /// the retry is live, and the retry needs a new walk to see it.
 #[test]
@@ -5777,6 +5813,12 @@ fn a_folder_the_gate_refuses_holds_the_capture() {
     scene.plant(scene.left, Vec::new());
     scene.tick_second(3);
     assert!(scene.binned().is_empty(), "a refused folder proves nothing");
+    assert!(
+        events_so_far(&mut scene.events_b)
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "the refusal is a trust violation"
+    );
 
     scene.plant(scene.inner, Vec::new());
     scene.tick_second(3);
