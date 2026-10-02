@@ -1827,8 +1827,7 @@ enum Sealer<'e> {
     End(ScopeEnd<'e>),
     /// A read did not land, so a later pass decides.
     Unanswered,
-    /// The gate refused the record under every own end it was read under, and
-    /// the refusal is reported.
+    /// The refusal is reported, and the capture drops.
     Refused,
 }
 
@@ -4359,12 +4358,9 @@ where
         self.return_captures(unfinished);
     }
 
-    /// The own end whose key opens the record of `unlinked`'s node: the
-    /// capture's own end, then, on a seal-open refusal only, each other own end
-    /// that derives the captured name (blueprint/engine.md "Owner capture").
-    /// Any other refusal under the capture's own end is reported at once. A
-    /// seal-open refusal is reported once, and only when no end opens the
-    /// record.
+    /// The own end whose key opens the record of `unlinked`'s node
+    /// (blueprint/engine.md "Owner capture"). A seal-open refusal is reported
+    /// only when no end opens the record.
     async fn sealing_end<'e>(
         &self,
         scope: &DrainScope<'e>,
@@ -4458,8 +4454,8 @@ where
             .await
         {
             Ok(_) => Ok(()),
-            Err(ChildFault::Halt(halt)) => Err(ChildFault::Halt(halt)),
             Err(ChildFault::Refused(_)) => Err(fault),
+            Err(halt) => Err(halt),
         }
     }
 

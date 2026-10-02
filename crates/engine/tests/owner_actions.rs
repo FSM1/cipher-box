@@ -2206,14 +2206,7 @@ fn a_held_node_that_leaves_both_parents_bins_in_the_scope_that_seals_it() {
     let mut fx = GrantScenario::new();
     let (keep, deep, engine, mut events, mut tasks) =
         a_second_device_that_lacks_the_winner(&mut fx);
-    concurrent_edit(
-        &fx.world,
-        &fx.blocks,
-        keep,
-        &read_key_of(keep),
-        SCOPE,
-        |children| children.retain(|child| child.id != deep.0),
-    );
+    unlink_from_keep(&fx, keep, deep);
     for _ in 0..8 {
         tick(&fx.world, &engine, &mut tasks);
     }
@@ -2232,14 +2225,7 @@ fn a_captured_record_no_own_scope_opens_is_one_trust_violation() {
     let mut fx = GrantScenario::new();
     let (keep, deep, engine, mut events, mut tasks) =
         a_second_device_that_lacks_the_winner(&mut fx);
-    concurrent_edit(
-        &fx.world,
-        &fx.blocks,
-        keep,
-        &read_key_of(keep),
-        SCOPE,
-        |children| children.retain(|child| child.id != deep.0),
-    );
+    unlink_from_keep(&fx, keep, deep);
     let (_, epoch, _) =
         published_seal(&fx.world, &fx.blocks, &write_name(deep), &read_key_of(deep));
     reseal_interior_node(&fx.world, &fx.blocks, deep, SCOPE, &[0x42; 32], epoch);
@@ -2262,21 +2248,8 @@ fn a_captured_node_with_a_malformed_head_is_one_trust_violation() {
     let mut fx = GrantScenario::new();
     let (mut engine, mut events, mut tasks) = fx.second_owner_device();
     let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |_, _| {});
-    let name = write_name(doomed);
     let cid = fx.blocks.put(b"not an envelope".to_vec());
-    let record = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &doomed.0).as_bytes()),
-        format!("/ipfs/{cid}").as_bytes(),
-        sequence_at(&fx.world, &name) + 1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-    for endpoint in fx.world.record_store.endpoints() {
-        fx.world
-            .record_store
-            .seed_record(&endpoint, name.as_str(), record.clone());
-    }
+    publish_value_at(&fx.world, doomed, format!("/ipfs/{cid}").as_bytes());
     events_so_far(&mut events);
     for _ in 0..8 {
         tick(&fx.world, &engine, &mut tasks);
@@ -2330,15 +2303,7 @@ fn a_capture_whose_bin_publish_failed_bins_on_the_next_pass() {
 /// which bins there with no faulty record reported.
 fn assert_a_node_a_grant_moved_bins_in_the_granted_scope(permission: Permission) {
     let mut fx = GrantScenario::new();
-    let inner = create_published_folder(
-        &fx.world,
-        &mut fx.engine,
-        &mut fx._tasks,
-        fx.folder,
-        "inner",
-    );
-    let doomed =
-        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "doomed");
+    let (inner, doomed) = nested_subtree(&mut fx);
     let (mut second, mut events, mut tasks) = fx.second_owner_device();
     for node in [fx.folder, inner] {
         block_on(second.command(Command::SetFocus { node: Some(node) })).unwrap();
@@ -2406,6 +2371,18 @@ fn a_node_a_read_grant_moved_bins_in_the_granted_scope() {
 #[test]
 fn a_node_a_write_grant_moved_bins_in_the_granted_scope() {
     assert_a_node_a_grant_moved_bins_in_the_granted_scope(Permission::Write);
+}
+
+/// A vault-scope writer unlinks `deep` from `keep`.
+fn unlink_from_keep(fx: &GrantScenario, keep: NodeId, deep: NodeId) {
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        keep,
+        &read_key_of(keep),
+        SCOPE,
+        |children| children.retain(|child| child.id != deep.0),
+    );
 }
 
 /// The scope id of each published bin entry for `node`.
