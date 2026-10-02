@@ -1,0 +1,3 @@
+here's another example of the login page failing hard - i cant be logging in with google, sending a code and verifying signature.
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/6f491603-2031-4a27-95c5-3dbfb7bdb568-b0ffe508-0000-4e1f-a71b-e9968db21897.png]

@@ -3,8 +3,11 @@
   "checkpoint_id": "c567ad0e5a24",
   "strategy": "manual-commit",
   "branch": "fix/login-busy-labels-per-method",
-  "checkpoints_count": 95,
-  "files_touched": null,
+  "checkpoints_count": 96,
+  "files_touched": [
+    "packages/auth-ui/src/RecoveryPhraseForm.test.tsx",
+    "packages/auth-ui/src/RecoveryPhraseForm.tsx"
+  ],
   "sessions": [
     {
       "metadata": "/c5/67ad0e5a24/0/metadata.json",
@@ -12,13 +15,20 @@
       "compact_transcript": "/c5/67ad0e5a24/0/transcript.jsonl",
       "content_hash": "/c5/67ad0e5a24/0/content_hash.txt",
       "prompt": "/c5/67ad0e5a24/0/prompt.txt"
+    },
+    {
+      "metadata": "/c5/67ad0e5a24/1/metadata.json",
+      "transcript": "/c5/67ad0e5a24/1/full.jsonl",
+      "compact_transcript": "/c5/67ad0e5a24/1/transcript.jsonl",
+      "content_hash": "/c5/67ad0e5a24/1/content_hash.txt",
+      "prompt": "/c5/67ad0e5a24/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 4766,
-    "cache_creation_tokens": 4995852,
-    "cache_read_tokens": 616451942,
-    "output_tokens": 1216725,
-    "api_call_count": 2298
+    "input_tokens": 5090,
+    "cache_creation_tokens": 5030305,
+    "cache_read_tokens": 617879414,
+    "output_tokens": 1232205,
+    "api_call_count": 2310
   }
 }
