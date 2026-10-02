@@ -438,7 +438,8 @@ fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
     let (served, after, queued) = create_under_a_folder_at_newer_version(1);
 
     assert_eq!(
-        after, served,
+        after,
+        Some(served),
         "the folder at the newer version was never republished"
     );
     assert_eq!(queued, 1, "and the create is still queued");
@@ -453,7 +454,8 @@ fn a_drain_op_under_a_folder_at_another_envelope_version_spends_its_attempts() {
 
     assert_eq!(queued, 0, "the attempt budget ends the retries");
     assert_eq!(
-        after, served,
+        after,
+        Some(served),
         "and the folder at the newer version was never republished"
     );
 }
@@ -461,9 +463,7 @@ fn a_drain_op_under_a_folder_at_another_envelope_version_spends_its_attempts() {
 /// Stage a create under a folder sealed at the next envelope version and run
 /// `passes` drain passes: the folder's record before and after, and the ops
 /// still queued.
-fn create_under_a_folder_at_newer_version(
-    passes: usize,
-) -> (Option<Vec<u8>>, Option<Vec<u8>>, usize) {
+fn create_under_a_folder_at_newer_version(passes: usize) -> (Vec<u8>, Option<Vec<u8>>, usize) {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let folder = NodeId([0x6f; 16]);
@@ -523,5 +523,5 @@ fn create_under_a_folder_at_newer_version(
     for _ in 0..passes {
         tick(&world, &engine, &mut tasks);
     }
-    (Some(record), record_at(&world, &name), queued(&device))
+    (record, record_at(&world, &name), queued(&device))
 }

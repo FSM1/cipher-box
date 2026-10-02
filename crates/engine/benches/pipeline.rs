@@ -255,7 +255,7 @@ impl Adopter for AcceptingAdopter {
             write_scope_seed: None,
             node_id: ROOT_ID,
             read_scope_seed: None,
-            version: 1,
+            version: net::author::ENVELOPE_V,
         })
     }
 

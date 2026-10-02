@@ -286,9 +286,8 @@ pub(crate) struct GatedResolve {
     pub(crate) tied: Vec<Vec<u8>>,
     /// No record was fetched, and the endpoints agree the name holds none.
     pub(crate) absent: bool,
-    /// The token a publish at this name builds on the gated record with
-    /// ([`Observed::gated`]). `None` when no record passed the gate, or an own
-    /// `Current` recovered nothing to read its version from.
+    /// [`Observed::gated`] for the record the gate passed. `None` when none
+    /// passed, or an own `Current` recovered no material.
     pub(crate) observed: Option<Result<Observed, PublishError>>,
 }
 
