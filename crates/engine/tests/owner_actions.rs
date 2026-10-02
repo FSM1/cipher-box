@@ -1789,6 +1789,53 @@ fn the_tick_resolves_the_material_of_an_owner_minted_interior_scope() {
     );
 }
 
+/// The boundary walk reads an owner-minted scope root whose cached copy is
+/// another value at its sequence: the session reports that fork once, and the
+/// served record replaces the cached copy, so the fork clears.
+#[test]
+fn a_walk_that_reads_an_owned_scope_root_forked_reports_it_once() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let name = write_name(fx.folder);
+    let endpoints = fx.world.record_store.endpoints();
+    let held = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], name.as_str())
+        .expect("the scope root is published");
+    let held = IpnsRecord::unmarshal(&held)
+        .and_then(|record| record.verify(&name))
+        .expect("the scope root verifies");
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &fx.folder.0).as_bytes());
+    let other = IpnsRecord::create_v2(
+        &signer,
+        b"/ipfs/bafyanotherscoperoot",
+        held.sequence,
+        held.ttl,
+        "2098-01-01T00:00:00Z",
+    )
+    .marshal();
+    block_on(
+        fx.owner_device
+            .snapshot_cache
+            .put(name.as_str().as_bytes(), &other),
+    )
+    .expect("seed the cached copy");
+    drop(events_so_far(&mut fx._events));
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let forks = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter(|event| {
+            matches!(event, Event::SameSequenceFork { routing_key } if routing_key == name.as_str())
+        })
+        .count();
+    assert_eq!(forks, 1);
+}
+
 /// One node linked from a folder of the vault's own scope and from a folder of
 /// an owner-minted interior scope, with the interior folder's read key.
 ///

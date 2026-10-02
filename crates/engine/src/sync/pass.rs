@@ -25,7 +25,7 @@ use crate::facade::claim_conversion::{
     ConversionPass, CutAuthority, PointerIndex, TickSites, placed, scope_pointer_index,
 };
 use crate::facade::{
-    EngineError, Event, MAX_FOCUS_FILES, NodeId, emit_trust_violation, memoized_scan,
+    EngineError, Event, ForkSightings, MAX_FOCUS_FILES, NodeId, emit_trust_violation, memoized_scan,
 };
 use crate::grants::grafted::{
     BookmarkedPermissions, BookmarkedScopeRoots, ContestedNodes, FloorNamespace, GraftedPlane,
@@ -537,6 +537,13 @@ where
             if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
                 emit_trust_violation(&self.seams.events, pass.root_name.as_str(), rejection);
             }
+            if let Some(fork) = resolved.fork {
+                state.fork_sightings.report(
+                    &self.seams.events,
+                    pass.root_name.as_str(),
+                    fork.sequence,
+                );
+            }
             let merged =
                 refresh_base_from_resolved(&state.snapshot, NodeId(self.root_id), resolved);
             if merged.changed {
@@ -603,6 +610,7 @@ where
                     .filter(|scope| scope.write_cut_unfinished)
                     .map(|scope| scope.scope_id)
                     .collect();
+                report_forked_scopes(&state.fork_sightings, &self.seams.events, &walked.proved);
                 install_unproved_scopes(
                     &state.unproved_scope_roots,
                     walked.proved.iter().map(|s| NodeId(s.scope_id)),
@@ -710,6 +718,7 @@ where
                 gateway: &self.seams.gateway,
                 base: &state.snapshot,
                 events: &self.seams.events,
+                forks: &state.fork_sightings,
                 scope_id: scope_root.0,
                 scope_read_seed: &material.seed.seed,
                 seed_stamp: Some(material.seed.stamp),
@@ -1735,6 +1744,20 @@ fn install_descendant_scopes(
     departed
 }
 
+/// Report each scope whose root one walk read as a same-sequence fork.
+fn report_forked_scopes(
+    forks: &ForkSightings,
+    events: &mpsc::UnboundedSender<Event>,
+    proved: &[DescendantScopeRoot],
+) {
+    for (scope, fork) in proved
+        .iter()
+        .filter_map(|scope| scope.fork.map(|fork| (scope, fork)))
+    {
+        forks.report(events, scope.name.as_str(), fork.sequence);
+    }
+}
+
 /// Record the boundaries one walk named without material, and release every
 /// root the same walk proved: a proved root reads on its own leg from now on,
 /// and a stale entry here would skip it as unreachable for the rest of the
@@ -2052,6 +2075,7 @@ mod tests {
                 read_scope_seed: Zeroizing::new(READ_SCOPE_SEED),
                 write,
                 write_cut_unfinished: false,
+                fork: None,
             }
         }
 
@@ -2113,6 +2137,43 @@ mod tests {
 
             assert_eq!(passes.len(), 1);
             assert_eq!(passes[0].source().read_seed_stamp, Some(6));
+        }
+
+        /// A walk reports each forked scope once per session, and no other.
+        #[test]
+        fn a_walk_reports_each_forked_scope_once() {
+            let forks = ForkSightings::default();
+            let (events, mut rx) = mpsc::unbounded();
+            let forked = DescendantScopeRoot {
+                fork: Some(crate::net::fork::Fork {
+                    sequence: 1,
+                    served: true,
+                }),
+                ..proved(Err(WritePlaneDark::Keyless))
+            };
+            let plain = DescendantScopeRoot {
+                scope_id: [0x77; 16],
+                name: derive_write_name(&WRITE_SCOPE_SEED, &[0x77; 16]),
+                ..proved(Err(WritePlaneDark::Keyless))
+            };
+            let name = forked.name.as_str().to_owned();
+
+            report_forked_scopes(&forks, &events, &[forked, plain]);
+            report_forked_scopes(
+                &forks,
+                &events,
+                &[DescendantScopeRoot {
+                    fork: Some(crate::net::fork::Fork {
+                        sequence: 1,
+                        served: false,
+                    }),
+                    ..proved(Err(WritePlaneDark::Keyless))
+                }],
+            );
+            drop(events);
+
+            let sent: Vec<Event> = core::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(sent, [Event::SameSequenceFork { routing_key: name }]);
         }
 
         /// A scope a walk promotes into this vault's own set leaves its grafted
