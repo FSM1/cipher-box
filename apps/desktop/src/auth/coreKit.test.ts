@@ -72,7 +72,7 @@ const credential: IdentityCredential = {
   method: 'google',
   token: 'an-identity-token',
   verifierId: 'a-verifier-id',
-  email: 'member@example.com',
+  display: 'member@example.com',
   expiresIn: 300,
 };
 
@@ -133,6 +133,19 @@ describe("the shell's Core Kit store", () => {
 
     await expect(session.logout()).rejects.toThrow('the keyring is locked');
     expect(sdk.logout).toHaveBeenCalled();
+  });
+});
+
+describe('what a sign-in displays', () => {
+  it('reports the display the exchange gave it, and drops it on a sign-out', async () => {
+    const session = createCoreKitSession(config);
+    expect(session.display()).toBeNull();
+
+    await session.login(credential);
+    expect(session.display()).toBe('member@example.com');
+
+    await session.logout();
+    expect(session.display()).toBeNull();
   });
 });
 

@@ -21,7 +21,7 @@ type Raised = 'recovery' | 'forget' | null;
  */
 export function SettingsPage() {
   const account = useEngineAccount();
-  const { email, method, recoveryPhraseHeld } = useAuthState();
+  const { display, method, recoveryPhraseHeld } = useAuthState();
   const [raised, setRaised] = useState<Raised>(null);
   const { storage, error: storageError, reload } = useVaultStorage();
 
@@ -35,9 +35,10 @@ export function SettingsPage() {
           <dl className="settings-facts">
             <dt>signed in with</dt>
             <dd data-testid="settings-method">{method ?? 'unknown'}</dd>
-            <dt>address</dt>
-            {/* Wallet logins carry no email, as in the header menu. */}
-            <dd data-testid="settings-email">{email ?? '[an0n]'}</dd>
+            <dt data-testid="settings-identifier-label">
+              {method === 'wallet' ? 'wallet' : 'address'}
+            </dt>
+            <dd data-testid="settings-email">{display ?? '[an0n]'}</dd>
             <dt>account</dt>
             <dd data-testid="settings-account-id">{account ?? 'checking session...'}</dd>
           </dl>

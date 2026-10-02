@@ -17,6 +17,13 @@ const CODE_CEILING = 10 ** CODE_DIGITS;
 /** Largest multiple of the ceiling inside 2^32, so rejection sampling stays unbiased. */
 const SAMPLE_LIMIT = Math.floor(2 ** 32 / CODE_CEILING) * CODE_CEILING;
 
+/**
+ * What a code authorises. Each purpose has its own code slot, so a sign-in code
+ * never verifies as a link and a link code never verifies as a sign-in. A link
+ * code verifies only for the account that asked for it.
+ */
+export type EmailCodePurpose = 'login' | 'link';
+
 const MAX_VERIFY_ATTEMPTS = 5;
 const MAX_SENDS_PER_WINDOW = 5;
 const SEND_WINDOW_MS = 15 * 60 * 1000;
@@ -34,17 +41,20 @@ interface IssuedCode {
   digest: Buffer;
   expiresAt: Date;
   attemptsLeft: number;
+  /** The account that asked for a link code; unset for a sign-in code. */
+  userId?: string;
 }
 
 /**
- * One address's state. The send window outlives the code it issued, so the
- * entry — not the code — is the unit that expires, and the budget cannot be
- * reset by simply letting a code lapse.
+ * One address's state: one send budget for both purposes, and one code slot per
+ * purpose. The send window outlives the codes it issued, so the entry — not a
+ * code — is the unit that expires, and the budget cannot be reset by simply
+ * letting a code lapse.
  */
 interface AddressEntry {
-  code: IssuedCode | null;
   sends: number;
   windowEndsAt: Date;
+  codes: Partial<Record<EmailCodePurpose, IssuedCode>>;
 }
 
 /**
@@ -70,8 +80,10 @@ export class EmailOtpService {
     this.ttlMs = Number(configService.get('EMAIL_OTP_TTL_SECONDS') ?? 300) * 1000;
   }
 
-  /** Issue a code and deliver it. Replaces any code already outstanding. */
-  async send(email: string): Promise<void> {
+  /** Issue a code and deliver it. Replaces any code already outstanding for the purpose. */
+  send(email: string, purpose: 'login'): Promise<void>;
+  send(email: string, purpose: 'link', userId: string): Promise<void>;
+  async send(email: string, purpose: EmailCodePurpose, userId?: string): Promise<void> {
     const address = normalizeEmail(email);
     this.evictExpired();
 
@@ -80,15 +92,16 @@ export class EmailOtpService {
 
     const code = this.generateCode();
     const salt = this.entropy.randomBytes(16);
-    entry.code = {
+    entry.codes[purpose] = {
       salt,
       digest: digestOf(salt, code),
       expiresAt: new Date(now.getTime() + this.ttlMs),
       attemptsLeft: MAX_VERIFY_ATTEMPTS,
+      userId,
     };
 
     try {
-      await this.mail.sendVerificationCode(address, code);
+      await this.mail.sendVerificationCode(address, code, purpose);
     } catch (error: unknown) {
       // Undeliverable is not "issued": leaving it live would let a member sit
       // waiting on a code that is never coming. The provider's reason carries
@@ -96,7 +109,7 @@ export class EmailOtpService {
       this.logger.error(
         `verification code delivery failed: ${error instanceof Error ? error.message : String(error)}`
       );
-      entry.code = null;
+      delete entry.codes[purpose];
       throw new ServiceUnavailableException('The verification code could not be delivered');
     }
   }
@@ -104,31 +117,35 @@ export class EmailOtpService {
   /**
    * Consume a code, returning the normalized address it was issued to.
    * Single-use, attempt-capped, and expiry-checked — a wrong guess costs an
-   * attempt, and running out voids the code entirely.
+   * attempt, and running out voids the code entirely. Another account's link
+   * code reads as no code at all, and costs its owner no attempt.
    */
-  verify(email: string, code: string): string {
+  verify(email: string, code: string, purpose: 'login'): string;
+  verify(email: string, code: string, purpose: 'link', userId: string): string;
+  verify(email: string, code: string, purpose: EmailCodePurpose, userId?: string): string {
     const address = normalizeEmail(email);
     this.evictExpired();
 
-    const issued = this.tracked.get(address)?.code;
-    if (!issued) {
+    const entry = this.tracked.get(address);
+    const issued = entry?.codes[purpose];
+    if (!entry || !issued || issued.userId !== userId) {
       throw new UnauthorizedException('No verification code is outstanding for this address');
     }
     if (issued.expiresAt.getTime() <= this.clock.now().getTime()) {
-      this.clearCode(address);
+      delete entry.codes[purpose];
       throw new UnauthorizedException('The verification code has expired');
     }
 
     issued.attemptsLeft -= 1;
     if (issued.attemptsLeft < 0) {
-      this.clearCode(address);
+      delete entry.codes[purpose];
       throw new UnauthorizedException('Too many attempts — request a new code');
     }
 
     if (!timingSafeEqual(digestOf(issued.salt, code), issued.digest)) {
       throw new UnauthorizedException('Incorrect verification code');
     }
-    this.clearCode(address);
+    delete entry.codes[purpose];
     return address;
   }
 
@@ -145,9 +162,9 @@ export class EmailOtpService {
     const entry = this.tracked.get(address);
     if (!entry) {
       const fresh: AddressEntry = {
-        code: null,
         sends: 1,
         windowEndsAt: new Date(now.getTime() + SEND_WINDOW_MS),
+        codes: {},
       };
       this.tracked.set(address, fresh);
       this.evictOverflow();
@@ -163,15 +180,10 @@ export class EmailOtpService {
     return entry;
   }
 
-  private clearCode(address: string): void {
-    const entry = this.tracked.get(address);
-    if (entry) entry.code = null;
-  }
-
   private evictExpired(): void {
     const now = this.clock.now().getTime();
-    for (const [address, entry] of this.tracked) {
-      if (entry.windowEndsAt.getTime() <= now) this.tracked.delete(address);
+    for (const [key, entry] of this.tracked) {
+      if (entry.windowEndsAt.getTime() <= now) this.tracked.delete(key);
     }
   }
 
@@ -186,6 +198,12 @@ export class EmailOtpService {
 /** One address is one identity: case and surrounding space never distinguish two. */
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+/** The first character and the domain, e.g. `m***@example.com`. */
+export function maskEmail(address: string): string {
+  const at = address.lastIndexOf('@');
+  return `${address.slice(0, 1)}***@${address.slice(at + 1)}`;
 }
 
 function digestOf(salt: Buffer, code: string): Buffer {

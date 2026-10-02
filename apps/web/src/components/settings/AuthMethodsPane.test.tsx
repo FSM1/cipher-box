@@ -50,8 +50,19 @@ const TEST_METHOD: AuthMethodDescriptor = {
   lastUsedAt: null,
 };
 
-async function renderPane(methods: AuthMethodDescriptor[]) {
-  const engine = fakeEngineClient({ authMethods: () => Promise.resolve(methods) });
+const EMAIL: AuthMethodDescriptor = {
+  id: 'method-email',
+  kind: 'email',
+  identifierDisplay: 'm***@example.test',
+  createdAt: '2026-08-04T10:00:00.000Z',
+  lastUsedAt: null,
+};
+
+async function renderPane(
+  methods: AuthMethodDescriptor[],
+  overrides: Parameters<typeof fakeEngineClient>[0] = {}
+) {
+  const engine = fakeEngineClient({ authMethods: () => Promise.resolve(methods), ...overrides });
   const Providers = pageWrapper(engine.client, fakeCoreKitSession({ loggedIn: true }).session);
   await act(async () => {
     render(
@@ -146,6 +157,133 @@ describe('the login methods pane', () => {
     await act(async () => release(`0x${'ab'.repeat(65)}`));
 
     expect(engine.calls.siweLinks).toEqual([]);
+  });
+
+  it('links an email with the code sent to it, then re-reads the list', async () => {
+    const reads = [[IDENTITY], [IDENTITY, EMAIL]];
+    const engine = await renderPane([], {
+      authMethods: () => Promise.resolve(reads.shift() ?? [IDENTITY, EMAIL]),
+    });
+
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email')));
+    fireEvent.change(screen.getByTestId('settings-link-email-input'), {
+      target: { value: ' Member@Example.test ' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-send')));
+
+    expect(engine.calls.emailLinkCodes).toEqual(['member@example.test']);
+    expect(screen.getByTestId('settings-link-email-form').textContent).toContain(
+      'code sent to member@example.test'
+    );
+
+    const code = screen.getByTestId('settings-link-email-code') as HTMLInputElement;
+    fireEvent.change(code, { target: { value: '12a34-56789' } });
+    expect(code.value).toBe('123456');
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-link')));
+
+    expect(engine.calls.emailLinks).toEqual([{ email: 'member@example.test', code: '123456' }]);
+    expect(screen.getByTestId('settings-auth-methods').textContent).toContain('m***@example.test');
+    // The form lets the address and the code go once the link lands.
+    expect(screen.queryByTestId('settings-link-email-form')).toBeNull();
+    expect(screen.getByTestId('settings-link-email')).toBeTruthy();
+  });
+
+  it('shows the API refusal of a link and keeps the code step open', async () => {
+    const engine = await renderPane([IDENTITY], {
+      emailLink: () => Promise.reject(new Error('Email is already linked to another account')),
+    });
+
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email')));
+    fireEvent.change(screen.getByTestId('settings-link-email-input'), {
+      target: { value: 'member@example.test' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-send')));
+    fireEvent.change(screen.getByTestId('settings-link-email-code'), {
+      target: { value: '123456' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-link')));
+
+    expect(engine.calls.emailLinks).toHaveLength(1);
+    expect(screen.getByTestId('settings-auth-error').textContent).toContain(
+      'Email is already linked to another account'
+    );
+    expect(screen.getByTestId('settings-link-email-code')).toBeTruthy();
+  });
+
+  it('stays on the address step when the code is refused', async () => {
+    const engine = await renderPane([IDENTITY], {
+      emailLinkSendCode: () => Promise.reject(new Error('api returned status 429')),
+    });
+
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email')));
+    fireEvent.change(screen.getByTestId('settings-link-email-input'), {
+      target: { value: 'member@example.test' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-send')));
+
+    expect(engine.calls.emailLinkCodes).toEqual(['member@example.test']);
+    expect(screen.getByTestId('settings-auth-error').textContent).toContain('429');
+    expect(screen.queryByTestId('settings-link-email-code')).toBeNull();
+  });
+
+  it('starts over at a new address and sends the code there', async () => {
+    const engine = await renderPane([IDENTITY]);
+
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email')));
+    fireEvent.change(screen.getByTestId('settings-link-email-input'), {
+      target: { value: 'first@example.test' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-send')));
+    fireEvent.change(screen.getByTestId('settings-link-email-code'), {
+      target: { value: '111111' },
+    });
+    fireEvent.click(screen.getByTestId('settings-link-email-restart'));
+
+    fireEvent.change(screen.getByTestId('settings-link-email-input'), {
+      target: { value: 'second@example.test' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-send')));
+    const code = screen.getByTestId('settings-link-email-code') as HTMLInputElement;
+    // The code typed for the first address does not carry over to the second.
+    expect(code.value).toBe('');
+    fireEvent.change(code, { target: { value: '222222' } });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-link')));
+
+    expect(engine.calls.emailLinkCodes).toEqual(['first@example.test', 'second@example.test']);
+    expect(engine.calls.emailLinks).toEqual([{ email: 'second@example.test', code: '222222' }]);
+  });
+
+  it('labels only the send in flight as sending', async () => {
+    let release: () => void = () => {};
+    await renderPane([IDENTITY], {
+      emailLinkSendCode: () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    });
+
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email')));
+    fireEvent.change(screen.getByTestId('settings-link-email-input'), {
+      target: { value: 'member@example.test' },
+    });
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-email-send')));
+
+    const send = screen.getByTestId('settings-link-email-send') as HTMLButtonElement;
+    expect(send.textContent).toBe('sending code...');
+    expect(send.disabled).toBe(true);
+    expect((screen.getByTestId('settings-link-wallet') as HTMLButtonElement).textContent).toBe(
+      'link a wallet'
+    );
+    await act(async () => release());
+  });
+
+  it('labels an email row by its kind', async () => {
+    await renderPane([IDENTITY, EMAIL]);
+
+    const [, email] = screen.getAllByRole('listitem');
+    expect(email!.querySelector('.settings-method-kind')!.textContent).toBe('email');
+    expect(email!.querySelector('.settings-method-id')!.textContent).toBe('m***@example.test');
+    expect(unlinks()[1]!.disabled).toBe(false);
   });
 
   it('reads a last-used stamp as a date rather than as the wire string', async () => {

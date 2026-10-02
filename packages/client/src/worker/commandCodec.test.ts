@@ -427,7 +427,11 @@ describe('readAuthMethods', () => {
   };
 
   it('passes known rows through, the engine-spelled unknown kind included', () => {
-    const rows = [row, { ...row, kind: 'unknown' as const }];
+    const rows = [
+      row,
+      { ...row, kind: 'email' as const, identifierDisplay: 'm***@example.test' },
+      { ...row, kind: 'unknown' as const },
+    ];
     expect(readAuthMethods(rows)).toEqual(rows);
   });
 

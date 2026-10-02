@@ -2,6 +2,7 @@ import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Clock } from '../../common/clock';
+import { Entropy } from '../../common/entropy';
 import { IdentitySubject, IdentitySubjectKind } from '../entities/identity-subject.entity';
 import { IdentityService } from './identity.service';
 
@@ -17,7 +18,8 @@ export class IdentitySubjectService {
     @InjectRepository(IdentitySubject)
     private readonly subjects: Repository<IdentitySubject>,
     private readonly identityService: IdentityService,
-    private readonly clock: Clock
+    private readonly clock: Clock,
+    private readonly entropy: Entropy
   ) {}
 
   /**
@@ -35,25 +37,26 @@ export class IdentitySubjectService {
     const existing = await this.subjects.findOne({ where: { kind, identifierHash } });
     if (existing) {
       await this.subjects.update({ id: existing.id }, { lastUsedAt: now });
-      return existing.id;
+      return existing.subjectId;
     }
 
+    const id = this.entropy.randomUuid();
     const inserted = await this.subjects
       .createQueryBuilder()
       .insert()
       .into(IdentitySubject)
-      .values({ kind, identifierHash, lastUsedAt: now })
+      .values({ id, subjectId: id, kind, identifierHash, lastUsedAt: now })
       .orIgnore()
-      .returning('id')
+      .returning('subject_id')
       .execute();
-    const mintedId = (inserted.raw as { id: string }[])[0]?.id;
-    if (mintedId) return mintedId;
+    const minted = (inserted.raw as { subject_id: string }[])[0]?.subject_id;
+    if (minted) return minted;
 
     // Lost the insert race, so the winner's row is the one that counts.
     const stored = await this.subjects.findOne({ where: { kind, identifierHash } });
     if (!stored) {
       throw new InternalServerErrorException('Identity subject could not be resolved');
     }
-    return stored.id;
+    return stored.subjectId;
   }
 }

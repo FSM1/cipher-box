@@ -20,13 +20,13 @@ use zeroize::Zeroizing;
 use super::error::ApiError;
 use super::signer::ChallengeSigner;
 use super::types::{
-    AuthMethod, ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest,
-    MailboxAckWire, MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration,
-    PendingApproval, PendingApprovalList, Quota, RefreshRequest, RegisterDeviceRequest,
-    RegisteredDevice, RegisteredDeviceList, RespondApprovalRequest, RetireEntry, RetireResult,
-    SiweChallengeResponse, SiweLinkRequest, SiweNonce, StepUpChallengeRequest, StepUpOperation,
-    TestLoginOutcome, TestLoginRequest, TestLoginResponse, TokenResponse, UnlinkMethodRequest,
-    UploadResult,
+    AuthMethod, ChallengeRequest, ChallengeResponse, EmailLinkRequest, EmailLinkSendCodeRequest,
+    ErrorBody, LoginOutcome, LoginRequest, MailboxAckWire, MailboxItem, MailboxPollWire,
+    MailboxPostWire, NameRegistration, PendingApproval, PendingApprovalList, Quota, RefreshRequest,
+    RegisterDeviceRequest, RegisteredDevice, RegisteredDeviceList, RespondApprovalRequest,
+    RetireEntry, RetireResult, SiweChallengeResponse, SiweLinkRequest, SiweNonce,
+    StepUpChallengeRequest, StepUpOperation, TestLoginOutcome, TestLoginRequest, TestLoginResponse,
+    TokenResponse, UnlinkMethodRequest, UploadResult,
 };
 use crate::content::{DAG_ROOT_CODEC, SessionBearer};
 use crate::deadlines::DeadlinePolicy;
@@ -287,6 +287,44 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
                 &SiweLinkRequest {
                     message,
                     signature,
+                    challenge: &challenge,
+                    challenge_signature: &challenge_signature,
+                },
+            )
+            .await?;
+        ok_or_err(response).map(drop)
+    }
+
+    /// Ask the API to email a link code to `email` for the authenticated
+    /// account. The code is issued for a link, so the sign-in route refuses it.
+    pub async fn email_link_send_code(&self, email: &str) -> Result<(), ApiError> {
+        let response = self
+            .json_authed(
+                HttpMethod::Post,
+                "/auth/email/link/send-code",
+                &EmailLinkSendCodeRequest { email },
+            )
+            .await?;
+        ok_or_err(response).map(drop)
+    }
+
+    /// Link an email code login to the authenticated account, re-proving the
+    /// account identity key first, as [`Self::siwe_link`] does.
+    pub async fn email_link(
+        &self,
+        email: &str,
+        code: &str,
+        signer: &impl ChallengeSigner,
+    ) -> Result<(), ApiError> {
+        let challenge = self.step_up_challenge(StepUpOperation::Link, None).await?;
+        let challenge_signature = signer.sign_challenge(&challenge);
+        let response = self
+            .json_authed(
+                HttpMethod::Post,
+                "/auth/email/link",
+                &EmailLinkRequest {
+                    email,
+                    code,
                     challenge: &challenge,
                     challenge_signature: &challenge_signature,
                 },
@@ -2158,6 +2196,12 @@ mod tests {
                     "createdAt": "2026-08-27T09:00:00.000Z",
                 },
                 { "id": "row-3", "kind": "passkey", "createdAt": "2026-08-27T08:00:00.000Z" },
+                {
+                    "id": "row-4",
+                    "kind": "email",
+                    "identifierDisplay": "m***@example.test",
+                    "createdAt": "2026-08-27T07:00:00.000Z",
+                },
             ]),
         ));
 
@@ -2185,6 +2229,13 @@ mod tests {
                     kind: AuthMethodKind::Unknown,
                     identifier_display: None,
                     created_at: "2026-08-27T08:00:00.000Z".to_owned(),
+                    last_used_at: None,
+                },
+                AuthMethod {
+                    id: "row-4".to_owned(),
+                    kind: AuthMethodKind::Email,
+                    identifier_display: Some("m***@example.test".to_owned()),
+                    created_at: "2026-08-27T07:00:00.000Z".to_owned(),
                     last_used_at: None,
                 },
             ],
@@ -2273,6 +2324,99 @@ mod tests {
         assert_eq!(body_json(&sent[1])["challenge"], link_challenge);
     }
 
+    /// The contract answers both email link routes with a 201 and no body.
+    fn created_empty() -> HttpResponse {
+        HttpResponse {
+            status: 201,
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn email_link_send_code_posts_the_address_as_the_owner() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(created_empty());
+
+        block_on(client.email_link_send_code("member@example.test")).expect("send code");
+
+        let requests = http.requests();
+        let sent = &requests[sent_after_login..];
+        assert_eq!(sent.len(), 1, "a send mints no step-up challenge");
+        assert_eq!(sent[0].method, HttpMethod::Post);
+        assert_eq!(sent[0].url, "http://api.test/auth/email/link/send-code");
+        assert!(
+            has_bearer(&sent[0]),
+            "only the account owner asks for a link code"
+        );
+        assert_eq!(
+            body_json(&sent[0]),
+            json!({ "email": "member@example.test" })
+        );
+    }
+
+    #[test]
+    fn email_link_mints_the_link_challenge_and_reproves_the_identity_key() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        let link_challenge = challenge_for(StepUpOperation::Link.challenge_prefix());
+        http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": link_challenge.clone() }),
+        ));
+        http.enqueue_response(created_empty());
+
+        block_on(client.email_link("member@example.test", "123456", &StubSigner)).expect("link");
+
+        let requests = http.requests();
+        let sent = &requests[sent_after_login..];
+        assert_eq!(sent.len(), 2, "one challenge, then one link");
+        assert_eq!(sent[0].url, "http://api.test/auth/challenge/step-up");
+        assert_eq!(body_json(&sent[0]), json!({ "operation": "link" }));
+        assert_eq!(sent[1].method, HttpMethod::Post);
+        assert_eq!(sent[1].url, "http://api.test/auth/email/link");
+        assert!(has_bearer(&sent[1]));
+        assert_eq!(
+            body_json(&sent[1]),
+            json!({
+                "email": "member@example.test",
+                "code": "123456",
+                "challenge": link_challenge.clone(),
+                "challengeSignature": format!("sig-for-{link_challenge}"),
+            })
+        );
+    }
+
+    /// The host shows the API's own words for a refused link.
+    #[test]
+    fn a_refused_email_link_carries_the_api_message() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": challenge_for(StepUpOperation::Link.challenge_prefix()) }),
+        ));
+        http.enqueue_response(json_response(
+            409,
+            json!({ "message": "Email is already linked to another account" }),
+        ));
+
+        let error = block_on(client.email_link("member@example.test", "123456", &StubSigner))
+            .expect_err("refused");
+
+        assert!(
+            matches!(
+                &error,
+                ApiError::Status { status: 409, message: Some(message), .. }
+                    if message == "Email is already linked to another account"
+            ),
+            "{error:?}"
+        );
+    }
+
     #[test]
     fn the_link_nonce_comes_from_its_own_authenticated_route() {
         let (http, _creds, client) = fakes();
@@ -2329,6 +2473,16 @@ mod tests {
             assert_step_up_refused(
                 &http,
                 block_on(client.siwe_link("siwe-message", "0xsig", &PanickingSigner)),
+                &challenge,
+            );
+            let (http, _creds, client) = fakes();
+            http.enqueue_response(json_response(
+                200,
+                json!({ "challenge": challenge.clone() }),
+            ));
+            assert_step_up_refused(
+                &http,
+                block_on(client.email_link("member@example.test", "123456", &PanickingSigner)),
                 &challenge,
             );
         }

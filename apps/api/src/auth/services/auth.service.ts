@@ -18,15 +18,26 @@ import {
   subjectLockKey,
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
+import { isUniqueViolation } from '../../common/pg-errors';
 import { AccountDevice } from '../../device-approval/entities/account-device.entity';
-import { AuthMethod, type AuthMethodKind } from '../entities/auth-method.entity';
+import {
+  AUTH_METHOD_IDENTIFIER_UNIQUE,
+  AuthMethod,
+  type AuthMethodKind,
+} from '../entities/auth-method.entity';
+import {
+  IDENTITY_SUBJECT_IDENTIFIER_UNIQUE,
+  IdentitySubject,
+} from '../entities/identity-subject.entity';
 import { User } from '../entities/user.entity';
 import {
   ChallengeService,
   stepUpChallengeKind,
+  type IdentityChallengeKind,
   type SiweChallengeKind,
   type StepUpOperation,
 } from './challenge.service';
+import { EmailOtpService, maskEmail } from './email-otp.service';
 import { IdentityService } from './identity.service';
 import { IdentityTokenService, type VerifiedIdentityToken } from './identity-token.service';
 import { SIWE_LINK_STATEMENT, SiweService } from './siwe.service';
@@ -38,12 +49,19 @@ export interface LoginResult {
 }
 
 /**
- * The kinds an unlink can actually revoke. `identity` and `test` authorise off
- * the `users` table rather than off `auth_methods`, and their login paths
+ * The kinds a link writes and an unlink can actually revoke: each has a display
+ * row and a subject row that opens the account. `identity` and `test` authorise
+ * off the `users` table rather than off `auth_methods`, and their login paths
  * re-insert the row on the next login — so deleting one would promise a
  * revocation the server does not perform.
  */
-const UNLINKABLE_KINDS: readonly AuthMethodKind[] = ['wallet'];
+const LINKABLE_KINDS = ['wallet', 'email'] as const;
+
+type LinkableKind = (typeof LINKABLE_KINDS)[number];
+
+function isLinkable(kind: AuthMethodKind): kind is LinkableKind {
+  return (LINKABLE_KINDS as readonly AuthMethodKind[]).includes(kind);
+}
 
 /** One login method in the display form `GET /auth/methods` serves. */
 export interface AuthMethodView {
@@ -74,6 +92,7 @@ export class AuthService {
     private readonly identityService: IdentityService,
     private readonly siweService: SiweService,
     private readonly tokenService: TokenService,
+    private readonly emailOtp: EmailOtpService,
     private readonly identityTokens: IdentityTokenService,
     private readonly clock: Clock,
     configService: ConfigService,
@@ -163,8 +182,11 @@ export class AuthService {
             { identitySubjectId: bind }
           );
         }
-        await this.touchAuthMethod(manager.getRepository(AuthMethod), account.id, 'identity', {
-          identifierHash: this.identityService.hashIdentifier(canonicalKey),
+        const methods = manager.getRepository(AuthMethod);
+        const identifierHash = this.identityService.hashIdentifier(canonicalKey);
+        const display = await methods.findOne({ where: { kind: 'identity', identifierHash } });
+        await this.touchAuthMethod(methods, display, account.id, 'identity', {
+          identifierHash,
           identifierDisplay: this.identityService.truncatePublicKey(canonicalKey),
         });
         return { user: account, isNewUser: !existing };
@@ -211,9 +233,12 @@ export class AuthService {
     challenge: string,
     challengeSignature: string
   ): Promise<void> {
-    const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    this.challengeService.consume(challenge, 'identity-link', { publicKey: canonicalKey });
-    this.identityService.verifyChallengeSignature(challenge, challengeSignature, canonicalKey);
+    const canonicalKey = this.reproveAccountKey(
+      publicKey,
+      challenge,
+      challengeSignature,
+      'identity-link'
+    );
 
     const nonce = parseSiweMessage(message).nonce;
     if (!nonce) {
@@ -227,18 +252,108 @@ export class AuthService {
       SIWE_LINK_STATEMENT
     );
 
-    const identifierHash = this.siweService.hashWalletAddress(address);
-    const existing = await this.authMethodRepository.findOne({
-      where: { kind: 'wallet', identifierHash },
-    });
-    if (existing && existing.userId !== userId) {
-      throw new ConflictException('Wallet is already linked to another account');
-    }
+    await this.linkMethod(
+      userId,
+      'wallet',
+      {
+        identifierHash: this.identityService.hashIdentifier(address),
+        identifierDisplay: this.siweService.truncateWalletAddress(address),
+      },
+      'Wallet already opens this account',
+      'Wallet is already linked to another account',
+      'Wallet already opens another account'
+    );
+  }
 
-    await this.touchAuthMethod(this.authMethodRepository, userId, 'wallet', {
-      identifierHash,
-      identifierDisplay: this.siweService.truncateWalletAddress(address),
-    });
+  /** Send a code that only `emailLink` accepts, and only for this account. */
+  sendEmailLinkCode(userId: string, email: string): Promise<void> {
+    return this.emailOtp.send(email, 'link', userId);
+  }
+
+  /**
+   * Link a passwordless email address to the authenticated account. The account
+   * key is re-proved first, for the reason `siweLink` states.
+   */
+  async emailLink(
+    userId: string,
+    publicKey: string,
+    email: string,
+    code: string,
+    challenge: string,
+    challengeSignature: string
+  ): Promise<void> {
+    this.reproveAccountKey(publicKey, challenge, challengeSignature, 'identity-link');
+    const address = this.emailOtp.verify(email, code, 'link', userId);
+
+    await this.linkMethod(
+      userId,
+      'email',
+      {
+        identifierHash: this.identityService.hashIdentifier(address),
+        identifierDisplay: maskEmail(address),
+      },
+      'Email already opens this account',
+      'Email is already linked to another account'
+    );
+  }
+
+  /**
+   * Point a verified provider identity at the account's subject (ADR 0039 D1):
+   * the display row and the `identity_subjects` row commit together or not at
+   * all. The identity exchange hashes the same identifier, so the subject row
+   * is the one a later sign-in through this method resolves. Any existing
+   * subject row refuses the link, so every display row a link writes has the
+   * one subject row the link wrote, and an unlink removes the two as a pair.
+   */
+  private async linkMethod(
+    userId: string,
+    kind: LinkableKind,
+    identifiers: { identifierHash: string; identifierDisplay: string },
+    opensThis: string,
+    linkedElsewhere: string,
+    opensAnother = linkedElsewhere
+  ): Promise<void> {
+    const { identifierHash } = identifiers;
+    try {
+      await runLockGuardedTransaction(this.dataSource, async (manager) => {
+        const bound = await this.boundSubjectOf(manager, userId);
+        if (bound === null) {
+          throw new ConflictException('This account has no bound identity subject');
+        }
+        await boundedAcquire(
+          manager,
+          [authMethodLockKey(userId), subjectLockKey(bound)],
+          this.lockTimeoutMs
+        );
+        const methods = manager.getRepository(AuthMethod);
+        const display = await methods.findOne({ where: { kind, identifierHash } });
+        if (display && display.userId !== userId) {
+          throw new ConflictException(linkedElsewhere);
+        }
+        const subjects = manager.getRepository(IdentitySubject);
+        const subject = await subjects.findOne({ where: { kind, identifierHash } });
+        if (subject) {
+          throw new ConflictException(subject.subjectId === bound ? opensThis : opensAnother);
+        }
+
+        await this.touchAuthMethod(methods, display, userId, kind, identifiers);
+        await subjects.insert({
+          kind,
+          identifierHash,
+          subjectId: bound,
+          lastUsedAt: this.clock.now(),
+        });
+      });
+    } catch (error) {
+      // Another account's link, or an exchange, wrote the identifier after the reads above.
+      if (isUniqueViolation(error, AUTH_METHOD_IDENTIFIER_UNIQUE)) {
+        throw new ConflictException(linkedElsewhere);
+      }
+      if (isUniqueViolation(error, IDENTITY_SUBJECT_IDENTIFIER_UNIQUE)) {
+        throw new ConflictException(opensAnother);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -266,6 +381,8 @@ export class AuthService {
    * Unlink one login method. The identity challenge is re-proved first: a stolen
    * access token alone must not be able to strip an account's other login
    * methods, and only live possession of the account key can authorize it.
+   * The unlink also deletes the subject row the link wrote, so a sign-in through
+   * the method stops opening the account.
    */
   async unlinkAuthMethod(
     userId: string,
@@ -274,24 +391,22 @@ export class AuthService {
     challenge: string,
     signature: string
   ): Promise<void> {
-    const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    this.challengeService.consume(challenge, 'identity-unlink', {
-      publicKey: canonicalKey,
-      subject: methodId,
-    });
-    this.identityService.verifyChallengeSignature(challenge, signature, canonicalKey);
+    this.reproveAccountKey(publicKey, challenge, signature, 'identity-unlink', methodId);
 
     await runLockGuardedTransaction(this.dataSource, async (manager) => {
       await boundedAcquire(manager, [authMethodLockKey(userId)], this.lockTimeoutMs);
       const repository = manager.getRepository(AuthMethod);
       // One read answers every refusal: whether the row is the caller's, what
       // kind it is, and whether it is the last one standing.
-      const owned = await repository.find({ where: { userId }, select: ['id', 'kind'] });
+      const owned = await repository.find({
+        where: { userId },
+        select: ['id', 'kind', 'identifierHash'],
+      });
       const target = owned.find((row) => row.id === methodId);
       if (!target) {
         throw new NotFoundException('Unknown login method');
       }
-      if (!UNLINKABLE_KINDS.includes(target.kind)) {
+      if (!isLinkable(target.kind)) {
         throw new ConflictException(
           `A ${target.kind} login method cannot be unlinked: logging in through it recreates the row, so removing it would revoke nothing`
         );
@@ -300,6 +415,9 @@ export class AuthService {
         throw new ConflictException('An account must keep at least one login method');
       }
       await repository.delete({ id: methodId, userId });
+      await manager
+        .getRepository(IdentitySubject)
+        .delete({ kind: target.kind, identifierHash: target.identifierHash });
     });
   }
 
@@ -317,27 +435,36 @@ export class AuthService {
     await this.tokenService.revokeAllForUser(userId);
   }
 
+  /**
+   * Consume a step-up challenge of `kind` and verify the account key's signature
+   * over it. `subject` is the row an unlink names.
+   */
+  private reproveAccountKey(
+    publicKey: string,
+    challenge: string,
+    signature: string,
+    kind: IdentityChallengeKind,
+    subject?: string
+  ): string {
+    const canonicalKey = this.identityService.normalizePublicKey(publicKey);
+    this.challengeService.consume(challenge, kind, { publicKey: canonicalKey, subject });
+    this.identityService.verifyChallengeSignature(challenge, signature, canonicalKey);
+    return canonicalKey;
+  }
+
   private async touchAuthMethod(
     repository: Repository<AuthMethod>,
+    existing: AuthMethod | null,
     userId: string,
-    kind: AuthMethod['kind'],
+    kind: AuthMethodKind,
     identifiers: { identifierHash: string; identifierDisplay: string }
   ): Promise<void> {
-    const existing = await repository.findOne({
-      where: { kind, identifierHash: identifiers.identifierHash },
-    });
+    const lastUsedAt = this.clock.now();
     if (existing) {
-      existing.lastUsedAt = this.clock.now();
-      await repository.save(existing);
+      await repository.update({ id: existing.id }, { lastUsedAt });
       return;
     }
-    await repository.save({
-      userId,
-      kind,
-      identifierHash: identifiers.identifierHash,
-      identifierDisplay: identifiers.identifierDisplay,
-      lastUsedAt: this.clock.now(),
-    });
+    await repository.insert({ userId, kind, ...identifiers, lastUsedAt });
   }
 }
 

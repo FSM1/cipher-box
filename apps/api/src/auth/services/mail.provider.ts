@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { EmailCodePurpose } from './email-otp.service';
 
 const SENDGRID_ENDPOINT = 'https://api.sendgrid.com/v3/mail/send';
 const SEND_TIMEOUT_MS = 10_000;
@@ -11,7 +12,29 @@ const SEND_TIMEOUT_MS = 10_000;
  */
 @Injectable()
 export abstract class MailProvider {
-  abstract sendVerificationCode(to: string, code: string): Promise<void>;
+  abstract sendVerificationCode(to: string, code: string, purpose: EmailCodePurpose): Promise<void>;
+}
+
+/** A link code says what it adds, so a member can tell it from a sign-in code. */
+export function verificationMessage(
+  code: string,
+  purpose: EmailCodePurpose
+): { subject: string; body: string } {
+  if (purpose === 'link') {
+    return {
+      subject: 'Add this address to your CipherBox account',
+      body:
+        'Someone signed in to CipherBox asked to add this address as a login to their account.\n\n' +
+        `Your code is: ${code}\n\n` +
+        'Share this code with no one. If you did not ask for this, ignore this email.',
+    };
+  }
+  return {
+    subject: 'Your CipherBox verification code',
+    body:
+      `Your CipherBox verification code is: ${code}\n\n` +
+      'It expires in a few minutes. If you did not request it, ignore this email.',
+  };
 }
 
 /** SendGrid's v3 REST API over plain `fetch`; the SDK adds nothing here. */
@@ -23,7 +46,8 @@ export class SendGridMailProvider extends MailProvider {
     super();
   }
 
-  async sendVerificationCode(to: string, code: string): Promise<void> {
+  async sendVerificationCode(to: string, code: string, purpose: EmailCodePurpose): Promise<void> {
+    const { subject, body } = verificationMessage(code, purpose);
     const response = await fetch(SENDGRID_ENDPOINT, {
       method: 'POST',
       headers: {
@@ -33,15 +57,8 @@ export class SendGridMailProvider extends MailProvider {
       body: JSON.stringify({
         personalizations: [{ to: [{ email: to }] }],
         from: { email: this.from },
-        subject: 'Your CipherBox verification code',
-        content: [
-          {
-            type: 'text/plain',
-            value:
-              `Your CipherBox verification code is: ${code}\n\n` +
-              'It expires in a few minutes. If you did not request it, ignore this email.',
-          },
-        ],
+        subject,
+        content: [{ type: 'text/plain', value: body }],
       }),
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
@@ -52,11 +69,14 @@ export class SendGridMailProvider extends MailProvider {
   }
 }
 
-/** Undeployed profiles only — the code goes to the log because nothing else can carry it. */
+/**
+ * Undeployed profiles only — the code goes to the log because nothing else can
+ * carry it. One line format for both purposes: the contract suite reads it.
+ */
 export class LoggingMailProvider extends MailProvider {
   private readonly logger = new Logger(LoggingMailProvider.name);
 
-  sendVerificationCode(to: string, code: string): Promise<void> {
+  sendVerificationCode(to: string, code: string, _purpose: EmailCodePurpose): Promise<void> {
     this.logger.warn(`Verification code for ${to}: ${code}`);
     return Promise.resolve();
   }

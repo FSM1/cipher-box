@@ -371,6 +371,8 @@ jobs:
       THROTTLE_AUTH_LIMIT: '200'
       CONTRACT_API_URL: http://localhost:3000
       CONTRACT_API_PROD_URL: http://localhost:3100
+      # The email link cases read the delivered code from the test-mode API log.
+      CONTRACT_API_LOG: /tmp/api-test.log
       CONTRACT_TEST_LOGIN_SECRET: contract-suite-secret
       # The stack's gateway, so the suite can fetch back a block the ingress
       # pinned and prove it landed under the caller-computed address.

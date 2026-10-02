@@ -256,6 +256,7 @@ const OWED_WORK_CLASSES: Record<OwedWorkClass, true> = {
 const AUTH_METHOD_KINDS: Record<AuthMethodKind, true> = {
   identity: true,
   wallet: true,
+  email: true,
   test: true,
   unknown: true,
 };

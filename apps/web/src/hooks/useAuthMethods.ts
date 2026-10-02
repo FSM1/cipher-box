@@ -1,5 +1,5 @@
 /**
- * The account's login methods, and the two exchanges that change the list. Each
+ * The account's login methods, and the exchanges that change the list. Each
  * change re-reads, so the pane shows what the account now carries.
  */
 
@@ -9,20 +9,32 @@ import { fromHex } from '@cipherbox/client';
 import { useEngine } from '../providers/EngineProvider';
 import { useCommandRunner } from './useCommandRunner';
 
+export type AuthMethodsCommand =
+  | 'authMethods'
+  | 'siweLink'
+  | 'emailLinkSendCode'
+  | 'emailLink'
+  | 'unlinkAuthMethod';
+
 export interface AuthMethodsRead {
   methods: AuthMethodDescriptor[];
-  busy: boolean;
+  /** The command in flight, so each control can label its own exchange. */
+  busy: AuthMethodsCommand | null;
   error: string | null;
   /** Issues the single-use nonce a link message embeds. */
   challenge(): Promise<string>;
   link(message: string, signature: string): Promise<void>;
+  /** Resolves `true` once the link code is on its way to `email`. */
+  linkEmailSendCode(email: string): Promise<boolean>;
+  /** Resolves `true` once `email` is linked and the list is re-read. */
+  linkEmail(email: string, code: string): Promise<boolean>;
   unlink(methodId: string): void;
 }
 
 export function useAuthMethods(): AuthMethodsRead {
   const client = useEngine();
   const [methods, setMethods] = useState<AuthMethodDescriptor[]>([]);
-  const { busy, error, run } = useCommandRunner<'authMethods' | 'siweLink' | 'unlinkAuthMethod'>();
+  const { busy, error, run } = useCommandRunner<AuthMethodsCommand>();
 
   const read = useCallback(
     async (facade: EngineFacade) => setMethods(await facade.authMethods()),
@@ -55,6 +67,23 @@ export function useAuthMethods(): AuthMethodsRead {
     [run, read]
   );
 
+  const linkEmailSendCode = useCallback(
+    (email: string) =>
+      run('emailLinkSendCode', async (facade) => {
+        await facade.emailLinkSendCode(email);
+      }),
+    [run]
+  );
+
+  const linkEmail = useCallback(
+    (email: string, code: string) =>
+      run('emailLink', async (facade) => {
+        await facade.emailLink(email, code);
+        await read(facade);
+      }),
+    [run, read]
+  );
+
   const unlink = useCallback(
     (methodId: string) =>
       void run('unlinkAuthMethod', async (facade) => {
@@ -64,5 +93,5 @@ export function useAuthMethods(): AuthMethodsRead {
     [run, read]
   );
 
-  return { methods, busy: busy !== null, error, challenge, link, unlink };
+  return { methods, busy, error, challenge, link, linkEmailSendCode, linkEmail, unlink };
 }

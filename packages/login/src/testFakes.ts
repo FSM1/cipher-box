@@ -14,6 +14,9 @@ import {
 export const SECRET_HEX = '0f'.repeat(32);
 export const FAKE_NONCE = 'nonce123456789ab';
 export const FAKE_IDENTITY_TOKEN = 'header.payload.signature';
+/** The truncated form the exchange gives a wallet. */
+export const FAKE_WALLET_DISPLAY = '0xa29A...aF4d';
+
 /** The token lifetime the fake exchange grants, in seconds. */
 export const FAKE_TOKEN_LIFETIME_S = 300;
 export const FAKE_NOW = new Date('2030-01-01T00:00:00Z');
@@ -44,11 +47,11 @@ export function fakeExchange() {
     nonces: 0,
     wallet: [] as { message: string; signature: string }[],
   };
-  const grant = (method: IdentityMethod, email: string | null): IdentityCredential => ({
+  const grant = (method: IdentityMethod, display: string): IdentityCredential => ({
     method,
     token: FAKE_IDENTITY_TOKEN,
     verifierId: `subject-for-${method}`,
-    email,
+    display,
     expiresIn: FAKE_TOKEN_LIFETIME_S,
   });
   const exchange: IdentityExchange = {
@@ -70,7 +73,7 @@ export function fakeExchange() {
     },
     fromWalletSignature(message, signature) {
       calls.wallet.push({ message, signature });
-      return Promise.resolve(grant('wallet', null));
+      return Promise.resolve(grant('wallet', FAKE_WALLET_DISPLAY));
     },
   };
   return { exchange, calls };
@@ -93,14 +96,14 @@ export function fakeSession(options: { loggedIn?: boolean; needsRecovery?: boole
   };
   let loggedIn = options.loggedIn ?? false;
   let method: IdentityMethod | null = null;
-  let email: string | null = null;
+  let display: string | null = null;
   const session: CoreKitSession = {
     restore: () => Promise.resolve(),
     isLoggedIn: () => loggedIn,
     login(credential) {
       calls.logins.push(credential);
       method = credential.method;
-      email = credential.email;
+      display = credential.display;
       if (options.needsRecovery) return Promise.reject(new RecoveryRequiredError());
       loggedIn = true;
       return Promise.resolve();
@@ -118,7 +121,7 @@ export function fakeSession(options: { loggedIn?: boolean; needsRecovery?: boole
       return Promise.resolve();
     },
     method: () => method,
-    email: () => email,
+    display: () => display,
     logout() {
       calls.logouts += 1;
       loggedIn = false;
@@ -185,11 +188,11 @@ export function passThroughCollector(
 }
 
 export function fakeAccount() {
-  const calls = { signedIn: [] as { method: IdentityMethod | null; email: string | null }[] };
+  const calls = { signedIn: [] as { method: IdentityMethod | null; display: string | null }[] };
   let signedOut = 0;
   const account: AccountRecord = {
-    signedIn(method, email) {
-      calls.signedIn.push({ method, email });
+    signedIn(method, display) {
+      calls.signedIn.push({ method, display });
     },
     signedOut() {
       signedOut += 1;

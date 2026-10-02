@@ -122,7 +122,7 @@ describe('CoreKitProvider', () => {
           method: 'google',
           token: 'header.payload.signature',
           verifierId: 'subject-42',
-          email: null,
+          display: 'member@example.test',
           expiresIn: 300,
         });
       });

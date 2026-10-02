@@ -6,13 +6,10 @@ import { authStore } from '../../stores/auth.store';
 import { fakeCoreKitSession, fakeEngineClient, pageWrapper } from '../../test/authFakes';
 
 /** A tab whose Core Kit session outlived the page, as a reload leaves one. */
-function renderMenu({
-  enrolled = false,
-  email = 'user@example.test',
-}: { enrolled?: boolean; email?: string | null } = {}) {
+function renderMenu({ enrolled = false }: { enrolled?: boolean } = {}) {
   const Providers = pageWrapper(
     fakeEngineClient().client,
-    fakeCoreKitSession({ loggedIn: true, enrolled, email: () => email }).session
+    fakeCoreKitSession({ loggedIn: true, enrolled }).session
   );
   return render(
     <Providers>
@@ -45,8 +42,16 @@ describe('UserMenu', () => {
     expect(screen.getByTestId('user-menu-settings').getAttribute('href')).toBe('/settings');
   });
 
-  it('names a session that carries no email, as a wallet login does', () => {
-    renderMenu({ email: null });
+  it('names a wallet session by its truncated address', () => {
+    authStore.signedIn('wallet', '0xa29A...aF4d');
+    renderMenu();
+
+    expect(screen.getByTestId('user-menu').textContent).toContain('0xa29A...aF4d');
+  });
+
+  it('names a session that kept no display', () => {
+    authStore.signedIn(null);
+    renderMenu();
 
     expect(screen.getByTestId('user-menu').textContent).toContain('[an0n]');
   });
