@@ -2794,7 +2794,7 @@ where
         .await
         .map_err(|_| Halt::UploadAttempt)?;
         let observed = Observed::gated(source.root_name, sequence, envelope.v)
-            .map_err(classify_publish_error)?;
+            .map_err(|_| Halt::Unclassified)?;
         let read_key = source.read_key(&source.root.0);
         let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::UploadAttempt)?;
         let ReadBody::Folder {
@@ -2980,7 +2980,7 @@ where
             .open_for_reauthor(plane, anchor, adopter, &name, &record_bytes, lagging)
             .await?;
         let observed =
-            Observed::gated(&name, adopted.sequence, envelope.v).map_err(classify_publish_error)?;
+            Observed::gated(&name, adopted.sequence, envelope.v).map_err(|_| Halt::Unclassified)?;
         // Re-sealing a node at an epoch above the scope's would cross the AAD
         // epoch binding.
         if adopted.epoch > anchor.epoch {
@@ -9120,7 +9120,8 @@ mod tests {
 
     /// A fork at the sequence a pass built on, where the record the gate passed
     /// carries another envelope version, is no basis for a publish over it.
-    /// At this build's version the pass builds on its own record.
+    /// At this build's version the pass builds on the gate's token at that
+    /// sequence, which equals its own.
     #[test]
     fn a_fork_at_another_envelope_version_is_no_publish_basis() {
         let name = derive_write_name(&Zeroizing::new([4; 32]), &[5; 16]);
@@ -9773,22 +9774,6 @@ mod tests {
                 "{case}",
             );
         }
-    }
-
-    /// A scope root at another envelope version is a refusal of these bytes,
-    /// not an availability halt.
-    #[test]
-    fn a_scope_root_at_another_envelope_version_is_an_upload_attempt_halt() {
-        let mut newer = harness_root_envelope();
-        newer.v = ENVELOPE_V + 1;
-        let harness = drain_harness(Some(newer));
-        let drain = harness.drain();
-        let scope = harness.scope();
-
-        assert_eq!(
-            block_on(drain.load_scope_root(&scope.source)).err(),
-            Some(Halt::UploadAttempt),
-        );
     }
 
     /// A quota hold's exit is a probe, and a placement the session cannot use

@@ -435,7 +435,7 @@ fn a_drain_publish_never_re_authors_a_scope_root_at_another_envelope_version() {
 /// newer client last wrote is never re-sealed under this build's version.
 #[test]
 fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
-    let (served, after, queued) = create_under_a_folder_at_newer_version(1);
+    let (served, after, queued, _) = create_under_a_folder_at_newer_version(1);
 
     assert_eq!(
         after,
@@ -445,14 +445,18 @@ fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
     assert_eq!(queued, 1, "and the create is still queued");
 }
 
-/// The version refusal repeats on every pass, so the op spends its attempt
-/// budget and leaves the queue rather than holding the head for the outage
-/// budget.
+/// A folder at another envelope version holds the op until this device runs
+/// a release that reads that version: past the attempt budget, the op is still
+/// queued and no write is lost to a dead letter.
 #[test]
-fn a_drain_op_under_a_folder_at_another_envelope_version_spends_its_attempts() {
-    let (served, after, queued) = create_under_a_folder_at_newer_version(8);
+fn a_drain_op_under_a_folder_at_another_envelope_version_stays_queued() {
+    let (served, after, queued, dead_letters) = create_under_a_folder_at_newer_version(8);
 
-    assert_eq!(queued, 0, "the attempt budget ends the retries");
+    assert_eq!(
+        (queued, dead_letters),
+        (1, 0),
+        "the op is held, not dead-lettered"
+    );
     assert_eq!(
         after,
         Some(served),
@@ -461,9 +465,11 @@ fn a_drain_op_under_a_folder_at_another_envelope_version_spends_its_attempts() {
 }
 
 /// Stage a create under a folder sealed at the next envelope version and run
-/// `passes` drain passes: the folder's record before and after, and the ops
-/// still queued.
-fn create_under_a_folder_at_newer_version(passes: usize) -> (Vec<u8>, Option<Vec<u8>>, usize) {
+/// `passes` drain passes: the folder's record before and after, the ops still
+/// queued, and the dead letters.
+fn create_under_a_folder_at_newer_version(
+    passes: usize,
+) -> (Vec<u8>, Option<Vec<u8>>, usize, usize) {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let folder = NodeId([0x6f; 16]);
@@ -523,5 +529,14 @@ fn create_under_a_folder_at_newer_version(passes: usize) -> (Vec<u8>, Option<Vec
     for _ in 0..passes {
         tick(&world, &engine, &mut tasks);
     }
-    (record, record_at(&world, &name), queued(&device))
+    let dead_letters = block_on(engine.status())
+        .expect("the session status reads")
+        .dead_letters
+        .len();
+    (
+        record,
+        record_at(&world, &name),
+        queued(&device),
+        dead_letters,
+    )
 }
