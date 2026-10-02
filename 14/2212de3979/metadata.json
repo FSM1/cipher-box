@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "142212de3979",
+  "strategy": "manual-commit",
+  "branch": "fix/login-busy-labels-per-method",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/auth/GoogleLoginButton.test.tsx",
+    "apps/web/src/components/auth/GoogleLoginButton.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/14/2212de3979/0/metadata.json",
+      "transcript": "/14/2212de3979/0/full.jsonl",
+      "compact_transcript": "/14/2212de3979/0/transcript.jsonl",
+      "content_hash": "/14/2212de3979/0/content_hash.txt",
+      "prompt": "/14/2212de3979/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 198,
+    "cache_creation_tokens": 29355,
+    "cache_read_tokens": 1347629,
+    "output_tokens": 5506,
+    "api_call_count": 8
+  }
+}
