@@ -134,8 +134,9 @@ use crate::rotation::{
 };
 use crate::rotation::{FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloor, cached_seed, deposit_seed, deposit_write_seed, own_descendant_scopes,
-    refresh_seed_floor, refresh_seed_floors, seed_names, walked_boundary_material,
+    ScopeSeeds, SeedFloor, StampedSeed, cached_seed, current_seed, deposit_seed,
+    deposit_write_seed, own_descendant_scopes, refresh_seed_floors, seed_names,
+    walked_boundary_material,
 };
 use crate::seams::{
     ContactLabel, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId,
@@ -9453,23 +9454,24 @@ where {
     }
 
     /// The scope's cached read seed, evicted first if the durable read-epoch
-    /// floor has risen past the one it was recovered under. Every on-demand
-    /// read goes through here; the resolve tick evicts once per pass.
-    async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
+    /// floor has risen past the one it was recovered under, or if no authority
+    /// answers for the scope any more. The resolve tick evicts once per pass,
+    /// and each navigation leg evicts its scope's seed ([`Self::navigation_legs`]).
+    /// The seed comes with the stamp the cache holds it under.
+    async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<StampedSeed> {
         // Every arm that serves no seed also drops the one it holds, so no
         // cached seed outlives the authority that entitles it.
         let Some(floors) = self.scope_floors(scope_id) else {
             self.state.scope_read_seeds.borrow_mut().remove(scope_id);
             return None;
         };
-        refresh_seed_floor(
+        current_seed(
             &floors,
             &self.state.scope_read_seeds,
             scope_id,
             SeedFloor::Read,
         )
-        .await;
-        cached_seed(&self.state.scope_read_seeds, scope_id)
+        .await
     }
 
     /// The namespace `scope_id`'s floors live in ([`floor_view`]), or `None`
@@ -9701,23 +9703,22 @@ where {
         );
         let scope_read_seed = self.scope_read_seed(&root.0).await;
         let root_name = self.state.current_root_name.borrow().clone();
-        let leg = scope_read_seed
-            .as_ref()
-            .map(|scope_read_seed| FolderRefresh {
-                transport: &self.record_transport,
-                snapshot_cache: &self.seams.snapshot_cache,
-                http: &self.seams.http,
-                floors: &self.seams.floor_store,
-                gateway: &self.gateway,
-                base: &self.state.snapshot,
-                events: &self.events,
-                scope_id: root.0,
-                scope_read_seed,
-                scope_root_name: root_name.as_ref(),
-                plane: None,
-                mode: ResolveMode::CacheFirst,
-                observed_at: now.0,
-            });
+        let leg = scope_read_seed.as_ref().map(|stamped| FolderRefresh {
+            transport: &self.record_transport,
+            snapshot_cache: &self.seams.snapshot_cache,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            gateway: &self.gateway,
+            base: &self.state.snapshot,
+            events: &self.events,
+            scope_id: root.0,
+            scope_read_seed: &stamped.seed,
+            seed_stamp: Some(stamped.stamp),
+            scope_root_name: root_name.as_ref(),
+            plane: None,
+            mode: ResolveMode::CacheFirst,
+            observed_at: now.0,
+        });
         if let Some(leg) = &leg
             && !due.is_empty()
         {
@@ -9876,7 +9877,12 @@ where {
             root_name: root_name.as_ref(),
         };
         for (scope, nodes) in by_scope {
-            let Ok(material) = legs.material(scope, self.scope_read_seed(&scope.0)).await else {
+            // The leg context knows only the proved set, so the seed of a scope
+            // no authority answers for, such as a forgotten share, goes here.
+            if self.scope_floors(&scope.0).is_none() {
+                self.state.scope_read_seeds.borrow_mut().remove(&scope.0);
+            }
+            let Ok(material) = legs.material(scope, &self.state.scope_read_seeds).await else {
                 unread = true;
                 continue;
             };
@@ -9889,7 +9895,8 @@ where {
                 base: &self.state.snapshot,
                 events: &self.events,
                 scope_id: scope.0,
-                scope_read_seed: &material.seed,
+                scope_read_seed: &material.seed.seed,
+                seed_stamp: Some(material.seed.stamp),
                 scope_root_name: material.scope_root_name.as_ref(),
                 plane: (!material.own).then_some(GraftedLeg {
                     scope_roots: &bookmarked,
@@ -11430,9 +11437,10 @@ where {
             &self.seams.http,
             &floors,
             scope_id,
-            scope_read_seed,
+            scope_read_seed.seed,
             node.0,
-        );
+        )
+        .with_seed_stamp(Some(scope_read_seed.stamp));
         let adopted = resolve_child(
             &self.record_transport,
             &self.seams.snapshot_cache,
@@ -12301,7 +12309,7 @@ where {
         &self,
         scope: NodeId,
     ) -> Option<crate::rotation::scope_material::ScopeMaterial> {
-        let read_scope_seed = self.scope_read_seed(&scope.0).await?;
+        let read_scope_seed = self.scope_read_seed(&scope.0).await?.seed;
         Some(crate::rotation::scope_material::ScopeMaterial {
             read_scope_seed,
             write_scope_seed: cached_seed(&self.state.scope_write_seeds, &scope.0)?,
@@ -18994,6 +19002,53 @@ mod tests {
                 );
             }
 
+            /// A rotation on this device raises the floor while the version read
+            /// waits on the network. The record at the new floor is honest, so
+            /// the read is availability, not a trust verdict.
+            #[test]
+            fn a_floor_raised_during_a_version_read_is_unavailable() {
+                const NEW_READ_SEED: [u8; 32] = [0x99; 32];
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+                let mut floor_key = crate::sync::owner_tag(&kdf::enc_subkey(&CAP_SECRET)).to_vec();
+                floor_key.extend_from_slice(&kdf::name_label(
+                    kdf::contact_label_seed(&CAP_SECRET).as_bytes(),
+                    &SCOPE,
+                ));
+                assert!(
+                    device.floor_store.epoch_keys().contains(&floor_key),
+                    "the start raised the scope's read-epoch floor"
+                );
+                let node_seed = kdf::node_seed(&NEW_READ_SEED, &CHILD_ID);
+                let envelope = seal_read_body(
+                    kdf::read_key(node_seed.as_bytes()).as_bytes(),
+                    &[14u8; 24],
+                    1,
+                    CHILD_ID,
+                    SCOPE,
+                    EPOCH + 1,
+                    &file_body(Vec::new()),
+                )
+                .unwrap();
+                let head_block = encode_envelope(&envelope).unwrap();
+                let head_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+                seed_child_record(&device, &head_cid, 1);
+                let backing = device.floor_store.clone();
+                device.http.enqueue_derived(move |_| {
+                    block_on(backing.raise_epoch_floor(&floor_key, EPOCH + 1))
+                        .expect("the rotation raises the floor");
+                    Ok(head_response(&head_block))
+                });
+
+                let read = block_on(engine.file_versions(NodeId(CHILD_ID)));
+
+                assert!(
+                    matches!(read, Err(EngineError::ContentUnavailable { .. })),
+                    "a record above the seed's stamp is availability: {read:?}"
+                );
+            }
+
             /// A published file whose links reach no scope root this session
             /// holds names no read seed, which is availability, never a
             /// verdict on a record nobody fetched.
@@ -20312,6 +20367,40 @@ mod focus_access_tests {
             engine.queued_focus_files(),
             vec![shared_file],
             "it stays queued for the tick's leg for that scope"
+        );
+    }
+
+    /// A forgotten share leaves no authority for its scope, so a navigation
+    /// before the next tick drops that scope's seed.
+    #[test]
+    fn a_navigation_drops_the_seed_of_a_forgotten_share() {
+        let engine = started_engine();
+        let grafted = NodeId([0x4C; 16]);
+        let row = file_id(3);
+        {
+            let mut base = engine.state.snapshot.borrow_mut();
+            base.upsert_node(NodeMeta::new(grafted, "shared", NodeKind::Folder));
+            base.upsert_node(NodeMeta::new(row, "theirs.bin", NodeKind::File));
+            base.link(grafted, row, 1);
+        }
+        deposit_seed(
+            &engine.state.scope_read_seeds,
+            grafted.0,
+            Zeroizing::new([6u8; 32]),
+            Some(0),
+        );
+        engine.note_focus_file(row);
+
+        let now = engine.seams.scheduler.now();
+        block_on(engine.refresh_focus_on_access(now, Some(grafted)));
+
+        assert!(
+            !engine
+                .state
+                .scope_read_seeds
+                .borrow()
+                .contains_key(&grafted.0),
+            "no cached seed outlives the share that entitles it"
         );
     }
 
