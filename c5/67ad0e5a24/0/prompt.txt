@@ -1,0 +1,518 @@
+<task-notification>
+<task-id>a248c98443da64c47</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a248c98443da64c47.output</output-file>
+<status>completed</status>
+<summary>Agent "Review 1 of PR 2183" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the gate agents.</result>
+<usage><subagent_tokens>86706</subagent_tokens><tool_uses>17</tool_uses><duration_ms>233882</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a46f1d955a0beeb09</task-id>
+<tool-use-id>toolu_01SFjg9R9tMPyPWFEA59MMhc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a46f1d955a0beeb09.output</output-file>
+<status>completed</status>
+<summary>Agent "Code-review gate PR 2183" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Awaiting sub-agent notifications.</result>
+<usage><subagent_tokens>72518</subagent_tokens><tool_uses>17</tool_uses><duration_ms>177328</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aac68500763e41df7</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/aac68500763e41df7.output</output-file>
+<status>completed</status>
+<summary>Agent "Standards axis review PR 2183" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># PR #2183 standards review (head 55af1f89b)
+
+There is no blocker. The FIRST check is clean. One item is should-fix: a test doc comment that names the wrong outcome. The other findings are optional.
+
+## FIRST check: the `current_seed` None path. Result: clean, not a blocker
+- `refresh_seed_floor` maps an absent floor to `Some(0)`. It returns `None` only on a store error, and that error also evicts the seed. A fresh scope with no floor gets `Some(0)`, and the seed is served.
+- The `?` in `current_seed` drops only a seed that is already evicted. The result is the same as facade `scope_read_seed`, which discards the result and then calls `cached_seed`.
+- A store error gives `Outage` (Unreachable) for an own scope and `Waiting` for a grafted scope. That is availability, not trust. Rule 6 is clean.
+- `floors_of` None: `material()` awaits the seed before it reads floors. An own scope always gets `Some` (`floor_namespace` Own). A grafted scope with no sharer gives `Waiting` in the old code and in the new code.
+
+## scope_seeds.rs `current_seed`
+- (a) Clean. Rule 7 is clean: the function returns a `Zeroizing` clone.
+- (b) Duplicated Code, judgement call, optional. Facade `scope_read_seed` repeats the body of `current_seed`. Fix: call `current_seed` there.
+
+## sync/pass.rs `refresh_focus` loop and `floors_of`
+- (a) Clean. The new 3-line comment is accurate: `evict_grafted_read_seeds` also evicts own descendants at the start of the pass.
+- (b) Duplicated Code, judgement call, optional. `floor_view` runs two times for each scope. Fix: build the view once and pass it to `material`.
+- (b) Optional. When `floors_of` is None, the focus leg keeps the seed, but the facade removes it. The risk is low: `refresh_floors` and the leg use the same `grafted` clone, so the start-of-pass eviction already dropped that seed.
+
+## Tests
+- Should fix: in `a_floor_raised_during_the_pass_does_not_accuse_an_honest_writer`, the doc says "the leg waits". The code takes the `Outage` arm, and the test asserts `Unreachable`. `Waiting` is a different variant. Fix: "the leg charges an outage and accuses nobody".
+- Optional: the test does not run the start-of-pass eviction. It pre-stales the cache and calls `refresh_focus` directly. Write the doc as a precondition.
+- The `events` rename is clean, because `run_focus` now reads the field. Optional: add "also read by `run_focus`" to the field doc.
+- Law 1 is clean. The tests assert the events, the verdict and the cache state, not source text.
+- CI gate: `CI / Rust` calls `ci-rust.yml`, and its "Engine simulation tests" job runs `cargo test -p cipherbox-engine`. That command includes `--lib`. "Rust Result" is the required check.
+- Rule 7 is clean.
+- There are no absence-justifying comments, no unchanged-code apologia and no tracker refs.
+
+Not checked: I did not run cargo, so I did not confirm that test 1 fails without the fix.
+
+Report file: /Users/myankelev/.claude/scratch/w22/MF/review1/standards.md</result>
+<usage><subagent_tokens>86169</subagent_tokens><tool_uses>13</tool_uses><duration_ms>193084</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a763b2ed21ea694b7</task-id>
+<tool-use-id>toolu_01AaRewsuqSc1ui9pH9HwEvr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a763b2ed21ea694b7.output</output-file>
+<status>completed</status>
+<summary>Agent "Security-review gate PR 2183" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Security review of PR 2183
+
+Head: 55af1f89b520d8e3726be9949f3a74b26540935a. I reviewed the diff `origin/main...HEAD` in the PR worktree.
+
+## Finding 1: should fix, not a blocker
+
+- **File and function:** `crates/engine/src/sync/pass.rs` `refresh_focus`, with `crates/engine/src/net/child.rs` `ChildAdopter::unseal`.
+- **Mechanism:**
+  - `current_seed` reads the floor one time for each leg.
+  - `refresh.run` and `refresh.run_files` then await the network with a copy of that seed.
+  - `ChildAdopter` reads the floor again for each record (`floor::check`, after the head fetch), and `unseal` classifies on that new floor.
+  - The engine has no pass lock. The tick is a separate task (`scheduler.spawn`), and facade commands interleave with it at each await.
+  - A second tick pass cannot run, because `run_tick_loop` is sequential.
+  - A facade navigation cannot raise a floor above its own seed, because the AAD binds the epoch.
+- **Raiser that can run during the leg:** a facade revoke, rotate, or grant mint on an own scope. `complete_cut` raises the floor after the publish, and then spawns the lazy-wave sweep as a separate task. The sweep re-seals interior records at the new epoch. The grant mint re-seals the interior inline.
+- **Scenario:**
+  1. The leg takes seed N for scope S.
+  2. The user revokes on S. The cut publishes the N+1 root and raises the floor to N+1. The sweep publishes interior folder F at N+1.
+  3. The leg then fetches F. The unseal fails, the floor is N+1, and `envelope.epoch &gt; floor` is false.
+  4. The engine emits `AttributableAbuse` against its own device.
+
+  The band of #1825 is smaller, but it is still reachable.
+- **Fix:** classify on the epoch that the seed belongs to, as the "Fix" section of #1825 proposes. Give the adopter the floor that `refresh_seed_floor` returned, together with the seed. Report availability when `envelope.epoch` is above that value. If you do not take this fix in this PR, record the residual on #1825.
+
+## Clean checks
+
+- **Check 2, verdict when `floors_of` is None:** `floor_view` returns None only for a scope that is not own and has no sharer. `material` then gives `Waiting`, as on main.
+- **Check 3, eviction on a floor-store error:**
+  - The store is local (IndexedDB or the fsync journal). On main, the same error already made `floor::check` in the leg fail.
+  - The drain takes the root seed from `adopt_root`, so the root seed is not affected.
+  - For a descendant scope, the drain reads `walked_boundary_material`, so the eviction removes the seed that the walk deposited. The queued operations of that scope wait one pass, until the next walk deposits the seed again.
+  - This is an availability delay of one pass and agrees with the `refresh_seed_floor` policy. It is an accepted design.
+- **Check 4, fail-closed:**
+  - A record at the floor that the current seed cannot open still emits `AttributableAbuse`. The second new test covers this.
+  - To raise an own floor, an attacker needs a record that opens under the AAD, or a pointer that the owner signed.
+  - A sharer can raise a grafted floor, but it can already withhold the scope.
+  - No new path turns tampering into Unreachable.
+- **Check 5, RefCell:** `refresh_seed_floor` awaits before `borrow_mut` and holds no borrow across an await. No other user holds a borrow of `scope_read_seeds` across an await.
+- **Check 6, determinism:** the change adds no clock and no RNG.
+- **Floor key:** `SharerScopedFloorStore::own` does not change epoch keys, so the leg reads the key that the gate raises.
+- **Over-eviction:** the stamps from `adopt_root` and `install_descendant_scopes` are not below the floor when the leg runs, if no concurrent raise occurs.
+
+The report is in `/Users/myankelev/.claude/scratch/w22/MF/review1/security-review.md`.</result>
+<usage><subagent_tokens>132022</subagent_tokens><tool_uses>26</tool_uses><duration_ms>344127</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a248c98443da64c47</task-id>
+<tool-use-id>toolu_01U2k13zWtovhzK7NKQJbG7x</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a248c98443da64c47.output</output-file>
+<status>completed</status>
+<summary>Agent "Review 1 of PR 2183" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the remaining two reports.</result>
+<usage><subagent_tokens>99026</subagent_tokens><tool_uses>27</tool_uses><duration_ms>600470</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8598c6e2a7568473</task-id>
+<tool-use-id>toolu_012QPgwVLzyGQXufvopPDF52</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a8598c6e2a7568473.output</output-file>
+<status>completed</status>
+<summary>Agent "Crypto-privacy gate PR 2183" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># PR 2183 crypto-privacy review (head 55af1f89b)
+
+Verdict: no blocker. One should-fix finding. Two optional findings. I wrote the same report to `/Users/myankelev/.claude/scratch/w22/MF/review1/crypto-review.md`.
+
+## Claim verdicts
+
+1. **Stamp/floor namespace parity: TRUE.**
+   - Each deposit stamps against the view that `floor_view` returns for that scope.
+   - The root (`adopt_root`), each own descendant (`install_descendant_scopes`) and each minted scope (the facade grant mint) use the raw store, which is the `Own` view. A descendant stamp is `adopted.epoch` from the `ScopeWalk` gate.
+   - A grafted deposit (`received_status.rs` `open`) uses `sharer_floors(share)`. That view is keyed by `share.sharer_identity_pk`. The same refresh writes that key into the `grafted_sharers` entry that `floors_of` reads.
+   - The start-of-pass eviction (`evict_grafted_read_seeds`) uses the same `floor_view`.
+2. **Rule 6: TRUE.** `net/child.rs` `ChildAdopter::unseal` rejects a failure at or below the floor. `net/focus.rs` `resolve_focused` emits the trust violation. A PR test covers this.
+3. **No stale seed after `current_seed`: PARTIAL.** See S1.
+   - `walked_boundary_material` and `grafted_write_passes` still read the cache without an eviction. Claim 4 covers both.
+   - The rotation wave (`net/rotation.rs` `WriteWaveNet`) gets `gated.read_scope_seed` or the override seed, not the cache.
+4. **Drain claim: the effect is TRUE. The stated mechanism is FALSE.**
+   - Each drain `ChildAdopter::new` site runs after `ensure_folder`, `open_pass` or `ledger_plane`. The sites are `load_child_node`, `open_tied_folder`, `served_child`, `adopt_node_record` and `create_replays_a_publish`.
+   - `anchor_for` returns an error until `open_scope_root` stores the second ratchet.
+   - A stale seed halts in `open_root_record`. That function runs an at-floor `floor::check`. Then it opens the root body under `ScopeEnd::read_key`, which is derived from `read_scope_seed`.
+   - The halt is `Halt::UploadAttempt`, and it occurs before the epoch-skew check.
+5. **Path 2: TRUE.**
+   - `open_under_anchor` returns early when `record_epoch &gt;= anchor.epoch`. Thus `seed_at_epoch` always runs at least one `ratchet_step`.
+   - A stale seed fails the history-link AEAD at the anchor epoch. The result is `None`, then `LaggingSeedMiss::Unreachable`, then `LaggingRead::Unreachable`, then `ChildResolveError::Unavailable`.
+   - An empty link set also gives `None`.
+6. **Rule 7: TRUE.** `remove` drops the `CachedSeed`, and its `Zeroizing` clears the seed. `current_seed` returns a `Zeroizing` clone.
+
+## Findings
+
+**S1 (should fix; does not block merge).** `sync/pass.rs` `refresh_focus` and `net/child.rs` `ChildAdopter::unseal`.
+- **Scenario:**
+  - `current_seed` reads the seed one time, at the start of the leg. Then `refresh.run` and `run_files` wait on the network.
+  - During that wait, a rotation or a scope-root adopt on this device raises the read floor.
+  - `floor::check` reads the floor again for each record, but the leg keeps the old seed.
+  - An honest record at the new floor does not open. The leg emits `AttributableAbuse`, and the verdict is `Rejected`.
+  - The same race occurs between a drain root open and its child adopts.
+- **Fix:** Return the floor that `refresh_seed_floor` read together with the seed, and give it to `ChildAdopter`. In `unseal`, report a failure above that floor as availability. A follow-up can do this.
+- **Test:** Raise the floor between two record resolves. Make sure that the leg emits no abuse.
+
+**O1 (optional, outside the diff, follow-up candidate).** `scope_seeds.rs` `CachedSeed`.
+- **Scenario:**
+  - `CachedSeed` has no namespace, and the cell key is only the scope id.
+  - The user forgets share A for scope S and accepts share B with the same S.
+  - The refresh changes the `grafted_sharers` entry for S to B, but B's open does not complete because of the budget or an outage.
+  - The seed from A, with a stamp from A's namespace, stays. The next pass compares that stamp with B's floor. Thus the seed stays after its share is gone.
+  - There is no false accusation. B's records come into the base only when B's open deposits B's seed.
+  - I did not find a path that clears the cell when the sharer changes.
+- **Fix:** Keep the `FloorNamespace` in `CachedSeed`. In `refresh_seed_floor`, evict the seed when the namespace is different.
+
+**O2 (optional).** Correct the claim 4 wording in comment 5943587893, as stated above.</result>
+<usage><subagent_tokens>188407</subagent_tokens><tool_uses>49</tool_uses><duration_ms>507821</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a248c98443da64c47</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a248c98443da64c47.output</output-file>
+<status>completed</status>
+<summary>Agent "Review 1 of PR 2183" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the code-review report.</result>
+<usage><subagent_tokens>103347</subagent_tokens><tool_uses>31</tool_uses><duration_ms>735428</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a248c98443da64c47</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a248c98443da64c47.output</output-file>
+<status>completed</status>
+<summary>Agent "Review 1 of PR 2183" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>**PR #2183 review gate 1: merged result**
+
+Head checked: `55af1f89b520d8e3726be9949f3a74b26540935a`. Diff: `git diff origin/main...HEAD` in the PR worktree. The gate reports are in `/Users/myankelev/.claude/scratch/w22/MF/review1/` (`code-review.md`, `standards.md`, `security-review.md`, `crypto-review.md`, `old-run.log`, `new-run.log`).
+
+**Old-code result.** The production hunk was reverted in a separate copy, and each tree used its own target directory. Both are now deleted.
+- `a_floor_raised_during_the_pass_does_not_accuse_an_honest_writer`: it fails on old code at the "abuse" assertion and passes on the PR head.
+- `a_record_at_the_floor_that_the_current_seed_cannot_open_stays_abuse`: it passes on both trees.
+
+So the fix test meets the bar.
+
+## Findings
+
+**B1. Blocker: PR metadata.** PR title and body.
+- The title says "and the drain material", but the head has no drain change.
+- The body says `Closes #1825`. Three acceptance criteria stay unmet: the stamp threading, a test that drives a drain site, and the mutation check (stamp to floor).
+- Scenario: the merge closes #1825 with these criteria open, and the squash subject names code that does not exist.
+- Fix: remove "and the drain material" from the title. Then either do S1 below in this PR, or use `Part of #1825` and file a follow-up with a dependency edge.
+
+**S1. Should fix: the race inside the leg.** `crates/engine/src/sync/pass.rs` `refresh_focus`, with `crates/engine/src/net/child.rs` `ChildAdopter::unseal`. I checked this in the code.
+- `current_seed` reads the floor one time, then `refresh.run` and `run_files` wait on the network with that seed.
+- The tick is a separate spawned task, and no lock holds it apart from a facade command.
+- `Engine::drive_owed_cut` (revoke or downgrade) runs `complete_cut`. That raises the floor and spawns the lazy-wave sweep, which re-seals interior records at N+1.
+- `unseal` classifies on the live floor (`envelope.epoch &gt; floor`).
+- Scenario: the leg takes seed N for own scope S. The user revokes a grant on S. The floor goes to N+1, and the sweep publishes folder F at N+1. The leg fetches F, the unseal fails at the floor, and the engine emits `AttributableAbuse` against its own device.
+- The drain has the same window. `ensure_folder` proves the root one time for each pass. After that, `load_child_node` and `served_child` adopt with the old seed and then reach `refuse_record` and `emit_trust_violation`.
+- Fix: do the issue's own Fix.
+  - Return the stamp of the cached seed (`CachedSeed.floor`) with the seed from `current_seed`.
+  - Carry the stamp through `FolderRefresh` and `ScopeMaterial` to `ChildAdopter`.
+  - In `unseal`, classify a failure above the stamp as availability.
+- Use the stamp, not the floor that `refresh_seed_floor` read. The stamp is at or above that floor, so more tampered records stay trust violations.
+- Test: raise the floor between two record resolves in one leg, and check that the leg emits no abuse. This also satisfies the mutation check.
+
+**S2. Should fix: test docs.** `pass.rs` `report_tests`.
+- The doc of `a_floor_raised_during_the_pass_does_not_accuse_an_honest_writer` says "the leg waits". For an own scope, the code gives `NoScopeLeg::Outage`, and the test asserts `Unreachable`.
+- "A rotation that lands after the start-of-pass eviction" and "the cache as the start-of-pass eviction left it" are false. The fixture puts a seed stamped below the floor into the cache and calls `refresh_focus` directly, so no rotation and no start-of-pass eviction runs.
+- Fix: state the precondition, "a seed stamped below the floor", and write "the leg reports an outage and accuses nobody".
+
+**S3. Should fix: issue comment 5943587893 states the wrong drain mechanism.**
+- `drain::open_root_record` runs `floor::check` and the root unseal before the epoch-skew check in `open_scope_root`. A stale seed halts there as `Halt::UploadAttempt`: no abuse event, but it uses one op attempt.
+- The effect "no adopter runs with a stale seed at the root" is true. The child adopts after a mid-pass rise are not covered (see S1).
+- Fix: correct the comment.
+
+**O1. Optional: duplicated code.** `facade::scope_read_seed` repeats the body of `current_seed`. Fix: call `current_seed` there.
+
+**O2. Optional: double view.** `refresh_focus` builds `floor_view` two times for each scope, once in the seed future and once in `material`. Fix: build the view one time.
+
+**O3. Optional, follow-up candidate, outside the diff.** `crates/engine/src/scope_seeds.rs` `CachedSeed`.
+- The cache key is the scope id alone, and the entry stores no `FloorNamespace`.
+- Scenario: the user forgets share A for scope S and accepts share B for S, but B does not open yet. A's seed stays, and its stamp is compared with B's floor. This causes no false accusation.
+- Fix: store the namespace in the entry and evict on a mismatch.
+
+## Clean checks
+
+- **Rule 6:** a record at the floor that the current seed cannot open still emits `AttributableAbuse` and gives `Rejected`. The second new test proves this.
+- **Rule 7:** an evicted entry zeroizes on drop. `current_seed` returns a `Zeroizing` clone and zeroes no caller buffer.
+- **Stamp and floor namespace match:** every deposit into `scope_read_seeds` and the start-of-pass eviction use the same view that `floors_of` returns.
+- **`floors_of` returns None:** this occurs only for a grafted scope with no sharer. The leg gives `Waiting`, the same as on main.
+- **Floor-store error:** the store is local, and the error evicts the seed. The next walk deposits it again, so the delay is one pass. This agrees with the `refresh_seed_floor` policy.
+- **Cell borrows:** no `RefCell` borrow stays across an await.
+- **Determinism:** the diff adds no clock and no RNG.
+- **Lagging path:** the claim is true. A stale seed fails the history-link step and gives `LaggingRead::Unreachable`.
+- **Code Style:** comments are short and give the reason. There are no absence-justifying comments and no tracker refs.
+- **Law 1:** the tests assert events, the verdict and the cache state. They run under `ci-rust.yml` "Engine simulation tests", which the required "Rust Result" check covers.
+
+The gates found no blocker in the code. B1 is a metadata blocker. My recommendation is to do S1 in this PR, because it is small and it closes #1825 as written.</result>
+<usage><subagent_tokens>109365</subagent_tokens><tool_uses>33</tool_uses><duration_ms>823134</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a248c98443da64c47</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a248c98443da64c47.output</output-file>
+<status>completed</status>
+<summary>Agent "Review 1 of PR 2183" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># PR 2183 review gate 1 report
+
+**Head:** 55af1f89b520d8e3726be9949f3a74b26540935a. This matches the head SHA you gave.
+**Diff:** `git diff origin/main...HEAD`. It changes `crates/engine/src/scope_seeds.rs` and `crates/engine/src/sync/pass.rs`.
+
+**Old-code result.** I built the old code in a separate copy with a separate target directory, then deleted both.
+- `a_floor_raised_during_the_pass_does_not_accuse_an_honest_writer` fails on old code: the abuse event fires. It passes on the PR head.
+- `a_record_at_the_floor_that_the_current_seed_cannot_open_stays_abuse` passes on both trees.
+
+So the fix meets the bar: a test fails on old code.
+
+## Findings
+
+**1. Blocker: the PR title and body.** This is PR metadata, not code.
+- **Problem:** The title says "and the drain material", but the head commit has no drain change. The body says `Closes #1825.`, but the issue has unmet criteria:
+  - The seed epoch stamp is not passed to the leg.
+  - No test drives a drain site.
+  - The issue's mutation check ("stamp to floor") does not exist.
+  - Finding 2 shows that the issue's band can still occur.
+- **Scenario:** The merge closes #1825 while the band remains. The squash subject then records a change that is not in the code.
+- **Fix:** Remove "and the drain material" from the title. Either do the fix in finding 2 or change the body to `Part of #1825` and add a follow-up issue with a dependency edge.
+
+**2. Should fix: the floor can rise while the leg waits on the network.**
+- **Where:** `sync/pass.rs` `refresh_focus`, with `net/child.rs` `ChildAdopter::unseal`.
+- **Mechanism (I checked it):**
+  - `current_seed` reads the floor one time, when the leg starts.
+  - `refresh.run` and `run_files` then wait on the network with that copy of the seed.
+  - `unseal` decides on the floor as it is at that moment (`envelope.epoch &gt; floor`).
+  - `drive_owed_cut` is a facade command. The tick is a separate task from `scheduler.spawn`, and no lock keeps the two apart.
+  - `complete_cut` raises the floor with `raise_epoch_floor`, then starts the sweep, which re-seals inner folders at N+1.
+- **Scenario:** The leg takes seed N for own scope S. The user revokes a share on S. The floor goes to N+1, and the sweep publishes folder F at N+1. The leg fetches F and the unseal fails at the floor. The engine reports `AttributableAbuse` against its own device, and the verdict is `Rejected`.
+- **Drain sites:** The same gap exists there, outside the diff. `ensure_folder` proves a scope root one time per pass. After a floor rise, `load_child_node` and `served_child` use the stale seed and reach `emit_trust_violation`.
+- **Fix:** Return the stamp of the cached seed with the seed, from `current_seed` and from `walked_boundary_material`. Pass it to `ChildAdopter`. In `unseal`, report a failure above the stamp as availability. This is the fix that the issue specifies. Add a test that raises the floor between two record fetches in one leg.
+
+**3. Should fix: the test docs in `sync/pass.rs` `report_tests` are not accurate.**
+- The tests do not run a rotation or the start-of-pass eviction. They put a seed stamped below the floor in the cache, then call `refresh_focus`. So they prove the eviction at the leg, not a floor rise during a pass.
+- The doc of `a_floor_raised_during_the_pass_does_not_accuse_an_honest_writer` says "A rotation that lands after the start-of-pass eviction".
+- The fixture doc says "the cache as the start-of-pass eviction left it", but that eviction removes such a seed.
+- The doc says "the leg waits", but `material()` returns `NoScopeLeg::Outage` for an own scope, and the test asserts `Unreachable`.
+- **Fix:** Give the precondition: "a seed stamped below the floor". Change the result text to "the leg reports an outage and accuses nobody".
+
+**4. Optional, follow-up candidate: the issue comment gives the wrong drain mechanism.**
+- The comment says a stale seed stops the drain at the epoch-skew check in `drain::open_scope_root`. That is not the step that stops it.
+- `drain::open_root_record` does the floor check and the root-body unseal first. A stale seed stops there with `Halt::UploadAttempt`, which emits no abuse event but uses one op attempt.
+- So the effect at the root is true. Finding 2 shows that the drain child adopts are not covered.
+- **Fix:** Correct the comment.
+
+**5. Optional, follow-up candidate: the cached seed has no namespace.**
+- **Where:** `scope_seeds.rs` `CachedSeed`. The cache key is only the scope id.
+- **Scenario:** The user forgets share A for scope S, then accepts share B for the same S. If B does not open, A's seed stays. Its stamp is then compared with B's floor. This is a retention problem only: no false accusation occurs.
+- **Fix:** Store the `FloorNamespace` in `CachedSeed`, and evict the seed when the namespace is different.
+
+**6. Optional: duplicated code.**
+- `facade::scope_read_seed` repeats the body of `current_seed`. Call `current_seed` there.
+- `floor_view` runs two times for each scope in `refresh_focus` (`floors_of`, then again in `material`). Build the view one time.
+
+## Checks that are clean
+
+- **Rule 6:** A record at the floor that the current seed cannot open still reports abuse. The second new test proves this. No new path turns tampering into `Unreachable`, because raising an own floor needs a record that passes the gate.
+- **Floor namespace:** Each deposit is stamped against the same floor view that `floors_of` gives. The start-of-pass eviction uses the same `floor_view`.
+- **`None` path:** `current_seed` gives `None` only on a floor-store error, and the store is local. The result is availability: an outage for an own scope, a wait for a shared scope. When `floors_of` gives `None` (only a shared scope with no sharer), the leg waits, the same as on main.
+- **Lagging path:** A stale seed fails the first `ratchet_step` and the read gives `LaggingRead::Unreachable`. The comment's claim is true.
+- **Rule 7:** An evicted seed is zeroed when it is dropped. `current_seed` returns a `Zeroizing` copy and zeroes no buffer that the caller owns.
+- **Borrows:** No `RefCell` borrow is held across an await.
+- **Determinism:** The change adds no clock and no RNG.
+- **Code style:** The comments are short and give the reason. There are no comments that justify absent code and no tracker references.
+- **Law 1:** The tests assert behaviour. `ci-rust.yml` "Engine simulation tests" runs them under the required "Rust Result" check.
+
+## Report files
+
+- `/Users/myankelev/.claude/scratch/w22/MF/review1/code-review.md`
+- `/Users/myankelev/.claude/scratch/w22/MF/review1/standards.md`
+- `/Users/myankelev/.claude/scratch/w22/MF/review1/security-review.md`
+- `/Users/myankelev/.claude/scratch/w22/MF/review1/crypto-review.md`
+- `/Users/myankelev/.claude/scratch/w22/MF/review1/old-run.log`
+- `/Users/myankelev/.claude/scratch/w22/MF/review1/new-run.log`</result>
+<usage><subagent_tokens>109656</subagent_tokens><tool_uses>33</tool_uses><duration_ms>849844</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a46f1d955a0beeb09</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a46f1d955a0beeb09.output</output-file>
+<status>completed</status>
+<summary>Agent "Code-review gate PR 2183" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># /code-review: PR #2183 (head 55af1f89b, fixed point origin/main)
+
+The report is also at `/Users/myankelev/.claude/scratch/w22/MF/review1/code-review.md`.
+
+## Old-code run
+
+An archive copy reverted the production hunk to `cached_seed`. Each tree had its own target directory.
+
+| Test | Old code | PR head |
+|---|---|---|
+| `a_floor_raised_during_the_pass_does_not_accuse_an_honest_writer` | FAIL (`a seed below the floor accuses nobody`: abuse event) | PASS |
+| `a_record_at_the_floor_that_the_current_seed_cannot_open_stays_abuse` | PASS | PASS |
+
+The other 4 `report_tests` pass on both trees. The copies and the target directories are deleted.
+
+## Spec
+
+1. **Blocker: PR metadata.** The title says "and the drain material", but 55af1f89b removed the drain change. The body is `Closes #1825.`, but these items stay unmet:
+   - the stamp threading
+   - AC3 ("The tests drive a drain site")
+   - AC4 ("replacing the stamp with the floor fails the first test")
+
+   Scenario: the merge closes the issue with its ACs unmet, and the squash subject records a change that is not in the code. Fix: change the title. Use "Part of #1825", or get an owner rescope of the ACs on the issue. pr-body.md does not make the drain claim.
+2. **Claim A (lagging path): sound.** `child::open_under_anchor` refuses `record_epoch &gt;= anchor.epoch`. Thus `reseal::seed_at_epoch` must do one `ratchet_step` (a history-link AEAD) from the held seed. A stale seed fails that step. The result is `None`, then `LaggingRead::Unreachable`, before `open_interior_under`.
+3. **Should fix, follow-up candidate (outside the diff): claim B (drain) is partly sound, and it names the wrong mechanism.**
+   - At the root, `drain::open_root_record` runs `floor::check` and the root unseal before the skew check in `open_scope_root`. A stale seed halts there as `Halt::UploadAttempt`, with no abuse report.
+   - But `ensure_folder` proves a root only one time per pass (`pass.holds`).
+   - Each drain `ChildAdopter::new` takes `plane.end.read_scope_seed`. This is a copy from the `walked_boundary_material` snapshot, which the pass makes before the drain.
+   - Scenario: a floor rises after the root proof. Then `load_child_node`/`served_child` unseal under the stale copy, `refuse_record` runs, and a false trust violation occurs. This is the window that the PR closes at the focus leg.
+   - Fix: before each drain `ChildAdopter::new`, compare the plane's read epoch with the current floor, and halt as availability. `current_seed` does not fit here, because the seed is already a copy.
+   - It is not confirmed that a floor can rise during a pass await. If it cannot, this item is optional.
+4. **Should fix: `pass::report_tests` test docs.** The tests put a seed stamped below the floor in the cache and call `refresh_focus` directly. No rotation runs, and no start-of-pass eviction runs.
+   - They prove the eviction at the focus leg.
+   - They do not prove a real floor rise during a pass, a drain site, the lagging path, or AC4.
+   - The test-1 doc ("A rotation that lands after the start-of-pass eviction") is not true.
+   - The fixture doc ("the cache as the start-of-pass eviction left it") is not true, because that eviction removes this state.
+   - Fix: state the precondition, "a seed stamped below the floor".
+
+## Standards
+
+1. **Should fix: the test-1 doc.** It says "the leg waits". For an own scope, `material()` returns `NoScopeLeg::Outage`, and the test asserts `Unreachable`. Fix: "the leg reports an outage and accuses nobody".
+2. **Optional: Duplicated Code.** `facade::scope_read_seed` repeats the `current_seed` body. Fix: call `current_seed` there.
+3. **Optional: the `refresh_focus` loop.** `floor_view` runs two times for each scope. Fix: build the view one time.
+
+Clean:
+- **The `current_seed` `None` path.** "No floor" maps to `Some(0)`. Only a store error gives `None`, and that error also evicts the seed. The result is Outage.
+- **Rules 6 and 7.**
+- **Comments:** short, give the reason, no tracker refs.
+- **Law 1:** the tests assert behavior and run in the `ci-rust.yml` "Engine simulation tests" job.
+
+Summary: Spec has 1 blocker (metadata) and 2 should-fix items. Standards has 1 should-fix and 2 optional items.</result>
+<usage><subagent_tokens>101700</subagent_tokens><tool_uses>33</tool_uses><duration_ms>696961</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adda12196b1d7f875</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/adda12196b1d7f875.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane MD implements ADR 0065" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I opened both PRs as drafts. CI passes on both. I did not request CodeRabbit.
+
+**PR A: https://github.com/FSM1/cipher-box/pull/2181**
+- Head: `a55bf0ea7`. CI: 27 checks pass, 4 skip.
+- The decoder reads the V2 owed body, and gives "no stop recorded" for a V1 body. The encoder still writes V1.
+- Old-code results:
+  - The two V2 tests do not compile on main, so they fail.
+  - The V1-default test passes on main. It is a guard, because ADR 0020 D5 requires a test for the default.
+
+**PR B: https://github.com/FSM1/cipher-box/pull/2188**
+- Head: `178ff5827`. CI: 36 checks pass, 1 skips.
+- The base is `main`, because CI runs only on PRs into `main`. Thus the diff includes the PR A commit. The body says "Closes #2157." and that the PR must not merge before #2181 ships in a release.
+- The work follows your answers: the pass count is in session memory, and the KAT pins the V1 and V2 owed bodies.
+- Old-code results:
+  - These fail: way A, way B, way E, ways C and D past the bound, "past T until K passes", "a restart needs K new passes", and the D4 renewal test.
+  - "Bound holds before T" passes. It is a guard.
+  - I did not run "an epoch above the root's, past the bound" on the old code in its final form. Its first form hung there.
+
+**Gap between the ADR and the code:** Consequence 3 says that the KAT body changes. The core vector body was an opaque stand-in, so nothing changed by itself. I hand-encoded the V1 and V2 bodies, as you approved.
+
+**Readings beyond the ADR text, for you to confirm:**
+1. A record at an epoch above the gated root's epoch drops only after the bound (cause `epoch-above-root`). An immediate drop could lose a real node that a read rotation on another device published.
+2. D2: when neither name is the derived name, the first ref wins.
+3. A head block over the size cap counts as "no head block".
+4. A malformed child name drops its parent under D1.
+5. "No record" counts only when every endpoint states that the record is absent. An endpoint that errors gives an ordinary stop that never drops, so way C can still block. The test fake does not show this case.
+
+**Open question:** `apps/web` shows no notice for `nodeDropped`. The ADR only asks for the event type in `packages/client`.
+
+My notes and the PR body files are in `/Users/myankelev/.claude/scratch/w22/MD/`.</result>
+<usage><subagent_tokens>432374</subagent_tokens><tool_uses>194</tool_uses><duration_ms>4691496</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-adda12196b1d7f875</worktreePath><worktreeBranch>worktree-agent-adda12196b1d7f875</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a20c036eea3d9afa4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a20c036eea3d9afa4.output</output-file>
+<status>completed</status>
+<summary>Agent "Fold simplify follow-ups PR 2178" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I folded both items into PR #2178 as one commit. All gates pass and CI is green. New head: `de61936c1ca68f9e6932d921162f1c7926e2830d`, pushed one time to `refactor/2161-generate-remaining-seam-types`, with no force.
+
+**Item 1: Rust decode (`crates/wasm/src/boundary.rs`, `crates/wasm/src/lib.rs`)**
+- I removed `SECRET_FIELDS`. The decode now gives a placeholder to every bytes field of a step. This agrees with the TS rule on `STEP_SECRETS`: every buffer that a step carries is a secret.
+- The new `pub fn take_rendezvous_secrets` fills the slots after serde. It returns `Err` when the `secrets_mut()` slots are not the same set as the placeheld fields. It also returns `Err` when a secret is empty. Both checks are active in release builds.
+- Two lists remain: the `deserialize_with = "secret"` attributes and the arms of `secrets_mut()`. A full single source was not practical, so the set check binds the two lists. If they drift, the decode fails closed.
+- The fix also refuses an empty secret that a caller sends. Before, an empty `factorKey` decoded without an error.
+
+**Item 2: `packages/client/src/leaderRelay.ts`**
+- `wipeStep` now loops over `RENDEZVOUS_SECRET_FIELDS`, the same as `scrubStep`.
+
+**New tests and their old-head results**
+- `an_empty_secret_is_refused` (`crates/wasm/tests/rendezvous.rs`): on 88fa63e7c it **failed**. An approve step with an empty `factorKey` decoded `Ok`.
+- `slots_that_drift_from_the_placeheld_fields_are_refused` (same file): on 88fa63e7c it **does not compile**, because `take_rendezvous_secrets` did not exist then. It tests the new drift check only.
+- `packages/client/src/leaderRelay.test.ts`: on the old `wipeStep` it **failed**. The test adds a mocked field `laterSecret` to the list, and the old code did not wipe it.
+
+**Gates (all pass)**
+- `cargo fmt --all` and `cargo clippy --workspace --all-targets -- -D warnings`: pass.
+- `cargo test -p cipherbox-wasm` native: 1 passed.
+- `cargo test -p cipherbox-wasm` on wasm32: 69 passed, of which 8 are rendezvous tests.
+- `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown`: pass.
+- `pnpm build:wasm`: pass. The root has no `build:wasm` script, so I ran it in `packages/client`.
+- `pnpm typecheck`, `pnpm lint` and `pnpm lint:tracker-refs`: pass.
+- `packages/client`: unit 677 passed, production-wasm 2 passed, browser 44 passed.
+- `apps/web`: 876 passed.
+- The commit has no tool attribution, and the attribution grep printed nothing.
+
+**CI:** 36 checks ran. 35 passed and 1 was skipped by its path filter (Desktop Build). Nothing failed and I did no re-run. I deleted `target/`.
+
+I did not post to GitHub, did not mark the PR ready, and did not request CodeRabbit.</result>
+<usage><subagent_tokens>110133</subagent_tokens><tool_uses>35</tool_uses><duration_ms>1298860</duration_ms></usage>
+</task-notification>
