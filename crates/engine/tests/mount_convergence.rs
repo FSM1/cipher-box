@@ -85,9 +85,9 @@ fn owner_pointer_read_key() -> [u8; 32] {
     *kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes()
 }
 
-/// Publish the account's initial state: an empty owner root at sequence 1 whose
-/// committed set is the owner's own, and the vault pointer naming it.
-fn seed_vault(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
+/// The owner root at the seeded epoch, with no children, signed at
+/// `sequence`.
+fn initial_root_record(blocks: &Blocks, sequence: u64) -> Vec<u8> {
     let owner_identity = owner_identity();
     let pseudonym = owner_pseudonym();
     let owner_enc = kdf::enc_subkey(&SECRET);
@@ -161,14 +161,23 @@ fn seed_vault(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
     blocks.put(head.block.clone());
 
     let root_signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
-    let root_record = IpnsRecord::create_v2(
+    IpnsRecord::create_v2(
         &root_signer,
         format!("/ipfs/{}", head.cid).as_bytes(),
-        1,
+        sequence,
         TTL_NANOS,
         EOL,
     )
-    .marshal();
+    .marshal()
+}
+
+/// Publish the account's initial state: an empty owner root at sequence 1 whose
+/// committed set is the owner's own, and the vault pointer naming it.
+fn seed_vault(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
+    let owner_identity = owner_identity();
+    let name = write_name(ROOT);
+    let pointer_read_key = owner_pointer_read_key();
+    let root_record = initial_root_record(blocks, 1);
 
     let pointer_block = seal_repoint(
         SessionRole::Owner,
@@ -944,6 +953,51 @@ fn a_one_device_owner_starts_after_an_unconfirmed_root_that_landed_and_a_tick() 
 
     the_owner_starts_again_after_its_session_adopts_the_cut_root(
         &world, &blocks, &owner, engine, tasks,
+    );
+}
+
+/// The sequence of the vault-root record the network serves.
+fn published_root_sequence(world: &FakeWorld, root_name: &IpnsName) -> u64 {
+    let bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], root_name.as_str())
+        .expect("the vault root is published");
+    IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(root_name))
+        .expect("the vault root verifies")
+        .sequence
+}
+
+/// After its session adopts the cut root, and before any vouch of the cut
+/// epoch lands, the session refuses an owner-signed root at the pre-cut epoch
+/// whose sequence is above the cut root's.
+#[test]
+fn a_session_refuses_a_pre_cut_root_above_the_cut_roots_sequence() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+
+    let above = published_root_sequence(&world, &root_name) + 1;
+    let stale = initial_root_record(&blocks, above);
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, root_name.as_str(), stale.clone());
+    }
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        listed_names(&engine, ROOT),
+        ["reports"],
+        "the session keeps the cut root and does not adopt the pre-cut epoch"
     );
 }
 
