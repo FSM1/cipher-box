@@ -86,6 +86,9 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     /// The scope every focus folder is sealed under.
     pub(crate) scope_id: [u8; 16],
     pub(crate) scope_read_seed: &'a Zeroizing<[u8; 32]>,
+    /// A lower bound on the epoch `scope_read_seed` belongs to
+    /// ([`ChildAdopter::with_seed_stamp`]).
+    pub(crate) seed_stamp: Option<u64>,
     /// The scope root's record name, which a lagging record's read walks the
     /// ratchet back from ([`resolve_child`]).
     pub(crate) scope_root_name: Option<&'a IpnsName>,
@@ -272,7 +275,8 @@ where
             self.scope_id,
             self.scope_read_seed.clone(),
             node.0,
-        );
+        )
+        .with_seed_stamp(self.seed_stamp);
         match resolve_child(
             self.transport,
             self.snapshot_cache,
@@ -514,6 +518,7 @@ mod tests {
                     events: &events,
                     scope_id,
                     scope_read_seed: &self.read_seed,
+                    seed_stamp: None,
                     scope_root_name: None,
                     plane: plane_roots.map(|scope_roots| GraftedLeg {
                         scope_roots,
