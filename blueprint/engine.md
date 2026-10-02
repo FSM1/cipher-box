@@ -316,7 +316,7 @@ The raises with no unseal (ADR 0067 D2), each a maximum:
   `effective_revoked_recipients` (ADR 0025 D3), the write-epoch raise after a
   landed wave (`after_write_wave`, `cut_write_scope`, `redrive_write_cut`), the
   cut-epoch raise after a landed cut (`rotate_cut` and the owed re-drive), the
-  pointer publish (`publish_pointer_over`), and the vouched floor of D3 below;
+  pointer publish (`publish_pointer_over`), and the vouched floor (below);
 - before the publish, only where it makes the device more restrictive: the
   revocation floor (`record_revocation_floor`);
 - an epoch a minting device holds by construction: `promote_scope_root`.

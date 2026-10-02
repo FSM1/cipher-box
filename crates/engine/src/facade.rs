@@ -5493,19 +5493,19 @@ impl<T: SeamTypes> Engine<T> {
         root_name.is_some()
     }
 
-    /// Vouch at the vault pointer the root epoch this start adopted above
+    /// Vouch at the vault pointer the root epoch this device adopted above
     /// `vouched`: a cut that landed its root and not its vouch. Inline, before
     /// the loops spawn, so a tick never races the re-point. A failure is
-    /// surfaced: a cut of the vault root in this session finishes the vouch,
-    /// and until one lands this device's next cold seed refuses.
+    /// surfaced, and a cut of the vault root in this session or the next start
+    /// finishes the vouch.
     async fn catch_up_vault_pointer(
         &self,
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         vouched: u64,
     ) {
         let root = self.state.snapshot.borrow().root.0;
-        // Above `vouched` only through this start's own gated adopt: the cold
-        // seed refused any higher floor that stood before it.
+        // Above `vouched` only through a gated adopt of the vault root, in this
+        // start or in an earlier session (ADR 0067 D3).
         let floor = match floor::read_epoch_floor(&self.seams.floor_store, &root).await {
             Ok(Some(floor)) if floor > vouched => Ok(floor),
             Ok(_) => return,
