@@ -32,12 +32,17 @@ import {
   type WireStream,
   type WireWrite,
 } from './broadcast.js';
-import { isBuffer, wipeBytes, wipeTransfer } from './buffers.js';
+import { isBuffer, wipeTransfer } from './buffers.js';
 import { EngineRequestError, unknownHandle, type HandleKind } from './correlatedTransport.js';
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
-import { commandTransfer, READ_KINDS, rendezvousTransfer } from './worker/protocol.js';
+import {
+  commandTransfer,
+  READ_KINDS,
+  rendezvousTransfer,
+  wipeRendezvousSecrets,
+} from './worker/protocol.js';
 import type {
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -85,19 +90,6 @@ function wipeChunk(payload: unknown): void {
 }
 
 /**
- * Wipes the secret scalars a rendezvous step carries. Every kind is covered,
- * `open` included: the step reached this realm by structured clone, so these
- * bytes are a copy the sender does not share and this frame is their last
- * owner. Takes the step unvalidated: an off-shape one carries none.
- */
-function wipeStep(step: unknown): void {
-  const held = step as { scalar?: unknown; sealScalar?: unknown; factorKey?: unknown } | null;
-  wipeBytes(held?.scalar);
-  wipeBytes(held?.sealScalar);
-  wipeBytes(held?.factorKey);
-}
-
-/**
  * Wipes every buffer a port message carries, on the routes that answer it with
  * neither a relay nor a refusal — a write step's upload chunk, a settings
  * command's BYO bearer, and a rendezvous step's secret scalars.
@@ -109,7 +101,7 @@ function wipeDropped(message: unknown): void {
     | undefined;
   wipeChunk(envelope?.write);
   wipeTransfer(commandTransfer(envelope?.command));
-  wipeStep(envelope?.read?.step);
+  wipeRendezvousSecrets(envelope?.read?.step);
 }
 
 /**
@@ -520,7 +512,7 @@ export class LeaderRelay {
    */
   private readValue(read: ReadDescriptor): Promise<ReadResultValue> {
     if (read.kind !== 'deviceRendezvous') return this.transport.read(read);
-    return this.transport.read(read).finally(() => wipeStep(read.step));
+    return this.transport.read(read).finally(() => wipeRendezvousSecrets(read.step));
   }
 
   private postPort(port: MessagePortLike, message: PortResponse, transfer?: Transferable[]): void {

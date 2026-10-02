@@ -659,13 +659,32 @@ the grantee that removed it stops reading it.
 - **A capture outlives the pass that could not settle it.** The merge that saw
   the departure has already dropped the node from the base, so the next pass
   would see nothing; the session holds the unsettled captures and clears one
-  only when its entry lands. Each carries the `deletedAt` it was stamped with,
-  so a retry re-keys under the key its entry will name.
-- **A node the base still links is no capture.** A move and a dual-link loser
-  both depart one parent and stay named by another, and binning one would seal a
-  live node under a key no reader derives. A child that does not publish under a
-  name this scope's write seed derives is a scope root, which the authored
-  delete refuses for the same reason.
+  only when its entry lands, a folder names it, or its scope passes the walk
+  bound. Each carries the `deletedAt` it was stamped with, so a retry re-keys
+  under the key its entry will name.
+- **A node that a folder of its scope still links is no capture.** A move and
+  a dual-link loser both depart one parent and stay named by another, and
+  binning one would seal a live node under a key no reader derives. The base
+  cannot prove a departure: a folder this device did not load, or loaded before
+  the move, does not show the new link. So the drain holds the capture and walks
+  the scope: it reads every node fresh through the gate, then reads each one
+  again, from a read budget the tick shares across its passes. The walk starts
+  after the device saw the departure and proves only that departure. The walk
+  makes one attempt at a read on each pass, up to three attempts. A refused
+  record, a record served tied, a second read that shows another record, or a
+  third attempt with no answer starts the walk again on a later pass. The drain
+  bins only a capture that a settled walk proved, that no folder names and that
+  the base does not link just before its re-key, and a capture it gives back
+  needs a new walk. A scope past the walk bound drops its captures and is not
+  walked again in that session, and a scope that holds 1024 captures drops each
+  new one. Residual: such a scope re-keys no orphan, and the grantee that
+  unlinked it keeps its key. Residual: four scopes at 1024 fill the session's
+  set of 4096, so a peer with write access to four scopes can make every other
+  scope drop its new captures. Residual: a settled proof waits for an adoption
+  slot, so its snapshot ages; the risk is low, because an honest move publishes
+  the destination before the source. A child that does not publish under a name
+  this scope's write seed derives is a scope root, which the authored delete
+  refuses for the same reason.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.

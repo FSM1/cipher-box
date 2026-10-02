@@ -248,6 +248,7 @@ where
             node,
             OwedEntry {
                 cut_epoch: cut.commitment.cut_epoch,
+                first_stop: None,
                 steps: steps.clone(),
             },
         )

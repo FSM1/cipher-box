@@ -5,7 +5,7 @@
  */
 
 import { wipeTransfer } from '../buffers.js';
-import { commandTransfer } from './protocol.js';
+import { commandTransfer, wipeRendezvousSecrets } from './protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
@@ -20,7 +20,7 @@ import type {
   WriteHandle,
   WriteTarget,
 } from './protocol.js';
-import type { EngineWasm, WasmDeviceApprovalResponse, WasmEngineHandle } from './engineWasm.js';
+import type { EngineWasm, WasmEngineHandle } from './engineWasm.js';
 import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import {
   buffer,
@@ -33,11 +33,11 @@ import {
   readBin,
   readEvent,
   readInvitePreview,
+  readRendezvous,
   readReceivedShares,
   readSharing,
   readSnapshot,
   readVaultStorage,
-  record,
   text,
 } from './commandCodec.js';
 
@@ -81,111 +81,22 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
     : (bytes.slice().buffer as ArrayBuffer);
 }
 
-/** Reads an approver's answer into a descriptor, releasing the boundary object. */
-function readApproval(answer: WasmDeviceApprovalResponse): DeviceRendezvousResult {
-  try {
-    return { kind: 'response', sealedFactor: answer.sealedFactor ?? null, payload: answer.payload };
-  } finally {
-    answer.free();
-  }
-}
-
 /**
- * Exhaustiveness bound: adding a step kind without a wasm call fails the build,
- * and a sender off the union gets a refusal rather than an unhandled
- * fall-through.
+ * Exhaustiveness bound: adding a read kind without a handler fails the build,
+ * and an off-union kind is refused, not run.
  */
-function unknownStep(step: never): Error {
-  return new Error(`unknown rendezvous step kind: ${String((step as DeviceRendezvousStep).kind)}`);
-}
-
-/** The same bound for read kinds: an off-union kind is refused, not run. */
 function unknownRead(read: never): Error {
   return new Error(`unknown read kind: ${String((read as ReadDescriptor).kind)}`);
 }
 
-/**
- * Runs one rendezvous step against the pure wasm functions. A step arrives as
- * plain data across a realm boundary, so every field passes a checker before
- * wasm-bindgen can coerce a wrong-typed one.
- */
+/** Runs one rendezvous step against the pure wasm function, which decodes it. */
 function runRendezvous(wasm: EngineWasm, step: DeviceRendezvousStep): DeviceRendezvousResult {
   try {
-    return dispatchRendezvous(wasm, step);
+    return readRendezvous(wasm.deviceRendezvous(step));
   } finally {
     // This realm's copies are its own to erase (security rule 7). The caller
     // keeps and erases its own, and a transferred buffer is already detached.
-    scrubStep(step);
-  }
-}
-
-/**
- * Erases every secret a step carried into this realm. Takes the step
- * unvalidated: an off-shape one carries none.
- */
-function scrubStep(step: unknown): void {
-  if (typeof step !== 'object' || step === null) return;
-  for (const held of [
-    (step as { scalar?: unknown }).scalar,
-    (step as { sealScalar?: unknown }).sealScalar,
-    (step as { factorKey?: unknown }).factorKey,
-  ]) {
-    if (held instanceof Uint8Array) held.fill(0);
-  }
-}
-
-function dispatchRendezvous(wasm: EngineWasm, step: DeviceRendezvousStep): DeviceRendezvousResult {
-  text(record(step, 'step').kind, 'step.kind');
-  switch (step.kind) {
-    case 'open': {
-      const opened = wasm.openDeviceRendezvous(
-        text(step.devicePublicKey, 'devicePublicKey'),
-        bytes(step.scalar, 'scalar')
-      );
-      try {
-        return {
-          kind: 'opened',
-          ephemeralPublicKey: opened.ephemeralPublicKey,
-          requestPayload: opened.requestPayload,
-          comparisonValue: opened.comparisonValue,
-        };
-      } finally {
-        opened.free();
-      }
-    }
-    case 'approve':
-      return readApproval(
-        wasm.approveDeviceRendezvous(
-          text(step.devicePublicKey, 'devicePublicKey'),
-          text(step.requestId, 'requestId'),
-          text(step.requesterDevicePublicKey, 'requesterDevicePublicKey'),
-          text(step.ephemeralPublicKey, 'ephemeralPublicKey'),
-          bytes(step.sealScalar, 'sealScalar'),
-          bytes(step.factorKey, 'factorKey')
-        )
-      );
-    case 'deny':
-      return readApproval(
-        wasm.denyDeviceRendezvous(
-          text(step.devicePublicKey, 'devicePublicKey'),
-          text(step.requestId, 'requestId'),
-          text(step.ephemeralPublicKey, 'ephemeralPublicKey')
-        )
-      );
-    case 'openFactor':
-      return {
-        kind: 'factor',
-        factorKey: wasm.openDeviceFactor(
-          text(step.sealedFactor, 'sealedFactor'),
-          text(step.requestId, 'requestId'),
-          text(step.requesterDevicePublicKey, 'requesterDevicePublicKey'),
-          text(step.responderDevicePublicKey, 'responderDevicePublicKey'),
-          text(step.responseSignature, 'responseSignature'),
-          bytes(step.scalar, 'scalar')
-        ),
-      };
-    default:
-      throw unknownStep(step);
+    wipeRendezvousSecrets(step);
   }
 }
 
@@ -289,26 +200,7 @@ export class EngineHost implements EngineHostLike {
   }
 
   async beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
-    const reserved = count(size, 'size');
-    const fields = record(target, 'target');
-    if ('node' in fields) {
-      return this.handle.beginWrite(
-        undefined,
-        undefined,
-        nodeId(this.wasm, fields.node, 'node'),
-        reserved,
-        fields.expectedVersion === undefined
-          ? undefined
-          : bytes(fields.expectedVersion, 'expectedVersion')
-      );
-    }
-    return this.handle.beginWrite(
-      nodeId(this.wasm, fields.parent, 'parent'),
-      text(fields.name, 'name'),
-      undefined,
-      reserved,
-      undefined
-    );
+    return this.handle.beginWrite(target, count(size, 'size'));
   }
 
   async pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
@@ -383,18 +275,13 @@ export class EngineHost implements EngineHostLike {
       default:
         // A descriptor reaches this realm by transfer, so this frame is the
         // last owner of whatever it carried (AGENTS.md 7).
-        scrubStep((read as { step?: unknown }).step);
+        wipeRendezvousSecrets((read as { step?: unknown }).step);
         throw unknownRead(read);
     }
   }
 
   async openContentStream(node: Uint8Array): Promise<OpenedStream> {
-    const opened = await this.handle.openContentStream(nodeId(this.wasm, node, 'node'));
-    try {
-      return { handle: opened.handle, size: opened.size };
-    } finally {
-      opened.free();
-    }
+    return this.handle.openContentStream(nodeId(this.wasm, node, 'node'));
   }
 
   async readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {

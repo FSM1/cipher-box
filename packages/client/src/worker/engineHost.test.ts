@@ -182,8 +182,8 @@ describe('EngineHost', () => {
     expect(secret).toEqual(new Uint8Array(32));
   });
 
-  // `EngineWasm` is hand-written, so a positional slot shift is invisible to
-  // `tsc`; assert the trailing arguments together instead.
+  // The URL slots of the generated constructor share a type, so a positional
+  // slot shift is invisible to `tsc`; assert the trailing arguments together.
   it('forwards the content gateway configuration', async () => {
     const { wasm, constructed } = recordingWasm();
 
@@ -243,17 +243,18 @@ describe('EngineHost', () => {
 describe('EngineHost request fields', () => {
   const node = new Uint8Array(16).fill(3);
 
-  it('opens a write on well-typed fields', async () => {
+  // The target is the engine's own `WriteTarget`, which the engine decodes.
+  it('hands a write target to the engine as it arrived', async () => {
     const { host, calls } = await permissiveHost();
 
     const readAt = new Uint8Array([0xc1, 0xd0]);
     await host.beginWrite({ parent: node, name: 'a.txt' }, 4);
-    await host.beginWrite({ node }, 8);
     await host.beginWrite({ node, expectedVersion: readAt }, 8);
 
-    expect(calls[0]).toEqual(['beginWrite', { bytes: node }, 'a.txt', undefined, 4, undefined]);
-    expect(calls[1]).toEqual(['beginWrite', undefined, undefined, { bytes: node }, 8, undefined]);
-    expect(calls[2]).toEqual(['beginWrite', undefined, undefined, { bytes: node }, 8, readAt]);
+    expect(calls).toEqual([
+      ['beginWrite', { parent: node, name: 'a.txt' }, 4],
+      ['beginWrite', { node, expectedVersion: readAt }, 8],
+    ]);
   });
 
   it('reads a stream window on well-typed bounds', async () => {
@@ -265,11 +266,6 @@ describe('EngineHost request fields', () => {
   });
 
   it.each([
-    ['a string parent', { parent: 'sixteen bytes!!!', name: 'a.txt' }, 4, 'parent: string'],
-    ['a numeric name', { parent: node, name: 12345 }, 4, 'name: number'],
-    ['a string node', { node: 'sixteen bytes!!!' }, 4, 'node: string'],
-    ['a non-object target', 'a.txt', 4, 'target: string'],
-    ['a null target', null, 4, 'target: null'],
     ['a string size', { node }, '4', 'size: string'],
     ['a NaN size', { node }, Number.NaN, 'size: number'],
     ['a fractional size', { node }, 1.5, 'size: number'],
@@ -517,47 +513,42 @@ function deviceReadHost(): Promise<{ host: EngineHost; challenged: string[] }> {
   return started(wasm).then((host) => ({ host, challenged }));
 }
 
-/** A wasm module whose rendezvous free functions record what they were called with. */
-function rendezvousWasm(): { wasm: EngineWasm; calls: unknown[][]; freed: () => number } {
-  const calls: unknown[][] = [];
-  let frees = 0;
-  const releasable = (fields: Record<string, unknown>): unknown => ({
-    ...fields,
-    free: () => {
-      frees += 1;
-    },
-  });
-  // A buffer argument is snapshotted at the call, because the host scrubs the
-  // step it was handed: recording the view itself would compare zeroes to
-  // zeroes and assert nothing.
-  const record =
-    (name: string, answer: () => unknown) =>
-    (...args: unknown[]): unknown => {
-      calls.push([name, ...args.map((arg) => (arg instanceof Uint8Array ? arg.slice() : arg))]);
-      return answer();
-    };
+/** A wasm module whose rendezvous export records each step and answers `answer`. */
+function rendezvousWasm(answer: (step: { kind: string }) => unknown = rendezvousAnswer): {
+  wasm: EngineWasm;
+  calls: unknown[];
+} {
+  const calls: unknown[] = [];
   const wasm = {
     EngineHandle: class {
       start(): Promise<void> {
         return Promise.resolve();
       }
     },
-    openDeviceRendezvous: record('openDeviceRendezvous', () =>
-      releasable({
+    // The step is snapshotted at the call, because the host scrubs the step it
+    // was handed: recording the step itself would compare zeroes to zeroes.
+    deviceRendezvous: (step: { kind: string }): unknown => {
+      calls.push(structuredClone(step));
+      return answer(step);
+    },
+  } as unknown as EngineWasm;
+  return { wasm, calls };
+}
+
+function rendezvousAnswer(step: { kind: string }): unknown {
+  switch (step.kind) {
+    case 'open':
+      return {
+        kind: 'opened',
         ephemeralPublicKey: '02beef',
         requestPayload: Uint8Array.of(1, 2),
         comparisonValue: '482913',
-      })
-    ),
-    approveDeviceRendezvous: record('approveDeviceRendezvous', () =>
-      releasable({ sealedFactor: 'c2VhbA==', payload: Uint8Array.of(3) })
-    ),
-    denyDeviceRendezvous: record('denyDeviceRendezvous', () =>
-      releasable({ sealedFactor: undefined, payload: Uint8Array.of(4) })
-    ),
-    openDeviceFactor: record('openDeviceFactor', () => Uint8Array.of(7, 7)),
-  } as unknown as EngineWasm;
-  return { wasm, calls, freed: () => frees };
+      };
+    case 'openFactor':
+      return { kind: 'factor', factorKey: Uint8Array.of(7, 7) };
+    default:
+      return { kind: 'response', sealedFactor: null, payload: Uint8Array.of(4) };
+  }
 }
 
 /**
@@ -643,6 +634,16 @@ describe('EngineHost identity fingerprint', () => {
 });
 
 describe('EngineHost device rendezvous', () => {
+  const approve = (): Extract<DeviceRendezvousStep, { kind: 'approve' }> => ({
+    kind: 'approve',
+    devicePublicKey: 'ed25519hex',
+    requestId: 'req-1',
+    requesterDevicePublicKey: 'reqhex',
+    ephemeralPublicKey: '02beef',
+    sealScalar: scalarBytes(),
+    factorKey: factorKeyBytes(),
+  });
+
   // Security rule 7: the realm that holds a copy erases it. The caller keeps
   // and erases its own, and a transferred buffer is already detached.
   it('scrubs the rendezvous scalar, the seal scalar and the factor key it was handed', async () => {
@@ -660,15 +661,7 @@ describe('EngineHost device rendezvous', () => {
     });
     await host.read({
       kind: 'deviceRendezvous',
-      step: {
-        kind: 'approve',
-        devicePublicKey: 'ed25519hex',
-        requestId: 'req-1',
-        requesterDevicePublicKey: 'reqhex',
-        ephemeralPublicKey: '02beef',
-        sealScalar,
-        factorKey,
-      },
+      step: { ...approve(), sealScalar, factorKey },
     });
     await host.read({
       kind: 'deviceRendezvous',
@@ -689,132 +682,38 @@ describe('EngineHost device rendezvous', () => {
     expect(factorScalar).toEqual(zeros(factorScalar.length));
   });
 
-  it.each([
-    [
-      'open',
-      { kind: 'open', devicePublicKey: 'ed25519hex', scalar: scalarBytes() },
-      ['openDeviceRendezvous', 'ed25519hex', scalarBytes()],
-      {
-        kind: 'opened',
-        ephemeralPublicKey: '02beef',
-        requestPayload: Uint8Array.of(1, 2),
-        comparisonValue: '482913',
-      },
-    ],
-    [
-      'approve',
-      {
-        kind: 'approve',
-        devicePublicKey: 'ed25519hex',
-        requestId: 'req-1',
-        requesterDevicePublicKey: 'reqhex',
-        ephemeralPublicKey: '02beef',
-        sealScalar: scalarBytes(),
-        factorKey: factorKeyBytes(),
-      },
-      [
-        'approveDeviceRendezvous',
-        'ed25519hex',
-        'req-1',
-        'reqhex',
-        '02beef',
-        scalarBytes(),
-        factorKeyBytes(),
-      ],
-      { kind: 'response', sealedFactor: 'c2VhbA==', payload: Uint8Array.of(3) },
-    ],
-    [
-      'deny',
-      {
-        kind: 'deny',
-        devicePublicKey: 'ed25519hex',
-        requestId: 'req-1',
-        ephemeralPublicKey: '02beef',
-      },
-      ['denyDeviceRendezvous', 'ed25519hex', 'req-1', '02beef'],
-      { kind: 'response', sealedFactor: null, payload: Uint8Array.of(4) },
-    ],
-    [
-      'openFactor',
-      {
-        kind: 'openFactor',
-        sealedFactor: 'c2VhbA==',
-        requestId: 'req-1',
-        requesterDevicePublicKey: 'reqhex',
-        responderDevicePublicKey: 'apprhex',
-        responseSignature: 'sighex',
-        scalar: scalarBytes(),
-      },
-      ['openDeviceFactor', 'c2VhbA==', 'req-1', 'reqhex', 'apprhex', 'sighex', scalarBytes()],
-      { kind: 'factor', factorKey: Uint8Array.of(7, 7) },
-    ],
-  ] as const)(
-    'runs the %s step against its own free function',
-    async (_case, step, call, result) => {
-      const { wasm, calls } = rendezvousWasm();
-      const host = await started(wasm);
-
-      await expect(
-        host.read({ kind: 'deviceRendezvous', step: step as DeviceRendezvousStep })
-      ).resolves.toEqual(result);
-      expect(calls).toEqual([call]);
-    }
-  );
-
-  it('releases the boundary object each answering step mints', async () => {
-    const { wasm, freed } = rendezvousWasm();
+  it('scrubs the step when the wasm export refuses it', async () => {
+    const { wasm } = rendezvousWasm(() => {
+      throw new Error('the rendezvous step does not decode');
+    });
     const host = await started(wasm);
+    const step = approve();
 
-    await host.read({
-      kind: 'deviceRendezvous',
-      step: { kind: 'open', devicePublicKey: 'ed25519hex', scalar: scalarBytes() },
-    });
-    await host.read({
-      kind: 'deviceRendezvous',
-      step: {
-        kind: 'deny',
-        devicePublicKey: 'ed25519hex',
-        requestId: 'req-1',
-        ephemeralPublicKey: '02beef',
-      },
-    });
-
-    expect(freed()).toBe(2);
+    await expect(host.read({ kind: 'deviceRendezvous', step })).rejects.toThrow(
+      'the rendezvous step does not decode'
+    );
+    expect(step.factorKey).toEqual(new Uint8Array(32));
+    expect(step.sealScalar).toEqual(new Uint8Array(32));
   });
 
-  it.each([
-    ['an unknown kind', { kind: 'bogus' }, 'unknown rendezvous step kind: bogus'],
-    ['no shape at all', null, 'invalid request field step: null'],
-    [
-      'a numeric device key',
-      { kind: 'open', devicePublicKey: 42, scalar: scalarBytes() },
-      'invalid request field devicePublicKey: number',
-    ],
-    [
-      'a string scalar',
-      { kind: 'open', devicePublicKey: 'ed25519hex', scalar: 'thirty-two bytes' },
-      'invalid request field scalar: string',
-    ],
-    [
-      'a numeric factor key',
-      {
-        kind: 'approve',
-        devicePublicKey: 'ed25519hex',
-        requestId: 'req-1',
-        requesterDevicePublicKey: 'reqhex',
-        ephemeralPublicKey: '02beef',
-        sealScalar: scalarBytes(),
-        factorKey: 42,
-      },
-      'invalid request field factorKey: number',
-    ],
-  ])('refuses a step carrying %s', async (_case, step, message) => {
+  it('hands the step to the wasm export and answers with its result', async () => {
     const { wasm, calls } = rendezvousWasm();
     const host = await started(wasm);
 
-    await expect(
-      host.read({ kind: 'deviceRendezvous', step: step as unknown as DeviceRendezvousStep })
-    ).rejects.toThrow(message);
-    expect(calls).toEqual([]);
+    await expect(host.read({ kind: 'deviceRendezvous', step: approve() })).resolves.toEqual({
+      kind: 'response',
+      sealedFactor: null,
+      payload: Uint8Array.of(4),
+    });
+    expect(calls).toEqual([approve()]);
+  });
+
+  it('refuses a result kind this build does not know', async () => {
+    const { wasm } = rendezvousWasm(() => ({ kind: 'bogus' }));
+    const host = await started(wasm);
+
+    await expect(host.read({ kind: 'deviceRendezvous', step: approve() })).rejects.toThrow(
+      'unknown WASM rendezvous result kind: bogus'
+    );
   });
 });

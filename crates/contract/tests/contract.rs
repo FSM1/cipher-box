@@ -1377,9 +1377,9 @@ impl SweepResolver for LocalNet {
         _scope: &ChildScopeRef,
         _child: &NodeRef,
     ) -> Result<SweptChild, SweepResolveFailure> {
-        Ok(SweptChild::Interior(SweptNode {
+        Ok(SweptChild::Interior(Box::new(SweptNode {
             current_read_epoch: LOCAL_NET_READ_EPOCH,
-            sequence: 1,
+            observed: cipherbox_engine::testkit::rotation::swept_observed(1),
             read_body: ReadBody::Folder {
                 created_at: 0,
                 modified_at: 0,
@@ -1388,7 +1388,7 @@ impl SweepResolver for LocalNet {
             },
             carried_unknown: PreservedFields::new(),
             carried_epoch_tag_unknown: PreservedFields::new(),
-        }))
+        })))
     }
 }
 

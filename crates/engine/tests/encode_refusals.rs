@@ -3,14 +3,15 @@
 //! under `--release`, where `debug_assert!` is compiled out, so a refusal that
 //! leans on one fails there.
 
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
+use cipherbox_core::seal::{
+    ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, encode_envelope, seal_read_body,
+};
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
-use cipherbox_engine::NodeId;
-use cipherbox_engine::SyncTimingProfile;
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::gate::{floor, record_cut_epoch_floor};
 use cipherbox_engine::grants::conversion::{
@@ -27,14 +28,27 @@ use cipherbox_engine::net::renewal_walk::cursor::{
 use cipherbox_engine::net::{
     BarFloor, Observed, PublishBar, PublishError, PublishOutcome, PublishRequest, publish,
 };
-use cipherbox_engine::seams::{FloorStore, HttpResponse, RecordTransport, UnixMillis};
+use cipherbox_engine::rotation::derive_write_name;
+use cipherbox_engine::seams::{
+    BoxedTask, FloorStore, HttpResponse, RecordTransport, StagingStore, UnixMillis,
+};
 use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
 };
 use cipherbox_engine::testkit::SeededEntropy;
-use cipherbox_engine::testkit::account::fresh_observed;
-use cipherbox_engine::testkit::{FakeDevice, FakeWorld, block_on};
+use cipherbox_engine::testkit::account::{
+    Blocks, EOL, ROOT, SCOPE as ACCOUNT_SCOPE, SECRET, TTL_NANOS, floor_label, fresh_observed,
+    seed_account, seed_account_sealed, seed_account_with, serve_http,
+};
+use cipherbox_engine::testkit::{
+    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED,
+    OWNER_ROOT_WRITE_SCOPE_SEED, block_on, poll_tasks_until_parked,
+};
+use cipherbox_engine::{
+    ApiBaseUrl, Command, ContentProfile, Engine, EventStream, GatewayConfig, LoginSecret, NodeId,
+    NodeKind, StoragePolicy, SyncTimingProfile,
+};
 use core::cell::RefCell;
 
 fn pointer_name() -> IpnsName {
@@ -281,6 +295,7 @@ fn an_owed_rotation_record_the_decoder_refuses_is_refused_at_encode() {
     let entropy = RefCell::new(SeededEntropy::new(3));
     let entry = |steps| OwedEntry {
         cut_epoch: 1,
+        first_stop: None,
         steps,
     };
 
@@ -307,4 +322,181 @@ fn an_owed_rotation_record_the_decoder_refuses_is_refused_at_encode() {
         seal_owed_record(BookkeepingSeal::new(&enc, &entropy), &reversed),
         Err(OwedRecordError::StepsOutOfOrder)
     );
+}
+
+// ---------------------------------------------------------------------------
+// Each author's publish goes through that gate.
+// ---------------------------------------------------------------------------
+
+type Session = (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>);
+
+/// A started session on a seeded account, its loops parked.
+fn booted(world: &FakeWorld, blocks: &Blocks, device: &FakeDevice) -> Session {
+    serve_http(device, blocks, 400);
+    let (mut engine, events) = Engine::new(
+        device.seam_set(),
+        Box::new(SeededEntropy::new(7)),
+        SyncTimingProfile::CI,
+        ContentProfile::CI,
+        StoragePolicy::CI,
+        ApiBaseUrl::offline(),
+        GatewayConfig {
+            accelerator: Some("https://gw.test".into()),
+            public_fallbacks: Vec::new(),
+        },
+    );
+    block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).expect("the session starts");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    (engine, events, tasks)
+}
+
+fn tick(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTask]) {
+    world.scheduler.advance(engine.profile().poll_cadence);
+    poll_tasks_until_parked(tasks);
+}
+
+fn record_at(world: &FakeWorld, name: &IpnsName) -> Option<Vec<u8>> {
+    world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], name.as_str())
+}
+
+/// The drain's publish passes the gate: a read-epoch floor that rises after
+/// the drain proved its scope and before the signature refuses the record.
+#[test]
+fn a_drain_publish_whose_scope_floor_rises_inside_its_window_publishes_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let device = world.device(b"me");
+    let (mut engine, _events, mut tasks) = booted(&world, &blocks, &device);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create stages");
+    let folder = block_on(engine.view())
+        .expect("a rendered view")
+        .children(ROOT)
+        .into_iter()
+        .find(|child| child.name == "photos")
+        .expect("the staged folder renders")
+        .id;
+    let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &folder.0);
+    device.floor_store.raise_epoch_floor_on_sequence_read(
+        &floor_label(name.as_str().as_bytes()),
+        &floor_label(&ACCOUNT_SCOPE),
+        OWNER_ROOT_EPOCH + 1,
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        nothing_reached_the_transport(&device, &name),
+        "the record sealed below the risen floor never reached the plane"
+    );
+    assert_eq!(queued(&device), 1, "and the create is still queued");
+}
+
+fn queued(device: &FakeDevice) -> usize {
+    block_on(StagingStore::queued_ops(&device.staging_store))
+        .expect("the queue reads")
+        .len()
+}
+
+/// The drain anchors its pass on the scope root through the gate's version
+/// rule: a root a newer client last wrote is never re-authored.
+#[test]
+fn a_drain_publish_never_re_authors_a_scope_root_at_another_envelope_version() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account_sealed(&world, &blocks, Vec::new(), Vec::new(), ENVELOPE_V + 1);
+    let root_record = record_at(&world, &root_name);
+    let device = world.device(b"me");
+    let (mut engine, _events, mut tasks) = booted(&world, &blocks, &device);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        record_at(&world, &root_name),
+        root_record,
+        "the root at the newer version was never republished"
+    );
+    assert_eq!(queued(&device), 1, "and the create is still queued");
+}
+
+/// The drain re-authors a folder through the gate's version rule: a folder a
+/// newer client last wrote is never re-sealed under this build's version.
+#[test]
+fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let folder = NodeId([0x6f; 16]);
+    let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &folder.0);
+    let body = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 0,
+        children: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    let read_key = kdf::read_key(kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &folder.0).as_bytes());
+    let envelope = seal_read_body(
+        read_key.as_bytes(),
+        &[0x4d; 24],
+        ENVELOPE_V + 1,
+        folder.0,
+        ACCOUNT_SCOPE,
+        OWNER_ROOT_EPOCH,
+        &body,
+    )
+    .expect("the folder seals");
+    let cid = blocks.put(encode_envelope(&envelope).expect("the head encodes"));
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &folder.0).as_bytes()),
+        format!("/ipfs/{cid}").as_bytes(),
+        1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+    seed_account_with(
+        &world,
+        &blocks,
+        Vec::new(),
+        vec![ChildRef {
+            id: folder.0,
+            name: "newer".into(),
+            ipns_name: name.as_str().as_bytes().to_vec(),
+            kind: CoreNodeKind::Folder,
+            link_counter: 1,
+            unknown: PreservedFields::new(),
+        }],
+    );
+    let device = world.device(b"me");
+    let (mut engine, _events, mut tasks) = booted(&world, &blocks, &device);
+    block_on(engine.command(Command::Create {
+        parent: folder,
+        name: "inside".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        record_at(&world, &name),
+        Some(record),
+        "the folder at the newer version was never republished"
+    );
+    assert_eq!(queued(&device), 1, "and the create is still queued");
 }
