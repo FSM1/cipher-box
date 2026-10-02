@@ -3,8 +3,14 @@
   "checkpoint_id": "66745bfb9690",
   "strategy": "manual-commit",
   "branch": "fix/login-busy-labels-per-method",
-  "checkpoints_count": 1,
-  "files_touched": null,
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/desktop/src/frontDoor.tsx",
+    "apps/web/src/components/auth/GoogleLoginButton.test.tsx",
+    "apps/web/src/components/auth/SignInPanel.tsx",
+    "packages/auth-ui/src/EmailLoginForm.test.tsx",
+    "packages/auth-ui/src/EmailLoginForm.tsx"
+  ],
   "sessions": [
     {
       "metadata": "/66/745bfb9690/0/metadata.json",
@@ -12,6 +18,13 @@
       "compact_transcript": "/66/745bfb9690/0/transcript.jsonl",
       "content_hash": "/66/745bfb9690/0/content_hash.txt",
       "prompt": "/66/745bfb9690/0/prompt.txt"
+    },
+    {
+      "metadata": "/66/745bfb9690/1/metadata.json",
+      "transcript": "/66/745bfb9690/1/full.jsonl",
+      "compact_transcript": "/66/745bfb9690/1/transcript.jsonl",
+      "content_hash": "/66/745bfb9690/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
