@@ -83,8 +83,8 @@ class KeyringStore {
 
 /** Adapts the Web3Auth SDK to the narrow session seam the login flow drives. */
 class ShellSession implements ShellCoreKitSession {
-  /** The address the exchange reported; the token deliberately carries no PII. */
-  private signedInEmail: string | null = null;
+  /** The label the exchange reported; the token deliberately carries no PII. */
+  private signedInDisplay: string | null = null;
 
   constructor(
     private readonly coreKit: Web3AuthMPCCoreKit,
@@ -106,7 +106,7 @@ class ShellSession implements ShellCoreKitSession {
       verifierId: credential.verifierId,
       idToken: credential.token,
     });
-    this.signedInEmail = credential.email;
+    this.signedInDisplay = credential.display;
     if (!this.isLoggedIn()) await this.useStoredDeviceFactor();
     if (this.isLoggedIn()) {
       await this.coreKit.commitChanges();
@@ -192,8 +192,8 @@ class ShellSession implements ShellCoreKitSession {
     return isIdentityMethod(claimed) ? claimed : null;
   }
 
-  email(): string | null {
-    return this.signedInEmail;
+  display(): string | null {
+    return this.signedInDisplay;
   }
 
   async logout(): Promise<void> {
@@ -201,7 +201,7 @@ class ShellSession implements ShellCoreKitSession {
       // A session held short of reconstruction is still a live credential.
       if (this.isLoggedIn() || this.awaitsRecovery()) await this.coreKit.logout();
     } finally {
-      this.signedInEmail = null;
+      this.signedInDisplay = null;
       // The SDK's own logout blanks its session id and leaves the rest of its
       // store standing, a device factor share among it. A refusal here reaches
       // the window: the login flow has already reported the host signed out, so

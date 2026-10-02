@@ -9,6 +9,7 @@ import {
   FAKE_DEVICE_PUBLIC_KEY,
   FAKE_IDENTITY_TOKEN,
   FAKE_NONCE,
+  FAKE_WALLET_DISPLAY,
   FAKE_PHRASE,
   FAKE_TOKEN_LIFETIME_S,
   fakeCoreKitSession,
@@ -191,7 +192,7 @@ describe('useAuth', () => {
         method: 'google',
         token: FAKE_IDENTITY_TOKEN,
         verifierId: 'subject-for-google',
-        email: 'user@example.test',
+        display: 'user@example.test',
         expiresIn: FAKE_TOKEN_LIFETIME_S,
       },
     ]);
@@ -203,7 +204,7 @@ describe('useAuth', () => {
     expect(result.current.auth.isAuthenticated).toBe(true);
     expect(authStore.getState()).toMatchObject({
       method: 'google',
-      email: 'user@example.test',
+      display: 'user@example.test',
     });
   });
 
@@ -241,7 +242,10 @@ describe('useAuth', () => {
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
     expect(engine.calls.startTokens).toEqual([FAKE_IDENTITY_TOKEN]);
     expect(result.current.auth.isAuthenticated).toBe(true);
-    expect(authStore.getState()).toMatchObject({ method: 'wallet' });
+    expect(authStore.getState()).toMatchObject({
+      method: 'wallet',
+      display: FAKE_WALLET_DISPLAY,
+    });
   });
 
   it('reads the SIWE nonce from the API, which the engine cannot answer pre-start', async () => {
@@ -314,9 +318,9 @@ describe('useAuth', () => {
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
     // A restore follows no exchange, so its start presents no token.
     expect(engine.calls.startTokens).toEqual([undefined]);
-    // The identity token carries no email claim, so a session restored without
-    // a fresh login has no address to show until the member signs in again.
-    expect(authStore.getState()).toMatchObject({ email: null });
+    // The identity token carries no display claim, so a session restored without
+    // a fresh login has no label to show until the member signs in again.
+    expect(authStore.getState()).toMatchObject({ display: null });
   });
 
   it('does not let a Core Kit logout failure carry the session into the new engine', async () => {
@@ -368,7 +372,7 @@ describe('useAuth', () => {
   it('disarms the secret source when reading the session metadata throws', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession({
-      email: () => {
+      display: () => {
         throw new Error('userNotLoggedIn');
       },
     });

@@ -34,7 +34,7 @@ export class AccountDevice {
   @Column({ name: 'user_id', type: 'uuid' })
   userId: string;
 
-  /** The `identity_subjects` row this device authenticated through. */
+  /** The `identity_subjects` subject this device authenticated through. */
   @Column({ name: 'identity_subject_id', type: 'uuid' })
   identitySubjectId: string;
 

@@ -1,20 +1,21 @@
 import { InternalServerErrorException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { describe, expect, it } from 'vitest';
-import { FakeClock } from '../../testing/fakes';
+import { FakeClock, FakeEntropy } from '../../testing/fakes';
 import { IdentitySubject, IdentitySubjectKind } from '../entities/identity-subject.entity';
 import { IdentityService } from './identity.service';
 import { IdentitySubjectService } from './identity-subject.service';
 
 interface Row {
   id: string;
+  subjectId: string;
   kind: IdentitySubjectKind;
   identifierHash: string;
   lastUsedAt: Date | null;
 }
 
 /**
- * `INSERT … ON CONFLICT DO NOTHING RETURNING id` under the unique index on
+ * `INSERT … ON CONFLICT DO NOTHING RETURNING subject_id` under the unique index on
  * `(kind, identifier_hash)`: the winner gets its row back, an ignored conflict
  * returns none. Every read awaits, so concurrent callers interleave before any
  * of them inserts — which is what puts the losers on the fallback path.
@@ -22,7 +23,6 @@ interface Row {
 class FakeSubjectRepository {
   readonly rows: Row[] = [];
   ignoredInserts = 0;
-  private nextId = 1;
 
   async findOne({
     where,
@@ -44,11 +44,11 @@ class FakeSubjectRepository {
   }
 
   createQueryBuilder() {
-    let pending: Omit<Row, 'id'>;
+    let pending: Row;
     const builder = {
       insert: () => builder,
       into: () => builder,
-      values: (values: Omit<Row, 'id'>) => {
+      values: (values: Row) => {
         pending = values;
         return builder;
       },
@@ -63,9 +63,8 @@ class FakeSubjectRepository {
           this.ignoredInserts += 1;
           return { raw: [] };
         }
-        const row: Row = { id: `subject-${this.nextId++}`, ...pending };
-        this.rows.push(row);
-        return { raw: [{ id: row.id }] };
+        this.rows.push(pending);
+        return { raw: [{ subject_id: pending.subjectId }] };
       },
     };
     return builder;
@@ -76,18 +75,34 @@ function subjectService(repository: FakeSubjectRepository) {
   return new IdentitySubjectService(
     repository as unknown as Repository<IdentitySubject>,
     new IdentityService(),
-    new FakeClock()
+    new FakeClock(),
+    new FakeEntropy()
   );
 }
 
 describe('IdentitySubjectService', () => {
-  it('mints a subject on first sight and returns the inserted id', async () => {
+  it('mints a subject on first sight equal to the row id, and returns it', async () => {
     const repository = new FakeSubjectRepository();
 
-    const id = await subjectService(repository).resolve('google', 'google-subject');
+    const subject = await subjectService(repository).resolve('google', 'google-subject');
 
     expect(repository.rows).toHaveLength(1);
-    expect(id).toBe(repository.rows[0].id);
+    expect(subject).toBe(repository.rows[0].id);
+    expect(subject).toBe(repository.rows[0].subjectId);
+  });
+
+  it('returns the subject a linked row points at, not the row id', async () => {
+    const repository = new FakeSubjectRepository();
+    const service = subjectService(repository);
+    repository.rows.push({
+      id: 'link-row',
+      subjectId: 'account-subject',
+      kind: 'wallet',
+      identifierHash: new IdentityService().hashIdentifier('0xabc'),
+      lastUsedAt: null,
+    });
+
+    expect(await service.resolve('wallet', '0xabc')).toBe('account-subject');
   });
 
   it('stores the identifier only as its hash, never in plaintext', async () => {
@@ -114,6 +129,7 @@ describe('IdentitySubjectService', () => {
       'identifierHash',
       'kind',
       'lastUsedAt',
+      'subjectId',
     ]);
   });
 

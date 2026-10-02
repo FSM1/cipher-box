@@ -169,6 +169,14 @@ pub fn gateway_url() -> Option<String> {
     non_empty("CONTRACT_GATEWAY_URL")
 }
 
+/// The test-mode API's log file, from `CONTRACT_API_LOG`. With no mail provider
+/// configured the API logs each verification code instead of sending it, so the
+/// log is the only inbox an email leg can read. Set by the CI job alongside
+/// [`api_url`]; the legs that need it fail loudly rather than skipping.
+pub fn api_log() -> Option<String> {
+    non_empty("CONTRACT_API_LOG")
+}
+
 /// The shared test-login secret; must equal the API's `TEST_LOGIN_SECRET`.
 pub fn test_login_secret() -> String {
     std::env::var("CONTRACT_TEST_LOGIN_SECRET").unwrap_or_else(|_| "contract-suite-secret".into())

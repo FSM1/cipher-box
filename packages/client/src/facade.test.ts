@@ -833,6 +833,26 @@ describe('EngineFacade', () => {
     expect(transport.commands).toEqual([{ kind: 'siweLink', message: 'link me', signature }]);
   });
 
+  it('sends a request for an email link code naming only the address', async () => {
+    const transport = new FakeTransport();
+
+    await new EngineFacade(transport).emailLinkSendCode('member@example.test');
+
+    expect(transport.commands).toEqual([
+      { kind: 'emailLinkSendCode', email: 'member@example.test' },
+    ]);
+  });
+
+  it('sends an email link as its own command, never as a login', async () => {
+    const transport = new FakeTransport();
+
+    await new EngineFacade(transport).emailLink('member@example.test', '123456');
+
+    expect(transport.commands).toEqual([
+      { kind: 'emailLink', email: 'member@example.test', code: '123456' },
+    ]);
+  });
+
   it('sends an unlink naming only the method id', async () => {
     const transport = new FakeTransport();
 

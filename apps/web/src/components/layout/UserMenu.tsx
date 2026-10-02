@@ -12,7 +12,7 @@ import { useAuthState } from '../../stores/auth.store';
  * does not implement — `ContextMenu` is the one that earns the role.
  */
 export function UserMenu() {
-  const { email } = useAuthState();
+  const { display } = useAuthState();
   const [isOpen, setIsOpen] = useState(false);
 
   return (
@@ -31,8 +31,7 @@ export function UserMenu() {
         aria-expanded={isOpen}
         onClick={() => setIsOpen(!isOpen)}
       >
-        {/* Wallet logins carry no email. */}
-        <span className="user-menu-email">{email ?? '[an0n]'}</span>
+        <span className="user-menu-email">{display ?? '[an0n]'}</span>
         <span className="user-menu-caret">&#9660;</span>
       </button>
 

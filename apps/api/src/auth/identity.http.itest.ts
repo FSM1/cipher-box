@@ -11,6 +11,8 @@ import { fakeConfig } from '../testing/fakes';
 import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { MetricsService } from '../ops/metrics.service';
+import { AccountDevice } from '../device-approval/entities/account-device.entity';
+import { AccountDeviceService } from '../device-approval/services/account-device.service';
 import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { AuthController } from './auth.controller';
 import { AuthMethod } from './entities/auth-method.entity';
@@ -72,12 +74,13 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
     ctx = await createHttpIntegrationApp({
       db,
       withOps: false,
-      entities: [User, AuthMethod, RefreshToken, AcceleratorToken, IdentitySubject],
+      entities: [User, AuthMethod, RefreshToken, AcceleratorToken, IdentitySubject, AccountDevice],
       controllers: [AuthController, IdentityController],
       providers: [
         MetricsService,
         AuthMetricsInterceptor,
         AuthService,
+        AccountDeviceService,
         TestAuthService,
         TokenService,
         AcceleratorTokenService,
@@ -238,7 +241,7 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
       expect(mail.delivered[0].to).toBe(address);
       expect(mail.delivered[0].code).toMatch(/^[0-9]{6}$/);
       expect(grant.body.verifierId).toBeTruthy();
-      expect(grant.body.email).toBe(address);
+      expect(grant.body.display).toBe(address);
     });
 
     it('refuses a code CipherBox did not issue', async () => {
@@ -287,6 +290,7 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
       const second = await emailGrant(`  ${address.toUpperCase()}  `);
 
       expect(second.body.verifierId).toBe(first.body.verifierId);
+      expect(second.body.display).toBe(address);
       expect(await subjectCount()).toBe(1);
     });
   });
@@ -303,7 +307,7 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
         .expect(200);
 
       expect(second.body.verifierId).toBe(first.body.verifierId);
-      expect(first.body.email).toBe('member@example.com');
+      expect(first.body.display).toBe('member@example.com');
       expect(await subjectCount()).toBe(1);
     });
 
@@ -342,8 +346,20 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
         .expect(200);
 
       expect(first.body.verifierId).toBe(second.body.verifierId);
-      expect(first.body.email).toBeNull();
       expect(await subjectCount()).toBe(1);
+    });
+
+    it('displays the truncated checksummed address and never returns the full one', async () => {
+      const privateKey = generatePrivateKey();
+      const { address } = privateKeyToAccount(privateKey);
+
+      const grant = await request(http())
+        .post('/auth/identity/wallet')
+        .send(await walletSignature(privateKey))
+        .expect(200);
+
+      expect(grant.body.display).toBe(`${address.slice(0, 6)}...${address.slice(-4)}`);
+      expect(grant.text.toLowerCase()).not.toContain(address.toLowerCase());
     });
 
     it('reaches a different subject for a different wallet', async () => {
@@ -405,6 +421,7 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
         'identifier_hash',
         'kind',
         'last_used_at',
+        'subject_id',
       ]);
     });
 

@@ -187,6 +187,7 @@ idempotency keys, unknown-recipient rejection);
 the recovery endpoint (auth + rate limit); account hard-delete cascade;
 the identity subject bind at the first login that presents a token, no rebind
 on a conflict, and both registration refusals (ADR 0058);
+the email link to the subject of the account, and its refusals (ADR 0039 D1);
 the republisher module's inventory walk and resolve-failure alerting; and
 **throttling asserted effective** — expect real 429s (v1's inert `@Throttle`
 decorators are a named defect, api.md). The API's committed OpenAPI artifact
@@ -235,6 +236,8 @@ is not the contract gate.
 - **`apps/api` integration.** The `*.itest.ts` files over HTTP on a real
   Postgres, in the job `Integration tests (real Postgres)`, reported through
   `API Result`. The login bind and the registration rule (ADR 0058) are among them.
+  `apps/api/src/auth/method-link.http.itest.ts` proves that a linked method opens
+  the account it links to (ADR 0039 D1).
 - **`apps/web` and `apps/desktop` shells.** Vault correctness is not tested
   here — it lives below the facade. What the web shell does own is the seam
   the facade does not: the `useSyncExternalStore` snapshot adapter, the

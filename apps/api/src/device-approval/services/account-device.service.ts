@@ -1,7 +1,7 @@
 import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import {
   IdentityTokenService,
@@ -17,6 +17,7 @@ import {
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { UUID_RE } from '../../common/patterns';
+import { isUniqueViolation } from '../../common/pg-errors';
 import { deviceRegistrationPayload, verifyDeviceSignature } from '../device-signature';
 import { ACCOUNT_DEVICE_PUBLIC_KEY_UNIQUE, AccountDevice } from '../entities/account-device.entity';
 
@@ -30,9 +31,6 @@ const MAX_DEVICE_CAP = 100;
 export const UNBOUND_ACCOUNT_MESSAGE = 'This account has no bound identity subject';
 export const OTHER_SUBJECT_MESSAGE =
   'The identity token names a subject other than the one bound to this account';
-
-/** Postgres `unique_violation`. */
-const UNIQUE_VIOLATION = '23505';
 
 export interface RegisterDeviceInput {
   publicKey: string;
@@ -227,11 +225,7 @@ export class AccountDeviceService {
 
 /** The lost race above and nothing else; any other fault must surface, not read as success. */
 function isPublicKeyConflict(error: unknown): boolean {
-  if (!(error instanceof QueryFailedError)) return false;
-  const driver = error.driverError as { code?: string; constraint?: string } | undefined;
-  return (
-    driver?.code === UNIQUE_VIOLATION && driver?.constraint === ACCOUNT_DEVICE_PUBLIC_KEY_UNIQUE
-  );
+  return isUniqueViolation(error, ACCOUNT_DEVICE_PUBLIC_KEY_UNIQUE);
 }
 
 function present(row: AccountDevice): RegisteredDevice {

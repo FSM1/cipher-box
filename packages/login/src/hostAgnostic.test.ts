@@ -65,7 +65,7 @@ describe('a host-agnostic login', () => {
     const grant = {
       token: 'header.payload.signature',
       verifierId: 'subject-42',
-      email: null,
+      display: 'member@example.test',
       expiresAt: '2030-01-01T00:05:00.000Z',
       expiresIn: 300,
     };
@@ -91,7 +91,7 @@ describe('a host-agnostic login', () => {
     expect(session.calls.logins).toHaveLength(1);
     expect(facade.calls.secrets).toHaveLength(1);
     expect(facade.calls.identityTokens).toEqual(['header.payload.signature']);
-    expect(account.calls.signedIn).toEqual([{ method: 'google', email: null }]);
+    expect(account.calls.signedIn).toEqual([{ method: 'google', display: 'member@example.test' }]);
   });
 
   it('cannot reach React at all', async () => {
