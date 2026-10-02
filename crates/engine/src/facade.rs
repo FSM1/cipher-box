@@ -9939,7 +9939,7 @@ where {
             sharers: &sharers,
             contact_label_seed: session.contact_label_seed(),
             own_root: root.0,
-            proved: &own,
+            own: &own,
             unproved: &unproved,
             base: &self.state.snapshot,
             root_name: root_name.as_ref(),

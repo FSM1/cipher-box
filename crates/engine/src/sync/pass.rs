@@ -155,8 +155,9 @@ pub(crate) struct ScopeLegContext<'a, F> {
     pub(crate) sharers: &'a GraftedSharers,
     pub(crate) contact_label_seed: &'a SecretBytes,
     pub(crate) own_root: [u8; 16],
-    /// The own check and the floor namespace read this one set.
-    pub(crate) proved: &'a BTreeSet<NodeId>,
+    /// This vault's own scope roots below its root. The own check and the
+    /// floor namespace read this one set.
+    pub(crate) own: &'a BTreeSet<NodeId>,
     pub(crate) unproved: &'a BTreeSet<NodeId>,
     pub(crate) base: &'a BaseSnapshot,
     pub(crate) root_name: Option<&'a IpnsName>,
@@ -194,13 +195,13 @@ impl<'a, F: FloorStore> ScopeLegContext<'a, F> {
         if self.unproved.contains(&scope) {
             return Err(NoScopeLeg::Outage);
         }
-        let own = is_own_scope(&self.own_root, self.proved, &scope.0);
+        let own = is_own_scope(&self.own_root, self.own, &scope.0);
         let floors = floor_view(
             self.floors,
             self.sharers,
             self.contact_label_seed,
             &self.own_root,
-            self.proved,
+            self.own,
             &scope.0,
         )
         .ok_or(NoScopeLeg::Waiting)?;
@@ -670,8 +671,8 @@ where
         );
         // A root this session minted carries a grant section before any walk
         // proves it, so its own record is no child of the enclosing scope. Its
-        // interior stays on the walk's grouping: an owed interior move leaves
-        // that interior sealed under the enclosing scope.
+        // interior stays on the walk's grouping: while its interior move is
+        // owed, that interior is still sealed under the enclosing scope.
         {
             let minted = state.minted_scope_roots.borrow();
             for targets in by_scope.values_mut() {
@@ -697,7 +698,7 @@ where
             sharers: grafted,
             contact_label_seed: &pass.contact_label_seed,
             own_root: self.root_id,
-            proved: &scopes.proved,
+            own: &scopes.proved,
             unproved: &scopes.unproved,
             base: &state.snapshot,
             root_name: Some(&pass.root_name),
