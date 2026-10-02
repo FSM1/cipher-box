@@ -64,7 +64,7 @@ use crate::seams::{FloorRaise, FloorStore, SeamError, SeamResult};
 /// staleness (the floor law: revocation boundaries cannot be rolled back).
 ///
 /// Where the read-epoch comparison is sound — and where it must not run — is
-/// [`cold_seed_checked`]'s contract.
+/// [`regression_below`]'s contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloorRegression {
     /// The re-point's `minReadEpoch` is strictly below the durable read-epoch
@@ -623,8 +623,8 @@ pub async fn write_epoch_regression<F: FloorStore>(
 /// the single checked cold-seed seam production uses.
 ///
 /// Reads the durable floors and rejects before any write if the re-point
-/// regresses one ([`repoint_regression`], with the vouched floor as the read
-/// bar at the vault anchor, ADR 0067 D3) — a replay past a revocation
+/// regresses one ([`regression_below`], with the vouched floor as the read bar
+/// at the vault anchor, ADR 0067 D3) — a replay past a revocation
 /// boundary, a trust violation and never mere staleness. Only when nothing
 /// regresses does it advance the floors via the monotonic-max [`cold_seed`].
 ///
@@ -636,7 +636,7 @@ pub async fn cold_seed_checked<F: FloorStore>(
     repoint: &RepointObject,
     session_root_scope_id: &[u8; 16],
 ) -> Result<(), ColdSeedError> {
-    // Cold-seeding *is* the vault-pointer path — both callers read that plane.
+    // Cold-seeding *is* the vault-pointer path — the cold start reads that plane.
     let plane = PointerPlane::VaultPointer;
     if let Some(regression) = regression_below(
         floors,
@@ -1196,6 +1196,53 @@ mod tests {
                     vouched: 2
                 }))
             );
+        });
+    }
+
+    /// A store on the default, one-key-at-a-time `commit_floors`, as the web
+    /// host is, whose second epoch raise fails.
+    #[derive(Default)]
+    struct SecondRaiseFails {
+        inner: InMemoryFloorStore,
+        raises: Cell<u32>,
+    }
+
+    impl FloorStore for SecondRaiseFails {
+        async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.epoch_floor(scope_id).await
+        }
+        async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
+            self.raises.set(self.raises.get() + 1);
+            if self.raises.get() == 2 {
+                return Err(SeamError::new("the second raise fails"));
+            }
+            self.inner.raise_epoch_floor(scope_id, epoch).await
+        }
+        async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.sequence_floor(ipns_name).await
+        }
+        async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+            self.inner.raise_sequence_floor(ipns_name, sequence).await
+        }
+        async fn clear(&self) -> SeamResult<()> {
+            self.inner.clear().await
+        }
+    }
+
+    /// An interrupted batch leaves the read-epoch floor raised and the vouched
+    /// floor not: never the vouched floor above the read-epoch floor.
+    #[test]
+    fn an_interrupted_vouched_raise_leaves_the_read_epoch_floor_ahead() {
+        block_on(async {
+            let floors = SecondRaiseFails::default();
+            assert!(raise_vouched_floor(&floors, &SCOPE, 3).await.is_err());
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
+            assert_eq!(vouched_floor(&floors, &SCOPE).await.unwrap(), None);
+
+            let floors = SecondRaiseFails::default();
+            assert!(cold_seed(&floors, &repoint(SCOPE, 4, 1)).await.is_err());
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(4));
+            assert_eq!(vouched_floor(&floors, &SCOPE).await.unwrap(), None);
         });
     }
 

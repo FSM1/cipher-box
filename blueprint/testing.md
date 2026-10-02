@@ -112,7 +112,11 @@ scenario fails the meta-test):
   one-device owner restarts after a vault-root vouch that ran out and a tick,
   and after an unconfirmed root that landed and a tick; a session refuses a
   pre-cut vault root above the cut root's sequence; a pointer below the vouched
-  floor is refused (ADR 0067, `crates/engine/tests/mount_convergence.rs`);
+  floor is refused; the first-run mint refuses a read-epoch floor above a
+  lower vouched floor; a standing pointer that already vouches the epoch raises
+  the vouched floor and publishes nothing (ADR 0067;
+  `crates/engine/tests/mount_convergence.rs` and the `sync::provision` and
+  `facade` unit tests);
 - all five rebase races from the FSM1/cipher-box-next#33 D5 table (conditional delete,
   rename/rename, add/add auto-suffix, dest-first move, dual-link repair);
 - the rotation trigger table and the eager-set law — owner cascade vs

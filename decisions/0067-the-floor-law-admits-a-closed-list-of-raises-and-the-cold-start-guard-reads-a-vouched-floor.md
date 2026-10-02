@@ -45,7 +45,7 @@ highest `minReadEpoch` that a vault pointer vouched to this device. It is a floo
 the epoch namespace, the root scope id with its own suffix, the same shape as the vault-pointer
 index mark. It rises in `cold_seed`, when the vouch of a vault-root cut lands, when
 `catch_up_vault_pointer` lands its vouch, and when `vouch_over` reads a standing pointer that
-already vouches the epoch. The read-epoch stage of `repoint_regression` compares
+already vouches the epoch. The read-epoch stage of `cold_seed_checked` compares
 the vouched `minReadEpoch` with this key. A device without the key compares with the read-epoch
 floor, as on main. The gated adopt still raises the read-epoch floor, so the gate still refuses
 a pre-cut vault root in the session.
@@ -106,7 +106,7 @@ refuses a pointer that only lags a root that this device adopted but did not vou
    guard rests on the last value that this release wrote.
 7. A device that is locked out at the upgrade has no key, so it stays locked out until a vouch
    lands.
-8. The `gate/floor.rs` module doc lists the raises of D1 and cites this ADR.
+8. The `gate/floor.rs` module doc cites this ADR and the blueprint list.
 9. ADR 0014 D2 and E3 carry an "Amended by ADR 0067 D1" sentence.
 
 ## Residuals

@@ -147,7 +147,7 @@ impl core::fmt::Display for RotationPublishError {
                 f.write_str("rotation publish met a held ref that no longer loses the link rank")
             }
             RotationPublishError::FloorUnrecorded => {
-                f.write_str("rotation record published, and its floor did not rise")
+                f.write_str("the vouched record stands, and its floor did not rise")
             }
         }
     }
