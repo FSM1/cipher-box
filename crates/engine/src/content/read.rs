@@ -79,10 +79,10 @@ pub struct SessionBearer(Rc<RefCell<BearerCell>>);
 impl SessionBearer {
     /// Install `token` as the credential every later request presents. A sealed
     /// cell ignores it.
-    pub(crate) fn set(&self, token: impl Into<String>) {
+    pub(crate) fn set(&self, token: Zeroizing<String>) {
         let mut cell = self.0.borrow_mut();
         if !cell.sealed {
-            cell.token = Some(Zeroizing::new(token.into()));
+            cell.token = Some(token);
         }
     }
 
@@ -114,7 +114,7 @@ impl SessionBearer {
     #[cfg(test)]
     fn holding(token: impl Into<String>) -> Self {
         let bearer = Self::default();
-        bearer.set(token);
+        bearer.set(Zeroizing::new(token.into()));
         bearer
     }
 }
@@ -1122,7 +1122,7 @@ mod tests {
         let session = SessionBearer::holding("jwt-1");
         session.seal();
         assert!(!session.is_held());
-        session.set("jwt-2");
+        session.set(Zeroizing::new("jwt-2".to_owned()));
         assert!(!session.is_held(), "a sealed cell stays empty");
     }
 
@@ -1156,9 +1156,9 @@ mod tests {
         };
 
         assert_eq!(read(), None, "no session yet: the leg goes out bare");
-        session.set("jwt-1");
+        session.set(Zeroizing::new("jwt-1".to_owned()));
         assert_eq!(read(), Some("Bearer jwt-1".to_owned()));
-        session.set("jwt-2");
+        session.set(Zeroizing::new("jwt-2".to_owned()));
         assert_eq!(read(), Some("Bearer jwt-2".to_owned()), "a rotation lands");
         session.clear();
         assert_eq!(read(), None, "logout drops the credential");

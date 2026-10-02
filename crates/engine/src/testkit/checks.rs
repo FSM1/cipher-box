@@ -216,7 +216,9 @@ fn provider_family() -> RejectFamily {
     mismatched.enqueue_response(HttpResponse {
         status: 200,
         headers: Vec::new(),
-        body: (format!("{{\"Key\":\"{}\"}}", encode_content_cid_str(&stored)).into_bytes()).into(),
+        body: format!("{{\"Key\":\"{}\"}}", encode_content_cid_str(&stored))
+            .into_bytes()
+            .into(),
     });
     vectors.push(placed(
         "provider-that-stored-another-address",

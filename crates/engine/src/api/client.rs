@@ -349,7 +349,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         let outcome = TestLoginOutcome {
             is_new_user: body.is_new_user.unwrap_or(false),
             public_key: body.public_key,
-            private_key: Zeroizing::new(body.private_key),
+            private_key: body.private_key,
         };
         self.store_tokens(TokenResponse {
             access_token: body.access_token,
@@ -910,9 +910,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// Persist the refresh token and hold the two in-memory bearers. The
     /// refresh string is zeroized once handed to the store.
     async fn store_tokens(&self, tokens: TokenResponse) -> Result<(), ApiError> {
-        let refresh_token = Zeroizing::new(tokens.refresh_token);
         self.credentials
-            .store_refresh_token(refresh_token.as_bytes())
+            .store_refresh_token(tokens.refresh_token.as_bytes())
             .await?;
         self.session.set(tokens.access_token);
         self.accelerator.set(tokens.accelerator_token);
@@ -1511,6 +1510,38 @@ mod tests {
         assert_eq!(
             block_on(client.quota()).unwrap_err(),
             ApiError::Unauthorized
+        );
+    }
+
+    /// A decode can fail after it parsed a live token (a 2xx refresh with no
+    /// accelerator token), so each token decodes straight into a wiping string.
+    #[test]
+    fn the_tokens_of_a_login_response_decode_into_wiping_strings() {
+        fn wiping(tokens: &TokenResponse) -> [&Zeroizing<String>; 3] {
+            [
+                &tokens.access_token,
+                &tokens.refresh_token,
+                &tokens.accelerator_token,
+            ]
+        }
+        fn wiping_test_login(body: &TestLoginResponse) -> [&Zeroizing<String>; 4] {
+            [
+                &body.access_token,
+                &body.refresh_token,
+                &body.accelerator_token,
+                &body.private_key,
+            ]
+        }
+        let mut body = login_response("jwt", "refresh", "gw");
+        let tokens: TokenResponse = serde_json::from_value(body.clone()).expect("decodes");
+        assert!(wiping(&tokens).iter().all(|token| !token.is_empty()));
+        body["publicKey"] = json!("02cafe");
+        body["privateKey"] = json!("11");
+        let test_login: TestLoginResponse = serde_json::from_value(body).expect("decodes");
+        assert!(
+            wiping_test_login(&test_login)
+                .iter()
+                .all(|token| !token.is_empty())
         );
     }
 

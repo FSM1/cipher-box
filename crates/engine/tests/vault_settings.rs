@@ -2580,7 +2580,9 @@ fn a_head_upload_the_api_refuses_leaves_the_mint_and_the_next_start_refuses_the_
         Some(Ok(HttpResponse {
             status: 503,
             headers: Vec::new(),
-            body: (br#"{"statusCode":503,"message":"pin store unavailable"}"#.to_vec()).into(),
+            body: br#"{"statusCode":503,"message":"pin store unavailable"}"#
+                .to_vec()
+                .into(),
         }))
     }));
     let refused_save = block_on(engine.command(Command::SaveVaultSettings {

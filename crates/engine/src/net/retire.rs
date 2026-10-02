@@ -1031,11 +1031,11 @@ mod tests {
         HttpResponse {
             status: if retired.is_some() { 200 } else { 503 },
             headers: Vec::new(),
-            body: (format!(
+            body: format!(
                 r#"{{"retired":{},"unpinned":0}}"#,
                 retired.unwrap_or_default()
             )
-            .into_bytes())
+            .into_bytes()
             .into(),
         }
     }

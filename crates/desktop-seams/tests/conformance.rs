@@ -878,6 +878,37 @@ async fn reqwest_http_hands_the_response_body_over_in_a_wiping_buffer() {
     }
 }
 
+/// The engine reads no cookie, so the seam hands over no `Set-Cookie` value.
+#[tokio::test]
+async fn reqwest_http_hands_over_no_set_cookie_header() {
+    let server = MockServer::start();
+    let http = ReqwestHttp::new().expect("client builds");
+    let request = || HttpRequest {
+        method: HttpMethod::Get,
+        url: format!("{}/cookie", server.base_url()),
+        headers: Vec::new(),
+        body: None,
+        credentials: HttpCredentials::Omit,
+        timeout_ms: None,
+    };
+
+    let buffered = http.send(request()).await.expect("transport-level success");
+    let capped = http
+        .send_capped(request(), 1024)
+        .await
+        .expect("transport-level success");
+
+    for response in [&buffered, &capped] {
+        let names: Vec<&str> = response.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"x-kept"), "other headers stay");
+        assert!(
+            !names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("set-cookie"))
+        );
+    }
+}
+
 fn stream_request(server: &MockServer, bytes: usize) -> HttpRequest {
     HttpRequest {
         method: HttpMethod::Get,

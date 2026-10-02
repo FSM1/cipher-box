@@ -18,6 +18,7 @@
 //! - `GET /teapot` — returns 418, to prove a non-2xx status is a response,
 //!   not a seam error.
 //! - `GET /redirect` — 302 to `/echo`, to prove the seam follows no hop.
+//! - `GET /cookie` — 200 with a `Set-Cookie` header and an `x-kept` header.
 //! - `GET /stream/<n>` — `n` bytes with `Transfer-Encoding: chunked` and no
 //!   `Content-Length`, so a capped read has only the streaming drain to gate
 //!   on.
@@ -230,6 +231,16 @@ fn handle_conn(
             (418, "I'm a teapot", Vec::new(), b"teapot".to_vec())
         } else if path == "/redirect" {
             (302, "Found", vec![("location", "/echo")], Vec::new())
+        } else if path == "/cookie" {
+            (
+                200,
+                "OK",
+                vec![
+                    ("set-cookie", "refreshToken=cookie-value; HttpOnly"),
+                    ("x-kept", "yes"),
+                ],
+                Vec::new(),
+            )
         } else {
             (404, "Not Found", Vec::new(), Vec::new())
         };

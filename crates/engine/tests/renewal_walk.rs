@@ -1089,11 +1089,11 @@ fn a_401_after_the_refresh_keeps_the_cursor_for_the_next_pass() {
                 return Ok(HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: (format!(
+                    body: format!(
                         r#"{{"accessToken":"jwt-1","refreshToken":"{}","acceleratorToken":"gw-1"}}"#,
                         "a".repeat(64)
                     )
-                    .into_bytes()).into(),
+                    .into_bytes().into(),
                 });
             }
             if registers(request, &key) && refusing.load(Ordering::SeqCst) {

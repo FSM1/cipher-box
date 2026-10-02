@@ -477,9 +477,9 @@ impl Blocks {
             return Ok(HttpResponse {
                 status: 404,
                 headers: Vec::new(),
-                body: (br#"{"statusCode":404,"message":"No cached record for this name"}"#
-                    .to_vec())
-                .into(),
+                body: br#"{"statusCode":404,"message":"No cached record for this name"}"#
+                    .to_vec()
+                    .into(),
             });
         }
         // The auth handshake, for a scenario that runs against a configured API

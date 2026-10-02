@@ -75,9 +75,12 @@ impl ReqwestHttp {
             .map_err(|err| SeamError::new(format!("http send: {err}")))?;
 
         let status = response.status().as_u16();
+        // `Set-Cookie` carries the refresh token, and only the host cookie
+        // jar needs it: the engine reads no cookie.
         let headers = response
             .headers()
             .iter()
+            .filter(|(name, _)| **name != reqwest::header::SET_COOKIE)
             .map(|(name, value)| {
                 (
                     name.as_str().to_owned(),
@@ -120,7 +123,8 @@ impl Http for ReqwestHttp {
         // Reject a body that declares itself over the cap before reading a byte;
         // a missing or lying Content-Length is still bounded by the streaming
         // drain below.
-        if let Some(declared) = response.content_length() {
+        let declared = response.content_length();
+        if let Some(declared) = declared {
             if declared > max_bytes as u64 {
                 return Err(CappedFetchError::BodyTooLarge {
                     observed: usize::try_from(declared).unwrap_or(usize::MAX),
@@ -129,10 +133,8 @@ impl Http for ReqwestHttp {
             }
         }
 
-        let declared = response
-            .content_length()
-            .and_then(|declared| usize::try_from(declared).ok());
-        let mut body = Zeroizing::new(Vec::with_capacity(declared.unwrap_or(0)));
+        let declared = declared.map_or(0, |declared| declared as usize);
+        let mut body = Zeroizing::new(Vec::with_capacity(declared));
         while let Some(chunk) = response.chunk().await.map_err(|err| {
             CappedFetchError::Transport(SeamError::new(format!("http body: {err}")))
         })? {
@@ -142,7 +144,7 @@ impl Http for ReqwestHttp {
                     limit: max_bytes,
                 });
             }
-            append_wiping(&mut body, &chunk);
+            append_wiping(&mut body, &chunk, max_bytes);
         }
 
         Ok(HttpResponse {
@@ -155,11 +157,12 @@ impl Http for ReqwestHttp {
 
 /// Append `chunk` to `body`. A `Vec` that grows frees its old buffer unwiped,
 /// so a growth moves the bytes into a new wiping buffer and drops the old one
-/// through its wipe.
-fn append_wiping(body: &mut Zeroizing<Vec<u8>>, chunk: &[u8]) {
+/// through its wipe. The caller holds `needed` at or below `limit`.
+fn append_wiping(body: &mut Zeroizing<Vec<u8>>, chunk: &[u8], limit: usize) {
     let needed = body.len() + chunk.len();
     if needed > body.capacity() {
-        let mut grown = Zeroizing::new(Vec::with_capacity(needed.max(body.capacity() * 2)));
+        let grown_to = needed.max(body.capacity().saturating_mul(2).min(limit));
+        let mut grown = Zeroizing::new(Vec::with_capacity(grown_to));
         grown.extend_from_slice(body);
         *body = grown;
     }

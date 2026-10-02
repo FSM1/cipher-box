@@ -160,7 +160,8 @@ fn upload_413(code: Option<&str>) -> SeamResult<HttpResponse> {
     Ok(HttpResponse {
         status: 413,
         headers: Vec::new(),
-        body: (format!("{{\"statusCode\":413,\"message\":\"too large\"{code}}}").into_bytes())
+        body: format!("{{\"statusCode\":413,\"message\":\"too large\"{code}}}")
+            .into_bytes()
             .into(),
     })
 }
@@ -171,7 +172,9 @@ fn pin_store_unavailable() -> SeamResult<HttpResponse> {
     Ok(HttpResponse {
         status: 503,
         headers: Vec::new(),
-        body: (br#"{"statusCode":503,"message":"pin store unavailable"}"#.to_vec()).into(),
+        body: br#"{"statusCode":503,"message":"pin store unavailable"}"#
+            .to_vec()
+            .into(),
     })
 }
 
@@ -181,7 +184,9 @@ fn proxy_413() -> SeamResult<HttpResponse> {
     Ok(HttpResponse {
         status: 413,
         headers: Vec::new(),
-        body: (b"<html><body>413 Request Entity Too Large</body></html>".to_vec()).into(),
+        body: b"<html><body>413 Request Entity Too Large</body></html>"
+            .to_vec()
+            .into(),
     })
 }
 
