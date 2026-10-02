@@ -21,16 +21,16 @@ use cipherbox_engine::net::renewal_walk::cursor::{
 };
 use cipherbox_engine::net::retire::{NODE_TOMBSTONE_PREFIX, StagingRetireLedger};
 use cipherbox_engine::seams::{
-    BoxedTask, HttpMethod, HttpRequest, HttpResponse, RecordTransport, Scheduler, SnapshotCache,
-    StagingStore, UnixMillis,
+    BoxedTask, FloorStore, HttpMethod, HttpRequest, HttpResponse, RecordTransport, Scheduler,
+    SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::{BookkeepingSeal, doomed_journal_key, owner_tag};
-use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, seed_account};
+use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, floor_label, seed_account};
 use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{
-    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED,
-    OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED, SeededEntropy, block_on,
-    poll_tasks_until_parked,
+    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH,
+    OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
+    SeededEntropy, block_on, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, ContentProfile, Engine, Event, EventStream, GatewayConfig, LoginSecret,
@@ -262,6 +262,241 @@ fn a_file_no_session_opens_for_65_days_renews_at_the_next_start() {
         &root_before,
         started,
         "the vault root",
+    );
+}
+
+/// `name`'s record at `before`'s sequence, signing `value` under the vault's
+/// write seed for `node` with an EOL earlier than any real write's, so the
+/// record the endpoints already serve stays the pick.
+fn re_signed(node: NodeId, before: &VerifiedRecord, value: &[u8]) -> Vec<u8> {
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
+    IpnsRecord::create_v2(
+        &signer,
+        value,
+        before.sequence,
+        before.ttl,
+        &renewal_eol_from(UnixMillis(0)),
+    )
+    .marshal()
+}
+
+/// Serve `record` on the second endpoint and `first` on every other one.
+fn serve_forked(world: &FakeWorld, name: &IpnsName, first: &[u8], record: Vec<u8>) {
+    for (index, endpoint) in world.record_store.endpoints().iter().enumerate() {
+        let bytes = if index == 1 {
+            record.clone()
+        } else {
+            first.to_vec()
+        };
+        world
+            .record_store
+            .seed_record(endpoint, name.as_str(), bytes);
+    }
+}
+
+/// The events a later session on a new device sends up to its first walk.
+fn later_session_events(world: &FakeWorld, blocks: &Blocks, label: &[u8]) -> Vec<Event> {
+    let device = world.device(label);
+    let (engine, mut events, mut tasks) = boot(world, blocks, &device, 2);
+    until_the_first_walk(world, &engine, &mut tasks);
+    core::iter::from_fn(|| events.try_next()).collect()
+}
+
+fn reported(events: &[Event], routing_key: &str) -> (usize, usize) {
+    let forks = events
+        .iter()
+        .filter(|event| {
+            matches!(event, Event::SameSequenceFork { routing_key: key } if key == routing_key)
+        })
+        .count();
+    let held = events
+        .iter()
+        .filter(|event| {
+            matches!(event, Event::RenewalFailed { routing_key: key, detail }
+                if key == routing_key && detail.contains("same-sequence fork"))
+        })
+        .count();
+    (forks, held)
+}
+
+/// A file whose two versions a test re-signs at one sequence: the endpoints
+/// serve a gate-passing record of another value beside the first. A device
+/// with no floor for the name sees the fork on its first read. With 45 days
+/// of EOL left the walk holds the renewal back and reports it; with 25 days
+/// left liveness wins and the walk renews over the fork (ADR 0066 D3).
+#[test]
+fn a_served_fork_holds_the_walk_back_until_the_threshold() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let device = world.device(b"the device that wrote");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 1);
+    let file = write_file(&world, &mut engine, &mut tasks, ROOT, "note.txt");
+    let name = write_name(file);
+    let first_bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], name.as_str())
+        .expect("the file is published");
+    let first = record_at(&world, &name);
+    let body = b"a second note";
+    let handle = block_on(engine.begin_write(
+        WriteTarget::Version {
+            node: file,
+            expected_version: None,
+        },
+        body.len() as u64,
+    ))
+    .expect("a write opens");
+    block_on(engine.push_chunk(handle, body)).expect("the chunk stages");
+    block_on(engine.commit_write(handle)).expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+    let second = record_at(&world, &name);
+    assert_eq!(second.sequence, first.sequence + 1);
+    drop(tasks);
+    drop(engine);
+    drop(world.scheduler.take_spawned_tasks());
+    serve_forked(
+        &world,
+        &name,
+        &first_bytes,
+        re_signed(file, &first, &second.value),
+    );
+
+    world.scheduler.advance(DAY * 45);
+    let events = later_session_events(&world, &blocks, b"a later session");
+    assert_eq!(
+        record_at(&world, &name).sequence,
+        first.sequence,
+        "held at S"
+    );
+    assert_eq!(reported(&events, name.as_str()), (1, 1));
+
+    world.scheduler.advance(DAY * 20);
+    let started = world.scheduler.now();
+    later_session_events(&world, &blocks, b"a session inside the threshold");
+    assert_renewed_at_start(&world, &name, &first, started, "the forked file");
+}
+
+/// A record of the file's own value at its sequence, which a second renewal
+/// signs, is no fork: the device that read both renews the name.
+#[test]
+fn a_tie_of_one_value_does_not_hold_the_walk_back() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let device = world.device(b"the device that wrote");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 1);
+    let file = write_file(&world, &mut engine, &mut tasks, ROOT, "note.txt");
+    drop(tasks);
+    drop(engine);
+    drop(world.scheduler.take_spawned_tasks());
+    let name = write_name(file);
+    let before = record_at(&world, &name);
+    world.record_store.seed_record(
+        &world.record_store.endpoints()[1],
+        name.as_str(),
+        re_signed(file, &before, &before.value),
+    );
+
+    world.scheduler.advance(DAY * 45);
+    let started = world.scheduler.now();
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+
+    assert_renewed_at_start(&world, &name, &before, started, "the file");
+    let events: Vec<Event> = core::iter::from_fn(|| events.try_next()).collect();
+    assert_eq!(reported(&events, name.as_str()), (0, 0));
+}
+
+/// The same at the vault root: with 45 days left no renewal signs over a
+/// served fork of the root, and the session reports it, while the file below
+/// it still renews.
+#[test]
+fn no_renewal_signs_over_a_vault_root_the_endpoints_serve_forked() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let device = world.device(b"the device that wrote");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 1);
+    let file = write_file(&world, &mut engine, &mut tasks, ROOT, "note.txt");
+    let root = write_name(ROOT);
+    let first_bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], root.as_str())
+        .expect("the root is published");
+    let first = record_at(&world, &root);
+    create_folder(&world, &mut engine, &mut tasks, ROOT, "more");
+    let second = record_at(&world, &root);
+    assert_eq!(second.sequence, first.sequence + 1);
+    drop(tasks);
+    drop(engine);
+    drop(world.scheduler.take_spawned_tasks());
+    serve_forked(
+        &world,
+        &root,
+        &first_bytes,
+        re_signed(ROOT, &first, &second.value),
+    );
+    let file_before = record_at(&world, &write_name(file));
+
+    world.scheduler.advance(DAY * 45);
+    let started = world.scheduler.now();
+    let events = later_session_events(&world, &blocks, b"a later session");
+
+    assert_eq!(
+        record_at(&world, &root).sequence,
+        first.sequence,
+        "held at S"
+    );
+    assert_eq!(reported(&events, root.as_str()), (1, 1));
+    assert_renewed_at_start(&world, &write_name(file), &file_before, started, "the file");
+}
+
+/// A vault root at `S + 1` after two writes, served as the first write's
+/// record at `S` on every endpoint 45 days later, with a gate-passing tie of
+/// the second write's value at `S`.
+fn a_root_left_with_a_tie() -> (FakeWorld, Blocks, IpnsName, Vec<u8>) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let device = world.device(b"the device that wrote");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 1);
+    write_file(&world, &mut engine, &mut tasks, ROOT, "note.txt");
+    let root = write_name(ROOT);
+    let first_bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], root.as_str())
+        .expect("the root is published");
+    let first = record_at(&world, &root);
+    create_folder(&world, &mut engine, &mut tasks, ROOT, "more");
+    let tie = re_signed(ROOT, &first, &record_at(&world, &root).value);
+    drop(tasks);
+    drop(engine);
+    drop(world.scheduler.take_spawned_tasks());
+    serve_forked(&world, &root, &first_bytes, first_bytes.clone());
+    world.scheduler.advance(DAY * 45);
+    (world, blocks, root, tie)
+}
+
+/// One endpoint serves a fork of the vault root to a single read, and the
+/// renewal walk is that read: the walk holds the renewal back, and the session
+/// still sends one fork event for it.
+#[test]
+fn a_root_fork_only_the_renewal_walk_reads_sends_one_fork_event() {
+    // The one GET that serves the tie moves until the walk is its reader.
+    let walk_only = (0..64).find_map(|answered| {
+        let (world, blocks, root, tie) = a_root_left_with_a_tie();
+        world
+            .record_store
+            .serve_gets_for_after(root.as_str(), answered, 1, Some(tie));
+        let events = later_session_events(&world, &blocks, b"a later session");
+        let reported = reported(&events, root.as_str());
+        (reported.1 == 1).then_some(reported)
+    });
+
+    assert_eq!(
+        walk_only.expect("one placement of the tie reaches the walk alone"),
+        (1, 1)
     );
 }
 
@@ -569,6 +804,114 @@ fn a_link_cycle_ends_in_the_pass_that_meets_it() {
     let cursor = stored_cursor(&device).expect("the pass stored its cursor");
     assert_eq!(cursor.root, None, "the cycle finished in one pass");
     assert!(cursor.deferred.is_empty(), "the cycle defers no folder");
+}
+
+/// Another writer publishes `node`'s next record at `epoch`, under a read key
+/// no session holds: the record a cut at `epoch` seals under its fresh seed.
+fn seal_above(world: &FakeWorld, blocks: &Blocks, node: NodeId, epoch: u64) {
+    let name = write_name(node);
+    let current = record_at(world, &name);
+    let head = author_child_envelope(EnvelopeAuthoring {
+        node_id: node.0,
+        scope_id: SCOPE,
+        epoch,
+        read_key: &[0x5C; 32],
+        nonce: &[0x3F; 24],
+        body: &ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        },
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the other writer authors a valid record");
+    blocks.put(head.block.clone());
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
+    let record = IpnsRecord::create_v2(
+        &signer,
+        format!("/ipfs/{}", head.cid).as_bytes(),
+        current.sequence + 1,
+        current.ttl,
+        core::str::from_utf8(&current.validity).expect("an RFC 3339 EOL"),
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+}
+
+/// The detail of the abuse the walk reports for a record its gate refused.
+const WALK_REFUSED: &str = "the renewal walk's adoption gate refused the record";
+
+/// The abuse a session reports when the read-epoch floor rises to `epoch` while
+/// it reads a folder whose record a writer sealed at `epoch` under a key this
+/// device does not hold.
+fn walk_abuse_after_a_floor_rise(epoch: u64) -> Vec<String> {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        let outer = create_folder(&world, engine, tasks, ROOT, "outer");
+        vec![create_folder(&world, engine, tasks, outer, "inner")]
+    });
+    seal_above(&world, &blocks, nodes[0], epoch);
+    let device = world.device(b"a later session");
+    let (engine, mut events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    while events.try_next().is_some() {}
+    device.floor_store.raise_epoch_floor_on_sequence_read(
+        &floor_label(write_name(nodes[0]).as_str().as_bytes()),
+        &floor_label(&SCOPE),
+        epoch,
+    );
+
+    tick(&world, &engine, &mut tasks);
+
+    let floor_key = [
+        owner_tag(&kdf::enc_subkey(&SECRET)).as_slice(),
+        &floor_label(&SCOPE),
+    ]
+    .concat();
+    assert_eq!(
+        block_on(device.floor_store.epoch_floor(&floor_key)).expect("the floor reads"),
+        Some(epoch),
+        "a read of the record raised the floor",
+    );
+    core::iter::from_fn(|| events.try_next())
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A cut on this device raises the read-epoch floor after the walk admitted
+/// the scope root and took its read seed. A record at the new floor needs the
+/// seed the cut minted, so it accuses no writer.
+#[test]
+fn a_floor_rise_during_a_walk_read_accuses_no_record_at_the_new_floor() {
+    let abuse = walk_abuse_after_a_floor_rise(OWNER_ROOT_EPOCH + 1);
+    assert!(
+        !abuse
+            .iter()
+            .any(|description| description.ends_with(WALK_REFUSED)),
+        "earned {abuse:?}"
+    );
+}
+
+/// At the epoch of the walk's read seed, a body that does not open is
+/// tampering.
+#[test]
+fn a_walk_record_at_its_seeds_epoch_that_does_not_open_stays_a_violation() {
+    let abuse = walk_abuse_after_a_floor_rise(OWNER_ROOT_EPOCH);
+    assert!(
+        abuse
+            .iter()
+            .any(|description| description.ends_with(WALK_REFUSED)),
+        "earned {abuse:?}"
+    );
 }
 
 /// One hour of the virtual clock: the cadence of the walk's passes.

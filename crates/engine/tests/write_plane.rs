@@ -4109,6 +4109,136 @@ fn a_split_where_our_root_holds_the_first_endpoint_heals_above_both_records() {
     assert_eq!(queued(&second), 0);
 }
 
+/// Two devices of one owner each sign a root at one sequence, and the
+/// endpoints split between the two records. A device that reads the split on
+/// two ticks reports one fork, and accuses nobody (ADR 0066 D2).
+#[test]
+fn a_fork_at_the_root_is_reported_once_in_a_session_and_accuses_nobody() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let second = world.device(b"alice-second-device");
+    let (mut engine_a, mut events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &second, 7);
+    let (base, _) = published(&world.record_store, ROOT);
+    let base_record = root_record(&world, 0);
+    let endpoints = world.record_store.endpoints();
+
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let ours = root_record(&world, 0);
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, write_name(ROOT).as_str(), base_record.clone());
+    }
+    block_on(engine_b.command(Command::Create {
+        parent: ROOT,
+        name: "notes".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_b, &mut tasks_b);
+    let theirs = root_record(&world, 0);
+    assert_ne!(ours, theirs);
+    assert_eq!(root_sequence(&world, 0), base + 1, "both sign one sequence");
+    world
+        .record_store
+        .seed_record(&endpoints[0], write_name(ROOT).as_str(), ours);
+    drop(events_so_far(&mut events_a));
+
+    tick(&world, &engine_a, &mut tasks_a);
+    tick(&world, &engine_a, &mut tasks_a);
+    let events = events_so_far(&mut events_a);
+    let forks: Vec<&Event> = events
+        .iter()
+        .filter(|event| matches!(event, Event::SameSequenceFork { .. }))
+        .collect();
+    assert_eq!(
+        forks,
+        [&Event::SameSequenceFork {
+            routing_key: write_name(ROOT).as_str().to_owned(),
+        }],
+        "one fork event for two reads of one fork"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
+        "a fork accuses nobody"
+    );
+}
+
+/// A restart reads the root from its cached copy, while the endpoints serve
+/// only the other side of a fork. The boot read sees the fork, and the session
+/// reports it once.
+#[test]
+fn a_restart_that_finds_a_fork_against_its_cached_root_reports_it_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let second = world.device(b"alice-second-device");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &second, 7);
+    let base_record = root_record(&world, 0);
+    let endpoints = world.record_store.endpoints();
+
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let ours = root_record(&world, 0);
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, write_name(ROOT).as_str(), base_record.clone());
+    }
+    block_on(engine_b.command(Command::Create {
+        parent: ROOT,
+        name: "notes".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_b, &mut tasks_b);
+    let theirs = root_record(&world, 0);
+    assert_ne!(ours, theirs);
+    for endpoint in 0..endpoints.len() {
+        assert_eq!(
+            root_record(&world, endpoint),
+            theirs,
+            "only theirs is served"
+        );
+    }
+    drop(engine_a);
+    drop(tasks_a);
+    drop(world.scheduler.take_spawned_tasks());
+
+    let (engine_a, mut events_a, mut tasks_a) = boot(&world, &blocks, &first, 43);
+    tick(&world, &engine_a, &mut tasks_a);
+    tick(&world, &engine_a, &mut tasks_a);
+    let forks = events_so_far(&mut events_a)
+        .into_iter()
+        .filter(|event| matches!(event, Event::SameSequenceFork { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        forks,
+        [Event::SameSequenceFork {
+            routing_key: write_name(ROOT).as_str().to_owned(),
+        }],
+        "the boot read reports the fork once"
+    );
+}
+
 /// A lost race, then a restart before the retry. The restarted session holds
 /// no memory of the race, and a read can leave our own losing record as its
 /// cached copy. The retry still rebases onto the record our op does not read as
@@ -5697,37 +5827,63 @@ fn a_walk_that_read_the_destination_before_the_move_starts_again() {
 /// The walk's first read of the destination shows a fork at the sequence the
 /// move published, which does not name the node. The second read shows the
 /// move's record at that same sequence, so the walk is no snapshot and starts
-/// again.
+/// again. The served record is the pick whichever side carries the higher
+/// signed `data` (ADR 0066 D2).
 #[test]
 fn a_walk_whose_second_read_shows_another_record_at_one_sequence_starts_again() {
-    let mut scene = CaptureScene::new();
-    scene.tick_second(2);
-    scene.move_leaf_right();
-    let right_name = write_name(scene.right);
-    let endpoints = scene.world.record_store.endpoints();
-    let (sequence, _) = published(&scene.world.record_store, scene.right);
-    let fork = folder_record_with(
-        &scene.world.record_store,
-        &scene.blocks,
-        scene.right,
-        vec![child_ref(scene.inner.0, "inner", CoreNodeKind::Folder)],
-        sequence,
-        EOL,
-    );
-    scene.world.record_store.serve_gets_for_after(
-        right_name.as_str(),
-        0,
-        endpoints.len(),
-        Some(fork),
-    );
-    scene.tick_second(4);
+    let signed_data = |name: &IpnsName, bytes: &[u8]| {
+        IpnsRecord::unmarshal(bytes)
+            .and_then(|record| record.verify(name))
+            .expect("the record verifies")
+            .data
+    };
+    for fork_ranks_higher in [true, false] {
+        let mut scene = CaptureScene::new();
+        scene.tick_second(2);
+        scene.move_leaf_right();
+        let right_name = write_name(scene.right);
+        let endpoints = scene.world.record_store.endpoints();
+        let (sequence, _) = published(&scene.world.record_store, scene.right);
+        let moved = scene
+            .world
+            .record_store
+            .record_at(&endpoints[0], right_name.as_str())
+            .expect("the move is published");
+        let fork = (0..64)
+            .map(|variant| {
+                folder_record_with(
+                    &scene.world.record_store,
+                    &scene.blocks,
+                    scene.right,
+                    vec![child_ref(
+                        scene.inner.0,
+                        &format!("inner-{variant}"),
+                        CoreNodeKind::Folder,
+                    )],
+                    sequence,
+                    EOL,
+                )
+            })
+            .find(|fork| {
+                (signed_data(&right_name, fork) > signed_data(&right_name, &moved))
+                    == fork_ranks_higher
+            })
+            .expect("a variant on each side of the order");
+        scene.world.record_store.serve_gets_for_after(
+            right_name.as_str(),
+            0,
+            endpoints.len(),
+            Some(fork),
+        );
+        scene.tick_second(4);
 
-    assert!(
-        scene.binned().is_empty(),
-        "two records at one sequence prove no departure"
-    );
-    assert!(scene.leaf_opens_under_the_scope());
-    scene.assert_second_reads_the_leaf_under_right();
+        assert!(
+            scene.binned().is_empty(),
+            "two records at one sequence prove no departure (fork higher: {fork_ranks_higher})"
+        );
+        assert!(scene.leaf_opens_under_the_scope());
+        scene.assert_second_reads_the_leaf_under_right();
+    }
 }
 
 /// A proof is spent when its bin publish does not land. A node relinked before
@@ -13184,6 +13340,10 @@ fn seed_vault_settings(
     settings: &VaultSettings,
 ) {
     serve_http(device, blocks, 8);
+    // Another device's save, which clears the account flag before a hosted
+    // head; the flag stays where this device left it.
+    let flagged = blocks.advisory();
+    blocks.set_advisory(false);
     let api = ApiClient::new(
         device.http.clone(),
         device.credential_store.clone(),
@@ -13202,6 +13362,7 @@ fn seed_vault_settings(
         settings,
     ))
     .expect("the settings record publishes");
+    blocks.set_advisory(flagged);
 }
 
 /// `External` means what it says: not one byte reaches CipherBox's store, and
@@ -13213,6 +13374,7 @@ fn an_external_write_places_every_block_on_the_members_node_and_none_on_the_host
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
     seed_settings(&world, &alice, &blocks, PinMode::External);
+    let seeded = uploaded_cids(&alice);
     blocks.set_quota(1_000, 1_000);
 
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
@@ -13236,20 +13398,283 @@ fn an_external_write_places_every_block_on_the_members_node_and_none_on_the_host
         !registered.is_empty(),
         "every mode still registers for union-liveness accounting"
     );
-    assert_eq!(
-        blocks.member_node_cids(),
-        registered,
-        "the member's node holds exactly the block set the registration names"
-    );
-    let hosted = uploaded_cids(&alice);
+    let (sequence, photo_head) = published(&world.record_store, photo);
+    assert_eq!(sequence, 1, "the version still published its own record");
+    let (_, root_head) = published(&world.record_store, ROOT);
+    let held = blocks.member_node_cids();
     assert!(
-        registered.iter().all(|cid| !hosted.contains(cid)),
-        "not one of the version's blocks took the hosted path"
+        registered.iter().all(|cid| held.contains(cid)),
+        "the member's node holds every block the registration names"
+    );
+    assert!(
+        held.contains(&photo_head) && held.contains(&root_head),
+        "and the record head blocks too"
     );
     assert_eq!(
-        published(&world.record_store, photo).0,
+        uploaded_cids(&alice),
+        seeded,
+        "not one block, record heads included, took the hosted path"
+    );
+}
+
+/// A device that writes under `External` has set the account's BYO flag, so the
+/// hosted ingress refuses it. The save back to `Hosted` must land, also while
+/// the member's node is down, and the next op of any kind must publish, or the
+/// device can never leave `External` from the app.
+#[test]
+fn an_external_device_saves_its_way_back_to_hosted() {
+    for node_down in [false, true] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        seed_settings(&world, &alice, &blocks, PinMode::External);
+
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &(0..200u8).collect::<Vec<_>>(),
+        )
+        .expect("the write commits");
+        tick(&world, &engine, &mut tasks);
+        assert!(blocks.advisory(), "the External write flagged the account");
+        blocks.set_member_node_down(node_down);
+
+        assert_eq!(
+            block_on(engine.command(Command::SaveVaultSettings {
+                settings: VaultSettings {
+                    pin_mode: PinMode::Hosted,
+                    retention: RetentionPolicy::KeepAll,
+                    ..VaultSettings::default()
+                },
+            })),
+            Ok(CommandOutcome::Done),
+            "node down {node_down}: the save back to Hosted lands"
+        );
+        assert!(!blocks.advisory(), "the save cleared the account flag");
+        // The folder's current head lives on the member's node, so the drain
+        // reads it there.
+        blocks.set_member_node_down(false);
+
+        create(&mut engine, "docs");
+        tick(&world, &engine, &mut tasks);
+        assert!(
+            published_names(&world.record_store, &blocks, ROOT).contains(&"docs".to_owned()),
+            "node down {node_down}: a folder made after the save publishes"
+        );
+        let docs = child_id(&engine, ROOT, "docs");
+        assert!(
+            uploaded_cids(&alice).contains(&published(&world.record_store, docs).1),
+            "and its head block took the hosted path"
+        );
+    }
+}
+
+/// Under `Dual` a record head spends the op's mirror budget like a content
+/// block: a dead node costs the op a bounded number of attempts, and the op
+/// reports the head its mirror does not hold.
+#[test]
+fn a_dual_folder_op_spends_one_mirror_budget_and_reports_the_missed_head() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.set_member_node_down(true);
+    let node_attempts = || {
+        alice
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.starts_with(MEMBER_NODE))
+            .count()
+    };
+    let before = node_attempts();
+    let op_id = create(&mut engine, "docs");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["docs".to_owned()],
+        "the hosted leg landed, so the folder published"
+    );
+    assert!(
+        node_attempts() - before <= 3,
+        "the op's heads shared one mirror budget"
+    );
+    assert_eq!(
+        events_so_far(&mut events)
+            .iter()
+            .filter(|event| matches!(
+                event,
+                Event::OpProgress {
+                    op_id: Some(id),
+                    phase: OpPhase::ExternalPinFailed,
+                    ..
+                } if *id == op_id
+            ))
+            .count(),
         1,
-        "the version still published its own record"
+        "the missed heads are reported once for the op"
+    );
+}
+
+/// A soft delete publishes the bin index inside the op, so that head spends the
+/// same mirror budget as the op's folder heads.
+#[test]
+fn a_dual_soft_delete_spends_one_mirror_budget_across_its_bin_index_head() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    create(&mut engine, "docs");
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "docs");
+    blocks.set_member_node_down(true);
+    let node_attempts = || {
+        alice
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.starts_with(MEMBER_NODE))
+            .count()
+    };
+    let before = node_attempts();
+    let _ = events_so_far(&mut events);
+    block_on(engine.command(Command::Delete { node: doomed })).expect("the delete stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        published_names(&world.record_store, &blocks, ROOT).is_empty(),
+        "the hosted leg landed, so the delete published"
+    );
+    assert!(
+        node_attempts() - before <= 3,
+        "the bin index head shared the op's mirror budget"
+    );
+    assert_eq!(
+        events_so_far(&mut events)
+            .iter()
+            .filter(|event| matches!(
+                event,
+                Event::OpProgress {
+                    phase: OpPhase::ExternalPinFailed,
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "the op reports its missed heads once"
+    );
+}
+
+/// The heads of an observed unlink's adoption belong to no op, so they share
+/// one mirror attempt rather than an op's budget.
+#[test]
+fn a_dual_adoption_outside_any_op_spends_one_mirror_attempt() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    create(&mut engine, "shared");
+    tick(&world, &engine, &mut tasks);
+    let shared = child_id(&engine, ROOT, "shared");
+    create_under(&mut engine, shared, "notes");
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.command(Command::SetFocus { node: Some(shared) })).unwrap();
+
+    blocks.set_member_node_down(true);
+    let node_attempts = || {
+        alice
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.starts_with(MEMBER_NODE))
+            .count()
+    };
+    let before = node_attempts();
+    let body = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 1,
+        children: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    plant_record(
+        &world.record_store,
+        &blocks,
+        shared,
+        Planted {
+            node_id: shared.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(shared),
+            body: &body,
+        },
+    );
+    tick(&world, &engine, &mut tasks);
+
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the adoption published a bin index record");
+    };
+    assert_eq!(index.entries.len(), 1, "the unlink was adopted");
+    assert_eq!(
+        node_attempts() - before,
+        1,
+        "the adoption's heads shared one mirror attempt"
+    );
+}
+
+/// The member's own node keeps what the member puts on it (ADR 0029 D16): a
+/// purge only ever puts the bin index head there, and never unpins.
+#[test]
+fn a_dual_purge_sends_the_members_node_no_unpin() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "photo.bin");
+    block_on(engine.command(Command::Delete { node: doomed })).expect("the delete stages");
+    tick(&world, &engine, &mut tasks);
+
+    let before = alice.http.requests().len();
+    let retired_before = blocks.retired().len();
+    block_on(engine.command(Command::Purge { node: doomed })).expect("the purge stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        blocks.retired().len() > retired_before,
+        "the purge retired the registry rows"
+    );
+    assert!(
+        alice.http.requests()[before..]
+            .iter()
+            .filter(|request| request.url.starts_with(MEMBER_NODE))
+            .all(|request| request.url.contains("/api/v0/block/put")),
+        "the member's node got puts only, never an unpin"
     );
 }
 
@@ -13335,11 +13760,10 @@ fn a_hold_under_an_external_placement_clears_without_a_quota_probe() {
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    seed_settings(&world, &alice, &blocks, PinMode::External);
+    seed_settings(&world, &alice, &blocks, PinMode::Hosted);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
-    // The record head block still traverses the hosted ingress, so it is what
-    // the account quota can refuse under an external placement.
+    // The hold is taken under `Hosted`, and the member then moves to `External`.
     blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("QUOTA_EXCEEDED")))));
     create(&mut engine, "photos");
     tick(&world, &engine, &mut tasks);
@@ -13349,6 +13773,10 @@ fn a_hold_under_an_external_placement_clears_without_a_quota_probe() {
     );
 
     blocks.accept_uploads();
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: external_settings(),
+    }))
+    .expect("the move to External lands");
     blocks.set_quota_down(true);
     let probes = || {
         alice
@@ -13412,8 +13840,12 @@ fn a_dual_write_publishes_and_reports_the_leg_the_members_node_did_not_take() {
         !uploaded_cids(&alice).is_empty(),
         "the hosted leg took the bytes"
     );
+    let held = blocks.member_node_cids();
     assert!(
-        blocks.member_node_cids().is_empty(),
+        registered_content_cids(&alice, &write_name(photo))
+            .iter()
+            .chain([&published(&world.record_store, photo).1])
+            .all(|cid| !held.contains(cid)),
         "the offline node took none"
     );
     let emitted = events_so_far(&mut events);
@@ -13483,10 +13915,15 @@ fn a_dual_write_places_the_same_block_set_on_both_legs() {
         registered.iter().all(|cid| hosted.contains(cid)),
         "the hosted leg took every block"
     );
-    assert_eq!(
-        blocks.member_node_cids(),
-        registered,
+    let held = blocks.member_node_cids();
+    assert!(
+        registered.iter().all(|cid| held.contains(cid)),
         "and the member's node holds the same addresses, under its own hashing"
+    );
+    let (_, head) = published(&world.record_store, photo);
+    assert!(
+        hosted.contains(&head) && held.contains(&head),
+        "the record head block went to both legs"
     );
     assert!(
         !events_so_far(&mut events).iter().any(|event| matches!(
@@ -13527,9 +13964,9 @@ fn a_mirror_refusal_the_op_retries_past_leaves_nothing_to_report() {
     let mut registered = registered_content_cids(&alice, &write_name(photo));
     registered.sort();
     registered.dedup();
-    assert_eq!(
-        blocks.member_node_cids(),
-        registered,
+    let held = blocks.member_node_cids();
+    assert!(
+        registered.iter().all(|cid| held.contains(cid)),
         "the retry put the refused block on the member's node"
     );
     assert!(
@@ -13907,9 +14344,9 @@ fn a_running_session_re_decides_its_placement_from_the_live_settings_record() {
     write_photo(&mut engine, "photo.bin");
     tick(&world, &engine, &mut tasks);
     let first = version_blocks(&alice, &engine, "photo.bin");
-    assert_eq!(
-        blocks.member_node_cids(),
-        first,
+    let held = blocks.member_node_cids();
+    assert!(
+        first.iter().all(|cid| held.contains(cid)),
         "the first version went to the member's own node"
     );
     let hosted = uploaded_cids(&alice);
@@ -13922,6 +14359,7 @@ fn a_running_session_re_decides_its_placement_from_the_live_settings_record() {
     // The member switches the account to hosted from another device. This
     // session is never restarted.
     seed_settings(&world, &alice, &blocks, PinMode::Hosted);
+    let held = blocks.member_node_cids();
     tick_past_the_settings_recheck(&world, &engine, &mut tasks);
 
     write_photo(&mut engine, "photo2.bin");
@@ -13934,7 +14372,7 @@ fn a_running_session_re_decides_its_placement_from_the_live_settings_record() {
     );
     assert_eq!(
         blocks.member_node_cids(),
-        first,
+        held,
         "and the revoked provider receives nothing further"
     );
     assert!(
@@ -14272,7 +14710,7 @@ fn external_settings() -> VaultSettings {
 }
 
 /// Queue a content write on `alice`, then save `External` settings while the
-/// head upload fails, and leave. The save raised the mint counter and nothing
+/// member's node is down, and leave. The save raised the mint counter and nothing
 /// landed, so the next cold start loads a stranded mint.
 fn queue_a_write_and_strand_a_settings_save(
     world: &FakeWorld,
@@ -14282,7 +14720,7 @@ fn queue_a_write_and_strand_a_settings_save(
     let (mut engine, _events, _tasks) = boot(world, blocks, alice, 42);
     let op_id = write_photo(&mut engine, "photo.bin");
     let photo = child_id(&engine, ROOT, "photo.bin");
-    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    blocks.set_member_node_down(true);
     assert!(
         block_on(engine.command(Command::SaveVaultSettings {
             settings: external_settings(),
@@ -14290,7 +14728,7 @@ fn queue_a_write_and_strand_a_settings_save(
         .is_err(),
         "the save does not reach the network"
     );
-    blocks.accept_uploads();
+    blocks.set_member_node_down(false);
     let (root_cid, _) = staged_version(alice);
     (op_id, photo, root_cid)
 }
@@ -14428,7 +14866,7 @@ fn a_failed_settings_save_holds_the_queued_write_in_the_same_session() {
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     let op_id = write_photo(&mut engine, "photo.bin");
     let photo = child_id(&engine, ROOT, "photo.bin");
-    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    blocks.set_member_node_down(true);
     assert!(
         block_on(engine.command(Command::SaveVaultSettings {
             settings: external_settings(),
@@ -14436,7 +14874,7 @@ fn a_failed_settings_save_holds_the_queued_write_in_the_same_session() {
         .is_err(),
         "the save does not reach the network"
     );
-    blocks.accept_uploads();
+    blocks.set_member_node_down(false);
     serve_http(&alice, &blocks, 400);
     let hosted_before = uploaded_cids(&alice).len();
     for _ in 0..PASSES_PAST_THE_BUDGET {
@@ -14606,7 +15044,11 @@ fn a_settings_recheck_reads_the_marks_again_after_an_unread_floor() {
     }));
     assert!(
         block_on(engine.command(Command::SaveVaultSettings {
-            settings: external_settings(),
+            settings: VaultSettings {
+                // A hosted leg, so the head meets the failing store.
+                pin_mode: PinMode::Dual,
+                ..external_settings()
+            },
         }))
         .is_err(),
         "the save does not reach the network"

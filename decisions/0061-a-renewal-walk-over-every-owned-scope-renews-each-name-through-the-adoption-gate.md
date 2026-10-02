@@ -60,8 +60,8 @@ cursor that does not open or decode, or a replayed older one, costs only work.
 2. The walk skips a name that a delete doomed, that the retire ledger owes a retire, that the
    parent no longer names, or that the drain has a publish of in flight. Amended by ADR 0063 D4
    on 2026-10-01: the walk also skips every name in a scope that has an owed rotation entry.
-   Amended by ADR 0066 D3 on 2026-10-02: the walk also skips a name that resolved as a
-   same-sequence fork in this cycle.
+   Amended by ADR 0066 D3 on 2026-10-02: the walk also skips a name that the endpoints serve
+   as a same-sequence fork, while more than 30 days of its EOL are left.
 3. Registration goes in batches of up to `REGISTRY_BATCH_MAX` names.
 4. After the registration, the walk reads the name through the fan-out again. If the freshest
    record is not the admitted record, the walk does not sign.
@@ -74,8 +74,8 @@ cursor that does not open or decode, or a replayed older one, costs only work.
    and the last-known-good keeper (`keep_newest_last_known_good`) take the record with the later
    EOL. Today both keep the first record that they hold, so a device that adopted a renewal can
    refuse the real write as `SequenceNotNewer`, or start from a cache that does not show it.
-   Amended by ADR 0066 D2 on 2026-10-02: at one sequence and one EOL, the lower record bytes
-   win, and a different record at the floor is a same-sequence fork.
+   Amended by ADR 0066 D2 on 2026-10-02: at one sequence and one EOL, the higher signed `data`
+   bytes win, and a different record at the floor is a same-sequence fork.
 
 A `LostRace` ends the renewal of that name for this cycle, with no retry.
 

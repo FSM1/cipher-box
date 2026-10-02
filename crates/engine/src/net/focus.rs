@@ -2,7 +2,7 @@
 //! scope root (blueprint/engine.md "Sync core: focus-window tick").
 //!
 //! Each node the window names resolves its own record cache-first through
-//! [`resolve_child`], passes the [`ChildAdopter`] gate on this device's floors,
+//! [`resolve_child_record`], passes the [`ChildAdopter`] gate on this device's floors,
 //! and merges into the base — the root leg's merge model, one level down. A
 //! folder merges its listing with [`project_folder_partial`]; a file merges
 //! its head version with [`project_child_version`], which is the only way its
@@ -15,9 +15,9 @@ use cipherbox_core::seal::{ChildRef, ReadBody};
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
-use super::child::{ChildAdopter, ChildResolveError, resolve_child};
+use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
 use crate::content::Gateway;
-use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
+use crate::facade::{Event, ForkSightings, NodeId, NodeKind, emit_trust_violation};
 use crate::gate::{Adopted, GateError};
 use crate::grants::TooLong;
 use crate::grants::grafted::{BookmarkedScopeRoots, ClaimRecord, GraftedPlane, PlaneSplit};
@@ -83,6 +83,8 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     pub(crate) base: &'a BaseSnapshot,
     /// Where a fail-closed rejection on a focused folder is surfaced.
     pub(crate) events: &'a mpsc::UnboundedSender<Event>,
+    /// Where a same-sequence fork on a focused node is reported once.
+    pub(crate) forks: &'a ForkSightings,
     /// The scope every focus folder is sealed under.
     pub(crate) scope_id: [u8; 16],
     pub(crate) scope_read_seed: &'a Zeroizing<[u8; 32]>,
@@ -90,7 +92,7 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     /// ([`ChildAdopter::with_seed_stamp`]).
     pub(crate) seed_stamp: Option<u64>,
     /// The scope root's record name, which a lagging record's read walks the
-    /// ratchet back from ([`resolve_child`]).
+    /// ratchet back from ([`resolve_child_record`]).
     pub(crate) scope_root_name: Option<&'a IpnsName>,
     /// The plane this leg runs on, or `None` on this vault's own plane
     /// ([`GraftedLeg`]).
@@ -277,7 +279,7 @@ where
             node.0,
         )
         .with_seed_stamp(self.seed_stamp);
-        match resolve_child(
+        match resolve_child_record(
             self.transport,
             self.snapshot_cache,
             &adopter,
@@ -287,9 +289,15 @@ where
         )
         .await
         {
-            Ok(adopted) => Some((name, adopted)),
+            Ok(ChildRecord::Admitted(adopted, _, fork)) => {
+                if let Some(fork) = fork {
+                    self.forks.report(self.events, name.as_str(), fork.sequence);
+                }
+                Some((name, adopted))
+            }
             // Availability: the base keeps rendering last-known-good.
-            Err(
+            Ok(ChildRecord::Absent)
+            | Err(
                 ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
             ) => {
                 report.fold(RefreshVerdict::Unreachable);
@@ -395,6 +403,8 @@ mod tests {
         captured: RefCell<Vec<NodeId>>,
         /// What the last pass charged itself.
         verdict: Cell<RefreshVerdict>,
+        /// The fork events the last pass sent.
+        forks_reported: Cell<usize>,
     }
 
     impl FolderLeg {
@@ -468,6 +478,7 @@ mod tests {
                 head_block,
                 captured: RefCell::new(Vec::new()),
                 verdict: Cell::new(RefreshVerdict::Reconciled),
+                forks_reported: Cell::new(0),
             }
         }
 
@@ -516,6 +527,7 @@ mod tests {
                     gateway: &self.gateway,
                     base: &self.base,
                     events: &events,
+                    forks: &ForkSightings::default(),
                     scope_id,
                     scope_read_seed: &self.read_seed,
                     seed_stamp: None,
@@ -536,7 +548,13 @@ mod tests {
                 .map(|unlinked| unlinked.node)
                 .collect();
             drop(events);
-            core::iter::from_fn(|| rx.try_recv().ok())
+            let sent: Vec<Event> = core::iter::from_fn(|| rx.try_recv().ok()).collect();
+            self.forks_reported.set(
+                sent.iter()
+                    .filter(|event| matches!(event, Event::SameSequenceFork { .. }))
+                    .count(),
+            );
+            sent.iter()
                 .any(|event| matches!(event, Event::AttributableAbuse { .. }))
         }
 
@@ -623,6 +641,58 @@ mod tests {
         assert_eq!(leg.parent_of(OWN_CHILD), Some(NodeId(OWN_ROOT)));
         assert_eq!(leg.name_of(OWN_CHILD), "my-note");
         assert!(reported, "a body that names a vault node is attributable");
+    }
+
+    /// A forced refresh of a folder it already adopted, whose cached copy is
+    /// another value at its sequence: the leg reports the fork once, renders
+    /// the served folder, and accuses nobody. A copy of one value is no fork.
+    #[test]
+    fn a_folder_whose_cached_copy_is_the_other_fork_side_is_reported() {
+        let leg = FolderLeg::new(SCOPE_A, vec![child_ref(HONEST, "a-photo", 1)]);
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+        assert!(!leg.run(SCOPE_A, Some(&scope_roots())));
+        assert_eq!(leg.forks_reported.get(), 0);
+
+        let served = block_on(leg.snapshot_cache.get(folder_name().as_str().as_bytes()))
+            .expect("cache read")
+            .expect("the first pass cached the folder");
+        let served = IpnsRecord::unmarshal(&served)
+            .and_then(|record| record.verify(&folder_name()))
+            .expect("the cached record verifies");
+        let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &FOLDER);
+        let other_side = |value: &[u8]| {
+            IpnsRecord::create_v2(
+                &kdf::ipns_keypair(write_seed.as_bytes()),
+                value,
+                1,
+                2_000_000_000,
+                "2098-01-01T00:00:00Z",
+            )
+            .marshal()
+        };
+        let one_value = other_side(&served.value);
+        let another_value = other_side(b"/ipfs/bafyanotherfolder");
+
+        for (case, cached, reported) in [
+            ("one value", Some(&one_value), 0),
+            ("another value", Some(&another_value), 1),
+            ("the fork cleared", None, 0),
+        ] {
+            if let Some(cached) = cached {
+                block_on(
+                    leg.snapshot_cache
+                        .put(folder_name().as_str().as_bytes(), cached),
+                )
+                .expect("cache write");
+            }
+            assert!(
+                !leg.run(SCOPE_A, Some(&scope_roots())),
+                "a fork accuses nobody ({case})"
+            );
+            assert_eq!(leg.forks_reported.get(), reported, "{case}");
+            assert_eq!(leg.listing(FOLDER), vec!["a-photo".to_owned()], "{case}");
+        }
     }
 
     /// A refusal is not a removal. An id a later bookmark contests is already

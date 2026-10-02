@@ -1789,6 +1789,53 @@ fn the_tick_resolves_the_material_of_an_owner_minted_interior_scope() {
     );
 }
 
+/// The boundary walk reads an owner-minted scope root whose cached copy is
+/// another value at its sequence: the session reports that fork once, and the
+/// served record replaces the cached copy, so the fork clears.
+#[test]
+fn a_walk_that_reads_an_owned_scope_root_forked_reports_it_once() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let name = write_name(fx.folder);
+    let endpoints = fx.world.record_store.endpoints();
+    let held = fx
+        .world
+        .record_store
+        .record_at(&endpoints[0], name.as_str())
+        .expect("the scope root is published");
+    let held = IpnsRecord::unmarshal(&held)
+        .and_then(|record| record.verify(&name))
+        .expect("the scope root verifies");
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &fx.folder.0).as_bytes());
+    let other = IpnsRecord::create_v2(
+        &signer,
+        b"/ipfs/bafyanotherscoperoot",
+        held.sequence,
+        held.ttl,
+        "2098-01-01T00:00:00Z",
+    )
+    .marshal();
+    block_on(
+        fx.owner_device
+            .snapshot_cache
+            .put(name.as_str().as_bytes(), &other),
+    )
+    .expect("seed the cached copy");
+    drop(events_so_far(&mut fx._events));
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let forks = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter(|event| {
+            matches!(event, Event::SameSequenceFork { routing_key } if routing_key == name.as_str())
+        })
+        .count();
+    assert_eq!(forks, 1);
+}
+
 /// One node linked from a folder of the vault's own scope and from a folder of
 /// an owner-minted interior scope, with the interior folder's read key.
 ///
@@ -2110,7 +2157,8 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
         session = Some((engine, events, tasks));
         granted_at(Permission::Read)(fx);
     });
-    let (engine, _events, mut tasks) = session.expect("the second device booted");
+    let (engine, mut events, mut tasks) = session.expect("the second device booted");
+    events_so_far(&mut events);
     assert!(
         !block_on(engine.view())
             .unwrap()
@@ -2128,7 +2176,371 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
             .all(|entry| entry.node_id != deep.0),
         "the node the winning parent names is no capture"
     );
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
     assert_held_in_the_vault_scope(&fx, keep, deep, "second device");
+}
+
+/// A granted folder keeps the ref its parent named it by, under the parent's
+/// write seed, so the vault scope's capture walk reads it under its own end.
+/// Another writer's unlink in the vault scope then bins, and no record is
+/// reported faulty.
+fn assert_a_capture_walk_reads_a_granted_folder_under_its_own_end(permission: Permission) {
+    let mut fx = GrantScenario::new();
+    let (mut engine, mut events, mut tasks) = fx.second_owner_device();
+    assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |_, _| {});
+    events_so_far(&mut events);
+    for _ in 0..4 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == doomed.0),
+        "the unlinked node bins"
+    );
+}
+
+#[test]
+fn a_capture_walk_reads_a_read_granted_folder_under_its_own_end() {
+    assert_a_capture_walk_reads_a_granted_folder_under_its_own_end(Permission::Read);
+}
+
+#[test]
+fn a_capture_walk_reads_a_write_granted_folder_under_its_own_end() {
+    assert_a_capture_walk_reads_a_granted_folder_under_its_own_end(Permission::Write);
+}
+
+/// A folder `doomed` under a new vault folder, which `second` loads and then
+/// sees another writer unlink. `before_unlink` runs between the two.
+fn unlinked_by_another_writer(
+    fx: &mut GrantScenario,
+    second: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    before_unlink: impl FnOnce(&mut GrantScenario, NodeId),
+) -> NodeId {
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
+    let doomed =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, plain, "doomed");
+    block_on(second.command(Command::SetFocus { node: Some(plain) })).unwrap();
+    tick(&fx.world, second, tasks);
+    assert_eq!(block_on(second.view()).unwrap().children(plain).len(), 1);
+    before_unlink(fx, doomed);
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        plain,
+        &read_key_of(plain),
+        SCOPE,
+        |children| children.retain(|child| child.id != doomed.0),
+    );
+    doomed
+}
+
+/// A folder that a name wave left at a name the scope's write seed does not
+/// derive is a folder the walk cannot read. Here such a folder links the
+/// departed node, so the node does not bin.
+#[test]
+fn a_folder_at_a_name_the_scope_does_not_derive_holds_the_capture() {
+    let mut fx = GrantScenario::new();
+    let (mut engine, _events, mut tasks) = fx.second_owner_device();
+    let top = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "top");
+    let stray = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, top, "stray");
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |fx, doomed| {
+        concurrent_add(
+            &fx.world,
+            &fx.blocks,
+            stray,
+            &read_key_of(stray),
+            SCOPE,
+            named_child(doomed, "doomed", &write_name(doomed)),
+        );
+        let old_seed = [0x5a; 32];
+        let record = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(kdf::write_seed(&old_seed, &stray.0).as_bytes()),
+            &published_value(&fx.world, &write_name(stray)),
+            1,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal();
+        for endpoint in fx.world.record_store.endpoints() {
+            fx.world.record_store.seed_record(
+                &endpoint,
+                derive_write_name(&old_seed, &stray.0).as_str(),
+                record.clone(),
+            );
+        }
+        concurrent_edit(
+            &fx.world,
+            &fx.blocks,
+            top,
+            &read_key_of(top),
+            SCOPE,
+            |children| {
+                for child in children.iter_mut().filter(|child| child.id == stray.0) {
+                    child.ipns_name = derive_write_name(&old_seed, &stray.0)
+                        .as_str()
+                        .as_bytes()
+                        .to_vec();
+                }
+            },
+        );
+    });
+    for _ in 0..4 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != doomed.0),
+        "a folder the walk cannot read links the node"
+    );
+}
+
+/// The owner moves a node from a vault folder into a folder under a granted
+/// folder. A second owner device that never loaded the destination sees a
+/// departure. Its walk reads the granted subtree under that scope's own end,
+/// finds the link, and bins nothing.
+fn assert_a_move_under_a_granted_folder_is_no_capture(permission: Permission) {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let (mut second, mut events, mut tasks) = fx.second_owner_device();
+    assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
+    let doomed =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, plain, "doomed");
+    block_on(second.command(Command::SetFocus { node: Some(plain) })).unwrap();
+    tick(&fx.world, &second, &mut tasks);
+    assert_eq!(block_on(second.view()).unwrap().children(plain).len(), 1);
+    block_on(fx.engine.command(Command::Relink {
+        node: doomed,
+        new_parent: inner,
+    }))
+    .expect("the move journals");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        block_on(fx.engine.view())
+            .unwrap()
+            .children(inner)
+            .iter()
+            .any(|child| child.id == doomed),
+        "the owner moved the node under the granted folder"
+    );
+    let before = published_head(&fx.world, &fx.blocks, &write_name(doomed));
+    events_so_far(&mut events);
+    for _ in 0..6 {
+        tick(&fx.world, &second, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != doomed.0),
+        "the moved node does not bin"
+    );
+    assert_eq!(
+        published_head(&fx.world, &fx.blocks, &write_name(doomed)),
+        before,
+        "nothing re-keys the node at its vault name"
+    );
+}
+
+#[test]
+fn a_move_under_a_read_granted_folder_is_no_capture() {
+    assert_a_move_under_a_granted_folder_is_no_capture(Permission::Read);
+}
+
+#[test]
+fn a_move_under_a_write_granted_folder_is_no_capture() {
+    assert_a_move_under_a_granted_folder_is_no_capture(Permission::Write);
+}
+
+/// A granted folder inside an unlinked folder is a scope root, so the re-key
+/// of the unlinked folder stops at it, and no record is reported faulty.
+#[test]
+fn the_rekey_of_a_captured_folder_stops_at_a_granted_folder_inside_it() {
+    let mut fx = GrantScenario::new();
+    let (mut second, mut events, mut tasks) = fx.second_owner_device();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "plain");
+    block_on(fx.engine.command(Command::Relink {
+        node: fx.folder,
+        new_parent: plain,
+    }))
+    .expect("the move journals");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        block_on(fx.engine.view())
+            .unwrap()
+            .children(plain)
+            .iter()
+            .any(|child| child.id == fx.folder),
+        "the granted folder sits under the folder that departs"
+    );
+    block_on(second.command(Command::SetFocus { node: Some(outer) })).unwrap();
+    tick(&fx.world, &second, &mut tasks);
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        outer,
+        &read_key_of(outer),
+        SCOPE,
+        |children| children.retain(|child| child.id != plain.0),
+    );
+    events_so_far(&mut events);
+    for _ in 0..6 {
+        tick(&fx.world, &second, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == plain.0),
+        "the unlinked folder bins"
+    );
+}
+
+/// The owner moves a node out of a folder under a granted folder into a vault
+/// folder. A second owner device that loaded only the granted side sees a
+/// departure in the granted scope. Its walk starts at the vault root, finds the
+/// link, and bins nothing.
+fn assert_a_move_out_of_a_granted_folder_is_no_capture(permission: Permission) {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let (mut second, mut events, mut tasks) = fx.second_owner_device();
+    assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let doomed =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "doomed");
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    block_on(second.command(Command::SetFocus { node: Some(inner) })).unwrap();
+    for _ in 0..2 {
+        tick(&fx.world, &second, &mut tasks);
+    }
+    assert_eq!(block_on(second.view()).unwrap().children(inner).len(), 1);
+    block_on(fx.engine.command(Command::Relink {
+        node: doomed,
+        new_parent: plain,
+    }))
+    .expect("the move journals");
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        block_on(fx.engine.view())
+            .unwrap()
+            .children(plain)
+            .iter()
+            .any(|child| child.id == doomed),
+        "the owner moved the node into the vault folder"
+    );
+    events_so_far(&mut events);
+    for _ in 0..8 {
+        tick(&fx.world, &second, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != doomed.0),
+        "the moved node does not bin"
+    );
+}
+
+#[test]
+fn a_move_out_of_a_read_granted_folder_is_no_capture() {
+    assert_a_move_out_of_a_granted_folder_is_no_capture(Permission::Read);
+}
+
+#[test]
+fn a_move_out_of_a_write_granted_folder_is_no_capture() {
+    assert_a_move_out_of_a_granted_folder_is_no_capture(Permission::Write);
+}
+
+/// The owner bins a folder that holds a granted folder, then purges it. The
+/// purge walk stops at the granted root, which the bin never re-keyed.
+fn assert_a_purge_stops_at_a_granted_folder_it_holds(permission: Permission) {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "plain");
+    block_on(fx.engine.command(Command::Relink {
+        node: fx.folder,
+        new_parent: plain,
+    }))
+    .expect("the move journals");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    block_on(fx.engine.command(Command::Delete { node: plain })).expect("the delete journals");
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == plain.0),
+        "the folder is in the bin"
+    );
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::Purge { node: plain })).expect("the purge journals");
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert!(
+        block_on(fx.engine.status())
+            .expect("the status reads")
+            .dead_letters
+            .is_empty(),
+        "the purge does not dead-letter"
+    );
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != plain.0),
+        "the purge drops the entry"
+    );
+}
+
+#[test]
+fn a_purge_stops_at_a_read_granted_folder_it_holds() {
+    assert_a_purge_stops_at_a_granted_folder_it_holds(Permission::Read);
+}
+
+#[test]
+fn a_purge_stops_at_a_write_granted_folder_it_holds() {
+    assert_a_purge_stops_at_a_granted_folder_it_holds(Permission::Write);
 }
 
 #[test]
@@ -4177,6 +4589,162 @@ fn published_bin_entries(fx: &GrantScenario) -> Vec<BinEntry> {
         panic!("the account's bin index reads");
     };
     index.entries
+}
+
+/// The scope `node`'s entry is filed under in the account's published bin
+/// index, or `None` when the index holds no entry for it.
+fn binned_scope(fx: &GrantScenario, node: NodeId) -> Option<[u8; 16]> {
+    published_bin_entries(fx)
+        .into_iter()
+        .find(|entry| entry.node_id == node.0)
+        .map(|entry| entry.scope_id)
+}
+
+/// A restore re-keys in place under the scope its entry was filed under, so a
+/// destination in another scope is refused when the command is given, with its
+/// own code, and nothing reaches the queue to dead-letter.
+#[test]
+fn a_restore_into_a_folder_of_another_scope_is_refused_at_command_time() {
+    let mut fx = GrantScenario::new();
+    let loose = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "loose");
+    block_on(fx.engine.command(Command::Delete { node: loose })).expect("the delete queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Restore {
+            node: loose,
+            into: Some(fx.folder),
+        })),
+        Err(EngineError::RestoreCrossesScope),
+        "the shared folder is another scope than the vault root the entry names"
+    );
+    assert_eq!(
+        queued_ops(&fx.owner_device),
+        0,
+        "the refusal stages nothing"
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .is_empty()
+    );
+    assert!(
+        binned_scope(&fx, loose).is_some(),
+        "the entry stands for another try"
+    );
+}
+
+/// The owner shares the folder a node was deleted from after the delete, so
+/// that folder is now a scope root and a default restore crosses into it. The
+/// refusal is the cross-scope one, and a folder of the entry's own scope still
+/// takes the node.
+#[test]
+fn a_default_restore_into_an_origin_shared_after_the_delete_is_refused() {
+    let mut fx = GrantScenario::new();
+    let draft = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "draft",
+    );
+    block_on(fx.engine.command(Command::Delete { node: draft })).expect("the delete queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Restore {
+            node: draft,
+            into: None,
+        })),
+        Err(EngineError::RestoreCrossesScope),
+        "the origin folder became its own scope after the delete"
+    );
+    assert!(binned_scope(&fx, draft).is_some());
+
+    block_on(fx.engine.command(Command::Restore {
+        node: draft,
+        into: Some(ROOT),
+    }))
+    .expect("a folder of the entry's own scope takes the restore");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(binned_scope(&fx, draft).is_none(), "and the restore lands");
+    assert!(
+        block_on(fx.engine.view())
+            .unwrap()
+            .children(ROOT)
+            .iter()
+            .any(|child| child.id == draft)
+    );
+}
+
+/// Before the session's first boundary walk lands, the engine knows no scope
+/// root below the vault, so it cannot tell where a destination lies. A restore
+/// waits for the walk, retryably, rather than queue a crossing or refuse a
+/// restore that is in scope.
+#[test]
+fn a_restore_before_the_first_boundary_walk_is_refused_retryably() {
+    let mut fx = GrantScenario::new();
+    let loose = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "loose");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let draft = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "draft",
+    );
+    for node in [loose, draft] {
+        block_on(fx.engine.command(Command::Delete { node })).expect("the delete queues");
+    }
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        binned_scope(&fx, draft),
+        Some(fx.folder.0),
+        "the draft's entry is filed under the shared folder's scope"
+    );
+
+    let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    let walk_pending = |outcome: Result<CommandOutcome, EngineError>| {
+        matches!(outcome, Err(EngineError::Seam { .. }))
+    };
+    assert!(
+        walk_pending(block_on(fresh.command(Command::Restore {
+            node: loose,
+            into: Some(fx.folder),
+        }))),
+        "a crossing is not queued before the walk names the shared folder's scope"
+    );
+    assert!(
+        walk_pending(block_on(fresh.command(Command::Restore {
+            node: draft,
+            into: None,
+        }))),
+        "an in-scope restore is not refused as a crossing before the walk"
+    );
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+
+    tick(&fx.world, &fresh, &mut tasks);
+    assert_eq!(
+        block_on(fresh.command(Command::Restore {
+            node: loose,
+            into: Some(fx.folder),
+        })),
+        Err(EngineError::RestoreCrossesScope)
+    );
+    assert!(matches!(
+        block_on(fresh.command(Command::Restore {
+            node: draft,
+            into: None,
+        })),
+        Ok(CommandOutcome::Queued { .. })
+    ));
 }
 
 /// Every publish helper resolves the plane of the node it seals, so a pass that
@@ -10413,10 +10981,11 @@ fn a_delete_of_a_folder_above_an_owed_move_is_refused() {
     );
 }
 
-/// Bin `outer` and the folder inside it, and stage an owed interior move of
-/// that folder out of the vault root's scope for the next session.
-fn bin_a_folder_over_an_owed_move(fx: &mut GrantScenario) -> (NodeId, NodeId) {
-    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+/// Bin `outer`, created under `parent`, and the folder inside it, and stage an
+/// owed interior move of that folder out of the vault root's scope for the next
+/// session.
+fn bin_a_folder_over_an_owed_move(fx: &mut GrantScenario, parent: NodeId) -> (NodeId, NodeId) {
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, parent, "outer");
     let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "inner");
     assert!(matches!(
         block_on(fx.engine.command(Command::Delete { node: outer })),
@@ -10437,20 +11006,27 @@ fn bin_a_folder_over_an_owed_move(fx: &mut GrantScenario) -> (NodeId, NodeId) {
     (outer, inner)
 }
 
-/// A restore of a binned folder above one whose interior move is owed is
-/// refused into another scope.
+/// A restore into the binned folder's own scope is refused while a folder
+/// inside it owes an interior move out of another scope: the restore would take
+/// that folder from the scope the move re-seals it into.
 #[test]
-fn a_restore_of_a_binned_folder_above_an_owed_move_into_another_scope_is_refused() {
+fn a_restore_of_a_binned_folder_above_an_owed_move_out_of_another_scope_is_refused() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx);
+    let folder = fx.folder;
+    let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx, folder);
+    assert_eq!(
+        binned_scope(&fx, outer),
+        Some(folder.0),
+        "the entry is filed under the shared folder's scope"
+    );
 
     let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
     tick(&fx.world, &fresh, &mut tasks);
     assert_eq!(
         block_on(fresh.command(Command::Restore {
             node: outer,
-            into: Some(fx.folder),
+            into: Some(folder),
         })),
         work_owed()
     );
@@ -10461,7 +11037,7 @@ fn a_restore_of_a_binned_folder_above_an_owed_move_into_another_scope_is_refused
 #[test]
 fn a_purge_of_a_binned_folder_above_an_owed_move_is_refused() {
     let mut fx = GrantScenario::new();
-    let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx);
+    let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx, ROOT);
 
     let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
     tick(&fx.world, &fresh, &mut tasks);
@@ -10502,7 +11078,7 @@ fn a_restore_of_a_folder_with_an_owed_move_into_another_scope_is_refused() {
             node: binned,
             into: Some(fx.folder),
         })),
-        work_owed()
+        Err(EngineError::RestoreCrossesScope)
     );
     assert!(
         matches!(

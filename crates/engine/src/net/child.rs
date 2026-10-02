@@ -25,7 +25,8 @@ use zeroize::Zeroizing;
 
 use super::adopter::{LocalHead, assemble_head_envelope, reject};
 use super::fanout::fanout_get_verify;
-use super::last_known_good::{keep_newest_last_known_good, keep_then_commit};
+use super::fork::{Fork, cached_fork, fork_of};
+use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
 use super::resolve::{AdoptOutcome, Adopter, GatePass, ResolveOutcome, resolve_gated};
 use crate::content::Gateway;
 use crate::gate::{Adopted, GateError, GateStage, RejectionReason, floor};
@@ -380,8 +381,9 @@ pub(crate) enum LaggingRead {
 
 /// What [`resolve_child_record`] found.
 pub(crate) enum ChildRecord {
-    /// The adopted body, and the record bytes it admitted.
-    Admitted(Adopted, Vec<u8>),
+    /// The adopted body, the record bytes it admitted, and the same-sequence
+    /// fork the read met.
+    Admitted(Adopted, Vec<u8>, Option<Fork>),
     /// The endpoints agree the name holds no record, and none is cached.
     Absent,
 }
@@ -418,7 +420,7 @@ where
     F: FloorStore,
 {
     match resolve_child_record(transport, snapshot_cache, adopter, name, scope_root, mode).await? {
-        ChildRecord::Admitted(adopted, _) => Ok(adopted),
+        ChildRecord::Admitted(adopted, ..) => Ok(adopted),
         ChildRecord::Absent => Err(ChildResolveError::Unavailable(NO_RECORD.to_owned())),
     }
 }
@@ -446,7 +448,8 @@ where
         .await
         .map_err(unavailable)?;
     let resolved = gated.resolved;
-    let lagging = async |record_bytes: &[u8], epoch| {
+    let mut fork = resolved.fork;
+    let lagging = async |record_bytes: &[u8], epoch, fork| {
         read_lagging(
             transport,
             snapshot_cache,
@@ -457,19 +460,19 @@ where
             epoch,
         )
         .await
-        .map(|adopted| ChildRecord::Admitted(adopted, record_bytes.to_vec()))
+        .map(|adopted| ChildRecord::Admitted(adopted, record_bytes.to_vec(), fork))
     };
     let (record_bytes, current) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
             let (_, bytes) = gated.held_record.ok_or_else(|| {
                 ChildResolveError::Unavailable("the adopted record's bytes are not held".to_owned())
             })?;
-            return Ok(ChildRecord::Admitted(adopted, bytes));
+            return Ok(ChildRecord::Admitted(adopted, bytes, fork));
         }
         ResolveOutcome::TrustViolation(rejection) => {
             let fetched = adopter.assembled_record_bytes(name);
             return match (lagging_epoch(&rejection.reason), fetched) {
-                (Some(epoch), Some(bytes)) => lagging(&bytes, epoch).await,
+                (Some(epoch), Some(bytes)) => lagging(&bytes, epoch, None).await,
                 (Some(epoch), None) => Err(lagging_unreachable(epoch, "its bytes are not held")),
                 (None, _) => Err(ChildResolveError::Gate(GateError::Rejected(rejection))),
             };
@@ -485,18 +488,28 @@ where
         Ok(adopted) => adopted,
         Err(GateError::Rejected(rejection)) => {
             return match lagging_epoch(&rejection.reason) {
-                Some(epoch) => lagging(&record_bytes, epoch).await,
+                Some(epoch) => lagging(&record_bytes, epoch, fork).await,
                 None => Err(ChildResolveError::Gate(GateError::Rejected(rejection))),
             };
         }
         Err(seam) => return Err(ChildResolveError::Gate(seam)),
     };
     if current {
-        keep_newest_last_known_good(snapshot_cache, name, &record_bytes)
+        let held = keep_served_last_known_good(snapshot_cache, name, &record_bytes)
             .await
             .map_err(unavailable)?;
+        // The keeper gives back the copy it replaced, which is fork evidence.
+        if let Some((pick, _)) = &gated.held_record
+            && fork.is_none()
+        {
+            fork = fork_of(
+                pick,
+                false,
+                cached_fork(name, held.as_deref(), &record_bytes, pick),
+            );
+        }
     }
-    Ok(ChildRecord::Admitted(adopted, record_bytes))
+    Ok(ChildRecord::Admitted(adopted, record_bytes, fork))
 }
 
 /// The record's epoch when the gate refused it for lagging the read-epoch
@@ -668,6 +681,15 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
         pending: floor::PendingSequenceRaise,
     ) -> Result<Adopted, SeamError> {
         pending.commit(self.floors).await
+    }
+
+    /// [`ChildAdopter::open_at_floor`], with the head this adopter assembled
+    /// for the pick kept for the pick's own re-open.
+    async fn gates_tie(&self, name: &IpnsName, record_bytes: &[u8]) -> bool {
+        let pick = self.assembled.take();
+        let gated = self.open_at_floor(name, record_bytes).await.is_ok();
+        *self.assembled.borrow_mut() = pick;
+        gated
     }
 
     /// A child record carries no owner blob, so no arm of this adopter ever
@@ -1752,6 +1774,78 @@ mod tests {
                 sequence_floor(&floors, &published.name),
                 sequence_bar.unwrap_or(0),
             );
+        }
+    }
+
+    /// A lagging record at its floor whose cached copy is another value at
+    /// that sequence opens through the lagging arm and keeps the fork. A tie
+    /// of the record's own value is no fork.
+    #[test]
+    fn a_lagging_record_at_its_floor_keeps_the_fork_its_cache_shows() {
+        let published = publish(Spec::default());
+        let root = publish_root(
+            CURRENT_EPOCH,
+            history_links(LAGGING_EPOCH + 1, CURRENT_EPOCH),
+        );
+        let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &NODE);
+        let signer = kdf::ipns_keypair(write_seed.as_bytes());
+        let other_side = |value: &str| {
+            IpnsRecord::create_v2(
+                &signer,
+                value.as_bytes(),
+                SEQUENCE,
+                TTL_NANOS,
+                "2098-01-01T00:00:00Z",
+            )
+            .marshal()
+        };
+        let one_value = other_side(&format!("/ipfs/{}", published.head.cid));
+        let another_value = other_side("/ipfs/bafyanotherhead");
+
+        for (cached, fork) in [
+            (&one_value, None),
+            (
+                &another_value,
+                Some(Fork {
+                    sequence: SEQUENCE,
+                    served: false,
+                }),
+            ),
+        ] {
+            let floors = floors_after_a_cut();
+            for (name, floor) in [(&root.name, ROOT_SEQUENCE), (&published.name, SEQUENCE)] {
+                block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), floor))
+                    .expect("the floor raises");
+            }
+            let cache = InMemorySnapshotCache::default();
+            for (name, record) in [(&root.name, &root.record_bytes), (&published.name, cached)] {
+                block_on(cache.put(name.as_str().as_bytes(), record)).expect("seed the cache");
+            }
+            let gw = gateway();
+            let http = ScriptedHttp::default();
+            http.enqueue_response(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: root.head.block.clone(),
+            });
+
+            let read = block_on(resolve_child_record(
+                &serving(&published),
+                &cache,
+                &adopter(&gw, &http, &floors, &published, NODE),
+                &published.name,
+                Some(&root.name),
+                ResolveMode::CacheFirst,
+            ));
+
+            match read {
+                Ok(ChildRecord::Admitted(adopted, _, read_fork)) => {
+                    assert_eq!(adopted.epoch, LAGGING_EPOCH);
+                    assert_eq!(read_fork, fork);
+                }
+                Ok(ChildRecord::Absent) => panic!("the record was absent"),
+                Err(_) => panic!("the lagging read failed"),
+            }
         }
     }
 

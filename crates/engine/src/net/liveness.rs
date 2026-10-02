@@ -842,6 +842,49 @@ mod tests {
         );
     }
 
+    /// A held name inside the renewal threshold renews over a same-sequence
+    /// fork the endpoints serve: liveness wins (ADR 0066 D3).
+    #[test]
+    fn a_held_name_the_endpoints_serve_forked_renews_inside_the_threshold() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let scheduler = world.scheduler.clone();
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let (name, held) = seeded_held(&device, [1u8; 32], [2u8; 16], "bafyheld", 0);
+        let other = IpnsRecord::create_v2(
+            &held.signer,
+            b"/ipfs/bafyother",
+            1,
+            TTL_NANOS,
+            &eol::eol_from(UnixMillis(0)),
+        )
+        .marshal();
+        let endpoint = device.record_store.endpoints()[1].clone();
+        device
+            .record_store
+            .seed_record(&endpoint, name.as_str(), other);
+        scheduler.advance(Duration::from_secs(65 * DAY));
+        device.http.enqueue_response(ok_200());
+
+        let results = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &scheduler,
+            &SyncTimingProfile::CI,
+            &[held],
+        ));
+        assert!(matches!(
+            outcome_of(&results, &name).outcome,
+            Ok(Some(PublishOutcome::Published { .. }))
+        ));
+        assert_eq!(seq_at(&device, &name), 2);
+    }
+
     #[test]
     fn renews_only_the_below_threshold_name_and_runs_beside_keyless() {
         let world = FakeWorld::new();

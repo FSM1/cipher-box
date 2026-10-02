@@ -69,6 +69,10 @@ pub struct VerifiedRecord {
     pub sequence: u64,
     /// The TTL in nanoseconds (injected from the sync timing profile).
     pub ttl: u64,
+    /// The signed `data` bytes, the record's identity: anyone can add an
+    /// unsigned field to the envelope, so two envelopes that carry the same
+    /// `data` are one record.
+    pub data: Vec<u8>,
 }
 
 /// One decoded protobuf field, holding its exact wire segment so marshal is
@@ -255,6 +259,7 @@ fn decode_data(data: &[u8]) -> Result<VerifiedRecord, CodecError> {
         validity: get_bytes("Validity")?,
         sequence: get_uint("Sequence")?,
         ttl: get_uint("TTL")?,
+        data: data.to_vec(),
     })
 }
 
@@ -436,7 +441,14 @@ mod tests {
         let parsed = IpnsRecord::unmarshal(&foreign).expect("foreign record unmarshals");
         assert_eq!(parsed.marshal(), foreign, "unknown fields survive re-PUT");
         // And verify still works: signatureV2 covers only data.
-        assert!(parsed.verify(&name_of(&s)).is_ok());
+        let verified = parsed
+            .verify(&name_of(&s))
+            .expect("the foreign record verifies");
+        assert_eq!(
+            verified.data,
+            rec.verify(&name_of(&s)).expect("the record verifies").data,
+            "unsigned fields leave the signed data, the record's identity, alone"
+        );
     }
 
     #[test]
