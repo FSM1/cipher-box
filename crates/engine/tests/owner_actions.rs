@@ -4267,6 +4267,75 @@ fn a_default_restore_into_an_origin_shared_after_the_delete_is_refused() {
     );
 }
 
+/// Before the session's first boundary walk lands, the engine knows no scope
+/// root below the vault, so it cannot tell where a destination lies. A restore
+/// waits for the walk, retryably, rather than queue a crossing or refuse a
+/// restore that is in scope.
+#[test]
+fn a_restore_before_the_first_boundary_walk_is_refused_retryably() {
+    let mut fx = GrantScenario::new();
+    let loose = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "loose");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let draft = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "draft",
+    );
+    for node in [loose, draft] {
+        block_on(fx.engine.command(Command::Delete { node })).expect("the delete queues");
+    }
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == draft.0 && entry.scope_id == fx.folder.0),
+        "the draft's entry is filed under the shared folder's scope"
+    );
+
+    let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    let walk_pending = |outcome: Result<CommandOutcome, EngineError>| {
+        matches!(outcome, Err(EngineError::Seam { .. }))
+    };
+    assert!(
+        walk_pending(block_on(fresh.command(Command::Restore {
+            node: loose,
+            into: Some(fx.folder),
+        }))),
+        "a crossing is not queued before the walk names the shared folder's scope"
+    );
+    assert!(
+        walk_pending(block_on(fresh.command(Command::Restore {
+            node: draft,
+            into: None,
+        }))),
+        "an in-scope restore is not refused as a crossing before the walk"
+    );
+    assert!(
+        block_on(fx.owner_device.staging_store.queued_ops())
+            .unwrap()
+            .is_empty()
+    );
+
+    tick(&fx.world, &fresh, &mut tasks);
+    assert_eq!(
+        block_on(fresh.command(Command::Restore {
+            node: loose,
+            into: Some(fx.folder),
+        })),
+        Err(EngineError::RestoreCrossesScope)
+    );
+    assert!(matches!(
+        block_on(fresh.command(Command::Restore {
+            node: draft,
+            into: None,
+        })),
+        Ok(CommandOutcome::Queued { .. })
+    ));
+}
+
 /// Every publish helper resolves the plane of the node it seals, so a pass that
 /// carries a second end serves the ops inside that scope from it. A soft delete
 /// of a node in the granted scope files its bin entry under **that** scope's id
@@ -10501,10 +10570,11 @@ fn a_delete_of_a_folder_above_an_owed_move_is_refused() {
     );
 }
 
-/// Bin `outer` and the folder inside it, and stage an owed interior move of
-/// that folder out of the vault root's scope for the next session.
-fn bin_a_folder_over_an_owed_move(fx: &mut GrantScenario) -> (NodeId, NodeId) {
-    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+/// Bin `outer`, created under `parent`, and the folder inside it, and stage an
+/// owed interior move of that folder out of the vault root's scope for the next
+/// session.
+fn bin_a_folder_over_an_owed_move(fx: &mut GrantScenario, parent: NodeId) -> (NodeId, NodeId) {
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, parent, "outer");
     let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "inner");
     assert!(matches!(
         block_on(fx.engine.command(Command::Delete { node: outer })),
@@ -10525,22 +10595,30 @@ fn bin_a_folder_over_an_owed_move(fx: &mut GrantScenario) -> (NodeId, NodeId) {
     (outer, inner)
 }
 
-/// A restore of a binned folder above one whose interior move is owed is
-/// refused into another scope, as every cross-scope restore is.
+/// A restore into the binned folder's own scope is refused while a folder
+/// inside it owes an interior move out of another scope: the restore would take
+/// that folder from the scope the move re-seals it into.
 #[test]
-fn a_restore_of_a_binned_folder_above_an_owed_move_into_another_scope_is_refused() {
+fn a_restore_of_a_binned_folder_above_an_owed_move_out_of_another_scope_is_refused() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx);
+    let folder = fx.folder;
+    let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx, folder);
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == outer.0 && entry.scope_id == folder.0),
+        "the entry is filed under the shared folder's scope"
+    );
 
     let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
     tick(&fx.world, &fresh, &mut tasks);
     assert_eq!(
         block_on(fresh.command(Command::Restore {
             node: outer,
-            into: Some(fx.folder),
+            into: Some(folder),
         })),
-        Err(EngineError::RestoreCrossesScope)
+        work_owed()
     );
 }
 
@@ -10549,7 +10627,7 @@ fn a_restore_of_a_binned_folder_above_an_owed_move_into_another_scope_is_refused
 #[test]
 fn a_purge_of_a_binned_folder_above_an_owed_move_is_refused() {
     let mut fx = GrantScenario::new();
-    let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx);
+    let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx, ROOT);
 
     let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
     tick(&fx.world, &fresh, &mut tasks);

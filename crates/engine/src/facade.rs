@@ -3189,7 +3189,8 @@ impl fmt::Display for EngineError {
                 f.write_str("the folder this item came from is gone; choose another")
             }
             EngineError::RestoreCrossesScope => f.write_str(
-                "this item cannot go back into a folder that is shared apart from it; choose another",
+                "this item can only go back into a folder shared the same way as the one it came \
+                 from; choose another",
             ),
             EngineError::NotBinned => f.write_str("this item is not in the bin"),
             EngineError::NotAFolder => f.write_str("not a folder"),
@@ -6823,6 +6824,7 @@ where {
                     return Err(EngineError::RestoreTargetGone);
                 }
                 refuse_outside_vault(&rendered, into)?;
+                self.refuse_before_the_boundary_walk()?;
                 let lands_in = scope_of(&rendered, into, &self.relocation_scope_roots());
                 if lands_in != NodeId(entry.scope_id) {
                     return Err(EngineError::RestoreCrossesScope);
@@ -11751,6 +11753,26 @@ where {
                 .map(NodeId),
         );
         roots
+    }
+
+    /// Refuse a command that must name the scope a node lies in until this
+    /// session's boundary walk has landed: before it, no scope root below the
+    /// vault is known and every node reads as the vault root's. A rejected walk
+    /// refuses for good, as [`Self::relocation_anchors`] does.
+    fn refuse_before_the_boundary_walk(&self) -> Result<(), EngineError> {
+        if self.state.boundary_walk_rejected.get() {
+            return Err(EngineError::TrustViolation {
+                message: "a scope root below this vault failed the adoption gate, so this \
+                          session cannot name the scope of a restore destination"
+                    .to_owned(),
+            });
+        }
+        if !self.state.boundary_walk_landed.get() {
+            return Err(EngineError::Seam {
+                message: "boundary-walk-pending".to_owned(),
+            });
+        }
+        Ok(())
     }
 
     /// What a relocation op anchors on: the source parent, the target's base
