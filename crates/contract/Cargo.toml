@@ -34,3 +34,8 @@ serde_json.workspace = true
 # `test-kit` for this suite's own tests: seeded entropy + the in-memory floor
 # store, so a leg can drive a real engine primitive against the live API.
 cipherbox-engine = { workspace = true, features = ["test-kit"] }
+# A headless wallet for the identity exchange: secp256k1 recoverable ECDSA over
+# an EIP-191 Keccak-256 digest, and the JWT `sub` read off an access token.
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+sha3 = "0.10"
+base64.workspace = true
