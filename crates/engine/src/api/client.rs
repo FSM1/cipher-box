@@ -2423,8 +2423,7 @@ mod tests {
         assert_eq!(body["label"], "Laptop");
     }
 
-    /// A buffer that grows while it is written frees each smaller copy of the
-    /// credential unwiped, so the body is sized before the write.
+    /// Pins the presizing of [`to_json`].
     #[test]
     fn a_credential_body_is_serialized_into_a_buffer_sized_before_the_write() {
         let token = "t".repeat(301);
@@ -2443,9 +2442,7 @@ mod tests {
         }
     }
 
-    /// The seam owns the body it sends last, so the body reaches it in a buffer
-    /// that wipes on drop: the identity token of a registration, and the
-    /// refresh token of a rotation.
+    /// A registration and a rotation each carry a credential ([`HttpRequest::body`]).
     #[test]
     fn a_credential_body_reaches_the_seam_in_a_wiping_buffer() {
         fn wiping(request: &HttpRequest) -> &Zeroizing<Vec<u8>> {

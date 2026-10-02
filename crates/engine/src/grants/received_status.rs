@@ -1048,12 +1048,13 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             &render.own_descendants.borrow(),
             &share.scope_id,
         ) {
+            let namespace = self.sharer_namespace(share);
             deposit_seed(
                 render.read_seeds,
                 share.scope_id,
                 Zeroizing::new(*grant.read_scope_seed()),
                 Some(epoch),
-                self.sharer_namespace(share),
+                namespace,
             );
             match (permission == Permission::Write)
                 .then(|| grant.write_scope_seed())
@@ -1069,7 +1070,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     Zeroizing::new(*write_scope_seed),
                     scope_name(&share.scope_root_name).ok().as_ref(),
                     Some(epoch),
-                    self.sharer_namespace(share),
+                    namespace,
                 ),
                 // The blob this pass opened is the whole of the capability, so
                 // an owner that re-sealed the grant down to read cuts the write

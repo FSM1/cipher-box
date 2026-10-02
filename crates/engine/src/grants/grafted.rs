@@ -453,8 +453,10 @@ pub(crate) async fn evict_grafted_write_seeds<F: FloorStore>(
         }
         match sharers.get(&scope_id) {
             Some(sharer) => {
-                let view = FloorNamespace::GrantedBy(ContactLabel::of(contact_label_seed, sharer))
-                    .view(floors);
+                let view = SharerScopedFloorStore::granted_by(
+                    floors,
+                    ContactLabel::of(contact_label_seed, sharer),
+                );
                 refresh_seed_floor(&view, write_seeds, &scope_id, SeedFloor::Read).await;
             }
             None => {
