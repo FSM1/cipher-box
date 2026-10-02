@@ -14,7 +14,8 @@ use super::publish::Observed;
 use super::rotation::{PointerPipeline, publish_pointer_over};
 use crate::api::ApiClient;
 use crate::entropy::Entropy;
-use crate::gate::floor::{self, PointerPlane};
+use crate::gate::GateError;
+use crate::gate::floor::{self, PointerPlane, Strictness};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{ResealedScopeRoot, RotationPublishError, ScopeRootPublisher};
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
@@ -103,18 +104,23 @@ where
         if vouched.current_root.as_str().as_bytes() != root_name {
             return Err(RotationPublishError::Rejected);
         }
-        let unread = |_| RotationPublishError::NotPublished;
         let vouched_floor = floor::vouched_floor(self.floors, &self.scope_id)
             .await
-            .map_err(unread)?;
-        let sequence_floor = floor::sequence_floor(self.floors, self.name().as_str().as_bytes())
-            .await
-            .map_err(unread)?;
-        if vouched_floor.is_some_and(|floor| vouched.min_read_epoch < floor)
-            || sequence_floor.is_some_and(|floor| standing.sequence < floor)
-        {
+            .map_err(|_| RotationPublishError::NotPublished)?;
+        if vouched_floor.is_some_and(|floor| vouched.min_read_epoch < floor) {
             return Err(RotationPublishError::Rejected);
         }
+        floor::check_sequence(
+            self.floors,
+            self.name().as_str().as_bytes(),
+            standing.sequence,
+            Strictness::AtOrAboveFloor,
+        )
+        .await
+        .map_err(|error| match error {
+            GateError::Seam(_) => RotationPublishError::NotPublished,
+            GateError::Rejected(_) => RotationPublishError::Rejected,
+        })?;
         Ok(StandingVouch {
             sequence: standing.sequence,
             repoint: vouched,

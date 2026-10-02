@@ -347,7 +347,7 @@ the read-epoch floor, so the session refuses a pre-cut root. The produce side
 `provision_vault`) signs no re-point below the
 read-epoch floor, and each raise of the vouched floor raises the read-epoch
 floor to at least the same value. A vouch carries every other field of the
-standing pointer, so `vouch_over` refuses a standing pointer below the vouched
+standing pointer, so `standing` refuses a standing pointer below the vouched
 floor or below the sequence that this device published at the name.
 
 **The first-run rule** (ADR 0022 as amended by ADR 0034). The vault-pointer walk
