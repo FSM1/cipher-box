@@ -9,12 +9,13 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { parseSiweMessage } from 'viem/siwe';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import {
   authMethodLockKey,
   boundedAcquire,
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
+  subjectLockKey,
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
 import { AuthMethod, type AuthMethodKind } from '../entities/auth-method.entity';
@@ -26,6 +27,7 @@ import {
   type StepUpOperation,
 } from './challenge.service';
 import { IdentityService } from './identity.service';
+import { IdentityTokenService, type VerifiedIdentityToken } from './identity-token.service';
 import { SIWE_LINK_STATEMENT, SiweService } from './siwe.service';
 import { TokenPair, TokenService } from './token.service';
 
@@ -71,6 +73,7 @@ export class AuthService {
     private readonly identityService: IdentityService,
     private readonly siweService: SiweService,
     private readonly tokenService: TokenService,
+    private readonly identityTokens: IdentityTokenService,
     private readonly clock: Clock,
     configService: ConfigService,
     @InjectRepository(User)
@@ -112,29 +115,63 @@ export class AuthService {
     });
   }
 
+  /**
+   * Challenge-signature login. An `identityToken` from the exchange that preceded
+   * this login binds an unbound account to an unbound subject (ADR 0058 D2); it is
+   * not spent here.
+   */
   async identityLogin(
     publicKey: string,
     challenge: string,
-    signature: string
+    signature: string,
+    identityToken?: string
   ): Promise<LoginResult> {
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
     this.challengeService.consume(challenge, 'identity-login', { publicKey: canonicalKey });
     this.identityService.verifyChallengeSignature(challenge, signature, canonicalKey);
 
-    let user = await this.userRepository.findOne({ where: { publicKey: canonicalKey } });
-    const isNewUser = !user;
-    if (!user) {
-      user = await this.userRepository.save({ publicKey: canonicalKey });
+    let identity: VerifiedIdentityToken | null = null;
+    if (identityToken !== undefined) {
+      try {
+        identity = await this.identityTokens.verify(identityToken);
+      } catch {
+        throw new UnauthorizedException('Invalid identity token');
+      }
+    }
+
+    const { user, isNewUser } = await runLockGuardedTransaction(
+      this.dataSource,
+      async (manager) => {
+        if (identity) {
+          await boundedAcquire(manager, [subjectLockKey(identity.subject)], this.lockTimeoutMs);
+        }
+        const users = manager.getRepository(User);
+        const existing = await users.findOne({ where: { publicKey: canonicalKey } });
+        const account = existing ?? (await users.save({ publicKey: canonicalKey }));
+        if (identity) {
+          await bindSubject(manager, account.id, identity.subject);
+        }
+        await this.touchAuthMethod(manager.getRepository(AuthMethod), account.id, 'identity', {
+          identifierHash: this.identityService.hashIdentifier(canonicalKey),
+          identifierDisplay: this.identityService.truncatePublicKey(canonicalKey),
+        });
+        return { user: account, isNewUser: !existing };
+      }
+    );
+    if (isNewUser) {
       this.logger.log(`Account created implicitly at first login (userId=${user.id})`);
     }
 
-    await this.touchAuthMethod(user.id, 'identity', {
-      identifierHash: this.identityService.hashIdentifier(canonicalKey),
-      identifierDisplay: this.identityService.truncatePublicKey(canonicalKey),
-    });
-
     const pair = await this.tokenService.createTokenPair(user.id, user.publicKey);
     return { pair, isNewUser };
+  }
+
+  /** The identity subject bound to the account (ADR 0058 D1), read on the caller's transaction. */
+  async boundSubjectOf(manager: EntityManager, userId: string): Promise<string | null> {
+    const user = await manager
+      .getRepository(User)
+      .findOne({ where: { id: userId }, select: ['id', 'identitySubjectId'] });
+    return user?.identitySubjectId ?? null;
   }
 
   /**
@@ -186,7 +223,7 @@ export class AuthService {
       throw new ConflictException('Wallet is already linked to another account');
     }
 
-    await this.touchAuthMethod(userId, 'wallet', {
+    await this.touchAuthMethod(this.authMethodRepository, userId, 'wallet', {
       identifierHash,
       identifierDisplay: this.siweService.truncateWalletAddress(address),
     });
@@ -269,19 +306,20 @@ export class AuthService {
   }
 
   private async touchAuthMethod(
+    repository: Repository<AuthMethod>,
     userId: string,
     kind: AuthMethod['kind'],
     identifiers: { identifierHash: string; identifierDisplay: string }
   ): Promise<void> {
-    const existing = await this.authMethodRepository.findOne({
+    const existing = await repository.findOne({
       where: { kind, identifierHash: identifiers.identifierHash },
     });
     if (existing) {
       existing.lastUsedAt = this.clock.now();
-      await this.authMethodRepository.save(existing);
+      await repository.save(existing);
       return;
     }
-    await this.authMethodRepository.save({
+    await repository.save({
       userId,
       kind,
       identifierHash: identifiers.identifierHash,
@@ -289,4 +327,18 @@ export class AuthService {
       lastUsedAt: this.clock.now(),
     });
   }
+}
+
+/**
+ * Write the bind when the account and the subject are both unbound (ADR 0058 D2).
+ * The caller holds the subject lock, so the subject check and the write serialize;
+ * the `IS NULL` guard keeps a concurrent bind of the account under another subject
+ * from being rewritten.
+ */
+async function bindSubject(manager: EntityManager, userId: string, subject: string): Promise<void> {
+  const users = manager.getRepository(User);
+  if (await users.existsBy({ identitySubjectId: subject })) {
+    return;
+  }
+  await users.update({ id: userId, identitySubjectId: IsNull() }, { identitySubjectId: subject });
 }

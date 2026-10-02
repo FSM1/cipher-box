@@ -17,6 +17,7 @@ import {
   type SiweChallengeKind,
 } from './challenge.service';
 import { IdentityService } from './identity.service';
+import { IdentityTokenService } from './identity-token.service';
 import { SIWE_LINK_STATEMENT, SIWE_LOGIN_STATEMENT, SiweService } from './siwe.service';
 import { TokenService } from './token.service';
 
@@ -62,6 +63,7 @@ describe('AuthService auth-method surface', () => {
         createTokenPair: () =>
           Promise.resolve({ accessToken: 'a', refreshToken: 'r', acceleratorToken: 'x' }),
       } as unknown as TokenService,
+      {} as IdentityTokenService,
       new FakeClock(),
       fakeConfig({}).service,
       users as never,

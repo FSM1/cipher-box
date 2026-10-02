@@ -7,10 +7,11 @@ import {
   type VerifiedIdentityToken,
 } from '../../auth/services/identity-token.service';
 import {
-  advisoryLockKey,
   boundedAcquire,
+  registryLockKey,
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
+  subjectLockKey,
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
@@ -223,13 +224,4 @@ function present(row: AccountDevice): RegisteredDevice {
     createdAt: row.createdAt.toISOString(),
     lastSeenAt: row.lastSeenAt.toISOString(),
   };
-}
-
-/** Namespaced per `advisoryLockKey`'s shared bigint space. */
-function subjectLockKey(identitySubjectId: string): bigint {
-  return advisoryLockKey(`device-registry-subject:${identitySubjectId}`);
-}
-
-function registryLockKey(userId: string): bigint {
-  return advisoryLockKey(`device-registry:${userId}`);
 }
