@@ -4372,7 +4372,7 @@ where
                 self.lagging_source(&adopter, name, record_bytes, rejection)
                     .await
             }
-            Err(error) => Err(wave_verdict(error).into()),
+            Err(GateError::Seam(error)) => Err(self.seam_refusal(&adopter, error)),
         }
     }
 
@@ -5216,8 +5216,7 @@ where
             }
             None => self.subtree.name(node_id).ok_or(ResolveFailure::Rejected)?,
         };
-        // Only a node below the root drops (ADR 0065 D1), and a drop retires
-        // only a name the scope's own seed derives for the node.
+        // Only a node below the root drops (ADR 0065 D1).
         let refused = |reason: ResolveFailure, cause: Option<DropCause>| match cause {
             Some(cause) if !is_root => NodeStop::Refused {
                 reason,
@@ -9913,13 +9912,30 @@ mod tests {
     ) -> IpnsName {
         let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &node_id);
         let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
+        stage_node_sealed_at(
+            harness,
+            node_id,
+            body,
+            sequence,
+            (OWNER_ROOT_EPOCH, &read_key),
+        )
+    }
+
+    /// [`stage_node_at`] with the body sealed at an epoch under a read key.
+    fn stage_node_sealed_at<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        node_id: [u8; 16],
+        body: &ReadBody,
+        sequence: u64,
+        (epoch, read_key): (u64, &[u8; 32]),
+    ) -> IpnsName {
         let envelope = seal_read_body(
-            &read_key,
+            read_key,
             &[19u8; 24],
             ENVELOPE_V,
             node_id,
             SCOPE,
-            OWNER_ROOT_EPOCH,
+            epoch,
             body,
         )
         .expect("the interior body seals");
@@ -12788,6 +12804,16 @@ mod tests {
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let mut entropy = SeededEntropy::new(13);
+        assert!(
+            block_on(rotate_scope_write(
+                &mut entropy,
+                &net,
+                &net,
+                &write_plan(&root, &owner),
+            ))
+            .is_err(),
+            "before the bound the wave stops"
+        );
         let plan = RotateScopeWritePlan {
             bound: &PastBound,
             ..write_plan(&root, &owner)
@@ -12813,6 +12839,8 @@ mod tests {
         }
 
         fn held(&self, _node_id: &[u8; 16]) {}
+
+        fn resolved(&self, _node_id: &[u8; 16]) {}
     }
 
     /// Every name the harness's registry was asked to retire.
@@ -12987,6 +13015,59 @@ mod tests {
             vec![DroppedNode {
                 node_id: MID,
                 cause: DropCause::EndpointUnavailable,
+            }]
+        );
+    }
+
+    /// A record at the floor sequence that no held seed opens, at an epoch
+    /// above the root's, waits for the bound as one above the floor does.
+    #[test]
+    fn a_record_at_the_floor_above_the_roots_epoch_drops_only_past_the_bound() {
+        let harness = Harness::plain();
+        let mid_name = stage_node(&harness, MID, &folder(Vec::new()));
+        let root = staged_root(
+            &harness,
+            vec![ref_to(MID, &mid_name)],
+            Vec::new(),
+            Vec::new(),
+        );
+        let owner = owner_identity();
+        let first = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        block_on(first.resolve_node(&SCOPE, None)).expect("the root resolves");
+        block_on(first.resolve_node(&MID, None)).expect("the walk adopts MID");
+        assert_eq!(
+            sequence_floor_of(&harness, mid_name.as_str().as_bytes()),
+            Some(1)
+        );
+        stage_node_sealed_at(
+            &harness,
+            MID,
+            &folder(Vec::new()),
+            1,
+            (OWNER_ROOT_EPOCH + 3, &[0x13; 32]),
+        );
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        let mut entropy = SeededEntropy::new(13);
+
+        let error = block_on(rotate_scope_write(
+            &mut entropy,
+            &net,
+            &net,
+            &write_plan(&root, &owner),
+        ))
+        .expect_err("the wave stops before the bound");
+        assert!(error.is_retryable());
+        let plan = RotateScopeWritePlan {
+            bound: &PastBound,
+            ..write_plan(&root, &owner)
+        };
+        let outcome = block_on(rotate_scope_write(&mut entropy, &net, &net, &plan))
+            .expect("past the bound the wave finishes");
+        assert_eq!(
+            outcome.dropped,
+            vec![DroppedNode {
+                node_id: MID,
+                cause: DropCause::EpochAboveRoot,
             }]
         );
     }

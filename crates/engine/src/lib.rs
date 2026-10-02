@@ -93,7 +93,7 @@ pub use devices::{
 };
 pub use entropy::{Entropy, EntropyError, OsEntropy};
 pub use facade::{
-    ApiBaseUrl, BlockProgress, Breadcrumb, Command, CommandOutcome, DeadLetter, Engine,
+    ApiBaseUrl, BlockProgress, Breadcrumb, Command, CommandOutcome, DeadLetter, DropCause, Engine,
     EngineError, EngineView, Event, EventStream, InvalidApiBaseUrl, InvitePreview,
     LinkPreviewState, LoginSecret, MAX_CONTACT_CODE_BYTES, MAX_FOCUS_FILES, MAX_FOCUS_FOLDERS,
     MAX_FOLDER_CHILDREN, MAX_NODE_NAME_BYTES, MAX_OPEN_STREAMS, NodeAttrs, NodeId, NodeKind,

@@ -95,7 +95,7 @@ pub struct WriteScopeNode {
 }
 
 /// Why the name wave leaves a node out of the moved tree (ADR 0065,
-/// CONTEXT.md "Dropped node"). Serialized as [`DropCause::check`].
+/// CONTEXT.md "Dropped node"). Serialized in kebab case, as `no-record`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
 #[cfg_attr(feature = "wasm", serde(rename_all = "kebab-case"))]
@@ -135,20 +135,6 @@ impl DropCause {
                 | Self::EpochAboveRoot
         )
     }
-
-    /// A stable, key-material-free name.
-    #[must_use]
-    pub fn check(self) -> &'static str {
-        match self {
-            Self::RecordRefused => "record-refused",
-            Self::EpochUnreachable => "epoch-unreachable",
-            Self::NoRecord => "no-record",
-            Self::EndpointUnavailable => "endpoint-unavailable",
-            Self::NoHeadBlock => "no-head-block",
-            Self::BelowSequenceFloor => "below-sequence-floor",
-            Self::EpochAboveRoot => "epoch-above-root",
-        }
-    }
 }
 
 /// Why [`WriteSubtreeResolver::resolve_node`] yields no node.
@@ -169,7 +155,8 @@ pub enum NodeStop {
         retire: Option<Box<IpnsName>>,
     },
     /// A ref met later outranks the one the walk took for a node (D2), so
-    /// the walk starts again from the root.
+    /// the walk starts again from the root. The resolver asks for one only
+    /// when it keeps a ref it did not keep before.
     Rewalk,
 }
 
@@ -186,6 +173,8 @@ pub trait NodeBound {
     fn past(&self, node_id: &[u8; 16]) -> bool;
     /// Count this pass toward `node_id`'s bound.
     fn held(&self, node_id: &[u8; 16]);
+    /// `node_id` resolved, so its count starts again.
+    fn resolved(&self, node_id: &[u8; 16]);
 }
 
 /// A bound that no node is ever past.
@@ -197,6 +186,8 @@ impl NodeBound for NoBound {
     }
 
     fn held(&self, _node_id: &[u8; 16]) {}
+
+    fn resolved(&self, _node_id: &[u8; 16]) {}
 }
 
 /// A node the wave left out of the moved tree.
@@ -1068,16 +1059,13 @@ struct Walk {
 /// on with the other nodes so each node held counts this pass, then stops. Any
 /// other refusal aborts: a partial subtree is never a complete wave.
 ///
-/// A [`NodeStop::Rewalk`] starts the walk again, at most once for each node a
-/// walk met.
+/// A [`NodeStop::Rewalk`] starts the walk again.
 async fn collect_subtree<R: WriteSubtreeResolver>(
     resolver: &R,
     root_id: [u8; 16],
     resumed: Option<&ResumedRoot>,
     bound: &dyn NodeBound,
 ) -> Result<Walk, WriteRotateError> {
-    let mut met: BTreeSet<[u8; 16]> = BTreeSet::new();
-    let mut rewalks = 0usize;
     'walk: loop {
         let mut walk = Walk::default();
         let mut held: Option<([u8; 16], ResolveFailure)> = None;
@@ -1087,19 +1075,14 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
         queue.push_back(root_id);
 
         while let Some(id) = queue.pop_front() {
-            met.insert(id);
             let node = match resolver.resolve_node(&id, resumed).await {
-                Ok(node) => node,
-                Err(NodeStop::Rewalk) if rewalks < met.len() => {
-                    rewalks += 1;
-                    continue 'walk;
+                Ok(node) => {
+                    bound.resolved(&id);
+                    node
                 }
-                Err(NodeStop::Rewalk) => {
-                    return Err(WriteRotateError::Resolve {
-                        node_id: id,
-                        reason: ResolveFailure::ConflictingChildLabel,
-                    });
-                }
+                // Each rewalk keeps one more ref, and a scope holds finitely
+                // many, so the walks end.
+                Err(NodeStop::Rewalk) => continue 'walk,
                 Err(NodeStop::Refused { cause, retire, .. })
                     if id != root_id && (!cause.needs_bound() || bound.past(&id)) =>
                 {

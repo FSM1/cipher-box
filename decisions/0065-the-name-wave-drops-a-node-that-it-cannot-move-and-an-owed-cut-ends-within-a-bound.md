@@ -28,21 +28,24 @@ revokee planted gives the revokee no new power.
 The causes are: the adoption gate refuses the record, except a sequence below the floor and a
 head block that does not match its CID; an epoch that no held history link reaches (ADR 0064
 consequence 8); and a malformed child ref in the body, which drops the parent. The wave removes
-the ref from the moved parent, does not walk below the node, retires the old name, moves the
-other nodes, re-points the root, and finishes the cut. The wave never adopts or carries a refused
-record.
+the ref from the moved parent, does not walk below the node, moves the other nodes, re-points the
+root, and finishes the cut. It retires the old name only when the root's write scope seed derives
+that name for the node. The wave never adopts or carries a refused record.
 
 **D2 — Of two refs to one node id at different names, the wave keeps the ref at the name that
-the scope's old write seed derives for that id, and drops the other ref.** Today this conflict
-(`ConflictingChildLabel` in `record_children`) stops the wave.
+the write scope seed of the root it reads derives for that id, and drops the other ref.** That
+seed is the old seed, or the new seed in a resumed wave. If neither name is derived, the wave
+keeps the first ref. Before this ADR, the conflict (`ConflictingChildLabel`) stopped the wave.
 
 **D3 — A stop that an endpoint can cause drops only after a bound.** The causes are: no record at
-the name, no endpoint that answers for the name, no endpoint that serves the head block, a record
-below the sequence floor, and a record at an epoch above the gated root's, which a read rotation on
-another owner device can publish. The owed entry keeps the time of its first stop. A re-drive
-retries such a node. When the entry has stopped for longer than the bound, and that node has
-stopped the wave over a minimum count of passes, the next re-drive drops the node as D1 does. No
-drop rests on one answer from the endpoint set.
+the name, no endpoint that answers for the name, no endpoint that serves a head block that matches
+its CID, a record below the sequence floor, and a record at an epoch above the gated root's, which a
+read rotation on another owner device can publish. The owed entry keeps the time that its current
+first step first stopped; an advance to a new first step clears it. A re-drive retries such a node.
+When the entry has stopped for longer than the bound, the next re-drive drops a node as D1 does
+when that node held the wave over a minimum count of passes, or when the entry held it over that
+count past the bound, so a new node on each pass does not hold the cut. No drop rests on one
+answer from the endpoint set.
 
 **D4 — After the time of the bound of D3, the renewal walk renews in an owed scope each name
 that the scope root's current write seed derives.** The count of passes does not apply here.

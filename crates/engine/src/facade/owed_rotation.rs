@@ -348,6 +348,7 @@ where
         let Some(_running) = Running::take(self.running) else {
             return;
         };
+        self.owed.next_pass();
         // A record that does not read is read again by the next pass.
         let Ok(scopes) = self.owed().scopes().await else {
             return;

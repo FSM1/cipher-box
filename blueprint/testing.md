@@ -122,7 +122,9 @@ scenario fails the meta-test):
   once, the next two past the bound, and the second ref goes with no report.
   The bound holds before T, for each node until its own K passes, and over a
   restart, and an honest node new to a wave past T does not drop on its first
-  stop; past T the renewal walk renews an owed scope, and within T it does not
+  stop; a new ref to nothing on each pass ends at the entry count, command
+  re-drives inside one pass count once, and a node that resolves starts its
+  count again; past T the renewal walk renews an owed scope, and within T it does not
   (ADR 0065, `crates/engine/tests/owner_actions.rs`). The wave retires only a
   name the scope derives, waits for the bound on a wrong head block and on an
   endpoint that does not answer, and re-seals the record its walk gated, so a

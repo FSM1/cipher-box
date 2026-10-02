@@ -11,7 +11,7 @@
 //! The session holds the record in one cell ([`OwedCell`]) and writes it
 //! through, so a command and the tick never write back each other's stale copy.
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -47,8 +47,9 @@ const FORMAT_V2: u8 = 2;
 pub const DROP_BOUND: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// The fewest passes of the current session that a node must hold the name
-/// wave before it drops. The count is the session's own, so a drop rests on
-/// stops this session saw.
+/// wave before it drops, or that the entry must hold it past [`DROP_BOUND`]
+/// before every held node drops. The count is the session's own, so a drop
+/// rests on stops this session saw.
 pub const DROP_BOUND_PASSES: u32 = 3;
 
 /// The most scopes the record holds. A command that would owe one more refuses
@@ -182,10 +183,41 @@ pub const ROTATION_WORK_OWED: &str = "rotation-work-owed";
 pub struct OwedCell {
     record: RefCell<Option<OwedRecord>>,
     held: RefCell<BTreeSet<NodeId>>,
-    /// The passes of this session that each node held the name wave of each
-    /// entry's write cut.
-    held_nodes: RefCell<BTreeMap<NodeId, BTreeMap<[u8; 16], u32>>>,
+    /// The passes of this session that held the name wave of each entry's
+    /// write cut.
+    held_nodes: RefCell<BTreeMap<NodeId, HeldPasses>>,
+    /// The sync pass of this session, which each tick advances. A command's
+    /// re-drive counts in the pass it runs in.
+    pass: Cell<u64>,
     writer: futures_util::lock::Mutex<()>,
+}
+
+/// A count of passes, each counted once.
+#[derive(Clone, Copy, Default)]
+struct Passes {
+    count: u32,
+    last: Option<u64>,
+}
+
+impl Passes {
+    fn count(&mut self, pass: u64) {
+        if self.last != Some(pass) {
+            self.count = self.count.saturating_add(1);
+            self.last = Some(pass);
+        }
+    }
+
+    fn before(self, pass: u64) -> u32 {
+        self.count - u32::from(self.last == Some(pass))
+    }
+}
+
+/// The passes that held one entry's name wave: past its time for the entry,
+/// and at any time for each node until it resolves.
+#[derive(Default)]
+struct HeldPasses {
+    past_time: Passes,
+    nodes: BTreeMap<[u8; 16], Passes>,
 }
 
 impl OwedCell {
@@ -203,13 +235,18 @@ impl OwedCell {
         self.held_nodes.borrow_mut().remove(&scope);
     }
 
+    #[cfg(test)]
     fn held_passes(&self, scope: NodeId, node_id: &[u8; 16]) -> u32 {
         self.held_nodes
             .borrow()
             .get(&scope)
-            .and_then(|nodes| nodes.get(node_id))
-            .copied()
-            .unwrap_or(0)
+            .and_then(|held| held.nodes.get(node_id))
+            .map_or(0, |passes| passes.count)
+    }
+
+    /// Start the next sync pass.
+    pub fn next_pass(&self) {
+        self.pass.set(self.pass.get().wrapping_add(1));
     }
 
     /// Take `scope` for one driver until the hold drops, or `None` while
@@ -222,39 +259,46 @@ impl OwedCell {
     }
 }
 
-/// The bound of ADR 0065 D3 for one pass of an entry's name wave. A node is
-/// past it once the entry's current step first stopped [`DROP_BOUND`] ago and
-/// the node held [`DROP_BOUND_PASSES`] earlier passes; it counts at most once
-/// for this pass.
+/// The bound of ADR 0065 D3 for one run of an entry's name wave. Once the
+/// entry's current step first stopped [`DROP_BOUND`] ago, a node is past it
+/// when it held [`DROP_BOUND_PASSES`] earlier passes, and every node is when
+/// the entry held that many earlier passes past that time. Each count takes a
+/// pass once, so the retries and re-drives inside one pass count as one.
 pub struct EntryBound<'a> {
     cell: &'a OwedCell,
     scope: NodeId,
     past_time: bool,
-    counted: RefCell<BTreeSet<[u8; 16]>>,
+    pass: u64,
 }
 
 impl NodeBound for EntryBound<'_> {
     fn past(&self, node_id: &[u8; 16]) -> bool {
-        // A retry inside this pass reads only the earlier passes.
-        let this_pass = u32::from(self.counted.borrow().contains(node_id));
-        self.past_time
-            && self
-                .cell
-                .held_passes(self.scope, node_id)
-                .saturating_sub(this_pass)
-                >= DROP_BOUND_PASSES
+        if !self.past_time {
+            return false;
+        }
+        let held = self.cell.held_nodes.borrow();
+        let Some(held) = held.get(&self.scope) else {
+            return false;
+        };
+        held.past_time.before(self.pass) >= DROP_BOUND_PASSES
+            || held
+                .nodes
+                .get(node_id)
+                .is_some_and(|node| node.before(self.pass) >= DROP_BOUND_PASSES)
     }
 
     fn held(&self, node_id: &[u8; 16]) {
-        if self.counted.borrow_mut().insert(*node_id) {
-            *self
-                .cell
-                .held_nodes
-                .borrow_mut()
-                .entry(self.scope)
-                .or_default()
-                .entry(*node_id)
-                .or_default() += 1;
+        let mut held = self.cell.held_nodes.borrow_mut();
+        let held = held.entry(self.scope).or_default();
+        held.nodes.entry(*node_id).or_default().count(self.pass);
+        if self.past_time {
+            held.past_time.count(self.pass);
+        }
+    }
+
+    fn resolved(&self, node_id: &[u8; 16]) {
+        if let Some(held) = self.cell.held_nodes.borrow_mut().get_mut(&self.scope) {
+            held.nodes.remove(node_id);
         }
     }
 }
@@ -355,7 +399,7 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
             cell: self.cell,
             scope,
             past_time: bound_elapsed(first_stop, now),
-            counted: RefCell::default(),
+            pass: self.cell.pass.get(),
         })
     }
 
@@ -492,6 +536,7 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
         edit: impl FnOnce(&mut Vec<OwedStep>),
     ) -> Result<(), OwedRecordError> {
         let mut write_cut_left = false;
+        let mut restarted = false;
         self.write(|record| {
             let Some(entry) = record.get_mut(&scope) else {
                 return Ok(false);
@@ -502,6 +547,7 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
             // A changed first step advanced the entry, so its bound starts again.
             if entry.steps.first().map(OwedStep::tag) != first_before {
                 entry.first_stop = None;
+                restarted = true;
             }
             write_cut_left = owed_write_cut && !owes_write_cut(&entry.steps);
             Ok(true)
@@ -509,6 +555,8 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
         .await?;
         if write_cut_left {
             self.cell.reset_held(scope);
+        } else if restarted && let Some(held) = self.cell.held_nodes.borrow_mut().get_mut(&scope) {
+            held.past_time = Passes::default();
         }
         Ok(())
     }
@@ -957,7 +1005,7 @@ mod tests {
         );
     }
 
-    /// A first-stop flag that is neither absent nor present is refused.
+    /// A first-stop flag byte other than 0 or 1 is refused.
     #[test]
     fn an_unknown_first_stop_flag_is_refused() {
         assert_eq!(decode_owed(&revoke_bytes(FORMAT_V2, &[2])), None);
@@ -1109,10 +1157,7 @@ mod tests {
                 .find(|vector| vector["name"] == name)
                 .and_then(|vector| vector["body"].as_str())
                 .unwrap_or_else(|| panic!("the KAT pins {name}"));
-            (0..hex.len())
-                .step_by(2)
-                .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex"))
-                .collect()
+            hex::decode(hex).expect("the KAT body is hex")
         };
         let entry = |first_stop| OwedEntry {
             first_stop,
@@ -1149,11 +1194,12 @@ mod tests {
         block_on(async {
             owed.owe(node(1), revoke()).await.expect("the entry lands");
             for pass in 0..DROP_BOUND_PASSES {
-                let bound = owed.bound(node(1), after).await.expect("the store answers");
-                assert!(!bound.past(&held));
-                bound.held(&held);
-                bound.held(&held);
-                assert!(!bound.past(&held), "a retry reads only the earlier passes");
+                cell.next_pass();
+                for _ in 0..2 {
+                    let bound = owed.bound(node(1), start).await.expect("the store answers");
+                    bound.held(&held);
+                    bound.held(&held);
+                }
                 owed.note_stop(
                     node(1),
                     start.saturating_add(Duration::from_secs(u64::from(pass))),
@@ -1162,6 +1208,11 @@ mod tests {
                 .expect("the stop lands");
             }
             assert_eq!(
+                cell.held_passes(node(1), &held),
+                DROP_BOUND_PASSES,
+                "a pass counts once"
+            );
+            assert_eq!(
                 owed.entry(node(1))
                     .await
                     .expect("the store answers")
@@ -1169,6 +1220,7 @@ mod tests {
                 Some(start),
                 "only the first stop is kept"
             );
+            cell.next_pass();
             let early = owed
                 .bound(node(1), UnixMillis(after.0 - 1))
                 .await
@@ -1179,14 +1231,46 @@ mod tests {
             assert!(!bound.past(&other), "another node counts its own passes");
             assert_eq!(owed.scopes_within_bound(after).await, Ok(Vec::new()));
 
+            bound.resolved(&held);
+            assert!(!bound.past(&held), "a node that resolves starts again");
+
             cell.forget();
             let bound = owed.bound(node(1), after).await.expect("the store answers");
-            assert!(!bound.past(&held), "a new session counts its own passes");
+            assert!(!bound.past(&other), "a new session counts its own passes");
             assert_eq!(
                 owed.scopes_within_bound(after).await,
                 Ok(Vec::new()),
                 "the time survives the session"
             );
+        });
+    }
+
+    /// Past its time, an entry that held [`DROP_BOUND_PASSES`] passes drops
+    /// every held node, so a new node on each pass does not hold the wave.
+    #[test]
+    fn an_entry_held_past_its_time_on_enough_passes_drops_every_held_node() {
+        let entropy = RefCell::new(SeededEntropy::new(7));
+        let mine = secret(9);
+        let store = InMemoryStagingStore::default();
+        let cell = OwedCell::default();
+        let owed = OwedRotation::new(&store, BookkeepingSeal::new(&mine, &entropy), &mine, &cell);
+        let start = UnixMillis(1_000);
+        let after = start.saturating_add(DROP_BOUND);
+        block_on(async {
+            owed.owe(node(1), revoke()).await.expect("the entry lands");
+            owed.note_stop(node(1), start)
+                .await
+                .expect("the stop lands");
+            for fresh in 0..DROP_BOUND_PASSES {
+                cell.next_pass();
+                let bound = owed.bound(node(1), after).await.expect("the store answers");
+                let id = [u8::try_from(fresh).expect("a small count"); 16];
+                assert!(!bound.past(&id));
+                bound.held(&id);
+            }
+            cell.next_pass();
+            let bound = owed.bound(node(1), after).await.expect("the store answers");
+            assert!(bound.past(&[0xee; 16]), "a node new to this pass drops");
         });
     }
 
@@ -1231,6 +1315,7 @@ mod tests {
         block_on(async {
             owed.owe(node(1), revoke()).await.expect("the entry lands");
             for _ in 0..DROP_BOUND_PASSES {
+                cell.next_pass();
                 owed.bound(node(1), after)
                     .await
                     .expect("the store answers")
@@ -1251,6 +1336,7 @@ mod tests {
                 None
             );
             assert_eq!(owed.scopes_within_bound(after).await, Ok(vec![node(1)]));
+            cell.next_pass();
             assert!(
                 !owed
                     .bound(node(1), after)

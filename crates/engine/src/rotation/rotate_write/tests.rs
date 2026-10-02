@@ -1414,6 +1414,59 @@ impl NodeBound for CountingBound {
     fn held(&self, node_id: &[u8; 16]) {
         self.held.borrow_mut().push(*node_id);
     }
+
+    fn resolved(&self, _node_id: &[u8; 16]) {}
+}
+
+/// A resolver that asks for `rewalks` more walks at one node, as a body whose
+/// derived refs the walk meets late does.
+struct RewalkingResolver {
+    inner: FakeResolver,
+    rewalks: Cell<usize>,
+}
+
+impl WriteSubtreeResolver for RewalkingResolver {
+    async fn resolve_node(
+        &self,
+        node_id: &[u8; 16],
+        resumed: Option<&ResumedRoot>,
+    ) -> Result<WriteScopeNode, NodeStop> {
+        if *node_id == nid(0x05) && self.rewalks.get() > 0 {
+            self.rewalks.set(self.rewalks.get() - 1);
+            return Err(NodeStop::Rewalk);
+        }
+        self.inner.resolve_node(node_id, resumed).await
+    }
+
+    async fn recover_wave(&self) -> Result<RecoveredWave, ResolveFailure> {
+        self.inner.recover_wave().await
+    }
+}
+
+/// ADR 0065 D2: the walk starts again as often as the resolver keeps a new
+/// ref, more often than it meets nodes, and the wave finishes.
+#[test]
+fn a_walk_restarts_more_often_than_it_meets_nodes_and_finishes() {
+    let owner = owner();
+    let (c, sig) = commitment(&owner);
+    let resolver = RewalkingResolver {
+        inner: tree(),
+        rewalks: Cell::new(8),
+    };
+    let state = WaveState::default();
+    let current_root = old_name_of(&SCOPE);
+    let outcome = block_on(async {
+        rotate_scope_write(
+            &mut SeededEntropy::new(4),
+            &resolver,
+            &FakePublisher::new(state.clone()),
+            &plan(&owner, &c, &sig, &current_root),
+        )
+        .await
+    })
+    .expect("the walks end");
+    assert_eq!(outcome.interior_node_count, 4);
+    assert_eq!(resolver.rewalks.get(), 0);
 }
 
 /// ADR 0065 D3: the bound is each node's own. A walk counts every node a

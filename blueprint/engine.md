@@ -1075,13 +1075,15 @@ landed from one that did not, so a re-drive after a lost advance runs one more.
 
 Each entry keeps the time that its current first step first stopped (ADR 0065
 D3); an advance to a new first step clears it. A node is **past the bound** when
-that time is at least T = 7 days old and the node held the name wave on at least
-K = 3 earlier passes of the current session. A pass counts once for each node,
-whatever its retries. The counts live in the session and end with the write
-cut, so a restart sets them to zero again: a drop rests on stops this session
-saw, and a restart only delays it. A node that is new to the wave waits for its
-own K passes, however long the entry stopped. A re-drive drops each node past
-the bound that a stop an endpoint can cause holds (rotateScopeWrite above).
+that time is at least T = 7 days old and either the node held the name wave on
+at least K = 3 earlier passes of the current session, or the entry held it on K
+earlier passes past T. The entry count stops a revokee that plants a new node
+on each pass. A pass is one sync pass, which each tick starts: its retries and
+any command re-drive inside it count once. A node that resolves starts its own
+count again. The counts live in the session and end with the write cut, so a
+restart sets them to zero again: a drop rests on stops this session saw, and a
+restart only delays it. A re-drive drops each node past the bound that a stop an
+endpoint can cause holds (rotateScopeWrite above).
 
 The renewal bound of ADR 0065 D4 rests on T alone. Once the entry's current
 step has stopped for T, the renewal walk renews in that scope each name that the
