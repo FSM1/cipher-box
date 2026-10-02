@@ -69,7 +69,7 @@ use crate::net::author::{
     author_scope_root_envelope, new_child, report_carried_cut,
 };
 use crate::net::last_known_good::keep_then_commit;
-use crate::net::publish::{Observed, PublishError, PublishOutcome, PublishReceipt};
+use crate::net::publish::{Observed, PublishError, PublishOutcome, PublishReceipt, PublishVerdict};
 use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
@@ -7583,8 +7583,9 @@ async fn yield_now() {
     .await;
 }
 
-/// Classify a publish failure for the valve. Only the head-block upload and the
-/// register-first call carry a server verdict this pass can act on; everything
+/// Classify a publish failure for the valve. The head-block upload and the
+/// register-first call carry a server verdict, and this build's own refusal of
+/// the bytes it would sign repeats on every retry, so it is charged; everything
 /// else is availability.
 ///
 /// `refused_bytes` is what the upload asked for, so a block entered here records
@@ -7593,9 +7594,16 @@ fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     match error {
         RecordPublishError::Upload(error) => classify_upload(error, refused_bytes),
         RecordPublishError::Publish(PublishError::Register(error)) => classify_register(error),
-        RecordPublishError::HeadCidMismatch { .. } | RecordPublishError::Publish(_) => {
-            Halt::Unclassified
-        }
+        RecordPublishError::Publish(error) => match error.verdict() {
+            PublishVerdict::Refused
+            | PublishVerdict::RefusedUnaddressed
+            | PublishVerdict::RefusedOversized => Halt::UploadAttempt,
+            PublishVerdict::RegistryRefused
+            | PublishVerdict::NotLanded
+            | PublishVerdict::PutUnacknowledged
+            | PublishVerdict::PutRefused => Halt::Unclassified,
+        },
+        RecordPublishError::HeadCidMismatch { .. } => Halt::Unclassified,
     }
 }
 
@@ -9063,6 +9071,33 @@ mod tests {
             RecordPublishError::Publish(crate::net::PublishError::AllEndpointsFailed),
         ] {
             assert_eq!(classify_publish(error, 4096), Halt::Unclassified);
+        }
+    }
+
+    /// This build's own refusal of the bytes it would sign repeats on every
+    /// retry over the same inputs, so it spends the attempt budget and is never
+    /// an outage.
+    #[test]
+    fn a_produce_side_refusal_costs_an_attempt() {
+        for error in [
+            PublishError::SequenceExhausted,
+            PublishError::BelowBar {
+                floor: crate::net::BarFloor::Read,
+                at: 2,
+                epoch: 1,
+            },
+            PublishError::ForeignVersion { version: 2 },
+            PublishError::EmptyHeadCid,
+            PublishError::RecordTooLarge {
+                size: 10_241,
+                limit: 10_240,
+            },
+        ] {
+            assert_eq!(
+                classify_publish(RecordPublishError::Publish(error.clone()), 4096),
+                Halt::UploadAttempt,
+                "{error}"
+            );
         }
     }
 
