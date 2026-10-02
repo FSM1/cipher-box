@@ -27,6 +27,11 @@ mod vault_pointer;
 /// it, so nothing on this plane sends the raw client an unbounded batch.
 pub const REGISTRY_BATCH_MAX: usize = 1000;
 
+/// The largest JSON body the API's registry routes accept, in bytes; every
+/// chunk [`register`] and [`retire`] send fits it (blueprint/api.md "Batch
+/// bounds").
+pub const REGISTRY_BODY_MAX_BYTES: usize = 1024 * 1024;
+
 pub mod author;
 pub(crate) mod cut;
 pub mod eol;

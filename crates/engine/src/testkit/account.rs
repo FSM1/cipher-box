@@ -28,9 +28,9 @@ use crate::NodeId;
 use crate::api::{REGISTRY_BATCH_REFUSED, RetireEntry};
 use crate::content::DAG_ROOT_CODEC;
 use crate::grants::GrantRow;
-use crate::net::REGISTRY_BATCH_MAX;
 use crate::net::author::ENVELOPE_V;
 use crate::net::publish::Observed;
+use crate::net::{REGISTRY_BATCH_MAX, REGISTRY_BODY_MAX_BYTES};
 use crate::seams::{HttpRequest, HttpResponse, RecordTransport, SeamError, SeamResult};
 use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 
@@ -123,12 +123,27 @@ pub fn registry_batch_refused() -> Vec<u8> {
         .into_bytes()
 }
 
+/// A registry token padded to `len` characters, unique per `i`: a name is at
+/// most 128 characters and a CID at most 256.
+pub fn wide_token(prefix: &str, i: usize, len: usize) -> String {
+    let token = format!("{prefix}{i}");
+    format!("{token}{}", "a".repeat(len - token.len()))
+}
+
 /// Ack a registration, refusing one past the registry's bounds fail-closed —
-/// never truncated or partially applied (blueprint/api.md "Batch bounds").
+/// never truncated or partially applied (blueprint/api.md "Batch bounds"). A
+/// body past the API's JSON limit gets the body parser's `413`, with no `code`.
 fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
+    let body = body.expect("a register call carries a body");
+    if body.len() > REGISTRY_BODY_MAX_BYTES {
+        return Ok(HttpResponse {
+            status: 413,
+            headers: Vec::new(),
+            body: Vec::new(),
+        });
+    }
     let entries: Vec<serde_json::Value> =
-        serde_json::from_slice(body.expect("a register call carries a body"))
-            .expect("a register body is a JSON array");
+        serde_json::from_slice(body).expect("a register body is a JSON array");
     let over_cap = entries.len() > REGISTRY_BATCH_MAX
         || entries.iter().any(|entry| {
             entry["contentCids"]

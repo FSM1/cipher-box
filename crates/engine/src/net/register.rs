@@ -12,8 +12,10 @@ use crate::seams::{CredentialStore, Http};
 /// Both of the registry's bounds are enforced here so no caller carries them:
 /// an entry past the per-entry `contentCids` cap splits into several entries
 /// under the same `ipnsName` (the head rides the first), and the batch itself
-/// chunks to [`REGISTRY_BATCH_MAX`] entries. A failing chunk leaves the earlier
-/// ones registered and returns `Err`.
+/// chunks to [`REGISTRY_BATCH_MAX`] entries and [`REGISTRY_BATCH_MAX`] content
+/// CIDs in total, which holds each body under
+/// [`REGISTRY_BODY_MAX_BYTES`](super::REGISTRY_BODY_MAX_BYTES). A failing chunk
+/// leaves the earlier ones registered and returns `Err`.
 pub async fn register<H, C>(
     api: &ApiClient<H, C>,
     entries: &[NameRegistration],
@@ -22,9 +24,21 @@ where
     H: Http,
     C: CredentialStore,
 {
-    let bounded: Vec<NameRegistration> = entries.iter().flat_map(split_entry).collect();
-    for chunk in bounded.chunks(REGISTRY_BATCH_MAX) {
-        api.register(chunk).await?;
+    let mut chunk: Vec<NameRegistration> = Vec::new();
+    let mut chunk_cids = 0;
+    for piece in entries.iter().flat_map(split_entry) {
+        if chunk.len() == REGISTRY_BATCH_MAX
+            || chunk_cids + piece.content_cids.len() > REGISTRY_BATCH_MAX
+        {
+            api.register(&chunk).await?;
+            chunk.clear();
+            chunk_cids = 0;
+        }
+        chunk_cids += piece.content_cids.len();
+        chunk.push(piece);
+    }
+    if !chunk.is_empty() {
+        api.register(&chunk).await?;
     }
     Ok(())
 }
@@ -51,7 +65,9 @@ fn split_entry(entry: &NameRegistration) -> Vec<NameRegistration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::REGISTRY_BODY_MAX_BYTES;
     use crate::seams::{HttpMethod, HttpResponse};
+    use crate::testkit::account::wide_token;
     use crate::testkit::block_on;
     use crate::testkit::fakes::{InMemoryCredentialStore, ScriptedHttp};
 
@@ -137,21 +153,20 @@ mod tests {
     #[test]
     fn an_entry_past_the_per_entry_cap_splits_under_one_name() {
         let (http, client) = client();
-        ack(&http, 1);
+        ack(&http, 2);
         let over_cap = entry("k51name", Some("bafyHead"), REGISTRY_BATCH_MAX + 2);
         block_on(register(&client, core::slice::from_ref(&over_cap))).expect("register");
 
-        let batches = sent(&http);
-        assert_eq!(batches.len(), 1, "the split entries still ride one batch");
-        let sizes: Vec<usize> = batches[0].iter().map(|entry| cids(entry).len()).collect();
+        let pieces: Vec<serde_json::Value> = sent(&http).into_iter().flatten().collect();
+        let sizes: Vec<usize> = pieces.iter().map(|entry| cids(entry).len()).collect();
         assert_eq!(sizes, vec![REGISTRY_BATCH_MAX, 2], "split at the cap");
         assert!(
-            batches[0]
+            pieces
                 .iter()
                 .all(|entry| entry["ipnsName"] == over_cap.ipns_name),
             "every piece registers under the one name"
         );
-        let heads: Vec<Option<&str>> = batches[0]
+        let heads: Vec<Option<&str>> = pieces
             .iter()
             .map(|entry| entry["headCid"].as_str())
             .collect();
@@ -160,7 +175,7 @@ mod tests {
             vec![Some("bafyHead"), None],
             "the head rides the first piece; the rest leave the stored head alone"
         );
-        let sent_cids: Vec<String> = batches[0].iter().flat_map(cids).collect();
+        let sent_cids: Vec<String> = pieces.iter().flat_map(cids).collect();
         assert_eq!(
             sent_cids, over_cap.content_cids,
             "every CID reaches the registry once, in order"
@@ -196,5 +211,86 @@ mod tests {
             wire(&entries),
             "every entry still reaches the registry once"
         );
+    }
+
+    #[test]
+    fn one_request_carries_at_most_the_cap_in_content_cids() {
+        let (http, client) = client();
+        ack(&http, 8);
+        let entries: Vec<NameRegistration> = (0..3)
+            .map(|i| entry(&format!("k51name{i}"), Some("bafyHead"), 600))
+            .collect();
+        block_on(register(&client, &entries)).expect("register");
+
+        let batches = sent(&http);
+        for batch in &batches {
+            let total: usize = batch.iter().map(|entry| cids(entry).len()).sum();
+            assert!(
+                total <= REGISTRY_BATCH_MAX,
+                "a request carries {total} content CIDs, past the cap"
+            );
+        }
+        let sent_cids: Vec<(String, String)> = batches
+            .iter()
+            .flatten()
+            .flat_map(|entry| {
+                let name = entry["ipnsName"].as_str().expect("a name").to_owned();
+                cids(entry).into_iter().map(move |cid| (name.clone(), cid))
+            })
+            .collect();
+        let expected: Vec<(String, String)> = entries
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .content_cids
+                    .iter()
+                    .map(|cid| (entry.ipns_name.clone(), cid.clone()))
+            })
+            .collect();
+        assert_eq!(
+            sent_cids, expected,
+            "every CID reaches the registry once, in order"
+        );
+        for entry in &entries {
+            let first = batches
+                .iter()
+                .flatten()
+                .find(|piece| piece["ipnsName"] == entry.ipns_name)
+                .expect("every name is sent");
+            assert_eq!(
+                first["headCid"].as_str(),
+                Some("bafyHead"),
+                "the head rides the first piece of its name"
+            );
+        }
+    }
+
+    #[test]
+    fn every_request_fits_the_registry_body_limit_at_the_widest_tokens() {
+        let (http, client) = client();
+        ack(&http, 64);
+        let mut entries: Vec<NameRegistration> = (0..REGISTRY_BATCH_MAX + 500)
+            .map(|i| NameRegistration {
+                ipns_name: wide_token("k51name", i, 128),
+                head_cid: Some(wide_token("bafyhead", i, 256)),
+                content_cids: vec![wide_token("bafyleaf", i, 256)],
+            })
+            .collect();
+        entries.push(NameRegistration {
+            ipns_name: wide_token("k51large", 0, 128),
+            head_cid: Some(wide_token("bafyhead", 0, 256)),
+            content_cids: (0..20 * REGISTRY_BATCH_MAX)
+                .map(|i| wide_token("bafylarge", i, 256))
+                .collect(),
+        });
+        block_on(register(&client, &entries)).expect("register");
+
+        for request in http.requests() {
+            let size = request.body.as_deref().expect("a register body").len();
+            assert!(
+                size <= REGISTRY_BODY_MAX_BYTES,
+                "a request body of {size} bytes is past the registry limit"
+            );
+        }
     }
 }

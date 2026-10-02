@@ -2153,6 +2153,7 @@
             "description": "Current head (metadata) CID this name publishes; omit to register the name only."
           },
           "contentCids": {
+            "maxItems": 1000,
             "description": "Content CIDs to pin/count under this account (idempotent upsert).",
             "type": "array",
             "items": {
