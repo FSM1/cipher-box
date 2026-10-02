@@ -7,14 +7,12 @@ use core::time::Duration;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, decode_envelope, open_read_body,
 };
 
-use cipherbox_engine::content::DAG_ROOT_CODEC;
 use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::eol::{eol_from, renewal_eol_from};
 use cipherbox_engine::net::renewal_walk::WALK_BUDGET;
@@ -23,8 +21,8 @@ use cipherbox_engine::net::renewal_walk::cursor::{
 };
 use cipherbox_engine::net::retire::{NODE_TOMBSTONE_PREFIX, StagingRetireLedger};
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, HttpMethod, HttpRequest, HttpResponse, OwedRetire, RecordTransport,
-    RetireLedger, Scheduler, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, FloorStore, HttpMethod, HttpRequest, HttpResponse, RecordTransport, RetireLedger,
+    Scheduler, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::{BookkeepingSeal, doomed_journal_key, owner_tag};
 use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, floor_label, seed_account};
@@ -1498,6 +1496,18 @@ fn a_cursor_that_does_not_read_skips_the_pass_and_keeps_the_cursor() {
     );
 }
 
+/// Tombstone `node` on `device`, as the drain does when it journals a hard
+/// delete's debt.
+fn tombstone(device: &FakeDevice, node: NodeId) {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(9));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
+            .tombstone(&owner_tag(&enc), node.0),
+    )
+    .expect("tombstone the node");
+}
+
 /// A tombstoned node the base links again is live elsewhere, and its debt
 /// waits: the walk renews its record, so the content is never lost.
 #[test]
@@ -1508,21 +1518,33 @@ fn a_tombstoned_node_the_base_links_still_renews() {
     let started = world.scheduler.now();
     let device = world.device(b"a later session");
     let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(9));
-    let ledger =
-        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy));
-    let owner = owner_tag(&enc);
-    block_on(ledger.tombstone(&owner, node.0)).expect("tombstone the node");
-    block_on(ledger.owe(
-        &owner,
-        &[OwedRetire::whole(
-            node.0,
-            encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, b"a dropped version")),
-            1,
-        )],
-    ))
-    .expect("journal a debt against it");
+    tombstone(&device, node);
     tick(&world, &engine, &mut tasks);
     assert_renewed_at_start(&world, &name, &before, started, "the linked file");
+}
+
+/// A tombstoned node the base links nowhere is retired: the walk reaches it
+/// through its bin entry and does not renew it.
+#[test]
+fn a_tombstoned_node_the_base_links_nowhere_is_not_renewed() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        let file = write_file(&world, engine, tasks, ROOT, "binned.txt");
+        block_on(engine.command(Command::Delete { node: file })).expect("the delete stages");
+        tick(&world, engine, tasks);
+        vec![file]
+    });
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+    world.scheduler.advance(DAY * 65);
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    tombstone(&device, nodes[0]);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        record_at(&world, &name).sequence,
+        before.sequence,
+        "the retired file is not renewed"
+    );
 }
