@@ -323,7 +323,7 @@ pub(crate) fn is_own_scope(
 ///
 /// Carries no `Debug`: the label it holds is the cross-scope correlator the
 /// blinded tag exists to deny ([`ContactLabel`]).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FloorNamespace {
     /// A scope this identity answers for, measured in its own namespace.
     Own,
@@ -339,6 +339,11 @@ impl FloorNamespace {
             Self::Own => SharerScopedFloorStore::own(floors),
             Self::GrantedBy(sharer) => SharerScopedFloorStore::granted_by(floors, sharer),
         }
+    }
+
+    /// The namespace `view` reads in.
+    pub(crate) fn of<F>(view: &SharerScopedFloorStore<'_, F>) -> Self {
+        view.sharer().map_or(Self::Own, Self::GrantedBy)
     }
 }
 
@@ -448,10 +453,8 @@ pub(crate) async fn evict_grafted_write_seeds<F: FloorStore>(
         }
         match sharers.get(&scope_id) {
             Some(sharer) => {
-                let view = SharerScopedFloorStore::granted_by(
-                    floors,
-                    ContactLabel::of(contact_label_seed, sharer),
-                );
+                let view = FloorNamespace::GrantedBy(ContactLabel::of(contact_label_seed, sharer))
+                    .view(floors);
                 refresh_seed_floor(&view, write_seeds, &scope_id, SeedFloor::Read).await;
             }
             None => {
@@ -490,9 +493,19 @@ mod tests {
         kdf::contact_label_seed(&[0x4c; 32])
     }
 
-    fn seeded(scope_id: [u8; 16], stamp: u64) -> RefCell<ScopeSeeds> {
+    fn granted_by(sharer: &[u8; IDENTITY_PUBLIC_LEN]) -> FloorNamespace {
+        FloorNamespace::GrantedBy(ContactLabel::of(&label_seed(), sharer))
+    }
+
+    fn seeded(scope_id: [u8; 16], stamp: u64, namespace: FloorNamespace) -> RefCell<ScopeSeeds> {
         let cell = RefCell::new(ScopeSeeds::new());
-        deposit_seed(&cell, scope_id, Zeroizing::new([0x66; 32]), Some(stamp));
+        deposit_seed(
+            &cell,
+            scope_id,
+            Zeroizing::new([0x66; 32]),
+            Some(stamp),
+            namespace,
+        );
         cell
     }
 
@@ -991,7 +1004,7 @@ mod tests {
     #[test]
     fn a_floor_rise_under_the_granting_identity_evicts_the_grafted_seed() {
         let floors = InMemoryFloorStore::default();
-        let seeds = seeded(SCOPE, 1);
+        let seeds = seeded(SCOPE, 1, granted_by(&SHARER));
 
         block_on(evict_grafted_read_seeds(
             &floors,
@@ -1028,7 +1041,7 @@ mod tests {
     #[test]
     fn an_owner_plane_floor_rise_leaves_the_grafted_seed_alone() {
         let floors = InMemoryFloorStore::default();
-        let seeds = seeded(SCOPE, 1);
+        let seeds = seeded(SCOPE, 1, granted_by(&SHARER));
         block_on(floors.raise_epoch_floor(&SCOPE, 9)).expect("the floor raises");
 
         block_on(evict_grafted_read_seeds(
@@ -1049,7 +1062,7 @@ mod tests {
     #[test]
     fn a_seed_whose_scope_left_the_map_is_dropped() {
         let floors = InMemoryFloorStore::default();
-        let seeds = seeded(SCOPE, 1);
+        let seeds = seeded(SCOPE, 1, granted_by(&SHARER));
 
         block_on(evict_grafted_read_seeds(
             &floors,
@@ -1068,7 +1081,7 @@ mod tests {
     #[test]
     fn the_vaults_own_seed_is_left_to_its_own_leg() {
         let floors = InMemoryFloorStore::default();
-        let seeds = seeded(OWN_ROOT, 1);
+        let seeds = seeded(OWN_ROOT, 1, FloorNamespace::Own);
         block_on(floors.raise_epoch_floor(&OWN_ROOT, 9)).expect("the floor raises");
 
         block_on(evict_grafted_read_seeds(
@@ -1088,7 +1101,7 @@ mod tests {
     #[test]
     fn a_floor_rise_under_the_granting_identity_evicts_the_grafted_write_seed() {
         let floors = InMemoryFloorStore::default();
-        let seeds = seeded(SCOPE, 1);
+        let seeds = seeded(SCOPE, 1, granted_by(&SHARER));
 
         block_on(evict_grafted_write_seeds(
             &floors,
@@ -1125,7 +1138,7 @@ mod tests {
     #[test]
     fn an_own_scopes_write_seed_is_left_to_its_own_leg() {
         let floors = InMemoryFloorStore::default();
-        let seeds = seeded(SCOPE, 1);
+        let seeds = seeded(SCOPE, 1, FloorNamespace::Own);
         block_on(floors.raise_epoch_floor(&SCOPE, 9)).expect("the floor raises");
 
         block_on(evict_grafted_write_seeds(
@@ -1145,7 +1158,7 @@ mod tests {
     #[test]
     fn a_write_seed_whose_scope_left_the_map_is_dropped() {
         let floors = InMemoryFloorStore::default();
-        let seeds = seeded(SCOPE, 1);
+        let seeds = seeded(SCOPE, 1, granted_by(&SHARER));
 
         block_on(evict_grafted_write_seeds(
             &floors,
@@ -1157,5 +1170,37 @@ mod tests {
         ));
 
         assert!(!seeds.borrow().contains_key(&SCOPE));
+    }
+
+    /// A forgotten share's seed goes when another sharer's grant takes the
+    /// scope id, before that grant's open deposits its own seed: the stamp was
+    /// measured in the first sharer's namespace and bounds nothing in the next.
+    #[test]
+    fn a_seed_of_a_replaced_sharer_is_evicted_before_the_new_share_opens() {
+        const NEXT_SHARER: [u8; IDENTITY_PUBLIC_LEN] = [0x03; IDENTITY_PUBLIC_LEN];
+        let floors = InMemoryFloorStore::default();
+        let next = GraftedSharers::from([(SCOPE, NEXT_SHARER)]);
+        let read_seeds = seeded(SCOPE, 1, granted_by(&SHARER));
+        let write_seeds = seeded(SCOPE, 1, granted_by(&SHARER));
+
+        block_on(evict_grafted_read_seeds(
+            &floors,
+            &next,
+            &label_seed(),
+            &OWN_ROOT,
+            &BTreeSet::new(),
+            &read_seeds,
+        ));
+        block_on(evict_grafted_write_seeds(
+            &floors,
+            &next,
+            &label_seed(),
+            &OWN_ROOT,
+            &BTreeSet::new(),
+            &write_seeds,
+        ));
+
+        assert!(!read_seeds.borrow().contains_key(&SCOPE));
+        assert!(!write_seeds.borrow().contains_key(&SCOPE));
     }
 }

@@ -511,7 +511,13 @@ where
                     ResolveOutcome::Adopted(adopted) => Some(adopted.epoch),
                     _ => floors_before.read,
                 };
-                deposit_seed(&state.scope_read_seeds, self.root_id, seed, stamp);
+                deposit_seed(
+                    &state.scope_read_seeds,
+                    self.root_id,
+                    seed,
+                    stamp,
+                    FloorNamespace::Own,
+                );
             }
             if let Some((node_id, seed)) = surfaced.write_scope_seed.take() {
                 deposit_write_seed(
@@ -520,6 +526,7 @@ where
                     seed,
                     Some(&pass.root_name),
                     floors_before.write,
+                    FloorNamespace::Own,
                 );
             }
         }
@@ -1678,6 +1685,7 @@ fn install_descendant_scopes(
             scope.scope_id,
             scope.read_scope_seed.clone(),
             Some(scope.adopted.epoch),
+            FloorNamespace::Own,
         );
         if let Ok(write) = &scope.write {
             deposit_write_seed(
@@ -1686,6 +1694,7 @@ fn install_descendant_scopes(
                 write.seed.clone(),
                 Some(&scope.name),
                 Some(write.epoch),
+                FloorNamespace::Own,
             );
         }
         let root = NodeId(scope.scope_id);
@@ -1796,7 +1805,13 @@ mod tests {
 
         fn seeds(scope_id: [u8; 16], seed: [u8; 32]) -> RefCell<ScopeSeeds> {
             let cell = RefCell::new(ScopeSeeds::new());
-            deposit_seed(&cell, scope_id, Zeroizing::new(seed), Some(0));
+            deposit_seed(
+                &cell,
+                scope_id,
+                Zeroizing::new(seed),
+                Some(0),
+                FloorNamespace::Own,
+            );
             cell
         }
 
@@ -2544,6 +2559,7 @@ mod report_tests {
             PROMOTED.0,
             Zeroizing::new(held),
             Some(stamp),
+            FloorNamespace::Own,
         );
     }
 

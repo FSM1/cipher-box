@@ -1801,7 +1801,7 @@ fn mailbox_lifecycle_through_the_api_client() {
     // post: JSON body carries the base64 blob and the idempotency key.
     assert_eq!(requests[0].url, "http://api.test/mailbox/messages");
     assert_eq!(requests[0].method, HttpMethod::Post);
-    let post_body = String::from_utf8(requests[0].body.clone().unwrap()).unwrap();
+    let post_body = String::from_utf8(requests[0].body.as_deref().cloned().unwrap()).unwrap();
     assert!(
         post_body.contains("\"blob\":\"aGk=\""),
         "base64 blob: {post_body}"

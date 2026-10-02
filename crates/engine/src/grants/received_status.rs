@@ -51,8 +51,8 @@ use super::accept::{BookmarkKey, LinkHold, ReceivedShare, ReceivedSharesList, Re
 use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
 use super::grafted::{
-    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, ContestedNodes, GraftedPlane,
-    GraftedSharers, in_own_tree, is_own_scope,
+    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, ContestedNodes, FloorNamespace,
+    GraftedPlane, GraftedSharers, in_own_tree, is_own_scope,
 };
 use super::invite::EphemeralInvitee;
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
@@ -760,10 +760,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// plain id reaches every other sharer's scope of that id and this vault's
     /// own anchored root scope.
     fn sharer_floors(&self, share: &ReceivedShare) -> SharerScopedFloorStore<'_, F> {
-        SharerScopedFloorStore::granted_by(
-            self.floors,
-            ContactLabel::of(self.contact_label_seed, &share.sharer_identity_pk),
-        )
+        self.sharer_namespace(share).view(self.floors)
+    }
+
+    /// The namespace `share`'s floors ratchet in: its granting contact's.
+    fn sharer_namespace(&self, share: &ReceivedShare) -> FloorNamespace {
+        FloorNamespace::GrantedBy(ContactLabel::of(
+            self.contact_label_seed,
+            &share.sharer_identity_pk,
+        ))
     }
 
     /// The verdict `share`'s row renders this pass, with the record a browse of
@@ -1043,6 +1048,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             share.scope_id,
             Zeroizing::new(*grant.read_scope_seed()),
             Some(epoch),
+            self.sharer_namespace(share),
         );
         if !is_own_scope(
             render.own_root,
@@ -1063,6 +1069,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     Zeroizing::new(*write_scope_seed),
                     scope_name(&share.scope_root_name).ok().as_ref(),
                     Some(epoch),
+                    self.sharer_namespace(share),
                 ),
                 // The blob this pass opened is the whole of the capability, so
                 // an owner that re-sealed the grant down to read cuts the write
@@ -2560,7 +2567,13 @@ mod tests {
             sharer_signer().verifying_key().to_sec1(),
             OTHER_SHARER_IDENTITY_PK,
         ]);
-        deposit_seed(&fx.write_seeds, SCOPE, Zeroizing::new([0x33; 32]), Some(0));
+        deposit_seed(
+            &fx.write_seeds,
+            SCOPE,
+            Zeroizing::new([0x33; 32]),
+            Some(0),
+            FloorNamespace::Own,
+        );
 
         fx.pass(0);
 
@@ -2577,7 +2590,13 @@ mod tests {
         fx.bookmark();
         fx.own_descendants.borrow_mut().insert(NodeId(SCOPE));
         for cell in [&fx.read_seeds, &fx.write_seeds] {
-            deposit_seed(cell, SCOPE, Zeroizing::new([0x33; 32]), Some(0));
+            deposit_seed(
+                cell,
+                SCOPE,
+                Zeroizing::new([0x33; 32]),
+                Some(0),
+                FloorNamespace::Own,
+            );
         }
 
         fx.cut(2);

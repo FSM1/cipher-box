@@ -435,7 +435,7 @@ impl Blocks {
                 .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
                 .map(|(_, value)| value.clone())
                 .expect("upload declares its CID");
-            let block = request.body.clone().unwrap_or_default();
+            let block = request.body.as_deref().cloned().unwrap_or_default();
             if let Some(hook) = self.on_upload.lock().expect("lock").as_mut()
                 && let Some(reply) = hook(&block)
             {
@@ -520,7 +520,7 @@ impl Blocks {
                     body,
                 });
             }
-            return register_reply(request.body.as_deref());
+            return register_reply(request.body.as_deref().map(Vec::as_slice));
         }
         if url.ends_with("/registry/retire") {
             if self.retire_down.load(Ordering::SeqCst) {

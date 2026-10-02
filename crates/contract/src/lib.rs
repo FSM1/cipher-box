@@ -53,7 +53,7 @@ impl Http for ReqwestHttp {
             builder = builder.header(name, value);
         }
         if let Some(body) = request.body {
-            builder = builder.body(body);
+            builder = builder.body(bytes::Bytes::from_owner(body));
         }
         // The per-request deadline the engine asked for, narrower than the
         // client-wide ceiling `new` sets; dropping it would leave a call the

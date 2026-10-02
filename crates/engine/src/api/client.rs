@@ -724,8 +724,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         path: &str,
         body: &B,
     ) -> Result<HttpResponse, ApiError> {
-        // Wipe the master copy; each send moves its own copy to the Http seam.
-        let body = Zeroizing::new(to_json(body));
+        let body = to_json(body);
         self.request_authed_with(
             method,
             path,
@@ -811,7 +810,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             method,
             url: self.url(path),
             headers,
-            body: body.map(<[u8]>::to_vec),
+            body: body.map(|body| Zeroizing::new(body.to_vec())),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(timeout_ms),
         };
@@ -838,16 +837,13 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             // Web: no stored token — the HTTP-only cookie rides the Http seam.
             None => None,
         };
-        // Serialize once into a zeroizing buffer so the secret-bearing body is
-        // cleared on every exit path (success, error, network failure).
-        let body = Zeroizing::new(to_json(&RefreshRequest {
-            refresh_token: refresh_token.as_ref().map(|token| token.to_string()),
-        }));
         let request = HttpRequest {
             method: HttpMethod::Post,
             url: self.url("/auth/refresh"),
             headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned())],
-            body: Some(body.to_vec()),
+            body: Some(to_json(&RefreshRequest {
+                refresh_token: refresh_token.as_deref().map(String::as_str),
+            })),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(self.deadlines.control_ms),
         };
@@ -963,10 +959,25 @@ fn is_eip4361_nonce(nonce: &str) -> bool {
     (8..=128).contains(&nonce.len()) && nonce.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
-/// Serialize a request body. The client's own request types are always
-/// serializable, so a failure is a programmer error, not a runtime condition.
-fn to_json<B: Serialize + ?Sized>(body: &B) -> Vec<u8> {
-    serde_json::to_vec(body).expect("api request bodies always serialize")
+/// Serialize a request body into a wiping buffer sized before the write: a
+/// growing buffer frees each smaller copy of a credential unwiped. The client's
+/// own request types always serialize, so a failure is a programmer error.
+fn to_json<B: Serialize + ?Sized>(body: &B) -> Zeroizing<Vec<u8>> {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, body).expect("api request bodies always serialize");
+    let mut buffer = Zeroizing::new(Vec::with_capacity(count.0));
+    serde_json::to_writer(&mut *buffer, body).expect("api request bodies always serialize");
+    buffer
 }
 
 /// An id bound for a request path. The device surface takes ids the API
@@ -1786,7 +1797,7 @@ mod tests {
         let requests = http.requests();
         assert!(requests[2].body.is_some());
         assert_eq!(requests[2].body, requests[4].body, "the JSON retry body");
-        assert_eq!(requests[5].body.as_deref(), Some(&block[..]));
+        assert_eq!(requests[5].body.as_deref(), Some(&block));
         assert_eq!(requests[5].body, requests[7].body, "the upload retry body");
     }
 
@@ -2093,7 +2104,7 @@ mod tests {
                 .any(|(name, value)| name == CONTENT_CID && *value == cid),
             "the declared address is sent"
         );
-        assert_eq!(request.body.as_deref(), Some(&block[..]));
+        assert_eq!(request.body.as_deref(), Some(&block));
     }
 
     #[test]
@@ -2413,6 +2424,65 @@ mod tests {
         assert_eq!(body["signature"], "device-signature");
         assert_eq!(body["identityToken"], "identity-token");
         assert_eq!(body["label"], "Laptop");
+    }
+
+    /// A buffer that grows while it is written frees each smaller copy of the
+    /// credential unwiped, so the body is sized before the write.
+    #[test]
+    fn a_credential_body_is_serialized_into_a_buffer_sized_before_the_write() {
+        let token = "t".repeat(301);
+        let register = to_json(&RegisterDeviceRequest {
+            public_key: DEVICE_KEY,
+            signature: "device-signature",
+            identity_token: &token,
+            label: None,
+        });
+        let refresh = to_json(&RefreshRequest {
+            refresh_token: Some(&token),
+        });
+        for body in [register, refresh] {
+            assert!(body.len() > token.len());
+            assert_eq!(body.capacity(), body.len(), "no growth left a copy");
+        }
+    }
+
+    /// The seam owns the body it sends last, so the body reaches it in a buffer
+    /// that wipes on drop: the identity token of a registration, and the
+    /// refresh token of a rotation.
+    #[test]
+    fn a_credential_body_reaches_the_seam_in_a_wiping_buffer() {
+        fn wiping(request: &HttpRequest) -> &Zeroizing<Vec<u8>> {
+            request.body.as_ref().expect("the request carries a body")
+        }
+        let (http, creds, client) = fakes();
+        login(&http, &client);
+        block_on(creds.store_refresh_token(b"seed-refresh-token")).unwrap();
+        http.enqueue_response(json_response(
+            200,
+            json!({
+                "id": "device-1",
+                "publicKey": DEVICE_KEY,
+                "createdAt": "2026-08-27T10:00:00.000Z",
+                "lastSeenAt": "2026-08-27T11:00:00.000Z",
+            }),
+        ));
+        block_on(client.register_device(DEVICE_KEY, "device-signature", "identity-token", None))
+            .expect("the registry accepted the key");
+        http.enqueue_response(json_response(
+            200,
+            login_response("jwt-2", &"b".repeat(64), "gw-b"),
+        ));
+        block_on(client.refresh()).expect("the rotation lands");
+
+        let requests = http.requests();
+        let [.., registration, rotation] = requests.as_slice() else {
+            panic!("a registration and a rotation were sent");
+        };
+        assert_eq!(registration.url, "http://api.test/devices");
+        assert_eq!(rotation.url, "http://api.test/auth/refresh");
+        for request in [registration, rotation] {
+            assert!(!wiping(request).is_empty());
+        }
     }
 
     /// The label is optional context, so a device that offered none must not

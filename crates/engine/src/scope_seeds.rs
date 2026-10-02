@@ -10,9 +10,10 @@ use zeroize::Zeroizing;
 
 use crate::facade::NodeId;
 use crate::gate::floor;
+use crate::grants::grafted::FloorNamespace;
 use crate::rotation::scope_material::ScopeMaterial;
 use crate::rotation::{WalkedReadEpochs, derive_write_name};
-use crate::seams::{FloorStore, SeamResult};
+use crate::seams::{FloorStore, SeamResult, SharerScopedFloorStore};
 
 /// A recovered scope seed and a lower bound on the epoch it belongs to (see
 /// [`deposit_seed`]).
@@ -21,9 +22,14 @@ use crate::seams::{FloorStore, SeamResult};
 /// floor past it revokes that epoch, so the seed is evicted rather than left
 /// resident for the rest of the session. Least privilege is a retention rule,
 /// not only an install rule.
+///
+/// The bound holds only in the namespace it was measured in: two grants may
+/// carry one scope id, and a floor in another sharer's namespace says nothing
+/// about this seed.
 pub(crate) struct CachedSeed {
     seed: Zeroizing<[u8; 32]>,
     floor: u64,
+    namespace: FloorNamespace,
 }
 
 /// One of the engine's in-memory per-scope seed cells: scope id → the recovered
@@ -52,14 +58,15 @@ impl SeedFloor {
     }
 }
 
-/// Read `scope_id`'s durable floor for `which`, evicting a cached seed stamped
-/// below it, and hand the floor back for the pass's own deposits.
+/// Read `scope_id`'s durable floor for `which` in the namespace of `floors`,
+/// evicting a cached seed stamped below it or deposited in another namespace,
+/// and hand the floor back for the pass's own deposits.
 ///
 /// `None` on a floor-store failure, which also evicts: a seed whose currency
 /// cannot be established is not held, and nothing may be stamped against a floor
 /// that was never read.
 pub(crate) async fn refresh_seed_floor<F: FloorStore>(
-    floors: &F,
+    floors: &SharerScopedFloorStore<'_, F>,
     cell: &RefCell<ScopeSeeds>,
     scope_id: &[u8; 16],
     which: SeedFloor,
@@ -69,8 +76,11 @@ pub(crate) async fn refresh_seed_floor<F: FloorStore>(
         .await
         .ok()
         .map(|floor| floor.unwrap_or(0));
+    let namespace = FloorNamespace::of(floors);
     let mut seeds = cell.borrow_mut();
-    if durable.is_none_or(|floor| seeds.get(scope_id).is_some_and(|c| c.floor < floor)) {
+    let stale =
+        |cached: &CachedSeed, floor: u64| cached.namespace != namespace || cached.floor < floor;
+    if durable.is_none_or(|floor| seeds.get(scope_id).is_some_and(|c| stale(c, floor))) {
         seeds.remove(scope_id);
     }
     durable
@@ -85,7 +95,7 @@ pub(crate) struct StampedSeed {
 /// The scope's cached seed after an eviction pass against `floors`
 /// ([`refresh_seed_floor`]): a seed the floor has passed is never served.
 pub(crate) async fn current_seed<F: FloorStore>(
-    floors: &F,
+    floors: &SharerScopedFloorStore<'_, F>,
     cell: &RefCell<ScopeSeeds>,
     scope_id: &[u8; 16],
     which: SeedFloor,
@@ -118,6 +128,8 @@ pub(crate) fn own_descendant_scopes(
 /// floor re-read after the resolve: a rise that landed mid-pass would be absorbed
 /// into the stamp and keep a revoked-epoch seed resident.
 ///
+/// `namespace` is the one the stamp is measured in.
+///
 /// `None` skips the deposit — the floor could not be read, so nothing can be
 /// stamped and the eviction pass has already cleared the cell.
 pub(crate) fn deposit_seed(
@@ -125,10 +137,17 @@ pub(crate) fn deposit_seed(
     scope_id: [u8; 16],
     seed: Zeroizing<[u8; 32]>,
     stamp: Option<u64>,
+    namespace: FloorNamespace,
 ) {
     if let Some(floor) = stamp {
-        cell.borrow_mut()
-            .insert(scope_id, CachedSeed { seed, floor });
+        cell.borrow_mut().insert(
+            scope_id,
+            CachedSeed {
+                seed,
+                floor,
+                namespace,
+            },
+        );
     }
 }
 
@@ -158,9 +177,10 @@ pub(crate) fn deposit_write_seed(
     seed: Zeroizing<[u8; 32]>,
     root_name: Option<&IpnsName>,
     floor: Option<u64>,
+    namespace: FloorNamespace,
 ) {
     if seed_names(&seed, &scope_id, root_name) {
-        deposit_seed(cell, scope_id, seed, floor);
+        deposit_seed(cell, scope_id, seed, floor, namespace);
     }
 }
 
@@ -172,7 +192,7 @@ pub(crate) struct SeedFloors {
     pub(crate) write: Option<u64>,
 }
 
-/// Evict both of `scope_id`'s cached seeds against their durable floors and
+/// Evict both of an own scope's cached seeds against their durable floors and
 /// report those floors, the stamps this pass's deposits carry.
 pub(crate) async fn refresh_seed_floors<F: FloorStore>(
     floors: &F,
@@ -180,9 +200,10 @@ pub(crate) async fn refresh_seed_floors<F: FloorStore>(
     read_seeds: &RefCell<ScopeSeeds>,
     write_seeds: &RefCell<ScopeSeeds>,
 ) -> SeedFloors {
+    let own = FloorNamespace::Own.view(floors);
     SeedFloors {
-        read: refresh_seed_floor(floors, read_seeds, scope_id, SeedFloor::Read).await,
-        write: refresh_seed_floor(floors, write_seeds, scope_id, SeedFloor::Write).await,
+        read: refresh_seed_floor(&own, read_seeds, scope_id, SeedFloor::Read).await,
+        write: refresh_seed_floor(&own, write_seeds, scope_id, SeedFloor::Write).await,
     }
 }
 
@@ -241,21 +262,28 @@ mod tests {
 
         const SCOPE: [u8; 16] = [4u8; 16];
         let floors = InMemoryFloorStore::default();
+        let own = FloorNamespace::Own.view(&floors);
         let cell = RefCell::new(ScopeSeeds::new());
         block_on(async {
             floors.raise_epoch_floor(&SCOPE, 5).await.unwrap();
-            let stamp = refresh_seed_floor(&floors, &cell, &SCOPE, SeedFloor::Read).await;
+            let stamp = refresh_seed_floor(&own, &cell, &SCOPE, SeedFloor::Read).await;
             assert_eq!(stamp, Some(5));
-            deposit_seed(&cell, SCOPE, Zeroizing::new([3u8; 32]), stamp);
+            deposit_seed(
+                &cell,
+                SCOPE,
+                Zeroizing::new([3u8; 32]),
+                stamp,
+                FloorNamespace::Own,
+            );
 
-            refresh_seed_floor(&floors, &cell, &SCOPE, SeedFloor::Read).await;
+            refresh_seed_floor(&own, &cell, &SCOPE, SeedFloor::Read).await;
             assert!(
                 cell.borrow().contains_key(&SCOPE),
                 "an unmoved floor keeps the seed"
             );
 
             floors.raise_epoch_floor(&SCOPE, 6).await.unwrap();
-            refresh_seed_floor(&floors, &cell, &SCOPE, SeedFloor::Read).await;
+            refresh_seed_floor(&own, &cell, &SCOPE, SeedFloor::Read).await;
             assert!(
                 !cell.borrow().contains_key(&SCOPE),
                 "the rise past the stamp revokes it"
@@ -263,8 +291,47 @@ mod tests {
 
             // A stamp the caller could not read holds nothing, so a floor-store
             // failure never leaves an unprovable seed resident.
-            deposit_seed(&cell, SCOPE, Zeroizing::new([3u8; 32]), None);
+            deposit_seed(
+                &cell,
+                SCOPE,
+                Zeroizing::new([3u8; 32]),
+                None,
+                FloorNamespace::Own,
+            );
             assert!(!cell.borrow().contains_key(&SCOPE));
+        });
+    }
+
+    /// Two grants may carry one scope id, so a stamp holds only in the
+    /// namespace it was measured in: a read in any other namespace evicts the
+    /// seed, whatever that namespace's floor is.
+    #[test]
+    fn a_cached_seed_read_in_another_namespace_is_evicted() {
+        use crate::seams::ContactLabel;
+        use crate::testkit::fakes::InMemoryFloorStore;
+        use cipherbox_core::kdf;
+
+        const SCOPE: [u8; 16] = [6u8; 16];
+        let label_seed = kdf::contact_label_seed(&[0x4c; 32]);
+        let first = FloorNamespace::GrantedBy(ContactLabel::of(&label_seed, &[0x02; 33]));
+        let second = FloorNamespace::GrantedBy(ContactLabel::of(&label_seed, &[0x03; 33]));
+        let floors = InMemoryFloorStore::default();
+        let cell = RefCell::new(ScopeSeeds::new());
+        block_on(async {
+            for other in [second, FloorNamespace::Own] {
+                deposit_seed(&cell, SCOPE, Zeroizing::new([3u8; 32]), Some(4), first);
+                refresh_seed_floor(&first.view(&floors), &cell, &SCOPE, SeedFloor::Read).await;
+                assert!(
+                    cell.borrow().contains_key(&SCOPE),
+                    "a read in its own namespace keeps the seed"
+                );
+
+                refresh_seed_floor(&other.view(&floors), &cell, &SCOPE, SeedFloor::Read).await;
+                assert!(
+                    !cell.borrow().contains_key(&SCOPE),
+                    "a read in another namespace evicts the seed"
+                );
+            }
         });
     }
 
@@ -309,9 +376,11 @@ mod tests {
                     CachedSeed {
                         seed: Zeroizing::new([3u8; 32]),
                         floor: u64::MAX,
+                        namespace: FloorNamespace::Own,
                     },
                 );
-                let stamp = refresh_seed_floor(&UnreadableFloors, &cell, &SCOPE, which).await;
+                let unreadable = FloorNamespace::Own.view(&UnreadableFloors);
+                let stamp = refresh_seed_floor(&unreadable, &cell, &SCOPE, which).await;
                 assert_eq!(stamp, None, "an unread floor stamps nothing");
                 assert!(
                     !cell.borrow().contains_key(&SCOPE),

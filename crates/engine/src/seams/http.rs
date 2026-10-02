@@ -2,6 +2,8 @@
 
 use core::fmt;
 
+use zeroize::Zeroizing;
+
 use super::{SeamError, SeamResult};
 
 /// Why a size-capped fetch ([`Http::send_capped`]) did not return a body.
@@ -123,8 +125,9 @@ pub struct HttpRequest {
     pub url: String,
     /// Header name/value pairs, in send order.
     pub headers: Vec<(String, String)>,
-    /// Request body bytes, if any.
-    pub body: Option<Vec<u8>>,
+    /// Request body bytes, if any. A body can carry a credential (an identity
+    /// token, a refresh token), so the seam that sends it last wipes it.
+    pub body: Option<Zeroizing<Vec<u8>>>,
     /// Ambient-credential scope for this request.
     pub credentials: HttpCredentials,
     /// Wall-clock ceiling for the whole request, in milliseconds.
@@ -243,7 +246,7 @@ mod tests {
             method: HttpMethod::Post,
             url: "https://api.example/auth/refresh".into(),
             headers: vec![("Authorization".into(), "Bearer secret-jwt".into())],
-            body: Some(b"refresh-token-bytes".to_vec()),
+            body: Some(b"refresh-token-bytes".to_vec().into()),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(10_000),
         };
