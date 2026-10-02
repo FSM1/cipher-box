@@ -9467,10 +9467,43 @@ fn build_owner_local_accept() -> Vec<OwnerLocalAcceptVector> {
             scalar,
             &owner,
             std::array::from_fn(|j| (0xa1 + i * 8 + j) as u8),
-            &owner_local_state_body(),
+            &match kind {
+                OwnerLocalKind::OwedRotation => owed_rotation_body(OWED_ROTATION_V2),
+                _ => owner_local_state_body(),
+            },
         ));
     }
+    // The format the previous release wrote, which the engine still decodes
+    // (ADR 0065 D3, ADR 0020 D5).
+    vectors.push(owner_local_accept_vector(
+        "owed-rotation-v1-body",
+        OwnerLocalKind::OwedRotation,
+        scalar,
+        &owner,
+        std::array::from_fn(|j| (0x41 + j) as u8),
+        &owed_rotation_body(OWED_ROTATION_V1),
+    ));
     vectors
+}
+
+/// The engine's `owed-rotation` body formats: V2 adds each entry's first stop.
+const OWED_ROTATION_V1: u8 = 1;
+const OWED_ROTATION_V2: u8 = 2;
+
+/// One revoke entry in the engine's `owed-rotation` encoding at `format`: a
+/// scope, cut epoch 3, at V2 a first stop at 1 700 000 000 000 ms, then a read
+/// cut and a write cut at write epoch 4. No key or seed material.
+fn owed_rotation_body(format: u8) -> Vec<u8> {
+    let mut body = vec![format, 1];
+    body.extend_from_slice(&[0xc1; 16]);
+    body.extend_from_slice(&3u64.to_be_bytes());
+    if format == OWED_ROTATION_V2 {
+        body.push(1);
+        body.extend_from_slice(&1_700_000_000_000u64.to_be_bytes());
+    }
+    body.extend_from_slice(&[2, 2, 3]);
+    body.extend_from_slice(&4u64.to_be_bytes());
+    body
 }
 
 /// A stand-in store body: core seals the engine's encoded state opaquely, so the

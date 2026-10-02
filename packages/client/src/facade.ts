@@ -508,6 +508,16 @@ export class EngineFacade {
     return this.command({ kind: 'siweLink', message, signature });
   }
 
+  /** Asks the API to email a link code to `email` for the account this session holds. */
+  emailLinkSendCode(email: string): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'emailLinkSendCode', email });
+  }
+
+  /** Links the address `code` was sent to. The engine re-proves the account identity key. */
+  emailLink(email: string, code: string): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'emailLink', email, code });
+  }
+
   /** Unlinks one login method. The engine re-proves the account identity key. */
   unlinkAuthMethod(methodId: string): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'unlinkAuthMethod', methodId });

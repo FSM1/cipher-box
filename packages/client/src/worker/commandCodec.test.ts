@@ -59,6 +59,15 @@ describe('readEvent', () => {
     expect(readEvent(known)).toBe(known);
   });
 
+  it('fails closed on a drop cause this build does not know', () => {
+    const dropped = { scopeRoot: new Uint8Array(16), nodeId: new Uint8Array(16) };
+    expect(() =>
+      readEvent(skewed({ kind: 'nodeDropped', ...dropped, cause: 'second-ref' }))
+    ).toThrow('unknown WASM drop cause: second-ref');
+    const known: EventDescriptor = { kind: 'nodeDropped', ...dropped, cause: 'no-head-block' };
+    expect(readEvent(known)).toBe(known);
+  });
+
   it('fails closed on a staleness level this build does not know', () => {
     expect(() => readEvent(skewed({ kind: 'stalenessChanged', staleness: 'frozen' }))).toThrow(
       'unknown WASM staleness: frozen'
@@ -427,7 +436,11 @@ describe('readAuthMethods', () => {
   };
 
   it('passes known rows through, the engine-spelled unknown kind included', () => {
-    const rows = [row, { ...row, kind: 'unknown' as const }];
+    const rows = [
+      row,
+      { ...row, kind: 'email' as const, identifierDisplay: 'm***@example.test' },
+      { ...row, kind: 'unknown' as const },
+    ];
     expect(readAuthMethods(rows)).toEqual(rows);
   });
 

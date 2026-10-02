@@ -29,6 +29,8 @@ fn a_wave_order_and_a_resumed_root_withhold_every_name_they_carry() {
         current_name: current.clone(),
         new_name: new.clone(),
         child_names: BTreeMap::from([(nid(2), child.clone())]),
+        dropped_children: BTreeSet::new(),
+        second_refs: Vec::new(),
         signer: kdf::ipns_keypair(&[7u8; 32]),
         write_scope_seed: None,
         write_epoch: ROTATED_WRITE_EPOCH,
@@ -151,7 +153,7 @@ impl WriteSubtreeResolver for FakeResolver {
         &self,
         node_id: &[u8; 16],
         resumed: Option<&ResumedRoot>,
-    ) -> Result<WriteScopeNode, ResolveFailure> {
+    ) -> Result<WriteScopeNode, NodeStop> {
         let children = self
             .nodes
             .get(node_id)
@@ -159,13 +161,14 @@ impl WriteSubtreeResolver for FakeResolver {
             .clone();
         let current_name = match self.resumed_seed(resumed) {
             Some(seed) => derive_write_name(&seed, node_id),
-            None if self.below_floor.get() => return Err(ResolveFailure::Rejected),
+            None if self.below_floor.get() => return Err(ResolveFailure::Rejected.into()),
             None => old_name_of(node_id),
         };
         Ok(WriteScopeNode {
             node_id: *node_id,
             current_name,
             child_node_ids: children,
+            second_refs: Vec::new(),
         })
     }
 
@@ -188,9 +191,9 @@ impl WriteSubtreeResolver for FailingResolver {
         &self,
         node_id: &[u8; 16],
         resumed: Option<&ResumedRoot>,
-    ) -> Result<WriteScopeNode, ResolveFailure> {
+    ) -> Result<WriteScopeNode, NodeStop> {
         if *node_id == self.fail_on {
-            return Err(ResolveFailure::Rejected);
+            return Err(ResolveFailure::Rejected.into());
         }
         self.inner.resolve_node(node_id, resumed).await
     }
@@ -385,6 +388,7 @@ fn plan<'a>(
         min_read_epoch: 7,
         current_root_name: current_root,
         is_vault_anchor: true,
+        bound: &NoBound,
     }
 }
 
@@ -1366,6 +1370,159 @@ fn commitment_naming_a_different_scope_is_rejected_fail_closed() {
         state.published.borrow().is_empty(),
         "nothing published on a scope-mismatch rejection"
     );
+}
+
+/// A resolver that refuses some node ids for a cause an endpoint can cause.
+struct BoundedResolver {
+    inner: FakeResolver,
+    refuse: Vec<[u8; 16]>,
+}
+
+impl WriteSubtreeResolver for BoundedResolver {
+    async fn resolve_node(
+        &self,
+        node_id: &[u8; 16],
+        resumed: Option<&ResumedRoot>,
+    ) -> Result<WriteScopeNode, NodeStop> {
+        if self.refuse.contains(node_id) {
+            return Err(NodeStop::Refused {
+                reason: ResolveFailure::Unavailable,
+                cause: DropCause::NoHeadBlock,
+                retire: Some(Box::new(old_name_of(node_id))),
+                answered: false,
+            });
+        }
+        self.inner.resolve_node(node_id, resumed).await
+    }
+
+    async fn recover_wave(&self) -> Result<RecoveredWave, ResolveFailure> {
+        self.inner.recover_wave().await
+    }
+}
+
+/// A bound past for the nodes in `past`, which records each node it counts.
+#[derive(Default)]
+struct CountingBound {
+    past: Vec<[u8; 16]>,
+    held: RefCell<Vec<[u8; 16]>>,
+}
+
+impl NodeBound for CountingBound {
+    fn past(&self, node_id: &[u8; 16], _plant: bool) -> bool {
+        self.past.contains(node_id)
+    }
+
+    fn held(&self, node_id: &[u8; 16]) {
+        self.held.borrow_mut().push(*node_id);
+    }
+
+    fn resolved(&self, _node_id: &[u8; 16]) {}
+}
+
+/// A resolver that asks for `rewalks` more walks at one node, as a body whose
+/// derived refs the walk meets late does.
+struct RewalkingResolver {
+    inner: FakeResolver,
+    rewalks: Cell<usize>,
+}
+
+impl WriteSubtreeResolver for RewalkingResolver {
+    async fn resolve_node(
+        &self,
+        node_id: &[u8; 16],
+        resumed: Option<&ResumedRoot>,
+    ) -> Result<WriteScopeNode, NodeStop> {
+        if *node_id == nid(0x05) && self.rewalks.get() > 0 {
+            self.rewalks.set(self.rewalks.get() - 1);
+            return Err(NodeStop::Rewalk);
+        }
+        self.inner.resolve_node(node_id, resumed).await
+    }
+
+    async fn recover_wave(&self) -> Result<RecoveredWave, ResolveFailure> {
+        self.inner.recover_wave().await
+    }
+}
+
+/// ADR 0065 D2: the walk starts again as often as the resolver keeps a new
+/// ref, more often than it meets nodes, and the wave finishes.
+#[test]
+fn a_walk_restarts_more_often_than_it_meets_nodes_and_finishes() {
+    let owner = owner();
+    let (c, sig) = commitment(&owner);
+    let resolver = RewalkingResolver {
+        inner: tree(),
+        rewalks: Cell::new(8),
+    };
+    let state = WaveState::default();
+    let current_root = old_name_of(&SCOPE);
+    let outcome = block_on(async {
+        rotate_scope_write(
+            &mut SeededEntropy::new(4),
+            &resolver,
+            &FakePublisher::new(state.clone()),
+            &plan(&owner, &c, &sig, &current_root),
+        )
+        .await
+    })
+    .expect("the walks end");
+    assert_eq!(outcome.interior_node_count, 4);
+    assert_eq!(resolver.rewalks.get(), 0);
+}
+
+/// ADR 0065 D3: the bound is each node's own. A walk counts every node a
+/// bounded stop holds, drops only the nodes past their bound, and stops while
+/// any node is held.
+#[test]
+fn a_bounded_stop_counts_each_held_node_and_drops_only_the_ones_past_it() {
+    let owner = owner();
+    let (c, sig) = commitment(&owner);
+    let resolver = BoundedResolver {
+        inner: tree(),
+        refuse: vec![nid(0x03), nid(0x04)],
+    };
+    let current_root = old_name_of(&SCOPE);
+    let rotate = |bound: &CountingBound, state: &WaveState| {
+        block_on(async {
+            rotate_scope_write(
+                &mut SeededEntropy::new(4),
+                &resolver,
+                &FakePublisher::new(state.clone()),
+                &RotateScopeWritePlan {
+                    bound,
+                    ..plan(&owner, &c, &sig, &current_root)
+                },
+            )
+            .await
+        })
+    };
+
+    let state = WaveState::default();
+    let one_past = CountingBound {
+        past: vec![nid(0x03)],
+        ..CountingBound::default()
+    };
+    let err = rotate(&one_past, &state).expect_err("a held node stops the wave");
+    assert_eq!(err.check(), "rot-write-resolve-failed");
+    assert!(err.is_retryable());
+    assert_eq!(*one_past.held.borrow(), vec![nid(0x04)]);
+    assert!(state.published.borrow().is_empty());
+
+    let state = WaveState::default();
+    let both_past = CountingBound {
+        past: vec![nid(0x03), nid(0x04)],
+        ..CountingBound::default()
+    };
+    let outcome = rotate(&both_past, &state).expect("both nodes drop");
+    assert_eq!(
+        outcome
+            .dropped
+            .iter()
+            .map(|d| d.node_id)
+            .collect::<Vec<_>>(),
+        vec![nid(0x03), nid(0x04)]
+    );
+    assert!(both_past.held.borrow().is_empty());
 }
 
 #[test]

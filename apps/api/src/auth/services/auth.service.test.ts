@@ -1,14 +1,15 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
+import { CapturingMailProvider, FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { FakeRepository } from '../../testing/fake-repo';
 import { newIdentity, signChallenge } from '../../testing/identities';
 import { AccountDevice } from '../../device-approval/entities/account-device.entity';
 import { AuthMethod, type AuthMethodKind } from '../entities/auth-method.entity';
+import { IdentitySubject } from '../entities/identity-subject.entity';
 import { User } from '../entities/user.entity';
 import { AuthService } from './auth.service';
 import {
@@ -17,6 +18,7 @@ import {
   type IdentityChallengeKind,
   type SiweChallengeKind,
 } from './challenge.service';
+import { EmailOtpService } from './email-otp.service';
 import { IdentityService } from './identity.service';
 import { IdentityTokenService, type VerifiedIdentityToken } from './identity-token.service';
 import { SIWE_LINK_STATEMENT, SIWE_LOGIN_STATEMENT, SiweService } from './siwe.service';
@@ -43,7 +45,15 @@ function authServiceOver(
   users: FakeRepository<User>,
   authMethods: FakeRepository<AuthMethod>,
   identityTokens: IdentityTokenService,
-  devices = new FakeRepository<AccountDevice>()
+  {
+    emailOtp = {} as EmailOtpService,
+    subjects = new FakeRepository<IdentitySubject>(),
+    devices = new FakeRepository<AccountDevice>(),
+  }: {
+    emailOtp?: EmailOtpService;
+    subjects?: FakeRepository<IdentitySubject>;
+    devices?: FakeRepository<AccountDevice>;
+  } = {}
 ): AuthService {
   return new AuthService(
     challenges,
@@ -53,6 +63,7 @@ function authServiceOver(
       createTokenPair: () =>
         Promise.resolve({ accessToken: 'a', refreshToken: 'r', acceleratorToken: 'x' }),
     } as unknown as TokenService,
+    emailOtp,
     identityTokens,
     new FakeClock(),
     fakeConfig({}).service,
@@ -61,6 +72,7 @@ function authServiceOver(
     fakeDataSource([
       [User, users],
       [AuthMethod, authMethods],
+      [IdentitySubject, subjects],
       [AccountDevice, devices],
     ])
   );
@@ -69,22 +81,40 @@ function authServiceOver(
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 /** A second account's identity key, for the cross-account refusals. */
 const OTHER_KEY = '02'.padEnd(66, 'c');
+/** The subject bound to the account at login. */
+const BOUND_SUBJECT = '22222222-2222-4222-8222-222222222222';
+const OTHER_SUBJECT = '44444444-4444-4444-8444-444444444444';
 
 describe('AuthService auth-method surface', () => {
   let authMethods: FakeRepository<AuthMethod>;
+  let subjects: FakeRepository<IdentitySubject>;
+  let mail: CapturingMailProvider;
+  let emailOtp: EmailOtpService;
   let users: FakeRepository<User>;
   let challenges: ChallengeService;
   let service: AuthService;
   let privateKey: Uint8Array;
   let publicKey: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     authMethods = new FakeRepository<AuthMethod>();
+    subjects = new FakeRepository<IdentitySubject>();
+    mail = new CapturingMailProvider();
+    emailOtp = new EmailOtpService(
+      new FakeClock(),
+      new FakeEntropy(),
+      mail,
+      fakeConfig({}).service
+    );
     users = new FakeRepository<User>();
     challenges = new ChallengeService(new FakeClock(), new FakeEntropy(), fakeConfig({}).service);
-    service = authServiceOver(challenges, users, authMethods, {} as IdentityTokenService);
+    service = authServiceOver(challenges, users, authMethods, {} as IdentityTokenService, {
+      emailOtp,
+      subjects,
+    });
 
     ({ privateKey, publicKey } = newIdentity());
+    await users.save({ id: USER_ID, publicKey, identitySubjectId: BOUND_SUBJECT });
   });
 
   /** The account key's answer to a fresh challenge of one operation's kind. */
@@ -122,6 +152,35 @@ describe('AuthService auth-method surface', () => {
     await unlink(wallet);
 
     expect(await authMethods.count({ where: { userId: USER_ID } })).toBe(1);
+  });
+
+  describe('the subject row an unlink removes', () => {
+    async function seedSubjectFor(methodId: string, row: { id: string; subjectId: string }) {
+      const method = authMethods.rows.find((candidate) => candidate.id === methodId);
+      await subjects.save({ ...row, kind: 'wallet', identifierHash: method?.identifierHash });
+    }
+
+    it('deletes the row a link wrote, with the display row', async () => {
+      await seedMethod('identity');
+      const wallet = await seedMethod('wallet');
+      await seedSubjectFor(wallet, { id: 'link-row', subjectId: BOUND_SUBJECT });
+
+      await unlink(wallet);
+
+      expect(subjects.rows).toHaveLength(0);
+    });
+
+    it('keeps the subject row of every other identity', async () => {
+      const other = '55555555-5555-4555-8555-555555555555';
+      await seedMethod('identity');
+      const wallet = await seedMethod('wallet');
+      await seedSubjectFor(wallet, { id: 'link-row', subjectId: BOUND_SUBJECT });
+      await subjects.save({ id: other, subjectId: other, kind: 'wallet', identifierHash: 'f' });
+
+      await unlink(wallet);
+
+      expect(subjects.rows.map((row) => row.id)).toEqual([other]);
+    });
   });
 
   /**
@@ -167,9 +226,9 @@ describe('AuthService auth-method surface', () => {
     statement: string,
     proof: { challenge: string; challengeSignature: string },
     nonceKind: SiweChallengeKind = 'siwe-link',
-    mintedFor?: string
+    mintedFor?: string,
+    account = privateKeyToAccount(generatePrivateKey())
   ) {
-    const account = privateKeyToAccount(generatePrivateKey());
     const message = siweMessage(account, statement, nonceKind, mintedFor);
     const signature = await account.signMessage({ message });
     return service.siweLink(
@@ -191,6 +250,186 @@ describe('AuthService auth-method surface', () => {
   it('links a wallet once the account identity key is re-proved', async () => {
     await linkWith(SIWE_LINK_STATEMENT, reproof('identity-link'));
     expect(await authMethods.count({ where: { userId: USER_ID, kind: 'wallet' } })).toBe(1);
+  });
+
+  describe('the subject row a wallet link writes', () => {
+    const wallet = privateKeyToAccount(generatePrivateKey());
+    const walletHash = new IdentityService().hashIdentifier(wallet.address);
+
+    const linkWallet = () =>
+      linkWith(SIWE_LINK_STATEMENT, reproof('identity-link'), 'siwe-link', undefined, wallet);
+
+    async function seedSubject(subjectId: string): Promise<void> {
+      await subjects.save({ kind: 'wallet', identifierHash: walletHash, subjectId });
+    }
+
+    it('points the wallet at the bound subject, under the hash the exchange computes', async () => {
+      await linkWallet();
+
+      expect(subjects.rows).toHaveLength(1);
+      expect(subjects.rows[0]).toMatchObject({
+        kind: 'wallet',
+        identifierHash: walletHash,
+        subjectId: BOUND_SUBJECT,
+      });
+      expect(authMethods.rows[0].identifierHash).toBe(walletHash);
+    });
+
+    it('refuses a wallet that already opens this account, and writes nothing', async () => {
+      await seedSubject(BOUND_SUBJECT);
+
+      await expect(linkWallet()).rejects.toThrow('Wallet already opens this account');
+      expect(authMethods.rows).toHaveLength(0);
+      expect(subjects.rows).toHaveLength(1);
+    });
+
+    it('refuses a wallet linked to another account, and writes nothing', async () => {
+      await authMethods.save({
+        userId: '33333333-3333-4333-8333-333333333333',
+        kind: 'wallet',
+        identifierHash: walletHash,
+      });
+
+      await expect(linkWallet()).rejects.toThrow('Wallet is already linked to another account');
+      expect(subjects.rows).toHaveLength(0);
+    });
+
+    it('refuses a wallet that already opens another subject, and writes nothing', async () => {
+      await seedSubject(OTHER_SUBJECT);
+
+      await expect(linkWallet()).rejects.toThrow('Wallet already opens another account');
+      expect(authMethods.rows).toHaveLength(0);
+      expect(subjects.rows).toHaveLength(1);
+    });
+
+    it('refuses an account with no bound subject, and writes nothing', async () => {
+      users.rows[0].identitySubjectId = null;
+
+      await expect(linkWallet()).rejects.toThrow('This account has no bound identity subject');
+      expect(authMethods.rows).toHaveLength(0);
+      expect(subjects.rows).toHaveLength(0);
+    });
+
+    it('answers 409 when another account links the wallet first', async () => {
+      authMethods.insert = () =>
+        Promise.reject(
+          new QueryFailedError('INSERT', [], {
+            code: '23505',
+            constraint: 'uq_auth_methods_kind_identifier',
+          } as never)
+        );
+
+      await expect(linkWallet()).rejects.toThrow('Wallet is already linked to another account');
+    });
+
+    it('answers 409 when an exchange mints the wallet its own subject first', async () => {
+      subjects.insert = () =>
+        Promise.reject(
+          new QueryFailedError('INSERT', [], {
+            code: '23505',
+            constraint: 'uq_identity_subjects_kind_identifier',
+          } as never)
+        );
+
+      await expect(linkWallet()).rejects.toThrow('Wallet already opens another account');
+    });
+  });
+
+  describe('email link', () => {
+    const EMAIL = 'Member@Example.com';
+    const emailHash = new IdentityService().hashIdentifier('member@example.com');
+
+    async function linkEmail(
+      proof = reproof('identity-link'),
+      purpose: 'login' | 'link' = 'link',
+      requestedBy = USER_ID
+    ) {
+      if (purpose === 'link') await emailOtp.send(EMAIL, 'link', requestedBy);
+      else await emailOtp.send(EMAIL, 'login');
+      const code = mail.lastCode();
+      return service.emailLink(
+        USER_ID,
+        publicKey,
+        EMAIL,
+        code,
+        proof.challenge,
+        proof.challengeSignature
+      );
+    }
+
+    it('writes a masked display row and points the address at the bound subject', async () => {
+      await linkEmail();
+
+      expect(authMethods.rows[0]).toMatchObject({
+        kind: 'email',
+        identifierHash: emailHash,
+        identifierDisplay: 'm***@example.com',
+      });
+      expect(subjects.rows[0]).toMatchObject({
+        kind: 'email',
+        identifierHash: emailHash,
+        subjectId: BOUND_SUBJECT,
+      });
+    });
+
+    it('refuses a sign-in code, and writes nothing', async () => {
+      await expect(linkEmail(reproof('identity-link'), 'login')).rejects.toThrow(
+        UnauthorizedException
+      );
+      expect(authMethods.rows).toHaveLength(0);
+      expect(subjects.rows).toHaveLength(0);
+    });
+
+    it('refuses a link carrying no valid identity re-proof, and writes nothing', async () => {
+      await expect(linkEmail(forgedProof)).rejects.toThrow(UnauthorizedException);
+      expect(authMethods.rows).toHaveLength(0);
+    });
+
+    it('refuses a link code another account requested, and writes nothing', async () => {
+      await expect(
+        linkEmail(reproof('identity-link'), 'link', '33333333-3333-4333-8333-333333333333')
+      ).rejects.toThrow(/No verification code is outstanding/);
+      expect(authMethods.rows).toHaveLength(0);
+      expect(subjects.rows).toHaveLength(0);
+    });
+
+    it('refuses an address linked to another account, and writes nothing', async () => {
+      await authMethods.save({
+        userId: '33333333-3333-4333-8333-333333333333',
+        kind: 'email',
+        identifierHash: emailHash,
+      });
+
+      await expect(linkEmail()).rejects.toThrow('Email is already linked to another account');
+      expect(subjects.rows).toHaveLength(0);
+    });
+
+    it('refuses an address that already opens another subject, and writes nothing', async () => {
+      await subjects.save({
+        kind: 'email',
+        identifierHash: emailHash,
+        subjectId: OTHER_SUBJECT,
+      });
+
+      await expect(linkEmail()).rejects.toThrow('Email is already linked to another account');
+      expect(authMethods.rows).toHaveLength(0);
+    });
+
+    it('refuses an address that already opens this account, and writes nothing', async () => {
+      await subjects.save({ kind: 'email', identifierHash: emailHash, subjectId: BOUND_SUBJECT });
+
+      await expect(linkEmail()).rejects.toThrow('Email already opens this account');
+      expect(authMethods.rows).toHaveLength(0);
+      expect(subjects.rows).toHaveLength(1);
+    });
+
+    it('refuses an account with no bound subject, and writes nothing', async () => {
+      users.rows[0].identitySubjectId = null;
+
+      await expect(linkEmail()).rejects.toThrow('This account has no bound identity subject');
+      expect(authMethods.rows).toHaveLength(0);
+      expect(subjects.rows).toHaveLength(0);
+    });
   });
 
   it('refuses a link carrying no valid identity re-proof, and links nothing', async () => {
@@ -298,13 +537,9 @@ describe('AuthService login bind (ADR 0058 D2)', () => {
         return { subject, method: 'google', tokenId: randomUUID(), expiresAt: new Date(0) };
       },
     } as unknown as IdentityTokenService;
-    service = authServiceOver(
-      challenges,
-      users,
-      new FakeRepository<AuthMethod>(),
-      identityTokens,
-      devices
-    );
+    service = authServiceOver(challenges, users, new FakeRepository<AuthMethod>(), identityTokens, {
+      devices,
+    });
 
     ({ privateKey, publicKey } = newIdentity());
   });

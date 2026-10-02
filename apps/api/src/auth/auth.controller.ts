@@ -28,6 +28,7 @@ import {
   AuthMethodDto,
   ChallengeRequestDto,
   ChallengeResponseDto,
+  EmailLinkRequestDto,
   HEX_REFRESH_TOKEN,
   LoginRequestDto,
   LogoutResponseDto,
@@ -40,6 +41,7 @@ import {
   TokenResponseDto,
   UnlinkMethodRequestDto,
 } from './dto/auth.dto';
+import { EmailCodeRequestDto } from './dto/identity.dto';
 import { AuthenticatedRequest, JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthService } from './services/auth.service';
 import { TestAuthService } from './services/test-auth.service';
@@ -187,6 +189,44 @@ export class AuthController {
       body.challengeSignature
     );
     return { success: true };
+  }
+
+  @Post('email/link/send-code')
+  @Throttle(THROTTLE_SURFACES.auth)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Send a verification code that only POST /auth/email/link will accept',
+  })
+  @ApiCreatedResponse({ description: 'The code was sent; the body is empty' })
+  async sendEmailLinkCode(
+    @Body() body: EmailCodeRequestDto,
+    @Req() request: AuthenticatedRequest
+  ): Promise<void> {
+    await this.authService.sendEmailLinkCode(request.user.userId, body.email);
+  }
+
+  @Post('email/link')
+  @Throttle(THROTTLE_SURFACES.auth)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Link a passwordless email address to the authenticated account, re-proving the account identity key',
+  })
+  @ApiCreatedResponse({ description: 'The address was linked; the body is empty' })
+  async emailLink(
+    @Body() body: EmailLinkRequestDto,
+    @Req() request: AuthenticatedRequest
+  ): Promise<void> {
+    await this.authService.emailLink(
+      request.user.userId,
+      accountKey(request),
+      body.email,
+      body.code,
+      body.challenge,
+      body.challengeSignature
+    );
   }
 
   @Get('methods')

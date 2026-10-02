@@ -1,6 +1,6 @@
 import { ArgumentMetadata, BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
-import { MAX_BATCH } from './dto/registry.dto';
+import { MAX_BATCH, MAX_CONTENT_CIDS, MAX_REGISTER_CONTENT_CIDS_TOTAL } from './dto/registry.dto';
 import { REGISTRY_BATCH_REFUSED } from './registry-error-codes';
 import { registerBodyPipes, retireBodyPipes } from './registry.pipes';
 
@@ -62,6 +62,28 @@ describe('registry batch gates', () => {
     expect(await refusal(retireBodyPipes, entries)).toMatchObject({
       code: REGISTRY_BATCH_REFUSED,
     });
+  });
+
+  // Split into entries under the per-entry cap, so only the total can refuse it.
+  const perEntry = MAX_CONTENT_CIDS / 2;
+  const registerWithCids = (total: number) =>
+    Array.from({ length: Math.ceil(total / perEntry) }, (_, entry) => ({
+      ipnsName: `k51total${entry}`,
+      contentCids: Array.from(
+        { length: Math.min(perEntry, total - entry * perEntry) },
+        (_, i) => `bafy${entry}x${i}`
+      ),
+    }));
+
+  it('register refuses a batch whose TOTAL contentCids exceed the cap, however it is split', async () => {
+    expect(
+      await refusal(registerBodyPipes, registerWithCids(MAX_REGISTER_CONTENT_CIDS_TOTAL + 1))
+    ).toMatchObject({ code: REGISTRY_BATCH_REFUSED });
+  });
+
+  it('register accepts a batch at the total contentCids cap', async () => {
+    const entries = registerWithCids(MAX_REGISTER_CONTENT_CIDS_TOTAL);
+    expect(await transform(registerBodyPipes, entries)).toHaveLength(entries.length);
   });
 
   it('retire accepts a well-formed batch and answers the parsed entries', async () => {

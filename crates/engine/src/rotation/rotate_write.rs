@@ -89,6 +89,130 @@ pub struct WriteScopeNode {
     pub current_name: IpnsName,
     /// The node's direct children within this write scope.
     pub child_node_ids: Vec<[u8; 16]>,
+    /// The refs this node's body gives a child at a second name, which the
+    /// wave leaves out (ADR 0065 D2): each child id, with the name it drops.
+    pub second_refs: Vec<([u8; 16], IpnsName)>,
+}
+
+/// Why the name wave leaves a node out of the moved tree (ADR 0065,
+/// CONTEXT.md "Dropped node"). Serialized in kebab case, as `no-record`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "kebab-case"))]
+pub enum DropCause {
+    /// The adoption gate refuses the record, for any cause but a sequence
+    /// below the floor or a head block that does not match its CID, or its body
+    /// carries a malformed child ref (D1).
+    RecordRefused,
+    /// The record is at an epoch no held history link reaches (D1).
+    EpochUnreachable,
+    /// Every endpoint states that no record is at the name (D3).
+    NoRecord,
+    /// No endpoint answers for the name (D3).
+    EndpointUnavailable,
+    /// No endpoint serves the record's head block, or one serves a block that
+    /// does not match its CID (D3).
+    NoHeadBlock,
+    /// The record is below the name's sequence floor (D3).
+    BelowSequenceFloor,
+    /// The record is at an epoch above the gated root's, which a read rotation
+    /// on another device can publish before this device reads its root, so it
+    /// waits for the bound as a D3 stop does.
+    EpochAboveRoot,
+}
+
+impl DropCause {
+    /// Whether an endpoint can cause this refusal, so the node drops only
+    /// after the bound of ADR 0065 D3.
+    #[must_use]
+    pub fn needs_bound(self) -> bool {
+        matches!(
+            self,
+            Self::NoRecord
+                | Self::EndpointUnavailable
+                | Self::NoHeadBlock
+                | Self::BelowSequenceFloor
+                | Self::EpochAboveRoot
+        )
+    }
+
+    /// Whether a revokee can plant this cause on a fresh node id, so the
+    /// entry count of ADR 0065 D3 drops it as well as the node's own count
+    /// ([`NodeStop::Refused`] adds an answered `EndpointUnavailable`).
+    #[must_use]
+    pub fn plantable(self) -> bool {
+        matches!(
+            self,
+            Self::NoRecord | Self::NoHeadBlock | Self::EpochAboveRoot
+        )
+    }
+}
+
+/// Why [`WriteSubtreeResolver::resolve_node`] yields no node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeStop {
+    /// The wave stops here.
+    Stop(ResolveFailure),
+    /// The node's record is refused for `cause`, so a node below the root
+    /// may drop.
+    Refused {
+        /// The verdict the wave reports when it stops instead.
+        reason: ResolveFailure,
+        /// Why the node may drop.
+        cause: DropCause,
+        /// The name a drop retires: the name the node sits at, and only when
+        /// the root's write scope seed derives it for the node, so a drop never
+        /// retires a name outside the scope.
+        retire: Option<Box<IpnsName>>,
+        /// An endpoint answered for the name, with no record or with bytes it
+        /// served. A revokee can plant such a stop on a fresh id, so the entry
+        /// count drops it.
+        answered: bool,
+    },
+    /// A ref met later outranks the one the walk took for a node (D2), so
+    /// the walk starts again from the root (`WaveSubtree` in
+    /// `net/rotation.rs` bounds the count).
+    Rewalk,
+}
+
+impl From<ResolveFailure> for NodeStop {
+    fn from(reason: ResolveFailure) -> Self {
+        Self::Stop(reason)
+    }
+}
+
+/// The bound of ADR 0065 D3 for one owed cut: whether each node is past it,
+/// and the count of passes that a node held the wave.
+pub trait NodeBound {
+    /// Whether `node_id` may drop for a cause an endpoint can cause; the
+    /// entry count applies only when a revokee can `plant` that cause.
+    fn past(&self, node_id: &[u8; 16], plant: bool) -> bool;
+    /// Count this pass toward `node_id`'s bound.
+    fn held(&self, node_id: &[u8; 16]);
+    /// `node_id` resolved, so its count starts again.
+    fn resolved(&self, node_id: &[u8; 16]);
+}
+
+/// A bound that no node is ever past.
+pub struct NoBound;
+
+impl NodeBound for NoBound {
+    fn past(&self, _node_id: &[u8; 16], _plant: bool) -> bool {
+        false
+    }
+
+    fn held(&self, _node_id: &[u8; 16]) {}
+
+    fn resolved(&self, _node_id: &[u8; 16]) {}
+}
+
+/// A node the wave left out of the moved tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DroppedNode {
+    /// The node id.
+    pub node_id: [u8; 16],
+    /// Why the wave left it out.
+    pub cause: DropCause,
 }
 
 /// The two re-point channels the wave publishes to (blueprint/engine.md
@@ -130,6 +254,13 @@ pub struct RepublishedNode {
     /// leaf; child-first ordering makes every entry known before the parent
     /// publishes.
     pub child_names: BTreeMap<[u8; 16], IpnsName>,
+    /// The children the wave dropped: the republish removes every ref to
+    /// each, and fails closed on one the body does not carry.
+    pub dropped_children: BTreeSet<[u8; 16]>,
+    /// The second refs the wave dropped ([`WriteScopeNode::second_refs`]):
+    /// the republish removes each, and fails closed on one the body does not
+    /// carry.
+    pub second_refs: Vec<([u8; 16], IpnsName)>,
     /// Signs the record at [`Self::new_name`] — the narrow per-name capability
     /// (the shape `net/liveness.rs` holds for the same reason), never the seed it
     /// derives from, so the publisher can derive no other node's name.
@@ -230,7 +361,7 @@ pub trait WriteSubtreeResolver {
         &self,
         node_id: &[u8; 16],
         resumed: Option<&ResumedRoot>,
-    ) -> Result<WriteScopeNode, ResolveFailure>;
+    ) -> Result<WriteScopeNode, NodeStop>;
 
     /// What published records say about this scope's write plane
     /// ([`RecoveredWave`]). The whole of the crash-recovery seam (#26 D8):
@@ -384,6 +515,9 @@ pub struct RotateScopeWritePlan<'a> {
     /// Whether this scope is the vault anchor — the scope the session's indexed
     /// vault pointer names ([`RepointChannel::VaultPointer`]).
     pub is_vault_anchor: bool,
+    /// The bound of ADR 0065 D3 that a node refused for a cause an endpoint
+    /// can cause must be past before it drops.
+    pub bound: &'a dyn NodeBound,
 }
 
 /// A completed write rotation. Holding one is proof the whole subtree was
@@ -399,6 +533,8 @@ pub struct WriteRotationOutcome {
     /// covers all of them, though a resumed wave may have republished some in a
     /// prior run (skipped via `is_republished`).
     pub interior_node_count: usize,
+    /// The nodes the wave left out of the moved tree (ADR 0065).
+    pub dropped: Vec<DroppedNode>,
 }
 
 /// A fail-closed write-rotation failure. Every variant leaves the rotation
@@ -718,8 +854,10 @@ where
     // 4) Enumerate the subtree from published records. BFS yields the root first,
     //    then level order; the wave processes descendants child-first (reversed) and
     //    the root last.
-    let bfs = collect_subtree(resolver, scope_id, resumed_root.as_ref()).await?;
-    let (root, descendants) = bfs
+    let walk = collect_subtree(resolver, scope_id, resumed_root.as_ref(), plan.bound).await?;
+    let dropped_ids: BTreeSet<[u8; 16]> = walk.dropped.iter().map(|d| d.node_id).collect();
+    let (root, descendants) = walk
+        .order
         .split_first()
         .expect("collect_subtree always yields at least the root");
 
@@ -732,6 +870,7 @@ where
             publisher,
             &write_scope_seed,
             node,
+            &dropped_ids,
             &new_name,
             new_write_epoch,
             false,
@@ -751,6 +890,9 @@ where
             }
         }
     }
+    // A dropped node keeps no live ref, so its old name retires with the
+    // others (ADR 0065 D1).
+    interior_old_names.extend(walk.dropped_names);
 
     // 6) Root LAST: republish the root at its new name. The old root name is NOT
     //    retired — it lingers past the migration window (#34 D4).
@@ -759,6 +901,7 @@ where
         publisher,
         &write_scope_seed,
         root,
+        &dropped_ids,
         &new_root_name,
         new_write_epoch,
         true,
@@ -825,6 +968,7 @@ where
         new_write_epoch,
         new_root_name,
         interior_node_count: descendants.len(),
+        dropped: walk.dropped,
     })
 }
 
@@ -845,6 +989,7 @@ async fn republish_node<P: WriteWavePublisher>(
     publisher: &P,
     write_scope_seed: &[u8; SECRET_LEN],
     node: &WriteScopeNode,
+    dropped_ids: &BTreeSet<[u8; 16]>,
     new_name: &IpnsName,
     write_epoch: u64,
     is_root: bool,
@@ -874,8 +1019,12 @@ async fn republish_node<P: WriteWavePublisher>(
         return Ok(());
     }
 
-    let child_names = node
+    let (dropped_children, kept): (BTreeSet<[u8; 16]>, BTreeSet<[u8; 16]>) = node
         .child_node_ids
+        .iter()
+        .copied()
+        .partition(|child| dropped_ids.contains(child));
+    let child_names = kept
         .iter()
         .map(|child| (*child, derive_write_name(write_scope_seed, child)))
         .collect();
@@ -886,6 +1035,8 @@ async fn republish_node<P: WriteWavePublisher>(
             current_name: node.current_name.clone(),
             new_name: new_name.clone(),
             child_names,
+            dropped_children,
+            second_refs: node.second_refs.clone(),
             signer: kdf::ipns_keypair(kdf::write_seed(write_scope_seed, &node_id).as_bytes()),
             write_scope_seed: is_root.then(|| SecretBytes::new(*write_scope_seed)),
             write_epoch,
@@ -903,38 +1054,87 @@ fn repoint_stage(channel: RepointChannel) -> &'static str {
     }
 }
 
+/// The subtree one walk enumerated: its nodes in BFS order, root first, and
+/// what it left out.
+#[derive(Default)]
+struct Walk {
+    order: Vec<WriteScopeNode>,
+    dropped: Vec<DroppedNode>,
+    /// The names of the dropped nodes that the wave retires.
+    dropped_names: Vec<IpnsName>,
+}
+
 /// BFS the write scope's subtree from `root_id` via the resolver: root first, then
 /// level order. A `node_id`-keyed visited set terminates diamonds/cycles fail-
-/// closed (a tree has none, but the walk never loops). An unresolvable node aborts
-/// — a partial subtree is never a complete wave.
+/// closed (a tree has none, but the walk never loops).
+///
+/// A node below the root that the resolver refuses for a cause in its record
+/// bytes drops, and the walk does not descend below it; one refused for a
+/// cause an endpoint can cause drops only once `bound` is past for it (ADR 0065
+/// D1, D3). Before that, the walk counts the pass toward the node's bound, goes
+/// on with the other nodes so each node held counts this pass, then stops. Any
+/// other refusal aborts: a partial subtree is never a complete wave.
+///
+/// A [`NodeStop::Rewalk`] starts the walk again.
 async fn collect_subtree<R: WriteSubtreeResolver>(
     resolver: &R,
     root_id: [u8; 16],
     resumed: Option<&ResumedRoot>,
-) -> Result<Vec<WriteScopeNode>, WriteRotateError> {
-    let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
-    let mut order: Vec<WriteScopeNode> = Vec::new();
-    let mut queue: VecDeque<[u8; 16]> = VecDeque::new();
+    bound: &dyn NodeBound,
+) -> Result<Walk, WriteRotateError> {
+    'walk: loop {
+        let mut walk = Walk::default();
+        let mut held: Option<([u8; 16], ResolveFailure)> = None;
+        let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
+        let mut queue: VecDeque<[u8; 16]> = VecDeque::new();
+        visited.insert(root_id);
+        queue.push_back(root_id);
 
-    visited.insert(root_id);
-    queue.push_back(root_id);
-
-    while let Some(id) = queue.pop_front() {
-        let node = resolver
-            .resolve_node(&id, resumed)
-            .await
-            .map_err(|reason| WriteRotateError::Resolve {
-                node_id: id,
-                reason,
-            })?;
-        for child in &node.child_node_ids {
-            if visited.insert(*child) {
-                queue.push_back(*child);
+        while let Some(id) = queue.pop_front() {
+            let node = match resolver.resolve_node(&id, resumed).await {
+                Ok(node) => {
+                    bound.resolved(&id);
+                    node
+                }
+                Err(NodeStop::Rewalk) => continue 'walk,
+                Err(NodeStop::Refused {
+                    cause,
+                    retire,
+                    answered,
+                    ..
+                }) if id != root_id
+                    && (!cause.needs_bound() || bound.past(&id, cause.plantable() || answered)) =>
+                {
+                    walk.dropped.push(DroppedNode { node_id: id, cause });
+                    walk.dropped_names.extend(retire.map(|name| *name));
+                    continue;
+                }
+                Err(NodeStop::Refused { reason, cause, .. })
+                    if id != root_id && cause.needs_bound() =>
+                {
+                    bound.held(&id);
+                    held.get_or_insert((id, reason));
+                    continue;
+                }
+                Err(NodeStop::Refused { reason, .. } | NodeStop::Stop(reason)) => {
+                    return Err(WriteRotateError::Resolve {
+                        node_id: id,
+                        reason,
+                    });
+                }
+            };
+            for child in &node.child_node_ids {
+                if visited.insert(*child) {
+                    queue.push_back(*child);
+                }
             }
+            walk.order.push(node);
         }
-        order.push(node);
+        return match held {
+            Some((node_id, reason)) => Err(WriteRotateError::Resolve { node_id, reason }),
+            None => Ok(walk),
+        };
     }
-    Ok(order)
 }
 
 #[cfg(test)]

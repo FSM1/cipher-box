@@ -189,7 +189,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     exchanged = null;
     if (!facade || !session) throw new Error('the engine is not ready to accept a login');
     const method = session.method();
-    const email = session.email();
+    const display = session.display();
 
     secrets?.use(session);
     try {
@@ -209,7 +209,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       if (retired === 'any' || retired === session) {
         throw new Error('the session ended before this sign-in finished');
       }
-      account.signedIn(method, email);
+      account.signedIn(method, display);
     } catch (failure) {
       secrets?.use(null);
       // A Core Kit session the engine refused is a live credential on this

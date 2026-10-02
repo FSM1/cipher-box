@@ -96,6 +96,15 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
         }
     }
 
+    /// The epoch tag of the head an adopt assembled, `None` before the head
+    /// block was fetched.
+    pub(crate) fn assembled_epoch(&self) -> Option<u64> {
+        self.assembled
+            .borrow()
+            .as_ref()
+            .map(|head| head.envelope.epoch)
+    }
+
     /// Bound the unseal classification by the epoch the read seed belongs to
     /// ([`Self::unseal`]). The floor can rise after the caller took the seed.
     #[must_use]

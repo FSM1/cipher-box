@@ -1,6 +1,12 @@
+import { Logger } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeConfig } from '../../testing/fakes';
-import { buildMailProvider, LoggingMailProvider, SendGridMailProvider } from './mail.provider';
+import {
+  buildMailProvider,
+  LoggingMailProvider,
+  SendGridMailProvider,
+  verificationMessage,
+} from './mail.provider';
 
 const SENDGRID = {
   MAIL_PROVIDER: 'sendgrid',
@@ -60,7 +66,8 @@ describe('SendGridMailProvider', () => {
 
     await new SendGridMailProvider('sg-key', 'noreply@cipherbox.cc').sendVerificationCode(
       'member@example.com',
-      '123456'
+      '123456',
+      'login'
     );
 
     const [, init] = fetchMock.mock.calls[0];
@@ -77,8 +84,47 @@ describe('SendGridMailProvider', () => {
     await expect(
       new SendGridMailProvider('sg-key', 'noreply@cipherbox.cc').sendVerificationCode(
         'member@example.com',
-        '123456'
+        '123456',
+        'login'
       )
     ).rejects.toThrow(/status 429/);
+  });
+});
+
+describe('verification mail by purpose', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('gives a link code its own subject and body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new SendGridMailProvider('sg-key', 'noreply@cipherbox.cc');
+
+    await provider.sendVerificationCode('member@example.com', '123456', 'login');
+    await provider.sendVerificationCode('member@example.com', '654321', 'link');
+
+    const [signIn, link] = fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body as string));
+    expect(link.subject).not.toBe(signIn.subject);
+    expect(link.subject).toBe(verificationMessage('654321', 'link').subject);
+    expect(link.content[0].value).toContain('654321');
+    expect(link.content[0].value).toMatch(/add this address as a login/);
+    expect(link.content[0].value).toMatch(/Share this code with no one/);
+    expect(signIn.content[0].value).toContain('123456');
+    expect(signIn.content[0].value).not.toMatch(/add this address/);
+  });
+
+  it('logs one line format for both purposes', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const provider = new LoggingMailProvider();
+
+    await provider.sendVerificationCode('member@example.com', '123456', 'login');
+    await provider.sendVerificationCode('member@example.com', '654321', 'link');
+
+    expect(warn.mock.calls.map(([line]) => line)).toEqual([
+      'Verification code for member@example.com: 123456',
+      'Verification code for member@example.com: 654321',
+    ]);
   });
 });

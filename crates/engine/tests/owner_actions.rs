@@ -59,8 +59,8 @@ use cipherbox_engine::seams::{
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::op::ScopeCrossing;
 use cipherbox_engine::sync::owed_rotation::{
-    OWED_ROTATION_PREFIX, OwedEntry, OwedRecord, OwedStep, ROTATION_WORK_OWED, owed_rotation_key,
-    seal_owed_record,
+    DROP_BOUND, DROP_BOUND_PASSES, OWED_ROTATION_PREFIX, OwedEntry, OwedRecord, OwedStep,
+    ROTATION_WORK_OWED, open_owed_record, owed_rotation_key, seal_owed_record,
 };
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
 use cipherbox_engine::sync::{
@@ -78,10 +78,11 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, ContentProfile,
-    DeadLetterReason, Engine, EngineError, Event, EventStream, GatewayConfig, InvitePreview,
-    LinkPreviewState, LoginSecret, NodeId, NodeKind, OwedWorkClass, Permission, PreviewEntry,
-    PreviewNames, RecordReader, ScopeEpochs, SessionBearer, SharePointer, SharingInviteLink,
-    StoragePolicy, SyncTimingProfile, decode_queue, load_bin_index, poll_verified, post_sealed,
+    DeadLetterReason, DropCause, Engine, EngineError, Event, EventStream, GatewayConfig,
+    InvitePreview, LinkPreviewState, LoginSecret, NodeId, NodeKind, OwedWorkClass, Permission,
+    PreviewEntry, PreviewNames, RecordReader, ScopeEpochs, SessionBearer, SharePointer,
+    SharingInviteLink, StoragePolicy, SyncTimingProfile, decode_queue, load_bin_index,
+    poll_verified, post_sealed,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -258,6 +259,12 @@ fn read_key_of(node: NodeId) -> [u8; 32] {
 /// The head block of the record currently published under `name`, verified
 /// under that name.
 fn published_head(world: &FakeWorld, blocks: &Blocks, name: &IpnsName) -> Option<Vec<u8>> {
+    let cid = published_head_cid(world, name)?;
+    Some(blocks.get(&cid).expect("the head block is on the plane"))
+}
+
+/// The head CID of the record currently published under `name`.
+fn published_head_cid(world: &FakeWorld, name: &IpnsName) -> Option<String> {
     let bytes = world
         .record_store
         .record_at(&world.record_store.endpoints()[0], name.as_str())?;
@@ -268,7 +275,7 @@ fn published_head(world: &FakeWorld, blocks: &Blocks, name: &IpnsName) -> Option
         .expect("utf8 value")
         .strip_prefix("/ipfs/")
         .expect("an /ipfs/ pointer");
-    Some(blocks.get(cid).expect("the head block is on the plane"))
+    Some(cid.to_owned())
 }
 
 /// The read epoch the record published at `node` is sealed at.
@@ -1500,88 +1507,6 @@ fn a_downgrade_right_after_a_manual_rotation_moves_the_lagging_subtree() {
     );
 }
 
-/// A node the ratchet reaches but that does not open under that seed is a
-/// trust violation, even below a lagging child the wave opened. The cut set
-/// has landed, so the revoke answers `Ok` and the host is told the work is
-/// owed behind a trust stop (ADR 0063 D5).
-#[test]
-fn a_write_revoke_refuses_a_lagging_grandchild_the_ratchet_cannot_open() {
-    let mut fx = GrantScenario::new();
-    let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
-    plant_unopenable_node(&fx, &revokee_seed, grandchild, 1);
-
-    assert_eq!(
-        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
-        Ok(CommandOutcome::Done)
-    );
-    assert_eq!(
-        owed_reports(&mut fx._events),
-        vec![(
-            fx.folder,
-            "rot-write-resolve-failed".to_owned(),
-            false,
-            OwedWorkClass::Trust
-        )],
-        "the wave reads past the lagging child and refuses the grandchild"
-    );
-}
-
-/// A wave that stops on a node beyond the ratchet leaves its cut owed: no pass
-/// drops the entry for an epoch it cannot read yet.
-#[test]
-fn a_write_revoke_stopped_beyond_the_ratchet_stays_owed() {
-    let mut fx = GrantScenario::new();
-    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
-    plant_unopenable_node(&fx, &revokee_seed, child, 0);
-    assert_eq!(
-        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
-        Ok(CommandOutcome::Done)
-    );
-    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the cut is owed");
-
-    for _ in 0..2 {
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
-    let events = events_so_far(&mut fx._events);
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, Event::RotationWorkAbandoned { .. })),
-        "no pass drops it"
-    );
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            Event::RotationWorkOwed { scope_root, .. } if *scope_root == fx.folder
-        )),
-        "and each pass reports it"
-    );
-}
-
-/// A lagging node beyond the ratchet is not a trust verdict (ADR 0021 D5): the
-/// revoke whose cut set landed answers `Ok`, and the host is told the work is
-/// owed at the unreadable node, not retryable (ADR 0063 D5).
-#[test]
-fn a_write_revoke_reports_a_child_beyond_the_ratchet_as_an_unsupported_target() {
-    let mut fx = GrantScenario::new();
-    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
-    plant_unopenable_node(&fx, &revokee_seed, child, 0);
-
-    assert_eq!(
-        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
-        Ok(CommandOutcome::Done)
-    );
-    assert_eq!(
-        owed_reports(&mut fx._events),
-        vec![(
-            fx.folder,
-            "rot-write-resolve-failed".to_owned(),
-            false,
-            OwedWorkClass::Capability
-        )]
-    );
-}
-
 /// A read revoke leaves the subtree lagging, so the write grant that follows
 /// moves lagging nodes off the names the vault's write seed derives.
 #[test]
@@ -1613,42 +1538,6 @@ fn a_write_grant_right_after_a_read_revoke_moves_the_lagging_subtree() {
         write_name(child),
         "the wave moved the child off the vault seed's name"
     );
-}
-
-/// The revokee holds `node`'s name key, and publishes a body sealed at `epoch`
-/// under a key no epoch of the scope derives.
-fn plant_unopenable_node(fx: &GrantScenario, revokee_seed: &[u8; 32], node: NodeId, epoch: u64) {
-    let name = derive_write_name(revokee_seed, &node.0);
-    let forged = author_child_envelope(EnvelopeAuthoring {
-        node_id: node.0,
-        scope_id: fx.folder.0,
-        epoch,
-        read_key: &[0x13; 32],
-        nonce: &[0x5f; 24],
-        body: &ReadBody::Folder {
-            created_at: 0,
-            modified_at: 0,
-            children: Vec::new(),
-            unknown: PreservedFields::new(),
-        },
-        carried_unknown: PreservedFields::new(),
-        carried_epoch_tag_unknown: PreservedFields::new(),
-    })
-    .expect("the forged node seals");
-    fx.blocks.put(forged.block.clone());
-    let record = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(revokee_seed, &node.0).as_bytes()),
-        format!("/ipfs/{}", forged.cid).as_bytes(),
-        sequence_at(&fx.world, &name) + 1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-    for endpoint in fx.world.record_store.endpoints() {
-        fx.world
-            .record_store
-            .seed_record(&endpoint, name.as_str(), record.clone());
-    }
 }
 
 /// Key regression, stated at the write plane: after the cut, the vault's write
@@ -10243,6 +10132,38 @@ fn owed_work_whose_recipient_is_unknown_is_abandoned_once() {
     );
 }
 
+/// The owed record the owner device holds now.
+fn staged_owed_record(fx: &GrantScenario) -> OwedRecord {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(11));
+    let blob = block_on(
+        fx.owner_device
+            .staging_store
+            .staged_bytes(&owed_rotation_key(&enc)),
+    )
+    .expect("the store answers")
+    .expect("a record is staged");
+    open_owed_record(BookkeepingSeal::new(&enc, &entropy), &blob).expect("the record opens")
+}
+
+/// A share run again over its standing mint keeps the time the entry first
+/// stopped, so a re-run does not start the bound of ADR 0065 D3 again.
+#[test]
+fn a_share_re_run_over_its_standing_mint_keeps_the_first_stop() {
+    let mut fx = GrantScenario::new();
+    let root = write_name(ROOT);
+    fx.world.record_store.fail_put_for(root.as_str());
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let first = staged_owed_record(&fx)[&fx.folder].first_stop;
+    assert!(first.is_some(), "the stalled move set the first stop");
+
+    fx.world.scheduler.advance(Duration::from_secs(60));
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the move is still owed");
+    assert_eq!(staged_owed_record(&fx)[&fx.folder].first_stop, first);
+}
+
 /// Seal `record` as the owner's owed rotation record on the owner device, for
 /// the next session to read.
 fn stage_owed_record(fx: &GrantScenario, record: &OwedRecord) {
@@ -11295,31 +11216,65 @@ fn an_entry_that_is_not_durable_refuses_the_revoke_before_any_publish() {
     assert!(fx.owed_scopes().is_empty(), "and nothing is owed");
 }
 
-/// ADR 0063 D4: the renewal walk renews no name of a scope with owed work,
-/// and still renews the names of every other scope.
+/// ADR 0063 D4: the renewal walk renews no name of a scope whose owed work
+/// stopped less than the bound ago, and still renews the names of every
+/// other scope.
 #[test]
 fn the_renewal_walk_skips_a_scope_with_owed_work() {
+    const DAY: u64 = 24 * 60 * 60;
     let mut fx = GrantScenario::new();
-    let recipient = recipient_identity().verifying_key().to_sec1();
-    fx.world.mailbox_hub.forget_recipient(&recipient);
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the delivery is owed");
-    let inner = create_published_folder(
-        &fx.world,
-        &mut fx.engine,
-        &mut fx._tasks,
-        fx.folder,
-        "inner",
-    );
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
     let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
     for _ in 0..3 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    let inner_before = sequence_at(&fx.world, &write_name(inner));
+    let child_name = derive_write_name(&revokee_seed, &child.0);
+    let child_before = sequence_at(&fx.world, &child_name);
     let outer_before = sequence_at(&fx.world, &write_name(outer));
+    // A downgrade cuts the write plane alone, so no read sweep re-seals the
+    // scope. Its wave first stops close to the names' renewal, so the walk
+    // meets the owed scope within the bound.
+    fx.world.scheduler.advance(Duration::from_secs(62 * DAY));
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
     let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::ChangePermission {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                permission: Permission::Read,
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.owed_scopes(), vec![folder], "the wave is owed");
 
-    let (world, mut events, _later) = restart_later_on_the_same_device(fx);
+    let GrantScenario {
+        world,
+        blocks,
+        owner_device,
+        engine,
+        _tasks,
+        ..
+    } = fx;
+    let (world, mut events, (_device, engine, mut tasks)) = start_after(
+        world,
+        &blocks,
+        owner_device,
+        (engine, _tasks),
+        Duration::from_secs(DAY),
+    );
+    // The re-drive's bounded retries hold each pass a while.
+    for _ in 0..64 {
+        if sequence_at(&world, &write_name(outer)) > outer_before {
+            break;
+        }
+        tick(&world, &engine, &mut tasks);
+    }
 
     assert_eq!(
         sequence_at(&world, &write_name(outer)),
@@ -11327,8 +11282,8 @@ fn the_renewal_walk_skips_a_scope_with_owed_work() {
         "the vault root's scope renews"
     );
     assert_eq!(
-        sequence_at(&world, &write_name(inner)),
-        inner_before,
+        sequence_at(&world, &child_name),
+        child_before,
         "the owed scope does not"
     );
     assert_eq!(
@@ -12936,11 +12891,30 @@ fn start_later_on(
     EventStream,
     (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>),
 ) {
+    start_after(
+        world,
+        blocks,
+        device,
+        stopped,
+        Duration::from_secs(65 * 24 * 60 * 60),
+    )
+}
+
+/// [`start_later_on`], `gap` after the stopped session.
+fn start_after(
+    world: FakeWorld,
+    blocks: &Blocks,
+    device: FakeDevice,
+    stopped: (Engine<FakeSeamTypes>, Vec<BoxedTask>),
+    gap: Duration,
+) -> (
+    FakeWorld,
+    EventStream,
+    (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>),
+) {
     drop(stopped);
     drop(world.scheduler.take_spawned_tasks());
-    world
-        .scheduler
-        .advance(Duration::from_secs(65 * 24 * 60 * 60));
+    world.scheduler.advance(gap);
     let (engine, events, mut tasks) = boot_owner(&world, blocks, &device);
     for _ in 0..3 {
         tick(&world, &engine, &mut tasks);
@@ -13256,4 +13230,856 @@ fn a_node_a_stopped_wave_did_not_reach_is_not_renewed_at_its_old_name() {
         "a write at an old name no parent names is not renewed"
     );
     assert_eq!(abuse_events(&mut events), 0);
+}
+
+// ---------------------------------------------------------------------------
+// ADR 0065: the name wave drops a node it cannot move
+// ---------------------------------------------------------------------------
+
+/// A drop the stream reports: scope root, node, cause.
+fn as_drop(event: &Event) -> Option<(NodeId, NodeId, DropCause)> {
+    match event {
+        Event::NodeDropped {
+            scope_root,
+            node_id,
+            cause,
+        } => Some((*scope_root, *node_id, *cause)),
+        _ => None,
+    }
+}
+
+/// The nodes the stream reports a write cut dropped.
+fn dropped_nodes(events: &mut EventStream) -> Vec<(NodeId, NodeId, DropCause)> {
+    events_so_far(events).iter().filter_map(as_drop).collect()
+}
+
+/// The revokee signs a record for `node` at the name `signer_seed` derives,
+/// over `body` sealed at `epoch` under `read_key`. The head block is served
+/// only when `serve_head` holds. Returns the name.
+#[allow(clippy::too_many_arguments)]
+fn plant_node(
+    fx: &GrantScenario,
+    signer_seed: &[u8; 32],
+    node: NodeId,
+    body: &ReadBody,
+    read_key: &[u8; 32],
+    epoch: u64,
+    serve_head: bool,
+) -> IpnsName {
+    let name = derive_write_name(signer_seed, &node.0);
+    let planted = author_child_envelope(EnvelopeAuthoring {
+        node_id: node.0,
+        scope_id: fx.folder.0,
+        epoch,
+        read_key,
+        nonce: &[0x5f; 24],
+        body,
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the planted node seals");
+    if serve_head {
+        fx.blocks.put(planted.block.clone());
+    }
+    let sequence = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], name.as_str())
+        .map_or(0, |_| sequence_at(&fx.world, &name));
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(signer_seed, &node.0).as_bytes()),
+        format!("/ipfs/{}", planted.cid).as_bytes(),
+        sequence + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+    name
+}
+
+/// A folder body naming `children`.
+fn folder_body(children: Vec<ChildRef>) -> ReadBody {
+    ReadBody::Folder {
+        created_at: 0,
+        modified_at: 0,
+        children,
+        unknown: PreservedFields::new(),
+    }
+}
+
+/// The read key of `node` in the granted scope at read epoch 1, which the
+/// write grantee holds before the revoke.
+fn granted_read_key(fx: &GrantScenario, node: NodeId) -> [u8; 32] {
+    read_key_under(&granted_override_seed(fx, 1), node)
+}
+
+/// The revoke finished: the cut moved the scope root off the revokee's seed,
+/// nothing stays owed, and the moved root names `child` at a name the
+/// revokee's seed does not derive.
+fn assert_revoke_finished(fx: &mut GrantScenario, revokee_seed: &[u8; 32], child: NodeId) {
+    assert!(fx.owed_scopes().is_empty(), "no work stays owed");
+    let after = fx.granted_scope_repoint();
+    assert_eq!(after.write_epoch, 3, "the revoke stepped the write epoch");
+    assert_ne!(
+        derive_write_name(revokee_seed, &fx.folder.0),
+        after.current_root,
+        "the revokee's seed no longer derives the root"
+    );
+    assert_ne!(
+        derive_write_name(revokee_seed, &child.0),
+        moved_child_name(fx, "child"),
+        "nor the child the moved root names"
+    );
+}
+
+/// The child names the moved root gives it, read under the epoch-2 key.
+fn moved_children(fx: &GrantScenario, parent_name: &IpnsName, parent: NodeId) -> Vec<ChildRef> {
+    let head = published_head(&fx.world, &fx.blocks, parent_name).expect("a published record");
+    let envelope = decode_envelope(&head).expect("the head decodes");
+    match open_read_body(
+        &envelope,
+        &read_key_under(&granted_override_seed(fx, 2), parent),
+    )
+    .expect("the body opens")
+    {
+        ReadBody::Folder { children, .. } => children,
+        ReadBody::File { .. } => Vec::new(),
+    }
+}
+
+/// The name the moved root gives its child named `display`.
+fn moved_child_name(fx: &GrantScenario, display: &str) -> IpnsName {
+    published_child_name(
+        &fx.world,
+        &fx.blocks,
+        &fx.granted_scope_repoint().current_root,
+        &read_key_under(&granted_override_seed(fx, 2), fx.folder),
+        display,
+    )
+}
+
+/// The revokee plants a grandchild that does not unseal under the key
+/// of its epoch. The revoke drops it at once, finishes the cut, retires its
+/// old name, and tells the owner which node it left out (ADR 0065 D1).
+#[test]
+fn a_write_revoke_drops_a_planted_node_that_does_not_unseal() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let planted = plant_node(
+        &fx,
+        &revokee_seed,
+        grandchild,
+        &folder_body(Vec::new()),
+        &[0x13; 32],
+        1,
+        true,
+    );
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(
+        dropped_nodes(&mut fx._events),
+        vec![(fx.folder, grandchild, DropCause::RecordRefused)]
+    );
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+    assert!(
+        moved_children(&fx, &moved_child_name(&fx, "child"), child).is_empty(),
+        "the moved child names no ref to the dropped node"
+    );
+    assert!(
+        retired(&fx.owner_device).contains(&planted.as_str().to_owned()),
+        "and the dropped node's old name retires"
+    );
+}
+
+/// The revokee plants a child at an epoch no held history link
+/// reaches. The revoke drops it, and the subtree below it, at once.
+#[test]
+fn a_write_revoke_drops_a_planted_node_beyond_the_ratchet() {
+    let mut fx = GrantScenario::new();
+    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_node(
+        &fx,
+        &revokee_seed,
+        child,
+        &folder_body(Vec::new()),
+        &[0x13; 32],
+        0,
+        true,
+    );
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(
+        dropped_nodes(&mut fx._events),
+        vec![(fx.folder, child, DropCause::EpochUnreachable)]
+    );
+    assert!(fx.owed_scopes().is_empty(), "no work stays owed");
+    let after = fx.granted_scope_repoint();
+    assert_ne!(
+        derive_write_name(&revokee_seed, &fx.folder.0),
+        after.current_root
+    );
+    assert!(
+        moved_children(&fx, &after.current_root, fx.folder).is_empty(),
+        "the moved root names no ref to the dropped child"
+    );
+}
+
+/// The revokee adds a second ref to a real node, at a name of its own,
+/// in a folder the walk reads first. The wave keeps the ref at the name the
+/// old write seed derives, and drops the other ref (ADR 0065 D2). No node
+/// drops, so the owner is told of none.
+#[test]
+fn a_write_revoke_drops_a_planted_second_ref_to_a_real_node() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    // "a" sorts before "child", so the walk reads the planted ref first.
+    let sibling =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "a");
+    let (child, grandchild) = nested_subtree(&mut fx);
+    let root = fx.granted_scope_repoint().current_root;
+    let revokee_seed = grantee_write_scope_seed(&fx.folder_section(), &root, &fx.folder.0, 1);
+    let planted_seed = [0x77; 32];
+    let elsewhere = plant_node(
+        &fx,
+        &planted_seed,
+        grandchild,
+        &folder_body(Vec::new()),
+        &granted_read_key(&fx, grandchild),
+        1,
+        true,
+    );
+    plant_node(
+        &fx,
+        &revokee_seed,
+        sibling,
+        &folder_body(vec![named_child(grandchild, "grand", &elsewhere)]),
+        &granted_read_key(&fx, sibling),
+        1,
+        true,
+    );
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(dropped_nodes(&mut fx._events), Vec::new());
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+    assert!(
+        moved_children(&fx, &moved_child_name(&fx, "a"), sibling).is_empty(),
+        "the moved sibling drops the second ref"
+    );
+    let grand = moved_children(&fx, &moved_child_name(&fx, "child"), child);
+    assert_eq!(grand.len(), 1, "the moved child keeps its ref");
+    assert_ne!(
+        grand[0].ipns_name,
+        elsewhere.as_str().as_bytes(),
+        "at a name of the new seed"
+    );
+    assert_ne!(
+        grand[0].ipns_name,
+        derive_write_name(&revokee_seed, &grandchild.0)
+            .as_str()
+            .as_bytes()
+    );
+}
+
+/// The revokee adds a ref to an id that has no record.
+fn plant_a_ref_to_nothing(
+    fx: &GrantScenario,
+    revokee_seed: &[u8; 32],
+    grandchild: NodeId,
+) -> NodeId {
+    let read_key = granted_read_key(fx, grandchild);
+    plant_a_ref_to(fx, revokee_seed, grandchild, NodeId([0x66; 16]), &read_key)
+}
+
+/// The revokee re-signs `grandchild` with one ref, to `ghost`, which has no
+/// record.
+fn plant_a_ref_to(
+    fx: &GrantScenario,
+    revokee_seed: &[u8; 32],
+    grandchild: NodeId,
+    ghost: NodeId,
+    read_key: &[u8; 32],
+) -> NodeId {
+    plant_node(
+        fx,
+        revokee_seed,
+        grandchild,
+        &folder_body(vec![named_child(
+            ghost,
+            "ghost",
+            &derive_write_name(&[0x55; 32], &ghost.0),
+        )]),
+        read_key,
+        1,
+        true,
+    );
+    ghost
+}
+
+/// The revokee republishes a node at a head block no endpoint serves.
+fn plant_an_unserved_head(fx: &GrantScenario, revokee_seed: &[u8; 32], grandchild: NodeId) {
+    plant_node(
+        fx,
+        revokee_seed,
+        grandchild,
+        &folder_body(Vec::new()),
+        &granted_read_key(fx, grandchild),
+        1,
+        false,
+    );
+}
+
+/// Revoke over a planted stop an endpoint can cause: the wave stops, and the
+/// cut is owed.
+fn revoke_into_a_bounded_stop(fx: &mut GrantScenario) {
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(
+            fx,
+            Command::Revoke {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        owed_reports(&mut fx._events),
+        vec![(
+            fx.folder,
+            "rot-write-resolve-failed".to_owned(),
+            true,
+            OwedWorkClass::Availability
+        )],
+        "a stop an endpoint can cause waits for the bound"
+    );
+}
+
+/// What sync passes reported once `stops` more of them stopped at the owed
+/// cut, or once one dropped a node: the stops counted, and the drops.
+struct PassRun {
+    stops: usize,
+    dropped: Vec<(NodeId, NodeId, DropCause)>,
+}
+
+/// Tick until `stops` passes report the cut owed, or a pass drops a node.
+fn run_passes(
+    world: &FakeWorld,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    events: &mut EventStream,
+    stops: usize,
+) -> PassRun {
+    let mut run = PassRun {
+        stops: 0,
+        dropped: Vec::new(),
+    };
+    for _ in 0..256 {
+        if run.stops >= stops || !run.dropped.is_empty() {
+            return run;
+        }
+        tick(world, engine, tasks);
+        for event in events_so_far(events) {
+            if matches!(event, Event::RotationWorkOwed { .. }) {
+                run.stops += 1;
+            }
+            run.dropped.extend(as_drop(&event));
+        }
+    }
+    panic!("the passes never settled");
+}
+
+/// [`run_passes`] on the scenario's own session.
+fn passes(fx: &mut GrantScenario, stops: usize) -> PassRun {
+    run_passes(
+        &fx.world,
+        &fx.engine,
+        &mut fx._tasks,
+        &mut fx._events,
+        stops,
+    )
+}
+
+/// Past the bound, a planted ref to an id with no record drops, and the cut
+/// ends.
+#[test]
+fn a_write_revoke_drops_a_ref_to_an_id_with_no_record_past_the_bound() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let ghost = plant_a_ref_to_nothing(&fx, &revokee_seed, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+
+    fx.world.scheduler.advance(DROP_BOUND);
+    let run = passes(&mut fx, usize::MAX);
+
+    assert_eq!(run.dropped, vec![(fx.folder, ghost, DropCause::NoRecord)]);
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
+/// Past the bound, a planted node whose head block no endpoint serves drops.
+#[test]
+fn a_write_revoke_drops_a_node_with_no_served_head_block_past_the_bound() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+
+    fx.world.scheduler.advance(DROP_BOUND);
+    let run = passes(&mut fx, usize::MAX);
+
+    assert_eq!(
+        run.dropped,
+        vec![(fx.folder, grandchild, DropCause::NoHeadBlock)]
+    );
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
+/// A planted node at an epoch above the root's: no held seed opens it, and a
+/// read rotation on another device can publish such a node, so it drops only
+/// past the bound.
+#[test]
+fn a_write_revoke_drops_a_planted_node_sealed_above_the_roots_epoch_past_the_bound() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_node(
+        &fx,
+        &revokee_seed,
+        grandchild,
+        &folder_body(Vec::new()),
+        &[0x13; 32],
+        9,
+        true,
+    );
+    revoke_into_a_bounded_stop(&mut fx);
+
+    fx.world.scheduler.advance(DROP_BOUND);
+    let run = passes(&mut fx, usize::MAX);
+
+    assert_eq!(
+        run.dropped,
+        vec![(fx.folder, grandchild, DropCause::EpochAboveRoot)]
+    );
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
+/// The bound needs its time: passes alone do not drop a node.
+#[test]
+fn a_bounded_stop_holds_over_many_passes_before_its_time() {
+    let mut fx = GrantScenario::new();
+    let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+
+    let run = passes(&mut fx, 2 * DROP_BOUND_PASSES as usize);
+
+    assert!(run.dropped.is_empty(), "nothing drops");
+    assert_eq!(
+        run.stops,
+        2 * DROP_BOUND_PASSES as usize,
+        "the cut stays owed"
+    );
+}
+
+/// The bound needs its passes: time alone does not drop a node. The revoke
+/// was the first stop, so the pass after `K - 1` more stops drops it.
+#[test]
+fn a_bounded_stop_holds_past_its_time_until_enough_passes() {
+    let mut fx = GrantScenario::new();
+    let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+
+    fx.world.scheduler.advance(DROP_BOUND);
+    let run = passes(&mut fx, DROP_BOUND_PASSES as usize - 1);
+    assert!(run.dropped.is_empty(), "nothing drops");
+
+    let run = passes(&mut fx, usize::MAX);
+    assert_eq!(run.stops, 0, "the next pass does not stop");
+    assert_eq!(
+        run.dropped,
+        vec![(fx.folder, grandchild, DropCause::NoHeadBlock)],
+        "it drops the node"
+    );
+}
+
+/// The passes are the session's own: a later session past the bound's time
+/// still sees the stop on `K` passes of its own before it drops.
+#[test]
+fn a_restart_past_the_bound_needs_its_own_passes() {
+    let mut fx = GrantScenario::new();
+    let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    let run = passes(&mut fx, DROP_BOUND_PASSES as usize);
+    assert!(run.dropped.is_empty());
+    let folder = fx.folder;
+
+    let GrantScenario {
+        world,
+        blocks,
+        owner_device,
+        engine,
+        _tasks,
+        ..
+    } = fx;
+    drop((engine, _tasks));
+    drop(world.scheduler.take_spawned_tasks());
+    world.scheduler.advance(DROP_BOUND);
+    let (engine, mut events, mut tasks) = boot_owner(&world, &blocks, &owner_device);
+
+    let run = run_passes(
+        &world,
+        &engine,
+        &mut tasks,
+        &mut events,
+        DROP_BOUND_PASSES as usize,
+    );
+    assert!(
+        run.dropped.is_empty(),
+        "the later session drops nothing before its own passes"
+    );
+    let run = run_passes(&world, &engine, &mut tasks, &mut events, usize::MAX);
+    assert_eq!(
+        run.dropped,
+        vec![(folder, grandchild, DropCause::NoHeadBlock)]
+    );
+}
+
+/// ADR 0065 D4: past the bound's time, the renewal walk renews the names of
+/// an owed scope that its root's current write seed derives. The time is
+/// durable, so the first passes of a later session renew it.
+#[test]
+fn the_renewal_walk_renews_an_owed_scope_past_the_bound() {
+    let mut fx = GrantScenario::new();
+    let recipient = recipient_identity().verifying_key().to_sec1();
+    fx.world.mailbox_hub.forget_recipient(&recipient);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the delivery is owed");
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let inner_before = sequence_at(&fx.world, &write_name(inner));
+    let folder = fx.folder;
+
+    let (world, mut events, _later) = restart_later_on_the_same_device(fx);
+
+    assert_eq!(
+        sequence_at(&world, &write_name(inner)),
+        inner_before + 1,
+        "past the bound the walk renews it"
+    );
+    assert_eq!(
+        owed_scopes(&mut events),
+        vec![folder],
+        "and the work is still owed"
+    );
+}
+
+/// ADR 0065 D3: past its time, an entry that held the wave on K passes drops
+/// every held node, so a new ref to nothing on each pass does not hold the
+/// cut for ever.
+#[test]
+fn a_new_ref_to_nothing_on_each_pass_does_not_hold_the_cut() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_a_ref_to_nothing(&fx, &revokee_seed, grandchild);
+    let read_key = granted_read_key(&fx, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    fx.world.scheduler.advance(DROP_BOUND);
+
+    let mut dropped = Vec::new();
+    for fresh in 0..=DROP_BOUND_PASSES {
+        let ghost = NodeId([0x70 + u8::try_from(fresh).expect("a small count"); 16]);
+        plant_a_ref_to(&fx, &revokee_seed, grandchild, ghost, &read_key);
+        let run = passes(&mut fx, 1);
+        if !run.dropped.is_empty() {
+            dropped = run.dropped;
+            break;
+        }
+    }
+
+    assert_eq!(dropped.len(), 1, "the cut ends within K + 1 passes");
+    assert_eq!(dropped[0].2, DropCause::NoRecord);
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
+/// ADR 0065 D3: with one endpoint down, a ref to nothing reads as no endpoint
+/// that answers, but the other endpoints answered, so a new ref to nothing on
+/// each pass still ends at the entry count.
+#[test]
+fn a_new_ref_to_nothing_on_each_pass_beside_a_down_endpoint_does_not_hold_the_cut() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_a_ref_to_nothing(&fx, &revokee_seed, grandchild);
+    let read_key = granted_read_key(&fx, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    fx.world.scheduler.advance(DROP_BOUND);
+    let down = fx
+        .world
+        .record_store
+        .endpoints()
+        .last()
+        .cloned()
+        .expect("an endpoint");
+    fx.world.record_store.fail_endpoint(&down);
+
+    let mut dropped = Vec::new();
+    for fresh in 0..=DROP_BOUND_PASSES {
+        let ghost = NodeId([0x70 + u8::try_from(fresh).expect("a small count"); 16]);
+        plant_a_ref_to(&fx, &revokee_seed, grandchild, ghost, &read_key);
+        let run = passes(&mut fx, 1);
+        if !run.dropped.is_empty() {
+            dropped = run.dropped;
+            break;
+        }
+    }
+
+    fx.world.record_store.heal_endpoint(&down);
+    assert_eq!(dropped.len(), 1, "the cut ends within K + 1 passes");
+    assert_eq!(dropped[0].2, DropCause::EndpointUnavailable);
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
+/// A V2-only IPNS record at `ghost`'s planted name: the spec permits it with
+/// no top-level value, and the record verify refuses it.
+fn plant_a_v2_only_record(fx: &GrantScenario, ghost: NodeId) {
+    let write_seed = kdf::write_seed(&[0x55; 32], &ghost.0);
+    let signer = kdf::ipns_keypair(write_seed.as_bytes());
+    let mut record = IpnsRecord::create_v2(
+        &signer,
+        b"/ipfs/bafkqaaa",
+        1,
+        0,
+        "2099-01-01T00:00:00.000000000Z",
+    )
+    .marshal();
+    assert_eq!(record[0], 0x0a, "the value field leads");
+    record.drain(..2 + usize::from(record[1]));
+    let name = derive_write_name(&[0x55; 32], &ghost.0);
+    let parsed = IpnsRecord::unmarshal(&record).expect("a V2-only record parses");
+    assert!(parsed.verify(&name).is_err());
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+}
+
+/// ADR 0065 D3: a ref to a name where every endpoint serves a record that
+/// does not verify reads as no endpoint that answers, but each endpoint
+/// served bytes, so a new such ref on each pass still ends at the entry count.
+#[test]
+fn a_new_ref_to_an_unverifiable_record_on_each_pass_does_not_hold_the_cut() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_a_ref_to_nothing(&fx, &revokee_seed, grandchild);
+    let read_key = granted_read_key(&fx, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    fx.world.scheduler.advance(DROP_BOUND);
+
+    let mut dropped = Vec::new();
+    for fresh in 0..=DROP_BOUND_PASSES {
+        let ghost = NodeId([0x70 + u8::try_from(fresh).expect("a small count"); 16]);
+        plant_a_ref_to(&fx, &revokee_seed, grandchild, ghost, &read_key);
+        plant_a_v2_only_record(&fx, ghost);
+        let run = passes(&mut fx, 1);
+        if !run.dropped.is_empty() {
+            dropped = run.dropped;
+            break;
+        }
+    }
+
+    assert_eq!(dropped.len(), 1, "the cut ends within K + 1 passes");
+    assert_eq!(dropped[0].2, DropCause::EndpointUnavailable);
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
+/// ADR 0065 D3: past the entry count, a node held for a cause that a revokee
+/// cannot plant on a fresh id waits for its own passes.
+#[test]
+fn an_honest_node_no_endpoint_answers_waits_past_the_entry_count() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let honest = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "honest",
+    );
+    plant_a_ref_to_nothing(&fx, &revokee_seed, grandchild);
+    let read_key = granted_read_key(&fx, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    fx.world.scheduler.advance(DROP_BOUND);
+
+    for fresh in 0..DROP_BOUND_PASSES {
+        let ghost = NodeId([0x70 + u8::try_from(fresh).expect("a small count"); 16]);
+        plant_a_ref_to(&fx, &revokee_seed, grandchild, ghost, &read_key);
+        let run = passes(&mut fx, 1);
+        assert!(run.dropped.is_empty(), "the entry count is not yet K");
+    }
+    let honest_name = derive_write_name(&revokee_seed, &honest.0);
+    fx.world.record_store.fail_get_for(honest_name.as_str());
+    let run = passes(&mut fx, 1);
+    assert_eq!(
+        run.dropped,
+        Vec::new(),
+        "one pass with no endpoint answer does not drop the honest node"
+    );
+
+    fx.world.record_store.heal_get_for(honest_name.as_str());
+    let run = passes(&mut fx, usize::MAX);
+    assert_eq!(run.dropped.len(), 1);
+    assert_eq!(run.dropped[0].2, DropCause::NoRecord);
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
+/// A command run again inside one sync pass re-drives the cut, but adds no
+/// pass to a node's count.
+#[test]
+fn command_re_drives_inside_one_pass_count_as_one_pass() {
+    let mut fx = GrantScenario::new();
+    let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    fx.world.scheduler.advance(DROP_BOUND);
+
+    let folder = fx.folder;
+    for _ in 0..DROP_BOUND_PASSES {
+        let _ = command_across_retries(
+            &mut fx,
+            Command::Revoke {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+            },
+        );
+    }
+    let run = passes(&mut fx, 1);
+
+    assert_eq!(dropped_nodes(&mut fx._events), Vec::new());
+    assert!(run.dropped.is_empty(), "two passes are not K");
+}
+
+/// Serve wrong bytes for the head block of the record at `name`. Returns the
+/// CID and the block, to serve again.
+fn break_head_block(fx: &GrantScenario, name: &IpnsName) -> (String, Vec<u8>) {
+    let cid = published_head_cid(&fx.world, name).expect("the node is published");
+    let block = fx.blocks.get(&cid).expect("its head block is served");
+    fx.blocks
+        .replace(&cid, b"not the block the record names".to_vec());
+    (cid, block)
+}
+
+/// A node that resolves starts its count again: earlier faults do not carry
+/// over to a fault past the entry's time.
+#[test]
+fn a_node_that_resolves_starts_its_count_again() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let honest = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "honest",
+    );
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    let honest_name = derive_write_name(&revokee_seed, &honest.0);
+
+    for _ in 0..DROP_BOUND_PASSES {
+        let (cid, block) = break_head_block(&fx, &honest_name);
+        let run = passes(&mut fx, 1);
+        assert!(run.dropped.is_empty());
+        fx.blocks.replace(&cid, block);
+    }
+    let run = passes(&mut fx, 1);
+    assert!(run.dropped.is_empty());
+
+    fx.world.scheduler.advance(DROP_BOUND);
+    let (cid, block) = break_head_block(&fx, &honest_name);
+    let run = passes(&mut fx, 1);
+    assert_eq!(
+        run.dropped,
+        Vec::new(),
+        "the honest node has one pass since it resolved"
+    );
+
+    fx.blocks.replace(&cid, block);
+    let run = passes(&mut fx, usize::MAX);
+    assert_eq!(
+        run.dropped,
+        vec![(fx.folder, grandchild, DropCause::NoHeadBlock)]
+    );
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
+/// ADR 0065 D3: the bound counts each node's own passes. An entry past its
+/// time meets an honest node whose head block one pass cannot fetch, and that
+/// node does not drop.
+#[test]
+fn a_node_new_to_an_entry_past_its_time_does_not_drop_on_its_first_stop() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let honest = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "honest",
+    );
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    fx.world.scheduler.advance(DROP_BOUND);
+    let run = passes(&mut fx, DROP_BOUND_PASSES as usize - 1);
+    assert!(run.dropped.is_empty());
+
+    let cid = published_head_cid(&fx.world, &derive_write_name(&revokee_seed, &honest.0))
+        .expect("the honest node is published");
+    let block = fx.blocks.get(&cid).expect("its head block is served");
+    fx.blocks
+        .replace(&cid, b"not the block the record names".to_vec());
+    let run = passes(&mut fx, 1);
+    assert_eq!(
+        run.dropped,
+        Vec::new(),
+        "the honest node holds the pass, and nothing drops"
+    );
+
+    fx.blocks.replace(&cid, block);
+    let run = passes(&mut fx, usize::MAX);
+    assert_eq!(
+        run.dropped,
+        vec![(fx.folder, grandchild, DropCause::NoHeadBlock)]
+    );
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
 }

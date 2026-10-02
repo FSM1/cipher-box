@@ -29,7 +29,7 @@ hex = "0.4"
 zeroize.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "time"] }
 serde_json.workspace = true
 # `test-kit` for this suite's own tests: seeded entropy + the in-memory floor
 # store, so a leg can drive a real engine primitive against the live API.

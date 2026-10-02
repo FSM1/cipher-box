@@ -14,6 +14,7 @@ import {
   FAKE_PHRASE,
   FAKE_NOW,
   FAKE_TOKEN_LIFETIME_S,
+  FAKE_WALLET_DISPLAY,
   passThroughCollector,
   type WebCollected,
 } from './testFakes';
@@ -77,6 +78,7 @@ function build(
 }
 
 const loggedIn = (parts: Parts) => parts.account.calls.signedIn;
+const GOOGLE_SIGN_IN = { method: 'google', display: 'user@example.test' } as const;
 
 describe('the serialization gate', () => {
   // A latch left set refuses every later sign-in and every logout, so the host
@@ -126,7 +128,7 @@ describe('the recovery phrase step', () => {
     expect(parts.session.calls.phrases).toEqual([FAKE_PHRASE]);
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
     expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
-    expect(loggedIn(parts)).toEqual([{ method: 'google', email: 'user@example.test' }]);
+    expect(loggedIn(parts)).toEqual([GOOGLE_SIGN_IN]);
   });
 
   it('rejects rather than reporting success when the engine refuses the secret', async () => {
@@ -156,7 +158,7 @@ describe('the recovery phrase step', () => {
     expect(parts.session.calls.adoptedFactors).toEqual([factorKey]);
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
     expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
-    expect(loggedIn(parts)).toEqual([{ method: 'google', email: 'user@example.test' }]);
+    expect(loggedIn(parts)).toEqual([GOOGLE_SIGN_IN]);
   });
 
   it('leaves the login held when the approved factor opens nothing', async () => {
@@ -241,7 +243,7 @@ describe('the identity token a start presents', () => {
 
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
     expect(parts.facade.calls.identityTokens).toEqual([undefined]);
-    expect(loggedIn(parts)).toEqual([{ method: 'google', email: 'user@example.test' }]);
+    expect(loggedIn(parts)).toEqual([GOOGLE_SIGN_IN]);
   });
 
   it('presents none for an approval that lands after the token expired', async () => {
@@ -304,13 +306,13 @@ describe('the login flow', () => {
         method: 'google',
         token: FAKE_IDENTITY_TOKEN,
         verifierId: 'subject-for-google',
-        email: 'user@example.test',
+        display: 'user@example.test',
         expiresIn: FAKE_TOKEN_LIFETIME_S,
       },
     ]);
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
     expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
-    expect(loggedIn(parts)).toEqual([{ method: 'google', email: 'user@example.test' }]);
+    expect(loggedIn(parts)).toEqual([GOOGLE_SIGN_IN]);
   });
 
   it('asks CipherBox for the code, then redeems what the host collected', async () => {
@@ -334,7 +336,7 @@ describe('the login flow', () => {
 
     expect(parts.exchange.calls.wallet).toEqual([{ message: 'siwe-message', signature }]);
     expect(parts.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
-    expect(loggedIn(parts)).toEqual([{ method: 'wallet', email: null }]);
+    expect(loggedIn(parts)).toEqual([{ method: 'wallet', display: FAKE_WALLET_DISPLAY }]);
   });
 
   // Desktop reaches no wallet, and a build with no Google client ID renders no
@@ -383,9 +385,9 @@ describe('the login flow', () => {
     expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
     // A restore follows no exchange, so its login binds nothing.
     expect(parts.facade.calls.identityTokens).toEqual([undefined]);
-    // The identity token carries no email claim, so a restored session has no
-    // address to show until the member signs in again.
-    expect(loggedIn(parts)).toEqual([{ method: null, email: null }]);
+    // The identity token carries no display claim, so a restored session has no
+    // label to show until the member signs in again.
+    expect(loggedIn(parts)).toEqual([{ method: null, display: null }]);
   });
 
   // The host rebuilds the flow whenever it replaces the engine facade, and a
