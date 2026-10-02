@@ -37,8 +37,8 @@ export class RegisterDeviceDto {
 
   @ApiProperty({
     description:
-      'CipherBox identity token this device signed in with; binds the account to the identity ' +
-      'a pre-reconstruction device can present. A successful registration spends it',
+      'CipherBox identity token this device signed in with. Its subject must be the one bound ' +
+      'to this account at login. A successful registration spends it',
   })
   @IsString()
   @MaxLength(4096)

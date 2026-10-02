@@ -9,7 +9,7 @@
   [ADR 0008](./0008-cipherbox-issues-the-identity-token.md) D1 (CipherBox issues the identity
   token), [ADR 0009](./0009-device-approval-is-a-bound-rendezvous.md) D3 (the comparison value)
   and D4 (device keys sign both halves), and the `blueprint/api.md` section "Identity and auth"
-- **Implemented by:** not built; one later slice under FSM1/cipher-box#2012. The spend at
+- **Implemented by:** FSM1/cipher-box#2210 (D1 to D3, the clients, and the e2e approver sign-in). The spend at
   registration landed with FSM1/cipher-box#2092.
 - **Amends:** ADR 0039 D2
 
@@ -92,8 +92,9 @@ still spends the token.
    accepts it more than once.
 10. The token lifetime stays 300 seconds. A spent row lives until its token expires, plus a grace.
 11. No backfill: an existing account stays unbound until its next login that follows an
-    exchange, and until then its registrations are refused. The rendezvous session still maps a
-    subject to an account through `account_devices`.
+    exchange, and until then its registrations are refused and it gets no rendezvous. The
+    rendezvous session maps a subject to an account through the bind, and still needs a
+    registered device on that account (ADR 0039 D3).
 12. Privacy: today the API links an account to a subject, and so to the unsalted hash of its
     provider identifier, only when a device registers. After the bind it links every account that
     signs in through an exchange.

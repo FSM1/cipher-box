@@ -5262,7 +5262,15 @@ impl<T: SeamTypes> Engine<T> {
     /// instance, and the secret is zeroized on consumption — derivation is the
     /// only reader, and the secret is dropped at its terminal owner the moment
     /// the identity is built.
-    pub async fn start(&mut self, secret: LoginSecret) -> Result<(), EngineError>
+    ///
+    /// A start that follows an identity exchange passes that exchange's token,
+    /// which binds the account to its identity subject (ADR 0058 D2). A
+    /// restored session passes `None`.
+    pub async fn start(
+        &mut self,
+        secret: LoginSecret,
+        identity_token: Option<Zeroizing<String>>,
+    ) -> Result<(), EngineError>
     where
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
@@ -5301,7 +5309,7 @@ impl<T: SeamTypes> Engine<T> {
         );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
-            api.login_identity(&signer)
+            api.login_identity(&signer, identity_token.as_deref().map(String::as_str))
                 .await
                 .map_err(EngineError::from_api)?;
         }
@@ -13479,7 +13487,7 @@ mod tests {
             ApiBaseUrl::offline(),
             GatewayConfig::disabled(),
         );
-        block_on(engine.start(LoginSecret::new(vec![secret_byte; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![secret_byte; 32]), None)).unwrap();
         engine
     }
 
@@ -13506,7 +13514,7 @@ mod tests {
             .http
             .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
 
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32])))
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
             .expect("a mint that did not land is not a failed start");
         assert!(
             !engine.is_provisioned(),
@@ -13546,7 +13554,7 @@ mod tests {
         device
             .http
             .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32])))
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
             .expect("a mint that did not land is not a failed start");
         assert!(!engine.is_provisioned(), "the write path starts dark");
         let _ = device.scheduler.take_spawned_tasks();
@@ -13585,7 +13593,8 @@ mod tests {
         device
             .http
             .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start survives the mint");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
+            .expect("start survives the mint");
 
         device
             .http
@@ -13652,7 +13661,8 @@ mod tests {
             first_run_engine(UNREGISTERED, &["fake:public-routing"]);
         serve_provisioning(&device);
 
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the first run starts");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
+            .expect("the first run starts");
 
         assert!(engine.is_provisioned(), "the first run minted its vault");
         let pointer = vault_pointer_name(&[7u8; 32], GENESIS_VAULT_POINTER_INDEX);
@@ -13672,7 +13682,7 @@ mod tests {
             first_run_engine(UNREGISTERED, &["fake:someguy", "fake:public-routing"]);
         serve_provisioning(&device);
 
-        let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+        let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None));
 
         assert_eq!(
             refused,
@@ -13702,7 +13712,7 @@ mod tests {
                 first_run_engine(registry, &["fake:public-routing"]);
             serve_provisioning(&device);
 
-            let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+            let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None));
 
             assert_eq!(
                 refused,
@@ -13733,7 +13743,7 @@ mod tests {
         ))
         .expect("the floor store accepts the mark");
 
-        let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+        let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None));
 
         assert!(
             matches!(refused, Err(EngineError::Seam { .. })),
@@ -13753,7 +13763,7 @@ mod tests {
         let (mut engine, _events) = new_engine();
         assert!(engine.session().is_none(), "no identity before start");
 
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let session = engine
             .session()
             .expect("start derives the session identity");
@@ -13806,7 +13816,7 @@ mod tests {
         // A configured base URL means the empty pointer chain provisions.
         serve_provisioning(&device);
 
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("start logs in");
 
         // The refresh token from the token response persisted via CredentialStore.
         let stored = block_on(device.credential_store.load_refresh_token())
@@ -13826,6 +13836,47 @@ mod tests {
                 .to_compact(),
         );
         assert_eq!(login_body["signature"], expected);
+        assert!(
+            login_body.get("identityToken").is_none(),
+            "a start that follows no exchange presents no identity token"
+        );
+    }
+
+    #[test]
+    fn start_presents_the_identity_token_at_login() {
+        let (mut engine, _events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
+        ));
+        serve_provisioning(&device);
+
+        block_on(engine.start(
+            LoginSecret::new(vec![7u8; 32]),
+            Some(Zeroizing::new("identity.jwt".to_owned())),
+        ))
+        .expect("start logs in");
+
+        let requests = device.http.requests();
+        assert_eq!(requests[1].url, "http://api.test/auth/login");
+        let login_body: Value = serde_json::from_slice(requests[1].body.as_ref().unwrap()).unwrap();
+        assert_eq!(login_body["identityToken"], "identity.jwt");
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request
+                    .body
+                    .as_deref()
+                    .is_some_and(|body| body.windows(12).any(|w| w == b"identity.jwt")))
+                .count(),
+            1,
+            "only the login request carries the token"
+        );
     }
 
     /// What gates the accelerator is the login-minted pseudonym, never the
@@ -13859,7 +13910,7 @@ mod tests {
             new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
         ));
         serve_provisioning(&device);
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("start logs in");
 
         let held = engine
             .gateway
@@ -13902,7 +13953,7 @@ mod tests {
         // Clear any pre-start bookkeeping so the spawn assertion is unambiguous.
         let _ = device.scheduler.take_spawned_tasks();
 
-        let out = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+        let out = block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None));
 
         assert!(
             matches!(out, Err(EngineError::Auth { .. })),
@@ -13944,7 +13995,7 @@ mod tests {
     #[test]
     fn siwe_link_command_forwards_message_and_hex_signature() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let before = device.http.requests().len();
         device.http.enqueue_response(json_response(
             200,
@@ -13979,7 +14030,7 @@ mod tests {
     #[test]
     fn siwe_link_command_reproves_the_identity_key() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let before = device.http.requests().len();
         device.http.enqueue_response(json_response(
             200,
@@ -14017,7 +14068,7 @@ mod tests {
     #[test]
     fn unlink_auth_method_command_reproves_the_identity_key() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let before = device.http.requests().len();
         device.http.enqueue_response(json_response(
             200,
@@ -14077,7 +14128,7 @@ mod tests {
             ),
         ] {
             let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
             let before = device.http.requests().len();
             device
                 .http
@@ -14106,7 +14157,7 @@ mod tests {
             (SiweIntent::Link, "/auth/siwe/link-challenge"),
         ] {
             let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
             let before = device.http.requests().len();
             device.http.enqueue_response(json_response(
                 200,
@@ -14140,7 +14191,7 @@ mod tests {
         };
         let (key, block) = cached_settings_block(&[7u8; 32], &settings, &mut SeededEntropy::new(9));
         block_on(device.snapshot_cache.put(&key, &block)).expect("seed last-known-good");
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         // The account flag lags the vaulted mode, so the server says the rows
         // are authoritative while this vault already places bytes off them.
         device.http.enqueue_response(json_response(
@@ -14184,7 +14235,7 @@ mod tests {
     #[test]
     fn vault_storage_keeps_an_advisory_flag_a_hosted_vault_cannot_see() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         device.http.enqueue_response(json_response(
             200,
             json!({ "usedBytes": 10, "limitBytes": 100, "advisory": true }),
@@ -14213,7 +14264,7 @@ mod tests {
     #[test]
     fn vault_storage_prices_a_stalled_reclaim_above_zero() {
         let (mut engine, _events, _device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let stall = ReclaimStall {
             node: [3u8; 16],
             target: "bafystalledroot".to_owned(),
@@ -14233,7 +14284,7 @@ mod tests {
     #[test]
     fn vault_storage_degrades_when_the_quota_probe_fails() {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         let before = device.http.requests().len();
 
         // Nothing is scripted, so the quota probe fails at the seam.
@@ -14956,7 +15007,7 @@ mod tests {
 
     fn started() -> (Engine<FakeSeamTypes>, EventStream) {
         let (mut engine, events) = new_engine();
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         (engine, events)
     }
 
@@ -15547,7 +15598,7 @@ mod tests {
     fn a_second_identity_on_one_device_inherits_no_floor_from_the_first() {
         const ROOT_SCOPE: [u8; 16] = [0u8; 16];
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
         block_on(engine.seams.floor_store.raise_epoch_floor(&ROOT_SCOPE, 9)).unwrap();
 
         assert_eq!(
@@ -15594,7 +15645,7 @@ mod tests {
         /// The same, with a live session over it.
         fn started_and_loaded() -> (Engine<FakeSeamTypes>, FakeDevice, EventStream) {
             let (mut engine, device, events) = loaded();
-            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).unwrap();
             (engine, device, events)
         }
 
@@ -15668,7 +15719,7 @@ mod tests {
                 Err(EngineError::NotStarted)
             );
             assert_eq!(
-                block_on(engine.start(LoginSecret::new(vec![7u8; 32]))),
+                block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)),
                 Err(EngineError::AlreadyStarted),
                 "the alive latch is never re-armed, so a host builds a new engine"
             );
@@ -15750,7 +15801,7 @@ mod tests {
                 Err(EngineError::Forgotten)
             ));
             assert_eq!(
-                block_on(engine.start(LoginSecret::new(vec![7u8; 32]))),
+                block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)),
                 Err(EngineError::Forgotten)
             );
         }
@@ -15825,7 +15876,7 @@ mod tests {
                 new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
             ));
             serve_provisioning(&device);
-            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("start logs in");
             let session_bearer = engine.session_bearer.clone();
 
             block_on(engine.command(Command::ForgetDevice)).unwrap();
@@ -16736,7 +16787,7 @@ mod tests {
                 ApiBaseUrl::offline(),
                 GatewayConfig::disabled(),
             );
-            block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).unwrap();
+            block_on(engine.start(LoginSecret::new(SECRET.to_vec()), None)).unwrap();
             // `start` runs its own cold start over the (unseeded) record store: an
             // empty vault-pointer chain paints once. These tests then drive
             // `cold_start_data_path` directly against the scripted pointers, so
@@ -17362,7 +17413,7 @@ mod tests {
             let world = FakeWorld::new();
             let device = world.device(b"alice-pk");
             let (mut engine, _events) = engine_on(&device);
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                 .expect("empty seams start cleanly");
             assert_eq!(engine.root(), ROOT);
             assert!(
@@ -17384,7 +17435,7 @@ mod tests {
             device.http.enqueue_response(head_response(&head_block));
 
             let (mut engine, _events) = engine_on(&device);
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                 .expect("cold start adopts the owner root");
 
             let view = block_on(engine.view()).unwrap();
@@ -17416,7 +17467,7 @@ mod tests {
                 .enqueue_response(head_response(b"forged head block"));
 
             let (mut engine, _events) = engine_on(&device);
-            let out = block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())));
+            let out = block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None));
 
             assert!(
                 matches!(out, Err(EngineError::ColdStart { .. })),
@@ -17494,7 +17545,7 @@ mod tests {
                 .enqueue_response(head_response(b"forged head block"));
 
             let (mut engine, _events) = engine_on(&device);
-            let out = block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())));
+            let out = block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None));
 
             assert!(
                 matches!(out, Err(EngineError::ColdStart { .. })),
@@ -17523,7 +17574,7 @@ mod tests {
                 }
                 device.http.enqueue_response(head_response(&head_block));
                 let (mut engine, _events) = engine_on(&device);
-                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None)).unwrap();
                 block_on(engine.view()).unwrap().children(ROOT)
             }
             // Two engines whose virtual clocks sit far apart reach the identical
@@ -17549,7 +17600,7 @@ mod tests {
             }
             device.http.enqueue_response(head_response(&head_block));
             let (mut engine, events) = engine_on(device);
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None)).unwrap();
             let mut tasks = world.scheduler.take_spawned_tasks();
             poll_tasks_once(&mut tasks);
             (engine, events, tasks)
@@ -17745,7 +17796,7 @@ mod tests {
                 &device,
                 ApiBaseUrl::parse("http://api.test").expect("a base"),
             );
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                 .expect("cold start adopts the owner root");
             let mut tasks = world.scheduler.take_spawned_tasks();
             poll_tasks_once(&mut tasks);
@@ -17871,7 +17922,7 @@ mod tests {
                     &device,
                     ApiBaseUrl::parse("http://api.test").expect("a base"),
                 );
-                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                     .expect("cold start adopts the owner root");
                 let mut tasks = world.scheduler.take_spawned_tasks();
                 poll_tasks_once(&mut tasks);
@@ -18611,7 +18662,7 @@ mod tests {
             let (head_block, head_cid, root_name) = owner_root();
             seed_vault_pointer(&device, &root_name);
             let (mut engine, _events) = engine_on(&device);
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None)).unwrap();
 
             let mut tasks = world.scheduler.take_spawned_tasks();
             assert_eq!(
@@ -18771,7 +18822,7 @@ mod tests {
                 }
                 device.http.enqueue_response(head_response(&head_block));
                 let (mut engine, mut events) = engine_on(device);
-                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None)).unwrap();
                 assert_eq!(drain(&mut events), vec![Event::SnapshotUpdated]);
                 (engine, events)
             }
@@ -19348,7 +19399,7 @@ mod tests {
                 &device,
                 ApiBaseUrl::parse("http://api.test").expect("a base"),
             );
-            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                 .expect("cold start adopts the owner root");
             drop(world.scheduler.take_spawned_tasks());
             block_on(
@@ -19412,7 +19463,7 @@ mod tests {
     /// every one of them runs behind.
     fn started_device_engine() -> (Engine<FakeSeamTypes>, FakeDevice) {
         let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("start");
         (engine, device)
     }
 
@@ -19438,7 +19489,7 @@ mod tests {
             ),
         ));
         serve_provisioning(&device);
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("start logs in");
         (engine, device)
     }
 
@@ -19809,7 +19860,8 @@ mod focus_access_tests {
     /// than recovered.
     fn started_engine() -> Engine<FakeSeamTypes> {
         let (mut engine, _clock) = engine();
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
+            .expect("the offline start logs in");
         engine.state.boundary_walk_landed.set(true);
         let scope_id = engine.state.snapshot.borrow().root.0;
         deposit_seed(
@@ -19824,7 +19876,8 @@ mod focus_access_tests {
     /// A started engine whose first boundary walk has not landed, and its clock.
     fn engine_before_the_walk() -> (Engine<FakeSeamTypes>, VirtualScheduler) {
         let (mut engine, clock) = engine();
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
+            .expect("the offline start logs in");
         engine.state.boundary_walk_landed.set(false);
         // A running sync loop, whose pass is what lands a walk.
         drop(engine.tick_loop_spawner.borrow_mut().take());
@@ -19870,7 +19923,8 @@ mod focus_access_tests {
     #[test]
     fn a_route_does_not_wait_on_a_walk_no_sync_loop_will_run() {
         let (mut engine, _clock) = engine();
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None))
+            .expect("the offline start logs in");
 
         let mut route = Box::pin(engine.set_focus(Some(UNLISTED)));
 

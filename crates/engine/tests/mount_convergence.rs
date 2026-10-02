@@ -215,7 +215,7 @@ fn boot(
 ) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
     serve_http(device, blocks, 600);
     let (mut engine, events) = engine_on_api(device, entropy_seed);
-    block_on(engine.start(secret())).expect("cold start adopts the owner root");
+    block_on(engine.start(secret(), None)).expect("cold start adopts the owner root");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     (engine, events, tasks)
@@ -1288,7 +1288,7 @@ fn recipient_with_the_share(
     let device = world.device(&recipient_identity().verifying_key().to_sec1());
     serve_http(&device, blocks, 2_000);
     let (mut engine, events) = engine_on_api(&device, 21);
-    block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec())))
+    block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec()), None))
         .expect("the recipient's own session starts");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);

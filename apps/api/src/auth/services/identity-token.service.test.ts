@@ -62,7 +62,10 @@ describe('IdentityTokenService', () => {
       clock
     );
 
-    const { token, expiresAt } = await service.sign({ subject: 'subject-id', method: 'wallet' });
+    const { token, expiresAt, expiresIn } = await service.sign({
+      subject: 'subject-id',
+      method: 'wallet',
+    });
     const { payload } = await jose.jwtVerify(token, await verificationKeyFrom(service), {
       issuer: IDENTITY_TOKEN_ISSUER,
       audience: IDENTITY_TOKEN_AUDIENCE,
@@ -72,6 +75,7 @@ describe('IdentityTokenService', () => {
     expect(payload.sub).toBe('subject-id');
     expect(payload.method).toBe('wallet');
     expect(expiresAt.getTime()).toBe(clock.now().getTime() + 300_000);
+    expect(expiresIn).toBe(300);
   });
 
   it('refuses a token signed by anything other than the configured key', async () => {

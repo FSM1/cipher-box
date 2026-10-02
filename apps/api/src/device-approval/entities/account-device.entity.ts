@@ -20,12 +20,8 @@ export const ACCOUNT_DEVICE_PUBLIC_KEY_UNIQUE = 'uq_account_devices_public_key';
  * a key this account proved possession of, so no self-reported identifier is the
  * basis of any check.
  *
- * `identity_subject_id` records which identity the device logged in through. A
- * device that cannot yet reconstruct its key holds only an identity token, so
- * this column is the sole path from that token back to the account whose devices
- * can approve it — without it the pre-reconstruction surface has no account to
- * name. It is deliberately here rather than on `users`, which stays keyed by the
- * derived `publicKey` alone (see `identity-subject.entity.ts`).
+ * `identity_subject_id` records the subject bound to the account when the
+ * device registered (ADR 0058 D3).
  */
 @Entity('account_devices')
 @Unique(ACCOUNT_DEVICE_PUBLIC_KEY_UNIQUE, ['publicKey'])

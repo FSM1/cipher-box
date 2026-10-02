@@ -17,6 +17,7 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -119,6 +120,10 @@ export class AuthController {
       'Challenge-signature login against the secp256k1 identity key; creates the account implicitly at first login',
   })
   @ApiOkResponse({ type: TokenResponseDto })
+  @ApiResponse({
+    status: 401,
+    description: 'A challenge or signature that does not verify, or an invalid identity token',
+  })
   async login(
     @Body() body: LoginRequestDto,
     @Res({ passthrough: true }) response: Response
@@ -126,7 +131,8 @@ export class AuthController {
     const { pair, isNewUser } = await this.authService.identityLogin(
       body.publicKey,
       body.challenge,
-      body.signature
+      body.signature,
+      body.identityToken
     );
     this.setRefreshCookie(response, pair.refreshToken);
     return { ...pair, isNewUser };

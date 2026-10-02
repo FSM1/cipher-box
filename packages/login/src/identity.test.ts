@@ -3,7 +3,13 @@ import { createIdentityExchange, isIdentityMethod } from './identity';
 
 const BASE = 'https://api.example.test';
 
-const GRANT = { token: 'header.payload.signature', verifierId: 'subject-42', email: null };
+const GRANT = {
+  token: 'header.payload.signature',
+  verifierId: 'subject-42',
+  email: null,
+  expiresAt: '2030-01-01T00:05:00.000Z',
+  expiresIn: 300,
+};
 
 function stubFetch(response: Response | (() => Promise<Response>)) {
   const fetchMock = vi.fn(
@@ -43,6 +49,7 @@ describe('the identity exchange', () => {
       token: 'header.payload.signature',
       verifierId: 'subject-42',
       email: 'member@example.test',
+      expiresIn: 300,
     });
   });
 

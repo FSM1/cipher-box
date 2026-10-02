@@ -101,7 +101,9 @@ export class IdentityTokenService implements OnModuleInit {
    * `method` claim rides along so a restored Core Kit session can still name
    * how it was established — `getUserInfo()` reflects the token's own claims.
    */
-  async sign(claims: IdentityTokenClaims): Promise<{ token: string; expiresAt: Date }> {
+  async sign(
+    claims: IdentityTokenClaims
+  ): Promise<{ token: string; expiresAt: Date; expiresIn: number }> {
     const issuedAt = Math.floor(this.clock.now().getTime() / 1000);
     const expiresAt = issuedAt + TOKEN_TTL_SECONDS;
     const token = await new jose.SignJWT({ method: claims.method })
@@ -113,7 +115,7 @@ export class IdentityTokenService implements OnModuleInit {
       .setIssuedAt(issuedAt)
       .setExpirationTime(expiresAt)
       .sign(this.signingKey);
-    return { token, expiresAt: new Date(expiresAt * 1000) };
+    return { token, expiresAt: new Date(expiresAt * 1000), expiresIn: TOKEN_TTL_SECONDS };
   }
 
   /**

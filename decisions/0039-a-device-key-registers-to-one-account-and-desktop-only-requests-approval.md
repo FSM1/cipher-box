@@ -101,7 +101,11 @@ the registry maps the subject to. When no registered device carries the subject,
 no scoped token and opens no rendezvous. That account's path is the recovery phrase (ADR 0009
 D2). The requesting device itself need not be registered: its request is self-signed, and the
 responding device must be registered to the account. The rule landed with FSM1/cipher-box#1312;
-this ADR records it.
+this ADR records it. Amended by
+[ADR 0058](./0058-the-identity-subject-binds-to-the-account-at-login-and-a-device-registration-reads-the-bind.md)
+D3 on 2026-10-02: the registry reads the bind on `users` in place of its own subject check, and
+the rendezvous maps the subject to the account through that bind; the approver requirement
+stands, so a bound account with no registered device still gets no rendezvous.
 
 **D4 — Desktop is a device-approval requester only through the cutover.** Approval always
 happens in a web session. The desktop window offers no approver affordance, and its copy says

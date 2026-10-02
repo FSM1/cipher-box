@@ -185,6 +185,8 @@ address the bytes do not hash to is refused and compensated;
 the mailbox lifecycle (post/poll/ack, the ack's "removed" answer,
 idempotency keys, unknown-recipient rejection);
 the recovery endpoint (auth + rate limit); account hard-delete cascade;
+the identity subject bind at the first login that presents a token, no rebind
+on a conflict, and both registration refusals (ADR 0058);
 the republisher module's inventory walk and resolve-failure alerting; and
 **throttling asserted effective** — expect real 429s (v1's inert `@Throttle`
 decorators are a named defect, api.md). The API's committed OpenAPI artifact
@@ -230,6 +232,9 @@ is not the contract gate.
 - **`apps/api` unit.** Nest specs where server logic actually lives (quota
   arithmetic, refcounting, retention caps, auth services) — the v1 jest
   setup ports. The contract suite, not spec mocks, is the correctness gate.
+- **`apps/api` integration.** The `*.itest.ts` files over HTTP on a real
+  Postgres, in the job `Integration tests (real Postgres)`, reported through
+  `API Result`. The login bind and the registration rule (ADR 0058) are among them.
 - **`apps/web` and `apps/desktop` shells.** Vault correctness is not tested
   here — it lives below the facade. What the web shell does own is the seam
   the facade does not: the `useSyncExternalStore` snapshot adapter, the
@@ -260,6 +265,8 @@ is not the contract gate.
   account implicitly, so a fresh login secret per test is a fresh vault
   (ADR 0049). The page mints the login secret itself, so the secret never
   appears as an `evaluate` argument in an uploaded trace.
+  The device-approval approver signs in with the token of a wallet exchange,
+  so its login binds the account and its registration passes (ADR 0058 D3).
 - **Desktop mounted e2e** keeps the v1 shape that worked: dev-key headless
   entry, real mounts per platform (FUSE-T SMB, libfuse3, WinFsp), the
   orchestrator scripts and wait-for-mount pattern — scenarios rewritten onto

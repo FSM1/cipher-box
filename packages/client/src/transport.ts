@@ -37,7 +37,7 @@ export interface EngineTransport {
    * it (security rule 7). A retry must therefore re-read its source rather than
    * re-send the buffer a retryable rejection handed back.
    */
-  start(secret: ArrayBuffer, accountId: string): Promise<void>;
+  start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void>;
   /**
    * The account the engine behind this transport holds, where the transport
    * tracks one (`EngineClient`) — the name of the durable stores a forget
@@ -134,11 +134,12 @@ export class LocalTransport extends CorrelatedTransport {
     this.ready.catch(() => undefined);
   }
 
-  start(secret: ArrayBuffer, accountId: string): Promise<void> {
+  start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void> {
     const transfer = [secret];
     return this.dispatch(
       this.ready,
-      (id) => this.worker.postMessage({ type: 'start', id, secret, accountId }, transfer),
+      (id) =>
+        this.worker.postMessage({ type: 'start', id, secret, accountId, identityToken }, transfer),
       transfer
     );
   }
