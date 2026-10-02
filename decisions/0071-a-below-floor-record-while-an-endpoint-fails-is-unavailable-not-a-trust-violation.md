@@ -2,7 +2,8 @@
 
 - **Status:** Proposed
 - **Date:** 2026-10-03
-- **Relates to:** [ADR 0022](./0022-a-first-run-cold-start-tolerates-a-failed-public-routing-endpoint.md)
+- **Relates to:** FSM1/cipher-box#2264 (a revoke stops as a trust violation while an endpoint
+  fails), [ADR 0022](./0022-a-first-run-cold-start-tolerates-a-failed-public-routing-endpoint.md)
   and [ADR 0034](./0034-a-degraded-settings-load-falls-back-to-the-last-verified-copy-and-never-widens-placement.md)
   (the first-run rule tells "every endpoint answered" from "an endpoint failed"),
   [ADR 0060](./0060-a-stated-refusal-from-every-endpoint-supersedes-the-bin-index-mint-mark.md) D1
