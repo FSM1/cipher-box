@@ -29,13 +29,16 @@ devices of the owner, and the drain rebase heals them.
 **D1 — At the sequence floor, a different record is a same-sequence fork, and the resolve reports
 it as its own outcome.** A fork is one of two things: a non-empty `tied` set from the fan-out, or a
 fetched record whose bytes differ from the bytes that the snapshot cache holds for that name at
-that sequence. Each record that `resolve_gated` resolves takes this rule: the vault root, each
-scope root, and each node that `resolve_child_record` resolves. The settings record and the bin
-index do not take it. They resolve through the record plane, and their sealed body revision keeps
-its own rule (ADR 0034 D6, ADR 0031).
+that sequence. Two read paths take this rule. The first is `resolve_gated`: the vault root, and
+each node that `resolve_child_record` resolves. The second is the root admit `gate_root_pass`
+(`net::rotation`), which admits a scope root at the floor through `reread_at_floor`, where the
+tick's boundary walk (`ScopeWalk::descend`) and the renewal walk (`admit_owned_scope_root`) read
+it. A rotation read of `gate_root_pass` seals above the floor, so it keeps the present rule. The
+settings record and the bin index do not take this rule. They resolve through the record plane,
+and their sealed body revision keeps its own rule (ADR 0034 D6, ADR 0031).
 
 **D2 — A fork is not a trust violation.** The gate still runs on each record. The reader picks
-one gate-passing record by a fixed total order, paints it as it paints a `Current` record, and
+one gate-passing record by a fixed total order, paints it as it paints a record at the floor, and
 sends one event for each name and sequence in a session. The drain reads the other records from
 the fork outcome, and its rebase heals the fork as it does today.
 
