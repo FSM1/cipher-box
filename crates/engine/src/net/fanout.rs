@@ -11,7 +11,8 @@ use core::task::Poll;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 
-use super::eol::eol_is_later;
+use super::eol::ranks_above;
+use super::fork::verified;
 use crate::seams::{EndpointId, RecordTransport};
 
 /// Hard ceiling on one signed IPNS record fetched from a `/routing/v1`
@@ -265,9 +266,9 @@ pub(crate) async fn fanout_get_answered<T: RecordTransport>(
 }
 
 /// The freshest verified record, and every other record another endpoint
-/// served at its sequence. The freshest pick keeps the later EOL on a tie, and
-/// the first endpoint when the EOLs match, so without the ties a sibling's
-/// record on a later endpoint hides behind it.
+/// served at its sequence. The freshest pick takes the record that ranks
+/// above the others at a tie ([`ranks_above`]), so without the ties a
+/// sibling's record hides behind it.
 /// The ties are record-verified only; a caller gates one before it builds on
 /// it.
 pub(crate) async fn fanout_get_tied<T: RecordTransport>(
@@ -294,8 +295,8 @@ pub(crate) async fn fanout_get_tied_classified<T: RecordTransport>(
 
 /// Every endpoint's answer to one fan-out GET, before a caller reads it.
 struct Scan {
-    /// The freshest verifiable record. At one sequence the later EOL wins
-    /// (ADR 0061 D3 step 7), then the first endpoint.
+    /// The freshest verifiable record. At one sequence the record that
+    /// [`ranks_above`] the others wins.
     best: Option<(VerifiedRecord, Vec<u8>)>,
     /// The other distinct verifiable records at `best`'s sequence, one per
     /// endpoint at most.
@@ -364,11 +365,16 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
             continue;
         };
         match &scan.best {
-            Some((current, held)) if verified.sequence == current.sequence => {
-                if bytes == *held || scan.tied.contains(&bytes) {
+            Some((current, _)) if verified.sequence == current.sequence => {
+                let seen =
+                    |bytes: &[u8]| signed_data(name, bytes).as_deref() == Some(&verified.data[..]);
+                if verified.data == current.data || scan.tied.iter().any(|tie| seen(tie)) {
                     continue;
                 }
-                if eol_is_later(&verified.validity, &current.validity) {
+                if ranks_above(
+                    (&verified.validity, &verified.data),
+                    (&current.validity, &current.data),
+                ) {
                     if let Some((_, displaced)) = scan.best.replace((verified, bytes)) {
                         scan.tied.push(displaced);
                     }
@@ -384,6 +390,11 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
         }
     }
     scan
+}
+
+/// The signed `data` of `record_bytes`, when it verifies under `name`.
+fn signed_data(name: &IpnsName, record_bytes: &[u8]) -> Option<Vec<u8>> {
+    verified(name, record_bytes).map(|record| record.data)
 }
 
 #[cfg(test)]
@@ -487,6 +498,57 @@ mod tests {
                 vec![renewal.clone()],
                 "the renewal is the tied record"
             );
+        }
+    }
+
+    /// At one sequence and one EOL, every reader takes the record with the
+    /// higher signed `data`, whatever endpoint serves it (ADR 0066 D2).
+    #[test]
+    fn at_one_sequence_and_one_eol_the_higher_signed_data_wins_on_any_endpoint() {
+        use crate::net::eol::eol_from;
+        use crate::seams::UnixMillis;
+
+        let signer = Ed25519Signer::from_seed([3u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let eol = eol_from(UnixMillis(5_000_000));
+        let mut records = [
+            IpnsRecord::create_v2(&signer, b"/ipfs/one", 4, 1, &eol).marshal(),
+            IpnsRecord::create_v2(&signer, b"/ipfs/two", 4, 1, &eol).marshal(),
+        ];
+        records.sort_by_key(|record| signed_data(&name, record));
+        let [lower, higher] = records;
+        for order in [[&lower, &higher], [&higher, &lower]] {
+            let eps = vec![EndpointId::new("a"), EndpointId::new("b")];
+            let store = InMemoryRecordStore::new(eps.clone());
+            store.seed_record(&eps[0], name.as_str(), order[0].clone());
+            store.seed_record(&eps[1], name.as_str(), order[1].clone());
+
+            let (_, best, tied) = block_on(fanout_get_tied(&store, &name)).expect("a record");
+            assert_eq!(best, higher, "the higher signed data wins the tie");
+            assert_eq!(tied, vec![lower.clone()]);
+        }
+    }
+
+    /// A copy of the record with an unsigned field added carries the same
+    /// signed `data`: it is the same record, not a tie, on either endpoint.
+    #[test]
+    fn a_copy_with_an_unsigned_field_added_is_the_same_record() {
+        let signer = Ed25519Signer::from_seed([3u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let record =
+            IpnsRecord::create_v2(&signer, b"/ipfs/one", 4, 1, "2099-01-01T00:00:00Z").marshal();
+        let copy = crate::net::fork::with_unsigned_field(&record);
+        assert_ne!(copy, record);
+
+        for order in [[&record, &copy], [&copy, &record]] {
+            let eps = vec![EndpointId::new("a"), EndpointId::new("b")];
+            let store = InMemoryRecordStore::new(eps.clone());
+            store.seed_record(&eps[0], name.as_str(), order[0].clone());
+            store.seed_record(&eps[1], name.as_str(), order[1].clone());
+
+            let (best, _, tied) = block_on(fanout_get_tied(&store, &name)).expect("a record");
+            assert_eq!(Some(best.data), signed_data(&name, &record));
+            assert!(tied.is_empty());
         }
     }
 
