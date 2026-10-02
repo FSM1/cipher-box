@@ -2133,6 +2133,60 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
     assert_held_in_the_vault_scope(&fx, keep, deep, "second device");
 }
 
+/// A read grant drops the losing ref of a node the vault scope seals, and a
+/// vault writer then drops the winning ref too. A second owner device that
+/// loaded both refs before the grant binds the departure to the vault scope,
+/// which seals the node: it bins the node with no faulty record reported.
+#[test]
+fn a_held_node_left_by_both_parents_bins_in_the_scope_that_seals_it() {
+    let mut fx = GrantScenario::new();
+    let second = fx.world.device(b"owner-second-device");
+    let mut session = None;
+    let (keep, deep, _inner) = dual_linked_at(&mut fx, 0, true, |fx| {
+        serve_http(&second, &fx.blocks, 600);
+        let (mut engine, events) = engine_on_api(&second, 7);
+        block_on(engine.start(secret(), None)).expect("the second device starts");
+        let mut tasks = fx.world.scheduler.take_spawned_tasks();
+        poll_tasks_until_parked(&mut tasks);
+        block_on(engine.command(Command::SetFocus {
+            node: Some(fx.folder),
+        }))
+        .unwrap();
+        tick(&fx.world, &engine, &mut tasks);
+        let inner = block_on(engine.view())
+            .unwrap()
+            .children(fx.folder)
+            .into_iter()
+            .find(|child| child.name == "box")
+            .expect("the second device lists the inner folder")
+            .id;
+        block_on(engine.command(Command::SetFocus { node: Some(inner) })).unwrap();
+        tick(&fx.world, &engine, &mut tasks);
+        assert_eq!(block_on(engine.view()).unwrap().children(inner).len(), 1);
+        session = Some((engine, events, tasks));
+        granted_at(Permission::Read)(fx);
+    });
+    let (engine, mut events, mut tasks) = session.expect("the second device booted");
+    events_so_far(&mut events);
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        keep,
+        &read_key_of(keep),
+        SCOPE,
+        |children| children.retain(|child| child.id != deep.0),
+    );
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    let entry = published_bin_entries(&fx)
+        .into_iter()
+        .find(|entry| entry.node_id == deep.0)
+        .expect("the node no folder links bins");
+    assert_eq!(entry.scope_id, ROOT.0, "in the scope that seals it");
+}
+
 /// A granted folder keeps the ref its parent named it by, under the parent's
 /// write seed, so the vault scope's capture walk reads it under its own end.
 /// Another writer's unlink in the vault scope then bins, and no record is

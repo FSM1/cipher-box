@@ -6294,7 +6294,9 @@ where
     /// journals it only after the unlink is live, so the detachment is already a
     /// published fact. Reading the node instead would settle nothing — a hard
     /// delete leaves the record resolvable at its own name until its EOL lapses,
-    /// and it names its content the whole time.
+    /// and it names its content the whole time. A retired node the base links
+    /// again is live elsewhere, and the name derived here may be its live
+    /// record's, so its debt waits: a leak, never a loss.
     async fn live_owing_record(
         &self,
         scope: &DrainScope<'_>,
@@ -6310,6 +6312,9 @@ where
             })
         };
         if owing == OwingRecord::Retired {
+            if !self.cells.base.borrow().links_to(NodeId(node)).is_empty() {
+                return None;
+            }
             return reaching(BTreeSet::new());
         }
         let (plane, root) = self.ledger_plane(end).await?;
@@ -10436,6 +10441,29 @@ mod tests {
                 "only a same-scope capture may begin resolving the subtree for re-keying",
             );
         }
+    }
+
+    /// A retired debt settles under the derived name with nothing live, unless
+    /// the base links the node again: then the name may be its live copy's,
+    /// and the debt waits.
+    #[test]
+    fn a_retired_debt_of_a_node_the_base_links_waits() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let node = NodeId([0x48; 16]);
+        let settle = || {
+            block_on(harness.drain().live_owing_record(
+                &harness.scope(),
+                node.0,
+                OwingRecord::Retired,
+            ))
+        };
+        assert!(settle().is_some(), "an unlinked retired node settles");
+        {
+            let mut base = harness.state.snapshot.borrow_mut();
+            base.upsert_node(NodeMeta::new(node, "moved", crate::facade::NodeKind::File));
+            base.link(HARNESS_ROOT, node, 1);
+        }
+        assert!(settle().is_none(), "a linked retired node waits");
     }
 
     /// An interior scope's walk starts at the vault root when the tick holds

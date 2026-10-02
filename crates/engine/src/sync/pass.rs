@@ -541,6 +541,7 @@ where
             if merged.changed {
                 let _ = self.seams.events.unbounded_send(Event::SnapshotUpdated);
             }
+            merged.loaded_in(&mut state.snapshot.borrow_mut(), self.root_id);
             hold_captures(
                 &state.observed_unlinks,
                 merged.observed_unlinks(self.root_id, NodeId(self.root_id), pass.now.0),
@@ -1703,6 +1704,7 @@ fn install_descendant_scopes(
         if merged.changed {
             let _ = events.unbounded_send(Event::SnapshotUpdated);
         }
+        merged.loaded_in(&mut base.borrow_mut(), scope.scope_id);
         departed.extend(merged.observed_unlinks(scope.scope_id, root, observed_at));
     }
     departed

@@ -96,6 +96,8 @@ pub(crate) struct FolderMerge {
     /// Children the folder stopped naming, as the snapshot held them before
     /// the unlink. Read through [`FolderMerge::observed_unlinks`].
     departed: Vec<NodeMeta>,
+    /// Children the folder names after the merge.
+    linked: Vec<NodeId>,
 }
 
 impl FolderMerge {
@@ -103,6 +105,17 @@ impl FolderMerge {
         Self {
             changed: false,
             departed: Vec::new(),
+            linked: Vec::new(),
+        }
+    }
+
+    /// Record that `scope`'s read pass merged this folder, so a later departure
+    /// of one of its children is that scope's capture.
+    pub(crate) fn loaded_in(&self, snapshot: &mut Snapshot, scope: [u8; 16]) {
+        for id in &self.linked {
+            if let Some(meta) = snapshot.node_mut(*id) {
+                meta.loaded_in = Some(scope);
+            }
         }
     }
 
@@ -112,7 +125,9 @@ impl FolderMerge {
     /// wait for a later pass re-keys under the key its own entry names.
     ///
     /// A node the snapshot held without an `ipnsName` is dropped: the bin entry
-    /// would name no route back to the record.
+    /// would name no route back to the record. A node carries the scope that
+    /// loaded it ([`Self::loaded_in`]), and `scope_id` stands in for one that
+    /// does not.
     pub(crate) fn observed_unlinks(
         &self,
         scope_id: [u8; 16],
@@ -123,7 +138,7 @@ impl FolderMerge {
             .iter()
             .filter_map(|node| {
                 Some(UnlinkedChild {
-                    scope_id,
+                    scope_id: node.loaded_in.unwrap_or(scope_id),
                     parent,
                     node: node.id,
                     name: node.name().to_owned(),
@@ -194,12 +209,23 @@ pub(crate) fn merge_folder(
             meta.content_version = prior.content_version;
             meta.head_content_cid = prior.head_content_cid.clone();
             meta.record_sequence = prior.record_sequence;
+            if snapshot
+                .links()
+                .iter()
+                .any(|link| link.parent == folder && link.child == id)
+            {
+                meta.loaded_in = prior.loaded_in;
+            }
         }
         changed |= snapshot.node(id) != Some(&meta);
         snapshot.upsert_node(meta);
         changed |= snapshot.link(folder, id, child.link_counter);
     }
-    FolderMerge { changed, departed }
+    FolderMerge {
+        changed,
+        departed,
+        linked: children.iter().map(|child| NodeId(child.id)).collect(),
+    }
 }
 
 /// Fold a verified file read-body's plaintext `(size, mtime)`, version count and
@@ -284,6 +310,62 @@ mod tests {
             sequence,
             epoch: 0,
         }
+    }
+
+    /// A departure names the scope whose pass loaded the node, until a link
+    /// made outside such a pass makes that scope unknown again.
+    #[test]
+    fn a_departure_names_the_scope_that_loaded_the_node_until_it_moves() {
+        let root = node_id(0);
+        let (left, right, moved) = (node_id(1), node_id(2), node_id(3));
+        let (loader, leg) = ([0x0a; 16], [0x0b; 16]);
+        let mut snapshot = Snapshot::new(root);
+        for folder in [left, right] {
+            snapshot.upsert_node(NodeMeta::new(folder, "f", NodeKind::Folder));
+            snapshot.link(root, folder, 1);
+        }
+        let departs = |snapshot: &mut Snapshot, folder: NodeId| {
+            merge_folder(snapshot, folder, &[], &[], 9, 0)
+                .observed_unlinks(leg, folder, 1)
+                .into_iter()
+                .map(|unlinked| unlinked.scope_id)
+                .collect::<Vec<_>>()
+        };
+
+        merge_folder(
+            &mut snapshot,
+            left,
+            &[child(3, "m", CoreNodeKind::File, 1)],
+            &[],
+            1,
+            0,
+        )
+        .loaded_in(&mut snapshot, loader);
+        merge_folder(
+            &mut snapshot,
+            left,
+            &[child(3, "m", CoreNodeKind::File, 1)],
+            &[],
+            2,
+            0,
+        );
+        assert_eq!(departs(&mut snapshot, left), vec![loader]);
+
+        merge_folder(
+            &mut snapshot,
+            left,
+            &[child(3, "m", CoreNodeKind::File, 1)],
+            &[],
+            3,
+            0,
+        )
+        .loaded_in(&mut snapshot, loader);
+        snapshot.relocate(moved, right, None);
+        assert_eq!(
+            departs(&mut snapshot, right),
+            vec![leg],
+            "a move forgets it"
+        );
     }
 
     #[test]

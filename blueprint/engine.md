@@ -688,7 +688,10 @@ owner has binned.
 The owner's engine adopts an unlink it observes but did not author (ADR 0010
 item 5, ADR 0043). The poll leg's folder merge reports the children a folder
 stopped naming; the drain writes one bin entry for each and re-keys the node, so
-the grantee that removed it stops reading it.
+the grantee that removed it stops reading it. A departure belongs to the scope
+whose read pass last merged the link that named the node, not the scope of the
+folder it left, so a held node of another scope is that scope's capture; a link
+made outside such a pass, or a move, forgets that scope.
 
 - **The re-key runs before the entry**, the opposite of the authored delete's
   order and for the opposite reason: the unlink has already published, so

@@ -64,6 +64,11 @@ pub struct NodeMeta {
     /// `ChildRef`; `None` for nodes not yet in gate-passing state.
     #[zeroize(skip)]
     pub ipns_name: Option<Vec<u8>>,
+    /// The scope whose read pass last merged the parent link that names this
+    /// node, which owns a capture of the node's departure. `None` once a merge
+    /// or a move outside such a pass links it anew.
+    #[zeroize(skip)]
+    pub(crate) loaded_in: Option<[u8; 16]>,
 }
 
 impl fmt::Debug for NodeMeta {
@@ -99,6 +104,7 @@ impl NodeMeta {
             size: None,
             mtime: None,
             ipns_name: None,
+            loaded_in: None,
         }
     }
 
@@ -308,6 +314,9 @@ impl Snapshot {
     pub fn relocate(&mut self, target: NodeId, new_parent: NodeId, vacating: Option<NodeId>) {
         let current = self.parent_of(target);
         if current != Some(new_parent) {
+            if let Some(meta) = self.nodes.get_mut(&target) {
+                meta.loaded_in = None;
+            }
             self.link_next(new_parent, target);
             if let Some(current) = current {
                 self.unlink(current, target);
