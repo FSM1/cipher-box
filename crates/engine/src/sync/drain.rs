@@ -29,6 +29,7 @@ use std::rc::Rc;
 use cipherbox_core::content::{
     decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid, verify_cid,
 };
+use cipherbox_core::error::TrustViolation;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -1798,6 +1799,38 @@ struct LoadedNode {
     body: ReadBody,
 }
 
+/// Why a child load gave no node.
+enum ChildFault {
+    Halt(Halt),
+    /// The gate refused the record, and nothing has reported it yet.
+    Refused(GateRejection),
+}
+
+impl From<Halt> for ChildFault {
+    fn from(halt: Halt) -> Self {
+        Self::Halt(halt)
+    }
+}
+
+impl ChildFault {
+    /// The record does not open under the plane's key: another scope may seal
+    /// it.
+    fn seal_open_failed(&self) -> bool {
+        matches!(self, Self::Refused(rejection)
+            if rejection.reason == RejectionReason::Trust(TrustViolation::SealOpenFailed.into()))
+    }
+}
+
+/// Which own end a proved capture's node record opens under.
+enum Sealer<'e> {
+    /// The end, with its root when it is not the capture's own scope.
+    End(ScopeEnd<'e>, Option<Box<LoadedRoot>>),
+    /// A read did not land, so a later pass decides.
+    Unanswered,
+    /// No own end opens the record, and the refusal is reported.
+    Refused,
+}
+
 /// One version's blocks, uploaded and pinned.
 struct UploadedVersion {
     /// The version the node's record carries.
@@ -2976,6 +3009,20 @@ where
         node: NodeId,
         mode: ResolveMode,
     ) -> Result<LoadedNode, Halt> {
+        self.load_child_node_unreported(plane, anchor, node, mode)
+            .await
+            .map_err(|fault| self.report_fault(&plane.end.write_name(&node.0), fault))
+    }
+
+    /// [`Self::load_child_node`], with a gate refusal answered to the caller
+    /// rather than reported.
+    async fn load_child_node_unreported(
+        &self,
+        plane: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        node: NodeId,
+        mode: ResolveMode,
+    ) -> Result<LoadedNode, ChildFault> {
         let name = plane.end.write_name(&node.0);
         let floors = plane.end.floors(&self.seams.floors);
         let adopter = self.child_adopter(plane, &floors, node);
@@ -3001,12 +3048,20 @@ where
                         .ok_or(Halt::EpochLagged)?,
                     Some(epoch),
                 ),
-                _ => return Err(refuse_record(&self.seams.events, &name, rejection)),
+                _ => return Err(ChildFault::Refused(rejection.clone())),
             },
             _ => (resolved_bytes(resolved, &name, &self.seams.events)?, None),
         };
         self.open_child_record(plane, anchor, &adopter, name, record_bytes, lagging, tied)
             .await
+    }
+
+    /// The halt `fault` takes, with a refusal reported against `name`.
+    fn report_fault(&self, name: &IpnsName, fault: ChildFault) -> Halt {
+        match fault {
+            ChildFault::Halt(halt) => halt,
+            ChildFault::Refused(rejection) => refuse_record(&self.seams.events, name, &rejection),
+        }
     }
 
     /// Open one non-root node's `record_bytes` for re-authoring.
@@ -3020,7 +3075,7 @@ where
         record_bytes: Vec<u8>,
         lagging: Option<u64>,
         tied: bool,
-    ) -> Result<LoadedNode, Halt> {
+    ) -> Result<LoadedNode, ChildFault> {
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, adopter, &name, &record_bytes, lagging)
             .await?;
@@ -3029,7 +3084,7 @@ where
         // Re-sealing a node at an epoch above the scope's would cross the AAD
         // epoch binding.
         if adopted.epoch > anchor.epoch {
-            return Err(Halt::Unclassified);
+            return Err(Halt::Unclassified.into());
         }
         Ok(LoadedNode {
             name,
@@ -3055,23 +3110,23 @@ where
         name: &IpnsName,
         record_bytes: &[u8],
         lagging: Option<u64>,
-    ) -> Result<(Adopted, Envelope), Halt> {
+    ) -> Result<(Adopted, Envelope), ChildFault> {
         let lagging = match lagging {
             Some(epoch) => epoch,
             None => match adopter.open_carried_at_floor(name, record_bytes).await {
                 Ok(carried) => return Ok(carried),
                 Err(GateError::Rejected(rejection)) => match rejection.reason {
                     RejectionReason::EpochBelowFloor { epoch, .. } => epoch,
-                    _ => return Err(refuse_record(&self.seams.events, name, &rejection)),
+                    _ => return Err(ChildFault::Refused(rejection)),
                 },
-                Err(GateError::Seam(_)) => return Err(Halt::UploadAttempt),
+                Err(GateError::Seam(_)) => return Err(Halt::UploadAttempt.into()),
             },
         };
         let seed = seed_for_lagging(plane.end.root.0, plane.end.read_scope_seed, anchor, lagging)?;
         adopter
             .open_interior_under(name, record_bytes, &seed)
             .await
-            .map_err(|_| Halt::UploadAttempt)
+            .map_err(|_| Halt::UploadAttempt.into())
     }
 
     /// Make `folder` and every ancestor between it and the root of the plane it
@@ -3196,12 +3251,13 @@ where
                 plane,
                 anchor,
                 &adopter,
-                name,
+                name.clone(),
                 record_bytes.to_vec(),
                 None,
                 true,
             )
-            .await?;
+            .await
+            .map_err(|fault| self.report_fault(&name, fault))?;
         folder_state(plane, loaded)
     }
 
@@ -4160,7 +4216,8 @@ where
     }
 
     /// Bind the unlinks the poll leg observed into the owner's bin, and re-key
-    /// each node out of the source scope's derivation (ADR 0010 item 5).
+    /// each node out of the derivation of the scope that seals it
+    /// ([`Self::sealing_end`], ADR 0010 item 5).
     /// Without the re-key, the grantee who unlinked the node keeps its read key.
     /// A capture bins only after [`Self::prove_captures`] proves it.
     ///
@@ -4225,16 +4282,36 @@ where
                 .entries
                 .iter()
                 .find(|entry| entry.node_id == unlinked.node.0);
-            if standing.is_some_and(|entry| entry.scope_id != unlinked.scope_id) {
+            // An entry no own end of this tick can match waits with no read.
+            if standing.is_some_and(|entry| {
+                entry.scope_id != unlinked.scope_id
+                    && !ends.iter().any(|end| end.root.0 == entry.scope_id)
+            }) {
                 unfinished.push(unlinked);
                 continue;
             }
             let deleted_at = standing.map_or(unlinked.deleted_at, |entry| entry.deleted_at);
+            let (end, other_root) = match self
+                .sealing_end(scope, ends, &root, &unlinked, deleted_at)
+                .await
+            {
+                Sealer::End(end, other_root) => (end, other_root),
+                Sealer::Unanswered => {
+                    unfinished.push(unlinked);
+                    continue;
+                }
+                Sealer::Refused => continue,
+            };
+            if standing.is_some_and(|entry| entry.scope_id != end.root.0) {
+                unfinished.push(unlinked);
+                continue;
+            }
+            let sealing_root = other_root.as_deref().unwrap_or(&root);
             if self
                 .rekey_into_bin(
                     scope,
-                    &scope.source.at(root.epoch),
-                    root.anchor(),
+                    &end.at(sealing_root.epoch),
+                    sealing_root.anchor(),
                     unlinked.node,
                     deleted_at,
                 )
@@ -4254,7 +4331,7 @@ where
                 unlinked.parent.0,
                 unlinked.name.clone(),
                 unlinked.deleted_at,
-                unlinked.scope_id,
+                end.root.0,
                 Some(
                     *self
                         .inputs
@@ -4270,6 +4347,94 @@ where
             unfinished.extend(added);
         }
         self.return_captures(unfinished);
+    }
+
+    /// The own end whose key opens the record of `unlinked`'s node: the
+    /// capture's own end, then, on a seal-open refusal only, each other own end
+    /// that derives the captured name (blueprint/engine.md "Owner capture").
+    /// The refusal under the capture's own end is reported once, and only when
+    /// no end opens the record.
+    async fn sealing_end<'e>(
+        &self,
+        scope: &DrainScope<'e>,
+        ends: &[ScopeEnd<'e>],
+        root: &LoadedRoot,
+        unlinked: &UnlinkedChild,
+        deleted_at: u64,
+    ) -> Sealer<'e> {
+        let node = unlinked.node;
+        let own = match self
+            .opens_under(
+                &scope.source.at(root.epoch),
+                root.anchor(),
+                node,
+                deleted_at,
+            )
+            .await
+        {
+            Ok(()) => return Sealer::End(scope.source, None),
+            Err(fault) if fault.seal_open_failed() => fault,
+            Err(_) => return Sealer::Unanswered,
+        };
+        let mut unanswered = false;
+        for end in ends.iter().filter(|end| {
+            end.root != scope.source.root
+                && end.write_name(&node.0).as_str().as_bytes() == unlinked.ipns_name
+        }) {
+            let Ok(other_root) = self.load_scope_root(end).await else {
+                unanswered = true;
+                continue;
+            };
+            match self
+                .opens_under(
+                    &end.at(other_root.epoch),
+                    other_root.anchor(),
+                    node,
+                    deleted_at,
+                )
+                .await
+            {
+                Ok(()) => return Sealer::End(*end, Some(Box::new(other_root))),
+                Err(fault) if fault.seal_open_failed() => {}
+                Err(_) => unanswered = true,
+            }
+        }
+        if unanswered {
+            return Sealer::Unanswered;
+        }
+        self.report_fault(&scope.source.write_name(&node.0), own);
+        Sealer::Refused
+    }
+
+    /// Whether `node`'s record opens under `plane`, or under the bin's held key
+    /// that a re-key whose index publish did not land left it at.
+    async fn opens_under(
+        &self,
+        plane: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        node: NodeId,
+        deleted_at: u64,
+    ) -> Result<(), ChildFault> {
+        let fault = match self
+            .load_child_node_unreported(plane, anchor, node, ResolveMode::CacheFirst)
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(fault) if fault.seal_open_failed() => fault,
+            Err(fault) => return Err(fault),
+        };
+        let held = self.inputs.bin_keys.held_key(&node.0, deleted_at);
+        let binned = SealPlane {
+            end: ScopeEnd {
+                read_scope_seed: &held,
+                ..plane.end
+            },
+            ..*plane
+        };
+        self.load_child_node_unreported(&binned, anchor, node, ResolveMode::CacheFirst)
+            .await
+            .map(|_| ())
+            .map_err(|_| fault)
     }
 
     /// Queue a purge for every entry past the owner's bin retention, so

@@ -733,6 +733,15 @@ the grantee that removed it stops reading it.
   slot, so its snapshot ages; the risk is low, because an honest move publishes
   the destination before the source. A capture of a scope root, proved or by
   its name, drops before any read.
+- **The record decides the capture's scope.** A grant can leave a node sealed
+  in a scope other than the one whose folder it left, and no tree rule names
+  the sealing scope on every device. Before the re-key, the drain opens the
+  node's record through the gate under the capture's own scope, then, on a
+  seal-open refusal only, under each other own scope whose write seed derives
+  the captured name. A node a re-key already moved opens under the bin's held
+  key. The scope that opens the record is the one the node re-keys and bins
+  under. When no own scope opens it, the drain sends one trust violation and
+  drops the capture; a read with no answer keeps the capture for a later pass.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.
