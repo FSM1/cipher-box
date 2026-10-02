@@ -174,7 +174,6 @@ where
             // A departure below a grafted root is the sharer's to bin: no pass
             // of this vault adopts it, and holding it starves the bounded set.
             if self.plane.is_none() {
-                merged.loaded_in(&mut self.base.borrow_mut(), self.scope_id);
                 report.departed.extend(merged.observed_unlinks(
                     self.scope_id,
                     *folder,
