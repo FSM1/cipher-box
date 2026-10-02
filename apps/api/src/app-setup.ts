@@ -1,10 +1,12 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
+import { json } from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { positiveIntConfig } from './common/config-int';
 import { UPLOAD_TOO_LARGE, uploadTooLargeBody } from './content/upload-error-codes';
 import { verifiedUnexpiredSubjectFromBearer } from './ops/account-throttler.guard';
+import { REGISTRY_BODY_LIMIT_BYTES } from './registry/dto/registry.dto';
 
 /**
  * Absolute upload-size cap (coarse DoS guard); the quota gate is the fine one.
@@ -86,6 +88,16 @@ function rawUploadBody(maxBytes: number) {
 }
 
 /**
+ * The registry batches outgrow the default 100 KiB JSON limit; every other
+ * route keeps it. Named apart from `jsonParser`: Nest skips its own global
+ * JSON parser when a layer of that name is already mounted.
+ */
+const registryJson = json({ limit: REGISTRY_BODY_LIMIT_BYTES });
+function registryJsonBody(req: Request, res: Response, next: NextFunction): void {
+  registryJson(req, res, next);
+}
+
+/**
  * Shared HTTP-pipeline configuration, applied identically by main.ts and by
  * the supertest apps in tests — what is asserted is what ships.
  */
@@ -100,6 +112,7 @@ export function configureApp(app: INestApplication): INestApplication {
   );
   app.use(cookieParser());
   app.use(rawUploadBody(maxUploadBytes()));
+  app.use('/registry', registryJsonBody);
   return app;
 }
 

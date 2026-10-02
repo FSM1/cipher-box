@@ -39,7 +39,7 @@ use cipherbox_engine::grants::{
     ScopeRootPromoter, SharePointer, create_grant, import_contact, post_share_pointer,
 };
 use cipherbox_engine::mailbox::poll_verified;
-use cipherbox_engine::net::REGISTRY_BATCH_MAX;
+use cipherbox_engine::net::{REGISTRY_BATCH_MAX, REGISTRY_BODY_MAX_BYTES};
 use cipherbox_engine::rotation::{
     CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, ResealSeeds,
     ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
@@ -1184,6 +1184,40 @@ async fn an_oversize_register_entry_is_refused_fail_closed() {
         ])
         .await
         .expect("chunked entries at the cap are accepted");
+}
+
+/// The largest request the engine's chunker sends — [`REGISTRY_BATCH_MAX`]
+/// entries carrying [`REGISTRY_BATCH_MAX`] content CIDs in total, at the widest
+/// tokens the registry admits — fits the registry's JSON body limit.
+#[tokio::test]
+async fn a_register_request_at_the_chunk_bound_fits_the_body_limit() {
+    let base = require_stack!("a_register_request_at_the_chunk_bound_fits_the_body_limit");
+    let client = fresh_account(&base).await;
+
+    let wide = |prefix: &str, i: usize, len: usize| {
+        let token = format!("{prefix}{i}");
+        format!("{token}{}", "a".repeat(len - token.len()))
+    };
+    let entries: Vec<NameRegistration> = (0..REGISTRY_BATCH_MAX)
+        .map(|i| NameRegistration {
+            ipns_name: wide("k51contractWide", i, 128),
+            head_cid: Some(wide("bafyContractWideHead", i, 256)),
+            content_cids: vec![wide("bafyContractWideLeaf", i, 256)],
+        })
+        .collect();
+    let body = serde_json::to_vec(&entries).expect("entries serialize");
+    assert!(
+        body.len() > 100 * 1024,
+        "the request outgrows the default limit"
+    );
+    assert!(
+        body.len() <= REGISTRY_BODY_MAX_BYTES,
+        "the chunk bound fits the published limit"
+    );
+    client
+        .register(&entries)
+        .await
+        .expect("a request at the chunk bound is accepted");
 }
 
 // --- mailbox (blueprint/api.md, Mailbox) ------------------------------------

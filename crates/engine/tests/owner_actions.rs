@@ -2196,7 +2196,7 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
     let (keep, deep, _inner) = dual_linked_at(&mut fx, 0, true, |fx| {
         serve_http(&second, &fx.blocks, 600);
         let (mut engine, events) = engine_on_api(&second, 7);
-        block_on(engine.start(secret())).expect("the second device starts");
+        block_on(engine.start(secret(), None)).expect("the second device starts");
         let mut tasks = fx.world.scheduler.take_spawned_tasks();
         poll_tasks_until_parked(&mut tasks);
         block_on(engine.command(Command::SetFocus {

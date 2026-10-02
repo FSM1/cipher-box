@@ -22,6 +22,14 @@ const CID_OR_NAME = /^[A-Za-z0-9]{1,256}$/;
 export const MAX_BATCH = 1000;
 export const MAX_CONTENT_CIDS = 1000;
 
+/**
+ * The JSON body limit of the registry routes. The engine sends at most
+ * MAX_BATCH entries and MAX_CONTENT_CIDS content CIDs in total per request,
+ * about 700 KB at the widest tokens above; its `REGISTRY_BODY_MAX_BYTES`
+ * mirrors this value.
+ */
+export const REGISTRY_BODY_LIMIT_BYTES = 1024 * 1024;
+
 export class RegisterEntryDto {
   @ApiProperty({
     description:
@@ -47,6 +55,7 @@ export class RegisterEntryDto {
 
   @ApiProperty({
     type: [String],
+    maxItems: MAX_CONTENT_CIDS,
     description: 'Content CIDs to pin/count under this account (idempotent upsert).',
   })
   @IsArray()
