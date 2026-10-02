@@ -1203,9 +1203,9 @@ fn no_other_owner_action_moves_the_vault_roots_read_epoch() {
     assert_eq!(listed_names(&engine, ROOT), ["reports"]);
 }
 
-/// Every command that can run a write cut is refused at the vault root, and the
-/// ones that cut a folder below it leave the vault pointer on the same root at
-/// the same write epoch: no command moves the vault root's write plane.
+/// A write grant, the one command that cuts a write scope with no grant in
+/// place, is refused at the vault root. A write grant, a downgrade and a revoke
+/// below it leave the vault pointer on the same root at the same write epoch.
 #[test]
 fn no_command_runs_a_write_cut_of_the_vault_root() {
     let world = FakeWorld::new();
@@ -1226,11 +1226,21 @@ fn no_command_runs_a_write_cut_of_the_vault_root() {
         recipient_identity_public_key: recipient.clone(),
         permission: Permission::Read,
     };
-    for command in [revoke(ROOT), downgrade(ROOT)] {
-        let name = command.name();
-        let refused = block_on(engine.command(command));
-        assert!(refused.is_err(), "{name} at the vault root: {refused:?}");
-    }
+    let refused = block_on(engine.command(Command::Grant {
+        node: ROOT,
+        recipient_identity_public_key: recipient.clone(),
+        permission: Permission::Write,
+        grantee_name: None,
+    }));
+    assert!(
+        matches!(
+            refused,
+            Err(EngineError::UnsupportedTarget {
+                check: "grant-target-is-the-vault-root"
+            })
+        ),
+        "a write grant at the vault root: {refused:?}"
+    );
     for command in [downgrade(reports), revoke(reports)] {
         grant_to_recipient_at(&mut engine, reports, Permission::Write);
         let name = command.name();
