@@ -546,10 +546,7 @@ describe('useAuth with "save this device" checked', () => {
 
   it('names only the browser requirement when this browser cannot hold a key', async () => {
     const engine = fakeEngineClient();
-    const coreKit = fakeCoreKitSession();
-    const identity = coreKit.session.deviceIdentity();
-    if (identity) identity.publicKeyHex = () => Promise.reject(new DeviceKeyUnusableError());
-    const { result } = mount(engine, coreKit);
+    const { result } = mount(engine, fakeCoreKitSession({ deviceKeyUnusable: true }));
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
     authStore.saveDevice(true);
 

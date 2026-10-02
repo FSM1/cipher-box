@@ -61,13 +61,13 @@ export async function deviceKeyPlace(
   };
 }
 
-const UNUSABLE =
-  'this browser has no Ed25519 in WebCrypto; use a current Chrome, Firefox or Safari';
-
 /** This browser cannot hold a device identity key, whatever the member does. */
 export class DeviceKeyUnusableError extends Error {
   constructor(options?: { cause?: unknown }) {
-    super(UNUSABLE, options);
+    super(
+      'this browser has no Ed25519 in WebCrypto; use a current Chrome, Firefox or Safari',
+      options
+    );
     this.name = 'DeviceKeyUnusableError';
   }
 }

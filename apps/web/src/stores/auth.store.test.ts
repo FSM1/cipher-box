@@ -68,8 +68,6 @@ describe('auth.store', () => {
     });
   });
 
-  // The landing that registers this browser reads the request after the flow
-  // has already published the session.
   it('keeps the request to save this device across the sign-in, and drops it on sign-out', () => {
     authStore.saveDevice(true);
 

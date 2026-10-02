@@ -1,11 +1,11 @@
 import { EngineRequestError, type EngineFacade } from '@cipherbox/client';
 import type { WebCoreKitSession } from './coreKit';
 
-/** The remedy for every refusal that a fresh sign-in token cures. */
+/**
+ * The remedy for every refusal that a fresh sign-in token cures: a registration
+ * signs an identity token, which only a fresh sign-in carries.
+ */
 export const SIGN_IN_TO_SAVE = 'sign in again with "save this device" checked';
-
-/** A registration signs an identity token, which only a fresh sign-in carries. */
-export const NO_TOKEN = SIGN_IN_TO_SAVE;
 
 /** A sign-in names the member, and the key is minted on its first use. */
 export const NO_IDENTITY = 'this browser holds no device identity key; sign in again to create one';
@@ -27,7 +27,7 @@ export async function registerThisDevice(
   const identity = session.deviceIdentity();
   if (!identity) throw new Error(NO_IDENTITY);
   const identityToken = session.identityToken();
-  if (identityToken === null) throw new Error(NO_TOKEN);
+  if (identityToken === null) throw new Error(SIGN_IN_TO_SAVE);
   const publicKey = await identity.publicKeyHex();
   const challenge = await facade.deviceRegistrationChallenge(publicKey);
   const signature = await identity.sign(Uint8Array.from(challenge));

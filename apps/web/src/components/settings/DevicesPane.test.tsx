@@ -11,6 +11,7 @@ import {
   fakeSignatureOver,
   type EngineCalls,
 } from '../../test/authFakes';
+import { DeviceKeyUnusableError } from '../../auth/deviceIdentity';
 import { DevicesPane } from './DevicesPane';
 
 const OTHER = {
@@ -216,9 +217,9 @@ describe('the authorized devices pane', () => {
   // A sign-in cannot give a browser a key its WebCrypto cannot hold, so the
   // pane names the browser as the cause instead.
   it('names an unusable device key as the cause, not the sign-in', async () => {
-    const unusable = 'this browser cannot hold a device identity key';
+    const unusable = new DeviceKeyUnusableError().message;
     const engine = fakeEngineClient({ devices: () => Promise.resolve([]) });
-    const session = fakeCoreKitSession({ loggedIn: true, deviceKeyUnusable: unusable }).session;
+    const session = fakeCoreKitSession({ loggedIn: true, deviceKeyUnusable: true }).session;
     render(<DevicesPane />, { wrapper: authWrapper(engine.client, session) });
     await act(async () => undefined);
 

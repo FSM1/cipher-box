@@ -28,7 +28,7 @@ import type { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
 import type { WebCoreKitSession } from '../auth/coreKit';
-import { DeviceIdentity } from '../auth/deviceIdentity';
+import { DeviceIdentity, DeviceKeyUnusableError } from '../auth/deviceIdentity';
 import { MemoryDeviceKeys, SerialLocks } from './storeFakes';
 
 import { IdentityProvider } from '../auth/IdentityProvider';
@@ -463,13 +463,13 @@ export interface CoreKitCalls {
 class FakeDeviceIdentity extends DeviceIdentity {
   constructor(
     private readonly calls: CoreKitCalls,
-    private readonly unusable: string | undefined
+    private readonly unusable: boolean
   ) {
     super(new MemoryDeviceKeys(), new SerialLocks(), 'fake-device-identity');
   }
 
   override publicKeyHex(): Promise<string> {
-    if (this.unusable !== undefined) return Promise.reject(new Error(this.unusable));
+    if (this.unusable) return Promise.reject(new DeviceKeyUnusableError());
     return Promise.resolve(FAKE_DEVICE_PUBLIC_KEY);
   }
 
@@ -501,8 +501,8 @@ export function fakeCoreKitSession(
     identityToken?: string | null;
     /** A browser holding no identity key, as one is left after `forgetDevice`. */
     noDeviceIdentity?: boolean;
-    /** What reading the key refuses with, on a browser whose WebCrypto holds no Ed25519. */
-    deviceKeyUnusable?: string;
+    /** A browser whose WebCrypto holds no Ed25519, so reading the key refuses. */
+    deviceKeyUnusable?: boolean;
   } = {}
 ) {
   const calls: CoreKitCalls = {
@@ -517,7 +517,7 @@ export function fakeCoreKitSession(
     adopted: [],
     adoptedBytes: [],
   };
-  const device = new FakeDeviceIdentity(calls, options.deviceKeyUnusable);
+  const device = new FakeDeviceIdentity(calls, options.deviceKeyUnusable ?? false);
   let identityToken =
     options.identityToken === undefined ? FAKE_IDENTITY_TOKEN : options.identityToken;
   let loggedIn = options.loggedIn ?? false;

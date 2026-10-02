@@ -10,7 +10,6 @@ import { useCoreKit } from '../auth/CoreKitProvider';
 import {
   isAuthRefusal,
   NO_IDENTITY,
-  NO_TOKEN,
   registerThisDevice,
   SIGN_IN_TO_SAVE,
 } from '../auth/registerThisDevice';
@@ -65,8 +64,11 @@ export function useDevices(): DevicesRead {
     // A session holding no key must not keep the last one's answer: the pane
     // would go on marking a row as this device and offer no way to register.
     setThisDevice(null);
+    if (!identity) {
+      setKeyError(NO_IDENTITY);
+      return;
+    }
     setKeyError(null);
-    if (!identity) return;
     let live = true;
     void identity.publicKeyHex().then(
       (publicKey) => {
@@ -93,9 +95,8 @@ export function useDevices(): DevicesRead {
           // A spent token can mean the key already landed: the sign-in did it,
           // or the response to an earlier try was lost.
           const listed = await read(facade);
-          if (thisDevice !== null && listed.some((row) => row.publicKey === thisDevice)) return;
           // The closed reason names the cause, so no error line repeats it.
-          setRefused(true);
+          if (!listed.some((row) => row.publicKey === thisDevice)) setRefused(true);
           return;
         }
         await read(facade);
@@ -114,10 +115,11 @@ export function useDevices(): DevicesRead {
 
   const registration = ((): Registration => {
     if (keyError !== null) return { state: 'closed', reason: keyError };
-    if (!session?.deviceIdentity()) return { state: 'closed', reason: NO_IDENTITY };
     if (thisDevice === null) return { state: 'reading' };
     if (refused) return { state: 'closed', reason: REFUSED };
-    if (session.identityToken() === null) return { state: 'closed', reason: NO_TOKEN };
+    if ((session?.identityToken() ?? null) === null) {
+      return { state: 'closed', reason: SIGN_IN_TO_SAVE };
+    }
     return { state: 'open' };
   })();
 
