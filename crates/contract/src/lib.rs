@@ -66,9 +66,12 @@ impl Http for ReqwestHttp {
             .await
             .map_err(|error| SeamError::new(format!("reqwest send: {error}")))?;
         let status = response.status().as_u16();
+        // `HttpResponse::headers` carries no `Set-Cookie`: it holds the
+        // refresh token, and the engine reads no cookie.
         let headers = response
             .headers()
             .iter()
+            .filter(|(name, _)| **name != reqwest::header::SET_COOKIE)
             .map(|(name, value)| {
                 (
                     name.as_str().to_owned(),
