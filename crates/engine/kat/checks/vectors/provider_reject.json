@@ -57,6 +57,6 @@
   {
     "name": "provider-that-stored-another-address",
     "check": "byo-address-mismatch",
-    "class": "trust"
+    "class": "availability"
   }
 ]

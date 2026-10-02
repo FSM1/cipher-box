@@ -31,8 +31,8 @@ use crate::gate::floor::RevisionMintError;
 use crate::net::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue, hold_if_unchanged};
 use crate::net::publish::{Observed, PublishError, PublishOutcome, PutMark};
 use crate::net::record_publish::{
-    PreflightError, RecordPublishError, RecordPublishRequest, preflight_bin_index,
-    publish_record_marked,
+    MirrorLeg, PreflightError, RecordPublishError, RecordPublishRequest, preflight_bin_index,
+    publish_record_placed,
 };
 use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
@@ -43,6 +43,7 @@ use crate::record_plane::{
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SnapshotCache,
 };
+use crate::settings::Placement;
 
 /// What a bin index load produced.
 ///
@@ -340,6 +341,50 @@ where
     Sn: SnapshotCache,
     Sch: Scheduler + Clone + 'static,
 {
+    let placement = api.placement().unwrap_or(Placement::Hosted);
+    publish_bin_index_placed(
+        transport,
+        api,
+        floors,
+        snapshots,
+        scheduler,
+        profile,
+        entropy,
+        orphans,
+        keys,
+        index,
+        &placement,
+        &mut MirrorLeg::once(),
+    )
+    .await
+}
+
+/// [`publish_bin_index`], with the head placed on the legs of `placement` and a
+/// dual write's mirror attempts spent from `mirror`, so a drain op's bin head
+/// shares that op's placement and budget.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn publish_bin_index_placed<T, H, C, F, Sn, Sch>(
+    transport: &T,
+    api: &ApiClient<H, C>,
+    floors: &F,
+    snapshots: &Sn,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    entropy: &mut dyn Entropy,
+    orphans: &OrphanHeads,
+    keys: &BinIndexKeys,
+    index: &BinIndex,
+    placement: &Placement,
+    mirror: &mut MirrorLeg,
+) -> Result<HeldRecord, BinIndexPublishError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sn: SnapshotCache,
+    Sch: Scheduler + Clone + 'static,
+{
     let name = &keys.name;
     let nonce = fresh_nonce(entropy).map_err(BinIndexPublishError::Entropy)?;
     let revision = next_revision(floors, name).await?;
@@ -354,7 +399,7 @@ where
         .map_err(BinIndexPublishError::Preflight)?;
 
     let mint_key = revision_mint_key(name);
-    let receipt = match publish_record_marked(
+    let receipt = match publish_record_placed(
         transport,
         api,
         floors,
@@ -366,6 +411,8 @@ where
             head: &head,
             content_cids: Vec::new(),
         },
+        placement,
+        mirror,
         Some(PutMark {
             key: &mint_key,
             value: revision,
