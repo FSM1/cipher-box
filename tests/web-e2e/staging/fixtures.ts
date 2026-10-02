@@ -11,12 +11,19 @@ import {
   type Locator,
   type Page,
   type Response,
+  type TestInfo,
 } from '@playwright/test';
 import type { Hex } from 'viem';
 import { FilesPage } from '../page-objects/files.page';
 import { LoginPage } from '../page-objects/login.page';
 import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
-import { DEVNET_BACKOFF_MS, isDevnetFault } from './loginRetry';
+import { recordForensics, requestTarget, type Forensics } from './forensics';
+import {
+  DEVNET_BACKOFF_MS,
+  devnetFault,
+  SIGN_IN_ANNOTATION,
+  type SignInRecord,
+} from './loginRetry';
 import { installTestWallet, TEST_WALLET_NAME, type TestWallet } from './wallet';
 
 export { expect } from '@playwright/test';
@@ -57,28 +64,38 @@ export const test = base.extend<StagingFixtures>({
   // Automatic: staging keeps whatever a run leaves behind, and nothing else
   // reclaims it. The removal is reported, never asserted — a spec fails on its
   // own subject, and `account-removal.spec.ts` is what holds the path itself
-  // to a verdict.
+  // to a verdict. A failed spec also gets its forensics log, read before the
+  // removal moves the page on.
   apiOrigin: [
     async ({ page, wallet }, use, testInfo) => {
       const origin = watchApiOrigin(page);
+      const forensics = recordForensics(page);
       await use(origin);
+      await attachOnFailure(testInfo, 'forensics', forensics);
       await report(testInfo, 'account-removal', await removeOnce(page, origin(), wallet.address));
     },
     { auto: true },
   ],
 
   secondContext: async ({ browser }: { browser: Browser }, use, testInfo) => {
-    const opened: Array<{ page: Page; apiOrigin: () => string | null; address: string }> = [];
+    const opened: Array<{
+      page: Page;
+      apiOrigin: () => string | null;
+      forensics: Forensics;
+      address: string;
+    }> = [];
 
     await use(async (privateKey?: Hex) => {
       const page = await (await browser.newContext()).newPage();
       const apiOrigin = watchApiOrigin(page);
+      const forensics = recordForensics(page);
       const wallet = await installTestWallet(page, privateKey);
-      opened.push({ page, apiOrigin, address: wallet.address });
+      opened.push({ page, apiOrigin, forensics, address: wallet.address });
       return { page, wallet };
     });
 
     for (const [index, context] of opened.entries()) {
+      await attachOnFailure(testInfo, `forensics-${index + 1}`, context.forensics);
       await report(
         testInfo,
         `account-removal-${index + 1}`,
@@ -126,6 +143,15 @@ function report(
   });
 }
 
+async function attachOnFailure(
+  testInfo: TestInfo,
+  label: string,
+  forensics: Forensics
+): Promise<void> {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  await testInfo.attach(label, { body: await forensics.report(), contentType: 'text/plain' });
+}
+
 /**
  * Signs in at the front door and waits for the vault browser. Returns the
  * milliseconds the successful attempt took, which is what the timing profile
@@ -145,10 +171,16 @@ export async function signIn(page: Page): Promise<number> {
  * reloads the same address, fragment included, and tries again; any other
  * refusal fails at once. The thrown error lists each refused request of the
  * last attempt by host, path and status only, since a body or a query can
- * carry a token.
+ * carry a token. Each sign-in leaves a {@link SignInRecord} annotation, which
+ * the staging reporter sums.
  */
 export async function signInWithWallet(page: Page, signedIn: Locator): Promise<number> {
   const login = new LoginPage(page);
+  const faults: Array<SignInRecord['faults'][number]> = [];
+  const annotate = (result: SignInRecord['result']): void => {
+    const record: SignInRecord = { faults, result };
+    test.info().annotations.push({ type: SIGN_IN_ANNOTATION, description: JSON.stringify(record) });
+  };
 
   for (let attempt = 0; ; attempt += 1) {
     if (attempt > 0) await page.reload();
@@ -157,8 +189,7 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
     const failed: string[] = [];
     const record = (response: Response): void => {
       if (response.status() < 400) return;
-      const url = new URL(response.url());
-      failed.push(`${url.host}${url.pathname} ${response.status()}`);
+      failed.push(`${requestTarget(response.url())} ${response.status()}`);
     };
     page.on('response', record);
     const started = Date.now();
@@ -172,10 +203,16 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
     } finally {
       page.off('response', record);
     }
-    if (refusal === null) return Date.now() - started;
+    if (refusal === null) {
+      annotate(faults.length === 0 ? 'signed-in' : 'recovered');
+      return Date.now() - started;
+    }
 
+    const fault = devnetFault(refusal);
     const wait = DEVNET_BACKOFF_MS[attempt];
-    if (wait === undefined || !isDevnetFault(refusal)) {
+    if (fault !== null) faults.push({ fault, attempt: attempt + 1 });
+    if (wait === undefined || fault === null) {
+      annotate(fault === null ? 'refused' : 'exhausted');
       throw new Error(
         `the wallet login was refused on attempt ${attempt + 1}; the refusal read: ` +
           `${refusal}; the refused requests: ${failed.join(', ') || 'none'}`
