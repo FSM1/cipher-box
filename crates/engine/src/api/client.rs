@@ -707,7 +707,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             .request_authed(HttpMethod::Get, &format!("/recovery/{ipns_name}"))
             .await?;
         let response = ok_or_err(response)?;
-        Ok(response.body)
+        Ok(response.into_body())
     }
 
     /// Toggle the account's BYO (bring-your-own IPFS) flag.
@@ -1084,7 +1084,7 @@ mod tests {
         HttpResponse {
             status,
             headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned())],
-            body: serde_json::to_vec(&body).unwrap(),
+            body: serde_json::to_vec(&body).unwrap().into(),
         }
     }
 
@@ -1687,7 +1687,7 @@ mod tests {
         let raw = |status, body: &[u8]| HttpResponse {
             status,
             headers: Vec::new(),
-            body: body.to_vec(),
+            body: body.to_vec().into(),
         };
         for (reply, case) in [
             (raw(404, b""), "a 404 is a missing route, never an answer"),
@@ -2337,7 +2337,7 @@ mod tests {
         HttpResponse {
             status: 201,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         }
     }
 

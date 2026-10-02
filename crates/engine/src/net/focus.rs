@@ -504,7 +504,7 @@ mod tests {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: self.head_block.clone(),
+                body: self.head_block.clone().into(),
             });
             let (events, mut rx) = mpsc::unbounded();
             let report = block_on(

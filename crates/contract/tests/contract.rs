@@ -987,7 +987,7 @@ async fn fetch_block(cid: &str) -> Vec<u8> {
         response.status, 200,
         "the gateway serves the pinned block at {cid}"
     );
-    response.body
+    response.into_body()
 }
 
 /// Hosted ingress pins under the **caller-computed** content address

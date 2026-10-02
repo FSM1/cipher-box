@@ -2677,7 +2677,7 @@ mod report_tests {
                     Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body,
+                        body: body.into(),
                     })
                 },
             ))

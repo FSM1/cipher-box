@@ -139,7 +139,7 @@ fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
         return Ok(HttpResponse {
             status: 413,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
     }
     let entries: Vec<serde_json::Value> =
@@ -154,9 +154,9 @@ fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
         status: if over_cap { 400 } else { 200 },
         headers: Vec::new(),
         body: if over_cap {
-            registry_batch_refused()
+            registry_batch_refused().into()
         } else {
-            Vec::new()
+            Vec::new().into()
         },
     })
 }
@@ -426,7 +426,9 @@ impl Blocks {
         Ok(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: format!("{{\"Key\":\"{cid}\",\"Size\":0}}\n").into_bytes(),
+            body: format!("{{\"Key\":\"{cid}\",\"Size\":0}}\n")
+                .into_bytes()
+                .into(),
         })
     }
 
@@ -439,7 +441,7 @@ impl Blocks {
             Ok(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body,
+                body: body.into(),
             })
         };
         let url = &request.url;
@@ -475,7 +477,9 @@ impl Blocks {
             return Ok(HttpResponse {
                 status: 404,
                 headers: Vec::new(),
-                body: br#"{"statusCode":404,"message":"No cached record for this name"}"#.to_vec(),
+                body: (br#"{"statusCode":404,"message":"No cached record for this name"}"#
+                    .to_vec())
+                .into(),
             });
         }
         // The auth handshake, for a scenario that runs against a configured API
@@ -532,7 +536,7 @@ impl Blocks {
                 return Ok(HttpResponse {
                     status: 400,
                     headers: Vec::new(),
-                    body,
+                    body: body.into(),
                 });
             }
             return register_reply(request.body.as_deref().map(Vec::as_slice));
@@ -542,7 +546,7 @@ impl Blocks {
                 return Ok(HttpResponse {
                     status: 503,
                     headers: Vec::new(),
-                    body: Vec::new(),
+                    body: Vec::new().into(),
                 });
             }
             // The registry answers a retire with what it deleted; the count is

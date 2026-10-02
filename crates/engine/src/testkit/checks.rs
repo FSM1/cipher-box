@@ -172,7 +172,7 @@ fn provider_family() -> RejectFamily {
     rejected.enqueue_response(HttpResponse {
         status: 401,
         headers: Vec::new(),
-        body: Vec::new(),
+        body: Vec::new().into(),
     });
     vectors.push(probed("provider-that-refused-the-bearer", &rejected));
 
@@ -181,7 +181,7 @@ fn provider_family() -> RejectFamily {
         status: 200,
         headers: Vec::new(),
         // Past the provider-response cap, so the probe reads no verdict at all.
-        body: vec![b'{'; 64 * 1024 + 1],
+        body: vec![b'{'; 64 * 1024 + 1].into(),
     });
     vectors.push(probed("answer-past-the-provider-response-cap", &flooding));
 
@@ -216,7 +216,7 @@ fn provider_family() -> RejectFamily {
     mismatched.enqueue_response(HttpResponse {
         status: 200,
         headers: Vec::new(),
-        body: format!("{{\"Key\":\"{}\"}}", encode_content_cid_str(&stored)).into_bytes(),
+        body: (format!("{{\"Key\":\"{}\"}}", encode_content_cid_str(&stored)).into_bytes()).into(),
     });
     vectors.push(placed(
         "provider-that-stored-another-address",

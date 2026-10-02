@@ -216,7 +216,9 @@ fn a_started_engine_serves_the_nonce_from_its_api_client() {
     device.http.enqueue_response(HttpResponse {
         status: 200,
         headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
-        body: br#"{"nonce":"a1b2c3d4e5f60718","expiresAt":"2026-01-01T00:00:00Z"}"#.to_vec(),
+        body: br#"{"nonce":"a1b2c3d4e5f60718","expiresAt":"2026-01-01T00:00:00Z"}"#
+            .to_vec()
+            .into(),
     });
 
     assert_eq!(

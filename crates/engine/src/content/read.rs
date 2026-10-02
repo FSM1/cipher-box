@@ -348,7 +348,7 @@ pub async fn read_block(
         }
         // Every 2xx body is verified before it can be returned.
         match verify_cid(expected_cid, &response.body) {
-            Ok(()) => return Ok(response.body),
+            Ok(()) => return Ok(response.into_body()),
             Err(violation) => mismatch = Some(violation),
         }
     }
@@ -502,7 +502,7 @@ mod tests {
         HttpResponse {
             status: 200,
             headers: vec![("Content-Type".into(), RAW_BLOCK.into())],
-            body,
+            body: body.into(),
         }
     }
 
@@ -749,7 +749,7 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 503,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
         http.enqueue_response(raw_response(leaf.sealed.clone()));
 
@@ -855,12 +855,12 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 502,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
         http.enqueue_response(HttpResponse {
             status: 504,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
 
         let err = block_on(read_block(

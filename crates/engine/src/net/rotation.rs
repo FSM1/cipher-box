@@ -6034,21 +6034,23 @@ mod tests {
                     return Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body: format!(r#"{{"cid":"{cid}","size":{size}}}"#).into_bytes(),
+                        body: format!(r#"{{"cid":"{cid}","size":{size}}}"#)
+                            .into_bytes()
+                            .into(),
                     });
                 }
                 if request.url.ends_with("/registry/retire") {
                     return Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body: br#"{"retired":1,"unpinned":0}"#.to_vec(),
+                        body: br#"{"retired":1,"unpinned":0}"#.to_vec().into(),
                     });
                 }
                 if request.url.contains("/registry/") {
                     return Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body: Vec::new(),
+                        body: Vec::new().into(),
                     });
                 }
                 match blocks
@@ -6059,7 +6061,7 @@ mod tests {
                     Some(block) => Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body: block.clone(),
+                        body: block.clone().into(),
                     }),
                     None => Err(SeamError::new("no such block")),
                 }

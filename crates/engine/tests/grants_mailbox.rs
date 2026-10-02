@@ -1766,7 +1766,7 @@ fn json_ok(body: &[u8]) -> HttpResponse {
     HttpResponse {
         status: 200,
         headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
-        body: body.to_vec(),
+        body: body.to_vec().into(),
     }
 }
 

@@ -10048,7 +10048,7 @@ mod tests {
                 .enqueue_response(crate::seams::HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: block.clone(),
+                    body: block.clone().into(),
                 });
         }
         let drain = harness.drain();
@@ -10394,7 +10394,7 @@ mod tests {
                 Some(block) => Ok(crate::seams::HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: block.clone(),
+                    body: block.clone().into(),
                 }),
                 None => Err(crate::seams::SeamError::new("no such block")),
             })
@@ -11317,7 +11317,7 @@ mod tests {
                 Ok(HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: head_block.clone(),
+                    body: head_block.clone().into(),
                 })
             })
         });

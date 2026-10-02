@@ -13480,7 +13480,7 @@ mod tests {
         HttpResponse {
             status,
             headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
-            body: serde_json::to_vec(&body).unwrap(),
+            body: serde_json::to_vec(&body).unwrap().into(),
         }
     }
 
@@ -17546,7 +17546,7 @@ mod tests {
             HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: head_block.to_vec(),
+                body: head_block.to_vec().into(),
             }
         }
 

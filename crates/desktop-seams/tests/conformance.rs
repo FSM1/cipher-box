@@ -21,7 +21,7 @@ use cipherbox_desktop_seams::{
 };
 use cipherbox_engine::seams::{
     CappedFetchError, CredentialStore, FloorStore, Http, HttpCredentials, HttpMethod, HttpRequest,
-    RecordTransport, SeamResult, StagingStore,
+    HttpResponse, RecordTransport, SeamResult, StagingStore,
 };
 use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::testkit::conformance::staging_store::Backing;
@@ -743,7 +743,7 @@ async fn reqwest_http_round_trips_request_and_response() {
         .expect("transport-level success");
 
     assert_eq!(response.status, 200);
-    assert_eq!(response.body, b"request-payload");
+    assert_eq!(*response.body, b"request-payload");
     assert!(
         response
             .headers
@@ -848,7 +848,34 @@ async fn reqwest_http_capped_fetch_admits_a_chunked_body_at_the_cap() {
         .expect("the cap is inclusive");
 
     assert_eq!(response.status, 200);
-    assert_eq!(response.body, vec![b'x'; 64]);
+    assert_eq!(response.body, vec![b'x'; 64].into());
+}
+
+/// A response body can carry a credential (the refresh token a rotation
+/// returns), so both reads hand it over in a buffer that wipes on drop. The
+/// chunked body has no `Content-Length`, so the capped read grows its buffer
+/// across the chunks.
+#[tokio::test]
+async fn reqwest_http_hands_the_response_body_over_in_a_wiping_buffer() {
+    fn wiping(response: &HttpResponse) -> &Zeroizing<Vec<u8>> {
+        &response.body
+    }
+    const LEN: usize = 300 * 1024;
+    let server = MockServer::start();
+    let http = ReqwestHttp::new().expect("client builds");
+
+    let buffered = http
+        .send(stream_request(&server, LEN))
+        .await
+        .expect("transport-level success");
+    let capped = http
+        .send_capped(stream_request(&server, LEN), LEN)
+        .await
+        .expect("the cap is inclusive");
+
+    for response in [&buffered, &capped] {
+        assert_eq!(**wiping(response), vec![b'x'; LEN]);
+    }
 }
 
 fn stream_request(server: &MockServer, bytes: usize) -> HttpRequest {

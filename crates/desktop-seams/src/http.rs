@@ -5,6 +5,7 @@ use core::time::Duration;
 use cipherbox_engine::seams::{
     CappedFetchError, Http, HttpMethod, HttpRequest, HttpResponse, SeamError, SeamResult,
 };
+use zeroize::Zeroizing;
 
 /// Plain HTTP for the hand-written API client, the trustless gateway read
 /// path, and BYO providers (blueprint/engine.md "Http", desktop column).
@@ -96,12 +97,13 @@ impl Http for ReqwestHttp {
         let body = response
             .bytes()
             .await
-            .map_err(|err| SeamError::new(format!("http body: {err}")))?
-            .to_vec();
+            .map_err(|err| SeamError::new(format!("http body: {err}")))?;
+        // `Vec::from` takes over the buffer that reqwest filled when it owns it
+        // alone, and copies it only when it does not.
         Ok(HttpResponse {
             status,
             headers,
-            body,
+            body: Zeroizing::new(Vec::from(body)),
         })
     }
 
@@ -127,7 +129,10 @@ impl Http for ReqwestHttp {
             }
         }
 
-        let mut body = Vec::new();
+        let declared = response
+            .content_length()
+            .and_then(|declared| usize::try_from(declared).ok());
+        let mut body = Zeroizing::new(Vec::with_capacity(declared.unwrap_or(0)));
         while let Some(chunk) = response.chunk().await.map_err(|err| {
             CappedFetchError::Transport(SeamError::new(format!("http body: {err}")))
         })? {
@@ -137,7 +142,7 @@ impl Http for ReqwestHttp {
                     limit: max_bytes,
                 });
             }
-            body.extend_from_slice(&chunk);
+            append_wiping(&mut body, &chunk);
         }
 
         Ok(HttpResponse {
@@ -146,6 +151,19 @@ impl Http for ReqwestHttp {
             body,
         })
     }
+}
+
+/// Append `chunk` to `body`. A `Vec` that grows frees its old buffer unwiped,
+/// so a growth moves the bytes into a new wiping buffer and drops the old one
+/// through its wipe.
+fn append_wiping(body: &mut Zeroizing<Vec<u8>>, chunk: &[u8]) {
+    let needed = body.len() + chunk.len();
+    if needed > body.capacity() {
+        let mut grown = Zeroizing::new(Vec::with_capacity(needed.max(body.capacity() * 2)));
+        grown.extend_from_slice(body);
+        *body = grown;
+    }
+    body.extend_from_slice(chunk);
 }
 
 fn map_method(method: HttpMethod) -> reqwest::Method {

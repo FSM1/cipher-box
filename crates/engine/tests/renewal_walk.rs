@@ -654,7 +654,9 @@ fn a_refused_registration_keeps_the_cursor_for_the_next_pass() {
                 return Ok(HttpResponse {
                     status: 503,
                     headers: Vec::new(),
-                    body: b"{\"statusCode\":503,\"message\":\"unavailable\"}".to_vec(),
+                    body: b"{\"statusCode\":503,\"message\":\"unavailable\"}"
+                        .to_vec()
+                        .into(),
                 });
             }
             blocks.reply(request)
@@ -937,7 +939,9 @@ fn a_4xx_registration_refusal_moves_the_cursor_at_once() {
                 return Ok(HttpResponse {
                     status: 409,
                     headers: Vec::new(),
-                    body: b"{\"statusCode\":409,\"message\":\"conflict\"}".to_vec(),
+                    body: b"{\"statusCode\":409,\"message\":\"conflict\"}"
+                        .to_vec()
+                        .into(),
                 });
             }
             blocks.reply(request)
@@ -1085,18 +1089,18 @@ fn a_401_after_the_refresh_keeps_the_cursor_for_the_next_pass() {
                 return Ok(HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: format!(
+                    body: (format!(
                         r#"{{"accessToken":"jwt-1","refreshToken":"{}","acceleratorToken":"gw-1"}}"#,
                         "a".repeat(64)
                     )
-                    .into_bytes(),
+                    .into_bytes()).into(),
                 });
             }
             if registers(request, &key) && refusing.load(Ordering::SeqCst) {
                 return Ok(HttpResponse {
                     status: 401,
                     headers: Vec::new(),
-                    body: b"{\"statusCode\":401,\"message\":\"unauthorized\"}".to_vec(),
+                    body: b"{\"statusCode\":401,\"message\":\"unauthorized\"}".to_vec().into(),
                 });
             }
             blocks.reply(request)

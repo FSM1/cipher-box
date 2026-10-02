@@ -647,7 +647,7 @@ mod tests {
         HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: b"{}".to_vec(),
+            body: b"{}".to_vec().into(),
         }
     }
 
@@ -709,7 +709,7 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 401,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
         let err = block_on(test_connection(
             &config(ByoKind::Psa, Some("bad")),
@@ -918,7 +918,9 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: format!("{{\"Key\":\"{address}\",\"Size\":17}}\n").into_bytes(),
+            body: format!("{{\"Key\":\"{address}\",\"Size\":17}}\n")
+                .into_bytes()
+                .into(),
         });
         block_on(place_block(
             &config(ByoKind::Kubo, Some("tok")),
@@ -969,7 +971,7 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: format!("{{\"Key\":\"{address}\"}}").into_bytes(),
+            body: format!("{{\"Key\":\"{address}\"}}").into_bytes().into(),
         });
         block_on(place_block(
             &config(ByoKind::Kubo, None),
@@ -1006,7 +1008,7 @@ mod tests {
             http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: body.as_bytes().to_vec(),
+                body: body.as_bytes().to_vec().into(),
             });
             assert_eq!(
                 block_on(place_block(
@@ -1066,7 +1068,7 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 507,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
         assert_eq!(
             block_on(place_block(
@@ -1163,7 +1165,7 @@ mod tests {
         let oversized = || HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: vec![b'{'; MAX_PROVIDER_RESPONSE_BYTES + 1],
+            body: vec![b'{'; MAX_PROVIDER_RESPONSE_BYTES + 1].into(),
         };
         let block = b"sealed leaf bytes".to_vec();
         let cid = leaf(&block);

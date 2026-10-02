@@ -79,12 +79,11 @@ impl Http for ReqwestHttp {
         let body = response
             .bytes()
             .await
-            .map_err(|error| SeamError::new(format!("reqwest body: {error}")))?
-            .to_vec();
+            .map_err(|error| SeamError::new(format!("reqwest body: {error}")))?;
         Ok(HttpResponse {
             status,
             headers,
-            body,
+            body: Zeroizing::new(Vec::from(body)),
         })
     }
 }
