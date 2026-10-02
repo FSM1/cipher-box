@@ -113,8 +113,19 @@ bytes (FSM1/cipher-box-next#28 D2).
   adoption gate; only gate-passing records touch the snapshot. Cold-resolve
   tails (~11 s median, up to ~60 s) are tolerated as background reconciliation.
   At one sequence, the fan-out resolve (`fanout::scan`) and the last-known-good
-  keeper (`keep_newest_last_known_good`) take the record with the later EOL,
-  so a real write wins over a renewal walk's re-signature (ADR 0061 D3 step 7).
+  keeper (`keep_newest_last_known_good`) take one record by a total order: the
+  later EOL wins, so a real write wins over a renewal walk's re-signature
+  (ADR 0061 D3 step 7), then the higher signed `data` (ADR 0066 D2). A record
+  is its signed `data`, so a copy with an unsigned field added is the same
+  record. Another value at the pick's sequence that the fan-out serves and
+  that passes the gate at the floor, or that the snapshot cache holds, is a
+  same-sequence fork; a record of the pick's own value is none. The vault root
+  resolve, whether it adopts or reads at the floor, the gated child resolve,
+  and the root admit of the boundary walk and the renewal walk report it
+  beside their outcome, never as a trust violation: the reader paints the
+  served pick, the served record replaces a cached copy at its sequence, and
+  the session sends one `sameSequenceFork` event for each name and sequence,
+  the boot read included (ADR 0066 D1, D2).
   The keeper can then hold the drain's own losing record, so at a split at the
   floor the drain rebases onto a gated record of the scope root, or of a
   folder the head op writes, on which its head op does not read as applied.
@@ -142,7 +153,12 @@ bytes (FSM1/cipher-box-next#28 D2).
   walk** (ADR 0061 D1 to D4), which reaches every other name of the vault. A
   session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
-  set. The API republisher (~12 h inventory walk) re-PUTs the same bytes and
+  set. The renewal walk holds back the renewal of a name the endpoints serve
+  forked while more than 30 days of its EOL are left, because a record at
+  `S + 1` buries the side the order did not pick, and sends `RenewalFailed`
+  for it; inside 30 days the walk and the renewal set renew over the fork, so
+  liveness wins (ADR 0066 D3).
+  The API republisher (~12 h inventory walk) re-PUTs the same bytes and
   extends no validity; it backstops dormant vaults only — no client depends on
   the background re-PUT loop, and no client resolve path ever touches the API's
   record cache (FSM1/cipher-box-next#24 D3).
@@ -1747,10 +1763,11 @@ The engine exposes one async command-and-event surface, designed to be wrapped,
 not extended: commands (the intent ops, grant/rotation/share actions, the invite
 preview of ADR 0028 C2, auth, manual refresh) and an event stream out (snapshot
 updates, staleness transitions, withheld-update escalations, dead-letters,
-attributable abuse events). Desktop calls it directly in the Tauri process; web
-wraps it via `crates/wasm` bindings inside a dedicated worker, with the RPC
-facade and tab leadership owned by `packages/client` (FSM1/cipher-box-next#28
-D3/D4). The engine's contract is only this: one live instance is the single
+attributable abuse events, and same-sequence fork events that carry the
+routing key alone, per ADR 0066). Desktop calls it directly in the Tauri
+process; web wraps it via `crates/wasm` bindings inside a dedicated worker,
+with the RPC facade and tab leadership owned by `packages/client`
+(FSM1/cipher-box-next#28 D3/D4). The engine's contract is only this: one live instance is the single
 writer, and every trust decision already happened below the facade — hosts
 render, they never decide.
 

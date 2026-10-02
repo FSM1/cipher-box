@@ -6,14 +6,15 @@ use core::future::poll_fn;
 use core::task::{Poll, Waker};
 use std::collections::BTreeMap;
 
-use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 
-use super::eol::eol_is_later;
+use super::eol::ranks_above;
+use super::fork::verified;
 use crate::seams::{SeamError, SnapshotCache};
 
 /// Leave `record_bytes`, a gate pass for `name`, as last-known-good unless the
-/// cached copy already sits above its sequence, or at it with an EOL no earlier
-/// (ADR 0061 D3 step 7).
+/// cached copy already sits above its sequence, or at it and does not rank
+/// below it ([`ranks_above`]).
 ///
 /// Every path that caches a name's record calls this **before** it moves that
 /// name's floor: a read that finds no source opens the cached copy at the
@@ -27,26 +28,31 @@ pub(crate) async fn keep_newest_last_known_good<S: SnapshotCache>(
     name: &IpnsName,
     record_bytes: &[u8],
 ) -> Result<(), SeamError> {
-    let key = name.as_str().as_bytes();
-    let _writing = NameLock::acquire(key).await;
-    let cached = snapshot_cache.get(key).await?;
-    if cached.as_deref() == Some(record_bytes) {
-        return Ok(());
-    }
-    let held = cached.and_then(|cached| verified_rank(name, &cached));
-    if let Some((held_sequence, held_eol)) = held {
-        let keep = match &verified_rank(name, record_bytes) {
-            None => true,
-            Some((sequence, eol)) => {
-                held_sequence > *sequence
-                    || (held_sequence == *sequence && !eol_is_later(eol, &held_eol))
-            }
-        };
-        if keep {
-            return Ok(());
-        }
-    }
-    snapshot_cache.put(key, record_bytes).await
+    keep_unless(snapshot_cache, name, record_bytes, |held, new| {
+        held.sequence > new.sequence
+            || (held.sequence == new.sequence
+                && !ranks_above((&new.validity, &new.data), (&held.validity, &held.data)))
+    })
+    .await
+    .map(drop)
+}
+
+/// [`keep_newest_last_known_good`] for the record the endpoints serve to a
+/// read at the sequence floor. A cached copy at that sequence is never the
+/// pick: the network is canonical and the cache an accelerator (ADR 0066 D2),
+/// so only a copy above the sequence stays.
+///
+/// Answers the copy the cache held, the evidence of a fork that only the
+/// cache saw.
+pub(crate) async fn keep_served_last_known_good<S: SnapshotCache>(
+    snapshot_cache: &S,
+    name: &IpnsName,
+    record_bytes: &[u8],
+) -> Result<Option<Vec<u8>>, SeamError> {
+    keep_unless(snapshot_cache, name, record_bytes, |held, new| {
+        held.sequence > new.sequence
+    })
+    .await
 }
 
 /// Leave `record_bytes` as `name`'s last-known-good, then run `commit`, the
@@ -62,12 +68,30 @@ pub(crate) async fn keep_then_commit<S: SnapshotCache, T>(
     commit.await
 }
 
-/// A verified record's sequence and signed EOL, the two keys it ranks by.
-fn verified_rank(name: &IpnsName, record_bytes: &[u8]) -> Option<(u64, Vec<u8>)> {
-    IpnsRecord::unmarshal(record_bytes)
-        .and_then(|record| record.verify(name))
-        .ok()
-        .map(|verified| (verified.sequence, verified.validity))
+/// Put `record_bytes` under the name's lock unless the cache holds the same
+/// signed record, or `keep` holds the verified cached copy over it. A record
+/// that does not verify never displaces one that does. Answers the cached
+/// copy.
+async fn keep_unless<S: SnapshotCache>(
+    snapshot_cache: &S,
+    name: &IpnsName,
+    record_bytes: &[u8],
+    keep: impl FnOnce(&VerifiedRecord, &VerifiedRecord) -> bool,
+) -> Result<Option<Vec<u8>>, SeamError> {
+    let key = name.as_str().as_bytes();
+    let _writing = NameLock::acquire(key).await;
+    let cached = snapshot_cache.get(key).await?;
+    if cached.as_deref() == Some(record_bytes) {
+        return Ok(cached);
+    }
+    let held = cached.as_deref().and_then(|cached| verified(name, cached));
+    let kept = held.is_some_and(|held| {
+        verified(name, record_bytes).is_none_or(|new| held.data == new.data || keep(&held, &new))
+    });
+    if !kept {
+        snapshot_cache.put(key, record_bytes).await?;
+    }
+    Ok(cached)
 }
 
 std::thread_local! {
@@ -117,6 +141,8 @@ mod tests {
     use core::cell::Cell;
     use core::pin::pin;
     use core::task::{Context, Waker};
+
+    use cipherbox_core::ipns::IpnsRecord;
 
     use super::*;
     use crate::net::eol;
@@ -201,6 +227,69 @@ mod tests {
         );
     }
 
+    /// At one sequence and one EOL, the keeper holds the higher signed `data`,
+    /// in whichever order the two records arrive (ADR 0066 D2).
+    #[test]
+    fn at_one_sequence_and_one_eol_the_keeper_takes_the_higher_signed_data() {
+        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[7u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let eol = eol::eol_from(UnixMillis(9_000_000));
+        let mut records = [
+            IpnsRecord::create_v2(&signer, b"/ipfs/one", 3, 1, &eol).marshal(),
+            IpnsRecord::create_v2(&signer, b"/ipfs/two", 3, 1, &eol).marshal(),
+        ];
+        records.sort_by_key(|record| verified(&name, record).map(|record| record.data));
+        let [lower, higher] = records;
+        let key = name.as_str().as_bytes();
+
+        for order in [[&lower, &higher], [&higher, &lower]] {
+            let cache = InMemorySnapshotCache::default();
+            for record in order {
+                block_on(keep_newest_last_known_good(&cache, &name, record)).unwrap();
+            }
+            assert_eq!(cache.peek(key).as_ref(), Some(&higher));
+        }
+    }
+
+    /// A read at the floor leaves the served record as last-known-good over a
+    /// cached copy at its sequence, whichever ranks higher, and keeps a cached
+    /// copy above it.
+    #[test]
+    fn a_read_at_the_floor_leaves_the_served_record_over_a_cached_copy_at_its_sequence() {
+        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[7u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let now = UnixMillis(9_000_000);
+        let later = IpnsRecord::create_v2(&signer, b"/ipfs/one", 3, 1, &eol::eol_from(now));
+        let earlier =
+            IpnsRecord::create_v2(&signer, b"/ipfs/two", 3, 1, &eol::renewal_eol_from(now));
+        let above = IpnsRecord::create_v2(&signer, b"/ipfs/three", 4, 1, &eol::eol_from(now));
+        let key = name.as_str().as_bytes();
+        let cache = InMemorySnapshotCache::default();
+
+        block_on(cache.put(key, &later.marshal())).unwrap();
+        let held = block_on(keep_served_last_known_good(
+            &cache,
+            &name,
+            &earlier.marshal(),
+        ))
+        .unwrap();
+        assert_eq!(
+            held,
+            Some(later.marshal()),
+            "it answers the copy it replaced"
+        );
+        assert_eq!(cache.peek(key), Some(earlier.marshal()));
+
+        block_on(cache.put(key, &above.marshal())).unwrap();
+        block_on(keep_served_last_known_good(
+            &cache,
+            &name,
+            &earlier.marshal(),
+        ))
+        .unwrap();
+        assert_eq!(cache.peek(key), Some(above.marshal()));
+    }
+
     /// Two gate passes for one name interleave: the pass that read sequence 6
     /// reads the cache first, and the pass that read 7 runs while that read is
     /// parked. The older pass then finishes last, and the newer copy stays.
@@ -224,16 +313,16 @@ mod tests {
         cache.release();
         assert!(matches!(
             older_pass.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(()))
+            Poll::Ready(Ok(_))
         ));
         if newer_done.is_pending() {
             newer_done = newer_pass.as_mut().poll(&mut cx);
         }
-        assert!(matches!(newer_done, Poll::Ready(Ok(()))));
+        assert!(matches!(newer_done, Poll::Ready(Ok(_))));
 
         let cached = cache.inner.peek(name.as_str().as_bytes());
         assert_eq!(
-            cached.and_then(|cached| verified_rank(&name, &cached).map(|(sequence, _)| sequence)),
+            cached.and_then(|cached| verified(&name, &cached).map(|record| record.sequence)),
             Some(7)
         );
     }

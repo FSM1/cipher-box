@@ -22,7 +22,7 @@ use futures_channel::mpsc;
 use cipherbox_core::content::{encode_content_cid_str, is_wellformed_content_cid};
 use cipherbox_core::error::TrustViolation;
 use cipherbox_core::hex::lower as hex_lower;
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
@@ -50,7 +50,8 @@ use super::author::{
     author_scope_root_with_section, report_carried_cut,
 };
 use super::child::{ChildAdopter, LaggingAnchor, LaggingRead, lagging_epoch, open_under_anchor};
-use super::last_known_good::keep_then_commit;
+use super::fork::{Fork, cached_fork, fork_of, served_fork};
+use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::pointer_fetch::{
     ConsultedPointer, PointerConsult, PointerConsultError, RecordPointerFetch,
@@ -84,7 +85,8 @@ use crate::grants::{
     recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
 use crate::net::fanout::{
-    FanoutRecord, fanout_get_answered, fanout_get_classified, fanout_get_verify,
+    FanoutRecord, fanout_get_answered, fanout_get_classified, fanout_get_tied,
+    fanout_get_tied_classified, fanout_get_verify,
 };
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
@@ -945,6 +947,38 @@ async fn gated_root_cached<H: Http, F: FloorStore, S: SnapshotCache>(
     .map_err(|_| RootGateVerdict::Unavailable)?
 }
 
+/// [`gated_root_cached`] for a read that can meet a same-sequence fork (ADR
+/// 0066 D1): a tie of `pick` that gates at the floor the pass left, or another
+/// record the cache held at its sequence.
+async fn gated_root_forked<H: Http, F: FloorStore, S: SnapshotCache>(
+    adopter: &RootAdopter<'_, H, F>,
+    snapshot_cache: &S,
+    name: &IpnsName,
+    pick: &VerifiedRecord,
+    record_bytes: &[u8],
+    tied: &[Vec<u8>],
+    expected_child: Option<[u8; 16]>,
+) -> Result<(GatedScopeRoot, Option<Fork>), RootGateVerdict> {
+    let pass = gate_root_pass(adopter, name, record_bytes, expected_child).await?;
+    let cached = keep_served_last_known_good(snapshot_cache, name, record_bytes)
+        .await
+        .map_err(|_| RootGateVerdict::Unavailable)?;
+    let root = pass.commit(adopter).await?;
+    let served = served_fork(name, pick, tied, async |tie| {
+        matches!(
+            gate_root_pass(adopter, name, tie, expected_child).await,
+            Ok(RootPass::AtFloor(_))
+        )
+    })
+    .await;
+    let fork = fork_of(
+        pick,
+        served,
+        cached_fork(name, cached.as_deref(), record_bytes, pick),
+    );
+    Ok((root, fork))
+}
+
 /// The write material a descendant scope root's own write plane runs under.
 pub(crate) struct ScopeWritePlane {
     pub(crate) seed: Zeroizing<[u8; SECRET_LEN]>,
@@ -977,6 +1011,8 @@ pub(crate) struct DescendantScopeRoot {
     /// answers at, and no write plane opened: a write cut that did not finish
     /// (ADR 0063 consequence 8).
     pub(crate) write_cut_unfinished: bool,
+    /// The same-sequence fork the descent read met.
+    pub(crate) fork: Option<Fork>,
 }
 
 /// Why a proved scope root opened no write plane on this pass.
@@ -1429,14 +1465,16 @@ where
             child.scope_id,
         )
         .under_parent_node_seed(parent_node_seed.clone());
-        let (_, record_bytes) = fanout_get_verify(self.transport, &name)
+        let (pick, record_bytes, tied) = fanout_get_tied(self.transport, &name)
             .await
             .ok_or(WalkFailure::Unavailable)?;
-        let gated = gated_root_cached(
+        let (gated, fork) = gated_root_forked(
             &adopter,
             self.snapshot_cache,
             &name,
+            &pick,
             &record_bytes,
+            &tied,
             Some(child.scope_id),
         )
         .await
@@ -1465,6 +1503,7 @@ where
                 read_scope_seed: gated.read_scope_seed,
                 write,
                 write_cut_unfinished,
+                fork,
             },
             grandchildren,
         ))
@@ -1798,6 +1837,8 @@ pub(crate) struct AdmittedScopeRoot {
     pub(crate) read_epoch: u64,
     /// `None` when the root is held keyless.
     pub(crate) write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
+    /// The same-sequence fork the read met (ADR 0066 D3).
+    pub(crate) fork: Option<Fork>,
 }
 
 /// Why the renewal walk admitted no owned scope root.
@@ -1837,23 +1878,29 @@ where
         Some(seed) => adopter.under_parent_node_seed(seed.clone()),
         None => adopter,
     };
-    let record_bytes = match fanout_get_classified(transport, name).await {
-        FanoutRecord::Found(_, record_bytes) => record_bytes,
-        FanoutRecord::Absent => return Err(ScopeRootAdmission::Gone),
-        FanoutRecord::Unavailable(_) => return Err(ScopeRootAdmission::Unavailable),
+    let (pick, record_bytes, tied) = match fanout_get_tied_classified(transport, name).await {
+        (Some((pick, record_bytes, tied)), _) => (pick, record_bytes, tied),
+        (None, true) => return Err(ScopeRootAdmission::Gone),
+        (None, false) => return Err(ScopeRootAdmission::Unavailable),
     };
-    let gated = gated_root_cached(&adopter, snapshot_cache, name, &record_bytes, None)
-        .await
-        .map_err(|verdict| match verdict {
-            // A rotation publishes before it raises the floor, so a root below
-            // its own floor is a stale read that converges, as for `walk_verdict`.
-            RootGateVerdict::Unavailable | RootGateVerdict::Superseded => {
-                ScopeRootAdmission::Unavailable
-            }
-            RootGateVerdict::Rejected | RootGateVerdict::NotResealable => {
-                ScopeRootAdmission::Rejected
-            }
-        })?;
+    let (gated, fork) = gated_root_forked(
+        &adopter,
+        snapshot_cache,
+        name,
+        &pick,
+        &record_bytes,
+        &tied,
+        None,
+    )
+    .await
+    .map_err(|verdict| match verdict {
+        // A rotation publishes before it raises the floor, so a root below
+        // its own floor is a stale read that converges, as for `walk_verdict`.
+        RootGateVerdict::Unavailable | RootGateVerdict::Superseded => {
+            ScopeRootAdmission::Unavailable
+        }
+        RootGateVerdict::Rejected | RootGateVerdict::NotResealable => ScopeRootAdmission::Rejected,
+    })?;
     Ok(AdmittedScopeRoot {
         record_bytes,
         sequence: gated.sequence,
@@ -1861,6 +1908,7 @@ where
         read_scope_seed: gated.read_scope_seed,
         read_epoch: gated.envelope.epoch,
         write_scope_seed: gated.write_scope_seed,
+        fork,
     })
 }
 
@@ -6541,6 +6589,123 @@ mod tests {
             Some(record_for(&CHILD_SCOPE, &child.head_cid_str, 1)),
             "only a gate pass writes the record cache"
         );
+    }
+
+    /// The child root's record at `sequence` pointing at `head_cid_str`, under
+    /// an EOL earlier than [`EOL`], so the staged record stays the pick.
+    fn forked_record_for(scope_id: &[u8; 16], head_cid_str: &str, sequence: u64) -> Vec<u8> {
+        let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, scope_id);
+        let signer = kdf::ipns_keypair(write_seed.as_bytes());
+        IpnsRecord::create_v2(
+            &signer,
+            format!("/ipfs/{head_cid_str}").as_bytes(),
+            sequence,
+            TTL_NANOS,
+            "2098-01-01T00:00:00Z",
+        )
+        .marshal()
+    }
+
+    /// The one-level tree staged and walked once, and a second gate-passing
+    /// body for the child scope root whose head block the plane serves.
+    fn walked_one_level() -> (
+        Harness<InMemoryRecordStore>,
+        InMemorySnapshotCache,
+        OwnerRootFixture,
+        OwnerRootFixture,
+        OwnerRootFixture,
+    ) {
+        let (child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
+        let cache = InMemorySnapshotCache::default();
+        let first = harness.walk(&cache, &root).expect("the vault root gates");
+        assert!(first.iter().all(|scope| scope.fork.is_none()));
+        let other = interior(CHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED, Vec::new());
+        assert_ne!(other.head_cid_str, child.head_cid_str);
+        harness
+            .blocks
+            .lock()
+            .expect("lock")
+            .insert(other.head_cid_str.clone(), other.head_block.clone());
+        (harness, cache, root, child, other)
+    }
+
+    fn forks_of(proved: &[DescendantScopeRoot]) -> Vec<([u8; 16], Option<Fork>)> {
+        proved
+            .iter()
+            .map(|scope| (scope.scope_id, scope.fork))
+            .collect()
+    }
+
+    /// A walk over a tree it already adopted, where one endpoint serves a
+    /// gate-passing child root of another value: the child scope is marked
+    /// forked, and the grandchild is not. A tie of the child's own value is no
+    /// fork.
+    #[test]
+    fn a_walk_marks_a_scope_whose_root_the_endpoints_serve_forked() {
+        let (harness, cache, root, child, other) = walked_one_level();
+        let endpoints = harness.store.endpoints();
+        let served = |head: &str| {
+            harness.store.seed_record(
+                &endpoints[1],
+                child.name.as_str(),
+                forked_record_for(&CHILD_SCOPE, head, 1),
+            );
+            forks_of(&harness.walk(&cache, &root).expect("the vault root gates"))
+        };
+
+        assert_eq!(
+            served(&child.head_cid_str),
+            vec![(CHILD_SCOPE, None), (GRANDCHILD_SCOPE, None)],
+            "a tie of one value"
+        );
+        assert_eq!(
+            served(&other.head_cid_str),
+            vec![
+                (
+                    CHILD_SCOPE,
+                    Some(Fork {
+                        sequence: 1,
+                        served: true
+                    })
+                ),
+                (GRANDCHILD_SCOPE, None)
+            ]
+        );
+    }
+
+    /// The cached copy of a child root is another value that the endpoints do
+    /// not serve: the walk marks that scope forked, leaves the served record
+    /// as last-known-good, and the next walk finds no fork.
+    #[test]
+    fn a_walk_marks_a_scope_whose_cached_root_is_the_other_fork_side() {
+        let (harness, cache, root, child, other) = walked_one_level();
+        block_on(cache.put(
+            child.name.as_str().as_bytes(),
+            &forked_record_for(&CHILD_SCOPE, &other.head_cid_str, 1),
+        ))
+        .expect("cache write");
+
+        let proved = harness.walk(&cache, &root).expect("the vault root gates");
+        assert_eq!(
+            forks_of(&proved),
+            vec![
+                (
+                    CHILD_SCOPE,
+                    Some(Fork {
+                        sequence: 1,
+                        served: false
+                    })
+                ),
+                (GRANDCHILD_SCOPE, None)
+            ]
+        );
+        let again = harness.walk(&cache, &root).expect("the vault root gates");
+        assert!(again.iter().all(|scope| scope.fork.is_none()));
     }
 
     /// The release-active ascent-link requirement: an owner-signed root with no
