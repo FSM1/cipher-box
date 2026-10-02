@@ -198,8 +198,9 @@ jobs:
               ;;
           esac
           KUBO_ARCHIVE="$RUNNER_TEMP/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.${KUBO_FORMAT}"
-          curl -fsSL --retry 3 -o "$KUBO_ARCHIVE" \
-            "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.${KUBO_FORMAT}"
+          curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 \
+            --retry-max-time 300 -o "$KUBO_ARCHIVE" \
+            "https://github.com/ipfs/kubo/releases/download/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.${KUBO_FORMAT}"
           # `shasum` is Perl's, and the Windows runner's bash keeps Git's Perl
           # directory off `PATH`; coreutils' `sha512sum` is the one macOS lacks.
           if command -v sha512sum > /dev/null; then
