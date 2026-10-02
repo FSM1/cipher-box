@@ -1697,10 +1697,10 @@ not extended: commands (the intent ops, grant/rotation/share actions, the invite
 preview of ADR 0028 C2, auth, manual refresh) and an event stream out (snapshot
 updates, staleness transitions, withheld-update escalations, dead-letters,
 attributable abuse events, and same-sequence fork events that carry the
-routing key alone, per ADR 0066). Desktop calls it directly in the Tauri process; web
-wraps it via `crates/wasm` bindings inside a dedicated worker, with the RPC
-facade and tab leadership owned by `packages/client` (FSM1/cipher-box-next#28
-D3/D4). The engine's contract is only this: one live instance is the single
+routing key alone, per ADR 0066). Desktop calls it directly in the Tauri
+process; web wraps it via `crates/wasm` bindings inside a dedicated worker,
+with the RPC facade and tab leadership owned by `packages/client`
+(FSM1/cipher-box-next#28 D3/D4). The engine's contract is only this: one live instance is the single
 writer, and every trust decision already happened below the facade — hosts
 render, they never decide.
 

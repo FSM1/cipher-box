@@ -25,7 +25,7 @@ use zeroize::Zeroizing;
 
 use super::adopter::{LocalHead, assemble_head_envelope, reject};
 use super::fanout::fanout_get_verify;
-use super::fork::{Fork, cached_fork};
+use super::fork::{Fork, cached_fork, fork_of};
 use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
 use super::resolve::{AdoptOutcome, Adopter, GatePass, ResolveOutcome, resolve_gated};
 use crate::content::Gateway;
@@ -447,10 +447,6 @@ where
     let gated = resolve_gated(transport, snapshot_cache, adopter, name, mode)
         .await
         .map_err(unavailable)?;
-    let pick = gated
-        .held_record
-        .as_ref()
-        .map(|(verified, _)| verified.clone());
     let resolved = gated.resolved;
     let mut fork = resolved.fork;
     let lagging = async |record_bytes: &[u8], epoch, fork| {
@@ -502,15 +498,16 @@ where
         let held = keep_served_last_known_good(snapshot_cache, name, &record_bytes)
             .await
             .map_err(unavailable)?;
-        // A forced refresh sees a side only the cache holds here alone.
-        if let Some(pick) = &pick
+        // Under `NoCache` the resolve read no cached copy, so the keeper's
+        // answer is the only evidence of a side the cache holds.
+        if let Some((pick, _)) = &gated.held_record
             && fork.is_none()
-            && cached_fork(name, held.as_deref(), pick)
         {
-            fork = Some(Fork {
-                sequence: pick.sequence,
-                served: false,
-            });
+            fork = fork_of(
+                pick,
+                false,
+                cached_fork(name, held.as_deref(), &record_bytes, pick),
+            );
         }
     }
     Ok(ChildRecord::Admitted(adopted, record_bytes, fork))

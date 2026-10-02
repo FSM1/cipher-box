@@ -12,6 +12,7 @@ use core::task::Poll;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 
 use super::eol::ranks_above;
+use super::fork::verified;
 use crate::seams::{EndpointId, RecordTransport};
 
 /// Hard ceiling on one signed IPNS record fetched from a `/routing/v1`
@@ -365,8 +366,6 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
         };
         match &scan.best {
             Some((current, _)) if verified.sequence == current.sequence => {
-                // One signed `data` is one record, whatever unsigned fields an
-                // endpoint adds to its envelope.
                 let seen =
                     |bytes: &[u8]| signed_data(name, bytes).as_deref() == Some(&verified.data[..]);
                 if verified.data == current.data || scan.tied.iter().any(|tie| seen(tie)) {
@@ -395,10 +394,7 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
 
 /// The signed `data` of `record_bytes`, when it verifies under `name`.
 fn signed_data(name: &IpnsName, record_bytes: &[u8]) -> Option<Vec<u8>> {
-    IpnsRecord::unmarshal(record_bytes)
-        .and_then(|record| record.verify(name))
-        .ok()
-        .map(|verified| verified.data)
+    verified(name, record_bytes).map(|record| record.data)
 }
 
 #[cfg(test)]
@@ -541,10 +537,7 @@ mod tests {
         let name = IpnsName::from_public_key(&signer.verifying_key());
         let record =
             IpnsRecord::create_v2(&signer, b"/ipfs/one", 4, 1, "2099-01-01T00:00:00Z").marshal();
-        let end_of_value = 2 + usize::from(record[1]);
-        let mut copy = record[..end_of_value].to_vec();
-        copy.extend_from_slice(&[0x12, 0x01, 0x00]);
-        copy.extend_from_slice(&record[end_of_value..]);
+        let copy = crate::net::fork::with_unsigned_field(&record);
         assert_ne!(copy, record);
 
         for order in [[&record, &copy], [&copy, &record]] {

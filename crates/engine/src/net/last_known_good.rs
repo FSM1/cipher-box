@@ -6,9 +6,10 @@ use core::future::poll_fn;
 use core::task::{Poll, Waker};
 use std::collections::BTreeMap;
 
-use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
+use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 
 use super::eol::ranks_above;
+use super::fork::verified;
 use crate::seams::{SeamError, SnapshotCache};
 
 /// Leave `record_bytes`, a gate pass for `name`, as last-known-good unless the
@@ -80,6 +81,9 @@ async fn keep_unless<S: SnapshotCache>(
     let key = name.as_str().as_bytes();
     let _writing = NameLock::acquire(key).await;
     let cached = snapshot_cache.get(key).await?;
+    if cached.as_deref() == Some(record_bytes) {
+        return Ok(cached);
+    }
     let held = cached.as_deref().and_then(|cached| verified(name, cached));
     let kept = held.is_some_and(|held| {
         verified(name, record_bytes).is_none_or(|new| held.data == new.data || keep(&held, &new))
@@ -88,12 +92,6 @@ async fn keep_unless<S: SnapshotCache>(
         snapshot_cache.put(key, record_bytes).await?;
     }
     Ok(cached)
-}
-
-fn verified(name: &IpnsName, record_bytes: &[u8]) -> Option<VerifiedRecord> {
-    IpnsRecord::unmarshal(record_bytes)
-        .and_then(|record| record.verify(name))
-        .ok()
 }
 
 std::thread_local! {
@@ -143,6 +141,8 @@ mod tests {
     use core::cell::Cell;
     use core::pin::pin;
     use core::task::{Context, Waker};
+
+    use cipherbox_core::ipns::IpnsRecord;
 
     use super::*;
     use crate::net::eol;

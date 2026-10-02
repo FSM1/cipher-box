@@ -177,7 +177,8 @@ scenario fails the meta-test):
   (`tests/write_plane.rs`); the walk holds a served fork of a file or of the
   vault root back with 45 days left and reports it, renews over it with 25
   days left, and renews over a tie of one value, and the renewal set renews
-  over a fork inside 30 days (`tests/renewal_walk.rs`, `net::liveness`). `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
+  over a fork inside 30 days (`tests/renewal_walk.rs`, `net::liveness`).
+  `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
   wave left at its old name, which nothing renews; `tests/write_plane.rs`
   covers a renewal inside the drain's window, and a lost race on a scope root
   or an interior folder healed after a restart or a re-read.

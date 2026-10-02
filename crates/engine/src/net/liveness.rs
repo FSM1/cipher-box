@@ -368,10 +368,9 @@ where
 
 /// Republish `request`'s name at seq+1 with a fresh 90-day EOL **iff** its
 /// current record is still live but within the renewal window
-/// ([`EOL_RENEW_THRESHOLD`]), a same-sequence fork included (ADR 0066 D3).
-/// Returns `Ok(None)` when the record's EOL is comfortably ahead (no renewal
-/// needed) or when no current record can be resolved to inspect. A lapsed
-/// record is out of scope here — that is revival.
+/// ([`EOL_RENEW_THRESHOLD`]). Returns `Ok(None)` when the record's EOL is
+/// comfortably ahead (no renewal needed) or when no current record can be
+/// resolved to inspect. A lapsed record is out of scope here — that is revival.
 pub async fn eol_republish<T, H, C, F, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,

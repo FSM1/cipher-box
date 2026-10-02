@@ -107,8 +107,8 @@ pub trait Adopter {
 
     /// Whether `record_bytes`, tied with a pick this read already gated, passes
     /// the gate at the durable floor the pick left: only such a tie is the
-    /// other side of a same-sequence fork (ADR 0066 D1). A tie that fails
-    /// accuses nobody here. Moves no floor and caches nothing.
+    /// other side of a same-sequence fork (ADR 0066 D1). Moves no floor and
+    /// caches nothing.
     async fn gates_tie(&self, name: &IpnsName, record_bytes: &[u8]) -> bool {
         matches!(
             self.adopt(name, record_bytes).await,
@@ -234,10 +234,10 @@ pub struct Resolved {
     pub last_known_good: Option<Vec<u8>>,
     /// The gate verdict on the freshest fetched record.
     pub outcome: ResolveOutcome,
-    /// The read-body an own [`ResolveOutcome::Current`] root carries,
-    /// recovered at the floor by the same stages an adopt runs. A quarantine
-    /// release rests on an absence a poll of this session established, so a
-    /// root that resolves `Current` must still paint the base (ADR 0011 D4).
+    /// The read-body an own [`ResolveOutcome::Current`] root carries, recovered
+    /// at the floor by the same stages an adopt runs. A quarantine release rests
+    /// on an absence a poll of this session established, so a root that resolves
+    /// `Current` must still paint the base (ADR 0011 D4).
     pub current_at_floor: Option<Adopted>,
     /// The same-sequence fork the gated record met, which is never a trust
     /// violation (ADR 0066 D1).
@@ -381,7 +381,10 @@ where
                 // The adopt left the floor at the pick, so a tie gates there.
                 let fork = fork_of(
                     &verified,
-                    served_fork(adopter, name, &verified, &tied).await,
+                    served_fork(name, &verified, &tied, async |tie| {
+                        adopter.gates_tie(name, tie).await
+                    })
+                    .await,
                     false,
                 );
                 (
@@ -421,8 +424,11 @@ where
                             };
                             let fork = fork_of(
                                 &verified,
-                                served_fork(adopter, name, &verified, &tied).await,
-                                cached_fork(name, cached.as_deref(), &verified),
+                                served_fork(name, &verified, &tied, async |tie| {
+                                    adopter.gates_tie(name, tie).await
+                                })
+                                .await,
+                                cached_fork(name, cached.as_deref(), &bytes, &verified),
                             );
                             let recovered = material.map(|material| GatedParts {
                                 hold: material
@@ -649,7 +655,7 @@ mod tests {
     use zeroize::Zeroizing;
 
     use super::super::eol;
-    use super::super::fork::Fork;
+    use super::super::fork::{Fork, with_unsigned_field};
     use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
     use crate::net::author::ENVELOPE_V;
     use crate::net::publish::PublishError;
@@ -879,16 +885,6 @@ mod tests {
             .and_then(|record| record.verify(name))
             .expect("the fixture verifies")
             .data
-    }
-
-    /// `record_bytes` with an unsigned field 2 put after field 1: a copy that
-    /// anyone can make without the key, and that still verifies.
-    fn with_unsigned_field(record_bytes: &[u8]) -> Vec<u8> {
-        let end_of_value = 2 + usize::from(record_bytes[1]);
-        let mut copy = record_bytes[..end_of_value].to_vec();
-        copy.extend_from_slice(&[0x12, 0x01, 0x00]);
-        copy.extend_from_slice(&record_bytes[end_of_value..]);
-        copy
     }
 
     /// One resolve at the floor of `name` with `served[i]` on endpoint `i`.

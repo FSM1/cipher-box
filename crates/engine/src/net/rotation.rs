@@ -50,7 +50,7 @@ use super::author::{
     author_scope_root_with_section, report_carried_cut,
 };
 use super::child::{ChildAdopter, LaggingAnchor, LaggingRead, lagging_epoch, open_under_anchor};
-use super::fork::{Fork, cached_fork, fork_of, other_values};
+use super::fork::{Fork, cached_fork, fork_of, served_fork};
 use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::pointer_fetch::{
@@ -947,8 +947,7 @@ async fn gated_root_cached<H: Http, F: FloorStore, S: SnapshotCache>(
 
 /// [`gated_root_cached`] for a read that can meet a same-sequence fork (ADR
 /// 0066 D1): a tie of `pick` that gates at the floor the pass left, or another
-/// record the cache held at its sequence. The served record replaces a cached
-/// copy at its sequence ([`keep_served_last_known_good`]).
+/// record the cache held at its sequence.
 async fn gated_root_forked<H: Http, F: FloorStore, S: SnapshotCache>(
     adopter: &RootAdopter<'_, H, F>,
     snapshot_cache: &S,
@@ -963,17 +962,18 @@ async fn gated_root_forked<H: Http, F: FloorStore, S: SnapshotCache>(
         .await
         .map_err(|_| RootGateVerdict::Unavailable)?;
     let root = pass.commit(adopter).await?;
-    let mut served = false;
-    for tie in other_values(name, pick, tied) {
-        if matches!(
+    let served = served_fork(name, pick, tied, async |tie| {
+        matches!(
             gate_root_pass(adopter, name, tie, expected_child).await,
             Ok(RootPass::AtFloor(_))
-        ) {
-            served = true;
-            break;
-        }
-    }
-    let fork = fork_of(pick, served, cached_fork(name, cached.as_deref(), pick));
+        )
+    })
+    .await;
+    let fork = fork_of(
+        pick,
+        served,
+        cached_fork(name, cached.as_deref(), record_bytes, pick),
+    );
     Ok((root, fork))
 }
 
