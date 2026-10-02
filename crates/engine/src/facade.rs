@@ -2919,6 +2919,14 @@ impl EngineError {
                         .to_owned(),
                 }
             }
+            // The member's own provider is the member's to fix, so the host
+            // shows which check it failed.
+            SettingsPublishError::Publish(RecordPublishError::Placement(e)) => EngineError::Seam {
+                message: format!(
+                    "your own IPFS provider did not take the settings record: {}",
+                    e.check()
+                ),
+            },
             SettingsPublishError::Publish(_) => EngineError::Seam {
                 message: "the settings record did not reach the record plane".to_owned(),
             },
@@ -5357,7 +5365,8 @@ impl<T: SeamTypes> Engine<T> {
                 base_url.unwrap_or_default().to_owned(),
             )
             .with_session_bearers(self.session_bearer.clone(), self.accelerator_bearer.clone())
-            .with_deadlines(self.deadlines),
+            .with_deadlines(self.deadlines)
+            .with_placement(self.state.placement.clone()),
         );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
@@ -9477,6 +9486,15 @@ where {
             .map_err(|e| EngineError::from_settings_publish(SettingsPublishError::Byo(e)))?;
         let observed = sign_above(self.state.placement.borrow().as_ref())
             .map_err(|refusal| EngineError::NoPlacement { refusal })?;
+        // A save with a hosted leg clears the account flag before its head goes
+        // to the hosted store, which refuses a BYO account (ADR 0029 D11).
+        if placement_of(settings).is_ok_and(|placement| placement.has_hosted_leg())
+            && api.quota().await.is_ok_and(|quota| quota.advisory)
+            && api.set_byo(false).await.is_ok()
+        {
+            // The next pre-flight sets the flag again if the save does not land.
+            self.state.byo_reconciled.set(false);
+        }
         let held = match publish_settings_above(
             &self.record_transport,
             api,
