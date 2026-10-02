@@ -9691,23 +9691,20 @@ where {
     fn scoped_to(&self, root: NodeId, nodes: Vec<NodeId>) -> Vec<NodeId> {
         nodes_in_scope(
             &self.state.snapshot.borrow(),
-            &self.navigation_boundaries(),
+            &focus_scope_roots(
+                &self.own_scopes(),
+                &self.state.unproved_scope_roots.borrow(),
+            ),
             root,
             nodes,
         )
     }
 
-    /// The boundaries a navigation leg groups against: the walk's
-    /// ([`focus_scope_roots`]) and this session's own grants, since a
-    /// navigation can land before any walk proves a root the owner just
-    /// minted.
-    fn navigation_boundaries(&self) -> BTreeSet<NodeId> {
-        focus_scope_roots(
-            &own_descendant_scopes(
-                &self.state.descendant_scope_roots,
-                &self.state.minted_scope_roots,
-            ),
-            &self.state.unproved_scope_roots.borrow(),
+    /// This session's [`own_descendant_scopes`].
+    fn own_scopes(&self) -> BTreeSet<NodeId> {
+        own_descendant_scopes(
+            &self.state.descendant_scope_roots,
+            &self.state.minted_scope_roots,
         )
     }
 
@@ -9919,12 +9916,7 @@ where {
         let Some(session) = self.session.as_ref() else {
             return (attempted, true);
         };
-        // A root this session minted is its own before any walk proves it, so
-        // its floors and seed are the owner's (`floor_namespace`).
-        let own = own_descendant_scopes(
-            &self.state.descendant_scope_roots,
-            &self.state.minted_scope_roots,
-        );
+        let own = self.own_scopes();
         let unproved = self.state.unproved_scope_roots.borrow().clone();
         let mut by_scope: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
         {
