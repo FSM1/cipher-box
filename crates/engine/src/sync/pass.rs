@@ -668,6 +668,16 @@ where
             &state.focus.borrow(),
             &focus_scope_ids,
         );
+        // A root this session minted carries a grant section before any walk
+        // proves it, so its own record is no child of the enclosing scope. Its
+        // interior stays on the walk's grouping: an owed interior move leaves
+        // that interior sealed under the enclosing scope.
+        {
+            let minted = state.minted_scope_roots.borrow();
+            for targets in by_scope.values_mut() {
+                targets.folders.retain(|folder| !minted.contains(folder));
+            }
+        }
         // A window whose only folder in view is a scope root groups
         // no folder target of its own, because that root resolves on
         // its pointer leg. Its scope still needs a pass, so the rows

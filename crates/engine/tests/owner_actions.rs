@@ -6002,6 +6002,28 @@ fn a_navigation_right_after_a_grant_reads_a_file_of_the_new_scope() {
     assert_eq!(size, Some(200), "the navigation read the file's version");
 }
 
+/// A tick whose walk does not answer must not read the record of a scope root
+/// the owner just minted as a child of the vault scope.
+#[test]
+fn a_tick_whose_walk_fails_reads_no_new_scope_root_as_a_child() {
+    let mut fx = GrantScenario::new();
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the folder takes the focus");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    events_so_far(&mut fx._events);
+    // The vault root's write plane does not open, so the walk proves no set.
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_for(&floor_label(&write_epoch_floor_key(&SCOPE)));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.owner_device.floor_store.heal_floors();
+
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+}
+
 /// A revoke runs several gated scope-root reads, so its refusal names the read
 /// that refused.
 #[test]
