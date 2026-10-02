@@ -118,14 +118,13 @@ The `Engine simulation tests` job in the **Rust** area of the PR gate blocks the
 
 ## Residuals
 
-**E2 — A restore into a folder of another scope dead-letters. The code and the blueprint disagree,
-and FSM1/cipher-box#2020 tracks the defect.** D9 and ADR 0010 item 4 say that a restore re-seals
-the subtree at the destination scope's current epoch. The code refuses every destination in
-another scope with `Halt::Permanent(CrossingUnauthorable)`, and the facade does not refuse it at
-command time. A node deleted from an unshared scope therefore cannot be restored into a shared
-folder, which is the case ADR 0010 item 4 names. The choice of fix is the owner's: a cross-scope
-restore in the drain, or the rule "a restore lands in the entry's own scope" with a refusal at
-command time.
+**E2 — A restore into a folder of another scope is refused.** D9 and ADR 0010 item 4 say that a
+restore re-seals the subtree at the destination scope's current epoch. The re-seal re-keys in place
+under the entry's own scope, so a node deleted from an unshared scope cannot be restored into a
+shared folder, which is the case ADR 0010 item 4 names. Owner choice on 2026-10-02
+(FSM1/cipher-box#2020): the facade refuses a destination in another scope at command time, and the
+drain halt `CrossingUnauthorable` stays as a defense. The cross-scope re-seal in the drain stays
+open.
 
 **E4 — Owner capture sees only a departure from a folder that this device has rendered.** A
 grantee's unlink from a folder that no owner device refreshes after the unlink is never captured,

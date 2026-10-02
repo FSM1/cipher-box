@@ -77,6 +77,8 @@ when the bin happened to be loaded, so it was advisory.
    re-seals the subtree at that scope's current epoch, whether the scope is shared or not, and an
    individual restore no longer mints a fresh key. A destination in another scope stays open
    (ADR 0043 E2).
+   Amended on 2026-10-02 (owner choice for FSM1/cipher-box#2020): a restore into another scope is
+   refused at command time until the cross-scope re-seal lands.
 5. **A grantee's delete is captured owner-side.** The owner's engine observes the unlink
    (carried-set diff on the poll tick) and adopts the orphan into the bin, re-keying at
    adoption — without the re-key, the deleting grantee keeps the node key.

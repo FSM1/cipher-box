@@ -8,8 +8,11 @@ import { useVaultStorage } from '../providers/VaultStorageProvider';
 import { useBin, type BinVerdict } from '../hooks/useBin';
 import { binRows, type BinRow } from '../vault/binRows';
 
-/** The refusal another destination can repair; no other one can. */
-const TARGET_GONE = 'restoreTargetGone';
+/** The refusals another destination can repair; no other one can. */
+const ANOTHER_FOLDER_CODES: readonly (string | undefined)[] = [
+  'restoreTargetGone',
+  'restoreCrossesScope',
+];
 
 /** The vault's bin, behind `RequireAuth`, over the engine's own bin index. */
 export function BinPage() {
@@ -99,7 +102,7 @@ export function BinPage() {
           rows={rows}
           unestablished={bin?.origin === 'defaults'}
           busy={busy}
-          elsewhere={code === TARGET_GONE ? refused : null}
+          elsewhere={ANOTHER_FOLDER_CODES.includes(code) ? refused : null}
           onRestore={restoreHome}
           onRestoreElsewhere={(row) => openDialog(setRestoring, row)}
           onPurge={(row) => openDialog(setPurging, row)}

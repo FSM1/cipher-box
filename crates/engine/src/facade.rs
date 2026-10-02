@@ -1591,7 +1591,9 @@ pub enum Command {
         node: NodeId,
         /// Where to put it back, or `None` for the folder its bin entry names.
         /// A destination the vault no longer holds is
-        /// [`EngineError::RestoreTargetGone`], so a host can offer another.
+        /// [`EngineError::RestoreTargetGone`], and one in another scope than
+        /// the entry's is [`EngineError::RestoreCrossesScope`], so a host can
+        /// offer another.
         #[cfg_attr(
             feature = "wasm",
             serde(with = "crate::wire::opt_node_id"),
@@ -2759,6 +2761,12 @@ pub enum EngineError {
     /// apart from every other refusal so a host can offer another folder rather
     /// than say the restore failed.
     RestoreTargetGone,
+    /// [`Command::Restore`] named a destination in another scope than the one
+    /// its bin entry was filed under, which includes a default restore whose
+    /// origin folder became a scope root after the delete. A restore re-keys in
+    /// place under the entry's scope (blueprint/engine.md "Restore, purge, and
+    /// expiry"), so a host offers a folder of that scope instead.
+    RestoreCrossesScope,
     /// [`Command::Restore`] or [`Command::Purge`] named a node the owner's bin
     /// index holds no entry for. Neither node nor bin is at fault: the entry
     /// left, most often because another device already acted on it.
@@ -3180,6 +3188,10 @@ impl fmt::Display for EngineError {
             EngineError::RestoreTargetGone => {
                 f.write_str("the folder this item came from is gone; choose another")
             }
+            EngineError::RestoreCrossesScope => f.write_str(
+                "this item can only go back into a folder shared the same way as the one it came \
+                 from; choose another",
+            ),
             EngineError::NotBinned => f.write_str("this item is not in the bin"),
             EngineError::NotAFolder => f.write_str("not a folder"),
             EngineError::NotAFile => f.write_str("not a file"),
@@ -6815,7 +6827,11 @@ where {
                     return Err(EngineError::RestoreTargetGone);
                 }
                 refuse_outside_vault(&rendered, into)?;
+                self.refuse_before_the_boundary_walk()?;
                 let lands_in = scope_of(&rendered, into, &self.relocation_scope_roots());
+                if lands_in != NodeId(entry.scope_id) {
+                    return Err(EngineError::RestoreCrossesScope);
+                }
                 let leaving: Vec<_> = self
                     .owed_moves()
                     .await?
@@ -11740,6 +11756,26 @@ where {
                 .map(NodeId),
         );
         roots
+    }
+
+    /// Refuse a restore until this session's boundary walk has landed, since a
+    /// restore must name its destination's scope: before the walk, no scope
+    /// root below the vault is known and every node reads as the vault root's.
+    /// A rejected walk refuses for good, as [`Self::relocation_anchors`] does.
+    fn refuse_before_the_boundary_walk(&self) -> Result<(), EngineError> {
+        if self.state.boundary_walk_rejected.get() {
+            return Err(EngineError::TrustViolation {
+                message: "a scope root below this vault failed the adoption gate, so this \
+                          session cannot name the scope of a restore destination"
+                    .to_owned(),
+            });
+        }
+        if !self.state.boundary_walk_landed.get() {
+            return Err(EngineError::Seam {
+                message: "boundary-walk-pending".to_owned(),
+            });
+        }
+        Ok(())
     }
 
     /// What a relocation op anchors on: the source parent, the target's base
