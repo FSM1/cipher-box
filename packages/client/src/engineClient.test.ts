@@ -310,6 +310,39 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
   });
 
+  it('carries the identity token when the first sign-in races the initial election', async () => {
+    const { tab, workers } = origin();
+    const client = tab({
+      secretSource: { provideSecret: () => Promise.resolve(fakeLoginSecret()) },
+    });
+    try {
+      await client.facade.start(Uint8Array.from([1]).buffer, TEST_ACCOUNT_ID, 'identity.jwt');
+      const start = workers[0].posted.find(
+        (message) => (message as { type?: string }).type === 'start'
+      ) as { identityToken?: string } | undefined;
+      expect(start?.identityToken).toBe('identity.jwt');
+      const follower = tab({
+        secretSource: { provideSecret: () => Promise.resolve(fakeLoginSecret()) },
+      });
+      try {
+        await startTab(follower);
+        await client.dispose();
+        await tick();
+        await tick();
+        expect(follower.currentRole()).toBe('leader');
+        const failover = workers[1].posted.find(
+          (message) => (message as { type?: string }).type === 'start'
+        ) as { identityToken?: string } | undefined;
+        expect(failover).toBeDefined();
+        expect(failover?.identityToken).toBeUndefined();
+      } finally {
+        await follower.dispose();
+      }
+    } finally {
+      await client.dispose();
+    }
+  });
+
   it('refuses a stream handle minted by a leadership that has been replaced', async () => {
     const { tab, workers } = origin();
     const secretSource = {
