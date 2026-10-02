@@ -48,8 +48,8 @@ use crate::rotation::{
     ascent_node_seed, cut_exited_scope, derive_write_name, install_walked_read_epochs,
 };
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloor, SeedFloors, cached_seed, current_seed, deposit_seed, deposit_write_seed,
-    own_descendant_scopes, refresh_seed_floors, walked_boundary_material,
+    ScopeSeeds, SeedFloor, SeedFloors, StampedSeed, cached_seed, current_seed, deposit_seed,
+    deposit_write_seed, own_descendant_scopes, refresh_seed_floors, walked_boundary_material,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
@@ -164,7 +164,7 @@ pub(crate) struct ScopeLegContext<'a, F> {
 /// One scope's leg material: the seed and floors its records unseal and gate
 /// under, and the plane it reads on.
 pub(crate) struct ScopeLegMaterial<'a, F> {
-    pub(crate) seed: Zeroizing<[u8; 32]>,
+    pub(crate) seed: StampedSeed,
     pub(crate) floors: SharerScopedFloorStore<'a, F>,
     pub(crate) scope_root_name: Option<IpnsName>,
     /// `false` for a grafted scope, which reads on the grafted plane.
@@ -181,10 +181,20 @@ pub(crate) enum NoScopeLeg {
     Waiting,
 }
 
-impl<'a, F> ScopeLegContext<'a, F> {
-    /// The floors `scope`'s records gate under ([`floor_view`]).
-    pub(crate) fn floors_of(&self, scope: NodeId) -> Option<SharerScopedFloorStore<'a, F>> {
-        floor_view(
+impl<'a, F: FloorStore> ScopeLegContext<'a, F> {
+    /// The material of `scope`'s leg. Its read seed passes the floor eviction
+    /// against the floors the leg gates under ([`current_seed`]), so a floor
+    /// raised since the start-of-pass eviction evicts it here.
+    pub(crate) async fn material(
+        &self,
+        scope: NodeId,
+        read_seeds: &RefCell<ScopeSeeds>,
+    ) -> Result<ScopeLegMaterial<'a, F>, NoScopeLeg> {
+        if self.unproved.contains(&scope) {
+            return Err(NoScopeLeg::Outage);
+        }
+        let own = is_own_scope(&self.own_root, self.proved, &scope.0);
+        let floors = floor_view(
             self.floors,
             self.sharers,
             self.contact_label_seed,
@@ -192,27 +202,14 @@ impl<'a, F> ScopeLegContext<'a, F> {
             self.proved,
             &scope.0,
         )
-    }
-
-    /// The material of `scope`'s leg. `seed` is awaited only for a scope whose
-    /// material a walk proved.
-    pub(crate) async fn material(
-        &self,
-        scope: NodeId,
-        seed: impl Future<Output = Option<Zeroizing<[u8; 32]>>>,
-    ) -> Result<ScopeLegMaterial<'a, F>, NoScopeLeg> {
-        if self.unproved.contains(&scope) {
-            return Err(NoScopeLeg::Outage);
-        }
-        let own = is_own_scope(&self.own_root, self.proved, &scope.0);
-        let Some(seed) = seed.await else {
+        .ok_or(NoScopeLeg::Waiting)?;
+        let Some(seed) = current_seed(&floors, read_seeds, &scope.0, SeedFloor::Read).await else {
             return Err(if own {
                 NoScopeLeg::Outage
             } else {
                 NoScopeLeg::Waiting
             });
         };
-        let floors = self.floors_of(scope).ok_or(NoScopeLeg::Waiting)?;
         let scope_root_name = scope_root_record_name(&self.base.borrow(), self.root_name, &scope.0);
         Ok(ScopeLegMaterial {
             seed,
@@ -688,20 +685,7 @@ where
             root_name: Some(&pass.root_name),
         };
         for (scope_root, targets) in by_scope {
-            // A floor raised since the start-of-pass eviction must evict the
-            // seed here too, or an honest record at the new floor fails its
-            // unseal at the floor and reads as abuse.
-            let seed = async {
-                let floors = legs.floors_of(scope_root)?;
-                current_seed(
-                    &floors,
-                    &state.scope_read_seeds,
-                    &scope_root.0,
-                    SeedFloor::Read,
-                )
-                .await
-            };
-            let material = match legs.material(scope_root, seed).await {
+            let material = match legs.material(scope_root, &state.scope_read_seeds).await {
                 Ok(material) => material,
                 Err(NoScopeLeg::Outage) => {
                     folder_verdict = folder_verdict.worst(RefreshVerdict::Unreachable);
@@ -718,7 +702,8 @@ where
                 base: &state.snapshot,
                 events: &self.seams.events,
                 scope_id: scope_root.0,
-                scope_read_seed: &material.seed,
+                scope_read_seed: &material.seed.seed,
+                seed_stamp: Some(material.seed.stamp),
                 scope_root_name: material.scope_root_name.as_ref(),
                 plane: (!material.own).then_some(GraftedLeg {
                     scope_roots: &scope_roots,
@@ -2286,7 +2271,7 @@ mod report_tests {
     use crate::facade::NodeKind;
     use crate::profile::SyncTimingProfile;
     use crate::rotation::derive_write_name;
-    use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore};
+    use crate::seams::{EndpointId, HttpResponse, OwnerScopedFloorStore, QueueGenerationStore};
     use crate::settings::Placement;
     use crate::storage_policy::StoragePolicy;
     use crate::sync::model::NodeMeta;
@@ -2297,7 +2282,8 @@ mod report_tests {
     };
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec,
-        SeededEntropy, block_on, gateway, owner_root_fixture, owner_root_pseudonym, serve,
+        SeededEntropy, block_on, gateway, owner_root_fixture, owner_root_pseudonym, requested_cid,
+        serve,
     };
 
     const ENDPOINT: &str = "fake:someguy";
@@ -2318,6 +2304,8 @@ mod report_tests {
         state: SessionState,
         /// Held open: an events channel whose receiver dropped refuses sends.
         events: mpsc::UnboundedReceiver<Event>,
+        /// The store under the pass's owner-scoped floors, shared with it.
+        floor_backing: InMemoryFloorStore,
     }
 
     fn harness(
@@ -2327,7 +2315,8 @@ mod report_tests {
     ) -> Harness {
         let enc_subkey = kdf::enc_subkey(&SECRET);
         let contact_label_seed = kdf::contact_label_seed(&SECRET);
-        let floors = OwnerScopedFloorStore::new(InMemoryFloorStore::default());
+        let floor_backing = InMemoryFloorStore::default();
+        let floors = OwnerScopedFloorStore::new(floor_backing.clone());
         floors.bind(&enc_subkey, &contact_label_seed);
         let (events, event_stream) = mpsc::unbounded();
         let seams = EngineSeams {
@@ -2373,6 +2362,7 @@ mod report_tests {
             ),
             state,
             events: event_stream,
+            floor_backing,
         }
     }
 
@@ -2473,22 +2463,21 @@ mod report_tests {
     const OLD_READ_SEED: [u8; 32] = [0x5B; 32];
     const NEW_READ_SEED: [u8; 32] = [0x5C; 32];
 
-    /// A pass over a focused folder `INSIDE` below the own promoted scope
-    /// `PROMOTED`, whose record is sealed at `epoch` under `seal_seed`. The
-    /// scope's read-epoch floor is at `floor`, and this device holds `held`
-    /// stamped `stamp`: the cache as the start-of-pass eviction left it.
-    fn focused_inside_promoted(
+    /// `node`'s folder record, sealed in `PROMOTED` at `epoch` under
+    /// `seal_seed` and published at its own name: the name, the head CID and
+    /// the head block.
+    fn sealed_folder(
+        transport: &InMemoryRecordStore,
+        node: NodeId,
         epoch: u64,
         seal_seed: [u8; 32],
-        floor: u64,
-        (held, stamp): ([u8; 32], u64),
-    ) -> Harness {
-        let node_seed = kdf::node_seed(&seal_seed, &INSIDE.0);
+    ) -> (IpnsName, String, Vec<u8>) {
+        let node_seed = kdf::node_seed(&seal_seed, &node.0);
         let envelope = seal_read_body(
             kdf::read_key(node_seed.as_bytes()).as_bytes(),
-            &[seal_seed[0]; 24],
+            &[seal_seed[0] ^ node.0[0]; 24],
             1,
-            INSIDE.0,
+            node.0,
             PROMOTED.0,
             epoch,
             &ReadBody::Folder {
@@ -2501,13 +2490,12 @@ mod report_tests {
         .expect("the body seals");
         let head_block = encode_envelope(&envelope).expect("the envelope encodes");
         let head_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
-        let name = derive_write_name(&PROMOTED_WRITE_SEED, &INSIDE.0);
-        let transport = unpublished();
+        let name = derive_write_name(&PROMOTED_WRITE_SEED, &node.0);
         transport.seed_record(
             &EndpointId::new(ENDPOINT),
             name.as_str(),
             IpnsRecord::create_v2(
-                &kdf::ipns_keypair(kdf::write_seed(&PROMOTED_WRITE_SEED, &INSIDE.0).as_bytes()),
+                &kdf::ipns_keypair(kdf::write_seed(&PROMOTED_WRITE_SEED, &node.0).as_bytes()),
                 format!("/ipfs/{head_cid}").as_bytes(),
                 1,
                 TTL_NANOS,
@@ -2515,7 +2503,18 @@ mod report_tests {
             )
             .marshal(),
         );
-        let harness = harness(transport, &BTreeMap::from([(head_cid, head_block)]), true);
+        (name, head_cid, head_block)
+    }
+
+    /// Place the focused `folders` below the own promoted scope `PROMOTED`,
+    /// with the scope's read-epoch floor at `floor` and `held` in the cache
+    /// stamped `stamp`.
+    fn focused_inside_promoted(
+        harness: &Harness,
+        folders: &[(NodeId, &IpnsName)],
+        floor: u64,
+        (held, stamp): ([u8; 32], u64),
+    ) {
         block_on(
             harness
                 .pass
@@ -2525,14 +2524,18 @@ mod report_tests {
         )
         .expect("the floor raises");
         let state = &harness.state;
+        let now = harness.pass.seams.scheduler.now();
         {
             let mut base = state.snapshot.borrow_mut();
             base.upsert_node(NodeMeta::new(PROMOTED, "promoted", NodeKind::Folder));
-            let mut inside = NodeMeta::new(INSIDE, "inside", NodeKind::Folder);
-            inside.ipns_name = Some(name.as_str().as_bytes().to_vec());
-            base.upsert_node(inside);
             base.link(NodeId(ROOT.0), PROMOTED, 1);
-            base.link(PROMOTED, INSIDE, 1);
+            for (node, name) in folders {
+                let mut folder = NodeMeta::new(*node, "inside", NodeKind::Folder);
+                folder.ipns_name = Some(name.as_str().as_bytes().to_vec());
+                base.upsert_node(folder);
+                base.link(PROMOTED, *node, 1);
+                state.focus.borrow_mut().touched_folders.insert(*node, now);
+            }
         }
         state.descendant_scope_roots.borrow_mut().insert(PROMOTED);
         deposit_seed(
@@ -2541,8 +2544,20 @@ mod report_tests {
             Zeroizing::new(held),
             Some(stamp),
         );
-        let now = harness.pass.seams.scheduler.now();
-        state.focus.borrow_mut().touched_folders.insert(INSIDE, now);
+    }
+
+    /// One focused folder `INSIDE` sealed at `epoch` under `seal_seed`, over a
+    /// floor at `floor` and a cache holding `held`.
+    fn focused_inside(
+        epoch: u64,
+        seal_seed: [u8; 32],
+        floor: u64,
+        held: ([u8; 32], u64),
+    ) -> Harness {
+        let transport = unpublished();
+        let (name, head_cid, head_block) = sealed_folder(&transport, INSIDE, epoch, seal_seed);
+        let harness = harness(transport, &BTreeMap::from([(head_cid, head_block)]), true);
+        focused_inside_promoted(&harness, &[(INSIDE, &name)], floor, held);
         harness
     }
 
@@ -2562,13 +2577,12 @@ mod report_tests {
         (verdict, abuse)
     }
 
-    /// A rotation that lands after the start-of-pass eviction raises the
-    /// floor past the seed this device holds. The record at the new floor is
-    /// honest, so the leg waits for the new seed and accuses nobody.
+    /// The leg starts with a seed stamped below the floor. The record at the
+    /// floor is honest, so the leg reports an outage and accuses nobody.
     #[test]
     fn a_floor_raised_during_the_pass_does_not_accuse_an_honest_writer() {
         let mut harness =
-            focused_inside_promoted(NEW_EPOCH, NEW_READ_SEED, NEW_EPOCH, (OLD_READ_SEED, EPOCH));
+            focused_inside(NEW_EPOCH, NEW_READ_SEED, NEW_EPOCH, (OLD_READ_SEED, EPOCH));
 
         let (verdict, abuse) = run_focus(&mut harness);
 
@@ -2584,7 +2598,7 @@ mod report_tests {
     /// record at the floor that does not open under it is tampering.
     #[test]
     fn a_record_at_the_floor_that_the_current_seed_cannot_open_stays_abuse() {
-        let mut harness = focused_inside_promoted(
+        let mut harness = focused_inside(
             NEW_EPOCH,
             OLD_READ_SEED,
             NEW_EPOCH,
@@ -2595,5 +2609,50 @@ mod report_tests {
 
         assert!(abuse, "a body that does not open at the floor is abuse");
         assert_eq!(verdict, RefreshVerdict::Rejected);
+    }
+
+    /// A rotation on this device raises the floor while the leg waits on the
+    /// network between two record resolves. The second record is honest at
+    /// the new floor, so the leg accuses nobody.
+    #[test]
+    fn a_floor_raised_between_two_resolves_of_one_leg_accuses_nobody() {
+        const SECOND: NodeId = NodeId([0xD3; 16]);
+        let transport = unpublished();
+        let (inside, inside_cid, inside_head) =
+            sealed_folder(&transport, INSIDE, EPOCH, OLD_READ_SEED);
+        let (second, second_cid, second_head) =
+            sealed_folder(&transport, SECOND, NEW_EPOCH, NEW_READ_SEED);
+        let mut harness = harness(transport, &BTreeMap::new(), true);
+        focused_inside_promoted(
+            &harness,
+            &[(INSIDE, &inside), (SECOND, &second)],
+            EPOCH,
+            (OLD_READ_SEED, EPOCH),
+        );
+        let backing = harness.floor_backing.clone();
+        let [floor_key] =
+            <[Vec<u8>; 1]>::try_from(backing.epoch_keys()).expect("one scope holds an epoch floor");
+        let blocks = BTreeMap::from([(inside_cid, inside_head), (second_cid.clone(), second_head)]);
+        harness.pass.seams.http = ScriptedHttp::with_route(move |request| {
+            let cid = requested_cid(&request.url);
+            if cid == second_cid {
+                block_on(backing.raise_epoch_floor(&floor_key, NEW_EPOCH))
+                    .expect("the rotation raises the floor");
+            }
+            Some(blocks.get(&cid).cloned().map_or_else(
+                || Err(SeamError::new("no such block")),
+                |body| {
+                    Ok(HttpResponse {
+                        status: 200,
+                        headers: Vec::new(),
+                        body,
+                    })
+                },
+            ))
+        });
+
+        let (_, abuse) = run_focus(&mut harness);
+
+        assert!(!abuse, "a record above the seed's stamp accuses nobody");
     }
 }

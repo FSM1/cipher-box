@@ -50,6 +50,9 @@ pub struct ChildAdopter<'a, H, F> {
     scope_id: [u8; 16],
     /// The scope read seed the per-node read key derives from.
     scope_read_seed: Zeroizing<[u8; 32]>,
+    /// A lower bound on the epoch `scope_read_seed` belongs to, when the caller
+    /// knows one ([`Self::with_seed_stamp`]).
+    seed_stamp: Option<u64>,
     /// The node id the resolved envelope must carry — the rendered-view child
     /// this read was issued for. A different id is a transplant, fail-closed.
     expected_node: [u8; 16],
@@ -86,10 +89,19 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
             floors,
             scope_id,
             scope_read_seed,
+            seed_stamp: None,
             expected_node,
             assembled: RefCell::new(None),
             local_head: RefCell::new(None),
         }
+    }
+
+    /// Bound the unseal classification by the epoch the read seed belongs to
+    /// ([`Self::unseal`]). The floor can rise after the caller took the seed.
+    #[must_use]
+    pub fn with_seed_stamp(mut self, stamp: Option<u64>) -> Self {
+        self.seed_stamp = stamp;
+        self
     }
 
     /// Supply a head block the caller already holds, so a self-adopt of our own
@@ -140,12 +152,12 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
     /// Unseal the read-body under the per-node read key derived from the scope
     /// read seed (`node-seed` → `read-key`, the frozen KDF edges).
     ///
-    /// A failure above `epoch_floor` is availability: this device holds no seed
-    /// for that epoch, so the record accuses nobody by failing to open, and the
-    /// root leg that recovers the seed repaints it. At or below the floor this
-    /// seed is the one the record must open under, so the failure stays the
-    /// fail-closed trust verdict. An absent floor proves nothing above it and
-    /// keeps the verdict.
+    /// A failure above `epoch_floor`, or above the seed's own stamp, is
+    /// availability: this device holds no seed for that epoch, so the record
+    /// accuses nobody by failing to open, and the root leg that recovers the
+    /// seed repaints it. At or below both, this seed is the one the record must
+    /// open under, so the failure stays the fail-closed trust verdict. With
+    /// neither, nothing is proved above and the verdict stands.
     ///
     /// Accepted: the epoch tag attests nothing (ADR 0017), so a party that can
     /// sign at this name buys unreachability instead of an accusation. It can
@@ -156,9 +168,15 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         let read_key = kdf::read_key(node_seed.as_bytes());
         match open_read_body(envelope, read_key.as_bytes()) {
             Ok(read_body) => Ok(read_body),
-            Err(_) if epoch_floor.is_some_and(|floor| envelope.epoch > floor) => {
+            Err(_)
+                if epoch_floor
+                    .into_iter()
+                    .chain(self.seed_stamp)
+                    .min()
+                    .is_some_and(|bound| envelope.epoch > bound) =>
+            {
                 Err(GateError::Seam(SeamError::new(format!(
-                    "record at epoch {} is above this scope's read-epoch floor",
+                    "record at epoch {} is above the epoch of the read seed this device holds",
                     envelope.epoch
                 ))))
             }
@@ -960,6 +978,48 @@ mod tests {
             matches!(error, GateError::Seam(_)),
             "epoch {UNOBSERVED_EPOCH} over floor {CURRENT_EPOCH} earned [{error}]"
         );
+    }
+
+    /// The floor rose after the caller took a seed stamped below it: a record at
+    /// the new floor needs a seed this device does not hold. Availability.
+    #[test]
+    fn a_failed_unseal_above_the_seed_stamp_is_availability() {
+        let published = publish(Spec {
+            epoch: CURRENT_EPOCH,
+            ..Spec::default()
+        });
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let floors = floors_after_a_cut();
+        let adopter = seeded_adopter(&gw, &http, &floors, &published, NODE, LAGGING_EPOCH)
+            .with_seed_stamp(Some(LAGGING_EPOCH));
+
+        let error = block_on(adopter.adopt(&published.name, &published.record_bytes))
+            .err()
+            .expect("a seed the record was not sealed under must open nothing");
+
+        assert!(matches!(error, GateError::Seam(_)), "earned [{error}]");
+    }
+
+    /// At or below the stamp the held seed is the one the record must open
+    /// under, so a body that does not open stays tampering.
+    #[test]
+    fn a_failed_unseal_at_the_seed_stamp_stays_a_trust_verdict() {
+        let published = publish(Spec {
+            epoch: CURRENT_EPOCH,
+            ..Spec::default()
+        });
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let floors = floors_after_a_cut();
+        let adopter = seeded_adopter(&gw, &http, &floors, &published, NODE, LAGGING_EPOCH)
+            .with_seed_stamp(Some(CURRENT_EPOCH));
+
+        let refused = refusal(
+            block_on(adopter.adopt(&published.name, &published.record_bytes)),
+            "a seed the record was not sealed under must open nothing",
+        );
+        assert_eq!(refused.stage, GateStage::Unseal);
     }
 
     /// At the floor this device holds the seed the record must open under, so a

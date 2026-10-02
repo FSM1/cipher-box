@@ -865,7 +865,8 @@ impl<'a> ScopeEnd<'a> {
 #[derive(Clone, Copy)]
 pub(crate) struct SealPlane<'a> {
     pub(crate) end: ScopeEnd<'a>,
-    /// The read epoch every record sealed under this plane binds.
+    /// The read epoch every record sealed under this plane binds, and so the
+    /// epoch its read material belongs to (`ChildAdopter::with_seed_stamp`).
     pub(crate) epoch: u64,
 }
 
@@ -2754,7 +2755,8 @@ where
             plane.end.root.0,
             plane.end.read_scope_seed.clone(),
             node.0,
-        );
+        )
+        .with_seed_stamp(Some(plane.epoch));
         let resolved = resolve_gated(
             &self.seams.transport,
             &self.seams.snapshot_cache,
@@ -2973,7 +2975,8 @@ where
             plane.end.root.0,
             plane.end.read_scope_seed.clone(),
             folder.0,
-        );
+        )
+        .with_seed_stamp(Some(plane.epoch));
         let loaded = self
             .open_child_record(
                 plane,
@@ -6454,7 +6457,8 @@ where
             plane.end.root.0,
             plane.end.read_scope_seed.clone(),
             folder.0,
-        );
+        )
+        .with_seed_stamp(Some(plane.epoch));
         let resolved = resolve_gated(
             &self.seams.transport,
             &self.seams.snapshot_cache,
@@ -6653,7 +6657,8 @@ where
                 plane.end.root.0,
                 plane.end.read_scope_seed.clone(),
                 node.0,
-            );
+            )
+            .with_seed_stamp(Some(plane.epoch));
             if let Some(local) = local {
                 adopter.hold_local_head(local);
             }
@@ -6954,7 +6959,8 @@ where
             plane.end.root.0,
             plane.end.read_scope_seed.clone(),
             target.0,
-        );
+        )
+        .with_seed_stamp(Some(plane.epoch));
         let resolved = resolve(
             &self.seams.transport,
             &self.seams.snapshot_cache,
@@ -10267,5 +10273,98 @@ mod tests {
         let events = drain_events(&mut harness.events);
         assert!(events.contains(&Event::DeadLetter { op_id, reason }));
         assert!(events.contains(&Event::SnapshotUpdated));
+    }
+
+    /// A rotation on this device raises the floor while a drain child load
+    /// waits on the network, after the pass proved its scope root. The record
+    /// at the new floor is honest, so the load accuses nobody.
+    #[test]
+    fn a_floor_raised_during_a_drain_child_load_accuses_nobody() {
+        use cipherbox_core::seal::seal_read_body;
+
+        use crate::seams::HttpResponse;
+        use crate::testkit::requested_cid;
+
+        const CHILD: NodeId = NodeId([0xC7; 16]);
+        const NEW_READ_SEED: [u8; 32] = [0xC8; 32];
+        const NEW_EPOCH: u64 = OWNER_ROOT_EPOCH + 1;
+
+        let mut harness = drain_harness(None);
+        let backing = InMemoryFloorStore::default();
+        let floors = OwnerScopedFloorStore::new(backing.clone());
+        floors.bind(
+            &harness.enc_secret,
+            &kdf::contact_label_seed(&HARNESS_SECRET),
+        );
+        block_on(floors.raise_epoch_floor(&HARNESS_SCOPE, OWNER_ROOT_EPOCH))
+            .expect("the floor raises");
+        harness.seams.floors = floors;
+        let [floor_key] =
+            <[Vec<u8>; 1]>::try_from(backing.epoch_keys()).expect("one scope holds an epoch floor");
+
+        let node_seed = kdf::node_seed(&NEW_READ_SEED, &CHILD.0);
+        let envelope = seal_read_body(
+            kdf::read_key(node_seed.as_bytes()).as_bytes(),
+            &[0xC9; 24],
+            1,
+            CHILD.0,
+            HARNESS_SCOPE,
+            NEW_EPOCH,
+            &ReadBody::Folder {
+                created_at: 0,
+                modified_at: 0,
+                children: Vec::new(),
+                unknown: PreservedFields::new(),
+            },
+        )
+        .expect("the body seals");
+        let head_block = encode_envelope(&envelope).expect("the envelope encodes");
+        let head_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+        let name = derive_write_name(&harness.write_scope_seed, &CHILD.0);
+        harness.seams.transport.seed_record(
+            &EndpointId::new("fake:someguy"),
+            name.as_str(),
+            IpnsRecord::create_v2(
+                &kdf::ipns_keypair(kdf::write_seed(&harness.write_scope_seed, &CHILD.0).as_bytes()),
+                format!("/ipfs/{head_cid}").as_bytes(),
+                1,
+                HARNESS_TTL_NANOS,
+                HARNESS_EOL,
+            )
+            .marshal(),
+        );
+        harness.seams.http = ScriptedHttp::with_route(move |request| {
+            (requested_cid(&request.url) == head_cid).then(|| {
+                block_on(backing.raise_epoch_floor(&floor_key, NEW_EPOCH))
+                    .expect("the rotation raises the floor");
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: head_block.clone(),
+                })
+            })
+        });
+
+        let refused = {
+            let scope = harness.scope();
+            let loaded = block_on(harness.drain().load_child_node(
+                &scope.source.at(OWNER_ROOT_EPOCH),
+                Anchor {
+                    epoch: OWNER_ROOT_EPOCH,
+                    history_links: &[],
+                },
+                CHILD,
+                ResolveMode::NoCache,
+            ));
+            matches!(loaded, Err(Halt::RecordRefused))
+        };
+
+        assert!(!refused, "the load is not charged as a refused record");
+        assert!(
+            drain_events(&mut harness.events)
+                .iter()
+                .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
+            "a record above the plane's epoch accuses nobody",
+        );
     }
 }

@@ -76,6 +76,12 @@ pub(crate) async fn refresh_seed_floor<F: FloorStore>(
     durable
 }
 
+/// A cached seed as one read served it, with its stamp ([`CachedSeed`]).
+pub(crate) struct StampedSeed {
+    pub(crate) seed: Zeroizing<[u8; 32]>,
+    pub(crate) stamp: u64,
+}
+
 /// The scope's cached seed after an eviction pass against `floors`
 /// ([`refresh_seed_floor`]): a seed the floor has passed is never served.
 pub(crate) async fn current_seed<F: FloorStore>(
@@ -83,9 +89,12 @@ pub(crate) async fn current_seed<F: FloorStore>(
     cell: &RefCell<ScopeSeeds>,
     scope_id: &[u8; 16],
     which: SeedFloor,
-) -> Option<Zeroizing<[u8; 32]>> {
+) -> Option<StampedSeed> {
     refresh_seed_floor(floors, cell, scope_id, which).await?;
-    cached_seed(cell, scope_id)
+    cell.borrow().get(scope_id).map(|cached| StampedSeed {
+        seed: cached.seed.clone(),
+        stamp: cached.floor,
+    })
 }
 
 /// The scope roots below the vault root this session owns: the ones a gated

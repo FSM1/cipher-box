@@ -134,8 +134,9 @@ use crate::rotation::{
 };
 use crate::rotation::{FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloor, cached_seed, deposit_seed, deposit_write_seed, own_descendant_scopes,
-    refresh_seed_floor, refresh_seed_floors, seed_names, walked_boundary_material,
+    ScopeSeeds, SeedFloor, StampedSeed, cached_seed, current_seed, deposit_seed,
+    deposit_write_seed, own_descendant_scopes, refresh_seed_floors, seed_names,
+    walked_boundary_material,
 };
 use crate::seams::{
     ContactLabel, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId,
@@ -9426,20 +9427,26 @@ where {
     /// floor has risen past the one it was recovered under. Every on-demand
     /// read goes through here; the resolve tick evicts once per pass.
     async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
+        self.stamped_scope_read_seed(scope_id)
+            .await
+            .map(|stamped| stamped.seed)
+    }
+
+    /// [`Self::scope_read_seed`] with the stamp the cache holds it under.
+    async fn stamped_scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<StampedSeed> {
         // Every arm that serves no seed also drops the one it holds, so no
         // cached seed outlives the authority that entitles it.
         let Some(floors) = self.scope_floors(scope_id) else {
             self.state.scope_read_seeds.borrow_mut().remove(scope_id);
             return None;
         };
-        refresh_seed_floor(
+        current_seed(
             &floors,
             &self.state.scope_read_seeds,
             scope_id,
             SeedFloor::Read,
         )
-        .await;
-        cached_seed(&self.state.scope_read_seeds, scope_id)
+        .await
     }
 
     /// The namespace `scope_id`'s floors live in ([`floor_view`]), or `None`
@@ -9669,25 +9676,24 @@ where {
                 &self.profile,
             ),
         );
-        let scope_read_seed = self.scope_read_seed(&root.0).await;
+        let scope_read_seed = self.stamped_scope_read_seed(&root.0).await;
         let root_name = self.state.current_root_name.borrow().clone();
-        let leg = scope_read_seed
-            .as_ref()
-            .map(|scope_read_seed| FolderRefresh {
-                transport: &self.record_transport,
-                snapshot_cache: &self.seams.snapshot_cache,
-                http: &self.seams.http,
-                floors: &self.seams.floor_store,
-                gateway: &self.gateway,
-                base: &self.state.snapshot,
-                events: &self.events,
-                scope_id: root.0,
-                scope_read_seed,
-                scope_root_name: root_name.as_ref(),
-                plane: None,
-                mode: ResolveMode::CacheFirst,
-                observed_at: now.0,
-            });
+        let leg = scope_read_seed.as_ref().map(|stamped| FolderRefresh {
+            transport: &self.record_transport,
+            snapshot_cache: &self.seams.snapshot_cache,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            gateway: &self.gateway,
+            base: &self.state.snapshot,
+            events: &self.events,
+            scope_id: root.0,
+            scope_read_seed: &stamped.seed,
+            seed_stamp: Some(stamped.stamp),
+            scope_root_name: root_name.as_ref(),
+            plane: None,
+            mode: ResolveMode::CacheFirst,
+            observed_at: now.0,
+        });
         if let Some(leg) = &leg
             && !due.is_empty()
         {
@@ -9846,7 +9852,7 @@ where {
             root_name: root_name.as_ref(),
         };
         for (scope, nodes) in by_scope {
-            let Ok(material) = legs.material(scope, self.scope_read_seed(&scope.0)).await else {
+            let Ok(material) = legs.material(scope, &self.state.scope_read_seeds).await else {
                 unread = true;
                 continue;
             };
@@ -9859,7 +9865,8 @@ where {
                 base: &self.state.snapshot,
                 events: &self.events,
                 scope_id: scope.0,
-                scope_read_seed: &material.seed,
+                scope_read_seed: &material.seed.seed,
+                seed_stamp: Some(material.seed.stamp),
                 scope_root_name: material.scope_root_name.as_ref(),
                 plane: (!material.own).then_some(GraftedLeg {
                     scope_roots: &bookmarked,
