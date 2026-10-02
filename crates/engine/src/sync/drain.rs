@@ -10466,9 +10466,6 @@ mod tests {
         }
     }
 
-    /// A retired debt settles under the derived name with nothing live, unless
-    /// the base links the node again: then the name may be its live copy's,
-    /// and the debt waits.
     #[test]
     fn a_retired_debt_of_a_node_the_base_links_waits() {
         let harness = drain_harness(Some(harness_root_envelope()));

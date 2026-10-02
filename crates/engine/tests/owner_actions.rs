@@ -2154,7 +2154,11 @@ fn a_node_a_read_grant_moved_bins_in_the_granted_scope() {
         block_on(second.command(Command::SetFocus { node: Some(node) })).unwrap();
         tick(&fx.world, &second, &mut tasks);
     }
-    assert_eq!(block_on(second.view()).unwrap().children(inner).len(), 1);
+    assert_eq!(
+        block_on(second.view()).unwrap().children(inner).len(),
+        1,
+        "the second device loads the doomed node"
+    );
     block_on(second.command(Command::SetFocus { node: None })).unwrap();
     tick(&fx.world, &second, &mut tasks);
     assert_eq!(
@@ -2164,8 +2168,9 @@ fn a_node_a_read_grant_moved_bins_in_the_granted_scope() {
     for _ in 0..2 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    converge_into_granted_scope(&fx, inner);
-    converge_into_granted_scope(&fx, doomed);
+    for node in [inner, doomed] {
+        converge_into_granted_scope(&fx, node);
+    }
     tick(&fx.world, &second, &mut tasks);
     let (seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
     concurrent_edit(
