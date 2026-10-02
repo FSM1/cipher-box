@@ -48,8 +48,9 @@ use crate::rotation::{
     ascent_node_seed, cut_exited_scope, derive_write_name, install_walked_read_epochs,
 };
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloors, cached_seed, deposit_seed, deposit_write_seed, own_descendant_scopes,
-    refresh_seed_floors, walked_boundary_material,
+    ScopeSeeds, SeedFloor, SeedFloors, cached_seed, current_seed, deposit_seed, deposit_write_seed,
+    own_descendant_scopes, refresh_seed_floors, refresh_walked_seed_floors,
+    walked_boundary_material,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
@@ -182,6 +183,18 @@ pub(crate) enum NoScopeLeg {
 }
 
 impl<'a, F> ScopeLegContext<'a, F> {
+    /// The floors `scope`'s records gate under ([`floor_view`]).
+    pub(crate) fn floors_of(&self, scope: NodeId) -> Option<SharerScopedFloorStore<'a, F>> {
+        floor_view(
+            self.floors,
+            self.sharers,
+            self.contact_label_seed,
+            &self.own_root,
+            self.proved,
+            &scope.0,
+        )
+    }
+
     /// The material of `scope`'s leg. `seed` is awaited only for a scope whose
     /// material a walk proved.
     pub(crate) async fn material(
@@ -200,15 +213,7 @@ impl<'a, F> ScopeLegContext<'a, F> {
                 NoScopeLeg::Waiting
             });
         };
-        let floors = floor_view(
-            self.floors,
-            self.sharers,
-            self.contact_label_seed,
-            &self.own_root,
-            self.proved,
-            &scope.0,
-        )
-        .ok_or(NoScopeLeg::Waiting)?;
+        let floors = self.floors_of(scope).ok_or(NoScopeLeg::Waiting)?;
         let scope_root_name = scope_root_record_name(&self.base.borrow(), self.root_name, &scope.0);
         Ok(ScopeLegMaterial {
             seed,
@@ -684,7 +689,19 @@ where
             root_name: Some(&pass.root_name),
         };
         for (scope_root, targets) in by_scope {
-            let seed = async { cached_seed(&state.scope_read_seeds, &scope_root.0) };
+            // A floor raised since the start-of-pass eviction must evict the
+            // seed here too, or an honest record at the new floor fails its
+            // unseal at the floor and reads as abuse.
+            let seed = async {
+                let floors = legs.floors_of(scope_root)?;
+                current_seed(
+                    &floors,
+                    &state.scope_read_seeds,
+                    &scope_root.0,
+                    SeedFloor::Read,
+                )
+                .await
+            };
             let material = match legs.material(scope_root, seed).await {
                 Ok(material) => material,
                 Err(NoScopeLeg::Outage) => {
@@ -948,6 +965,13 @@ where
         // The vault-root pass's second end, and the cut a scope exit
         // owes: both read the boundaries this session knows, at the
         // material the walk proved for them.
+        refresh_walked_seed_floors(
+            &self.seams.floors,
+            &state.walked_read_epochs,
+            &state.scope_read_seeds,
+            &state.scope_write_seeds,
+        )
+        .await;
         let boundaries = read_seed.as_ref().map(|root_read_seed| Boundaries {
             base: &state.snapshot,
             scope_roots: state
@@ -2257,19 +2281,23 @@ mod tests {
 mod report_tests {
     use super::*;
 
+    use cipherbox_core::content::{compute_cid, encode_content_cid_str};
     use cipherbox_core::ipns::IpnsRecord;
     use cipherbox_core::kdf;
+    use cipherbox_core::seal::{PreservedFields, ReadBody, encode_envelope, seal_read_body};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use futures_channel::mpsc;
 
     use crate::api::ApiClient;
-    use crate::content::ContentProfile;
+    use crate::content::{ContentProfile, DAG_ROOT_CODEC};
     use crate::deadlines::DeadlinePolicy;
+    use crate::facade::NodeKind;
     use crate::profile::SyncTimingProfile;
     use crate::rotation::derive_write_name;
     use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore};
     use crate::settings::Placement;
     use crate::storage_policy::StoragePolicy;
+    use crate::sync::model::NodeMeta;
     use crate::testkit::account::{EOL, ROOT, SECRET, TTL_NANOS};
     use crate::testkit::fakes::{
         InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache,
@@ -2297,7 +2325,7 @@ mod report_tests {
         pass: FakePass,
         state: SessionState,
         /// Held open: an events channel whose receiver dropped refuses sends.
-        _events: mpsc::UnboundedReceiver<Event>,
+        events: mpsc::UnboundedReceiver<Event>,
     }
 
     fn harness(
@@ -2352,7 +2380,7 @@ mod report_tests {
                 ROOT.0,
             ),
             state,
-            _events: event_stream,
+            events: event_stream,
         }
     }
 
@@ -2443,5 +2471,137 @@ mod report_tests {
             }
         );
         assert!(report.converged());
+    }
+
+    const PROMOTED: NodeId = NodeId([0xD1; 16]);
+    const INSIDE: NodeId = NodeId([0xD2; 16]);
+    const PROMOTED_WRITE_SEED: [u8; 32] = [0x5A; 32];
+    const EPOCH: u64 = 1;
+    const NEW_EPOCH: u64 = EPOCH + 1;
+    const OLD_READ_SEED: [u8; 32] = [0x5B; 32];
+    const NEW_READ_SEED: [u8; 32] = [0x5C; 32];
+
+    /// A pass over a focused folder `INSIDE` below the own promoted scope
+    /// `PROMOTED`, whose record is sealed at `epoch` under `seal_seed`. The
+    /// scope's read-epoch floor is at `floor`, and this device holds `held`
+    /// stamped `stamp`: the cache as the start-of-pass eviction left it.
+    fn focused_inside_promoted(
+        epoch: u64,
+        seal_seed: [u8; 32],
+        floor: u64,
+        (held, stamp): ([u8; 32], u64),
+    ) -> Harness {
+        let node_seed = kdf::node_seed(&seal_seed, &INSIDE.0);
+        let envelope = seal_read_body(
+            kdf::read_key(node_seed.as_bytes()).as_bytes(),
+            &[seal_seed[0]; 24],
+            1,
+            INSIDE.0,
+            PROMOTED.0,
+            epoch,
+            &ReadBody::Folder {
+                created_at: 0,
+                modified_at: 0,
+                children: Vec::new(),
+                unknown: PreservedFields::new(),
+            },
+        )
+        .expect("the body seals");
+        let head_block = encode_envelope(&envelope).expect("the envelope encodes");
+        let head_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+        let name = derive_write_name(&PROMOTED_WRITE_SEED, &INSIDE.0);
+        let transport = unpublished();
+        transport.seed_record(
+            &EndpointId::new(ENDPOINT),
+            name.as_str(),
+            IpnsRecord::create_v2(
+                &kdf::ipns_keypair(kdf::write_seed(&PROMOTED_WRITE_SEED, &INSIDE.0).as_bytes()),
+                format!("/ipfs/{head_cid}").as_bytes(),
+                1,
+                TTL_NANOS,
+                EOL,
+            )
+            .marshal(),
+        );
+        let harness = harness(transport, &BTreeMap::from([(head_cid, head_block)]), true);
+        block_on(
+            harness
+                .pass
+                .seams
+                .floors
+                .raise_epoch_floor(&PROMOTED.0, floor),
+        )
+        .expect("the floor raises");
+        let state = &harness.state;
+        {
+            let mut base = state.snapshot.borrow_mut();
+            base.upsert_node(NodeMeta::new(PROMOTED, "promoted", NodeKind::Folder));
+            let mut inside = NodeMeta::new(INSIDE, "inside", NodeKind::Folder);
+            inside.ipns_name = Some(name.as_str().as_bytes().to_vec());
+            base.upsert_node(inside);
+            base.link(NodeId(ROOT.0), PROMOTED, 1);
+            base.link(PROMOTED, INSIDE, 1);
+        }
+        state.descendant_scope_roots.borrow_mut().insert(PROMOTED);
+        deposit_seed(
+            &state.scope_read_seeds,
+            PROMOTED.0,
+            Zeroizing::new(held),
+            Some(stamp),
+        );
+        let now = harness.pass.seams.scheduler.now();
+        state.focus.borrow_mut().touched_folders.insert(INSIDE, now);
+        harness
+    }
+
+    /// The focus legs of one pass, and whether they raised abuse.
+    fn run_focus(harness: &mut Harness) -> (RefreshVerdict, bool) {
+        let pass = harness
+            .pass
+            .loop_gate(&harness.state, TickCause::Poll)
+            .expect("the session is live");
+        let (verdict, _) = block_on(harness.pass.refresh_focus(
+            &harness.state,
+            &pass,
+            &GraftedSharers::new(),
+        ));
+        let abuse = core::iter::from_fn(|| harness.events.try_recv().ok())
+            .any(|event| matches!(event, Event::AttributableAbuse { .. }));
+        (verdict, abuse)
+    }
+
+    /// A rotation that lands after the start-of-pass eviction raises the
+    /// floor past the seed this device holds. The record at the new floor is
+    /// honest, so the leg waits for the new seed and accuses nobody.
+    #[test]
+    fn a_floor_raised_during_the_pass_does_not_accuse_an_honest_writer() {
+        let mut harness =
+            focused_inside_promoted(NEW_EPOCH, NEW_READ_SEED, NEW_EPOCH, (OLD_READ_SEED, EPOCH));
+
+        let (verdict, abuse) = run_focus(&mut harness);
+
+        assert!(!abuse, "a seed below the floor accuses nobody");
+        assert_eq!(verdict, RefreshVerdict::Unreachable);
+        assert!(
+            cached_seed(&harness.state.scope_read_seeds, &PROMOTED.0).is_none(),
+            "the leg evicted the seed the floor revoked"
+        );
+    }
+
+    /// The other arm: this device holds the seed of the floor epoch, so a
+    /// record at the floor that does not open under it is tampering.
+    #[test]
+    fn a_record_at_the_floor_that_the_current_seed_cannot_open_stays_abuse() {
+        let mut harness = focused_inside_promoted(
+            NEW_EPOCH,
+            OLD_READ_SEED,
+            NEW_EPOCH,
+            (NEW_READ_SEED, NEW_EPOCH),
+        );
+
+        let (verdict, abuse) = run_focus(&mut harness);
+
+        assert!(abuse, "a body that does not open at the floor is abuse");
+        assert_eq!(verdict, RefreshVerdict::Rejected);
     }
 }
