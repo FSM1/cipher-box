@@ -863,6 +863,90 @@ fn a_start_whose_floor_read_fails_surfaces_it_and_a_later_cut_vouches() {
     assert_eq!(listed_names(&second, ROOT), ["reports"]);
 }
 
+/// The owner's only device: a session that ticks after a cut of the vault root
+/// that did not vouch its epoch, then starts again.
+fn the_owner_starts_again_after_its_session_adopts_the_cut_root(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    owner: &FakeDevice,
+    engine: Engine<FakeSeamTypes>,
+    mut tasks: Vec<BoxedTask>,
+) {
+    tick(world, &engine, &mut tasks);
+    assert!(
+        block_on(FloorStore::epoch_floor(&owner.floors(&SECRET), &SCOPE)).expect("the floor reads")
+            > Some(vouched_min_read_epoch(world)),
+        "the session adopted the cut root above the epoch the anchor vouches"
+    );
+    drop((engine, tasks));
+
+    serve_http(owner, blocks, 600);
+    let (mut engine, _events) = engine_on_api(owner, 45);
+    let started = block_on(engine.start(secret()));
+    assert!(
+        started.is_ok(),
+        "the device that cut the vault root starts again: {started:?}"
+    );
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+}
+
+/// The anchor PUT fails past the retry bound while every read works, and the
+/// session adopts the cut root before it ends. No other device exists.
+#[test]
+fn a_one_device_owner_starts_after_a_vouch_that_ran_out_and_a_tick() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+
+    the_owner_starts_again_after_its_session_adopts_the_cut_root(
+        &world, &blocks, &owner, engine, tasks,
+    );
+}
+
+/// GETs of the vault root a cut reads before the confirm of its root publish.
+const ROOT_GETS_BEFORE_CONFIRM: usize = 2;
+
+/// The root PUT lands, but every confirm and every retry reads no record
+/// there, so the cut reports the root unconfirmed and never vouches. The
+/// session then adopts the root that did land. No other device exists.
+#[test]
+fn a_one_device_owner_starts_after_an_unconfirmed_root_that_landed_and_a_tick() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    world.record_store.serve_gets_for_after(
+        root_name.as_str(),
+        ROOT_GETS_BEFORE_CONFIRM,
+        usize::MAX,
+        None,
+    );
+    let cut = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
+    world
+        .record_store
+        .serve_gets_for_after(root_name.as_str(), 0, 0, None);
+    assert!(cut.is_err(), "the root publish is unconfirmed: {cut:?}");
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(
+        published_epoch(&world, &blocks, ROOT),
+        EPOCH + 1,
+        "the root landed"
+    );
+    assert_eq!(vouched_min_read_epoch(&world), EPOCH, "nothing was vouched");
+
+    the_owner_starts_again_after_its_session_adopts_the_cut_root(
+        &world, &blocks, &owner, engine, tasks,
+    );
+}
+
 /// Every other owner action that could reach the vault root is refused there or
 /// leaves its read epoch alone, so none of them owes the anchor a vouch.
 #[test]
