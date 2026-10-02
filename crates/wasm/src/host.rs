@@ -587,10 +587,8 @@ impl EngineHandle {
                     JsError::new("the pinned version is larger than a read can address").into(),
                 );
             }
-            match encode_view(&OpenedStream::new(handle.0, size as f64)) {
-                Ok(opened) => Ok(opened),
-                Err(error) => refuse(error.into()),
-            }
+            encode_view(&OpenedStream::new(handle.0, size as f64))
+                .or_else(|error| refuse(error.into()))
         })
     }
 

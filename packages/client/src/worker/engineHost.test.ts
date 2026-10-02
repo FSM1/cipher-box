@@ -634,7 +634,7 @@ describe('EngineHost identity fingerprint', () => {
 });
 
 describe('EngineHost device rendezvous', () => {
-  const approve = (): DeviceRendezvousStep => ({
+  const approve = (): Extract<DeviceRendezvousStep, { kind: 'approve' }> => ({
     kind: 'approve',
     devicePublicKey: 'ed25519hex',
     requestId: 'req-1',
@@ -661,7 +661,7 @@ describe('EngineHost device rendezvous', () => {
     });
     await host.read({
       kind: 'deviceRendezvous',
-      step: { ...approve(), sealScalar, factorKey } as DeviceRendezvousStep,
+      step: { ...approve(), sealScalar, factorKey },
     });
     await host.read({
       kind: 'deviceRendezvous',
@@ -687,7 +687,7 @@ describe('EngineHost device rendezvous', () => {
       throw new Error('the rendezvous step does not decode');
     });
     const host = await started(wasm);
-    const step = approve() as Extract<DeviceRendezvousStep, { kind: 'approve' }>;
+    const step = approve();
 
     await expect(host.read({ kind: 'deviceRendezvous', step })).rejects.toThrow(
       'the rendezvous step does not decode'

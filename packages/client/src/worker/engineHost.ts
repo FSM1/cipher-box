@@ -4,7 +4,7 @@
  * never leaves it.
  */
 
-import { wipeTransfer } from '../buffers.js';
+import { wipeBytes, wipeTransfer } from '../buffers.js';
 import { commandTransfer, RENDEZVOUS_SECRET_FIELDS } from './protocol.js';
 import type {
   CommandDescriptor,
@@ -106,10 +106,7 @@ function runRendezvous(wasm: EngineWasm, step: DeviceRendezvousStep): DeviceRend
  */
 function scrubStep(step: unknown): void {
   if (typeof step !== 'object' || step === null) return;
-  for (const field of RENDEZVOUS_SECRET_FIELDS) {
-    const held = (step as Record<string, unknown>)[field];
-    if (held instanceof Uint8Array) held.fill(0);
-  }
+  for (const field of RENDEZVOUS_SECRET_FIELDS) wipeBytes((step as Record<string, unknown>)[field]);
 }
 
 /** A refusal carrying one of the engine's own stable codes, as the engine does. */

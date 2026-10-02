@@ -269,9 +269,9 @@ const RESULT_SECRETS: Record<BytesField<DeviceRendezvousResult>, boolean> = {
 export const RENDEZVOUS_SECRET_FIELDS: readonly string[] = [
   ...new Set([
     ...Object.keys(STEP_SECRETS),
-    ...Object.keys(RESULT_SECRETS).filter(
-      (field) => RESULT_SECRETS[field as keyof typeof RESULT_SECRETS]
-    ),
+    ...Object.entries(RESULT_SECRETS)
+      .filter(([, secret]) => secret)
+      .map(([field]) => field),
   ]),
 ];
 

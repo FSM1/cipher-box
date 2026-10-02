@@ -184,11 +184,11 @@ pub mod rendezvous {
     /// runs, so a secret field left off [`SECRET_FIELDS`] fails every decode
     /// rather than passing silently.
     fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Secret, D::Error> {
-        let placeholder = cipherbox_engine::wire::bytes::deserialize(deserializer)?;
+        let placeholder = Zeroizing::new(cipherbox_engine::wire::bytes::deserialize(deserializer)?);
         if !placeholder.is_empty() {
             return Err(de::Error::custom("a secret field skipped its placeholder"));
         }
-        Ok(Zeroizing::new(placeholder))
+        Ok(placeholder)
     }
 
     fn as_bytes<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
