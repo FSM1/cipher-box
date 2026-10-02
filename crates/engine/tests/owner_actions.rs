@@ -2242,31 +2242,15 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
     assert_held_in_the_vault_scope(&fx, keep, deep, "second device");
 }
 
-/// A read-granted folder shares its parent's write seed, so the vault scope's
-/// capture walk must stop at it as a boundary. Another writer's unlink in the
-/// vault scope then bins on its own, and no record is reported faulty.
-#[test]
-fn a_capture_walk_stops_at_a_read_granted_folder() {
+/// A granted folder keeps the ref its parent named it by, under the parent's
+/// write seed, so the vault scope's capture walk must stop at it as a boundary.
+/// Another writer's unlink in the vault scope then bins, and no record is
+/// reported faulty.
+fn assert_a_capture_walk_stops_at_a_granted_folder(permission: Permission) {
     let mut fx = GrantScenario::new();
     let (mut engine, mut events, mut tasks) = fx.second_owner_device();
-    assert_eq!(
-        fx.grant_folder_at(Permission::Read),
-        Ok(CommandOutcome::Done)
-    );
-    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
-    let doomed =
-        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, plain, "doomed");
-    block_on(engine.command(Command::SetFocus { node: Some(plain) })).unwrap();
-    tick(&fx.world, &engine, &mut tasks);
-    assert_eq!(block_on(engine.view()).unwrap().children(plain).len(), 1);
-    concurrent_edit(
-        &fx.world,
-        &fx.blocks,
-        plain,
-        &read_key_of(plain),
-        SCOPE,
-        |children| children.retain(|child| child.id != doomed.0),
-    );
+    assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |_| {});
     events_so_far(&mut events);
     for _ in 0..4 {
         tick(&fx.world, &engine, &mut tasks);
@@ -2277,6 +2261,71 @@ fn a_capture_walk_stops_at_a_read_granted_folder() {
             .iter()
             .any(|entry| entry.node_id == doomed.0),
         "the unlinked node bins"
+    );
+}
+
+#[test]
+fn a_capture_walk_stops_at_a_read_granted_folder() {
+    assert_a_capture_walk_stops_at_a_granted_folder(Permission::Read);
+}
+
+#[test]
+fn a_capture_walk_stops_at_a_write_granted_folder() {
+    assert_a_capture_walk_stops_at_a_granted_folder(Permission::Write);
+}
+
+/// A folder `doomed` under a new vault folder, which `second` loads and then
+/// sees another writer unlink. `before_unlink` runs between the two.
+fn unlinked_by_another_writer(
+    fx: &mut GrantScenario,
+    second: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    before_unlink: impl FnOnce(&mut GrantScenario),
+) -> NodeId {
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
+    let doomed =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, plain, "doomed");
+    block_on(second.command(Command::SetFocus { node: Some(plain) })).unwrap();
+    tick(&fx.world, second, tasks);
+    assert_eq!(block_on(second.view()).unwrap().children(plain).len(), 1);
+    before_unlink(fx);
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        plain,
+        &read_key_of(plain),
+        SCOPE,
+        |children| children.retain(|child| child.id != doomed.0),
+    );
+    doomed
+}
+
+/// A folder that names a child at a name the scope's write seed does not derive,
+/// such as one a name wave left at an older seed, is a folder the walk cannot
+/// read. It may link the departed node, so the node does not bin.
+#[test]
+fn a_child_at_a_name_the_scope_does_not_derive_holds_the_capture() {
+    let mut fx = GrantScenario::new();
+    let (mut engine, _events, mut tasks) = fx.second_owner_device();
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |fx| {
+        let stray = NodeId([0x5a; 16]);
+        concurrent_add(
+            &fx.world,
+            &fx.blocks,
+            fx.folder,
+            &read_key_of(fx.folder),
+            SCOPE,
+            named_child(stray, "stray", &derive_write_name(&[0x5a; 32], &stray.0)),
+        );
+    });
+    for _ in 0..4 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != doomed.0),
+        "a folder the walk cannot read may still link the node"
     );
 }
 

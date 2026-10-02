@@ -868,6 +868,10 @@ struct CaptureWalk {
     /// The unanswered attempts at the walk's next read: the last of `pending`,
     /// or `read[confirmed]` once every node is read one time.
     unanswered: u8,
+    /// A folder names a child at a name this scope's write seed does not
+    /// derive, and no proved scope root has that id. The walk cannot read it,
+    /// so a settled walk proves no capture.
+    blind: bool,
 }
 
 /// Which record a walk read: two reads with one mark read the same bytes.
@@ -916,6 +920,7 @@ impl CaptureWalk {
             read: Vec::new(),
             confirmed: 0,
             unanswered: 0,
+            blind: false,
         }
     }
 
@@ -937,7 +942,12 @@ impl CaptureWalk {
             if names_node(&self.cohort, id) {
                 self.linked.insert(id);
             }
-            if names_this_scope(end, child) && !scope_roots.contains(&id) && self.seen.insert(id) {
+            if scope_roots.contains(&id) {
+                continue;
+            }
+            if !names_this_scope(end, child) {
+                self.blind = true;
+            } else if self.seen.insert(id) {
                 self.pending.push(id);
             }
         }
@@ -4411,7 +4421,9 @@ where
                         .iter()
                         .partition(|(node, _)| walk.linked.contains(node));
                     self.take_captures(scope, &linked);
-                    proofs.proved.extend(proved);
+                    if !walk.blind {
+                        proofs.proved.extend(proved);
+                    }
                 }
             }
         }
