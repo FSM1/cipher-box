@@ -2519,7 +2519,8 @@ where
             .gated_scope_root(scope, end, ResolveMode::CacheFirst)
             .await?;
         let served: Vec<Vec<u8>> = match &gated.resolved.outcome {
-            ResolveOutcome::Current { record_bytes } => {
+            ResolveOutcome::Current { record_bytes }
+            | ResolveOutcome::Forked { record_bytes, .. } => {
                 gated.tied.iter().chain([record_bytes]).cloned().collect()
             }
             _ => Vec::new(),
@@ -6971,7 +6972,9 @@ where
             // soft delete re-keyed into the bin. An earlier stage says nothing
             // about what stands at the name.
             ResolveOutcome::TrustViolation(rejection) => rejection.stage == GateStage::Unseal,
-            ResolveOutcome::Current { .. } | ResolveOutcome::NoUpdate => false,
+            ResolveOutcome::Current { .. }
+            | ResolveOutcome::Forked { .. }
+            | ResolveOutcome::NoUpdate => false,
         })
     }
 
@@ -7570,11 +7573,13 @@ fn resolved_bytes(
             .held_record
             .map(|(_, bytes)| bytes)
             .ok_or(Halt::Unclassified),
-        ResolveOutcome::Current { record_bytes } => Ok(gated
-            .resolved
-            .last_known_good
-            .filter(|cached| gated.tied.contains(cached))
-            .unwrap_or(record_bytes)),
+        ResolveOutcome::Current { record_bytes } | ResolveOutcome::Forked { record_bytes, .. } => {
+            Ok(gated
+                .resolved
+                .last_known_good
+                .filter(|cached| gated.tied.contains(cached))
+                .unwrap_or(record_bytes))
+        }
         ResolveOutcome::NoUpdate => gated.resolved.last_known_good.ok_or(Halt::Unclassified),
         ResolveOutcome::TrustViolation(rejection) => Err(refuse_record(events, name, &rejection)),
     }

@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 
-use super::eol::eol_is_later;
+use super::eol::ranks_above;
 use crate::seams::{SeamError, SnapshotCache};
 
 /// Leave `record_bytes`, a gate pass for `name`, as last-known-good unless the
-/// cached copy already sits above its sequence, or at it with an EOL no earlier
-/// (ADR 0061 D3 step 7).
+/// cached copy already sits above its sequence, or at it and does not rank
+/// below it ([`ranks_above`]).
 ///
 /// Every path that caches a name's record calls this **before** it moves that
 /// name's floor: a read that finds no source opens the cached copy at the
@@ -29,17 +29,19 @@ pub(crate) async fn keep_newest_last_known_good<S: SnapshotCache>(
 ) -> Result<(), SeamError> {
     let key = name.as_str().as_bytes();
     let _writing = NameLock::acquire(key).await;
-    let cached = snapshot_cache.get(key).await?;
-    if cached.as_deref() == Some(record_bytes) {
+    let Some(cached) = snapshot_cache.get(key).await? else {
+        return snapshot_cache.put(key, record_bytes).await;
+    };
+    if cached == record_bytes {
         return Ok(());
     }
-    let held = cached.and_then(|cached| verified_rank(name, &cached));
-    if let Some((held_sequence, held_eol)) = held {
+    if let Some((held_sequence, held_eol)) = verified_rank(name, &cached) {
         let keep = match &verified_rank(name, record_bytes) {
             None => true,
             Some((sequence, eol)) => {
                 held_sequence > *sequence
-                    || (held_sequence == *sequence && !eol_is_later(eol, &held_eol))
+                    || (held_sequence == *sequence
+                        && !ranks_above((eol, record_bytes), (&held_eol, &cached)))
             }
         };
         if keep {
@@ -47,6 +49,18 @@ pub(crate) async fn keep_newest_last_known_good<S: SnapshotCache>(
         }
     }
     snapshot_cache.put(key, record_bytes).await
+}
+
+/// Whether `cached`, the last-known-good copy of `name` read before the keeper
+/// writes `record_bytes`, is another verified record at its sequence: evidence
+/// of a same-sequence fork (ADR 0066 D1).
+pub(crate) fn cached_another(name: &IpnsName, cached: Option<&[u8]>, record_bytes: &[u8]) -> bool {
+    let sequence = |bytes: &[u8]| verified_rank(name, bytes).map(|(sequence, _)| sequence);
+    cached.is_some_and(|cached| {
+        cached != record_bytes
+            && sequence(cached).is_some()
+            && sequence(cached) == sequence(record_bytes)
+    })
 }
 
 /// Leave `record_bytes` as `name`'s last-known-good, then run `commit`, the
@@ -199,6 +213,30 @@ mod tests {
             Some(write),
             "and the renewal never replaces it"
         );
+    }
+
+    /// At one sequence and one EOL, the keeper holds the lower record bytes,
+    /// in whichever order the two records arrive (ADR 0066 D2).
+    #[test]
+    fn at_one_sequence_and_one_eol_the_keeper_takes_the_lower_bytes() {
+        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[7u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let eol = eol::eol_from(UnixMillis(9_000_000));
+        let mut records = [
+            IpnsRecord::create_v2(&signer, b"/ipfs/one", 3, 1, &eol).marshal(),
+            IpnsRecord::create_v2(&signer, b"/ipfs/two", 3, 1, &eol).marshal(),
+        ];
+        records.sort();
+        let [lower, higher] = records;
+        let key = name.as_str().as_bytes();
+
+        for order in [[&lower, &higher], [&higher, &lower]] {
+            let cache = InMemorySnapshotCache::default();
+            for record in order {
+                block_on(keep_newest_last_known_good(&cache, &name, record)).unwrap();
+            }
+            assert_eq!(cache.peek(key).as_ref(), Some(&lower));
+        }
     }
 
     /// Two gate passes for one name interleave: the pass that read sequence 6

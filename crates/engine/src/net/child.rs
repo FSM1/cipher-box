@@ -356,6 +356,9 @@ pub(crate) enum LaggingRead {
 pub(crate) enum ChildRecord {
     /// The adopted body, and the record bytes it admitted.
     Admitted(Adopted, Vec<u8>),
+    /// The adopted body of the pick of a same-sequence fork at the floor
+    /// (ADR 0066).
+    Forked(Adopted),
     /// The endpoints agree the name holds no record, and none is cached.
     Absent,
 }
@@ -392,7 +395,7 @@ where
     F: FloorStore,
 {
     match resolve_child_record(transport, snapshot_cache, adopter, name, scope_root, mode).await? {
-        ChildRecord::Admitted(adopted, _) => Ok(adopted),
+        ChildRecord::Admitted(adopted, _) | ChildRecord::Forked(adopted) => Ok(adopted),
         ChildRecord::Absent => Err(ChildResolveError::Unavailable(NO_RECORD.to_owned())),
     }
 }
@@ -433,7 +436,7 @@ where
         .await
         .map(|adopted| ChildRecord::Admitted(adopted, record_bytes.to_vec()))
     };
-    let (record_bytes, current) = match resolved.outcome {
+    let (record_bytes, current, forked) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
             let (_, bytes) = gated.held_record.ok_or_else(|| {
                 ChildResolveError::Unavailable("the adopted record's bytes are not held".to_owned())
@@ -448,9 +451,10 @@ where
                 (None, _) => Err(ChildResolveError::Gate(GateError::Rejected(rejection))),
             };
         }
-        ResolveOutcome::Current { record_bytes } => (record_bytes, true),
+        ResolveOutcome::Current { record_bytes } => (record_bytes, true, false),
+        ResolveOutcome::Forked { record_bytes, .. } => (record_bytes, true, true),
         ResolveOutcome::NoUpdate => match resolved.last_known_good {
-            Some(cached) => (cached, false),
+            Some(cached) => (cached, false, false),
             None if gated.absent => return Ok(ChildRecord::Absent),
             None => return Err(ChildResolveError::Unavailable(NO_RECORD.to_owned())),
         },
@@ -459,7 +463,12 @@ where
         Ok(adopted) => adopted,
         Err(GateError::Rejected(rejection)) => {
             return match lagging_epoch(&rejection.reason) {
-                Some(epoch) => lagging(&record_bytes, epoch).await,
+                Some(epoch) => match lagging(&record_bytes, epoch).await {
+                    Ok(ChildRecord::Admitted(adopted, _)) if forked => {
+                        Ok(ChildRecord::Forked(adopted))
+                    }
+                    read => read,
+                },
                 None => Err(ChildResolveError::Gate(GateError::Rejected(rejection))),
             };
         }
@@ -470,7 +479,11 @@ where
             .await
             .map_err(unavailable)?;
     }
-    Ok(ChildRecord::Admitted(adopted, record_bytes))
+    Ok(if forked {
+        ChildRecord::Forked(adopted)
+    } else {
+        ChildRecord::Admitted(adopted, record_bytes)
+    })
 }
 
 /// The record's epoch when the gate refused it for lagging the read-epoch

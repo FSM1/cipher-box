@@ -177,6 +177,13 @@ fn each_event_kind_crosses_as_its_stable_name() {
             2,
         ),
         (
+            Event::SameSequenceFork {
+                routing_key: String::new(),
+            },
+            "sameSequenceFork",
+            2,
+        ),
+        (
             Event::RenewalFailed {
                 routing_key: String::new(),
                 detail: String::new(),

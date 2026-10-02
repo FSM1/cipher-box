@@ -145,6 +145,7 @@ mod tests {
                 epoch: 1,
             }),
             write_cut_unfinished: false,
+            forked: false,
         }
     }
 

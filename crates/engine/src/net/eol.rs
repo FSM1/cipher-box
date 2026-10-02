@@ -92,11 +92,17 @@ pub fn renewal_eol_from(now: UnixMillis) -> String {
     )
 }
 
-/// Whether the EOL `candidate` is strictly later than `held`. An EOL that does
-/// not parse is never later than one that does. At one sequence, every reader
-/// takes the record with the later EOL (ADR 0061 D3 step 7).
-pub fn eol_is_later(candidate: &[u8], held: &[u8]) -> bool {
-    parse_rfc3339(candidate) > parse_rfc3339(held)
+/// Whether the record `candidate` ranks above `held` at one sequence, each
+/// given as its signed EOL and its bytes: the later EOL wins (ADR 0061 D3 step
+/// 7), then the lower bytes (ADR 0066 D2), so every reader takes one record
+/// whatever the endpoints serve. An EOL that does not parse is never later
+/// than one that does.
+pub fn ranks_above(candidate: (&[u8], &[u8]), held: (&[u8], &[u8])) -> bool {
+    match parse_rfc3339(candidate.0).cmp(&parse_rfc3339(held.0)) {
+        core::cmp::Ordering::Greater => true,
+        core::cmp::Ordering::Less => false,
+        core::cmp::Ordering::Equal => candidate.1 < held.1,
+    }
 }
 
 /// Milliseconds of EOL remaining at `now` for a record whose signed

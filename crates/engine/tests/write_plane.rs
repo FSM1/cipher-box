@@ -4103,6 +4103,72 @@ fn a_split_where_our_root_holds_the_first_endpoint_heals_above_both_records() {
     assert_eq!(queued(&second), 0);
 }
 
+/// Two devices of one owner each sign a root at one sequence, and the
+/// endpoints split between the two records. A device that reads the split on
+/// two ticks reports one fork, and accuses nobody (ADR 0066 D2).
+#[test]
+fn a_fork_at_the_root_is_reported_once_in_a_session_and_accuses_nobody() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let second = world.device(b"alice-second-device");
+    let (mut engine_a, mut events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &second, 7);
+    let (base, _) = published(&world.record_store, ROOT);
+    let base_record = root_record(&world, 0);
+    let endpoints = world.record_store.endpoints();
+
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let ours = root_record(&world, 0);
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, write_name(ROOT).as_str(), base_record.clone());
+    }
+    block_on(engine_b.command(Command::Create {
+        parent: ROOT,
+        name: "notes".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_b, &mut tasks_b);
+    let theirs = root_record(&world, 0);
+    assert_ne!(ours, theirs);
+    assert_eq!(root_sequence(&world, 0), base + 1, "both sign one sequence");
+    world
+        .record_store
+        .seed_record(&endpoints[0], write_name(ROOT).as_str(), ours);
+    drop(events_so_far(&mut events_a));
+
+    tick(&world, &engine_a, &mut tasks_a);
+    tick(&world, &engine_a, &mut tasks_a);
+    let events = events_so_far(&mut events_a);
+    let forks: Vec<&Event> = events
+        .iter()
+        .filter(|event| matches!(event, Event::SameSequenceFork { .. }))
+        .collect();
+    assert_eq!(
+        forks,
+        [&Event::SameSequenceFork {
+            routing_key: write_name(ROOT).as_str().to_owned(),
+        }],
+        "one fork event for two reads of one fork"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
+        "a fork accuses nobody"
+    );
+}
+
 /// A lost race, then a restart before the retry. The restarted session holds
 /// no memory of the race, and a read can leave our own losing record as its
 /// cached copy. The retry still rebases onto the record our op does not read as

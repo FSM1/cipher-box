@@ -120,6 +120,7 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   conversionRecordUnreadable: true,
   refusedClaimDropped: true,
   attributableAbuse: true,
+  sameSequenceFork: true,
   renewalFailed: true,
   vaultUnprovisioned: true,
   vaultSettingsChanged: true,

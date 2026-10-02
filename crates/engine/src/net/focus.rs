@@ -2,7 +2,7 @@
 //! scope root (blueprint/engine.md "Sync core: focus-window tick").
 //!
 //! Each node the window names resolves its own record cache-first through
-//! [`resolve_child`], passes the [`ChildAdopter`] gate on this device's floors,
+//! [`resolve_child_record`], passes the [`ChildAdopter`] gate on this device's floors,
 //! and merges into the base — the root leg's merge model, one level down. A
 //! folder merges its listing with [`project_folder_partial`]; a file merges
 //! its head version with [`project_child_version`], which is the only way its
@@ -15,9 +15,9 @@ use cipherbox_core::seal::{ChildRef, ReadBody};
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
-use super::child::{ChildAdopter, ChildResolveError, resolve_child};
+use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
 use crate::content::Gateway;
-use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
+use crate::facade::{Event, ForkSightings, NodeId, NodeKind, emit_trust_violation};
 use crate::gate::{Adopted, GateError};
 use crate::grants::TooLong;
 use crate::grants::grafted::{BookmarkedScopeRoots, ClaimRecord, GraftedPlane, PlaneSplit};
@@ -83,11 +83,13 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     pub(crate) base: &'a BaseSnapshot,
     /// Where a fail-closed rejection on a focused folder is surfaced.
     pub(crate) events: &'a mpsc::UnboundedSender<Event>,
+    /// Where a same-sequence fork on a focused node is reported once.
+    pub(crate) forks: &'a ForkSightings,
     /// The scope every focus folder is sealed under.
     pub(crate) scope_id: [u8; 16],
     pub(crate) scope_read_seed: &'a Zeroizing<[u8; 32]>,
     /// The scope root's record name, which a lagging record's read walks the
-    /// ratchet back from ([`resolve_child`]).
+    /// ratchet back from ([`resolve_child_record`]).
     pub(crate) scope_root_name: Option<&'a IpnsName>,
     /// The plane this leg runs on, or `None` on this vault's own plane
     /// ([`GraftedLeg`]).
@@ -273,7 +275,7 @@ where
             self.scope_read_seed.clone(),
             node.0,
         );
-        match resolve_child(
+        match resolve_child_record(
             self.transport,
             self.snapshot_cache,
             &adopter,
@@ -283,9 +285,15 @@ where
         )
         .await
         {
-            Ok(adopted) => Some((name, adopted)),
+            Ok(ChildRecord::Admitted(adopted, _)) => Some((name, adopted)),
+            Ok(ChildRecord::Forked(adopted)) => {
+                self.forks
+                    .report(self.events, name.as_str(), adopted.sequence);
+                Some((name, adopted))
+            }
             // Availability: the base keeps rendering last-known-good.
-            Err(
+            Ok(ChildRecord::Absent)
+            | Err(
                 ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
             ) => {
                 report.fold(RefreshVerdict::Unreachable);
@@ -512,6 +520,7 @@ mod tests {
                     gateway: &self.gateway,
                     base: &self.base,
                     events: &events,
+                    forks: &ForkSightings::default(),
                     scope_id,
                     scope_read_seed: &self.read_seed,
                     scope_root_name: None,

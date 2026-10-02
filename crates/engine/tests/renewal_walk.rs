@@ -265,6 +265,99 @@ fn a_file_no_session_opens_for_65_days_renews_at_the_next_start() {
     );
 }
 
+/// A second record at the file's own sequence lands on one endpoint: the
+/// device that wrote the file reads it at its floor as a fork, so its walk
+/// does not sign `S + 1` over either side, and the vault root still renews
+/// (ADR 0066 D3).
+#[test]
+fn the_walk_does_not_renew_a_name_that_resolved_as_a_fork() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let device = world.device(b"the device that wrote");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 1);
+    let file = write_file(&world, &mut engine, &mut tasks, ROOT, "note.txt");
+    drop(tasks);
+    drop(engine);
+    drop(world.scheduler.take_spawned_tasks());
+    let nodes = [file];
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &nodes[0].0).as_bytes());
+    let other = IpnsRecord::create_v2(
+        &signer,
+        &before.value,
+        before.sequence,
+        before.ttl,
+        &renewal_eol_from(UnixMillis(0)),
+    )
+    .marshal();
+    world
+        .record_store
+        .seed_record(&world.record_store.endpoints()[1], name.as_str(), other);
+    let root_before = record_at(&world, &write_name(ROOT));
+
+    world.scheduler.advance(DAY * 65);
+    let started = world.scheduler.now();
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        record_at(&world, &name).sequence,
+        before.sequence,
+        "the forked file stays at S"
+    );
+    assert_renewed_at_start(
+        &world,
+        &write_name(ROOT),
+        &root_before,
+        started,
+        "the vault root",
+    );
+}
+
+/// The same at the vault root, which a later session holds: no renewal signs
+/// over either side of the fork, and the file below it still renews.
+#[test]
+fn no_renewal_signs_over_a_vault_root_that_resolved_as_a_fork() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let device = world.device(b"the device that wrote");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 1);
+    let file = write_file(&world, &mut engine, &mut tasks, ROOT, "note.txt");
+    drop(tasks);
+    drop(engine);
+    drop(world.scheduler.take_spawned_tasks());
+    let root = write_name(ROOT);
+    let before = record_at(&world, &root);
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
+    let other = IpnsRecord::create_v2(
+        &signer,
+        &before.value,
+        before.sequence,
+        before.ttl,
+        &renewal_eol_from(UnixMillis(0)),
+    )
+    .marshal();
+    world
+        .record_store
+        .seed_record(&world.record_store.endpoints()[1], root.as_str(), other);
+    let file_before = record_at(&world, &write_name(file));
+
+    world.scheduler.advance(DAY * 65);
+    let started = world.scheduler.now();
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        record_at(&world, &root).sequence,
+        before.sequence,
+        "the forked vault root stays at S"
+    );
+    assert_renewed_at_start(&world, &write_name(file), &file_before, started, "the file");
+}
+
 /// A name with more EOL left than the walk window is not renewed.
 #[test]
 fn a_name_outside_the_walk_window_is_left_alone() {

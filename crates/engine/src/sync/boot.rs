@@ -253,7 +253,9 @@ where
             (RootResolve::Adopted, base)
         }
         // Availability staleness, so it paints without claiming an adoption.
-        ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => {
+        ResolveOutcome::NoUpdate
+        | ResolveOutcome::Current { .. }
+        | ResolveOutcome::Forked { .. } => {
             let mut base = base;
             if let Some(at_floor) = &resolved.current_at_floor {
                 project_root(&mut base, params.root, at_floor);

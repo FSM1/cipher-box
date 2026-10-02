@@ -634,8 +634,10 @@ where
                     read_seed: admitted.read_scope_seed.clone(),
                 };
                 let (bytes, sequence) = (admitted.record_bytes.clone(), admitted.sequence);
-                self.consider(pass, scope_id, scope_id, &name, &bytes, sequence)
-                    .await;
+                if !admitted.forked {
+                    self.consider(pass, scope_id, scope_id, &name, &bytes, sequence)
+                        .await;
+                }
                 Some((plane, scope_id, body))
             }
             WalkRoot::Bin(node_id) => {
@@ -735,6 +737,9 @@ where
                 .await;
                 Some(adopted.read_body)
             }
+            // A renewal at `S + 1` would bury the side the order did not pick
+            // (ADR 0066 D3).
+            Ok(ChildRecord::Forked(adopted)) => Some(adopted.read_body),
             Ok(ChildRecord::Absent) => {
                 pass.report
                     .failed
@@ -1048,6 +1053,7 @@ mod tests {
                 },
                 read_scope_seed: Zeroizing::new([0; 32]),
                 write_scope_seed: Some(Zeroizing::new(current)),
+                forked: false,
             },
         }
     }

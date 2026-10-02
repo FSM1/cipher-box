@@ -49,7 +49,7 @@ use super::author::{
     author_scope_root_with_section, report_carried_cut,
 };
 use super::child::{ChildAdopter, LaggingAnchor, LaggingRead, lagging_epoch, open_under_anchor};
-use super::last_known_good::{keep_newest_last_known_good, keep_then_commit};
+use super::last_known_good::{cached_another, keep_newest_last_known_good, keep_then_commit};
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::pointer_fetch::{
     ConsultedPointer, PointerConsult, PointerConsultError, RecordPointerFetch,
@@ -82,7 +82,10 @@ use crate::grants::{
     ScopeRootPromoter, UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row,
     recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
-use crate::net::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify};
+use crate::net::fanout::{
+    FanoutRecord, fanout_get_classified, fanout_get_tied, fanout_get_tied_classified,
+    fanout_get_verify,
+};
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::eager_set::bind_child_labels;
@@ -924,6 +927,34 @@ async fn gated_root_cached<H: Http, F: FloorStore, S: SnapshotCache>(
     .map_err(|_| RootGateVerdict::Unavailable)?
 }
 
+/// [`gated_root_cached`], and whether a read at the floor met a same-sequence
+/// fork: `tied` records beside `record_bytes`, or another cached record at its
+/// sequence (ADR 0066 D1).
+async fn gated_root_forked<H: Http, F: FloorStore, S: SnapshotCache>(
+    adopter: &RootAdopter<'_, H, F>,
+    snapshot_cache: &S,
+    name: &IpnsName,
+    record_bytes: &[u8],
+    tied: bool,
+    expected_child: Option<[u8; 16]>,
+) -> Result<(GatedScopeRoot, bool), RootGateVerdict> {
+    let pass = gate_root_pass(adopter, name, record_bytes, expected_child).await?;
+    let forked = matches!(pass, RootPass::AtFloor(_))
+        && (tied || {
+            let cached = snapshot_cache
+                .get(name.as_str().as_bytes())
+                .await
+                .map_err(|_| RootGateVerdict::Unavailable)?;
+            cached_another(name, cached.as_deref(), record_bytes)
+        });
+    let root = keep_then_commit(snapshot_cache, name, record_bytes, async {
+        Ok(pass.commit(adopter).await)
+    })
+    .await
+    .map_err(|_| RootGateVerdict::Unavailable)??;
+    Ok((root, forked))
+}
+
 /// The write material a descendant scope root's own write plane runs under.
 pub(crate) struct ScopeWritePlane {
     pub(crate) seed: Zeroizing<[u8; SECRET_LEN]>,
@@ -956,6 +987,8 @@ pub(crate) struct DescendantScopeRoot {
     /// answers at, and no write plane opened: a write cut that did not finish
     /// (ADR 0063 consequence 8).
     pub(crate) write_cut_unfinished: bool,
+    /// The descent read the root as one side of a same-sequence fork.
+    pub(crate) forked: bool,
 }
 
 /// Why a proved scope root opened no write plane on this pass.
@@ -1401,14 +1434,15 @@ where
             child.scope_id,
         )
         .under_parent_node_seed(parent_node_seed.clone());
-        let (_, record_bytes) = fanout_get_verify(self.transport, &name)
+        let (_, record_bytes, tied) = fanout_get_tied(self.transport, &name)
             .await
             .ok_or(WalkFailure::Unavailable)?;
-        let gated = gated_root_cached(
+        let (gated, forked) = gated_root_forked(
             &adopter,
             self.snapshot_cache,
             &name,
             &record_bytes,
+            !tied.is_empty(),
             Some(child.scope_id),
         )
         .await
@@ -1437,6 +1471,7 @@ where
                 read_scope_seed: gated.read_scope_seed,
                 write,
                 write_cut_unfinished,
+                forked,
             },
             grandchildren,
         ))
@@ -1768,6 +1803,9 @@ pub(crate) struct AdmittedScopeRoot {
     pub(crate) read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
     /// `None` when the root is held keyless.
     pub(crate) write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
+    /// The read met a same-sequence fork, which the walk does not renew over
+    /// (ADR 0066 D3).
+    pub(crate) forked: bool,
 }
 
 /// Why the renewal walk admitted no owned scope root.
@@ -1807,29 +1845,35 @@ where
         Some(seed) => adopter.under_parent_node_seed(seed.clone()),
         None => adopter,
     };
-    let record_bytes = match fanout_get_classified(transport, name).await {
-        FanoutRecord::Found(_, record_bytes) => record_bytes,
-        FanoutRecord::Absent => return Err(ScopeRootAdmission::Gone),
-        FanoutRecord::Unavailable(_) => return Err(ScopeRootAdmission::Unavailable),
+    let (record_bytes, tied) = match fanout_get_tied_classified(transport, name).await {
+        (Some((_, record_bytes, tied)), _) => (record_bytes, tied),
+        (None, true) => return Err(ScopeRootAdmission::Gone),
+        (None, false) => return Err(ScopeRootAdmission::Unavailable),
     };
-    let gated = gated_root_cached(&adopter, snapshot_cache, name, &record_bytes, None)
-        .await
-        .map_err(|verdict| match verdict {
-            // A rotation publishes before it raises the floor, so a root below
-            // its own floor is a stale read that converges, as for `walk_verdict`.
-            RootGateVerdict::Unavailable | RootGateVerdict::Superseded => {
-                ScopeRootAdmission::Unavailable
-            }
-            RootGateVerdict::Rejected | RootGateVerdict::NotResealable => {
-                ScopeRootAdmission::Rejected
-            }
-        })?;
+    let (gated, forked) = gated_root_forked(
+        &adopter,
+        snapshot_cache,
+        name,
+        &record_bytes,
+        !tied.is_empty(),
+        None,
+    )
+    .await
+    .map_err(|verdict| match verdict {
+        // A rotation publishes before it raises the floor, so a root below
+        // its own floor is a stale read that converges, as for `walk_verdict`.
+        RootGateVerdict::Unavailable | RootGateVerdict::Superseded => {
+            ScopeRootAdmission::Unavailable
+        }
+        RootGateVerdict::Rejected | RootGateVerdict::NotResealable => ScopeRootAdmission::Rejected,
+    })?;
     Ok(AdmittedScopeRoot {
         record_bytes,
         sequence: gated.sequence,
         read_body: gated.read_body,
         read_scope_seed: gated.read_scope_seed,
         write_scope_seed: gated.write_scope_seed,
+        forked,
     })
 }
 

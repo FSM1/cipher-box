@@ -145,7 +145,15 @@ scenario fails the meta-test):
   time ahead of the clock, and one window for each cycle; a publish during the
   registration wait makes the walk refuse; at one
   sequence the later EOL wins in the resolve and in the last-known-good
-  keeper. `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
+  keeper, and at one EOL the lower record bytes win. A same-sequence fork
+  (ADR 0066): a resolve at the floor reports a fork when the fan-out serves a
+  second record at that sequence, and, cache-first, when the cache holds one,
+  and a record at the floor that fails the floor check stays a trust
+  violation (`net::resolve`); a device that reads a fork at the vault root on
+  two ticks sends one fork event and no abuse event (`tests/write_plane.rs`);
+  the walk renews neither a forked file nor a forked vault root, and the
+  renewal set does not renew a name the endpoints serve forked
+  (`tests/renewal_walk.rs`, `net::liveness`). `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
   wave left at its old name, which nothing renews; `tests/write_plane.rs`
   covers a renewal inside the drain's window, and a lost race on a scope root
   or an interior folder healed after a restart or a re-read.

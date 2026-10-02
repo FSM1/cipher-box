@@ -2258,6 +2258,13 @@ pub enum Event {
         /// Human-readable classification (no key material).
         description: String,
     },
+    /// A read met another record at one sequence of a name: a same-sequence
+    /// fork, not a trust violation (ADR 0066). Sent once for each name and
+    /// sequence in a session.
+    SameSequenceFork {
+        /// The record's routing key (`ipnsName`).
+        routing_key: String,
+    },
     /// A held record's sub-EOL renewal did not land — a lost CAS race or a
     /// fail-closed publish failure — or a start could not raise the vault
     /// pointer's `minReadEpoch` to the root epoch it adopted. Surfaced, never
@@ -2414,6 +2421,10 @@ impl fmt::Debug for Event {
             Self::AttributableAbuse { description } => f
                 .debug_struct("AttributableAbuse")
                 .field("description", description)
+                .finish(),
+            Self::SameSequenceFork { routing_key } => f
+                .debug_struct("SameSequenceFork")
+                .field("routing_key", &RedactedText::of(routing_key))
                 .finish(),
             Self::RenewalFailed {
                 routing_key,
@@ -4566,6 +4577,32 @@ pub(crate) fn emit_trust_violation(
     let _ = events.unbounded_send(Event::AttributableAbuse {
         description: format!("{:?}: {detail}", RedactedText::of(routing_key)),
     });
+}
+
+/// The (routing key, sequence) pairs this session reported a same-sequence
+/// fork at, so each pair sends [`Event::SameSequenceFork`] once (ADR 0066 D2).
+#[derive(Default)]
+pub(crate) struct ForkSightings(RefCell<BTreeSet<(String, u64)>>);
+
+impl ForkSightings {
+    /// Report a fork at `sequence` of `routing_key`, unless this session
+    /// already did.
+    pub(crate) fn report(
+        &self,
+        events: &mpsc::UnboundedSender<Event>,
+        routing_key: &str,
+        sequence: u64,
+    ) {
+        if self
+            .0
+            .borrow_mut()
+            .insert((routing_key.to_owned(), sequence))
+        {
+            let _ = events.unbounded_send(Event::SameSequenceFork {
+                routing_key: routing_key.to_owned(),
+            });
+        }
+    }
 }
 
 /// Report one grant row whose recipient binding the owner never signed.
@@ -9702,6 +9739,7 @@ where {
                 gateway: &self.gateway,
                 base: &self.state.snapshot,
                 events: &self.events,
+                forks: &self.state.fork_sightings,
                 scope_id: root.0,
                 scope_read_seed,
                 scope_root_name: root_name.as_ref(),
@@ -9879,6 +9917,7 @@ where {
                 gateway: &self.gateway,
                 base: &self.state.snapshot,
                 events: &self.events,
+                forks: &self.state.fork_sightings,
                 scope_id: scope.0,
                 scope_read_seed: &material.seed,
                 scope_root_name: material.scope_root_name.as_ref(),

@@ -11,7 +11,7 @@ use core::task::Poll;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 
-use super::eol::eol_is_later;
+use super::eol::ranks_above;
 use crate::seams::{EndpointId, RecordTransport};
 
 /// Hard ceiling on one signed IPNS record fetched from a `/routing/v1`
@@ -259,9 +259,9 @@ pub async fn fanout_get_under<T: RecordTransport>(
 }
 
 /// The freshest verified record, and every other record another endpoint
-/// served at its sequence. The freshest pick keeps the later EOL on a tie, and
-/// the first endpoint when the EOLs match, so without the ties a sibling's
-/// record on a later endpoint hides behind it.
+/// served at its sequence. The freshest pick takes the record that ranks
+/// above the others at a tie ([`ranks_above`]), so without the ties a
+/// sibling's record hides behind it.
 /// The ties are record-verified only; a caller gates one before it builds on
 /// it.
 pub(crate) async fn fanout_get_tied<T: RecordTransport>(
@@ -288,8 +288,8 @@ pub(crate) async fn fanout_get_tied_classified<T: RecordTransport>(
 
 /// Every endpoint's answer to one fan-out GET, before a caller reads it.
 struct Scan {
-    /// The freshest verifiable record. At one sequence the later EOL wins
-    /// (ADR 0061 D3 step 7), then the first endpoint.
+    /// The freshest verifiable record. At one sequence the record that
+    /// [`ranks_above`] the others wins.
     best: Option<(VerifiedRecord, Vec<u8>)>,
     /// The other distinct verifiable records at `best`'s sequence, one per
     /// endpoint at most.
@@ -349,7 +349,7 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
                 if bytes == *held || scan.tied.contains(&bytes) {
                     continue;
                 }
-                if eol_is_later(&verified.validity, &current.validity) {
+                if ranks_above((&verified.validity, &bytes), (&current.validity, held)) {
                     if let Some((_, displaced)) = scan.best.replace((verified, bytes)) {
                         scan.tied.push(displaced);
                     }
@@ -468,6 +468,34 @@ mod tests {
                 vec![renewal.clone()],
                 "the renewal is the tied record"
             );
+        }
+    }
+
+    /// At one sequence and one EOL, every reader takes the lower record bytes,
+    /// whatever endpoint serves them (ADR 0066 D2).
+    #[test]
+    fn at_one_sequence_and_one_eol_the_lower_bytes_win_on_any_endpoint() {
+        use crate::net::eol::eol_from;
+        use crate::seams::UnixMillis;
+
+        let signer = Ed25519Signer::from_seed([3u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let eol = eol_from(UnixMillis(5_000_000));
+        let mut records = [
+            IpnsRecord::create_v2(&signer, b"/ipfs/one", 4, 1, &eol).marshal(),
+            IpnsRecord::create_v2(&signer, b"/ipfs/two", 4, 1, &eol).marshal(),
+        ];
+        records.sort();
+        let [lower, higher] = records;
+        for order in [[&lower, &higher], [&higher, &lower]] {
+            let eps = vec![EndpointId::new("a"), EndpointId::new("b")];
+            let store = InMemoryRecordStore::new(eps.clone());
+            store.seed_record(&eps[0], name.as_str(), order[0].clone());
+            store.seed_record(&eps[1], name.as_str(), order[1].clone());
+
+            let (_, best, tied) = block_on(fanout_get_tied(&store, &name)).expect("a record");
+            assert_eq!(best, lower, "the lower bytes win the tie");
+            assert_eq!(tied, vec![higher.clone()]);
         }
     }
 

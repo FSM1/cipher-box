@@ -524,8 +524,16 @@ where
         }
         let resolved = held_resolve.map(|surfaced| surfaced.resolved);
         if let Ok(resolved) = &resolved {
-            if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
-                emit_trust_violation(&self.seams.events, pass.root_name.as_str(), rejection);
+            match &resolved.outcome {
+                ResolveOutcome::TrustViolation(rejection) => {
+                    emit_trust_violation(&self.seams.events, pass.root_name.as_str(), rejection);
+                }
+                ResolveOutcome::Forked { sequence, .. } => state.fork_sightings.report(
+                    &self.seams.events,
+                    pass.root_name.as_str(),
+                    *sequence,
+                ),
+                _ => {}
             }
             let merged =
                 refresh_base_from_resolved(&state.snapshot, NodeId(self.root_id), resolved);
@@ -593,6 +601,13 @@ where
                     .filter(|scope| scope.write_cut_unfinished)
                     .map(|scope| scope.scope_id)
                     .collect();
+                for scope in walked.proved.iter().filter(|scope| scope.forked) {
+                    state.fork_sightings.report(
+                        &self.seams.events,
+                        scope.name.as_str(),
+                        scope.adopted.sequence,
+                    );
+                }
                 install_unproved_scopes(
                     &state.unproved_scope_roots,
                     walked.proved.iter().map(|s| NodeId(s.scope_id)),
@@ -701,6 +716,7 @@ where
                 gateway: &self.seams.gateway,
                 base: &state.snapshot,
                 events: &self.seams.events,
+                forks: &state.fork_sightings,
                 scope_id: scope_root.0,
                 scope_read_seed: &material.seed,
                 scope_root_name: material.scope_root_name.as_ref(),
@@ -790,9 +806,9 @@ where
         // trust verdict, never the staleness the other failures are.
         let root_verdict = match resolved {
             Ok(r) => match &r.outcome {
-                ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. } => {
-                    RefreshVerdict::Reconciled
-                }
+                ResolveOutcome::Adopted(_)
+                | ResolveOutcome::Current { .. }
+                | ResolveOutcome::Forked { .. } => RefreshVerdict::Reconciled,
                 ResolveOutcome::TrustViolation(_) => RefreshVerdict::Rejected,
                 ResolveOutcome::NoUpdate => RefreshVerdict::Unreachable,
             },
@@ -1993,6 +2009,7 @@ mod tests {
                 read_scope_seed: Zeroizing::new(READ_SCOPE_SEED),
                 write,
                 write_cut_unfinished: false,
+                forked: false,
             }
         }
 

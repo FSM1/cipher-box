@@ -28,7 +28,9 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol::{self, EOL_RENEW_THRESHOLD};
-use super::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify, fanout_put};
+use super::fanout::{
+    FanoutRecord, fanout_get_classified, fanout_get_tied, fanout_get_verify, fanout_put,
+};
 use super::publish::{
     InlineRecordRequest, Observed, PublishError, PublishOutcome, PublishRequest, publish,
     publish_inline,
@@ -369,8 +371,10 @@ where
 /// Republish `request`'s name at seq+1 with a fresh 90-day EOL **iff** its
 /// current record is still live but within the renewal window
 /// ([`EOL_RENEW_THRESHOLD`]). Returns `Ok(None)` when the record's EOL is
-/// comfortably ahead (no renewal needed) or when no current record can be
-/// resolved to inspect. A lapsed record is out of scope here — that is revival.
+/// comfortably ahead (no renewal needed), when no current record can be
+/// resolved to inspect, or when the endpoints serve another record at its
+/// sequence: a renewal would bury one side of that fork (ADR 0066 D3). A
+/// lapsed record is out of scope here — that is revival.
 pub async fn eol_republish<T, H, C, F, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,
@@ -386,11 +390,13 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let Some((verified, _bytes)) = fanout_get_verify(transport, request.observed.name()).await
+    let Some((verified, _bytes, tied)) = fanout_get_tied(transport, request.observed.name()).await
     else {
         return Ok(None);
     };
-    if !eol::needs_renewal(scheduler.now(), &verified.validity, EOL_RENEW_THRESHOLD) {
+    if !tied.is_empty()
+        || !eol::needs_renewal(scheduler.now(), &verified.validity, EOL_RENEW_THRESHOLD)
+    {
         return Ok(None);
     }
 
@@ -840,6 +846,47 @@ mod tests {
                 .validity,
             eol::eol_from(start).into_bytes(),
         );
+    }
+
+    /// A held name inside the renewal window, where one endpoint serves
+    /// another record at its sequence: the renewal would bury one side of the
+    /// fork, so it does not sign (ADR 0066 D3).
+    #[test]
+    fn a_held_name_the_endpoints_serve_forked_is_not_renewed() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let scheduler = world.scheduler.clone();
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let (name, held) = seeded_held(&device, [1u8; 32], [2u8; 16], "bafyheld", 0);
+        let other = IpnsRecord::create_v2(
+            &held.signer,
+            b"/ipfs/bafyother",
+            1,
+            TTL_NANOS,
+            &eol::eol_from(UnixMillis(0)),
+        )
+        .marshal();
+        let endpoint = device.record_store.endpoints()[1].clone();
+        device
+            .record_store
+            .seed_record(&endpoint, name.as_str(), other);
+        scheduler.advance(Duration::from_secs(65 * DAY));
+        device.http.enqueue_response(ok_200());
+
+        let results = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &scheduler,
+            &SyncTimingProfile::CI,
+            &[held],
+        ));
+        assert_eq!(outcome_of(&results, &name).outcome.as_ref().unwrap(), &None);
+        assert_eq!(seq_at(&device, &name), 1);
     }
 
     #[test]
