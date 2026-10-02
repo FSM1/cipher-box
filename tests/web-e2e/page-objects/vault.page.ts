@@ -41,7 +41,8 @@ export class VaultPage {
    * no fixture setup. It is minted in the page because an `evaluate` argument is
    * recorded verbatim in the trace this suite uploads from a public repo.
    * `identity` binds the account to its subject, as a sign-in that follows an
-   * exchange does.
+   * exchange does. Its token is an `evaluate` argument, so a spec that passes one
+   * turns the trace off.
    */
   async coldStart(identity?: ExchangedIdentity): Promise<string> {
     // Its own store namespace, so a second cold start in one context never
