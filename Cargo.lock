@@ -710,7 +710,6 @@ dependencies = [
 name = "cipherbox-contract"
 version = "0.0.0"
 dependencies = [
- "base64 0.22.1",
  "cipherbox-core",
  "cipherbox-engine",
  "getrandom 0.2.17",
