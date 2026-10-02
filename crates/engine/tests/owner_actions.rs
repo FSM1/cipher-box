@@ -2221,7 +2221,8 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
         session = Some((engine, events, tasks));
         granted_at(Permission::Read)(fx);
     });
-    let (engine, _events, mut tasks) = session.expect("the second device booted");
+    let (engine, mut events, mut tasks) = session.expect("the second device booted");
+    events_so_far(&mut events);
     assert!(
         !block_on(engine.view())
             .unwrap()
@@ -2239,14 +2240,15 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
             .all(|entry| entry.node_id != deep.0),
         "the node the winning parent names is no capture"
     );
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
     assert_held_in_the_vault_scope(&fx, keep, deep, "second device");
 }
 
 /// A granted folder keeps the ref its parent named it by, under the parent's
-/// write seed, so the vault scope's capture walk must stop at it as a boundary.
+/// write seed, so the vault scope's capture walk reads it under its own end.
 /// Another writer's unlink in the vault scope then bins, and no record is
 /// reported faulty.
-fn assert_a_capture_walk_stops_at_a_granted_folder(permission: Permission) {
+fn assert_a_capture_walk_reads_a_granted_folder_under_its_own_end(permission: Permission) {
     let mut fx = GrantScenario::new();
     let (mut engine, mut events, mut tasks) = fx.second_owner_device();
     assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
@@ -2265,13 +2267,13 @@ fn assert_a_capture_walk_stops_at_a_granted_folder(permission: Permission) {
 }
 
 #[test]
-fn a_capture_walk_stops_at_a_read_granted_folder() {
-    assert_a_capture_walk_stops_at_a_granted_folder(Permission::Read);
+fn a_capture_walk_reads_a_read_granted_folder_under_its_own_end() {
+    assert_a_capture_walk_reads_a_granted_folder_under_its_own_end(Permission::Read);
 }
 
 #[test]
-fn a_capture_walk_stops_at_a_write_granted_folder() {
-    assert_a_capture_walk_stops_at_a_granted_folder(Permission::Write);
+fn a_capture_walk_reads_a_write_granted_folder_under_its_own_end() {
+    assert_a_capture_walk_reads_a_granted_folder_under_its_own_end(Permission::Write);
 }
 
 /// A folder `doomed` under a new vault folder, which `second` loads and then
@@ -2479,6 +2481,130 @@ fn the_rekey_of_a_captured_folder_stops_at_a_granted_folder_inside_it() {
             .any(|entry| entry.node_id == plain.0),
         "the unlinked folder bins"
     );
+}
+
+/// The owner moves a node out of a folder under a granted folder into a vault
+/// folder. A second owner device that loaded only the granted side sees a
+/// departure in the granted scope. Its walk starts at the vault root, finds the
+/// link, and bins nothing.
+fn assert_a_move_out_of_a_granted_folder_is_no_capture(permission: Permission) {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let (mut second, mut events, mut tasks) = fx.second_owner_device();
+    assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let doomed =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "doomed");
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    block_on(second.command(Command::SetFocus { node: Some(inner) })).unwrap();
+    for _ in 0..2 {
+        tick(&fx.world, &second, &mut tasks);
+    }
+    assert_eq!(block_on(second.view()).unwrap().children(inner).len(), 1);
+    block_on(fx.engine.command(Command::Relink {
+        node: doomed,
+        new_parent: plain,
+    }))
+    .expect("the move journals");
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        block_on(fx.engine.view())
+            .unwrap()
+            .children(plain)
+            .iter()
+            .any(|child| child.id == doomed),
+        "the owner moved the node into the vault folder"
+    );
+    events_so_far(&mut events);
+    for _ in 0..8 {
+        tick(&fx.world, &second, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != doomed.0),
+        "the moved node does not bin"
+    );
+}
+
+#[test]
+fn a_move_out_of_a_read_granted_folder_is_no_capture() {
+    assert_a_move_out_of_a_granted_folder_is_no_capture(Permission::Read);
+}
+
+#[test]
+fn a_move_out_of_a_write_granted_folder_is_no_capture() {
+    assert_a_move_out_of_a_granted_folder_is_no_capture(Permission::Write);
+}
+
+/// The owner bins a folder that holds a granted folder, then purges it. The
+/// purge walk stops at the granted root, which the bin never re-keyed.
+fn assert_a_purge_stops_at_a_granted_folder_it_holds(permission: Permission) {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
+    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, outer, "plain");
+    block_on(fx.engine.command(Command::Relink {
+        node: fx.folder,
+        new_parent: plain,
+    }))
+    .expect("the move journals");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    block_on(fx.engine.command(Command::Delete { node: plain })).expect("the delete journals");
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == plain.0),
+        "the folder is in the bin"
+    );
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::Purge { node: plain })).expect("the purge journals");
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    assert!(
+        block_on(fx.engine.status())
+            .expect("the status reads")
+            .dead_letters
+            .is_empty(),
+        "the purge does not dead-letter"
+    );
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != plain.0),
+        "the purge drops the entry"
+    );
+}
+
+#[test]
+fn a_purge_stops_at_a_read_granted_folder_it_holds() {
+    assert_a_purge_stops_at_a_granted_folder_it_holds(Permission::Read);
+}
+
+#[test]
+fn a_purge_stops_at_a_write_granted_folder_it_holds() {
+    assert_a_purge_stops_at_a_granted_folder_it_holds(Permission::Write);
 }
 
 #[test]

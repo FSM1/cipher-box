@@ -190,12 +190,11 @@ fn admissible_staged_block(key: &[u8], block: Vec<u8>) -> Result<Vec<u8>, Halt> 
 
 /// Whether `child` publishes under the name this scope's write seed derives.
 ///
-/// A child that does not is a scope root: its subtree is sealed under a
-/// grantee's own seed, and cutting that grantee needs a re-key the bin does not
-/// carry, so a delete of it stays hard (ADR 0010 item 3). Every other reader in
-/// the delete path derives the child's name the same way and never reads this
-/// field, so a child the comparison rejects is one this scope's write plane
-/// does not name either.
+/// A name check only: a granted scope root passes it, and [`in_this_scope`]
+/// also excludes a proved scope root. Every other reader in the delete path
+/// derives the child's name the same way and never reads this field, so a
+/// child the comparison rejects is one this scope's write plane does not name
+/// either.
 fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
     end.write_name(&child.id).as_str().as_bytes() == child.ipns_name
 }
@@ -938,6 +937,22 @@ enum WalkStep {
 }
 
 impl CaptureWalk {
+    /// A walk of the whole vault from its root, so a link in a scope above or
+    /// beside the capture's own scope counts. With no vault end this tick, the
+    /// walk reads the capture's own scope and proves nothing.
+    fn from_vault_root(
+        scope: &DrainScope<'_>,
+        ends: &[ScopeEnd<'_>],
+        cohort: BTreeSet<CaptureKey>,
+    ) -> Self {
+        let vault = std::iter::once(&scope.source)
+            .chain(ends)
+            .find(|end| end.ascent_node_seed.is_none());
+        let mut walk = Self::new(vault.map_or(scope.source.root, |end| end.root), cohort);
+        walk.blind = vault.is_none();
+        walk
+    }
+
     fn new(root: NodeId, cohort: BTreeSet<CaptureKey>) -> Self {
         Self {
             cohort,
@@ -1697,22 +1712,21 @@ enum Settle<'a> {
 
 /// Where a doomed walk stops descending.
 #[derive(Clone, Copy)]
-enum Boundary {
+enum Boundary<'r> {
     /// Every child ref is walked. A descendant this pass cannot read is unknown
     /// structure and refuses the whole operation.
     None,
-    /// A child that does not publish under a name this scope's write seed
-    /// derives is a scope root, and the bin re-keyed no such child: its record
-    /// does not open under the bin-held key, so it is not this purge's to
-    /// reclaim ([`Drain::rekey_subtree`]).
-    ScopeRoots,
+    /// A scope root, which the bin never re-keyed: its record does not open
+    /// under the bin-held key, so it is not this purge's to reclaim
+    /// ([`Drain::rekey_subtree`]). Holds the pass's proved scope roots.
+    ScopeRoots(&'r [NodeId]),
 }
 
-impl Boundary {
+impl Boundary<'_> {
     fn admits(self, end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
         match self {
             Self::None => true,
-            Self::ScopeRoots => names_this_scope(end, child),
+            Self::ScopeRoots(scope_roots) => in_this_scope(end, scope_roots, child),
         }
     }
 }
@@ -3740,7 +3754,7 @@ where
                 NodeId(entry.origin_parent),
                 target,
                 entry.kind,
-                Boundary::ScopeRoots,
+                Boundary::ScopeRoots(scope.scope_roots),
             )
             .await
             .map_err(charge_bin_read)?;
@@ -4040,7 +4054,7 @@ where
         parent: NodeId,
         target: NodeId,
         kind: NodeKind,
-        boundary: Boundary,
+        boundary: Boundary<'_>,
     ) -> Result<Vec<Doomed>, Halt> {
         let mut doomed = Vec::new();
         let mut seen = BTreeSet::from([parent.0]);
@@ -4360,9 +4374,9 @@ where
     /// this scope may still bin. A node held twice keeps its first capture.
     ///
     /// A node the base still links did not leave the tree, and binning it would
-    /// seal a live node under a key no reader derives. A scope root, proved or
-    /// by its name, stays hard ([`names_this_scope`]). A name longer than this
-    /// build ever authors is a peer's, and no entry carries it.
+    /// seal a live node under a key no reader derives. A capture of a scope
+    /// root, proved or by its name, drops unbinned ([`in_this_scope`]). A name
+    /// longer than this build ever authors is a peer's, and no entry carries it.
     fn prune_captures(&self, scope: &DrainScope<'_>) -> BTreeSet<CaptureKey> {
         let base = self.cells.base.borrow();
         let mut eligible = BTreeSet::new();
@@ -4438,7 +4452,7 @@ where
             (!walk.cohort.is_empty()).then_some(walk)
         });
         if walk.is_none() && !unproved.is_empty() {
-            walk = Some(CaptureWalk::new(scope_root, unproved));
+            walk = Some(CaptureWalk::from_vault_root(scope, ends, unproved));
         }
         if let Some(mut walk) = walk {
             match self.step_walk(scope, ends, root, &mut walk).await {
