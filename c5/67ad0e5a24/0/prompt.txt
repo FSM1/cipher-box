@@ -516,3 +516,118 @@ My notes and the PR body files are in `/Users/myankelev/.claude/scratch/w22/MD/`
 I did not post to GitHub, did not mark the PR ready, and did not request CodeRabbit.</result>
 <usage><subagent_tokens>110133</subagent_tokens><tool_uses>35</tool_uses><duration_ms>1298860</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>aadf9b5fae4069504</task-id>
+<tool-use-id>toolu_01C1625pAV6ZZmYG4KNzTVk1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/aadf9b5fae4069504.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane MC 2164 owner capture" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I folded the review into PR 2179 in one commit. CI passes: 27 checks pass and 4 are skipped.
+
+**Head SHA:** b2f689ce08b4f3c3a846aa440b60d08fd4c8b5e4. The PR is still a draft. I did not request a CodeRabbit review. I read the PR body back after the change. It has no tool attribution.
+
+**Items, tests and old-head results.** The old head is 63dcda9ce. The unit tests use the new bound injection, so they do not compile on the old head. I did not run them there.
+
+1. **The proof binds to what the device saw.**
+   - a. The walk reads each folder twice. A changed sequence or a failed read starts the walk again. Test: `a_walk_that_read_the_destination_before_the_move_starts_again` fails on the old head. The unit test `a_walk_resumes_across_passes_and_restarts_when_a_folder_moves` covers this too.
+   - b. Proofs use the key (node, `deletedAt`). Test: `a_new_departure_of_a_node_needs_a_walk_of_its_own` (unit).
+   - c. A capture that is given back loses its proof. Test: `a_capture_given_back_needs_a_new_walk_before_it_bins` fails on the old head.
+   - d. The drain checks the base again at take time. This item has no test. In one pass the base changes only through a concurrent read, and I found no fixture that can make that occur.
+2. **A failed read drops the walk.** Test: `a_folder_removed_while_it_does_not_read_does_not_stop_the_walk` fails on the old head.
+3. **A tied record is a failed read.** Test: `a_destination_served_tied_proves_no_departure` fails on the old head.
+4. **The read budget is shared across the tick, and the cohort has no limit.** Tests: an added assertion in `a_tick_shares_its_bin_expiries_over_the_final_pass_count`, and the resume unit test.
+5. **Overflow drops the scope's captures and sets the session marker.** The drain stops before `load_scope_root` for a scope with the marker. I changed the blueprint and added the residual. I also changed the bullet "clears one only when its entry lands", because the drop contradicted it. Test: `a_scope_past_the_walk_bound_drops_its_captures_and_is_not_walked_again` (unit). It asserts that `FOLDER` is read 0 times.
+6. **The overflow test gives `FOLDER` a record.** This is in the test of item 5.
+7. **Missing tests.**
+   - The gate refusal test, `a_folder_the_gate_refuses_holds_the_capture`, passes on the old head.
+   - The cleanup test, `a_scope_whose_captures_left_the_set_keeps_no_walk`, is a unit test.
+   - Tests from items 1 to 5 cover the other cases.
+8. **The grant test.** The PR body calls it a regression guard.
+9. **Optional items.** I applied all of them.
+
+The three tests that failed on main before still fail on main after the refactor, and the true-capture test still passes on main.
+
+**Follow-up issues:** #2189 (`open_root_record` gives no trust-violation event), #2190 (the walk during a name wave), #2191 (a capture after a move into a child scope). Each has the `comp:engine` label. #2190 and #2191 are blocked by #2164. #2189 has no edge, because it does not depend on #2164.
+
+**Gates:** fmt, clippy, engine tests (3,033 pass), the wasm32 check, tracker-refs, and markdownlint and prettier on the blueprint all pass.</result>
+<usage><subagent_tokens>399553</subagent_tokens><tool_uses>93</tool_uses><duration_ms>1707562</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aadf9b5fae4069504</worktreePath><worktreeBranch>worktree-agent-aadf9b5fae4069504</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2ca28e931d65a771</task-id>
+<tool-use-id>toolu_01U5A8xbfLR2DW5AH8ukqmtR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a2ca28e931d65a771.output</output-file>
+<status>completed</status>
+<summary>Agent "Review 1 of PRs 2181 and 2188" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Two gate reports are in (standards, spec). I am waiting for the security and crypto reports.</result>
+<usage><subagent_tokens>178708</subagent_tokens><tool_uses>55</tool_uses><duration_ms>631999</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8ccd92f73ac38e16</task-id>
+<tool-use-id>toolu_013YhkQPBZ1n3QH41HF4e9Pd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2074cd51-eaea-489e-933c-9eef4b9d8c76/tasks/a8ccd92f73ac38e16.output</output-file>
+<status>completed</status>
+<summary>Agent "Code-review later commits PR 2178" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No gate found a blocker. I found three optional items and one note for the PR body. The worktree is at de61936c1, and CI on the PR head passes, including "Core KATs (native + WASM)", which runs the wasm32 facade tests. I ran the two changed client test files locally, and all 45 tests pass.
+
+## Gate 1: /code-review, standards axis
+
+**Optional: duplicated code.** `wipeStep` in `packages/client/src/leaderRelay.ts` and `scrubStep` in `packages/client/src/worker/engineHost.ts` now have the same body: an object check, then a loop over `RENDEZVOUS_SECRET_FIELDS` that calls `wipeBytes`.
+- **Failure scenario:** a person changes the wipe at one site and forgets the other site. Then one realm keeps a secret copy.
+- **Fix:** export one helper next to `RENDEZVOUS_SECRET_FIELDS` in `protocol.ts`, and call it from both sites.
+
+**Optional: the invariant is stated three times.** The rule "the slots name exactly the bytes fields" is in the docs of `take_rendezvous_secrets`, `decode_rendezvous_step` and `secrets_mut`. AGENTS.md says to state an invariant one time, at its home.
+- **Fix:** keep the full statement at `take_rendezvous_secrets` only.
+
+These items are clean:
+- no tracker references and no absence-justifying comments;
+- no TS enums;
+- the tests assert behavior, not source text;
+- `crates/wasm/tests/rendezvous.rs` is in the CI gate;
+- the `or_else` change in `host.rs`, the `Glue.*` types and the `Object.entries` filter.
+
+## Gate 1: /code-review, spec axis (issue #2161 and the two commits)
+
+Each purpose of the fold is done:
+- `SECRET_FIELDS` is removed, and each bytes field gets a placeholder.
+- The check on the slots refuses a missing slot and a duplicate slot.
+- `wipeStep` reads the shared list, and the new test proves that.
+- The issue rule "a new field fails `pnpm typecheck`" holds through `STEP_SECRETS`.
+
+**Note for the PR body: behavior changes in the /simplify commit 88fa63e7c.** This commit wraps the buffered bytes in `secret()` (`crates/wasm/src/lib.rs`) in `Zeroizing` before the empty check. It also changes `scrubStep` from `instanceof Uint8Array` to `wipeBytes`. Both changes are improvements, but /simplify is quality only.
+- **Fix:** no code change. Put the two changes in the PR body.
+
+## Gate 2: security and crypto
+
+**Optional: a narrower placeholder in `decode_rendezvous_step` (`crates/wasm/src/boundary.rs`).**
+- At b394e7291, each value at a secret key got the placeholder, whatever its type. Now only a value where `is_bytes` is true gets it.
+- **Failure scenario:** a caller sends `scalar: Array.from(bytes)` or a hex string. serde-wasm-bindgen 0.6 `deserialize_any` buffers the array as numbers, or the string as text, in serde's internal buffer. Then `secret()` refuses the step, and the buffer is freed with no wipe.
+- The TS type forbids these shapes, and the value is the caller's own secret. The `secret()` doc already names this residue class.
+- **Fix:** accept this as a residual. Or give the placeholder to each own key whose value is not a string, because each non-secret field of each step is a string. That change closes the array and object cases, but not a secret sent as a string.
+
+These items are clean:
+- **Release-active:** the checks in `take_rendezvous_secrets` are a plain `if` and `ok_or_else`. They do not use `debug_assert!` or `assert!`.
+- **"Every bytes field is a secret":**
+  - No step variant has a bytes field that is not a secret.
+  - Each value that serde-wasm-bindgen reads as bytes (`Uint8Array` or `ArrayBuffer`) is also `is_bytes`, so it gets the placeholder.
+  - An unknown bytes field gets the placeholder, and then `deny_unknown_fields` refuses the step.
+- **Empty secret:** no legal flow sends one. `apps/web/src/engine/introspection.ts` sends 32 bytes for `scalar`, `sealScalar` and `factorKey`, and a `deny` step has no bytes field. `a_scalar_of_the_wrong_length_is_refused` uses 31 bytes, so it still passes. No TS code expects the old message "a rendezvous scalar is 32 bytes".
+- **The empty refusal also closes a hole:** `seal_factor` does not check the length of `factor_key`. At b394e7291, an empty or detached `factorKey` sealed an empty factor.
+- **Zeroize at the terminal owner:** the code copies the bytes into `Zeroizing` immediately. It does not zero the JS buffer, which the TS owner scrubs. If the decode refuses after some slots are filled, the dropped step wipes them.
+- **Logs and errors:** `rendezvous_refused` has no value in it, and the `secret()` message is static and mapped away.
+
+All review notes and reports are in `/Users/myankelev/.claude/scratch/w22/MB/review2/`: the saved diff, `standards.md` and `spec-review.md`.</result>
+<usage><subagent_tokens>98788</subagent_tokens><tool_uses>17</tool_uses><duration_ms>448872</duration_ms></usage>
+</task-notification>
