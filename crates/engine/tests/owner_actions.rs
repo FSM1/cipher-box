@@ -5912,6 +5912,63 @@ fn a_snapshot_row_carries_the_ipns_name_of_a_published_child() {
     }
 }
 
+/// A navigation into a folder the owner granted on this device lands before
+/// any walk proves the new scope root. The navigation leg must hold it as a
+/// scope root, never read its record as an ordinary child and report the
+/// owner's own honest record as abuse.
+#[test]
+fn a_navigation_right_after_a_grant_reads_no_new_scope_root_as_a_child() {
+    let mut fx = GrantScenario::new();
+    events_so_far(&mut fx._events);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the granted folder takes the focus");
+    block_on(fx.engine.command(Command::Create {
+        parent: fx.folder,
+        name: "after-the-grant.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a metadata create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    let listed: Vec<String> = block_on(fx.engine.snapshot(fx.folder))
+        .expect("the granted folder opens")
+        .children
+        .into_iter()
+        .map(|child| child.name)
+        .collect();
+    assert_eq!(listed, vec!["after-the-grant.bin".to_owned()]);
+}
+
+/// A revoke runs several gated scope-root reads, so its refusal names the read
+/// that refused.
+#[test]
+fn a_revoke_refused_by_the_gate_names_the_read_that_refused() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // The vault root's own record at the granted scope's name: owner-signed,
+    // and refused by the gate because its commitment names another name.
+    publish_value_at(
+        &fx.world,
+        fx.folder,
+        &published_value(&fx.world, &write_name(ROOT)),
+    );
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        })),
+        Err(EngineError::TrustViolation {
+            message: "descendant record rejected by adoption gate at [scope-root]".to_owned(),
+        })
+    );
+}
+
 /// The share dialog's epoch row reads the scope root's published record, so a
 /// person revoke steps the read epoch by one and leaves the write epoch alone.
 #[test]

@@ -550,7 +550,7 @@ where
             .net(&target, PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
             .await
-            .map_err(|e| stop(EngineError::from_resolve_failure(e)))?;
+            .map_err(|e| stop(EngineError::from_resolve_failure(e, "owed-scope-root")))?;
         Ok(OwedScope {
             indexed,
             target,
@@ -586,7 +586,7 @@ where
             .net(&parent, PointerConsultArm::Permitted)
             .resolve_anchored(&parent.scope)
             .await
-            .map_err(EngineError::from_resolve_failure)?;
+            .map_err(|e| EngineError::from_resolve_failure(e, "owed-enclosing-scope"))?;
         let indexed = enclosing
             .direct_child_scope_index
             .iter()
@@ -619,7 +619,7 @@ where
         let current = net
             .resolve_anchored(&parent.scope)
             .await
-            .map_err(|e| stop(EngineError::from_resolve_failure(e)))?;
+            .map_err(|e| stop(EngineError::from_resolve_failure(e, "owed-move-source")))?;
         let subtree = sites
             .child_scopes_inside(node, &current.direct_child_scope_index)
             .await

@@ -2857,16 +2857,15 @@ impl EngineError {
         }
     }
 
-    /// Map the gated read a mint runs first: a rejection is a fail-closed trust
-    /// verdict, and every other verdict is availability.
-    fn from_resolve_failure(err: ResolveFailure) -> Self {
+    /// Map a gated scope-root read: a rejection is a fail-closed trust verdict,
+    /// and every other verdict is availability. `site` names which read
+    /// refused, since one command runs several and the verdict alone does not
+    /// tell them apart.
+    fn from_resolve_failure(err: ResolveFailure, site: &'static str) -> Self {
+        let message = format!("{err} at [{site}]");
         match err {
-            ResolveFailure::Rejected => EngineError::TrustViolation {
-                message: err.to_string(),
-            },
-            _ => EngineError::Seam {
-                message: err.to_string(),
-            },
+            ResolveFailure::Rejected => EngineError::TrustViolation { message },
+            _ => EngineError::Seam { message },
         }
     }
 
@@ -4308,7 +4307,7 @@ impl OwnerScope {
     fn resolve_error(&self, check: &'static str, failure: ResolveFailure) -> EngineError {
         match failure {
             ResolveFailure::Rejected if !self.vouched => EngineError::UnsupportedTarget { check },
-            other => EngineError::from_resolve_failure(other),
+            other => EngineError::from_resolve_failure(other, "scope-root"),
         }
     }
 }
@@ -7242,7 +7241,7 @@ where {
         let mut current = net
             .resolve_vault_root(&scope.scope)
             .await
-            .map_err(EngineError::from_resolve_failure)?;
+            .map_err(|e| EngineError::from_resolve_failure(e, "vault-root"))?;
         // Root-first, so each step descends into the index the step above rode.
         // The vault root is the walk's own anchor rather than a step in it, and
         // no index names it.
@@ -7274,7 +7273,7 @@ where {
             current = net
                 .resolve_anchored(&scope.scope)
                 .await
-                .map_err(EngineError::from_resolve_failure)?;
+                .map_err(|e| EngineError::from_resolve_failure(e, "enclosing-scope"))?;
         }
         Ok((scope, current, net))
     }
@@ -8366,7 +8365,7 @@ where {
         {
             Ok(()) => Err(EngineError::UnsupportedTarget { check }),
             Err(ResolveFailure::Rejected) => Ok(()),
-            Err(other) => Err(EngineError::from_resolve_failure(other)),
+            Err(other) => Err(EngineError::from_resolve_failure(other, "unindexed-scope")),
         }
     }
 
@@ -9692,12 +9691,23 @@ where {
     fn scoped_to(&self, root: NodeId, nodes: Vec<NodeId>) -> Vec<NodeId> {
         nodes_in_scope(
             &self.state.snapshot.borrow(),
-            &focus_scope_roots(
-                &self.state.descendant_scope_roots.borrow(),
-                &self.state.unproved_scope_roots.borrow(),
-            ),
+            &self.navigation_boundaries(),
             root,
             nodes,
+        )
+    }
+
+    /// The boundaries a navigation leg groups against: the walk's
+    /// ([`focus_scope_roots`]) and this session's own grants, since a
+    /// navigation can land before any walk proves a root the owner just
+    /// minted.
+    fn navigation_boundaries(&self) -> BTreeSet<NodeId> {
+        focus_scope_roots(
+            &own_descendant_scopes(
+                &self.state.descendant_scope_roots,
+                &self.state.minted_scope_roots,
+            ),
+            &self.state.unproved_scope_roots.borrow(),
         )
     }
 
@@ -9914,7 +9924,7 @@ where {
         let mut by_scope: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
         {
             let base = self.state.snapshot.borrow();
-            let scope_roots = focus_scope_roots(&proved, &unproved);
+            let scope_roots = self.navigation_boundaries();
             for node in nodes {
                 let scope = scope_root_of(&base, node, &scope_roots);
                 if node != scope {
