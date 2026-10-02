@@ -2698,6 +2698,25 @@ where
         }
     }
 
+    /// The child adopter for `node` on one plane, its unseal bounded by the
+    /// plane's epoch.
+    fn child_adopter<'e>(
+        &'e self,
+        plane: &SealPlane<'_>,
+        floors: &'e SharerScopedFloorStore<'e, F>,
+        node: NodeId,
+    ) -> ChildAdopter<'e, H, SharerScopedFloorStore<'e, F>> {
+        ChildAdopter::new(
+            &self.seams.gateway,
+            &self.seams.http,
+            floors,
+            plane.end.root.0,
+            plane.end.read_scope_seed.clone(),
+            node.0,
+        )
+        .with_seed_stamp(Some(plane.epoch))
+    }
+
     /// One end's scope root as the record plane now serves it, resolved through
     /// its own gate.
     ///
@@ -2748,15 +2767,7 @@ where
     ) -> Result<LoadedNode, Halt> {
         let name = plane.end.write_name(&node.0);
         let floors = plane.end.floors(&self.seams.floors);
-        let adopter = ChildAdopter::new(
-            &self.seams.gateway,
-            &self.seams.http,
-            &floors,
-            plane.end.root.0,
-            plane.end.read_scope_seed.clone(),
-            node.0,
-        )
-        .with_seed_stamp(Some(plane.epoch));
+        let adopter = self.child_adopter(plane, &floors, node);
         let resolved = resolve_gated(
             &self.seams.transport,
             &self.seams.snapshot_cache,
@@ -2968,15 +2979,7 @@ where
     ) -> Result<FolderState, Halt> {
         let name = plane.end.write_name(&folder.0);
         let floors = plane.end.floors(&self.seams.floors);
-        let adopter = ChildAdopter::new(
-            &self.seams.gateway,
-            &self.seams.http,
-            &floors,
-            plane.end.root.0,
-            plane.end.read_scope_seed.clone(),
-            folder.0,
-        )
-        .with_seed_stamp(Some(plane.epoch));
+        let adopter = self.child_adopter(plane, &floors, folder);
         let loaded = self
             .open_child_record(
                 plane,
@@ -6450,15 +6453,7 @@ where
         name: &IpnsName,
     ) -> Result<Option<Served>, Halt> {
         let floors = plane.end.floors(&self.seams.floors);
-        let adopter = ChildAdopter::new(
-            &self.seams.gateway,
-            &self.seams.http,
-            &floors,
-            plane.end.root.0,
-            plane.end.read_scope_seed.clone(),
-            folder.0,
-        )
-        .with_seed_stamp(Some(plane.epoch));
+        let adopter = self.child_adopter(plane, &floors, folder);
         let resolved = resolve_gated(
             &self.seams.transport,
             &self.seams.snapshot_cache,
@@ -6650,15 +6645,7 @@ where
             }
             adopter.adopt(name, record_bytes).await?
         } else {
-            let adopter = ChildAdopter::new(
-                &self.seams.gateway,
-                &self.seams.http,
-                &floors,
-                plane.end.root.0,
-                plane.end.read_scope_seed.clone(),
-                node.0,
-            )
-            .with_seed_stamp(Some(plane.epoch));
+            let adopter = self.child_adopter(plane, &floors, node);
             if let Some(local) = local {
                 adopter.hold_local_head(local);
             }
@@ -6952,15 +6939,7 @@ where
         {
             return Ok(false);
         }
-        let adopter = ChildAdopter::new(
-            &self.seams.gateway,
-            &self.seams.http,
-            &floors,
-            plane.end.root.0,
-            plane.end.read_scope_seed.clone(),
-            target.0,
-        )
-        .with_seed_stamp(Some(plane.epoch));
+        let adopter = self.child_adopter(plane, &floors, target);
         let resolved = resolve(
             &self.seams.transport,
             &self.seams.snapshot_cache,
