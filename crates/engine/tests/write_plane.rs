@@ -5533,6 +5533,13 @@ fn a_move_into_a_folder_this_device_never_loaded_is_never_captured() {
         opens_under(&world, &blocks, leaf, &read_key_of(leaf)),
         "and it still opens under the scope read seed"
     );
+    block_on(engine_b.command(Command::SetFocus { node: Some(right) })).unwrap();
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        child_id(&engine_b, right, "notes.txt"),
+        leaf,
+        "the second device reads the node under the destination"
+    );
 }
 
 /// A second owner device whose copy of the destination is older than the move
@@ -5595,6 +5602,13 @@ fn a_move_into_a_folder_this_device_holds_stale_is_never_captured() {
         "a stale copy of the destination proves no departure"
     );
     assert!(opens_under(&world, &blocks, leaf, &read_key_of(leaf)));
+    block_on(engine_b.command(Command::SetFocus { node: Some(right) })).unwrap();
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        child_id(&engine_b, right, "notes.txt"),
+        leaf,
+        "the second device reads the node under the destination"
+    );
 }
 
 /// A folder the capture walk cannot read could name the node, so the capture
