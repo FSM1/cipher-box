@@ -260,9 +260,8 @@ pub mod rendezvous {
     }
 
     impl DeviceRendezvousStep {
-        /// Each secret slot of this step, by its JS field name.
-        /// [`decode_rendezvous_step`] refuses a step whose slots differ from
-        /// its bytes fields.
+        /// Each secret slot of this step, by its JS field name; see
+        /// [`crate::boundary::take_rendezvous_secrets`].
         pub(crate) fn secrets_mut(&mut self) -> Vec<(&'static str, &mut Secret)> {
             match self {
                 Self::Open { scalar, .. } | Self::OpenFactor { scalar, .. } => {

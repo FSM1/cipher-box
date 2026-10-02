@@ -13,7 +13,7 @@
  * command: it streams chunk by chunk through a write handle.
  */
 
-import { isBuffer } from '../buffers.js';
+import { isBuffer, wipeBytes } from '../buffers.js';
 import type {
   ApprovalDecision,
   AuthMethod,
@@ -274,6 +274,15 @@ export const RENDEZVOUS_SECRET_FIELDS: readonly string[] = [
       .map(([field]) => field),
   ]),
 ];
+
+/**
+ * Erases every secret a rendezvous step carries in this realm, `open` steps
+ * included. Takes the step unvalidated: an off-shape one carries none.
+ */
+export function wipeRendezvousSecrets(step: unknown): void {
+  if (typeof step !== 'object' || step === null) return;
+  for (const field of RENDEZVOUS_SECRET_FIELDS) wipeBytes((step as Record<string, unknown>)[field]);
+}
 
 /**
  * The secret buffers a rendezvous step or its result hands over for good, for

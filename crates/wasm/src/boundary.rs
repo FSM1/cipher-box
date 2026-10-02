@@ -108,9 +108,9 @@ pub fn decode_write_target(target: JsValue) -> Result<WriteTarget, JsError> {
         .map_err(|_| JsError::new("the write target does not decode"))
 }
 
-/// Decodes one device-rendezvous step. Every bytes field of a step is a secret:
-/// each decodes as an empty placeholder, then is taken into its zeroizing slot.
-/// Refuses an unknown `kind`, an unknown field, and a field of the wrong type.
+/// Decodes one device-rendezvous step; its secrets go through
+/// [`take_rendezvous_secrets`]. Refuses an unknown `kind`, an unknown field,
+/// and a field of the wrong type.
 pub fn decode_rendezvous_step(step: &JsValue) -> Result<DeviceRendezvousStep, JsError> {
     if !step.is_object() {
         return Err(rendezvous_refused());

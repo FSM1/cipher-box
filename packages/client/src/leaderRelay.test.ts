@@ -7,10 +7,8 @@ import type { DeviceRendezvousStep } from './worker/protocol.js';
 
 vi.mock('./worker/protocol.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./worker/protocol.js')>();
-  return {
-    ...actual,
-    RENDEZVOUS_SECRET_FIELDS: [...actual.RENDEZVOUS_SECRET_FIELDS, 'laterSecret'],
-  };
+  (actual.RENDEZVOUS_SECRET_FIELDS as string[]).push('laterSecret');
+  return actual;
 });
 
 describe('leader relay rendezvous wipe', () => {

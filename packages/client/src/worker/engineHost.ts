@@ -4,8 +4,8 @@
  * never leaves it.
  */
 
-import { wipeBytes, wipeTransfer } from '../buffers.js';
-import { commandTransfer, RENDEZVOUS_SECRET_FIELDS } from './protocol.js';
+import { wipeTransfer } from '../buffers.js';
+import { commandTransfer, wipeRendezvousSecrets } from './protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
@@ -96,17 +96,8 @@ function runRendezvous(wasm: EngineWasm, step: DeviceRendezvousStep): DeviceRend
   } finally {
     // This realm's copies are its own to erase (security rule 7). The caller
     // keeps and erases its own, and a transferred buffer is already detached.
-    scrubStep(step);
+    wipeRendezvousSecrets(step);
   }
-}
-
-/**
- * Erases every secret a step carried into this realm. Takes the step
- * unvalidated: an off-shape one carries none.
- */
-function scrubStep(step: unknown): void {
-  if (typeof step !== 'object' || step === null) return;
-  for (const field of RENDEZVOUS_SECRET_FIELDS) wipeBytes((step as Record<string, unknown>)[field]);
 }
 
 /** A refusal carrying one of the engine's own stable codes, as the engine does. */
@@ -284,7 +275,7 @@ export class EngineHost implements EngineHostLike {
       default:
         // A descriptor reaches this realm by transfer, so this frame is the
         // last owner of whatever it carried (AGENTS.md 7).
-        scrubStep((read as { step?: unknown }).step);
+        wipeRendezvousSecrets((read as { step?: unknown }).step);
         throw unknownRead(read);
     }
   }
