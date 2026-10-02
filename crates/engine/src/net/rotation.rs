@@ -56,7 +56,7 @@ use super::pointer_fetch::{
 };
 use super::publish::{
     InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome, PublishVerdict,
-    publish_inline,
+    publish_inline, refuse_foreign_version,
 };
 use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
@@ -2515,7 +2515,7 @@ where
             write_scope_seed: Some(source.write_scope_seed.clone()),
             // The record the promotion replaces, where the node keeps its name.
             observed: if node.ipns_name == name.as_str().as_bytes() {
-                Observed::record(&name, current.sequence)
+                current.observed
             } else {
                 Observed::unread(&name)
             },
@@ -3162,7 +3162,7 @@ where
             .await?;
         Ok(SweptNode {
             current_read_epoch: envelope.epoch,
-            sequence: observed.sequence(),
+            observed,
             read_body,
             carried_unknown: envelope.unknown,
             carried_epoch_tag_unknown: envelope.epoch_tag_unknown,
@@ -3401,7 +3401,7 @@ where
             envelope,
         )
         .await
-        .map(SweptChild::Interior)
+        .map(|node| SweptChild::Interior(Box::new(node)))
     }
 }
 
@@ -3455,6 +3455,11 @@ where
         };
         let preflighted = preflight(&binding, seal.read_key, &head)
             .map_err(|_| RotationPublishError::NotPublished)?;
+        // Release-active: the read the re-seal builds on must be of the name it
+        // publishes at, or the publish signs over another node's record.
+        if node.observed.name() != name {
+            return Err(RotationPublishError::Rejected);
+        }
         let signer = SessionIdentity::write_name_signer(write_scope_seed, &node.node_id);
         let receipt = publish_record(
             self.transport,
@@ -3463,8 +3468,7 @@ where
             self.scheduler,
             self.profile,
             &RecordPublishRequest {
-                // The interior read the sweep carried the node's sequence from.
-                observed: &Observed::record(name, node.sequence),
+                observed: node.observed,
                 signer: &signer,
                 head: &preflighted,
                 content_cids: Vec::new(),
@@ -3518,7 +3522,7 @@ where
             &InteriorRecord {
                 node_id: node.node_id,
                 ipns_name: node.ipns_name,
-                sequence: node.sequence,
+                observed: node.observed,
                 read_body: node.read_body,
                 carried_unknown: node.carried_unknown,
                 carried_epoch_tag_unknown: node.carried_epoch_tag_unknown,
@@ -3696,7 +3700,7 @@ where
         )
         .await
         .map_err(ResolveFailure::from)?;
-        gated.observed().map_err(|_| ResolveFailure::Rejected)?;
+        refuse_foreign_version(gated.envelope.v).map_err(|_| ResolveFailure::Rejected)?;
         let GatedWriteBody {
             body: write_body,
             epoch: write_epoch,
@@ -3777,7 +3781,7 @@ where
             envelope,
         )
         .await
-        .map(MovingChild::Pending)
+        .map(|node| MovingChild::Pending(Box::new(node)))
     }
 }
 
@@ -4234,9 +4238,7 @@ where
             Err(error) => return Err(wave_verdict(error)),
         }
         match adopter.open_carried_at_floor(name, record_bytes).await {
-            Ok((adopted, envelope)) => {
-                self.interior_wave_source(name, adopted.epoch, adopted, envelope)
-            }
+            Ok((adopted, envelope)) => self.interior_wave_source(adopted.epoch, adopted, envelope),
             Err(GateError::Rejected(rejection)) => {
                 self.lagging_source(&adopter, name, record_bytes, rejection)
                     .await
@@ -4273,24 +4275,21 @@ where
         .map_err(wave_verdict)?
         {
             LaggingRead::Opened(adopted, envelope) => {
-                self.interior_wave_source(name, anchor.epoch, adopted, *envelope)
+                self.interior_wave_source(anchor.epoch, adopted, *envelope)
             }
             LaggingRead::Unreachable(_) => Err(WritePublishError::Unreadable),
         }
     }
 
     /// An opened interior node, re-sealed at `read_epoch` under the scope's
-    /// current read seed. The re-seal publishes at a new name, so the read at
-    /// `name` lends it only the version rule ([`Observed::gated`]).
+    /// current read seed.
     fn interior_wave_source(
         &self,
-        name: &IpnsName,
         read_epoch: u64,
         adopted: Adopted,
         envelope: Envelope,
     ) -> Result<WaveSource, WritePublishError> {
-        Observed::gated(name, adopted.sequence, envelope.v)
-            .map_err(|_| WritePublishError::Rejected)?;
+        refuse_foreign_version(envelope.v).map_err(|_| WritePublishError::Rejected)?;
         Ok(WaveSource {
             read_body: adopted.read_body,
             read_epoch,
@@ -4321,7 +4320,7 @@ where
         )
         .await
         .map_err(|verdict| wave_read_verdict(verdict.into()))?;
-        gated.observed().map_err(|_| WritePublishError::Rejected)?;
+        refuse_foreign_version(gated.envelope.v).map_err(|_| WritePublishError::Rejected)?;
         let envelope = gated.envelope;
         // The root gate binds `envelope.scope` but not `envelope.id`, and every
         // AAD this republish authors binds the id — so a root whose record claims
@@ -4485,7 +4484,7 @@ where
         )
         .await
         .map_err(ResolveFailure::from)?;
-        gated.observed().map_err(|_| ResolveFailure::Rejected)?;
+        refuse_foreign_version(gated.envelope.v).map_err(|_| ResolveFailure::Rejected)?;
         if gated.envelope.id != self.scope_id {
             return Err(ResolveFailure::Rejected);
         }
@@ -13249,7 +13248,7 @@ mod tests {
                 &InteriorRecord {
                     node_id,
                     ipns_name: name.as_str().as_bytes(),
-                    sequence: 1,
+                    observed: &gated_at(&name),
                     read_body: &interior_body(),
                     carried_unknown: &carried_unknown,
                     carried_epoch_tag_unknown: &PreservedFields::new(),
@@ -13867,18 +13866,23 @@ mod tests {
         })
     }
 
-    /// One interior node handed over verbatim, at the sequence the staged record
-    /// carries.
+    /// A gated read of `name` at the sequence a staged record carries.
+    fn gated_at(name: &IpnsName) -> Observed {
+        Observed::gated(name, 1, ENVELOPE_V).expect("this build's envelope version")
+    }
+
+    /// One interior node handed over verbatim, read at `observed`.
     fn interior_record_of<'a>(
         node_id: [u8; 16],
         ipns_name: &'a [u8],
+        observed: &'a Observed,
         body: &'a ReadBody,
         empty: &'a PreservedFields,
     ) -> InteriorRecord<'a> {
         InteriorRecord {
             node_id,
             ipns_name,
-            sequence: 1,
+            observed,
             read_body: body,
             carried_unknown: empty,
             carried_epoch_tag_unknown: empty,
@@ -13907,7 +13911,7 @@ mod tests {
             &InteriorRecord {
                 node_id: child.node_id,
                 ipns_name: &child.ipns_name,
-                sequence: node.sequence,
+                observed: &node.observed,
                 read_body: &node.read_body,
                 carried_unknown: &node.carried_unknown,
                 carried_epoch_tag_unknown: &node.carried_epoch_tag_unknown,
@@ -13963,7 +13967,13 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(root.scope_id, name.as_str().as_bytes(), &body, &empty),
+                &interior_record_of(
+                    root.scope_id,
+                    name.as_str().as_bytes(),
+                    &gated_at(&name),
+                    &body,
+                    &empty
+                ),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -13997,7 +14007,13 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(node_id, elsewhere.as_str().as_bytes(), &body, &empty),
+                &interior_record_of(
+                    node_id,
+                    elsewhere.as_str().as_bytes(),
+                    &gated_at(&elsewhere),
+                    &body,
+                    &empty
+                ),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -14027,7 +14043,13 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(node_id, name.as_str().as_bytes(), &body, &empty),
+                &interior_record_of(
+                    node_id,
+                    name.as_str().as_bytes(),
+                    &gated_at(&name),
+                    &body,
+                    &empty
+                ),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -14135,7 +14157,13 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(node_id, name.as_str().as_bytes(), &body, &empty),
+                &interior_record_of(
+                    node_id,
+                    name.as_str().as_bytes(),
+                    &gated_at(&name),
+                    &body,
+                    &empty
+                ),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -14169,7 +14197,7 @@ mod tests {
                     node_id,
                     ipns_name: name.as_str().as_bytes(),
                     read_epoch: swept.current_read_epoch,
-                    sequence: 1,
+                    observed: &gated_at(&name),
                     read_body: &body,
                     carried_unknown: &empty,
                     carried_epoch_tag_unknown: &empty,

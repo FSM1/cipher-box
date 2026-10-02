@@ -185,7 +185,8 @@ impl Observed {
 }
 
 /// [`Observed::gated`]'s version rule, for a read whose record carries its
-/// fields to a publish at another name, or to no publish.
+/// fields to a publish at another name, or to no publish. A read that a publish
+/// at its own name builds on takes the rule through [`Observed::gated`].
 pub(crate) fn refuse_foreign_version(version: u64) -> Result<(), PublishError> {
     if version != ENVELOPE_V {
         return Err(PublishError::ForeignVersion { version });

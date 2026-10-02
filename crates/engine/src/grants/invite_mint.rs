@@ -398,9 +398,9 @@ mod tests {
             } else {
                 return Err(SweepResolveFailure::Unavailable);
             };
-            Ok(SweptChild::Interior(SweptNode {
+            Ok(SweptChild::Interior(Box::new(SweptNode {
                 current_read_epoch: PARENT_EPOCH,
-                sequence: 1,
+                observed: crate::testkit::rotation::swept_observed(1),
                 read_body: ReadBody::Folder {
                     created_at: 0,
                     modified_at: 0,
@@ -409,7 +409,7 @@ mod tests {
                 },
                 carried_unknown: PreservedFields::new(),
                 carried_epoch_tag_unknown: PreservedFields::new(),
-            }))
+            })))
         }
     }
 

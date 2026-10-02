@@ -358,13 +358,13 @@ impl SweepResolver for FakeNet {
                 child.ipns_name.clone(),
             )));
         }
-        Ok(SweptChild::Interior(SweptNode {
+        Ok(SweptChild::Interior(Box::new(SweptNode {
             current_read_epoch: node.epoch,
-            sequence: 1,
+            observed: crate::testkit::rotation::swept_observed(1),
             read_body: folder_named(child.node_id[0], &node.children, &state.child_names),
             carried_unknown: PreservedFields::new(),
             carried_epoch_tag_unknown: PreservedFields::new(),
-        }))
+        })))
     }
 }
 

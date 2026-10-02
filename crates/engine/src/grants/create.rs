@@ -41,6 +41,7 @@ use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::contact::Contact;
 use crate::grants::{GrantRow, mint_grant_row, name_row};
 use crate::mailbox::post_sealed;
+use crate::net::publish::Observed;
 use crate::rotation::sweep::{body_children, canonicalize_frontier, resolve_scope_current};
 use crate::rotation::{
     AscentAuthority, CascadeResealResolver, CommittedSet, NodeRef, ResealError, ResealSeeds,
@@ -619,7 +620,7 @@ pub trait GrantResumeResolver {
 pub enum MovingChild {
     /// Still in the scope the folder is leaving, so the move owes it the
     /// re-seal.
-    Pending(SweptNode),
+    Pending(Box<SweptNode>),
     /// Already in the grantee scope, published by a stalled attempt. The walk
     /// carries on through its children and publishes nothing.
     Moved(ReadBody),
@@ -688,9 +689,9 @@ pub struct InteriorRecord<'a> {
     pub node_id: [u8; 16],
     /// That ref's opaque `ipnsName` bytes — the publish destination.
     pub ipns_name: &'a [u8],
-    /// The sequence of the record this body came from: the CAS basis the re-seal
-    /// must land above.
-    pub sequence: u64,
+    /// The read this body came from: the CAS basis the re-seal must land
+    /// above.
+    pub observed: &'a Observed,
     /// The body carried forward verbatim.
     pub read_body: &'a ReadBody,
     /// Envelope fields a republish preserves byte-stable.
@@ -1690,7 +1691,7 @@ where
                             &InteriorRecord {
                                 node_id: child.node_id,
                                 ipns_name: &child.ipns_name,
-                                sequence: node.sequence,
+                                observed: &node.observed,
                                 read_body: &node.read_body,
                                 carried_unknown: &node.carried_unknown,
                                 carried_epoch_tag_unknown: &node.carried_epoch_tag_unknown,
@@ -2277,9 +2278,9 @@ mod tests {
                 Some((node_id, regressed)) if promoted && node_id == child.node_id => regressed,
                 _ => epoch,
             };
-            Ok(SweptChild::Interior(SweptNode {
+            Ok(SweptChild::Interior(Box::new(SweptNode {
                 current_read_epoch: epoch,
-                sequence: 1,
+                observed: crate::testkit::rotation::swept_observed(1),
                 read_body: ReadBody::Folder {
                     created_at: 0,
                     modified_at: 0,
@@ -2288,7 +2289,7 @@ mod tests {
                 },
                 carried_unknown: PreservedFields::new(),
                 carried_epoch_tag_unknown: PreservedFields::new(),
-            }))
+            })))
         }
     }
 

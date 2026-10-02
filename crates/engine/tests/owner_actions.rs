@@ -4014,6 +4014,93 @@ fn a_crossing_publishes_above_the_record_a_rotation_left_at_the_destination() {
     );
 }
 
+/// A bin re-key re-seals each node at the name it already holds, whose record
+/// can sit above this device's sequence floor: a rotation's sweep publishes
+/// without adopting. The re-key signs above what the name serves, so the
+/// delete lands rather than losing the CAS race.
+#[test]
+fn a_bin_re_key_publishes_above_the_record_a_rotation_left_at_the_name() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, holiday);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done),
+        "the cut re-seals the granted subtree at the name the re-key publishes at"
+    );
+    let served = sequence_at(&fx.world, &write_name(holiday));
+
+    block_on(fx.engine.command(Command::Delete { node: holiday })).expect("the delete stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(queued_ops(&fx.owner_device), 0, "the delete left the queue");
+    assert!(
+        sequence_at(&fx.world, &write_name(holiday)) > served,
+        "the re-key signed above the record the name served"
+    );
+}
+
+/// The bin re-key runs under the same end proof as a crossing: a delete under
+/// a second end the record plane moved past publishes nothing.
+#[test]
+fn a_bin_re_key_under_a_superseded_end_publishes_nothing() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, holiday);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let granted_root = write_name(fx.folder);
+    let walked = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], granted_root.as_str());
+    let (mut other, _other_events, _other_tasks) = fx.second_owner_device();
+    assert_eq!(
+        block_on(other.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done),
+        "another device cuts the granted scope"
+    );
+
+    let holiday_sequence = sequence_at(&fx.world, &write_name(holiday));
+    block_on(fx.engine.command(Command::Delete { node: holiday })).expect("the delete stages");
+    // As in the crossing case: the walk's fan-out GET reads the record it
+    // proved last tick, so the end it hands the pass is one cut behind.
+    fx.world.record_store.serve_gets_for_after(
+        granted_root.as_str(),
+        0,
+        fx.world.record_store.endpoints().len(),
+        walked,
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(queued_ops(&fx.owner_device), 1, "the delete is held");
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(holiday)),
+        holiday_sequence,
+        "and nothing was re-sealed under the superseded end"
+    );
+}
+
+fn queued_ops(device: &FakeDevice) -> usize {
+    block_on(device.staging_store.queued_ops())
+        .expect("the queue reads")
+        .len()
+}
+
 /// A crossing whose boundary this session has proved no material for is one it
 /// cannot author. It is charged rather than held: a member watching a move that
 /// will never publish reads a dead letter, never a vault that says it is fresh.

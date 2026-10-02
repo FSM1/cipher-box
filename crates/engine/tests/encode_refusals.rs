@@ -28,7 +28,9 @@ use cipherbox_engine::net::renewal_walk::cursor::{
 use cipherbox_engine::net::{
     BarFloor, Observed, PublishBar, PublishError, PublishOutcome, PublishRequest, publish,
 };
-use cipherbox_engine::seams::{BoxedTask, FloorStore, HttpResponse, RecordTransport, UnixMillis};
+use cipherbox_engine::seams::{
+    BoxedTask, FloorStore, HttpResponse, RecordTransport, StagingStore, UnixMillis,
+};
 use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
@@ -36,7 +38,7 @@ use cipherbox_engine::sync::owed_rotation::{
 use cipherbox_engine::testkit::SeededEntropy;
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, ROOT, SCOPE as ACCOUNT_SCOPE, SECRET, TTL_NANOS, floor_label, fresh_observed,
-    seed_account, seed_account_with, serve_http,
+    seed_account, seed_account_sealed, seed_account_with, serve_http,
 };
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED,
@@ -400,6 +402,39 @@ fn a_drain_publish_whose_scope_floor_rises_inside_its_window_publishes_nothing()
         None,
         "the record sealed below the risen floor never reached the plane"
     );
+    assert_eq!(queued(&device), 1, "and the create is still queued");
+}
+
+fn queued(device: &FakeDevice) -> usize {
+    block_on(StagingStore::queued_ops(&device.staging_store))
+        .expect("the queue reads")
+        .len()
+}
+
+/// The drain anchors its pass on the scope root through the gate's version
+/// rule: a root a newer client last wrote is never re-authored.
+#[test]
+fn a_drain_publish_never_re_authors_a_scope_root_at_another_envelope_version() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account_sealed(&world, &blocks, Vec::new(), Vec::new(), ENVELOPE_V + 1);
+    let root_record = record_at(&world, &root_name);
+    let device = world.device(b"me");
+    let (mut engine, _events, mut tasks) = booted(&world, &blocks, &device);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        record_at(&world, &root_name),
+        root_record,
+        "the root at the newer version was never republished"
+    );
+    assert_eq!(queued(&device), 1, "and the create is still queued");
 }
 
 /// The drain re-authors a folder through the gate's version rule: a folder a
