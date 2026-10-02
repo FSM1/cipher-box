@@ -3942,6 +3942,64 @@ fn a_crossing_publishes_above_the_record_a_rotation_left_at_the_destination() {
     );
 }
 
+/// A writer at the destination name can serve a record at `u64::MAX`, above
+/// which no re-seal can sign. The refusal repeats on every retry, so the move
+/// spends its attempt budget and dead-letters rather than holding the queue
+/// head for the outage budget.
+#[test]
+fn a_crossing_with_no_sequence_left_at_the_destination_dead_letters() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, holiday);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let name = write_name(holiday);
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &holiday.0).as_bytes());
+    let exhausted = IpnsRecord::create_v2(
+        &signer,
+        &published_value(&fx.world, &name),
+        u64::MAX,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), exhausted.clone());
+    }
+
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("a move out of the granted scope journals its crossing");
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "the attempt budget ends the retries"
+    );
+    let status = block_on(fx.engine.status()).expect("the session status reads");
+    assert_eq!(
+        status
+            .dead_letters
+            .iter()
+            .map(|dead| dead.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AttemptsExhausted],
+    );
+}
+
 /// A bin re-key re-seals each node at the name it already holds, whose record
 /// can sit above this device's sequence floor: a rotation's sweep publishes
 /// without adopting. The re-key signs above what the name serves, so the
