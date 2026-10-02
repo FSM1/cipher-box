@@ -54,6 +54,9 @@ floor law, added beside the AAD-confirmed unseal and the cold seed from the re-p
 commitment is the only field that may move a durable floor without an unseal. No other field of
 the commitment, of the envelope, or of any grant blob gains such a path. A grant blob's epoch
 field stays an advisory routing hint with no advancement path.
+Amended by ADR 0067 D1 and D2 on 2026-10-02: a floor also rises with no unseal from a value that an
+owner device authored after its publish lands, and from an epoch that a minting device holds by
+construction. The list of such raises stays closed, and `blueprint/engine.md` names each one.
 
 **D3 — The pre-condition is the whole of gate stage 2, and nothing less.** The commitment
 verifies under the contact-code-anchored sharer identity, the scope root name it is presented
@@ -133,6 +136,8 @@ a device with no floor, rather than a device that can never raise one.
 **E3 — A partial or reordered set of unseal-free advances is moot under D2.** The exception has
 one member, so there is no set to reorder and no half-applied set to leave a plane unreadable. A
 second member would reopen the question, which is why D2 states the list as closed.
+Amended by ADR 0067 D1 and D2 on 2026-10-02: the list has more than one member. Each raise is a
+maximum, and a raise before its publish is admitted only when it makes the device more restrictive.
 
 ## Gate
 
