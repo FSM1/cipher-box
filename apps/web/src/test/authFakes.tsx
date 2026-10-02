@@ -50,6 +50,8 @@ export const FAKE_NONCE = 'nonce123456789ab';
 
 /** The identity token the fake exchange mints, whichever method asked. */
 export const FAKE_IDENTITY_TOKEN = 'header.payload.signature';
+/** Far enough out that the wall clock the web flow reads never reaches it. */
+export const FAKE_TOKEN_EXPIRY = new Date('2099-01-01T00:00:00Z');
 
 /** The one phrase the fake session enrolls and accepts; 24 words, as a real one is. */
 export const FAKE_PHRASE = `${'word '.repeat(23)}last`;
@@ -148,6 +150,8 @@ export interface EngineCalls {
   started: ArrayBuffer[];
   /** What each buffer held on arrival, before the handoff scrubbed it. */
   secrets: Uint8Array[];
+  /** The identity token each start presented, `undefined` for one with none. */
+  startTokens: Array<string | undefined>;
   /** The wallet links, kept apart from `siwe`: a link is not a login. */
   siweLinks: { message: string; signature: Uint8Array }[];
   siweChallenges: number;
@@ -260,6 +264,7 @@ export function fakeEngineClient(
   const calls: EngineCalls = {
     started: [],
     secrets: [],
+    startTokens: [],
     logouts: 0,
     siweLinks: [],
     siweChallenges: 0,
@@ -300,9 +305,10 @@ export function fakeEngineClient(
       return () => sessionEndListeners.delete(listener);
     },
     facade: {
-      async start(secret: ArrayBuffer, accountId: string) {
+      async start(secret: ArrayBuffer, accountId: string, identityToken?: string) {
         calls.started.push(secret);
         calls.secrets.push(new Uint8Array(secret).slice());
+        calls.startTokens.push(identityToken);
         await (overrides.start?.() ?? Promise.resolve());
         holds(accountId);
       },
@@ -609,6 +615,7 @@ export function fakeIdentityExchange(overrides: Partial<IdentityExchange> = {}):
     token: FAKE_IDENTITY_TOKEN,
     verifierId: `subject-for-${method}`,
     email,
+    expiresAt: FAKE_TOKEN_EXPIRY,
   });
   const exchange: IdentityExchange = {
     fromGoogleToken(idToken) {

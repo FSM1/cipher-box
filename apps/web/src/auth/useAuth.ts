@@ -122,6 +122,7 @@ export function useAuth(): Auth {
         secrets: secrets ?? null,
         account: authStore,
         progress,
+        now: () => new Date(),
         // `facade.logout` closes the client for good, so the tab needs a new one.
         afterLogout: rebuildEngine,
         // The origin's engine and session are shared across its tabs, so ending
