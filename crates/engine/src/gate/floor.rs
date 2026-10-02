@@ -6,8 +6,12 @@
 //! goes through this module's accessors, and it is the only place that advances
 //! them **from the record plane** — the owner-authored rotation cut raises the
 //! read-epoch floor directly ([`crate::rotation::rotate`],
-//! [`crate::rotation::cascade`]). These are the record-plane advances the law
-//! admits, with the monotonicity every one of them keeps:
+//! [`crate::rotation::cascade`]). A floor rises with no unseal only from the
+//! three sources of ADR 0067 D1: an owner-signed field bound to the scope, a
+//! value this device authored once its publish lands, or an epoch a minting
+//! device holds by construction. blueprint/engine.md "Adoption gate and floors"
+//! closes the list of sites (ADR 0067 D2). These are the record-plane advances
+//! the law admits, with the monotonicity every one of them keeps:
 //!
 //! 1. **Advance on AAD-confirmed unseal** ([`advance_on_unseal`] for
 //!    gate-adopted roots, [`advance_sequence_on_unseal`] for child records) —
@@ -18,7 +22,11 @@
 //!    anchor. The owner-vouched `minReadEpoch` seeds the read-epoch floor (the
 //!    revocation boundary) and `writeEpoch` the write-epoch floor. The
 //!    [`RepointObject`] is authenticated by construction, so no floor moves on
-//!    an unsigned or non-owner re-point (see [`cold_seed`]).
+//!    an unsigned or non-owner re-point (see [`cold_seed`]). It also raises the
+//!    vouched floor ([`vouched_floor`]), which a landed vault-pointer vouch
+//!    raises too ([`raise_vouched_floor`]). The cold-start guard reads it, so a
+//!    pointer that only lags a root this device adopted is no rollback
+//!    (ADR 0067 D3).
 //! 3. **Pointer `writeEpoch` advances on sight** ([`advance_write_epoch_on_sight`])
 //!    — an owner-vouched write epoch above the durable floor raises it the
 //!    moment it is seen (#38 D4).
@@ -31,8 +39,7 @@
 //!    root takes that epoch from the scope pointer under item 3, never from the
 //!    record (`crate::net::rotation` `recover_write_plane_from_pointer`).
 //! 6. **A verified commitment's cut epoch, with no unseal**
-//!    ([`crate::gate::record_cut_epoch_floor`]) — the one exception to item 1,
-//!    and the list of exceptions is closed. The owner signs the field and the
+//!    ([`crate::gate::record_cut_epoch_floor`]). The owner signs the field and the
 //!    signed preimage names the scope root it is presented under, so stage 2 of
 //!    the gate proves it without a body (ADR 0014).
 //!    The floor it raises is read against commitments alone, so a raise from a

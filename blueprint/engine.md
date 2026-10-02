@@ -287,8 +287,11 @@ reject at decode in core (FSM1/cipher-box-next#39 D7); the gate surfaces them as
 The **floor law** (FSM1/cipher-box-next#39 D4, superseding FSM1/cipher-box-next#26 D4's blob-seeded floors): floors
 advance only on an AAD-confirmed unseal and cold-seed from the re-point
 object's owner-vouched epochs (`writeEpoch`, `minReadEpoch`); a grant blob's
-epoch field is an advisory routing hint. One exception, and the list of them is
-closed: the `cutEpoch` of a grant-set commitment that passed stage 2 whole
+epoch field is an advisory routing hint. A floor rises with no unseal only
+from the three sources of
+[ADR 0067](../decisions/0067-the-floor-law-admits-a-closed-list-of-raises-and-the-cold-start-guard-reads-a-vouched-floor.md)
+D1, and the list of sites below is closed (D2): a new site needs an ADR. One of
+them: the `cutEpoch` of a grant-set commitment that passed stage 2 whole
 raises that scope's cut-epoch floor with no unseal, under the sharer-scoped key
 ([ADR 0014](../decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)
 D1–D5). The owner signs that field and the signed preimage names the scope root
@@ -302,6 +305,22 @@ above the durable floor advances it the moment it is seen (FSM1/cipher-box-next#
 instant every old-epoch record at the old name fails the gate. `FloorStore` is
 a required constructor argument, fail-closed on regression.
 
+The raises with no unseal (ADR 0067 D2), each a maximum:
+
+- an owner-signed field: the cold seed (`cold_seed`), a pointer `writeEpoch`
+  on sight (`PointerConsult::run`), and the verified cut epoch
+  (`record_cut_epoch_floor`, ADR 0014);
+- a value this owner device authored, after its publish lands: the read-epoch
+  floor of a cut (`complete_cut`, `rekey_one`), the cut epochs of a cascade
+  (`record_cut_epochs`), the grant floor (`record_grant_floor`), the clear in
+  `effective_revoked_recipients` (ADR 0025 D3), the write-epoch raise after a
+  landed wave (`after_write_wave`, `cut_write_scope`, `redrive_write_cut`), the
+  cut-epoch raise after a landed cut (`rotate_cut` and the owed re-drive), the
+  pointer publish (`publish_pointer_over`), and the vouched floor of D3 below;
+- before the publish, only where it makes the device more restrictive: the
+  revocation floor (`record_revocation_floor`);
+- an epoch a minting device holds by construction: `promote_scope_root`.
+
 **Cold start adopts nothing** until the floor store seeds from the
 owner-signed anchor. The sequence is non-circular by construction (FSM1/cipher-box-next#38 D3):
 own vault → scope/vault pointer (first act) → floors seeded → current root
@@ -309,6 +328,18 @@ name → envelope grant blob → seeds → render. Residual, honestly scoped
 (FSM1/cipher-box-next#39 D4): a cold device can be shown a view missing at most grantee-triggered
 epochs (which revoke nobody — pure staleness) plus within-epoch staleness;
 revocation boundaries cannot be rolled back.
+
+**The vouched floor** (ADR 0067 D3, D4). At the vault anchor, the cold-start
+guard compares the vouched `minReadEpoch` with the vouched floor: the highest
+`minReadEpoch` that a vault pointer vouched to this device, a floor-store key
+beside the vault-pointer index mark. The cold seed raises it, and so does a
+landed vouch of a vault-root cut or of the cold-start catch-up. A device without
+the key compares with the read-epoch floor. A pointer that only lags a root that
+this device adopted is therefore no rollback, and the gated adopt still raises
+the read-epoch floor, so the session refuses a pre-cut root. The produce side
+(`check_repoint_publishable`, `vouch_over`) signs no re-point below the
+read-epoch floor, and each raise of the vouched floor raises the read-epoch
+floor to at least the same value.
 
 **The first-run rule** (ADR 0022 as amended by ADR 0034). The vault-pointer walk
 reads a name as absent only when every routing endpoint answered and every
