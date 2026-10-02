@@ -4,11 +4,19 @@
  * account a spec mints is removed when the spec ends.
  */
 
-import { test as base, expect, type Browser, type Locator, type Page } from '@playwright/test';
+import {
+  test as base,
+  expect,
+  type Browser,
+  type Locator,
+  type Page,
+  type Response,
+} from '@playwright/test';
 import type { Hex } from 'viem';
 import { FilesPage } from '../page-objects/files.page';
 import { LoginPage } from '../page-objects/login.page';
 import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
+import { DEVNET_BACKOFF_MS, isDevnetFault } from './loginRetry';
 import { installTestWallet, TEST_WALLET_NAME, type TestWallet } from './wallet';
 
 export { expect } from '@playwright/test';
@@ -118,9 +126,6 @@ function report(
   });
 }
 
-/** How many wallet logins one sign-in spends before it gives up. */
-const SIGN_IN_ATTEMPTS = 3;
-
 /**
  * Signs in at the front door and waits for the vault browser. Returns the
  * milliseconds the successful attempt took, which is what the timing profile
@@ -136,31 +141,49 @@ export async function signIn(page: Page): Promise<number> {
  * waits for `signedIn`. Returns the milliseconds the successful attempt took.
  *
  * The auth network refuses a login under its own load, which the panel draws as
- * a banner and not as a navigation, so a refused attempt reloads the same
- * address, fragment included, and is retried.
+ * a banner and not as a navigation. A devnet fault waits out its window, then
+ * reloads the same address, fragment included, and tries again; any other
+ * refusal fails at once. The thrown error lists each refused request of the
+ * last attempt by host, path and status only, since a body or a query can
+ * carry a token.
  */
 export async function signInWithWallet(page: Page, signedIn: Locator): Promise<number> {
   const login = new LoginPage(page);
-  let refusal = '';
 
-  for (let attempt = 0; attempt < SIGN_IN_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
     if (attempt > 0) await page.reload();
     await expect(login.walletButton).toBeEnabled({ timeout: 60_000 });
 
+    const failed: string[] = [];
+    const record = (response: Response): void => {
+      if (response.status() < 400) return;
+      const url = new URL(response.url());
+      failed.push(`${url.host}${url.pathname} ${response.status()}`);
+    };
+    page.on('response', record);
     const started = Date.now();
-    await login.walletButton.click();
-    await page
-      .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
-      .click();
+    let refusal: string | null;
+    try {
+      await login.walletButton.click();
+      await page
+        .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
+        .click();
+      refusal = await login.refusal(signedIn, 300_000);
+    } finally {
+      page.off('response', record);
+    }
+    if (refusal === null) return Date.now() - started;
 
-    const refused = await login.refusal(signedIn, 300_000);
-    if (refused === null) return Date.now() - started;
-    refusal = refused;
+    const wait = DEVNET_BACKOFF_MS[attempt];
+    if (wait === undefined || !isDevnetFault(refusal)) {
+      throw new Error(
+        `the wallet login was refused on attempt ${attempt + 1}; the refusal read: ` +
+          `${refusal}; the refused requests: ${failed.join(', ') || 'none'}`
+      );
+    }
+    test.info().setTimeout(test.info().timeout + (Date.now() - started) + wait);
+    await page.waitForTimeout(wait);
   }
-
-  throw new Error(
-    `the wallet login was refused ${SIGN_IN_ATTEMPTS} times; the last refusal read: ${refusal}`
-  );
 }
 
 /**
