@@ -497,4 +497,5 @@ fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
         Some(record),
         "the folder at the newer version was never republished"
     );
+    assert_eq!(queued(&device), 1, "and the create is still queued");
 }
