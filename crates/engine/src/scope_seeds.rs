@@ -177,20 +177,6 @@ pub(crate) async fn refresh_seed_floors<F: FloorStore>(
     }
 }
 
-/// Evict both seeds of every boundary the last walk proved against that
-/// boundary's own floors ([`refresh_seed_floors`]).
-pub(crate) async fn refresh_walked_seed_floors<F: FloorStore>(
-    floors: &F,
-    walked: &RefCell<WalkedReadEpochs>,
-    read_seeds: &RefCell<ScopeSeeds>,
-    write_seeds: &RefCell<ScopeSeeds>,
-) {
-    let roots: Vec<NodeId> = walked.borrow().keys().copied().collect();
-    for root in roots {
-        refresh_seed_floors(floors, &root.0, read_seeds, write_seeds).await;
-    }
-}
-
 /// What each boundary the last walk proved seals under: the read epoch that walk
 /// recorded, paired with the two seeds the per-scope caches hold. A boundary
 /// missing either seed is left out.
@@ -271,34 +257,6 @@ mod tests {
             deposit_seed(&cell, SCOPE, Zeroizing::new([3u8; 32]), None);
             assert!(!cell.borrow().contains_key(&SCOPE));
         });
-    }
-
-    /// The drain's boundary material holds no seed a floor revoked after the
-    /// walk proved it, and keeps the boundary whose floor did not move.
-    #[test]
-    fn walked_boundary_material_drops_a_boundary_its_floor_revoked() {
-        use crate::testkit::fakes::InMemoryFloorStore;
-
-        const RAISED: NodeId = NodeId([6u8; 16]);
-        const STEADY: NodeId = NodeId([7u8; 16]);
-        let floors = InMemoryFloorStore::default();
-        let walked = RefCell::new(WalkedReadEpochs::from([(RAISED, 1), (STEADY, 1)]));
-        let read_seeds = RefCell::new(ScopeSeeds::new());
-        let write_seeds = RefCell::new(ScopeSeeds::new());
-        for root in [RAISED, STEADY] {
-            for cell in [&read_seeds, &write_seeds] {
-                deposit_seed(cell, root.0, Zeroizing::new([3u8; 32]), Some(1));
-            }
-        }
-        block_on(async {
-            floors.raise_epoch_floor(&RAISED.0, 2).await.unwrap();
-            refresh_walked_seed_floors(&floors, &walked, &read_seeds, &write_seeds).await;
-        });
-
-        let material = walked_boundary_material(&walked, &read_seeds, &write_seeds);
-
-        assert!(!material.contains_key(&RAISED), "the raised boundary goes");
-        assert!(material.contains_key(&STEADY), "the steady boundary stays");
     }
 
     /// A floor store whose reads fail — the seam-outage arm of

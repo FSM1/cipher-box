@@ -49,8 +49,7 @@ use crate::rotation::{
 };
 use crate::scope_seeds::{
     ScopeSeeds, SeedFloor, SeedFloors, cached_seed, current_seed, deposit_seed, deposit_write_seed,
-    own_descendant_scopes, refresh_seed_floors, refresh_walked_seed_floors,
-    walked_boundary_material,
+    own_descendant_scopes, refresh_seed_floors, walked_boundary_material,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
@@ -965,13 +964,6 @@ where
         // The vault-root pass's second end, and the cut a scope exit
         // owes: both read the boundaries this session knows, at the
         // material the walk proved for them.
-        refresh_walked_seed_floors(
-            &self.seams.floors,
-            &state.walked_read_epochs,
-            &state.scope_read_seeds,
-            &state.scope_write_seeds,
-        )
-        .await;
         let boundaries = read_seed.as_ref().map(|root_read_seed| Boundaries {
             base: &state.snapshot,
             scope_roots: state
