@@ -43,7 +43,7 @@ export function useDevices(): DevicesRead {
   const { session } = useCoreKit();
   const [devices, setDevices] = useState<RegisteredDeviceDescriptor[]>([]);
   const [thisDevice, setThisDevice] = useState<string | null>(null);
-  const [keyError, setKeyError] = useState<string | null>(null);
+  const [keyClosed, setKeyClosed] = useState<string | null>(null);
   const [refused, setRefused] = useState(false);
   const { busy, error, run } = useCommandRunner<'devices' | 'registerDevice' | 'revokeDevice'>();
 
@@ -65,10 +65,10 @@ export function useDevices(): DevicesRead {
     // would go on marking a row as this device and offer no way to register.
     setThisDevice(null);
     if (!identity) {
-      setKeyError(NO_IDENTITY);
+      setKeyClosed(NO_IDENTITY);
       return;
     }
-    setKeyError(null);
+    setKeyClosed(null);
     let live = true;
     void identity.publicKeyHex().then(
       (publicKey) => {
@@ -76,7 +76,7 @@ export function useDevices(): DevicesRead {
       },
       // The failure is the closed reason; the list still renders.
       (failure: unknown) => {
-        if (live) setKeyError(errorMessage(failure));
+        if (live) setKeyClosed(errorMessage(failure));
       }
     );
     return () => {
@@ -92,11 +92,12 @@ export function useDevices(): DevicesRead {
           setThisDevice(await registerThisDevice(session, facade));
         } catch (refusal) {
           if (!isAuthRefusal(refusal)) throw refusal;
+          // The closed reason names the cause, so no error line repeats it.
+          setRefused(true);
           // A spent token can mean the key already landed: the sign-in did it,
           // or the response to an earlier try was lost.
-          const listed = await read(facade);
-          // The closed reason names the cause, so no error line repeats it.
-          if (!listed.some((row) => row.publicKey === thisDevice)) setRefused(true);
+          const listed = await read(facade).catch(() => []);
+          if (listed.some((row) => row.publicKey === thisDevice)) setRefused(false);
           return;
         }
         await read(facade);
@@ -114,7 +115,7 @@ export function useDevices(): DevicesRead {
   );
 
   const registration = ((): Registration => {
-    if (keyError !== null) return { state: 'closed', reason: keyError };
+    if (keyClosed !== null) return { state: 'closed', reason: keyClosed };
     if (thisDevice === null) return { state: 'reading' };
     if (refused) return { state: 'closed', reason: REFUSED };
     if ((session?.identityToken() ?? null) === null) {

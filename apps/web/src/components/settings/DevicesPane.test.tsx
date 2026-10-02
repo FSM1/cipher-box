@@ -263,9 +263,13 @@ describe('the authorized devices pane', () => {
   });
 
   it('marks this device when a refused registration finds its key already listed', async () => {
-    const reads = [[], [OWN]];
+    let firstRead = true;
     const engine = fakeEngineClient({
-      devices: () => Promise.resolve(reads.length > 1 ? (reads.shift() ?? []) : reads[0]),
+      devices: () => {
+        const listed = firstRead ? [] : [OWN];
+        firstRead = false;
+        return Promise.resolve(listed);
+      },
       registerDevice: () =>
         Promise.reject(new EngineRequestError('auth error: refused as unauthorized', 'auth')),
     });
@@ -283,6 +287,35 @@ describe('the authorized devices pane', () => {
       expect(screen.getByTestId('settings-device-own').textContent).toBe('this device')
     );
     expect(screen.queryByTestId('settings-device-register')).toBeNull();
+    expect(screen.queryByTestId('settings-devices-error')).toBeNull();
+  });
+
+  it('names the refusal when the list cannot be read again either', async () => {
+    const refused = new EngineRequestError('auth error: refused as unauthorized', 'auth');
+    let firstRead = true;
+    const engine = fakeEngineClient({
+      devices: () => {
+        if (firstRead) {
+          firstRead = false;
+          return Promise.resolve([]);
+        }
+        return Promise.reject(refused);
+      },
+      registerDevice: () => Promise.reject(refused),
+    });
+    const session = fakeCoreKitSession({ loggedIn: true }).session;
+    render(<DevicesPane />, { wrapper: authWrapper(engine.client, session) });
+    await act(async () => undefined);
+    const register = await waitFor(() => screen.getByTestId('settings-device-register'));
+    await waitFor(() => expect(register.getAttribute('disabled')).toBeNull());
+
+    await act(async () => {
+      fireEvent.click(register);
+    });
+
+    expect(screen.getByTestId('settings-device-register-closed').textContent).toContain(
+      'can no longer register a device'
+    );
     expect(screen.queryByTestId('settings-devices-error')).toBeNull();
   });
 

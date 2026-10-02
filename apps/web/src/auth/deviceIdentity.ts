@@ -61,7 +61,7 @@ export async function deviceKeyPlace(
   };
 }
 
-/** This browser cannot hold a device identity key, whatever the member does. */
+/** This browser cannot hold a device identity key. No sign-in cures this; only another browser does. */
 export class DeviceKeyUnusableError extends Error {
   constructor(options?: { cause?: unknown }) {
     super(
