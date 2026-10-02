@@ -197,12 +197,13 @@ impl EngineHandle {
         secret: Vec<u8>,
         #[wasm_bindgen(js_name = identityToken)] identity_token: Option<String>,
     ) -> Promise {
+        let identity_token = identity_token.map(Zeroizing::new);
         let engine = self.engine.clone();
         future_to_promise(async move {
             engine
                 .write()
                 .await
-                .start_with_identity_token(LoginSecret::new(secret), identity_token)
+                .start(LoginSecret::new(secret), identity_token)
                 .await
                 .map_err(engine_error)?;
             Ok(JsValue::UNDEFINED)

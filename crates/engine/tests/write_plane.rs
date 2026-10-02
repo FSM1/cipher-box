@@ -332,7 +332,7 @@ fn boot_with(
 ) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
     serve_http(device, blocks, 400);
     let (mut engine, events) = engine_with(device, entropy);
-    block_on(engine.start(secret())).expect("cold start adopts the owner root");
+    block_on(engine.start(secret(), None)).expect("cold start adopts the owner root");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     (engine, events, tasks)
@@ -534,7 +534,7 @@ fn a_first_run_account_provisions_its_vault_and_publishes_a_write() {
     serve_http(&alice, &blocks, 64);
     let (mut engine, _events) = engine_on_api(&alice, 42);
 
-    block_on(engine.start(secret())).expect("start provisions the first-run vault");
+    block_on(engine.start(secret(), None)).expect("start provisions the first-run vault");
 
     // The pointer chain is no longer empty, and the root it names is published.
     let root_name = vault_root_name(&world);
@@ -592,7 +592,7 @@ fn a_first_run_account_provisions_its_vault_and_publishes_a_write() {
     let bob = world.device(b"alice-second-device");
     serve_http(&bob, &blocks, 16);
     let (mut engine_b, _events_b) = engine_on(&bob, 7);
-    block_on(engine_b.start(secret()))
+    block_on(engine_b.start(secret(), None))
         .expect("the second device cold-starts off the provisioned vault");
     let children = block_on(engine_b.view()).unwrap().children(ROOT);
     assert_eq!(children.len(), 1, "device B resolves the provisioned write");
@@ -618,7 +618,7 @@ fn a_vault_published_mid_mint_is_adopted_rather_than_minted_over() {
     let moved_on = seed_account_published_after_put(&world, &blocks, &genesis_name);
     let (mut engine, mut events) = engine_on_api(&alice, 42);
 
-    block_on(engine.start(secret())).expect("a moved-on account is not a failed start");
+    block_on(engine.start(secret(), None)).expect("a moved-on account is not a failed start");
 
     assert_ne!(
         moved_on, genesis_name,
@@ -675,7 +675,7 @@ fn a_refreshed_retry_of_a_failed_mint_publishes_a_write_in_the_same_session() {
     blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
     let (mut engine, mut events) = engine_on_api(&alice, 42);
 
-    block_on(engine.start(secret())).expect("a mint that did not land is not a failed start");
+    block_on(engine.start(secret(), None)).expect("a mint that did not land is not a failed start");
     assert!(
         !engine.is_provisioned(),
         "the session starts with no vault and a dark write path"
@@ -747,7 +747,7 @@ fn a_retry_adopts_the_vault_another_device_published_rather_than_minting_a_secon
     serve_http(&alice, &blocks, 64);
     blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
     let (mut engine, _events) = engine_on_api(&alice, 42);
-    block_on(engine.start(secret())).expect("a mint that did not land is not a failed start");
+    block_on(engine.start(secret(), None)).expect("a mint that did not land is not a failed start");
     assert!(!engine.is_provisioned());
 
     let op_id = block_on(engine.command(Command::Create {
@@ -763,7 +763,7 @@ fn a_retry_adopts_the_vault_another_device_published_rather_than_minting_a_secon
     let bob = world.device(b"alice-second-device");
     serve_http(&bob, &blocks, 64);
     let (mut engine_b, _events_b) = engine_on_api(&bob, 43);
-    block_on(engine_b.start(secret())).expect("the second device provisions the vault");
+    block_on(engine_b.start(secret(), None)).expect("the second device provisions the vault");
     let root_name = vault_root_name(&world);
     let published = world
         .record_store
@@ -823,7 +823,7 @@ fn the_first_tick_adopts_the_genesis_root_before_the_drain_reads_it() {
     let alice = world.device(b"alice");
     serve_http(&alice, &blocks, 64);
     let (mut engine, _events) = engine_on_api(&alice, 42);
-    block_on(engine.start(secret())).expect("start provisions the first-run vault");
+    block_on(engine.start(secret(), None)).expect("start provisions the first-run vault");
     let root_name = vault_root_name(&world);
 
     // Provisioning publishes the root; it does not cache it. Nothing the drain
@@ -1098,7 +1098,7 @@ fn a_folder_create_publishes_and_resolves_back() {
     let alice = world.device(b"alice");
     serve_http(&alice, &blocks, 16);
     let (mut engine, _events) = engine_on(&alice, 42);
-    block_on(engine.start(secret())).expect("cold start adopts the owner root");
+    block_on(engine.start(secret(), None)).expect("cold start adopts the owner root");
     assert!(
         block_on(engine.view()).unwrap().children(ROOT).is_empty(),
         "the account starts with an empty root"
@@ -1171,7 +1171,7 @@ fn a_published_child_sits_on_the_write_name_edge_and_the_read_key_edge() {
     let alice = world.device(b"alice");
     serve_http(&alice, &blocks, 16);
     let (mut engine, _events) = engine_on(&alice, 42);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     block_on(engine.command(Command::Create {
         parent: ROOT,
         name: "photos".into(),
@@ -1224,7 +1224,7 @@ fn a_restart_that_adopts_nothing_still_drains() {
     let alice = world.device(b"alice");
     serve_http(&alice, &blocks, 40);
     let (mut engine, _events) = engine_on(&alice, 42);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     block_on(engine.command(Command::Create {
         parent: ROOT,
         name: "photos".into(),
@@ -1239,7 +1239,7 @@ fn a_restart_that_adopts_nothing_still_drains() {
     // Same device, second run: the network root is exactly at this device's
     // durable floor, so cold start reconciles without adopting.
     let (mut engine, _events) = engine_on(&alice, 43);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     block_on(engine.command(Command::Create {
         parent: ROOT,
         name: "docs".into(),
@@ -1282,7 +1282,7 @@ fn an_empty_file_create_publishes_under_the_same_metadata_path() {
     let alice = world.device(b"alice");
     serve_http(&alice, &blocks, 16);
     let (mut engine, _events) = engine_on(&alice, 42);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     block_on(engine.command(Command::Create {
         parent: ROOT,
         name: "notes.txt".into(),
@@ -1320,7 +1320,7 @@ fn a_second_device_of_the_same_account_resolves_the_write() {
     let alice = world.device(b"alice");
     serve_http(&alice, &blocks, 16);
     let (mut engine_a, _events_a) = engine_on(&alice, 42);
-    block_on(engine_a.start(secret())).unwrap();
+    block_on(engine_a.start(secret(), None)).unwrap();
     block_on(engine_a.command(Command::Create {
         parent: ROOT,
         name: "photos".into(),
@@ -1336,7 +1336,7 @@ fn a_second_device_of_the_same_account_resolves_the_write() {
     let bob = world.device(b"alice-second-device");
     serve_http(&bob, &blocks, 8);
     let (mut engine_b, _events_b) = engine_on(&bob, 7);
-    block_on(engine_b.start(secret()))
+    block_on(engine_b.start(secret(), None))
         .expect("the second device cold-starts off the published record plane");
 
     let children = block_on(engine_b.view()).unwrap().children(ROOT);
@@ -1428,7 +1428,7 @@ fn open_reader(
     let device = world.device(b"alice-second-device");
     serve_http(&device, blocks, calls);
     let (mut engine, events) = engine_on(&device, 7);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     (device, engine, events)
 }
 
@@ -1474,7 +1474,7 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
     let bob = world.device(b"alice-second-device");
     serve_http(&bob, &blocks, 400);
     let (mut engine_b, _events_b) = engine_on(&bob, 7);
-    block_on(engine_b.start(secret()))
+    block_on(engine_b.start(secret(), None))
         .expect("the second device cold-starts off the published record plane");
 
     let children = block_on(engine_b.view()).unwrap().children(ROOT);
@@ -1524,7 +1524,7 @@ fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     let bob = world.device(b"alice-second-device");
     serve_http(&bob, &blocks, 400);
     let (mut engine_b, _events_b) = engine_on(&bob, 7);
-    block_on(engine_b.start(secret())).unwrap();
+    block_on(engine_b.start(secret(), None)).unwrap();
     let node = block_on(engine_b.view()).unwrap().children(ROOT)[0].id;
 
     let whole = block_on(engine_b.read_content(node)).expect("the verified read serves it");
@@ -1910,7 +1910,7 @@ fn an_update_content_write_round_trips_the_new_version_to_a_second_device() {
     let bob = world.device(b"alice-second-device");
     serve_http(&bob, &blocks, 400);
     let (mut engine_b, _events_b) = engine_on(&bob, 7);
-    block_on(engine_b.start(secret())).unwrap();
+    block_on(engine_b.start(secret(), None)).unwrap();
     assert_eq!(
         block_on(engine_b.read_content(node)).expect("the head version reads"),
         b"second version bytes, longer than the first",
@@ -3058,7 +3058,7 @@ fn assert_round_trips(world: &FakeWorld, blocks: &Blocks, name: &str, plaintext:
     let bob = world.device(b"alice-second-device");
     serve_http(&bob, blocks, 400);
     let (mut engine_b, _events_b) = engine_on(&bob, 7);
-    block_on(engine_b.start(secret()))
+    block_on(engine_b.start(secret(), None))
         .expect("the second device cold-starts off the published record plane");
     let children = block_on(engine_b.view()).unwrap().children(ROOT);
     let file = children
@@ -3642,7 +3642,7 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
     .unwrap();
 
     let (mut engine, _events) = engine_on(&alice, 42);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let op_id = block_on(engine.command(Command::Create {
         parent: ROOT,
         name: "photos".into(),
@@ -4471,7 +4471,7 @@ fn start_on_api(
 ) -> (Engine<FakeSeamTypes>, Vec<BoxedTask>) {
     serve_http(device, blocks, 64);
     let (mut engine, _events) = engine_on_api(device, entropy_seed);
-    block_on(engine.start(secret())).expect("the session starts");
+    block_on(engine.start(secret(), None)).expect("the session starts");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     (engine, tasks)
@@ -4804,7 +4804,7 @@ fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
     // it spawns stay unpolled, so what follows is the start's own spend.
     serve_http(&alice, &blocks, 64);
     let (mut engine, _events) = engine_on_api(&alice, 43);
-    block_on(engine.start(secret())).expect("the second session starts");
+    block_on(engine.start(secret(), None)).expect("the second session starts");
 
     assert_eq!(
         world.record_store.get_count(bin_name().as_str()),
@@ -6884,7 +6884,7 @@ fn a_restart_holds_a_replayed_quarantine_until_one_of_its_own_polls_converges() 
     let mark = retire_targets(&alice).len();
     serve_http(&alice, &blocks, 400);
     let (mut engine, _events) = engine_on(&alice, 43);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     tick(&world, &engine, &mut tasks);
@@ -7299,7 +7299,7 @@ fn a_delete_whose_confirm_never_landed_settles_from_the_journal_after_a_restart(
     seed_hard_delete(&world, &alice, &blocks);
     serve_http(&alice, &blocks, 400);
     let (mut engine, _events) = engine_on(&alice, 42);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     write_file(
@@ -7337,7 +7337,7 @@ fn a_delete_whose_confirm_never_landed_settles_from_the_journal_after_a_restart(
     blocks.refuse_retire(false);
     serve_http(&alice, &blocks, 400);
     let (mut engine, _events) = engine_on(&alice, 43);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     tick(&world, &engine, &mut tasks);
@@ -7378,7 +7378,7 @@ fn entries_this_build_refuses_never_starve_the_deletes_sorting_behind_them() {
     seed_hard_delete(&world, &alice, &blocks);
     serve_http(&alice, &blocks, 400);
     let (mut engine, _events) = engine_on(&alice, 42);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     write_file(
@@ -7445,7 +7445,7 @@ fn a_wall_of_planted_journal_keys_costs_a_pass_its_ceiling_and_not_the_delete() 
     seed_hard_delete(&world, &alice, &blocks);
     serve_http(&alice, &blocks, 400);
     let (mut engine, _events) = engine_on(&alice, 42);
-    block_on(engine.start(secret())).unwrap();
+    block_on(engine.start(secret(), None)).unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     write_file(
@@ -10199,7 +10199,7 @@ fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
     let bob = world.device(b"alice-second-device");
     serve_http(&bob, &blocks, 400);
     let (mut engine_b, _events_b) = engine_on(&bob, 7);
-    block_on(engine_b.start(secret())).unwrap();
+    block_on(engine_b.start(secret(), None)).unwrap();
     let kept = child_id(&engine_b, ROOT, "kept.bin");
     assert_eq!(
         block_on(engine_b.read_content(kept)).expect("every leaf of the next version was sent"),
@@ -15589,7 +15589,7 @@ fn a_shrunken_preserved_budget_is_enforced_at_the_next_store_open() {
         },
     );
     serve_http(&alice, &blocks, 400);
-    block_on(reopened.start(secret())).expect("the second session cold-starts");
+    block_on(reopened.start(secret(), None)).expect("the second session cold-starts");
 
     assert!(
         !staged().contains(&roots[0]),
@@ -16999,7 +16999,7 @@ fn a_mounted_device_publishes_a_vault(world: &FakeWorld, blocks: &Blocks) -> (Ip
     let mount = world.device(b"alice");
     serve_http(&mount, blocks, 64);
     let (mut engine, _events) = engine_on_api(&mount, 42);
-    block_on(engine.start(secret())).expect("the mount provisions the first-run vault");
+    block_on(engine.start(secret(), None)).expect("the mount provisions the first-run vault");
     block_on(engine.command(Command::Create {
         parent: ROOT,
         name: "photos".into(),
@@ -17042,7 +17042,7 @@ fn a_tab_that_adopts_a_published_genesis_root_converges_on_that_devices_tree() {
     serve_http(&tab, &blocks, 64);
     let (mut engine, _events) = engine_on_api(&tab, 43);
 
-    block_on(engine.start(secret())).expect("the tab settles on the published root");
+    block_on(engine.start(secret(), None)).expect("the tab settles on the published root");
     assert!(
         engine.is_provisioned(),
         "the tab holds the write seed of the vault it adopted"
@@ -17107,7 +17107,7 @@ fn a_vault_only_the_api_cache_can_see_leaves_a_retryable_session_that_converges(
     serve_http_with_cached_record(&tab, &blocks, 64, &pointer_name, published_pointer.clone());
     let (mut engine, mut events) = engine_on_api(&tab, 43);
 
-    block_on(engine.start(secret()))
+    block_on(engine.start(secret(), None))
         .expect("a vault this pass cannot resolve is not a failed start");
     assert!(
         !engine.is_provisioned(),

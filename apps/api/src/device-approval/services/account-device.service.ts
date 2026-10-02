@@ -26,6 +26,11 @@ const DEFAULT_DEVICE_CAP = 20;
 /** Ceiling on the configured cap; an over-range value falls back to the default. */
 const MAX_DEVICE_CAP = 100;
 
+/** The registration refusals of ADR 0058 D3. */
+export const UNBOUND_ACCOUNT_MESSAGE = 'This account has no bound identity subject';
+export const OTHER_SUBJECT_MESSAGE =
+  'The identity token names a subject other than the one bound to this account';
+
 /** Postgres `unique_violation`. */
 const UNIQUE_VIOLATION = '23505';
 
@@ -139,12 +144,10 @@ export class AccountDeviceService {
         .getRepository(User)
         .findOne({ where: { id: userId }, select: ['id', 'identitySubjectId'] });
       if (!account?.identitySubjectId) {
-        throw new ConflictException('This account has no bound identity subject');
+        throw new ConflictException(UNBOUND_ACCOUNT_MESSAGE);
       }
       if (account.identitySubjectId !== identitySubjectId) {
-        throw new ConflictException(
-          'The identity token names a subject other than the one bound to this account'
-        );
+        throw new ConflictException(OTHER_SUBJECT_MESSAGE);
       }
 
       const repo = manager.getRepository(AccountDevice);
@@ -208,9 +211,12 @@ export class AccountDeviceService {
   async accountForIdentitySubject(identitySubjectId: string): Promise<string | null> {
     const account = await this.dataSource
       .getRepository(User)
-      .findOne({ where: { identitySubjectId }, select: ['id'] });
-    if (!account) return null;
-    return (await this.deviceRepository.existsBy({ userId: account.id })) ? account.id : null;
+      .createQueryBuilder('account')
+      .select('account.id', 'id')
+      .where('account.identitySubjectId = :identitySubjectId', { identitySubjectId })
+      .andWhere('EXISTS (SELECT 1 FROM account_devices d WHERE d.user_id = account.id)')
+      .getRawOne<{ id: string }>();
+    return account?.id ?? null;
   }
 
   /** Whether this account has registered exactly this device key. */

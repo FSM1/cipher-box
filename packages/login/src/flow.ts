@@ -182,11 +182,10 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
    * inside the failure envelope, so nothing can leave it armed over a host that
    * renders signed out.
    *
-   * `followsExchange` is false for a restore. The credential is spent here,
-   * whichever way the start goes.
+   * The credential is spent here, whichever way the start goes.
    */
-  const handOff = async (followsExchange: boolean): Promise<void> => {
-    const held = followsExchange && exchanged?.session === session ? exchanged : null;
+  const handOff = async (): Promise<void> => {
+    const held = exchanged?.session === session ? exchanged : null;
     exchanged = null;
     if (!facade || !session) throw new Error('the engine is not ready to accept a login');
     const method = session.method();
@@ -231,7 +230,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       const credential = await collect();
       exchanged = { session, credential, receivedAt: host.now() };
       await session.login(credential);
-      await handOff(true);
+      await handOff();
     });
 
   /**
@@ -330,7 +329,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
           throw new Error('recovery is not available on this device');
         retired = null;
         await session.recoverWithPhrase(phrase);
-        await handOff(true);
+        await handOff();
       });
     },
 
@@ -340,7 +339,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
           throw new Error('device approval is not available on this device');
         retired = null;
         await session.adoptApprovalFactor(factorKey);
-        await handOff(true);
+        await handOff();
       });
     },
 
@@ -363,7 +362,11 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       if (restore !== null && restore.session === session && restore.facade === facade) {
         return restore.done;
       }
-      const done = exclusively(() => handOff(false)).catch(() => undefined);
+      // A restore follows no exchange, so it presents no token.
+      const done = exclusively(() => {
+        exchanged = null;
+        return handOff();
+      }).catch(() => undefined);
       restore = { session, facade, done };
       return done;
     },

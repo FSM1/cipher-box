@@ -148,9 +148,20 @@ export class AuthService {
         }
         const users = manager.getRepository(User);
         const existing = await users.findOne({ where: { publicKey: canonicalKey } });
-        const account = existing ?? (await users.save({ publicKey: canonicalKey }));
-        if (identity) {
-          await bindSubject(manager, account.id, identity.subject);
+        const bind =
+          identity &&
+          !existing?.identitySubjectId &&
+          (await subjectIsFree(manager, identity.subject, existing?.id))
+            ? identity.subject
+            : null;
+        const account =
+          existing ?? (await users.save({ publicKey: canonicalKey, identitySubjectId: bind }));
+        if (existing && bind) {
+          // `IS NULL` keeps a concurrent bind of this account under another subject.
+          await users.update(
+            { id: existing.id, identitySubjectId: IsNull() },
+            { identitySubjectId: bind }
+          );
         }
         await this.touchAuthMethod(manager.getRepository(AuthMethod), account.id, 'identity', {
           identifierHash: this.identityService.hashIdentifier(canonicalKey),
@@ -331,23 +342,21 @@ export class AuthService {
 }
 
 /**
- * Write the bind when the account and the subject are both unbound (ADR 0058 D2).
- * The caller holds the subject lock, so the subject check and the write serialize;
- * the `IS NULL` guard keeps a concurrent bind of the account under another subject
- * from being rewritten.
+ * Whether `subject` may bind to the account `userId`, or to the account this
+ * login creates when `userId` is absent (ADR 0058 D2). The caller holds the
+ * subject lock, so this check and the bind serialize.
  */
-async function bindSubject(manager: EntityManager, userId: string, subject: string): Promise<void> {
-  const users = manager.getRepository(User);
-  if (await users.existsBy({ identitySubjectId: subject })) {
-    return;
+async function subjectIsFree(
+  manager: EntityManager,
+  subject: string,
+  userId: string | undefined
+): Promise<boolean> {
+  if (await manager.getRepository(User).existsBy({ identitySubjectId: subject })) {
+    return false;
   }
   // Device rows from before the bind landed still claim their subject.
-  if (
-    await manager
-      .getRepository(AccountDevice)
-      .existsBy({ identitySubjectId: subject, userId: Not(userId) })
-  ) {
-    return;
-  }
-  await users.update({ id: userId, identitySubjectId: IsNull() }, { identitySubjectId: subject });
+  return !(await manager.getRepository(AccountDevice).existsBy({
+    identitySubjectId: subject,
+    ...(userId === undefined ? {} : { userId: Not(userId) }),
+  }));
 }

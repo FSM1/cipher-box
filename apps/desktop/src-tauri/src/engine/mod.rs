@@ -273,7 +273,7 @@ impl EngineHost {
         identity_token: Option<String>,
         session: SessionEnv,
     ) -> Result<(), String> {
-        let started = self.spawn_engine(secret, identity_token, session)?;
+        let started = self.spawn_engine(secret, identity_token.map(Zeroizing::new), session)?;
         let outcome = started
             .await
             .unwrap_or_else(|_| Err("the engine stopped before it started".to_owned()));
@@ -411,7 +411,7 @@ impl EngineHost {
     fn spawn_engine(
         &self,
         secret: Zeroizing<Vec<u8>>,
-        identity_token: Option<String>,
+        identity_token: Option<Zeroizing<String>>,
         session: SessionEnv,
     ) -> Result<oneshot::Receiver<Result<(), String>>, String> {
         let mut live = self.live.lock().map_err(|_| POISONED)?;
@@ -510,7 +510,7 @@ fn account_id(secret: &[u8]) -> Result<String, String> {
 /// closes.
 fn host_engine(
     secret: Zeroizing<Vec<u8>>,
-    identity_token: Option<String>,
+    identity_token: Option<Zeroizing<String>>,
     session: SessionEnv,
     account_dir: PathBuf,
     inbox: mpsc::UnboundedReceiver<Request>,
@@ -559,7 +559,7 @@ fn host_engine(
 /// seam set is the engine's from here on.
 async fn start_engine(
     secret: Zeroizing<Vec<u8>>,
-    identity_token: Option<String>,
+    identity_token: Option<Zeroizing<String>>,
     session: &SessionEnv,
     account_dir: &std::path::Path,
 ) -> Result<(Engine<DesktopSeamTypes>, EventStream), String> {
@@ -587,7 +587,7 @@ async fn start_engine(
     // The engine copies the secret into its own zeroizing store; this frame's
     // owner scrubs on drop, whichever way the start goes.
     engine
-        .start_with_identity_token(LoginSecret::new(secret.to_vec()), identity_token)
+        .start(LoginSecret::new(secret.to_vec()), identity_token)
         .await
         .map_err(|error| error.to_string())?;
     Ok((engine, events))

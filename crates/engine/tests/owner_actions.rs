@@ -202,7 +202,7 @@ fn boot_owner(
 ) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
     serve_http(device, blocks, 600);
     let (mut engine, events) = engine_on_api(device, 42);
-    block_on(engine.start(secret())).expect("cold start adopts the owner root");
+    block_on(engine.start(secret(), None)).expect("cold start adopts the owner root");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     (engine, events, tasks)
@@ -839,7 +839,7 @@ impl GrantScenario {
     ) -> (Engine<FakeSeamTypes>, EventStream) {
         serve_http(device, &self.blocks, 64);
         let (mut engine, events) = engine_with(device, entropy_seed, ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(secret.to_vec())))
+        block_on(engine.start(LoginSecret::new(secret.to_vec()), None))
             .expect("the bearer's own session starts");
         (engine, events)
     }
@@ -6774,7 +6774,7 @@ fn a_command_pass_before_the_first_walk_keeps_a_pending_entry_it_cannot_place() 
 
     serve_http(&fx.owner_device, &fx.blocks, 600);
     let (mut restarted, _restarted_events) = engine_on_api(&fx.owner_device, 43);
-    block_on(restarted.start(secret())).expect("the restart adopts the owner root");
+    block_on(restarted.start(secret(), None)).expect("the restart adopts the owner root");
     let mut tasks = fx.world.scheduler.take_spawned_tasks();
     assert_eq!(
         block_on(restarted.command(Command::ConvertInviteClaims { node: fx.folder })),
@@ -8375,7 +8375,7 @@ fn a_crash_between_the_ack_and_the_record_write_keeps_the_claim() {
 
     serve_http(&fx.owner_device, &fx.blocks, 600);
     let (mut restarted, _restarted_events) = engine_on_api(&fx.owner_device, 43);
-    block_on(restarted.start(secret())).expect("the restart adopts the owner root");
+    block_on(restarted.start(secret(), None)).expect("the restart adopts the owner root");
     let mut tasks = fx.world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);
     tick(&fx.world, &restarted, &mut tasks);
@@ -9453,7 +9453,7 @@ fn a_granted_account_on_a_device_with_no_bookmark_joins_with_no_claim() {
     let laptop = fx.world.device(b"the recipient's second device");
     serve_http(&laptop, &fx.blocks, 8_000);
     let (mut second, _second_events) = engine_on_api(&laptop, 23);
-    block_on(second.start(LoginSecret::new(RECIPIENT_SECRET.to_vec())))
+    block_on(second.start(LoginSecret::new(RECIPIENT_SECRET.to_vec()), None))
         .expect("the recipient's second session starts");
     let mut second_tasks = fx.world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut second_tasks);
@@ -12441,7 +12441,7 @@ fn a_permission_change_refuses_a_grantee_that_holds_more_than_one_row() {
 fn recipient_session(fx: &GrantScenario) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
     serve_http(&fx.recipient_device, &fx.blocks, 8_000);
     let (mut engine, events) = engine_on_api(&fx.recipient_device, 21);
-    block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec())))
+    block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec()), None))
         .expect("the recipient's own session starts");
     let mut tasks = fx.world.scheduler.take_spawned_tasks();
     poll_tasks_until_parked(&mut tasks);

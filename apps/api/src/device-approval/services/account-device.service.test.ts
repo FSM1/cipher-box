@@ -16,7 +16,12 @@ import {
 } from '../../testing/identity-tokens';
 import { deviceRegistrationPayload } from '../device-signature';
 import { AccountDevice } from '../entities/account-device.entity';
-import { AccountDeviceService, RegisterDeviceInput } from './account-device.service';
+import {
+  AccountDeviceService,
+  OTHER_SUBJECT_MESSAGE,
+  RegisterDeviceInput,
+  UNBOUND_ACCOUNT_MESSAGE,
+} from './account-device.service';
 
 /** The service's own default; an over-range DEVICE_REGISTRY_CAP falls back to it. */
 const DEFAULT_DEVICE_CAP = 20;
@@ -352,7 +357,7 @@ describe('AccountDeviceService', () => {
 
       await expect(
         service.register(unbound, registration(device, unbound, { identityToken: presented }))
-      ).rejects.toThrow(new ConflictException('This account has no bound identity subject'));
+      ).rejects.toThrow(new ConflictException(UNBOUND_ACCOUNT_MESSAGE));
       expect(devices.rows).toHaveLength(0);
       expect(spent.has(presented)).toBe(false);
     });
@@ -362,11 +367,7 @@ describe('AccountDeviceService', () => {
 
       await expect(
         service.register(account, registration(device, account, { identityToken: presented }))
-      ).rejects.toThrow(
-        new ConflictException(
-          'The identity token names a subject other than the one bound to this account'
-        )
-      );
+      ).rejects.toThrow(new ConflictException(OTHER_SUBJECT_MESSAGE));
       expect(devices.rows).toHaveLength(0);
       expect(spent.has(presented)).toBe(false);
     });
@@ -490,28 +491,6 @@ describe('AccountDeviceService', () => {
       await expect(service.revoke(account, 'not-a-uuid')).resolves.toBeUndefined();
       await expect(service.revoke(account, randomUUID())).resolves.toBeUndefined();
       expect(devices.rows).toHaveLength(1);
-    });
-  });
-
-  describe('accountForIdentitySubject', () => {
-    it('resolves a bound subject to its account when the account has a device', async () => {
-      await service.register(account, registration(device, account));
-      await expect(service.accountForIdentitySubject(subjectOf(token))).resolves.toBe(account);
-    });
-
-    it('returns null for a bound account with no device', async () => {
-      await expect(service.accountForIdentitySubject(subjectOf(token))).resolves.toBeNull();
-    });
-
-    it('returns null for an unbound subject, even when a device row carries it', async () => {
-      const unbound = randomUUID();
-      await devices.save({
-        userId: account,
-        identitySubjectId: unbound,
-        publicKey: device.publicKey,
-      });
-
-      await expect(service.accountForIdentitySubject(unbound)).resolves.toBeNull();
     });
   });
 

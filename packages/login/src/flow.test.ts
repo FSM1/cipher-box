@@ -269,6 +269,17 @@ describe('the identity token a start presents', () => {
     expect(before.facade.calls.identityTokens).toEqual([FAKE_IDENTITY_TOKEN]);
   });
 
+  it('presents none for a restore, even while a held login keeps a token', async () => {
+    const parts = build({ session: fakeSession({ loggedIn: true, needsRecovery: true }) });
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+
+    await parts.flow.resume();
+
+    expect(parts.facade.calls.identityTokens).toEqual([undefined]);
+  });
+
   it('presents none for a restore that follows a sign-in', async () => {
     const parts = build();
     await parts.flow.loginWithGoogle('google.id.token');

@@ -33,7 +33,11 @@ import {
 import { DeviceController } from './device.controller';
 import { AccountDevice } from './entities/account-device.entity';
 import { DeviceApproval } from './entities/device-approval.entity';
-import { AccountDeviceService } from './services/account-device.service';
+import {
+  AccountDeviceService,
+  OTHER_SUBJECT_MESSAGE,
+  UNBOUND_ACCOUNT_MESSAGE,
+} from './services/account-device.service';
 import { DeviceApprovalService } from './services/device-approval.service';
 
 /**
@@ -572,9 +576,7 @@ describe('device-approval HTTP surface (real Postgres)', () => {
       const refused = await post(other, registration(other, createTestDeviceKey(), token)).expect(
         409
       );
-      expect(refused.body.message).toBe(
-        'The identity token names a subject other than the one bound to this account'
-      );
+      expect(refused.body.message).toBe(OTHER_SUBJECT_MESSAGE);
 
       await post(member, registration(member, createTestDeviceKey(), token)).expect(201);
     });
@@ -639,7 +641,7 @@ describe('device-approval HTTP surface (real Postgres)', () => {
       const token = await identityToken(randomUUID());
 
       const res = await register(account, token).expect(409);
-      expect(res.body.message).toBe('This account has no bound identity subject');
+      expect(res.body.message).toBe(UNBOUND_ACCOUNT_MESSAGE);
       expect(await deviceRowCount()).toBe(0);
       expect(await spentTokenIds()).toEqual([]);
     });
@@ -649,9 +651,7 @@ describe('device-approval HTTP surface (real Postgres)', () => {
       const token = await identityToken(randomUUID());
 
       const res = await register(account, token).expect(409);
-      expect(res.body.message).toBe(
-        'The identity token names a subject other than the one bound to this account'
-      );
+      expect(res.body.message).toBe(OTHER_SUBJECT_MESSAGE);
       expect(await deviceRowCount()).toBe(0);
       expect(await spentTokenIds()).toEqual([]);
     });
