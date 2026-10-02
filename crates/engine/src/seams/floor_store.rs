@@ -280,7 +280,7 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
 /// The seed is the account's, so the label is the same on every device of the
 /// account; its **use** is local. Publishing one makes it the cross-scope
 /// correlator the blinded tag exists to deny ([`kdf::contact_label`]).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ContactLabel([u8; CONTACT_LABEL_LEN]);
 
 /// The fixed-width prefix [`SharerScopedFloorStore`] puts on every epoch key —
@@ -345,6 +345,11 @@ impl<'a, F> SharerScopedFloorStore<'a, F> {
             inner,
             sharer: Some(sharer),
         }
+    }
+
+    /// The granting contact's label, or `None` for a scope this vault owns.
+    pub(crate) fn sharer(&self) -> Option<ContactLabel> {
+        self.sharer
     }
 
     /// `scope_id` under the granting contact's label, borrowed unchanged on the

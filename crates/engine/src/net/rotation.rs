@@ -6093,7 +6093,7 @@ mod tests {
                         .find(|(name, _)| name.eq_ignore_ascii_case("x-content-cid"))
                         .map(|(_, value)| value.clone())
                         .ok_or_else(|| SeamError::new("upload without a content CID"))?;
-                    let body = request.body.clone().unwrap_or_default();
+                    let body = request.body.as_deref().cloned().unwrap_or_default();
                     let size = body.len();
                     blocks.lock().expect("lock").insert(cid.clone(), body);
                     return Ok(HttpResponse {

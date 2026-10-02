@@ -177,7 +177,7 @@ fn route(method: HttpMethod, path: &str, body: &[u8]) -> HttpResponse {
 impl Http for StubHttp {
     async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse> {
         let path = path_of(&request.url);
-        let body = request.body.unwrap_or_default();
+        let body = request.body.as_deref().cloned().unwrap_or_default();
         let throttled = self.state.borrow().throttled.contains(&path);
         let response = if throttled {
             json(429, r#"{"statusCode":429,"message":"Too Many Requests"}"#)

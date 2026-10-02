@@ -710,6 +710,7 @@ dependencies = [
 name = "cipherbox-contract"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "cipherbox-core",
  "cipherbox-engine",
  "getrandom 0.2.17",
@@ -772,6 +773,7 @@ dependencies = [
 name = "cipherbox-desktop-seams"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "cipherbox-core",
  "cipherbox-desktop-seams",
  "cipherbox-engine",

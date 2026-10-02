@@ -20,6 +20,7 @@ cipherbox-engine.workspace = true
 # featureless reqwest (no TLS backend, matching the tauri resolution): the API
 # is reached over plain http on localhost in CI, so no TLS/OpenSSL is linked.
 reqwest = { version = "0.13", default-features = false }
+bytes.workspace = true
 getrandom = "0.2"
 # Lowercase hex, the API's wire form for public keys — the same crate core and
 # the engine already use.
