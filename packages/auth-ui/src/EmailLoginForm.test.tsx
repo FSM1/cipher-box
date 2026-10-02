@@ -150,6 +150,29 @@ describe('EmailLoginForm', () => {
     await waitFor(() => expect(onSendCode).toHaveBeenLastCalledWith('member@example.test'));
   });
 
+  // The host's flag covers every method; only this form's own send is a send.
+  it('does not claim a send that another method is making', () => {
+    renderForm({ busy: true });
+
+    const button = screen.getByTestId('email-login-button');
+    expect(button.textContent).toBe('[CONTINUE]');
+    expect(button.hasAttribute('disabled')).toBe(true);
+    expect(button.classList.contains('terminal-btn--loading')).toBe(false);
+  });
+
+  it('reports its own send until it settles', async () => {
+    const send = deferred();
+    renderForm({ onSendCode: () => send.promise });
+
+    typeAddress('member@example.test');
+    const button = screen.getByTestId('email-login-button');
+    expect(button.textContent).toBe('sending code...');
+    expect(button.classList.contains('terminal-btn--loading')).toBe(true);
+
+    await send.reject(new Error('too many requests'));
+    expect(screen.getByTestId('email-login-button').textContent).toBe('[CONTINUE]');
+  });
+
   it('sends nothing while the tab cannot accept a login', () => {
     const { onSendCode } = renderForm({ disabled: true });
 

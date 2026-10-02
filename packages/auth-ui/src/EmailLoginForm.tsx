@@ -18,6 +18,8 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [sentTo, setSentTo] = useState<string | null>(null);
+  // This form's own step in flight; `busy` is any transition on the host.
+  const [pending, setPending] = useState<'send' | 'verify' | null>(null);
 
   const codeInput = useRef<HTMLInputElement>(null);
 
@@ -36,13 +38,20 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
     if (blocked) return;
     if (sentTo === null) {
       if (!trimmed) return;
-      void onSendCode(trimmed).then(
-        () => setSentTo(trimmed),
-        () => undefined
-      );
+      setPending('send');
+      void onSendCode(trimmed)
+        .then(
+          () => setSentTo(trimmed),
+          () => undefined
+        )
+        .finally(() => setPending(null));
       return;
     }
-    if (code.length === 6) void onVerify(sentTo, code).catch(() => undefined);
+    if (code.length !== 6) return;
+    setPending('verify');
+    void onVerify(sentTo, code)
+      .catch(() => undefined)
+      .finally(() => setPending(null));
   };
 
   const restart = () => {
@@ -72,11 +81,11 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
           <button
             type="submit"
             data-testid="email-login-button"
-            className={filledButton(busy)}
+            className={filledButton(pending === 'send')}
             disabled={blocked || !trimmed}
-            aria-busy={busy}
+            aria-busy={pending === 'send'}
           >
-            {busy ? 'sending code...' : '[CONTINUE]'}
+            {pending === 'send' ? 'sending code...' : '[CONTINUE]'}
           </button>
         </>
       ) : (
@@ -105,11 +114,11 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
           <button
             type="submit"
             data-testid="email-verify-button"
-            className={filledButton(busy)}
+            className={filledButton(pending === 'verify')}
             disabled={blocked || code.length !== 6}
-            aria-busy={busy}
+            aria-busy={pending === 'verify'}
           >
-            {busy ? 'verifying...' : '[VERIFY]'}
+            {pending === 'verify' ? 'verifying...' : '[VERIFY]'}
           </button>
           <button
             type="button"
@@ -126,8 +135,8 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
   );
 }
 
-function filledButton(busy?: boolean): string {
-  return busy
+function filledButton(loading: boolean): string {
+  return loading
     ? 'terminal-btn terminal-btn--filled terminal-btn--loading'
     : 'terminal-btn terminal-btn--filled';
 }
