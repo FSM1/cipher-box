@@ -23,6 +23,14 @@ export const MAX_BATCH = 1000;
 export const MAX_CONTENT_CIDS = 1000;
 
 /**
+ * The total `contentCids` of one register batch. Register takes one advisory
+ * lock per distinct token, so this bounds the lock-table load of one request.
+ * It is above the engine's chunk of 1000 because an earlier engine release
+ * sends up to about 1650 in one request, and a refusal dead-letters that write.
+ */
+export const MAX_REGISTER_CONTENT_CIDS_TOTAL = 2000;
+
+/**
  * The JSON body limit of the registry routes. The engine sends at most
  * MAX_BATCH entries and MAX_CONTENT_CIDS content CIDs in total per request,
  * about 700 KB at the widest tokens above; its `REGISTRY_BODY_MAX_BYTES`

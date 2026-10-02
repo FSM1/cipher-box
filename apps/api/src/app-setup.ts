@@ -90,10 +90,15 @@ function rawUploadBody(maxBytes: number) {
 /**
  * The registry batches outgrow the default 100 KiB JSON limit; every other
  * route keeps it. Named apart from `jsonParser`: Nest skips its own global
- * JSON parser when a layer of that name is already mounted.
+ * JSON parser when a layer of that name is already mounted. The larger limit
+ * applies only behind a verified, unexpired bearer, as in `rawUploadBody`; any
+ * other request falls through to the default parser and the route's guard.
  */
 const registryJson = json({ limit: REGISTRY_BODY_LIMIT_BYTES });
 function registryJsonBody(req: Request, res: Response, next: NextFunction): void {
+  if (!verifiedUnexpiredSubjectFromBearer(req.headers as Record<string, unknown>)) {
+    return next();
+  }
   registryJson(req, res, next);
 }
 

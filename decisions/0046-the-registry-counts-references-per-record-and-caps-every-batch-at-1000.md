@@ -273,11 +273,13 @@ more blocks in total also crosses the limit. The wave reads that failure as retr
 enforces the item caps and not the body size, and the Contract Suite sends short synthetic CIDs.
 This ADR records the blueprint rule of D4. The fix is a body limit sized to the caps, or a
 chunker that also bounds the request size. FSM1/cipher-box#2018 tracks the defect on both paths.
+Resolved on 2026-10-02: the registry routes accept 1 MiB, the server caps the total `contentCids`
+of one register request at 2000, and `net::register` also chunks at 1000 content CIDs in total.
 
 **E2 — The per-entry `contentCids` cap runs inside the per-item validation, and the OpenAPI
 document does not publish it.** The blueprint says
 that the caps are enforced before the per-item validation. The entry-count and total-target
-checks are (`BatchSizePipe`, `TargetCountPipe` in `apps/api/src/registry/registry.pipes.ts`). The
+checks are (`BatchSizePipe`, `ItemCountPipe` in `apps/api/src/registry/registry.pipes.ts`). The
 `contentCids` cap is `ArrayMaxSize` on the entry DTO, so it runs with the per-item validation. The
 answer is the same whole-batch 400 with the code. The cost is that the API validates the batch
 before it refuses it, which E1's body limit bounds. This ADR records the blueprint rule.
@@ -287,7 +289,8 @@ The two top-level batch arrays carry `maxItems: 1000`, and `RetireEntryDto.targe
 per-entry 1000. `RegisterEntryDto.contentCids` in `apps/api/openapi.json` carries no `maxItems`,
 because its `@ApiProperty` in `apps/api/src/registry/dto/registry.dto.ts` sets none. A reader of
 the OpenAPI document cannot see the per-entry cap that D4 splits around. This ADR records the
-blueprint rule. FSM1/cipher-box#2018 tracks this gap with E1.
+blueprint rule. FSM1/cipher-box#2018 tracks this gap with E1. Resolved on 2026-10-02:
+`RegisterEntryDto.contentCids` publishes `maxItems: 1000`. The first paragraph of E2 stays open.
 
 **E3 — A reference is per record, not per version.** All versions of one file share the file's
 record name. A record-scoped retire of a doomed version's leaves therefore drops the references of
@@ -361,7 +364,9 @@ path.
   `crates/engine/tests/write_plane.rs`. The Contract Suite test
   `an_oversize_register_entry_is_refused_fail_closed` proves that the chunked shape is accepted.
   **Finding:** every test uses short CIDs or the CI framing, so no test crosses the body limit of
-  E1.
+  E1. Resolved on 2026-10-02: the Contract Suite tests
+  `a_register_request_at_the_chunk_bound_fits_the_body_limit` and
+  `a_register_request_past_the_body_limit_is_refused` send bodies at and past the limit.
 - **D5:** the Engine tests in `crates/engine/tests/write_plane.rs`
   `a_registration_the_registry_refuses_dead_letters_instead_of_holding_the_queue_head`,
   `a_registration_400_from_an_intermediary_is_charged_not_permanent`,

@@ -13,7 +13,12 @@ import {
 import { THROTTLE_SURFACES } from '../ops/throttling';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { AccountController } from './account.controller';
-import { MAX_BATCH, MAX_CONTENT_CIDS, REGISTRY_BODY_LIMIT_BYTES } from './dto/registry.dto';
+import {
+  MAX_BATCH,
+  MAX_CONTENT_CIDS,
+  MAX_REGISTER_CONTENT_CIDS_TOTAL,
+  REGISTRY_BODY_LIMIT_BYTES,
+} from './dto/registry.dto';
 import { NameInventory } from './entities/name-inventory.entity';
 import { PinReference } from './entities/pin-reference.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
@@ -248,6 +253,47 @@ describe('registry HTTP surface (real Postgres)', () => {
         .send(entries)
         .expect(413);
       expect(await namesFor(acct.id)).toHaveLength(0);
+    });
+
+    it('refuses a batch whose TOTAL contentCids exceed the cap, writing no rows', async () => {
+      const acct = await account();
+      const perEntry = MAX_CONTENT_CIDS / 2;
+      const entries = Array.from(
+        { length: Math.ceil((MAX_REGISTER_CONTENT_CIDS_TOTAL + 1) / perEntry) },
+        (_, entry) => ({
+          ipnsName: `k51total${entry}`,
+          contentCids: Array.from({ length: perEntry }, (_, i) => `bafyTotal${entry}x${i}`),
+        })
+      );
+      const response = await request(http())
+        .post('/registry/register')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send(entries)
+        .expect(400);
+      expect(response.body.code).toBe(REGISTRY_BATCH_REFUSED);
+      expect(await namesFor(acct.id)).toHaveLength(0);
+    });
+
+    // Past the 100 KiB default, inside the registry limit.
+    const midSizeBody = () =>
+      Array.from({ length: 400 }, (_, i) => ({
+        ipnsName: wide('k51mid', i, 128),
+        contentCids: [wide('bafyMid', i, 256)],
+      }));
+
+    it('parses an unauthenticated registry body at the default limit only', async () => {
+      const body = midSizeBody();
+      expect(Buffer.byteLength(JSON.stringify(body))).toBeGreaterThan(100 * 1024);
+      await request(http()).post('/registry/register').send(body).expect(413);
+    });
+
+    it('keeps the default body limit on a route outside the registry', async () => {
+      const acct = await account();
+      await request(http())
+        .patch('/account/byo')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send({ byo: true, padding: midSizeBody() })
+        .expect(413);
     });
   });
 

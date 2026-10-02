@@ -1220,6 +1220,37 @@ async fn a_register_request_at_the_chunk_bound_fits_the_body_limit() {
         .expect("a request at the chunk bound is accepted");
 }
 
+/// A body just past [`REGISTRY_BODY_MAX_BYTES`] is refused with a `413`, so the
+/// engine's constant and the API's limit stay the same value.
+#[tokio::test]
+async fn a_register_request_past_the_body_limit_is_refused() {
+    let base = require_stack!("a_register_request_past_the_body_limit_is_refused");
+    let client = fresh_account(&base).await;
+
+    // Every CID is 256 characters, so each one adds 259 bytes to the body.
+    let cid = |i: usize| format!("bafyContractPast{i:0>240}");
+    let entry = NameRegistration {
+        ipns_name: "k51contractPastLimit".to_owned(),
+        head_cid: None,
+        content_cids: (0..REGISTRY_BODY_MAX_BYTES / 259 + 1).map(cid).collect(),
+    };
+    let size = serde_json::to_vec(std::slice::from_ref(&entry))
+        .expect("entry serializes")
+        .len();
+    assert!(
+        size > REGISTRY_BODY_MAX_BYTES && size < REGISTRY_BODY_MAX_BYTES + 1024,
+        "the body is just past the limit: {size}"
+    );
+    let error = client
+        .register(std::slice::from_ref(&entry))
+        .await
+        .expect_err("a body past the limit must be refused");
+    assert!(
+        matches!(&error, ApiError::Status { status: 413, .. }),
+        "the registry body limit is the engine's constant: {error:?}"
+    );
+}
+
 // --- mailbox (blueprint/api.md, Mailbox) ------------------------------------
 
 /// An account addressable as a mailbox recipient: the client plus its identity

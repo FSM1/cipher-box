@@ -136,7 +136,11 @@ decay) inverted into structure.
   one name row, and a bare re-register carrying no `headCid` leaves the stored
   head untouched. The refusal carries `code: REGISTRY_BATCH_REFUSED`, so a
   client classifies on the gate's own discriminator rather than on a bare `400`
-  an intermediary could have answered (ADR 0046).
+  an intermediary could have answered (ADR 0046). Register also caps the total
+  `contentCids` of one request at 2000, with the same `400` and code. The
+  registry routes accept a JSON body of at most 1 MiB; every other route keeps
+  100 KiB. The engine chunks one register request at 1000 content CIDs in
+  total, so the widest request it sends is near 700 KB.
 - **Register-first, fail-closed**: registration precedes the first publish of a
   name, and publish is blocked on it. A live-but-uninventoried name is
   structurally impossible; the worst failure is a registered-never-published
