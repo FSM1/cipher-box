@@ -668,10 +668,11 @@ the grantee that removed it stops reading it.
   the move, does not show the new link. So the drain holds the capture and reads
   every folder of the scope fresh through the gate, in a bounded share for each
   pass. The walk starts after the device saw the departure, and the drain bins
-  only a capture that no folder names. A read that fails keeps the capture held,
-  and a scope past the walk bound bins nothing. A child that does not publish under a
-  name this scope's write seed derives is a scope root, which the authored
-  delete refuses for the same reason.
+  only a capture that no folder names. A read that fails keeps the capture held.
+  A scope past the walk bound keeps its captures held and is not walked again in
+  that session, though a restart may walk it again. A child that does not
+  publish under a name this scope's write seed derives is a scope root, which
+  the authored delete refuses for the same reason.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.

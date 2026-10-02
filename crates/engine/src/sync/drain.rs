@@ -807,7 +807,7 @@ pub(crate) fn hold_captures(set: &RefCell<Vec<UnlinkedChild>>, observed: Vec<Unl
 const MAX_CAPTURE_WALK_READS: usize = 128;
 
 /// The folders one capture walk may hold. A scope past this bound cannot prove
-/// any capture, so the walk ends and its captures leave the set unbinned.
+/// any capture, so its captures stay held and the session walks it no more.
 const MAX_CAPTURE_WALK_FOLDERS: usize = 65_536;
 
 /// One scope's proof that held captures left the tree.
@@ -817,6 +817,9 @@ pub(crate) struct CaptureProofs {
     proved: BTreeSet<[u8; 16]>,
     /// The walk under way, if any.
     walk: Option<CaptureWalk>,
+    /// A walk of this scope passed the folder bound. No later walk can prove
+    /// a capture either, so none starts in this session.
+    overflowed: bool,
 }
 
 /// A fresh read of every folder of one scope, which proves which held captures
@@ -844,8 +847,9 @@ impl CaptureWalk {
     }
 
     /// Record what one folder names: a cohort node it links, and each folder of
-    /// this scope still to read. Answers `false` when the walk passes its bound.
-    fn visit(&mut self, end: &ScopeEnd<'_>, children: &[ChildRef]) -> bool {
+    /// this scope still to read. Answers `false` when the walk holds more than
+    /// `bound` folders.
+    fn visit(&mut self, end: &ScopeEnd<'_>, children: &[ChildRef], bound: usize) -> bool {
         for child in children {
             if self.cohort.contains(&child.id) {
                 self.linked.insert(child.id);
@@ -857,7 +861,7 @@ impl CaptureWalk {
                 self.pending.push(NodeId(child.id));
             }
         }
-        self.seen.len() <= MAX_CAPTURE_WALK_FOLDERS
+        self.seen.len() <= bound
     }
 }
 
@@ -1331,6 +1335,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// What this tick may still queue in bin purges, shared out across its
     /// scope passes ([`MAX_BIN_EXPIRIES`]).
     bin_expiries: RefCell<TickShare>,
+    /// The folders one capture walk may hold ([`MAX_CAPTURE_WALK_FOLDERS`]).
+    capture_walk_folders: usize,
 }
 
 impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S, St, Sch> {
@@ -1345,6 +1351,16 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             inputs,
             established_bin_index: RefCell::new(None),
             bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),
+            capture_walk_folders: MAX_CAPTURE_WALK_FOLDERS,
+        }
+    }
+
+    /// The same drain under a capture walk bound a fixture can reach.
+    #[cfg(test)]
+    fn with_capture_walk_folders(self, capture_walk_folders: usize) -> Self {
+        Self {
+            capture_walk_folders,
+            ..self
         }
     }
 }
@@ -4021,10 +4037,13 @@ where
             return;
         }
         if eligible.is_empty() {
-            self.cells
-                .capture_proofs
-                .borrow_mut()
-                .remove(&scope.source.root);
+            let mut proofs = self.cells.capture_proofs.borrow_mut();
+            if proofs
+                .get(&scope.source.root)
+                .is_some_and(|proofs| !proofs.overflowed)
+            {
+                proofs.remove(&scope.source.root);
+            }
             return;
         }
         let Ok(root) = self.load_scope_root(&scope.source).await else {
@@ -4249,10 +4268,11 @@ where
     /// captures proved to have left the tree, at most [`MAX_BIN_ADOPTIONS`].
     ///
     /// A walk whose cohort has left the set is stale, so a new walk starts on
-    /// the unproved captures held now. A capture some folder names, or one a
-    /// walk past its bound cannot prove, leaves the set unbinned. A folder read
-    /// that fails stays on the walk for the next pass, so no capture is proved
-    /// past a folder this device could not read.
+    /// the unproved captures held now. A capture some folder names leaves the
+    /// set unbinned. A walk past its folder bound proves nothing: its captures
+    /// stay held, and no walk of the scope starts again in this session. A
+    /// folder read that fails stays on the walk for the next pass, so no
+    /// capture is proved past a folder this device could not read.
     async fn prove_captures(
         &self,
         scope: &DrainScope<'_>,
@@ -4272,6 +4292,7 @@ where
             .filter(|node| !proofs.proved.contains(node))
             .collect();
         let walk = match proofs.walk.take() {
+            _ if proofs.overflowed => None,
             Some(walk) if unproved.iter().any(|node| walk.cohort.contains(node)) => Some(walk),
             _ if unproved.is_empty() => None,
             _ => Some(CaptureWalk::new(
@@ -4293,13 +4314,13 @@ where
                     walk.pending.push(folder);
                     break;
                 };
-                if !walk.visit(&plane.end, &children) {
+                if !walk.visit(&plane.end, &children, self.capture_walk_folders) {
                     within_bound = false;
                     break;
                 }
             }
             if !within_bound {
-                self.take_captures(scope, &walk.cohort);
+                proofs.overflowed = true;
             } else if walk.pending.is_empty() {
                 self.take_captures(scope, &walk.linked);
                 proofs
@@ -10049,6 +10070,89 @@ mod tests {
                 "only a same-scope capture may begin resolving the subtree for re-keying",
             );
         }
+    }
+
+    /// A scope with more folders than the walk may hold proves no capture. The
+    /// capture stays held, no re-key starts, and the session does not walk the
+    /// scope again on each later pass.
+    #[test]
+    fn a_scope_past_the_walk_bound_keeps_its_captures_held_and_walks_once() {
+        const FOLDER: NodeId = NodeId([0x46; 16]);
+        let write_scope_seed = Zeroizing::new(OWNER_ROOT_WRITE_SCOPE_SEED);
+        let root = owner_root_fixture(OwnerRootSpec {
+            owner_identity: &EcdsaSigner::from_scalar(&HARNESS_SECRET).expect("valid scalar"),
+            owner_enc: &kdf::enc_subkey(&HARNESS_SECRET).public(),
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+            scope_id: HARNESS_SCOPE,
+            root_id: HARNESS_ROOT.0,
+            children: vec![ChildRef {
+                id: FOLDER.0,
+                name: "inner".to_owned(),
+                ipns_name: derive_write_name(&write_scope_seed, &FOLDER.0)
+                    .as_str()
+                    .as_bytes()
+                    .to_vec(),
+                kind: NodeKind::Folder,
+                link_counter: 1,
+                unknown: PreservedFields::new(),
+            }],
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants: Vec::new(),
+        });
+        let harness = drain_harness(Some(root.envelope));
+        let unlinked = capture(&harness.write_scope_seed);
+        let target_name = derive_write_name(&harness.write_scope_seed, &unlinked.node.0);
+        let root_name = derive_write_name(&harness.write_scope_seed, &HARNESS_ROOT.0);
+        let root_record = block_on(
+            harness
+                .seams
+                .snapshot_cache
+                .get(root_name.as_str().as_bytes()),
+        )
+        .unwrap()
+        .expect("the harness caches its root");
+        for endpoint in harness.seams.transport.endpoints() {
+            harness
+                .seams
+                .transport
+                .seed_record(&endpoint, root_name.as_str(), root_record.clone());
+        }
+        *harness.state.observed_unlinks.borrow_mut() = vec![unlinked.clone()];
+
+        for _ in 0..3 {
+            block_on(
+                harness
+                    .drain()
+                    .with_capture_walk_folders(1)
+                    .adopt_observed_unlinks(&harness.scope()),
+            );
+        }
+
+        let retained = harness.state.observed_unlinks.borrow();
+        assert_eq!(retained.len(), 1, "the unproved capture stays held");
+        assert_eq!(retained[0].node, unlinked.node);
+        assert_eq!(
+            harness.seams.transport.get_count(target_name.as_str()),
+            0,
+            "no re-key of an unproved capture starts"
+        );
+        assert!(
+            !harness
+                .state
+                .held_records
+                .borrow()
+                .contains_key(&HeldKey::BinIndex),
+            "no bin index record was published",
+        );
+        assert_eq!(
+            harness.seams.transport.get_count(root_name.as_str()),
+            1,
+            "the session walks the scope once, not on every pass"
+        );
     }
 
     /// A departure inside a granted scope reaches the owner capture path now
