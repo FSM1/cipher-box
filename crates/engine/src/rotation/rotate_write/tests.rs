@@ -1389,6 +1389,7 @@ impl WriteSubtreeResolver for BoundedResolver {
                 reason: ResolveFailure::Unavailable,
                 cause: DropCause::NoHeadBlock,
                 retire: Some(Box::new(old_name_of(node_id))),
+                answered: false,
             });
         }
         self.inner.resolve_node(node_id, resumed).await
@@ -1407,7 +1408,7 @@ struct CountingBound {
 }
 
 impl NodeBound for CountingBound {
-    fn past(&self, node_id: &[u8; 16], _cause: DropCause) -> bool {
+    fn past(&self, node_id: &[u8; 16], _plant: bool) -> bool {
         self.past.contains(node_id)
     }
 

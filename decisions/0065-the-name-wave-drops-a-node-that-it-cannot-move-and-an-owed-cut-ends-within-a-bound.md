@@ -35,8 +35,8 @@ that name for the node. The wave never adopts or carries a refused record.
 **D2 — Of two refs to one node id at different names, the wave keeps the ref at the name that
 the write scope seed of the root it reads derives for that id, and drops the other ref.** That
 seed is the old seed, or the new seed in a resumed wave. If neither name is derived, the wave
-keeps the first ref. A derived ref met after the wave kept another ref replaces it, and the walk
-starts again one time for each body that has such refs. Before this ADR, the conflict
+keeps the first ref that its last walk meets. A derived ref met after the wave kept another ref
+replaces it, and the walk starts again, at most one time for each node id. Before this ADR, the conflict
 (`ConflictingChildLabel`) stopped the wave.
 
 **D3 — A stop that an endpoint can cause drops only after a bound.** The causes are: no record at
@@ -47,10 +47,12 @@ first step first stopped; an advance to a new first step clears it. A re-drive r
 When the entry has stopped for longer than the bound, the next re-drive drops a node as D1 does
 when that node held the wave over a minimum count of passes. It also drops the node when the
 entry held the wave over that count past the bound and the cause is one that a revokee can plant
-on a fresh id: no record, no matching head block, or an epoch above the root's. Thus a new node on
-each pass does not hold the cut. A drop of another cause never rests on one answer from the
-endpoint set. A residual stays: past the entry count, a node with a plantable cause drops on one
-answer.
+on a fresh id: no record, no matching head block, an epoch above the root's, or no endpoint that
+answers when at least one endpoint said the name has no record or served bytes that do not verify.
+Thus a new node on each pass does not hold the cut. A drop of another cause, such as every endpoint
+failed, never rests on one answer from the endpoint set. A residual stays: past the entry count, a
+node with a plantable cause drops on one answer, including an honest node that one endpoint fails
+while another says it has no record.
 
 **D4 — After the time of the bound of D3, the renewal walk renews in an owed scope each name
 that the scope root's current write seed derives.** The count of passes does not apply here.

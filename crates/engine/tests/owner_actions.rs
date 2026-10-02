@@ -13616,6 +13616,97 @@ fn a_new_ref_to_nothing_on_each_pass_does_not_hold_the_cut() {
     assert_revoke_finished(&mut fx, &revokee_seed, child);
 }
 
+/// ADR 0065 D3: with one endpoint down, a ref to nothing reads as no endpoint
+/// that answers, but the other endpoints answered, so a new ref to nothing on
+/// each pass still ends at the entry count.
+#[test]
+fn a_new_ref_to_nothing_on_each_pass_beside_a_down_endpoint_does_not_hold_the_cut() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_a_ref_to_nothing(&fx, &revokee_seed, grandchild);
+    let read_key = granted_read_key(&fx, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    fx.world.scheduler.advance(DROP_BOUND);
+    let down = fx
+        .world
+        .record_store
+        .endpoints()
+        .last()
+        .cloned()
+        .expect("an endpoint");
+    fx.world.record_store.fail_endpoint(&down);
+
+    let mut dropped = Vec::new();
+    for fresh in 0..=DROP_BOUND_PASSES {
+        let ghost = NodeId([0x70 + u8::try_from(fresh).expect("a small count"); 16]);
+        plant_a_ref_to(&fx, &revokee_seed, grandchild, ghost, &read_key);
+        let run = passes(&mut fx, 1);
+        if !run.dropped.is_empty() {
+            dropped = run.dropped;
+            break;
+        }
+    }
+
+    fx.world.record_store.heal_endpoint(&down);
+    assert_eq!(dropped.len(), 1, "the cut ends within K + 1 passes");
+    assert_eq!(dropped[0].2, DropCause::EndpointUnavailable);
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
+/// A V2-only IPNS record at `ghost`'s planted name: the spec permits it with
+/// no top-level value, and the record verify refuses it.
+fn plant_a_v2_only_record(fx: &GrantScenario, ghost: NodeId) {
+    let write_seed = kdf::write_seed(&[0x55; 32], &ghost.0);
+    let signer = kdf::ipns_keypair(write_seed.as_bytes());
+    let mut record = IpnsRecord::create_v2(
+        &signer,
+        b"/ipfs/bafkqaaa",
+        1,
+        0,
+        "2099-01-01T00:00:00.000000000Z",
+    )
+    .marshal();
+    assert_eq!(record[0], 0x0a, "the value field leads");
+    record.drain(..2 + usize::from(record[1]));
+    let name = derive_write_name(&[0x55; 32], &ghost.0);
+    let parsed = IpnsRecord::unmarshal(&record).expect("a V2-only record parses");
+    assert!(parsed.verify(&name).is_err());
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+}
+
+/// ADR 0065 D3: a ref to a name where every endpoint serves a record that
+/// does not verify reads as no endpoint that answers, but each endpoint
+/// served bytes, so a new such ref on each pass still ends at the entry count.
+#[test]
+fn a_new_ref_to_an_unverifiable_record_on_each_pass_does_not_hold_the_cut() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_a_ref_to_nothing(&fx, &revokee_seed, grandchild);
+    let read_key = granted_read_key(&fx, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    fx.world.scheduler.advance(DROP_BOUND);
+
+    let mut dropped = Vec::new();
+    for fresh in 0..=DROP_BOUND_PASSES {
+        let ghost = NodeId([0x70 + u8::try_from(fresh).expect("a small count"); 16]);
+        plant_a_ref_to(&fx, &revokee_seed, grandchild, ghost, &read_key);
+        plant_a_v2_only_record(&fx, ghost);
+        let run = passes(&mut fx, 1);
+        if !run.dropped.is_empty() {
+            dropped = run.dropped;
+            break;
+        }
+    }
+
+    assert_eq!(dropped.len(), 1, "the cut ends within K + 1 passes");
+    assert_eq!(dropped[0].2, DropCause::EndpointUnavailable);
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
 /// ADR 0065 D3: past the entry count, a node held for a cause that a revokee
 /// cannot plant on a fresh id waits for its own passes.
 #[test]

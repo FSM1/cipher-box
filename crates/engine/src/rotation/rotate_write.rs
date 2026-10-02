@@ -137,7 +137,8 @@ impl DropCause {
     }
 
     /// Whether a revokee can plant this cause on a fresh node id, so the
-    /// entry count of ADR 0065 D3 drops it as well as the node's own count.
+    /// entry count of ADR 0065 D3 drops it as well as the node's own count
+    /// ([`NodeStop::Refused`] adds an answered `EndpointUnavailable`).
     #[must_use]
     pub fn plantable(self) -> bool {
         matches!(
@@ -163,6 +164,10 @@ pub enum NodeStop {
         /// the root's write scope seed derives it for the node, so a drop never
         /// retires a name outside the scope.
         retire: Option<Box<IpnsName>>,
+        /// An endpoint answered for the name, with no record or with bytes it
+        /// served. A revokee can plant such a stop on a fresh id, so the entry
+        /// count drops it.
+        answered: bool,
     },
     /// A ref met later outranks the one the walk took for a node (D2), so
     /// the walk starts again from the root (`WaveSubtree` in
@@ -179,8 +184,9 @@ impl From<ResolveFailure> for NodeStop {
 /// The bound of ADR 0065 D3 for one owed cut: whether each node is past it,
 /// and the count of passes that a node held the wave.
 pub trait NodeBound {
-    /// Whether `node_id` may drop for `cause`, a cause an endpoint can cause.
-    fn past(&self, node_id: &[u8; 16], cause: DropCause) -> bool;
+    /// Whether `node_id` may drop for a cause an endpoint can cause; the
+    /// entry count applies only when a revokee can `plant` that cause.
+    fn past(&self, node_id: &[u8; 16], plant: bool) -> bool;
     /// Count this pass toward `node_id`'s bound.
     fn held(&self, node_id: &[u8; 16]);
     /// `node_id` resolved, so its count starts again.
@@ -191,7 +197,7 @@ pub trait NodeBound {
 pub struct NoBound;
 
 impl NodeBound for NoBound {
-    fn past(&self, _node_id: &[u8; 16], _cause: DropCause) -> bool {
+    fn past(&self, _node_id: &[u8; 16], _plant: bool) -> bool {
         false
     }
 
@@ -1091,8 +1097,13 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
                     node
                 }
                 Err(NodeStop::Rewalk) => continue 'walk,
-                Err(NodeStop::Refused { cause, retire, .. })
-                    if id != root_id && (!cause.needs_bound() || bound.past(&id, cause)) =>
+                Err(NodeStop::Refused {
+                    cause,
+                    retire,
+                    answered,
+                    ..
+                }) if id != root_id
+                    && (!cause.needs_bound() || bound.past(&id, cause.plantable() || answered)) =>
                 {
                     walk.dropped.push(DroppedNode { node_id: id, cause });
                     walk.dropped_names.extend(retire.map(|name| *name));

@@ -21,7 +21,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use crate::facade::NodeId;
-use crate::rotation::{DropCause, NodeBound};
+use crate::rotation::NodeBound;
 use crate::seams::{SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
 use crate::sync::drain::owner_scoped_key;
@@ -272,7 +272,7 @@ pub struct EntryBound<'a> {
 }
 
 impl NodeBound for EntryBound<'_> {
-    fn past(&self, node_id: &[u8; 16], cause: DropCause) -> bool {
+    fn past(&self, node_id: &[u8; 16], plant: bool) -> bool {
         if !self.past_time {
             return false;
         }
@@ -280,7 +280,7 @@ impl NodeBound for EntryBound<'_> {
         let Some(held) = held.get(&self.scope) else {
             return false;
         };
-        (cause.plantable() && held.past_time.before(self.pass) >= DROP_BOUND_PASSES)
+        (plant && held.past_time.before(self.pass) >= DROP_BOUND_PASSES)
             || held
                 .nodes
                 .get(node_id)
@@ -1225,28 +1225,25 @@ mod tests {
                 .bound(node(1), UnixMillis(after.0 - 1))
                 .await
                 .expect("the store answers");
-            assert!(
-                !early.past(&held, DropCause::EndpointUnavailable),
-                "before its time"
-            );
+            assert!(!early.past(&held, false), "before its time");
             let bound = owed.bound(node(1), after).await.expect("the store answers");
-            assert!(bound.past(&held, DropCause::EndpointUnavailable));
+            assert!(bound.past(&held, false));
             assert!(
-                !bound.past(&other, DropCause::EndpointUnavailable),
+                !bound.past(&other, false),
                 "another node counts its own passes"
             );
             assert_eq!(owed.scopes_within_bound(after).await, Ok(Vec::new()));
 
             bound.resolved(&held);
             assert!(
-                !bound.past(&held, DropCause::EndpointUnavailable),
+                !bound.past(&held, false),
                 "a node that resolves starts again"
             );
 
             cell.forget();
             let bound = owed.bound(node(1), after).await.expect("the store answers");
             assert!(
-                !bound.past(&other, DropCause::EndpointUnavailable),
+                !bound.past(&other, false),
                 "a new session counts its own passes"
             );
             assert_eq!(
@@ -1278,30 +1275,16 @@ mod tests {
                 cell.next_pass();
                 let bound = owed.bound(node(1), after).await.expect("the store answers");
                 let id = [u8::try_from(fresh).expect("a small count"); 16];
-                assert!(!bound.past(&id, DropCause::NoRecord));
+                assert!(!bound.past(&id, true));
                 bound.held(&id);
             }
             cell.next_pass();
             let bound = owed.bound(node(1), after).await.expect("the store answers");
-            for cause in [
-                DropCause::NoRecord,
-                DropCause::NoHeadBlock,
-                DropCause::EpochAboveRoot,
-            ] {
-                assert!(
-                    bound.past(&[0xee; 16], cause),
-                    "a new node drops for {cause:?}"
-                );
-            }
-            for cause in [
-                DropCause::EndpointUnavailable,
-                DropCause::BelowSequenceFloor,
-            ] {
-                assert!(
-                    !bound.past(&[0xee; 16], cause),
-                    "a new node waits for its own passes for {cause:?}"
-                );
-            }
+            assert!(bound.past(&[0xee; 16], true), "a new node drops");
+            assert!(
+                !bound.past(&[0xee; 16], false),
+                "a new node with a cause no revokee plants waits for its own passes"
+            );
         });
     }
 
@@ -1373,7 +1356,7 @@ mod tests {
                     .bound(node(1), after)
                     .await
                     .expect("the store answers")
-                    .past(&held, DropCause::EndpointUnavailable)
+                    .past(&held, false)
             );
 
             owed.note_stop(node(1), start)

@@ -83,7 +83,9 @@ use crate::grants::{
     ScopeRootPromoter, UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row,
     recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
-use crate::net::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify};
+use crate::net::fanout::{
+    FanoutRecord, fanout_get_answered, fanout_get_classified, fanout_get_verify,
+};
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::eager_set::bind_child_labels;
@@ -3895,6 +3897,8 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
 #[derive(Default)]
 pub struct WaveSubtree {
     inner: RefCell<Discovered>,
+    /// The name the root's write scope seed derives for each node id met.
+    derived: RefCell<BTreeMap<[u8; 16], IpnsName>>,
 }
 
 #[derive(Default)]
@@ -3903,14 +3907,14 @@ struct Discovered {
     /// The write scope seed the gated root's own owner-write blob yielded: the
     /// seed whose names a second ref yields to (ADR 0065 D2).
     root_write_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
-    /// The name each node with a second ref keeps. It outlives a re-walk. A
-    /// re-walk keeps a derived name for a node that kept another name, and no
-    /// later ref replaces a derived name, so the re-walks end; each body asks
-    /// for at most one.
+    /// The name each node with a second ref keeps. Only a derived name
+    /// outlives a re-walk. Each re-walk follows a new derived name, and no ref
+    /// replaces one, so the re-walks are at most the count of node ids that
+    /// get a derived name here.
     kept: BTreeMap<[u8; 16], IpnsName>,
-    /// Each node's gated read, by node id and name. It outlives a re-walk, so
-    /// a re-walk reads nothing from the network.
-    sources: BTreeMap<([u8; 16], String), WaveSource>,
+    /// Each node's gated read, or its refusal, by node id and name. It
+    /// outlives a re-walk, so a re-walk reads nothing from the network.
+    gated: BTreeMap<([u8; 16], String), Result<WaveSource, NodeStop>>,
     /// The directly-descendant scope roots the pass **proved**: each rotates
     /// under its own write scope seed, so the wave stops at them
     /// (`grants/child_index.rs`).
@@ -3940,40 +3944,64 @@ enum BodyStop {
 
 impl WaveSubtree {
     /// Start a walk again from the root: forget the names the last walk
-    /// took, and keep its reads, the root's plane, and the names it settled.
+    /// took and the non-derived names it kept, and keep its reads, the root's
+    /// plane, and the derived names it kept.
     fn restart(&self) {
+        let derived: BTreeMap<[u8; 16], IpnsName> = self
+            .inner
+            .borrow()
+            .kept
+            .iter()
+            .filter(|(id, name)| self.derives(id, name))
+            .map(|(id, name)| (*id, name.clone()))
+            .collect();
         let mut inner = self.inner.borrow_mut();
+        inner.kept = derived;
         inner.names.clear();
         inner.lowest_read_epoch = None;
     }
 
-    /// The read this run already gated for `node_id` at `name`.
-    fn source(&self, node_id: &[u8; 16], name: &IpnsName) -> Option<WaveSource> {
+    /// What this run already gated for `node_id` at `name`.
+    fn gated(&self, node_id: &[u8; 16], name: &IpnsName) -> Option<Result<WaveSource, NodeStop>> {
         self.inner
             .borrow()
-            .sources
+            .gated
             .get(&(*node_id, name.as_str().to_owned()))
             .cloned()
     }
 
-    fn record_source(&self, node_id: &[u8; 16], name: &IpnsName, source: &WaveSource) {
-        self.inner
-            .borrow_mut()
-            .sources
-            .insert((*node_id, name.as_str().to_owned()), source.clone());
+    /// Keep a gated read or a refusal. Any other stop ends the walk.
+    fn record_gated(
+        &self,
+        node_id: &[u8; 16],
+        name: &IpnsName,
+        gated: &Result<WaveSource, NodeStop>,
+    ) {
+        if matches!(gated, Ok(_) | Err(NodeStop::Refused { .. })) {
+            self.inner
+                .borrow_mut()
+                .gated
+                .insert((*node_id, name.as_str().to_owned()), gated.clone());
+        }
     }
 
     /// Whether the root's write scope seed derives `name` for `node_id`.
     fn derives(&self, node_id: &[u8; 16], name: &IpnsName) -> bool {
-        self.inner
-            .borrow()
-            .root_write_seed
-            .as_ref()
-            .is_some_and(|seed| derive_write_name(seed, node_id) == *name)
+        let inner = self.inner.borrow();
+        let Some(seed) = inner.root_write_seed.as_ref() else {
+            return false;
+        };
+        *self
+            .derived
+            .borrow_mut()
+            .entry(*node_id)
+            .or_insert_with(|| derive_write_name(seed, node_id))
+            == *name
     }
 
     fn record_root_write_seed(&self, seed: &[u8; SECRET_LEN]) {
         self.inner.borrow_mut().root_write_seed = Some(Zeroizing::new(*seed));
+        self.derived.borrow_mut().clear();
     }
 
     fn record_anchor(&self, anchor: LaggingAnchor) {
@@ -4315,6 +4343,56 @@ where
     F: FloorStore,
     S: SnapshotCache,
 {
+    /// Read and gate `node_id`'s record at `name`: the scope root when
+    /// `root` is `Some` (with a resumed write epoch or none), else an interior
+    /// node. `refused` maps a refusal to the walk's stop.
+    async fn gate_node(
+        &self,
+        node_id: [u8; 16],
+        name: &IpnsName,
+        root: Option<Option<u64>>,
+        refused: &impl Fn(ResolveFailure, Option<DropCause>, bool) -> NodeStop,
+    ) -> Result<WaveSource, NodeStop> {
+        let record_bytes = match fanout_get_answered(self.transport, name).await {
+            (FanoutRecord::Found(_, bytes), _) => bytes,
+            (FanoutRecord::Absent, _) => {
+                return Err(refused(
+                    ResolveFailure::Unavailable,
+                    Some(DropCause::NoRecord),
+                    true,
+                ));
+            }
+            (FanoutRecord::Unavailable(_), answered) => {
+                return Err(refused(
+                    ResolveFailure::Unavailable,
+                    Some(DropCause::EndpointUnavailable),
+                    answered,
+                ));
+            }
+        };
+        let source = if let Some(resumed_write_epoch) = root {
+            self.root_source(name, &record_bytes, resumed_write_epoch)
+                .await
+                .map_err(WaveRefusal::from)
+        } else {
+            self.interior_source(node_id, name, &record_bytes).await
+        }
+        .map_err(|refusal| refused(subtree_verdict(refusal.error), refusal.cause, false))?;
+        if let Some(plane) = &source.root {
+            self.subtree.record_root_write_seed(&plane.write_scope_seed);
+            self.subtree.record_anchor(LaggingAnchor {
+                epoch: source.read_epoch,
+                history_links: plane.section.history_links.clone(),
+            });
+            self.record_scope_boundary(
+                &plane.write_body.direct_child_scope_index,
+                &plane.read_scope_seed,
+            )
+            .await?;
+        }
+        Ok(source)
+    }
+
     /// Gate an interior node's current record and open it for re-authoring.
     ///
     /// The adopt advances the per-name sequence floor, so a wave that already
@@ -5232,10 +5310,12 @@ where
             None => self.subtree.name(node_id).ok_or(ResolveFailure::Rejected)?,
         };
         // Only a node below the root drops (ADR 0065 D1).
-        let refused = |reason: ResolveFailure, cause: Option<DropCause>| match cause {
+        let refused = |reason: ResolveFailure, cause: Option<DropCause>, answered: bool| match cause
+        {
             Some(cause) if !is_root => NodeStop::Refused {
                 reason,
                 cause,
+                answered,
                 retire: self
                     .subtree
                     .derives(node_id, &current_name)
@@ -5243,47 +5323,20 @@ where
             },
             _ => NodeStop::Stop(reason),
         };
-        let source = if let Some(source) = self.subtree.source(node_id, &current_name) {
-            source
-        } else {
-            let record_bytes = match fanout_get_classified(self.transport, &current_name).await {
-                FanoutRecord::Found(_, bytes) => bytes,
-                FanoutRecord::Absent => {
-                    return Err(refused(
-                        ResolveFailure::Unavailable,
-                        Some(DropCause::NoRecord),
-                    ));
-                }
-                FanoutRecord::Unavailable(_) => {
-                    return Err(refused(
-                        ResolveFailure::Unavailable,
-                        Some(DropCause::EndpointUnavailable),
-                    ));
-                }
-            };
-            let source = if let Some((_, resumed_write_epoch)) = root {
-                self.root_source(&current_name, &record_bytes, resumed_write_epoch)
-                    .await
-                    .map_err(WaveRefusal::from)
-            } else {
-                self.interior_source(*node_id, &current_name, &record_bytes)
-                    .await
+        let source = match self.subtree.gated(node_id, &current_name) {
+            Some(gated) => gated?,
+            None => {
+                let gated = self
+                    .gate_node(
+                        *node_id,
+                        &current_name,
+                        root.map(|(_, epoch)| epoch),
+                        &refused,
+                    )
+                    .await;
+                self.subtree.record_gated(node_id, &current_name, &gated);
+                gated?
             }
-            .map_err(|refusal| refused(subtree_verdict(refusal.error), refusal.cause))?;
-            if let Some(plane) = &source.root {
-                self.subtree.record_root_write_seed(&plane.write_scope_seed);
-                self.subtree.record_anchor(LaggingAnchor {
-                    epoch: source.read_epoch,
-                    history_links: plane.section.history_links.clone(),
-                });
-                self.record_scope_boundary(
-                    &plane.write_body.direct_child_scope_index,
-                    &plane.read_scope_seed,
-                )
-                .await?;
-            }
-            self.subtree.record_source(node_id, &current_name, &source);
-            source
         };
         self.subtree.record_read_epoch(source.read_epoch);
         let children = match self.subtree.record_children(&source.read_body) {
@@ -5293,6 +5346,7 @@ where
                 return Err(refused(
                     ResolveFailure::Rejected,
                     Some(DropCause::RecordRefused),
+                    false,
                 ));
             }
         };
@@ -5901,7 +5955,22 @@ mod tests {
     }
 
     fn record_for(scope_id: &[u8; 16], head_cid_str: &str, sequence: u64) -> Vec<u8> {
-        let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, scope_id);
+        record_under(
+            &OWNER_ROOT_WRITE_SCOPE_SEED,
+            scope_id,
+            head_cid_str,
+            sequence,
+        )
+    }
+
+    /// [`record_for`] at the name `write_scope_seed` derives.
+    fn record_under(
+        write_scope_seed: &[u8; SECRET_LEN],
+        scope_id: &[u8; 16],
+        head_cid_str: &str,
+        sequence: u64,
+    ) -> Vec<u8> {
+        let write_seed = kdf::write_seed(write_scope_seed, scope_id);
         let signer = kdf::ipns_keypair(write_seed.as_bytes());
         IpnsRecord::create_v2(
             &signer,
@@ -9947,7 +10016,45 @@ mod tests {
         node_id: [u8; 16],
         body: &ReadBody,
         sequence: u64,
+        sealed: (u64, &[u8; 32]),
+    ) -> IpnsName {
+        stage_sealed_under(
+            harness,
+            node_id,
+            body,
+            sequence,
+            sealed,
+            &OWNER_ROOT_WRITE_SCOPE_SEED,
+        )
+    }
+
+    /// [`stage_node`] at the name `write_scope_seed` derives, which the
+    /// wave's root seed does not.
+    fn stage_node_under<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        node_id: [u8; 16],
+        body: &ReadBody,
+        write_scope_seed: &[u8; SECRET_LEN],
+    ) -> IpnsName {
+        let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &node_id);
+        let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
+        stage_sealed_under(
+            harness,
+            node_id,
+            body,
+            1,
+            (OWNER_ROOT_EPOCH, &read_key),
+            write_scope_seed,
+        )
+    }
+
+    fn stage_sealed_under<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        node_id: [u8; 16],
+        body: &ReadBody,
+        sequence: u64,
         (epoch, read_key): (u64, &[u8; 32]),
+        write_scope_seed: &[u8; SECRET_LEN],
     ) -> IpnsName {
         let envelope = seal_read_body(
             read_key,
@@ -9966,8 +10073,8 @@ mod tests {
             .lock()
             .expect("lock")
             .insert(cid.clone(), block);
-        let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &node_id);
-        let record = record_for(&node_id, &cid, sequence);
+        let name = derive_write_name(write_scope_seed, &node_id);
+        let record = record_under(write_scope_seed, &node_id, &cid, sequence);
         for endpoint in harness.store.endpoints() {
             harness
                 .store
@@ -12854,7 +12961,7 @@ mod tests {
     struct PastBound;
 
     impl NodeBound for PastBound {
-        fn past(&self, _node_id: &[u8; 16], _cause: DropCause) -> bool {
+        fn past(&self, _node_id: &[u8; 16], _plant: bool) -> bool {
             true
         }
 
@@ -12870,7 +12977,7 @@ mod tests {
     }
 
     impl NodeBound for HeldBound {
-        fn past(&self, _node_id: &[u8; 16], _cause: DropCause) -> bool {
+        fn past(&self, _node_id: &[u8; 16], _plant: bool) -> bool {
             false
         }
 
@@ -13195,6 +13302,88 @@ mod tests {
             1,
             "MID's head block is fetched once"
         );
+    }
+
+    /// A node held for a bounded cause is read once in a run, however many
+    /// re-walks follow.
+    #[test]
+    fn a_held_node_is_read_once_across_a_rewalk() {
+        let harness = Harness::plain();
+        let ghost = derive_write_name(&[0x55; 32], &[0x66; 16]);
+        let leaf = stage_node(&harness, LEAF, &folder(Vec::new()));
+        let mid = stage_node(&harness, MID, &folder(vec![ref_to(LEAF, &leaf)]));
+        let root = staged_root(
+            &harness,
+            vec![
+                ref_to([0x66; 16], &ghost),
+                ref_to(MID, &mid),
+                ref_to(LEAF, &derive_write_name(&[0x51; 32], &LEAF)),
+            ],
+            Vec::new(),
+            Vec::new(),
+        );
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        let walks = CountedWalks {
+            inner: &net,
+            walks: core::cell::Cell::new(0),
+        };
+        let bound = HeldBound::default();
+        let mut entropy = SeededEntropy::new(13);
+
+        let plan = RotateScopeWritePlan {
+            bound: &bound,
+            ..write_plan(&root, &owner)
+        };
+        block_on(rotate_scope_write(&mut entropy, &walks, &net, &plan))
+            .expect_err("the node with no record holds the wave");
+        assert_eq!(walks.walks.get(), 2, "MID's body asks for one re-walk");
+        assert_eq!(
+            harness.store.get_count(ghost.as_str()),
+            harness.store.endpoints().len(),
+            "one fan-out read"
+        );
+    }
+
+    /// ADR 0065 D2: a re-walk forgets the non-derived names the last walk
+    /// kept, so the first ref of the last walk wins, not a ref in a body the
+    /// last walk no longer reads.
+    #[test]
+    fn a_rewalk_keeps_the_first_ref_of_its_own_walk() {
+        let harness = Harness::plain();
+        let y = [0x34; 16];
+        let p = [0x35; 16];
+        let q = [0x36; 16];
+        let y_named = stage_node_under(&harness, y, &folder(Vec::new()), &[0x52; 32]);
+        let p_derived = stage_node(&harness, p, &folder(Vec::new()));
+        let p_bogus = stage_node_under(
+            &harness,
+            p,
+            &folder(vec![ref_to(y, &derive_write_name(&[0x51; 32], &y))]),
+            &[0x53; 32],
+        );
+        let q_name = stage_node(&harness, q, &folder(vec![ref_to(y, &y_named)]));
+        let r = [0x37; 16];
+        let r_name = stage_node(&harness, r, &folder(vec![ref_to(p, &p_derived)]));
+        let root = staged_root(
+            &harness,
+            vec![ref_to(p, &p_bogus), ref_to(q, &q_name), ref_to(r, &r_name)],
+            Vec::new(),
+            Vec::new(),
+        );
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        let mut entropy = SeededEntropy::new(13);
+
+        let outcome = block_on(rotate_scope_write(
+            &mut entropy,
+            &net,
+            &net,
+            &write_plan(&root, &owner),
+        ))
+        .expect("the wave finishes");
+        assert!(outcome.dropped.is_empty());
+        assert_eq!(outcome.interior_node_count, 4, "P, Q, R, and Y all move");
     }
 
     /// ADR 0065 D2: two refs at names the seed does not derive come before

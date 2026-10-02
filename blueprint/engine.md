@@ -1078,9 +1078,12 @@ D3); an advance to a new first step clears it. A node is **past the bound** when
 that time is at least T = 7 days old and either the node held the name wave on
 at least K = 3 earlier passes of the current session, or the entry held it on K
 earlier passes past T and the cause is one a revokee can plant on a fresh id (no
-record, no matching head block, an epoch above the root's). The entry count
-stops a revokee that plants a new node on each pass. A pass is one sync pass, which each tick starts: its retries and
-any command re-drive inside it count once. A node that resolves starts its own
+record, no matching head block, an epoch above the root's, or no endpoint that
+answers when one endpoint said no record or served bytes that do not verify).
+The entry count stops a revokee that plants a new node on each pass. A pass is
+one sync pass, which each tick starts: its retries and any command re-drive
+inside it count once. Within one pass the wave reads each node one time, across
+its re-walks. A node that resolves starts its own
 count again. The counts live in the session and end with the write cut, so a
 restart sets them to zero again: a drop rests on stops this session saw, and a
 restart only delays it. A re-drive drops each node past the bound that a stop an
