@@ -43,7 +43,8 @@ reads a versioned entry as unwritten, and the ledger never discards, so such an 
 this release. Amended by
 [ADR 0059](./0059-a-dropped-version-whose-staged-root-does-not-read-journals-its-root-alone.md)
 D1 on 2026-09-29: a drop whose staged root does not give a target set journals a root-only debt,
-and the settle fetches the root.
+and the settle fetches the root. Amended by ADR 0070 D1 on 2026-10-03: a new entry is at version 3
+and records the name of the record that owes the debt, and the settle retires under that name.
 
 **D2 — The drain holds the acknowledged sequence of a PUT that did not confirm, signs above it,
 and settles nothing at or below it.** A publish whose PUT was acknowledged but not confirmed, or
