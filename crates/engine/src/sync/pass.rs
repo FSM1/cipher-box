@@ -1806,7 +1806,7 @@ mod tests {
 
         fn seeds(scope_id: [u8; 16], seed: [u8; 32]) -> RefCell<ScopeSeeds> {
             let cell = RefCell::new(ScopeSeeds::new());
-            let namespace = own_namespace(&sharers())(&scope_id).unwrap_or(FloorNamespace::Own);
+            let namespace = own_namespace(&sharers())(&scope_id).expect("SHARED has a sharer");
             deposit_seed(&cell, scope_id, Zeroizing::new(seed), Some(0), namespace);
             cell
         }
@@ -1889,6 +1889,17 @@ mod tests {
             let empty = RefCell::new(ScopeSeeds::new());
             let write_permitted =
                 BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]);
+            let other = FloorNamespace::GrantedBy(crate::seams::ContactLabel::of(
+                &label_seed(),
+                &[0x03; IDENTITY_PUBLIC_LEN],
+            ));
+            let foreign = |seed: [u8; 32]| {
+                let cell = RefCell::new(ScopeSeeds::new());
+                deposit_seed(&cell, SHARED, Zeroizing::new(seed), Some(0), other);
+                cell
+            };
+            let (foreign_read, foreign_write) =
+                (foreign(READ_SCOPE_SEED), foreign(WRITE_SCOPE_SEED));
 
             for (case, permissions, sharers, sharer_encs, read_seeds, write_seeds) in [
                 (
@@ -1930,6 +1941,14 @@ mod tests {
                     BTreeMap::new(),
                     &read,
                     &write,
+                ),
+                (
+                    "the seeds were deposited under another sharer",
+                    write_permitted.clone(),
+                    sharers(),
+                    encs(),
+                    &foreign_read,
+                    &foreign_write,
                 ),
             ] {
                 assert!(

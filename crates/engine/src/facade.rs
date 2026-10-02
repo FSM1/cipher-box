@@ -20433,6 +20433,56 @@ mod focus_access_tests {
         );
     }
 
+    /// A write seed the cache holds under another sharer's namespace authors
+    /// nothing in the scope that a new sharer now answers for.
+    #[test]
+    fn a_write_into_a_graft_refuses_a_seed_held_under_another_sharer() {
+        const SHARER: [u8; 33] = [0x02; 33];
+        const PREVIOUS: [u8; 33] = [0x03; 33];
+        let engine = started_engine();
+        let graft = NodeId([0x4D; 16]);
+        let mut rendered = engine.state.snapshot.borrow().clone();
+        rendered.upsert_node(NodeMeta::new(graft, "shared", NodeKind::Folder));
+        engine.state.grafted_write_roots.borrow_mut().insert(graft);
+        engine
+            .state
+            .bookmarked_permissions
+            .borrow_mut()
+            .insert(graft.0, CommittedPermission::Write);
+        engine
+            .state
+            .grafted_sharers
+            .borrow_mut()
+            .insert(graft.0, SHARER);
+        let label_seed = engine
+            .session
+            .as_ref()
+            .expect("a live session")
+            .contact_label_seed();
+        let deposit = |sharer: &[u8; 33]| {
+            deposit_seed(
+                &engine.state.scope_write_seeds,
+                graft.0,
+                Zeroizing::new([7u8; 32]),
+                Some(0),
+                FloorNamespace::GrantedBy(crate::seams::ContactLabel::of(label_seed, sharer)),
+            );
+        };
+
+        deposit(&SHARER);
+        assert_eq!(
+            engine.write_home(&rendered, graft, TargetRole::Parent),
+            Ok(WriteHome::Graft(graft)),
+            "the sharer that answers for the scope supplies the seed"
+        );
+
+        deposit(&PREVIOUS);
+        assert_eq!(
+            engine.write_home(&rendered, graft, TargetRole::Parent),
+            Err(out_of_scope())
+        );
+    }
+
     /// A shared scope whose seed is held runs a leg of its own. The vault's
     /// seed is withheld, so only that scope's seed can have attempted its row.
     #[test]
