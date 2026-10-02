@@ -2196,7 +2196,7 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
     let (keep, deep, _inner) = dual_linked_at(&mut fx, 0, true, |fx| {
         serve_http(&second, &fx.blocks, 600);
         let (mut engine, events) = engine_on_api(&second, 7);
-        block_on(engine.start(secret())).expect("the second device starts");
+        block_on(engine.start(secret(), None)).expect("the second device starts");
         let mut tasks = fx.world.scheduler.take_spawned_tasks();
         poll_tasks_until_parked(&mut tasks);
         block_on(engine.command(Command::SetFocus {
@@ -2240,6 +2240,44 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
         "the node the winning parent names is no capture"
     );
     assert_held_in_the_vault_scope(&fx, keep, deep, "second device");
+}
+
+/// A read-granted folder shares its parent's write seed, so the vault scope's
+/// capture walk must stop at it as a boundary. Another writer's unlink in the
+/// vault scope then bins on its own, and no record is reported faulty.
+#[test]
+fn a_capture_walk_stops_at_a_read_granted_folder() {
+    let mut fx = GrantScenario::new();
+    let (mut engine, mut events, mut tasks) = fx.second_owner_device();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
+    let doomed =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, plain, "doomed");
+    block_on(engine.command(Command::SetFocus { node: Some(plain) })).unwrap();
+    tick(&fx.world, &engine, &mut tasks);
+    assert_eq!(block_on(engine.view()).unwrap().children(plain).len(), 1);
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        plain,
+        &read_key_of(plain),
+        SCOPE,
+        |children| children.retain(|child| child.id != doomed.0),
+    );
+    events_so_far(&mut events);
+    for _ in 0..4 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .any(|entry| entry.node_id == doomed.0),
+        "the unlinked node bins"
+    );
 }
 
 #[test]

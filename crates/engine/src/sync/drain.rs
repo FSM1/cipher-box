@@ -922,14 +922,22 @@ impl CaptureWalk {
     /// Record what one folder names: a cohort node it links, and each child of
     /// this scope still to read. A child's kind is wire data, so a child marked
     /// as a file is read too: its body, not its ref, says if it names children.
+    /// A read-granted scope root shares this scope's write seed, so only
+    /// `scope_roots` marks it as a boundary.
     /// Answers `false` when the walk holds more than `bound` nodes.
-    fn visit(&mut self, end: &ScopeEnd<'_>, children: &[ChildRef], bound: usize) -> bool {
+    fn visit(
+        &mut self,
+        end: &ScopeEnd<'_>,
+        scope_roots: &[NodeId],
+        children: &[ChildRef],
+        bound: usize,
+    ) -> bool {
         for child in children {
             let id = NodeId(child.id);
             if names_node(&self.cohort, id) {
                 self.linked.insert(id);
             }
-            if names_this_scope(end, child) && self.seen.insert(id) {
+            if names_this_scope(end, child) && !scope_roots.contains(&id) && self.seen.insert(id) {
                 self.pending.push(id);
             }
         }
@@ -4307,9 +4315,10 @@ where
     /// this scope may still bin. A node held twice keeps its first capture.
     ///
     /// A node the base still links did not leave the tree, and binning it would
-    /// seal a live node under a key no reader derives. A child that does not
-    /// publish under a name this scope's write seed derives is a scope root,
-    /// which the authored delete refuses for the same reason. A name longer than
+    /// seal a live node under a key no reader derives. A proved scope root, or a
+    /// child that does not publish under a name this scope's write seed derives,
+    /// is a scope root, which the authored delete refuses for the same reason.
+    /// A name longer than
     /// this build ever authors is a peer's, and no entry carries it.
     fn prune_captures(&self, scope: &DrainScope<'_>) -> BTreeSet<CaptureKey> {
         let base = self.cells.base.borrow();
@@ -4324,6 +4333,7 @@ where
                 return scope.scope_roots.contains(&NodeId(unlinked.scope_id));
             }
             if base.contains(unlinked.node)
+                || scope.scope_roots.contains(&unlinked.node)
                 || names_node(&eligible, unlinked.node)
                 || unlinked.name.len() > MAX_NODE_NAME_BYTES
                 || scope
@@ -4462,7 +4472,12 @@ where
             }
             walk.pending.pop();
             walk.read.push((node, read.mark));
-            if !walk.visit(&plane.end, &read.children, self.capture_walk_nodes) {
+            if !walk.visit(
+                &plane.end,
+                scope.scope_roots,
+                &read.children,
+                self.capture_walk_nodes,
+            ) {
                 break WalkStep::Overflowed;
             }
         };
@@ -10204,6 +10219,26 @@ mod tests {
                 "only a same-scope capture may begin resolving the subtree for re-keying",
             );
         }
+    }
+
+    /// A read-granted scope root shares its parent scope's write seed, so its
+    /// name passes the name check. Its capture still drops before any read.
+    #[test]
+    fn a_capture_of_a_proved_scope_root_drops_unread() {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let unlinked = capture(&harness.write_scope_seed);
+        harness.scope_roots.push(unlinked.node);
+        *harness.state.observed_unlinks.borrow_mut() = vec![unlinked.clone()];
+        block_on(harness.drain().adopt_observed_unlinks(&harness.scope()));
+        assert!(harness.state.observed_unlinks.borrow().is_empty());
+        assert_eq!(
+            harness
+                .seams
+                .transport
+                .get_count(derive_write_name(&harness.write_scope_seed, &unlinked.node.0).as_str()),
+            0,
+            "the drain reads nothing for a scope root"
+        );
     }
 
     /// Serve the harness root's cached record from the record plane, which the
