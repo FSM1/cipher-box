@@ -134,7 +134,7 @@ function emailForm(model: ShellModel, actions: ShellActions): ReactElement {
       <EmailLoginForm
         onSendCode={actions.sendEmailCode}
         onVerify={actions.submitEmailCode}
-        busy={model.busy}
+        disabled={model.busy}
       />
     </div>
   );

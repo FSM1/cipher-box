@@ -29,6 +29,8 @@ export interface RecoveryPhraseFormProps {
 export function RecoveryPhraseForm({ onSubmit, onCancel, busy, error }: RecoveryPhraseFormProps) {
   const field = useRef<HTMLTextAreaElement>(null);
   const [malformed, setMalformed] = useState<string | null>(null);
+  // This form's own attempt in flight, as distinct from the host being busy elsewhere.
+  const [pending, setPending] = useState(false);
 
   // The panel replaces the login methods in place and `busy` disables the
   // field, so focus lands on the body unless it is put back each time.
@@ -38,7 +40,7 @@ export function RecoveryPhraseForm({ onSubmit, onCancel, busy, error }: Recovery
 
   const submit = async () => {
     const input = field.current;
-    if (input === null) return;
+    if (input === null || pending) return;
     const phrase = normalizeRecoveryPhrase(input.value);
     // Read once and dropped, whatever the attempt turns out to be.
     input.value = '';
@@ -47,10 +49,13 @@ export function RecoveryPhraseForm({ onSubmit, onCancel, busy, error }: Recovery
       return;
     }
     setMalformed(null);
+    setPending(true);
     try {
       await onSubmit(phrase);
     } catch {
       // The host surfaces the failure as `error`.
+    } finally {
+      setPending(false);
     }
   };
 
@@ -75,27 +80,28 @@ export function RecoveryPhraseForm({ onSubmit, onCancel, busy, error }: Recovery
         autoCorrect="off"
         autoCapitalize="off"
         aria-label="recovery phrase"
-        disabled={busy}
+        disabled={busy || pending}
       />
       <div className="recovery-actions">
         <button
           type="button"
           className={
-            busy
+            pending
               ? 'terminal-btn terminal-btn--filled terminal-btn--loading'
               : 'terminal-btn terminal-btn--filled'
           }
           data-testid="recovery-submit"
-          disabled={busy}
+          disabled={busy || pending}
+          aria-busy={pending}
           onClick={() => void submit()}
         >
-          {busy ? 'unlocking...' : 'unlock'}
+          {pending ? 'unlocking...' : 'unlock'}
         </button>
         <button
           type="button"
           className="email-login-restart"
           data-testid="recovery-cancel"
-          disabled={busy}
+          disabled={busy || pending}
           onClick={onCancel}
         >
           cancel
