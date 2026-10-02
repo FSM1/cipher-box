@@ -62,9 +62,8 @@ use crate::content::limits::folder_listing_budget;
 use crate::content::read::authority_of;
 use crate::content::{
     ByoIpfsConfig, ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError,
-    PinMode, ProviderError, Refused, RootManifest, SealError, SessionBearer, StagingLedger,
-    open_content_range, open_content_root, pre_flight_quota_check, read_pinned_range,
-    sealed_total_bytes,
+    PinMode, Refused, RootManifest, SealError, SessionBearer, StagingLedger, open_content_range,
+    open_content_root, pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
 use crate::deadlines::DeadlinePolicy;
 use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprovalView};
@@ -2903,15 +2902,22 @@ impl EngineError {
                 check: "settings-record-preflight",
             },
             SettingsPublishError::Entropy(e) => EngineError::from_entropy(e),
-            // A leg answered about a block other than the one placed, so
+            // The API answered about a block other than the one uploaded, so
             // publishing on its answer would sign a pointer to bytes nothing
             // confirmed — a fail-closed verdict, never an outage to retry.
-            SettingsPublishError::Publish(
-                RecordPublishError::HeadCidMismatch { .. }
-                | RecordPublishError::Placement(ProviderError::AddressMismatch),
-            ) => EngineError::TrustViolation {
-                message: "a store echoed a different address for the settings head block"
-                    .to_owned(),
+            SettingsPublishError::Publish(RecordPublishError::HeadCidMismatch { .. }) => {
+                EngineError::TrustViolation {
+                    message: "the API echoed a different address for the settings head block"
+                        .to_owned(),
+                }
+            }
+            // The member's own provider is the member's to fix, so the host
+            // shows which check it failed.
+            SettingsPublishError::Publish(RecordPublishError::Placement(e)) => EngineError::Seam {
+                message: format!(
+                    "your own IPFS provider did not take the settings record: {}",
+                    e.check()
+                ),
             },
             SettingsPublishError::Publish(_) => EngineError::Seam {
                 message: "the settings record did not reach the record plane".to_owned(),

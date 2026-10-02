@@ -2606,25 +2606,45 @@ fn a_head_upload_the_api_refuses_leaves_the_mint_and_the_next_start_refuses_the_
     );
 }
 
-/// A store answering about a block other than the one placed is a fail-closed
-/// verdict on that answer, never an outage a host should retry. The hosted
-/// ingress and the member's node get the same verdict.
+/// The API answering about a block other than the one uploaded is a fail-closed
+/// verdict on that answer, never an outage a host should retry.
 #[test]
 fn a_settings_save_the_api_answered_about_another_block_is_a_trust_violation() {
-    for settings in [configured(), external_only()] {
-        let world = FakeWorld::new();
-        let blocks = Blocks::default();
-        let device = world.device(b"me");
-        let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
-        blocks.echo_other_address();
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+    blocks.echo_other_address();
 
-        let outcome = block_on(engine.command(Command::SaveVaultSettings { settings }));
+    let outcome = block_on(engine.command(Command::SaveVaultSettings {
+        settings: configured(),
+    }));
 
-        assert!(
-            matches!(outcome, Err(EngineError::TrustViolation { .. })),
-            "got {outcome:?}",
-        );
-    }
+    assert!(
+        matches!(outcome, Err(EngineError::TrustViolation { .. })),
+        "got {outcome:?}",
+    );
+}
+
+/// A member's node that stores under another address is most often a
+/// misconfigured node, not an attack. The save fails closed and names the
+/// provider check, so the member can fix the node.
+#[test]
+fn a_settings_save_the_members_node_answered_about_another_block_names_the_provider() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+    blocks.echo_other_address();
+
+    let outcome = block_on(engine.command(Command::SaveVaultSettings {
+        settings: external_only(),
+    }));
+
+    assert!(
+        matches!(&outcome, Err(EngineError::Seam { message }) if message.contains("byo-address-mismatch")),
+        "got {outcome:?}",
+    );
 }
 
 /// Whether the events so far accuse anybody.

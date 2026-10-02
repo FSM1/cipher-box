@@ -13415,6 +13415,112 @@ fn a_dual_soft_delete_spends_one_mirror_budget_across_its_bin_index_head() {
     );
 }
 
+/// The heads of an observed unlink's adoption belong to no op, so they share
+/// one mirror attempt rather than an op's budget.
+#[test]
+fn a_dual_adoption_outside_any_op_spends_one_mirror_attempt() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    create(&mut engine, "shared");
+    tick(&world, &engine, &mut tasks);
+    let shared = child_id(&engine, ROOT, "shared");
+    create_under(&mut engine, shared, "notes");
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.command(Command::SetFocus { node: Some(shared) })).unwrap();
+
+    blocks.set_member_node_down(true);
+    let node_attempts = || {
+        alice
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.starts_with(MEMBER_NODE))
+            .count()
+    };
+    let before = node_attempts();
+    let body = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 1,
+        children: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    plant_record(
+        &world.record_store,
+        &blocks,
+        shared,
+        Planted {
+            node_id: shared.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(shared),
+            body: &body,
+        },
+    );
+    tick(&world, &engine, &mut tasks);
+
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the adoption published a bin index record");
+    };
+    assert_eq!(index.entries.len(), 1, "the unlink was adopted");
+    assert!(
+        node_attempts() - before <= 1,
+        "the adoption's heads shared one mirror attempt"
+    );
+}
+
+/// The member's own node keeps what the member puts on it (ADR 0029 D16): a
+/// purge only ever puts the bin index head there, and never unpins.
+#[test]
+fn a_dual_purge_sends_the_members_node_no_unpin() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "photo.bin");
+    let placed = blocks.member_node_cids();
+    block_on(engine.command(Command::Delete { node: doomed })).expect("the delete stages");
+    tick(&world, &engine, &mut tasks);
+
+    let before = alice.http.requests().len();
+    let retired_before = blocks.retired().len();
+    block_on(engine.command(Command::Purge { node: doomed })).expect("the purge stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        blocks.retired().len() > retired_before,
+        "the purge retired the registry rows"
+    );
+    assert!(
+        alice.http.requests()[before..]
+            .iter()
+            .filter(|request| request.url.starts_with(MEMBER_NODE))
+            .all(|request| request.url.contains("/api/v0/block/put")),
+        "the member's node got puts only, never an unpin"
+    );
+    let held = blocks.member_node_cids();
+    assert!(
+        placed.iter().all(|cid| held.contains(cid)),
+        "and it still holds every block it took"
+    );
+}
+
 /// Leaves already released from staging can never be placed again, so a
 /// placement changed mid-upload is decided on one question: does the leg this
 /// version must now publish from already hold them?

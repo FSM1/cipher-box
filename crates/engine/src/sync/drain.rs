@@ -1749,6 +1749,16 @@ struct OpMirror {
     gap: bool,
 }
 
+impl OpMirror {
+    /// The mirror of heads a pass publishes outside any op, which no op reports.
+    fn outside_op() -> Self {
+        Self {
+            leg: MirrorLeg::once(),
+            gap: false,
+        }
+    }
+}
+
 /// One record as this pass published it.
 struct Published {
     /// The token of the record the self-adopt gated.
@@ -1983,6 +1993,7 @@ where
         exits: &R,
     ) -> DrainReport {
         let (report, queued_purges) = self.drain_queue(scope, exits).await;
+        self.mirror.replace(OpMirror::outside_op());
         self.adopt_observed_unlinks(scope).await;
         // A queue this pass could not read cannot say which purges are already
         // queued, and the sweep stages ops: it waits rather than duplicating.
@@ -2168,6 +2179,7 @@ where
                 && let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id)
                 && matches!(op.kind, OpKind::Delete { to_bin: true, .. })
             {
+                self.mirror.replace(OpMirror::outside_op());
                 if let Err(halt) = self.finish_binned_delete(scope, &pass, op.target).await {
                     self.apply_valve(scope, *op_id, op, halt, attempts, report)
                         .await;
@@ -7592,9 +7604,7 @@ async fn yield_now() {
 fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     match error {
         RecordPublishError::Upload(error) => classify_upload(error, refused_bytes),
-        // Either leg answering about another address is one verdict.
-        RecordPublishError::HeadCidMismatch { .. }
-        | RecordPublishError::Placement(ProviderError::AddressMismatch) => Halt::Unclassified,
+        RecordPublishError::HeadCidMismatch { .. } => Halt::Unclassified,
         RecordPublishError::Placement(error) => classify_placement(error),
         RecordPublishError::Publish(error) => classify_publish_error(error),
     }
@@ -9105,11 +9115,18 @@ mod tests {
                 expected: "a".to_owned(),
                 returned: "b".to_owned(),
             },
-            RecordPublishError::Placement(ProviderError::AddressMismatch),
             RecordPublishError::Publish(crate::net::PublishError::AllEndpointsFailed),
         ] {
             assert_eq!(classify_publish(error, 4096), Halt::Unclassified);
         }
+        assert_eq!(
+            classify_publish(
+                RecordPublishError::Placement(ProviderError::AddressMismatch),
+                4096
+            ),
+            Halt::UploadAttempt,
+            "a member node that stores under another address is a provider fault, as for a content block",
+        );
     }
 
     /// A fork at the sequence a pass built on, where the record the gate passed

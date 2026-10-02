@@ -17,9 +17,9 @@
   settings record" and "Advisory pin row" terms
 - **Implemented by:** FSM1/cipher-box#1072 (dispatch, dual, the upload mark, the publish
   refusal, the quota pre-flight, D1 to D11), FSM1/cipher-box#1338 (provenance of the reconcile,
-  D12), FSM1/cipher-box#1585 (the in-session re-decide and the staging read leg, D13 and D14)
-  and FSM1/cipher-box#932 (the BYO endpoint policy, D15). The decision source for D3, D9 and
-  D11 is the resolution of FSM1/cipher-box#822 (2026-07-27).
+  D12), FSM1/cipher-box#1585 (the in-session re-decide and the staging read leg, D13 and D14),
+  FSM1/cipher-box#932 (the BYO endpoint policy, D15) and FSM1/cipher-box#2234 (D1 and D16). The
+  decision source for D3, D9 and D11 is the resolution of FSM1/cipher-box#822 (2026-07-27).
 
 ## Context
 
@@ -88,7 +88,8 @@ being server-free. The exemption also needs a new signal on the wire, because th
 tell a record head from a DAG root by codec. The owner rejected it on 2026-09-26 for D1.
 
 **(j) Unpin on the member's Kubo when the retire ledger settles a target.** It needs a durable
-member-leg flag on each ledger entry, and PSA and Pinata stay out of reach. Deferred for D16.
+member-leg flag on each ledger entry, and PSA and Pinata stay out of reach. Rejected for v2.0 by D16;
+FSM1/cipher-box#2244 holds it.
 
 ## Trust argument
 
@@ -100,6 +101,7 @@ member-leg flag on each ledger entry, and PSA and Pinata stay out of reach. Defe
 
 - `blueprint/engine.md` "Content plane" states every item of this ADR and cites it.
 - #34 D1 is confirmed: "BYO bytes bypass it" covers the record head block too.
+- D16: under `External` and `Dual` the member's node grows without bound until the member prunes it.
 
 ## Residuals
 
@@ -145,9 +147,6 @@ that leaves `External` clears `byo` first.
 **E3 — An assumed placement on a `Dual` account drops the mirror without a signal.** A `Dual`
 account runs `byo=false` (D11). So on a fresh device whose settings record is withheld, the
 assumed `Hosted` default writes one copy, and nothing tells the member that the mirror dropped.
-
-**E4 — Under `External` and `Dual` the member's node grows without bound (D16).** A deleted or
-pruned version stays pinned on the member's node until the member removes it.
 
 ## Gate
 
