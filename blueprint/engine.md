@@ -945,6 +945,11 @@ and discardable after a restart (ADR 0045). Web reaches full offline parity:
 uploads stage into OPFS/IndexedDB behind the storage-policy staging budget (past
 it, only new uploads fail fast; metadata ops queue unbounded).
 
+An op over a record at an envelope version this build does not read is charged
+no attempt on any path, the bin read included; a spent unattributed budget
+dead-letters it as `newerRelease`, so the member is told to update (owner
+decision of 2026-10-02).
+
 ## Rotation primitives
 
 Three primitives, no recovery machinery (FSM1/cipher-box-next#26 D8): no job records, no

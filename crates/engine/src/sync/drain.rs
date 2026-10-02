@@ -418,6 +418,10 @@ enum Halt {
     /// [`Halt::Unclassified`] and never against the attempt budget, which a
     /// busy sibling device would otherwise spend on a valid op.
     LostRace,
+    /// A record this op builds on is at an envelope version this build does
+    /// not read. Charged like [`Halt::Unclassified`], since an update clears
+    /// it and no retry does, and a spent budget names the newer release.
+    ForeignVersion,
     /// A refusal this pass cannot attribute, raised before the record it was
     /// authoring reached the transport: an upload, a registration, or a
     /// produce-side trust refusal. Charged like [`Halt::Attempt`], and a spent
@@ -2379,18 +2383,17 @@ where
             // Its own budget, its own count: an outage must not spend the
             // attempt budget, and a spent attempt is what tells
             // [`Self::create_replays_a_publish`] this device already published.
-            Halt::Unclassified | Halt::LostRace | Halt::OtherBinScope => {
+            Halt::Unclassified | Halt::LostRace | Halt::OtherBinScope | Halt::ForeignVersion => {
                 if attempts.charge_unattributed(op_id) < UNATTRIBUTED_BUDGET {
                     return;
                 }
-                self.abandon_keeping_its_name(
-                    scope,
-                    op_id,
-                    op,
-                    DeadLetterReason::AttemptsExhausted,
-                    report,
-                )
-                .await;
+                let reason = if halt == Halt::ForeignVersion {
+                    DeadLetterReason::NewerRelease
+                } else {
+                    DeadLetterReason::AttemptsExhausted
+                };
+                self.abandon_keeping_its_name(scope, op_id, op, reason, report)
+                    .await;
             }
             // The facade undid the op against the blocks it could see when the
             // cancel landed. One more can confirm inside that window — the
@@ -2874,7 +2877,7 @@ where
         .await
         .map_err(|_| Halt::UploadAttempt)?;
         let observed = Observed::gated(source.root_name, sequence, envelope.v)
-            .map_err(|_| Halt::Unclassified)?;
+            .map_err(|_| Halt::ForeignVersion)?;
         let read_key = source.read_key(&source.root.0);
         let Ok(body) = open_read_body(&envelope, &read_key) else {
             return Err(self
@@ -3094,8 +3097,8 @@ where
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, adopter, &name, &record_bytes, lagging)
             .await?;
-        let observed =
-            Observed::gated(&name, adopted.sequence, envelope.v).map_err(|_| Halt::Unclassified)?;
+        let observed = Observed::gated(&name, adopted.sequence, envelope.v)
+            .map_err(|_| Halt::ForeignVersion)?;
         // Re-sealing a node at an epoch above the scope's would cross the AAD
         // epoch binding.
         if adopted.epoch > anchor.epoch {
@@ -7772,9 +7775,7 @@ fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
 fn classify_publish_error(error: PublishError) -> Halt {
     match error {
         PublishError::Register(error) => classify_register(error),
-        // Another device runs a newer release: the op waits for this one to
-        // update rather than spend its attempts.
-        PublishError::ForeignVersion { .. } => Halt::Unclassified,
+        PublishError::ForeignVersion { .. } => Halt::ForeignVersion,
         error => match error.verdict() {
             PublishVerdict::Refused
             | PublishVerdict::RefusedUnaddressed
@@ -7935,6 +7936,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         | Halt::Cancelled
         | Halt::OtherBinScope => None,
         Halt::Unclassified => Some("the upload did not complete"),
+        Halt::ForeignVersion => Some("another device runs a newer release; update this app"),
         Halt::EpochLagged => Some("this folder is still being re-keyed after a key change"),
         Halt::OwedMove => Some("a sharing change on this folder is not finished yet"),
         Halt::Attempt | Halt::UploadAttempt | Halt::LostRace => {
@@ -8153,7 +8155,7 @@ fn publish_basis(served: Option<Served>, built_on: &(Observed, Vec<u8>)) -> Resu
     }
     match served.observed {
         Some(gated) if served.sequence == built_on.0.sequence() => {
-            gated.map_err(|_| Halt::Unclassified)
+            gated.map_err(|_| Halt::ForeignVersion)
         }
         _ => Ok(built_on.0.clone()),
     }
@@ -9314,7 +9316,7 @@ mod tests {
 
         assert_eq!(
             publish_basis(forked(ENVELOPE_V + 1), &built_on),
-            Err(Halt::Unclassified)
+            Err(Halt::ForeignVersion)
         );
         assert_eq!(
             publish_basis(forked(ENVELOPE_V), &built_on),
@@ -9330,8 +9332,39 @@ mod tests {
                 RecordPublishError::Publish(PublishError::ForeignVersion { version: 2 }),
                 4096
             ),
-            Halt::Unclassified
+            Halt::ForeignVersion
         );
+    }
+
+    /// A bin restore or purge over a record at another envelope version waits
+    /// for the update like any other op: its read keeps the version class and
+    /// does not dead-letter on the attempt budget.
+    #[test]
+    fn a_bin_read_over_another_envelope_version_is_not_charged() {
+        let refused = RecordPublishError::Publish(PublishError::ForeignVersion { version: 2 });
+        let halted = halted_op(
+            charge_bin_read(classify_publish(refused, 4096)),
+            ATTEMPT_BUDGET,
+        );
+
+        assert!(halted.report.dead_letters.is_empty());
+        assert_eq!(halted.still_queued, vec![halted.op_id]);
+    }
+
+    /// A spent unattributed budget over a record at another envelope version
+    /// tells the member to update, not that the op failed too many times.
+    #[test]
+    fn a_spent_budget_over_another_envelope_version_names_the_newer_release() {
+        let refused = RecordPublishError::Publish(PublishError::ForeignVersion { version: 2 });
+        let halted = halted_op(classify_publish(refused, 4096), UNATTRIBUTED_BUDGET);
+
+        let reasons: Vec<DeadLetterReason> = halted
+            .report
+            .dead_letters
+            .iter()
+            .map(|(_, _, reason)| *reason)
+            .collect();
+        assert_eq!(reasons, vec![DeadLetterReason::NewerRelease]);
     }
 
     /// This build's own refusal of the bytes it would sign repeats on every
