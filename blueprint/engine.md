@@ -661,9 +661,15 @@ the grantee that removed it stops reading it.
   would see nothing; the session holds the unsettled captures and clears one
   only when its entry lands. Each carries the `deletedAt` it was stamped with,
   so a retry re-keys under the key its entry will name.
-- **A node the base still links is no capture.** A move and a dual-link loser
-  both depart one parent and stay named by another, and binning one would seal a
-  live node under a key no reader derives. A child that does not publish under a
+- **A node that a folder of its scope still links is no capture.** A move and
+  a dual-link loser both depart one parent and stay named by another, and
+  binning one would seal a live node under a key no reader derives. The base
+  cannot prove a departure: a folder this device did not load, or loaded before
+  the move, does not show the new link. So the drain holds the capture and reads
+  every folder of the scope fresh through the gate, in a bounded share for each
+  pass. The walk starts after the device saw the departure, and the drain bins
+  only a capture that no folder names. A read that fails keeps the capture held,
+  and a scope past the walk bound bins nothing. A child that does not publish under a
   name this scope's write seed derives is a scope root, which the authored
   delete refuses for the same reason.
 - **One entry per node, however many ticks observe it.** The index refuses a

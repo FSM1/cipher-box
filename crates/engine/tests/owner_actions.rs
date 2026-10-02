@@ -2185,6 +2185,63 @@ fn assert_write_grant_follows_the_link_rank(inner_counter: u64) {
     }
 }
 
+/// A read grant drops the losing ref of a node the granted folder holds. A
+/// second owner device that loaded that folder but never the winning parent
+/// sees a departure, and must not bin the node the winning parent still names.
+#[test]
+fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner() {
+    let mut fx = GrantScenario::new();
+    let second = fx.world.device(b"owner-second-device");
+    let mut session = None;
+    let (keep, deep, _inner) = dual_linked_at(&mut fx, 0, true, |fx| {
+        serve_http(&second, &fx.blocks, 600);
+        let (mut engine, events) = engine_on_api(&second, 7);
+        block_on(engine.start(secret())).expect("the second device starts");
+        let mut tasks = fx.world.scheduler.take_spawned_tasks();
+        poll_tasks_until_parked(&mut tasks);
+        block_on(engine.command(Command::SetFocus {
+            node: Some(fx.folder),
+        }))
+        .unwrap();
+        tick(&fx.world, &engine, &mut tasks);
+        let inner = block_on(engine.view())
+            .unwrap()
+            .children(fx.folder)
+            .into_iter()
+            .find(|child| child.name == "box")
+            .expect("the second device lists the inner folder")
+            .id;
+        block_on(engine.command(Command::SetFocus { node: Some(inner) })).unwrap();
+        tick(&fx.world, &engine, &mut tasks);
+        assert_eq!(
+            block_on(engine.view()).unwrap().children(inner).len(),
+            1,
+            "the second device loaded the losing parent with its ref"
+        );
+        session = Some((engine, events, tasks));
+        granted_at(Permission::Read)(fx);
+    });
+    let (engine, _events, mut tasks) = session.expect("the second device booted");
+    assert!(
+        !block_on(engine.view())
+            .unwrap()
+            .children(keep)
+            .iter()
+            .any(|child| child.id == deep),
+        "the second device never loaded the winning parent"
+    );
+    for _ in 0..4 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert!(
+        published_bin_entries(&fx)
+            .iter()
+            .all(|entry| entry.node_id != deep.0),
+        "the node the winning parent names is no capture"
+    );
+    assert_held_in_the_vault_scope(&fx, keep, deep, "second device");
+}
+
 #[test]
 fn a_dual_link_tie_moves_with_a_grant_only_under_the_lower_parent_id() {
     assert_grant_and_delete_follow_the_link_rank(1);
