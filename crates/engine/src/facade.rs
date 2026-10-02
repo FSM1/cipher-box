@@ -5270,6 +5270,25 @@ impl<T: SeamTypes> Engine<T> {
         T::SnapshotCache: Clone + 'static,
         T::StagingStore: Clone + 'static,
     {
+        self.start_with_identity_token(secret, None).await
+    }
+
+    /// [`start`](Self::start), presenting `identity_token` at login. A start
+    /// that follows an identity exchange passes that exchange's token, which
+    /// binds the account to its identity subject (ADR 0058 D2); a restored
+    /// session passes `None`. The token drops as the login returns.
+    pub async fn start_with_identity_token(
+        &mut self,
+        secret: LoginSecret,
+        identity_token: Option<String>,
+    ) -> Result<(), EngineError>
+    where
+        T::Http: Clone + 'static,
+        T::CredentialStore: Clone + 'static,
+        T::FloorStore: Clone + 'static,
+        T::SnapshotCache: Clone + 'static,
+        T::StagingStore: Clone + 'static,
+    {
         if self.forgotten {
             return Err(EngineError::Forgotten);
         }
@@ -5301,10 +5320,11 @@ impl<T: SeamTypes> Engine<T> {
         );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
-            api.login_identity(&signer)
+            api.login_identity(&signer, identity_token.as_deref())
                 .await
                 .map_err(EngineError::from_api)?;
         }
+        drop(identity_token);
 
         // Where this session's bytes go. Server-free and ahead of any vault
         // resolve, so a self-hosting owner never needs CipherBox to tell them
@@ -13825,6 +13845,47 @@ mod tests {
                 .to_compact(),
         );
         assert_eq!(login_body["signature"], expected);
+        assert!(
+            login_body.get("identityToken").is_none(),
+            "a start that follows no exchange presents no identity token"
+        );
+    }
+
+    #[test]
+    fn start_with_identity_token_presents_it_at_login() {
+        let (mut engine, _events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
+        ));
+        serve_provisioning(&device);
+
+        block_on(engine.start_with_identity_token(
+            LoginSecret::new(vec![7u8; 32]),
+            Some("identity.jwt".to_owned()),
+        ))
+        .expect("start logs in");
+
+        let requests = device.http.requests();
+        assert_eq!(requests[1].url, "http://api.test/auth/login");
+        let login_body: Value = serde_json::from_slice(requests[1].body.as_ref().unwrap()).unwrap();
+        assert_eq!(login_body["identityToken"], "identity.jwt");
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request
+                    .body
+                    .as_deref()
+                    .is_some_and(|body| body.windows(12).any(|w| w == b"identity.jwt")))
+                .count(),
+            1,
+            "only the login request carries the token"
+        );
     }
 
     /// What gates the accelerator is the login-minted pseudonym, never the

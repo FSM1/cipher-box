@@ -8,6 +8,7 @@ import {
   FAKE_IDENTITY_TOKEN,
   FAKE_NONCE,
   FAKE_PHRASE,
+  FAKE_TOKEN_EXPIRY,
   fakeCoreKitSession,
   fakeEngineClient,
   fakeIdentityExchange,
@@ -64,6 +65,7 @@ describe('useAuth recovery phrase', () => {
     expect(coreKit.calls.phrases).toEqual([FAKE_PHRASE]);
     expect(result.current.auth.recoveryRequired).toBe(false);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(engine.calls.startTokens).toEqual([FAKE_IDENTITY_TOKEN]);
     expect(result.current.auth.isAuthenticated).toBe(true);
   });
 
@@ -187,9 +189,13 @@ describe('useAuth', () => {
         token: FAKE_IDENTITY_TOKEN,
         verifierId: 'subject-for-google',
         email: 'user@example.test',
+        expiresAt: FAKE_TOKEN_EXPIRY,
       },
     ]);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(engine.calls.startTokens).toEqual([FAKE_IDENTITY_TOKEN]);
+    // Login does not spend the token: a device registration still presents it.
+    expect(coreKit.session.identityToken()).toBe(FAKE_IDENTITY_TOKEN);
     // Signed in because the engine took the secret, not because the chrome said so.
     expect(result.current.auth.isAuthenticated).toBe(true);
     expect(authStore.getState()).toMatchObject({
@@ -212,6 +218,7 @@ describe('useAuth', () => {
     expect(identity.calls.verified).toEqual([{ email: 'user@example.test', code: '123456' }]);
     expect(coreKit.calls.logins).toHaveLength(1);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(engine.calls.startTokens).toEqual([FAKE_IDENTITY_TOKEN]);
   });
 
   // The wallet is a first login now, not a secondary method: it lands on the
@@ -229,6 +236,7 @@ describe('useAuth', () => {
     expect(identity.calls.wallet).toEqual([{ message: 'siwe-message', signature }]);
     expect(coreKit.calls.logins).toHaveLength(1);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(engine.calls.startTokens).toEqual([FAKE_IDENTITY_TOKEN]);
     expect(result.current.auth.isAuthenticated).toBe(true);
     expect(authStore.getState()).toMatchObject({ method: 'wallet' });
   });
@@ -301,6 +309,8 @@ describe('useAuth', () => {
 
     expect(coreKit.calls.logins).toEqual([]);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
+    // A restore follows no exchange, so its start presents no token.
+    expect(engine.calls.startTokens).toEqual([undefined]);
     // The identity token carries no email claim, so a session restored without
     // a fresh login has no address to show until the member signs in again.
     expect(authStore.getState()).toMatchObject({ email: null });

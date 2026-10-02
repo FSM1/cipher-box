@@ -73,6 +73,7 @@ const credential: IdentityCredential = {
   token: 'an-identity-token',
   verifierId: 'a-verifier-id',
   email: 'member@example.com',
+  expiresAt: new Date('2099-01-01T00:00:00Z'),
 };
 
 /** The store the SDK was handed by the session under test. */

@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use cipherbox_desktop_seams::{KeyringCredentialStore, SealedCoreKitStore, core_kit_store_dir};
 use cipherbox_engine::OsEntropy;
+use tauri::http::HeaderMap;
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
@@ -86,6 +87,22 @@ fn login_secret(body: &InvokeBody) -> Result<Zeroizing<Vec<u8>>, String> {
     Ok(secret)
 }
 
+/// Carries the identity token beside the raw secret body; `apps/desktop/src/auth/facade.ts`
+/// names the same header.
+const IDENTITY_TOKEN_HEADER: &str = "x-cipherbox-identity-token";
+
+/// The identity token a start that follows an exchange carries, or `None` for
+/// one that follows none (ADR 0058 D2).
+fn identity_token(headers: &HeaderMap) -> Result<Option<String>, String> {
+    let Some(value) = headers.get(IDENTITY_TOKEN_HEADER) else {
+        return Ok(None);
+    };
+    match value.to_str() {
+        Ok(token) if !token.is_empty() => Ok(Some(token.to_owned())),
+        _ => Err("the identity token is not a usable string".to_string()),
+    }
+}
+
 /// This session's [`HostCredentialStore`].
 #[cfg(not(feature = "e2e-hook"))]
 fn session_credentials(app: &AppHandle) -> HostCredentialStore {
@@ -116,15 +133,19 @@ pub(crate) fn session_env(app: &AppHandle) -> Result<SessionEnv, String> {
     })
 }
 
-/// Accepts the login secret the Core Kit exported and starts the engine on it.
+/// Accepts the login secret the Core Kit exported and starts the engine on it,
+/// with the identity token of the exchange the start follows, if any.
 #[tauri::command]
 pub async fn session_start(
     app: AppHandle,
     request: Request<'_>,
     engine: State<'_, EngineHost>,
 ) -> Result<(), String> {
+    let identity_token = identity_token(request.headers())?;
     let secret = login_secret(request.body())?;
-    engine.start(secret, session_env(&app)?).await
+    engine
+        .start(secret, identity_token, session_env(&app)?)
+        .await
 }
 
 /// Ends the session: the engine revokes this device's credential and stops.
@@ -217,6 +238,34 @@ mod tests {
         assert!(login_secret(&InvokeBody::Raw(vec![7u8; 33])).is_err());
         assert!(login_secret(&InvokeBody::Raw(Vec::new())).is_err());
         assert!(login_secret(&InvokeBody::Raw(vec![7u8; LOGIN_SECRET_LEN])).is_ok());
+    }
+
+    #[test]
+    fn reads_the_identity_token_from_its_header_and_none_without_one() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(identity_token(&headers), Ok(None));
+
+        headers.insert(
+            IDENTITY_TOKEN_HEADER,
+            "identity.jwt".parse().expect("a header value"),
+        );
+        assert_eq!(
+            identity_token(&headers),
+            Ok(Some("identity.jwt".to_owned()))
+        );
+    }
+
+    #[test]
+    fn refuses_an_identity_token_header_that_is_empty_or_not_text() {
+        let mut headers = HeaderMap::new();
+        headers.insert(IDENTITY_TOKEN_HEADER, "".parse().expect("a header value"));
+        assert!(identity_token(&headers).is_err());
+
+        headers.insert(
+            IDENTITY_TOKEN_HEADER,
+            tauri::http::HeaderValue::from_bytes(&[0xff, 0xfe]).expect("opaque bytes"),
+        );
+        assert!(identity_token(&headers).is_err());
     }
 
     /// The window keys its listener off this name, so it is part of the IPC

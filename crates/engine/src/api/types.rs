@@ -45,6 +45,10 @@ pub(crate) struct LoginRequest<'a> {
     pub public_key: &'a str,
     pub challenge: &'a str,
     pub signature: &'a str,
+    /// The token of the exchange this login follows, which binds the account
+    /// to its identity subject (ADR 0058 D2); omitted for every other start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_token: Option<&'a str>,
 }
 
 #[derive(Serialize)]

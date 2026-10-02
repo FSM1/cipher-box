@@ -67,10 +67,12 @@ export class EngineFacade {
    * caller's `secret` buffer is detached by the transfer). `accountId` names
    * whose durable state the engine opens. Resolves when the engine has run its
    * cold-start sequence (vault-pointer resolve, floor cold-seed, root adoption,
-   * first snapshot event).
+   * first snapshot event). `identityToken` is the token of the exchange this
+   * start follows, which the engine's login presents (ADR 0058 D2); a restored
+   * session passes none.
    */
-  start(secret: ArrayBuffer, accountId: string): Promise<void> {
-    return this.transport.start(secret, accountId);
+  start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void> {
+    return this.transport.start(secret, accountId, identityToken);
   }
 
   /**

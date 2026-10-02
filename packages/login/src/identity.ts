@@ -23,6 +23,8 @@ export interface IdentityCredential {
   verifierId: string;
   /** For display only — absent for wallet, which carries no address. */
   email: string | null;
+  /** When `token` stops verifying; an unreadable expiry is an `Invalid Date`. */
+  expiresAt: Date;
 }
 
 export interface IdentityExchange {
@@ -38,6 +40,7 @@ interface GrantBody {
   token: string;
   verifierId: string;
   email: string | null;
+  expiresAt: string;
 }
 
 /** Talks to the API's identity surface at `apiBaseUrl`. */
@@ -64,6 +67,7 @@ export function createIdentityExchange(apiBaseUrl: string): IdentityExchange {
     token: grant.token,
     verifierId: grant.verifierId,
     email: grant.email,
+    expiresAt: new Date(grant.expiresAt),
   });
 
   return {
