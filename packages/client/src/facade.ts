@@ -282,7 +282,8 @@ export class EngineFacade {
   /**
    * Puts a soft-deleted node back, into `into` or the folder its bin entry
    * names for `null`. Rejects with `restoreTargetGone` when the vault no longer
-   * holds that destination, and with `notBinned` when the bin holds no entry.
+   * holds that destination, with `restoreCrossesScope` when it lies in another
+   * scope than the entry's, and with `notBinned` when the bin holds no entry.
    */
   restore(node: Uint8Array, into: Uint8Array | null): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'restore', node, into });

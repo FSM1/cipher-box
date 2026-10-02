@@ -175,17 +175,19 @@ describe('the bin route', () => {
     expect(screen.queryByTestId('bin-restore-elsewhere')).toBeNull();
   });
 
-  it('offers another folder where the destination is gone', async () => {
-    await renderBin({
-      bin: () => Promise.resolve(bin()),
-      restore: () =>
-        Promise.reject(new EngineRequestError('the destination is gone', 'restoreTargetGone')),
-    });
+  it.each(['restoreTargetGone', 'restoreCrossesScope'])(
+    'offers another folder where the destination is refused with %s',
+    async (code) => {
+      await renderBin({
+        bin: () => Promise.resolve(bin()),
+        restore: () => Promise.reject(new EngineRequestError('choose another folder', code)),
+      });
 
-    await click('bin-restore');
+      await click('bin-restore');
 
-    expect(screen.getByTestId('bin-restore-elsewhere')).toBeTruthy();
-  });
+      expect(screen.getByTestId('bin-restore-elsewhere')).toBeTruthy();
+    }
+  );
 
   it('restores into a folder the member picked instead', async () => {
     const restore = vi

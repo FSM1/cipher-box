@@ -68,9 +68,11 @@ impl From<EngineError> for VfsError {
             // The bin is not projected onto the mount, so a node it holds no
             // entry for is a node this filesystem cannot find.
             EngineError::UnknownNode | EngineError::NotBinned => VfsError::NotFound,
-            error @ EngineError::RestoreTargetGone => VfsError::Refused {
-                message: error.to_string(),
-            },
+            error @ (EngineError::RestoreTargetGone | EngineError::RestoreCrossesScope) => {
+                VfsError::Refused {
+                    message: error.to_string(),
+                }
+            }
             EngineError::NotAFolder => VfsError::NotADirectory,
             EngineError::NotAFile => VfsError::IsADirectory,
             EngineError::TrustViolation { message } | EngineError::ColdStart { message } => {
