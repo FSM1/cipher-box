@@ -669,16 +669,18 @@ the grantee that removed it stops reading it.
   the move, does not show the new link. So the drain holds the capture and walks
   the scope: it reads every node fresh through the gate, then reads each one
   again, from a read budget the tick shares across its passes. The walk starts
-  after the device saw the departure and proves only that departure. A read
-  with no answer is tried again on the next pass, up to three passes. A refused
+  after the device saw the departure and proves only that departure. The walk
+  makes one attempt at a read on each pass, up to three attempts. A refused
   record, a record served tied, a second read that shows another record, or a
-  read that stays unanswered starts the walk again on a later pass. The drain
+  third attempt with no answer starts the walk again on a later pass. The drain
   bins only a capture that a settled walk proved, that no folder names and that
   the base does not link just before its re-key, and a capture it gives back
   needs a new walk. A scope past the walk bound drops its captures and is not
   walked again in that session, and a scope that holds 1024 captures drops each
   new one. Residual: such a scope re-keys no orphan, and the grantee that
-  unlinked it keeps its key. Residual: a settled proof waits for an adoption
+  unlinked it keeps its key. Residual: four scopes at 1024 fill the session's
+  set of 4096, so a peer with write access to four scopes can make every other
+  scope drop its new captures. Residual: a settled proof waits for an adoption
   slot, so its snapshot ages; the risk is low, because an honest move publishes
   the destination before the source. A child that does not publish under a name
   this scope's write seed derives is a scope root, which the authored delete

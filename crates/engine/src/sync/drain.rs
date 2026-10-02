@@ -758,9 +758,9 @@ const MAX_HELD_CAPTURES: usize = 4096;
 /// past it drops unbinned (blueprint/engine.md "Owner capture").
 const MAX_HELD_CAPTURES_PER_SCOPE: usize = 1024;
 
-/// The passes a capture walk retries one node read that failed for want of an
-/// answer before it starts again.
-const MAX_CAPTURE_READ_RETRIES: u8 = 3;
+/// The unanswered attempts a capture walk makes at one node read, one for each
+/// pass, before it starts again.
+const MAX_CAPTURE_READ_ATTEMPTS: u8 = 3;
 
 /// Purges one tick queues for expired bin entries. A retention deadline can
 /// come due for a whole bin at once, and a purge is an op like any other: the
@@ -863,25 +863,32 @@ struct CaptureWalk {
     seen: BTreeSet<NodeId>,
     /// Cohort nodes some folder names.
     linked: BTreeSet<NodeId>,
-    /// Each node read, with the sequence and the digest of the record read.
-    read: Vec<(NodeId, u64, [u8; 32])>,
+    /// Each node read, with the record read.
+    read: Vec<(NodeId, RecordMark)>,
     /// How many of `read` the second read has confirmed.
     confirmed: usize,
-    /// The passes the read at the head of the walk has failed for want of an
-    /// answer.
-    retries: u8,
+    /// The unanswered attempts at the walk's next read: the last of `pending`,
+    /// or `read[confirmed]` once every node is read one time.
+    unanswered: u8,
+}
+
+/// Which record a walk read: two reads with one mark read the same bytes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RecordMark {
+    sequence: u64,
+    digest: [u8; 32],
 }
 
 /// One node of a capture walk, as the record plane serves it now.
 struct WalkRead {
-    sequence: u64,
-    digest: [u8; 32],
+    mark: RecordMark,
     children: Vec<ChildRef>,
 }
 
 /// Why a walk read gave no [`WalkRead`].
 enum WalkReadFault {
-    /// No answer: the read may land on a later pass.
+    /// Any halt but a refusal, such as no answer or an `UploadAttempt`,
+    /// `Unclassified` or `EpochLagged` halt: the read may land on a later pass.
     Unanswered,
     /// A refused record, or one served tied with other bytes at its sequence:
     /// what the walk read so far proves nothing.
@@ -910,7 +917,7 @@ impl CaptureWalk {
             linked: BTreeSet::new(),
             read: Vec::new(),
             confirmed: 0,
-            retries: 0,
+            unanswered: 0,
         }
     }
 
@@ -919,24 +926,16 @@ impl CaptureWalk {
     /// as a file is read too: its body, not its ref, says if it names children.
     /// Answers `false` when the walk holds more than `bound` nodes.
     fn visit(&mut self, end: &ScopeEnd<'_>, children: &[ChildRef], bound: usize) -> bool {
-        self.link(children);
-        for child in children {
-            let id = NodeId(child.id);
-            if names_this_scope(end, child) && self.seen.insert(id) {
-                self.pending.push(id);
-            }
-        }
-        self.seen.len() <= bound
-    }
-
-    /// Record each cohort node that `children` names.
-    fn link(&mut self, children: &[ChildRef]) {
         for child in children {
             let id = NodeId(child.id);
             if names_node(&self.cohort, id) {
                 self.linked.insert(id);
             }
+            if names_this_scope(end, child) && self.seen.insert(id) {
+                self.pending.push(id);
+            }
         }
+        self.seen.len() <= bound
     }
 }
 
@@ -4440,26 +4439,24 @@ where
                 Ok(read) => read,
                 Err(WalkReadFault::Untrusted) => break WalkStep::Restart,
                 Err(WalkReadFault::Unanswered) => {
-                    walk.retries += 1;
-                    break if walk.retries >= MAX_CAPTURE_READ_RETRIES {
+                    walk.unanswered += 1;
+                    break if walk.unanswered >= MAX_CAPTURE_READ_ATTEMPTS {
                         WalkStep::Restart
                     } else {
                         WalkStep::Unfinished
                     };
                 }
             };
-            walk.retries = 0;
+            walk.unanswered = 0;
             if second {
-                let (_, sequence, digest) = walk.read[walk.confirmed];
-                if (read.sequence, read.digest) != (sequence, digest) {
+                if read.mark != walk.read[walk.confirmed].1 {
                     break WalkStep::Restart;
                 }
-                walk.link(&read.children);
                 walk.confirmed += 1;
                 continue;
             }
             walk.pending.pop();
-            walk.read.push((node, read.sequence, read.digest));
+            walk.read.push((node, read.mark));
             if !walk.visit(&plane.end, &read.children, self.capture_walk_nodes) {
                 break WalkStep::Overflowed;
             }
@@ -4496,8 +4493,10 @@ where
                 .await
                 .map_err(fault)?;
             return Ok(WalkRead {
-                sequence: root.state.sequence,
-                digest: cipherbox_core::suite::hash::hash(&record),
+                mark: RecordMark {
+                    sequence: root.state.sequence,
+                    digest: cipherbox_core::suite::hash::hash(&record),
+                },
                 children: root.state.children,
             });
         }
@@ -4509,8 +4508,10 @@ where
             return Err(WalkReadFault::Untrusted);
         }
         Ok(WalkRead {
-            sequence: loaded.observed.sequence(),
-            digest: cipherbox_core::suite::hash::hash(&loaded.record),
+            mark: RecordMark {
+                sequence: loaded.observed.sequence(),
+                digest: cipherbox_core::suite::hash::hash(&loaded.record),
+            },
             children: match loaded.body {
                 ReadBody::Folder { children, .. } => children,
                 ReadBody::File { .. } => Vec::new(),
@@ -10273,7 +10274,7 @@ mod tests {
         })
     }
 
-    /// Publish `folder` in the harness scope at `sequence` with no children,
+    /// Publish `folder` in the harness scope at `sequence` naming `children`,
     /// serve every block in `blocks` with its head block added, and answer
     /// that head block's CID.
     fn publish_harness_folder(
@@ -10281,11 +10282,12 @@ mod tests {
         blocks: &mut BTreeMap<String, Vec<u8>>,
         folder: NodeId,
         sequence: u64,
+        children: Vec<ChildRef>,
     ) -> String {
         let body = ReadBody::Folder {
             created_at: 1,
             modified_at: sequence,
-            children: Vec::new(),
+            children,
             unknown: PreservedFields::new(),
         };
         let read_key = harness.scope().source.read_key(&folder.0);
@@ -10354,7 +10356,7 @@ mod tests {
         let mut harness = drain_harness(Some(envelope));
         serve_harness_root(&harness);
         for folder in folders {
-            publish_harness_folder(&mut harness, &mut blocks, *folder, 1);
+            publish_harness_folder(&mut harness, &mut blocks, *folder, 1, Vec::new());
         }
         *harness.state.observed_unlinks.borrow_mut() = vec![capture(&harness.write_scope_seed)];
         (harness, blocks)
@@ -10375,6 +10377,67 @@ mod tests {
             .seams
             .transport
             .get_count(derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &node.0).as_str())
+    }
+
+    /// The second read of a folder serves another record at the sequence of the
+    /// first. It names a folder the walk never read, and that folder names the
+    /// capture, so the walk is no snapshot and starts again.
+    #[test]
+    fn a_second_read_of_another_record_at_one_sequence_starts_the_walk_again() {
+        let (mut harness, mut blocks) = walk_harness();
+        let target = capture(&harness.write_scope_seed).node;
+        let hidden = NodeId([0x48; 16]);
+        publish_harness_folder(
+            &mut harness,
+            &mut blocks,
+            hidden,
+            1,
+            vec![harness_folder_ref(target)],
+        );
+        let folder = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &WALK_FOLDER.0);
+        let endpoints = harness.seams.transport.endpoints();
+        let served = harness
+            .seams
+            .transport
+            .record_at(&endpoints[0], folder.as_str())
+            .expect("the walk folder is published");
+        publish_harness_folder(
+            &mut harness,
+            &mut blocks,
+            WALK_FOLDER,
+            1,
+            vec![harness_folder_ref(hidden)],
+        );
+        let fork = harness
+            .seams
+            .transport
+            .record_at(&endpoints[0], folder.as_str())
+            .expect("the fork is published");
+        for endpoint in &endpoints {
+            harness
+                .seams
+                .transport
+                .seed_record(endpoint, folder.as_str(), served.clone());
+        }
+        harness.seams.transport.serve_gets_for_after(
+            folder.as_str(),
+            endpoints.len(),
+            endpoints.len(),
+            Some(fork),
+        );
+
+        walk_pass(&harness, MAX_CAPTURE_WALK_READS, MAX_CAPTURE_WALK_NODES);
+
+        assert_eq!(
+            reads_of(&harness, hidden),
+            0,
+            "the walk never read the folder only the fork names"
+        );
+        assert_eq!(
+            reads_of(&harness, target),
+            0,
+            "a walk that read two records at one sequence proves nothing"
+        );
     }
 
     /// A read that goes unanswered for one pass is tried again, so the walk
@@ -10443,7 +10506,7 @@ mod tests {
             .observed_unlinks
             .borrow_mut()
             .push(capture_of(&harness.write_scope_seed, second));
-        let first_head = publish_harness_folder(&mut harness, &mut blocks, first, 1);
+        let first_head = publish_harness_folder(&mut harness, &mut blocks, first, 1, Vec::new());
         let base = Rc::clone(&harness.state.snapshot);
         let relink: Box<dyn FnOnce()> = Box::new(move || {
             let mut base = base.borrow_mut();
@@ -10579,7 +10642,7 @@ mod tests {
         );
         assert_eq!(reads_of(&harness, WALK_FOLDER), 1);
 
-        publish_harness_folder(&mut harness, &mut blocks, WALK_FOLDER, 2);
+        publish_harness_folder(&mut harness, &mut blocks, WALK_FOLDER, 2, Vec::new());
         walk_pass(&harness, 1, MAX_CAPTURE_WALK_NODES);
         assert_eq!(
             reads_of(&harness, target),
