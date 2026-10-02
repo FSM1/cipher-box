@@ -62,12 +62,10 @@ function loadGoogleIdentityServices(): Promise<GoogleIdentityServices> {
 interface GoogleLoginButtonProps {
   /** The OAuth provider's client ID, not the Web3Auth project's. */
   clientId: string | undefined;
-  /** Receives the Google ID token; the API verifies it. */
-  onCredential: (idToken: string) => void;
+  /** Receives the Google ID token; the API verifies it. Settles with the login. */
+  onCredential: (idToken: string) => Promise<void>;
   /** True while the tab cannot accept a login at all. */
   disabled?: boolean;
-  /** True while some auth transition is in flight. */
-  busy?: boolean;
 }
 
 /**
@@ -75,14 +73,11 @@ interface GoogleLoginButtonProps {
  * carries no client ID presents the method as unavailable instead, so the
  * affordance cannot be clicked into nothing.
  */
-export function GoogleLoginButton({
-  clientId,
-  onCredential,
-  disabled,
-  busy,
-}: GoogleLoginButtonProps) {
+export function GoogleLoginButton({ clientId, onCredential, disabled }: GoogleLoginButtonProps) {
   const target = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  // This button's own login in flight; the host reports any failure itself.
+  const [busy, setBusy] = useState(false);
   // Read through a ref so a re-rendered parent cannot re-run the one-shot mount.
   // GIS calls it from outside React, so it is installed on commit: a render
   // React discards must not leave its callback reachable.
@@ -99,7 +94,13 @@ export function GoogleLoginButton({
         if (!live || !target.current) return;
         google.accounts.id.initialize({
           client_id: clientId,
-          callback: (response) => deliver.current(response.credential),
+          callback: (response) => {
+            setBusy(true);
+            void deliver
+              .current(response.credential)
+              .catch(() => undefined)
+              .finally(() => setBusy(false));
+          },
           auto_select: false,
         });
         google.accounts.id.renderButton(target.current, {

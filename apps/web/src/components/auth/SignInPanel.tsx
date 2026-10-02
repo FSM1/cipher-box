@@ -39,9 +39,6 @@ export function SignInPanel() {
     if (!recoveryRequired) setRoute('choose');
   }, [recoveryRequired]);
 
-  // `useAuth` already surfaces the failure as `error`.
-  const dispatch = (login: Promise<void>) => void login.catch(() => undefined);
-
   function heldAtPolicy() {
     if (route === 'phrase') return <RecoveryPhraseLogin />;
     if (route === 'approve') {
@@ -89,9 +86,8 @@ export function SignInPanel() {
         <div className="login-methods" data-testid="sign-in-methods">
           <GoogleLoginButton
             clientId={googleClientId}
-            onCredential={(idToken) => dispatch(loginWithGoogle(idToken))}
-            disabled={!isReady}
-            busy={isBusy}
+            onCredential={loginWithGoogle}
+            disabled={!isReady || isBusy}
           />
 
           <div className="login-divider">
