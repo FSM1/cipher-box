@@ -5464,6 +5464,430 @@ fn a_child_another_parent_still_names_is_never_captured() {
     );
 }
 
+/// Two folders under the root, `left` holding `leaf` and `right` holding the
+/// empty folder `inner`, all published by `alice`. A second owner device has
+/// loaded `left` and nothing below `right`.
+struct CaptureScene {
+    world: FakeWorld,
+    blocks: Blocks,
+    alice: FakeDevice,
+    engine: Engine<FakeSeamTypes>,
+    _events: EventStream,
+    tasks: Vec<BoxedTask>,
+    left: NodeId,
+    right: NodeId,
+    inner: NodeId,
+    leaf: NodeId,
+    engine_b: Engine<FakeSeamTypes>,
+    events_b: EventStream,
+    tasks_b: Vec<BoxedTask>,
+}
+
+impl CaptureScene {
+    fn new() -> Self {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+        for name in ["left", "right"] {
+            create_under(&mut engine, ROOT, name);
+        }
+        tick(&world, &engine, &mut tasks);
+        let left = child_id(&engine, ROOT, "left");
+        let right = child_id(&engine, ROOT, "right");
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: left,
+                name: "notes.txt".into(),
+            },
+            &(0..200u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+        create_under(&mut engine, right, "inner");
+        tick(&world, &engine, &mut tasks);
+        let leaf = child_id(&engine, left, "notes.txt");
+        let inner = child_id(&engine, right, "inner");
+
+        let second = world.device(b"alice-second-device");
+        let (mut engine_b, events_b, mut tasks_b) = boot(&world, &blocks, &second, 7);
+        block_on(engine_b.command(Command::SetFocus { node: Some(left) })).unwrap();
+        tick(&world, &engine_b, &mut tasks_b);
+        assert_eq!(
+            child_id(&engine_b, left, "notes.txt"),
+            leaf,
+            "the second device loaded the source folder"
+        );
+        Self {
+            world,
+            blocks,
+            alice,
+            engine,
+            _events,
+            tasks,
+            left,
+            right,
+            inner,
+            leaf,
+            engine_b,
+            events_b,
+            tasks_b,
+        }
+    }
+
+    /// `alice` moves the leaf into `right` and publishes the move.
+    fn move_leaf_right(&mut self) {
+        block_on(self.engine.command(Command::Move {
+            node: self.leaf,
+            new_parent: self.right,
+            new_name: "notes.txt".into(),
+            replacing: None,
+        }))
+        .unwrap();
+        tick(&self.world, &self.engine, &mut self.tasks);
+        assert!(
+            published_names(&self.world.record_store, &self.blocks, self.right)
+                .contains(&"notes.txt".to_owned()),
+            "the destination names the leaf"
+        );
+    }
+
+    /// Another writer republishes `folder` naming `children`.
+    fn plant(&self, folder: NodeId, children: Vec<ChildRef>) {
+        self.plant_sealed(folder, read_key_of(folder), children);
+    }
+
+    /// [`Self::plant`], sealed under `read_key`.
+    fn plant_sealed(&self, folder: NodeId, read_key: [u8; 32], children: Vec<ChildRef>) {
+        let body = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 1,
+            children,
+            unknown: PreservedFields::new(),
+        };
+        plant_record(
+            &self.world.record_store,
+            &self.blocks,
+            folder,
+            Planted {
+                node_id: folder.0,
+                scope_id: SCOPE,
+                read_key,
+                body: &body,
+            },
+        );
+    }
+
+    fn tick_second(&mut self, ticks: usize) {
+        for _ in 0..ticks {
+            tick(&self.world, &self.engine_b, &mut self.tasks_b);
+        }
+    }
+
+    fn binned(&self) -> Vec<[u8; 16]> {
+        bin_entries(&self.world, &self.alice, &self.blocks)
+    }
+
+    fn leaf_opens_under_the_scope(&self) -> bool {
+        opens_under(
+            &self.world,
+            &self.blocks,
+            self.leaf,
+            &read_key_of(self.leaf),
+        )
+    }
+
+    /// The second device focuses `node` for one tick.
+    fn focus_second(&mut self, node: NodeId) {
+        block_on(
+            self.engine_b
+                .command(Command::SetFocus { node: Some(node) }),
+        )
+        .unwrap();
+        self.tick_second(1);
+    }
+
+    /// The second device focuses `right` and reads the leaf there.
+    fn assert_second_reads_the_leaf_under_right(&mut self) {
+        self.focus_second(self.right);
+        assert_eq!(
+            child_id(&self.engine_b, self.right, "notes.txt"),
+            self.leaf,
+            "the second device reads the node under the destination"
+        );
+    }
+}
+
+/// A second owner device that loaded the source folder but never the
+/// destination sees a move as a departure. The node stays live under the
+/// destination, so the device must not bin it or re-key it.
+#[test]
+fn a_move_into_a_folder_this_device_never_loaded_is_never_captured() {
+    let mut scene = CaptureScene::new();
+    scene.move_leaf_right();
+    scene.tick_second(3);
+
+    assert!(
+        scene.binned().is_empty(),
+        "a node the destination still names is no capture"
+    );
+    assert!(scene.leaf_opens_under_the_scope());
+    scene.assert_second_reads_the_leaf_under_right();
+}
+
+/// A second owner device whose copy of the destination is older than the move
+/// sees the move as a departure too. Its base does not link the node, but the
+/// destination does, so the device must not bin it.
+#[test]
+fn a_move_into_a_folder_this_device_holds_stale_is_never_captured() {
+    let mut scene = CaptureScene::new();
+    scene.focus_second(scene.right);
+    scene.focus_second(scene.left);
+
+    scene.move_leaf_right();
+    scene.tick_second(3);
+
+    assert!(
+        scene.binned().is_empty(),
+        "a stale copy of the destination proves no departure"
+    );
+    assert!(scene.leaf_opens_under_the_scope());
+    scene.assert_second_reads_the_leaf_under_right();
+}
+
+/// The walk reads the destination before the move lands there and the source
+/// after. Its second read of the destination shows another sequence, so the
+/// walk starts again and finds the node.
+#[test]
+fn a_walk_that_read_the_destination_before_the_move_starts_again() {
+    let mut scene = CaptureScene::new();
+    let right_name = write_name(scene.right);
+    let endpoints = scene.world.record_store.endpoints();
+    let before = scene
+        .world
+        .record_store
+        .record_at(&endpoints[0], right_name.as_str())
+        .expect("the destination is published");
+    // Settle the session's own first reads, so the walk is the next reader.
+    scene.tick_second(2);
+    scene.move_leaf_right();
+    scene.world.record_store.serve_gets_for_after(
+        right_name.as_str(),
+        0,
+        endpoints.len(),
+        Some(before),
+    );
+    scene.tick_second(4);
+
+    assert!(
+        scene.binned().is_empty(),
+        "a walk that is no snapshot proves no departure"
+    );
+    assert!(scene.leaf_opens_under_the_scope());
+    scene.assert_second_reads_the_leaf_under_right();
+}
+
+/// The walk's first read of the destination shows a fork at the sequence the
+/// move published, which does not name the node. The second read shows the
+/// move's record at that same sequence, so the walk is no snapshot and starts
+/// again.
+#[test]
+fn a_walk_whose_second_read_shows_another_record_at_one_sequence_starts_again() {
+    let mut scene = CaptureScene::new();
+    scene.tick_second(2);
+    scene.move_leaf_right();
+    let right_name = write_name(scene.right);
+    let endpoints = scene.world.record_store.endpoints();
+    let (sequence, _) = published(&scene.world.record_store, scene.right);
+    let fork = folder_record_with(
+        &scene.world.record_store,
+        &scene.blocks,
+        scene.right,
+        vec![child_ref(scene.inner.0, "inner", CoreNodeKind::Folder)],
+        sequence,
+        EOL,
+    );
+    scene.world.record_store.serve_gets_for_after(
+        right_name.as_str(),
+        0,
+        endpoints.len(),
+        Some(fork),
+    );
+    scene.tick_second(4);
+
+    assert!(
+        scene.binned().is_empty(),
+        "two records at one sequence prove no departure"
+    );
+    assert!(scene.leaf_opens_under_the_scope());
+    scene.assert_second_reads_the_leaf_under_right();
+}
+
+/// A proof is spent when its bin publish does not land. A node relinked before
+/// the retry is live, and the retry needs a new walk to see it.
+#[test]
+fn a_capture_given_back_needs_a_new_walk_before_it_bins() {
+    let mut scene = CaptureScene::new();
+    // A bin record that stands and then does not resolve refuses the rewrite.
+    block_on(scene.engine.command(Command::Delete { node: scene.inner })).unwrap();
+    tick(&scene.world, &scene.engine, &mut scene.tasks);
+    assert_eq!(scene.binned(), vec![scene.inner.0]);
+    assert_eq!(block_on(scene.engine_b.bin()).unwrap().entries.len(), 1);
+    scene.world.record_store.fail_get_for(bin_name().as_str());
+    scene.plant(scene.left, Vec::new());
+    scene.tick_second(1);
+    assert!(scene.leaf_opens_under_the_scope(), "the bin did not load");
+
+    scene.plant(scene.right, vec![file_ref(scene.leaf.0, "notes.txt")]);
+    scene.world.record_store.heal_get_for(bin_name().as_str());
+    scene.tick_second(3);
+
+    assert_eq!(
+        scene.binned(),
+        vec![scene.inner.0],
+        "a node relinked after its proof is no capture"
+    );
+    assert!(scene.leaf_opens_under_the_scope());
+}
+
+/// A folder the walk cannot read could name the node, so the capture stays held
+/// and bins nothing. Once the folder reads, the walk proves the departure and
+/// the node bins.
+#[test]
+fn a_capture_waits_while_a_folder_of_its_scope_does_not_read() {
+    let mut scene = CaptureScene::new();
+    scene
+        .world
+        .record_store
+        .fail_get_for(write_name(scene.right).as_str());
+    scene.plant(scene.left, Vec::new());
+    scene.tick_second(3);
+    assert!(
+        scene.binned().is_empty(),
+        "a folder the walk could not read proves nothing"
+    );
+    assert!(scene.leaf_opens_under_the_scope());
+
+    scene
+        .world
+        .record_store
+        .heal_get_for(write_name(scene.right).as_str());
+    scene.tick_second(2);
+    assert_eq!(
+        scene.binned(),
+        vec![scene.leaf.0],
+        "the held capture bins once the walk reads every folder"
+    );
+    assert!(!scene.leaf_opens_under_the_scope());
+}
+
+/// A folder that does not read and then leaves the tree does not stop the
+/// walk: the next walk starts at the root and no longer meets it.
+#[test]
+fn a_folder_removed_while_it_does_not_read_does_not_stop_the_walk() {
+    let mut scene = CaptureScene::new();
+    scene
+        .world
+        .record_store
+        .fail_get_for(write_name(scene.inner).as_str());
+    scene.plant(scene.left, Vec::new());
+    scene.tick_second(2);
+    assert!(scene.binned().is_empty());
+
+    scene.plant(scene.right, Vec::new());
+    scene.tick_second(3);
+    assert_eq!(
+        scene.binned(),
+        vec![scene.leaf.0],
+        "the walk past the removed folder proves the departure"
+    );
+}
+
+/// A folder record the gate refuses is no read, so the capture stays held until
+/// the folder reads.
+#[test]
+fn a_folder_the_gate_refuses_holds_the_capture() {
+    let mut scene = CaptureScene::new();
+    scene.plant_sealed(scene.inner, read_key_of(scene.left), Vec::new());
+    scene.plant(scene.left, Vec::new());
+    scene.tick_second(3);
+    assert!(scene.binned().is_empty(), "a refused folder proves nothing");
+    assert!(
+        events_so_far(&mut scene.events_b)
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "the refusal is a trust violation"
+    );
+
+    scene.plant(scene.inner, Vec::new());
+    scene.tick_second(3);
+    assert_eq!(scene.binned(), vec![scene.leaf.0]);
+}
+
+/// A destination served tied with other bytes at its sequence is no read: the
+/// walk cannot know which of them a reader adopts.
+#[test]
+fn a_destination_served_tied_proves_no_departure() {
+    let mut scene = CaptureScene::new();
+    scene.move_leaf_right();
+    let right_name = write_name(scene.right);
+    let endpoints = scene.world.record_store.endpoints();
+    let (sequence, _) = published(&scene.world.record_store, scene.right);
+    let fork = folder_record_with(
+        &scene.world.record_store,
+        &scene.blocks,
+        scene.right,
+        vec![child_ref(scene.inner.0, "inner", CoreNodeKind::Folder)],
+        sequence,
+        EOL,
+    );
+    scene
+        .world
+        .record_store
+        .seed_record(&endpoints[0], right_name.as_str(), fork);
+    scene.tick_second(3);
+
+    assert!(
+        scene.binned().is_empty(),
+        "a tied destination proves no departure"
+    );
+    assert!(scene.leaf_opens_under_the_scope());
+}
+
+/// A child ref's kind is wire data. A folder that a ref marks as a file still
+/// names its children, so the walk reads it and the node it links is no
+/// capture.
+#[test]
+fn a_folder_marked_as_a_file_still_links_the_node_for_the_walk() {
+    let mut scene = CaptureScene::new();
+    scene.plant(
+        scene.right,
+        vec![child_ref(scene.inner.0, "inner", CoreNodeKind::File)],
+    );
+    scene.plant(scene.inner, vec![file_ref(scene.leaf.0, "notes.txt")]);
+    scene.plant(scene.left, Vec::new());
+    scene.tick_second(3);
+
+    assert!(
+        scene.binned().is_empty(),
+        "a folder behind a file ref still links the node"
+    );
+    assert!(scene.leaf_opens_under_the_scope());
+}
+
+/// A true departure still bins on a device that never loaded every folder:
+/// the walk reads the folders the base lacks and finds no link.
+#[test]
+fn an_unlink_no_folder_names_bins_on_a_device_that_loaded_one_parent() {
+    let mut scene = CaptureScene::new();
+    scene.plant(scene.left, Vec::new());
+    scene.tick_second(3);
+
+    assert_eq!(scene.binned(), vec![scene.leaf.0]);
+    assert!(!scene.leaf_opens_under_the_scope());
+}
+
 /// A capture the merge already dropped from the base outlives the pass that
 /// could not settle it. Without that, one refused publish would leave the node
 /// with no entry, no re-key, and no route back.
