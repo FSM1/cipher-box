@@ -173,6 +173,7 @@ use crate::sync::render::{RenderKey, RenderMemo};
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use cipherbox_core::hex::lower as hex_lower;
 
+pub use crate::rotation::DropCause;
 pub use crate::sync::drain::{QueueHold, QueueHoldReason};
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
@@ -2331,8 +2332,8 @@ pub enum Event {
             tsify(type = "Uint8Array")
         )]
         node_id: NodeId,
-        /// Key-material-free name of why the cut left it out.
-        cause: String,
+        /// Why the cut left it out.
+        cause: DropCause,
     },
     /// The renewal walk met an owned scope root whose name its write seed does
     /// not derive: a write cut that did not finish, which only the device that
@@ -8056,9 +8057,10 @@ where {
             });
         }
         let _hold = pass.hold_owed(node)?;
+        // A re-run keeps the time its standing entry first stopped.
         let owed = OwedEntry {
             cut_epoch: 0,
-            first_stop: None,
+            first_stop: over.as_ref().and_then(|standing| standing.first_stop),
             steps: owed_steps.clone(),
         };
         match &over {

@@ -49,7 +49,6 @@ use cipherbox_engine::grants::{
 use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::eol::eol_from;
-use cipherbox_engine::net::renewal_walk::CYCLE_HOLD;
 use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
@@ -61,7 +60,7 @@ use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::op::ScopeCrossing;
 use cipherbox_engine::sync::owed_rotation::{
     DROP_BOUND, DROP_BOUND_PASSES, OWED_ROTATION_PREFIX, OwedEntry, OwedRecord, OwedStep,
-    ROTATION_WORK_OWED, owed_rotation_key, seal_owed_record,
+    ROTATION_WORK_OWED, open_owed_record, owed_rotation_key, seal_owed_record,
 };
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
 use cipherbox_engine::sync::{
@@ -259,6 +258,12 @@ fn read_key_of(node: NodeId) -> [u8; 32] {
 /// The head block of the record currently published under `name`, verified
 /// under that name.
 fn published_head(world: &FakeWorld, blocks: &Blocks, name: &IpnsName) -> Option<Vec<u8>> {
+    let cid = published_head_cid(world, name)?;
+    Some(blocks.get(&cid).expect("the head block is on the plane"))
+}
+
+/// The head CID of the record currently published under `name`.
+fn published_head_cid(world: &FakeWorld, name: &IpnsName) -> Option<String> {
     let bytes = world
         .record_store
         .record_at(&world.record_store.endpoints()[0], name.as_str())?;
@@ -269,7 +274,7 @@ fn published_head(world: &FakeWorld, blocks: &Blocks, name: &IpnsName) -> Option
         .expect("utf8 value")
         .strip_prefix("/ipfs/")
         .expect("an /ipfs/ pointer");
-    Some(blocks.get(cid).expect("the head block is on the plane"))
+    Some(cid.to_owned())
 }
 
 /// The read epoch the record published at `node` is sealed at.
@@ -9915,6 +9920,38 @@ fn owed_work_whose_recipient_is_unknown_is_abandoned_once() {
 
 /// Seal `record` as the owner's owed rotation record on the owner device, for
 /// the next session to read.
+/// The owed record the owner device holds now.
+fn staged_owed_record(fx: &GrantScenario) -> OwedRecord {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(11));
+    let blob = block_on(
+        fx.owner_device
+            .staging_store
+            .staged_bytes(&owed_rotation_key(&enc)),
+    )
+    .expect("the store answers")
+    .expect("a record is staged");
+    open_owed_record(BookkeepingSeal::new(&enc, &entropy), &blob).expect("the record opens")
+}
+
+/// A share run again over its standing mint keeps the time the entry first
+/// stopped, so a re-run does not start the bound of ADR 0065 D3 again.
+#[test]
+fn a_share_re_run_over_its_standing_mint_keeps_the_first_stop() {
+    let mut fx = GrantScenario::new();
+    let root = write_name(ROOT);
+    fx.world.record_store.fail_put_for(root.as_str());
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let first = staged_owed_record(&fx)[&fx.folder].first_stop;
+    assert!(first.is_some(), "the stalled move set the first stop");
+
+    fx.world.scheduler.advance(Duration::from_secs(60));
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the move is still owed");
+    assert_eq!(staged_owed_record(&fx)[&fx.folder].first_stop, first);
+}
+
 fn stage_owed_record(fx: &GrantScenario, record: &OwedRecord) {
     let enc = kdf::enc_subkey(&SECRET);
     let entropy = RefCell::new(SeededEntropy::new(11));
@@ -10965,31 +11002,65 @@ fn an_entry_that_is_not_durable_refuses_the_revoke_before_any_publish() {
     assert!(fx.owed_scopes().is_empty(), "and nothing is owed");
 }
 
-/// ADR 0063 D4: the renewal walk renews no name of a scope with owed work,
-/// and still renews the names of every other scope.
+/// ADR 0063 D4: the renewal walk renews no name of a scope whose owed work
+/// stopped less than the bound ago, and still renews the names of every
+/// other scope.
 #[test]
 fn the_renewal_walk_skips_a_scope_with_owed_work() {
+    const DAY: u64 = 24 * 60 * 60;
     let mut fx = GrantScenario::new();
-    let recipient = recipient_identity().verifying_key().to_sec1();
-    fx.world.mailbox_hub.forget_recipient(&recipient);
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the delivery is owed");
-    let inner = create_published_folder(
-        &fx.world,
-        &mut fx.engine,
-        &mut fx._tasks,
-        fx.folder,
-        "inner",
-    );
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
     let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
     for _ in 0..3 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    let inner_before = sequence_at(&fx.world, &write_name(inner));
+    let child_name = derive_write_name(&revokee_seed, &child.0);
+    let child_before = sequence_at(&fx.world, &child_name);
     let outer_before = sequence_at(&fx.world, &write_name(outer));
+    // A downgrade cuts the write plane alone, so no read sweep re-seals the
+    // scope. Its wave first stops close to the names' renewal, so the walk
+    // meets the owed scope within the bound.
+    fx.world.scheduler.advance(Duration::from_secs(62 * DAY));
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
     let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::ChangePermission {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                permission: Permission::Read,
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(fx.owed_scopes(), vec![folder], "the wave is owed");
 
-    let (world, mut events, _later) = restart_later_on_the_same_device(fx);
+    let GrantScenario {
+        world,
+        blocks,
+        owner_device,
+        engine,
+        _tasks,
+        ..
+    } = fx;
+    let (world, mut events, (_device, engine, mut tasks)) = start_after(
+        world,
+        &blocks,
+        owner_device,
+        (engine, _tasks),
+        Duration::from_secs(DAY),
+    );
+    // The re-drive's bounded retries hold each pass a while.
+    for _ in 0..64 {
+        if sequence_at(&world, &write_name(outer)) > outer_before {
+            break;
+        }
+        tick(&world, &engine, &mut tasks);
+    }
 
     assert_eq!(
         sequence_at(&world, &write_name(outer)),
@@ -10997,65 +11068,14 @@ fn the_renewal_walk_skips_a_scope_with_owed_work() {
         "the vault root's scope renews"
     );
     assert_eq!(
-        sequence_at(&world, &write_name(inner)),
-        inner_before,
+        sequence_at(&world, &child_name),
+        child_before,
         "the owed scope does not"
     );
     assert_eq!(
         owed_scopes(&mut events),
         vec![folder],
         "the later session still reports the scope owed"
-    );
-}
-
-/// A stored owed record that does not open skips no scope: the walk renews
-/// every name as if no work were owed, and reports the record on each pass.
-#[test]
-fn the_renewal_walk_renews_past_an_owed_record_that_does_not_open() {
-    let mut fx = GrantScenario::new();
-    let recipient = recipient_identity().verifying_key().to_sec1();
-    fx.world.mailbox_hub.forget_recipient(&recipient);
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the delivery is owed");
-    let inner = create_published_folder(
-        &fx.world,
-        &mut fx.engine,
-        &mut fx._tasks,
-        fx.folder,
-        "inner",
-    );
-    let outer = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "outer");
-    for _ in 0..3 {
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
-    let inner_before = sequence_at(&fx.world, &write_name(inner));
-    let outer_before = sequence_at(&fx.world, &write_name(outer));
-    let key = owed_rotation_key(&kdf::enc_subkey(&SECRET));
-    block_on(
-        fx.owner_device
-            .staging_store
-            .put_staged_bytes(&key, b"not an owed rotation record"),
-    )
-    .expect("stage the bytes");
-
-    let (world, mut events, _later) = restart_later_on_the_same_device(fx);
-
-    assert_eq!(
-        sequence_at(&world, &write_name(outer)),
-        outer_before + 1,
-        "the vault root's scope renews"
-    );
-    assert_eq!(
-        sequence_at(&world, &write_name(inner)),
-        inner_before + 1,
-        "and so does the scope the record cannot say is owed"
-    );
-    assert!(
-        events_so_far(&mut events).iter().any(|event| matches!(
-            event,
-            Event::RenewalFailed { detail, .. } if detail.contains("owed rotation record")
-        )),
-        "the host is told the record does not read"
     );
 }
 
@@ -12606,11 +12626,30 @@ fn start_later_on(
     EventStream,
     (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>),
 ) {
+    start_after(
+        world,
+        blocks,
+        device,
+        stopped,
+        Duration::from_secs(65 * 24 * 60 * 60),
+    )
+}
+
+/// [`start_later_on`], `gap` after the stopped session.
+fn start_after(
+    world: FakeWorld,
+    blocks: &Blocks,
+    device: FakeDevice,
+    stopped: (Engine<FakeSeamTypes>, Vec<BoxedTask>),
+    gap: Duration,
+) -> (
+    FakeWorld,
+    EventStream,
+    (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>),
+) {
     drop(stopped);
     drop(world.scheduler.take_spawned_tasks());
-    world
-        .scheduler
-        .advance(Duration::from_secs(65 * 24 * 60 * 60));
+    world.scheduler.advance(gap);
     let (engine, events, mut tasks) = boot_owner(&world, blocks, &device);
     for _ in 0..3 {
         tick(&world, &engine, &mut tasks);
@@ -12941,7 +12980,7 @@ fn dropped_nodes(events: &mut EventStream) -> Vec<(NodeId, NodeId, String)> {
                 scope_root,
                 node_id,
                 cause,
-            } => Some((scope_root, node_id, cause)),
+            } => Some((scope_root, node_id, cause.check().to_owned())),
             _ => None,
         })
         .collect()
@@ -13152,7 +13191,8 @@ fn a_write_revoke_drops_a_planted_node_beyond_the_ratchet() {
 
 /// Way E: the revokee adds a second ref to a real node, at a name of its own,
 /// in a folder the walk reads first. The wave keeps the ref at the name the
-/// old write seed derives, and drops the other (ADR 0065 D2).
+/// old write seed derives, and drops the other ref (ADR 0065 D2). No node
+/// drops, so the owner is told of none.
 #[test]
 fn a_write_revoke_drops_a_planted_second_ref_to_a_real_node() {
     let mut fx = GrantScenario::new();
@@ -13191,10 +13231,7 @@ fn a_write_revoke_drops_a_planted_second_ref_to_a_real_node() {
         Ok(CommandOutcome::Done)
     );
 
-    assert_eq!(
-        dropped_nodes(&mut fx._events),
-        vec![(fx.folder, grandchild, "second-ref".to_owned())]
-    );
+    assert_eq!(dropped_nodes(&mut fx._events), Vec::new());
     assert_revoke_finished(&mut fx, &revokee_seed, child);
     let after = fx.granted_scope_repoint();
     let sibling_name = published_child_name(
@@ -13319,7 +13356,9 @@ fn run_passes(
                     scope_root,
                     node_id,
                     cause,
-                } => run.dropped.push((scope_root, node_id, cause)),
+                } => run
+                    .dropped
+                    .push((scope_root, node_id, cause.check().to_owned())),
                 _ => {}
             }
         }
@@ -13485,8 +13524,9 @@ fn a_restart_past_the_bound_needs_its_own_passes() {
     );
 }
 
-/// ADR 0065 D4: past the bound, the renewal walk renews the names of an owed
-/// scope that its root's current write seed derives.
+/// ADR 0065 D4: past the bound's time, the renewal walk renews the names of
+/// an owed scope that its root's current write seed derives. The time is
+/// durable, so the first passes of a later session renew it.
 #[test]
 fn the_renewal_walk_renews_an_owed_scope_past_the_bound() {
     let mut fx = GrantScenario::new();
@@ -13504,17 +13544,7 @@ fn the_renewal_walk_renews_an_owed_scope_past_the_bound() {
     let inner_before = sequence_at(&fx.world, &write_name(inner));
     let folder = fx.folder;
 
-    let (world, mut events, (_device, engine, mut tasks)) = restart_later_on_the_same_device(fx);
-    assert_eq!(
-        sequence_at(&world, &write_name(inner)),
-        inner_before,
-        "the walk of the session's first passes skips the owed scope"
-    );
-
-    world.scheduler.advance(CYCLE_HOLD);
-    for _ in 0..DROP_BOUND_PASSES {
-        tick(&world, &engine, &mut tasks);
-    }
+    let (world, mut events, _later) = restart_later_on_the_same_device(fx);
 
     assert_eq!(
         sequence_at(&world, &write_name(inner)),
@@ -13526,4 +13556,45 @@ fn the_renewal_walk_renews_an_owed_scope_past_the_bound() {
         vec![folder],
         "and the work is still owed"
     );
+}
+
+/// ADR 0065 D3: the bound counts each node's own passes. An entry past its
+/// time meets an honest node whose head block one pass cannot fetch, and that
+/// node does not drop.
+#[test]
+fn a_node_new_to_an_entry_past_its_time_does_not_drop_on_its_first_stop() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let honest = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "honest",
+    );
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    revoke_into_a_bounded_stop(&mut fx);
+    fx.world.scheduler.advance(DROP_BOUND);
+    let run = passes(&mut fx, DROP_BOUND_PASSES as usize - 1);
+    assert!(run.dropped.is_empty());
+
+    let cid = published_head_cid(&fx.world, &derive_write_name(&revokee_seed, &honest.0))
+        .expect("the honest node is published");
+    let block = fx.blocks.get(&cid).expect("its head block is served");
+    fx.blocks
+        .replace(&cid, b"not the block the record names".to_vec());
+    let run = passes(&mut fx, 1);
+    assert_eq!(
+        run.dropped,
+        Vec::new(),
+        "the honest node holds the pass, and nothing drops"
+    );
+
+    fx.blocks.replace(&cid, block);
+    let run = passes(&mut fx, usize::MAX);
+    assert_eq!(
+        run.dropped,
+        vec![(fx.folder, grandchild, "no-head-block".to_owned())]
+    );
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
 }

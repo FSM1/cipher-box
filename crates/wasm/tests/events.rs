@@ -4,7 +4,7 @@
 #![cfg(all(target_family = "wasm", target_os = "unknown"))]
 
 use cipherbox_engine::facade::{
-    BlockProgress, DeadLetterReason, Event, NodeId, OpPhase, OwedWorkClass, Staleness,
+    BlockProgress, DeadLetterReason, DropCause, Event, NodeId, OpPhase, OwedWorkClass, Staleness,
 };
 use cipherbox_engine::seams::OpId;
 use cipherbox_wasm::boundary::encode_event;
@@ -223,7 +223,7 @@ fn each_event_kind_crosses_as_its_stable_name() {
             Event::NodeDropped {
                 scope_root: node,
                 node_id: node,
-                cause: String::new(),
+                cause: DropCause::NoHeadBlock,
             },
             "nodeDropped",
             4,

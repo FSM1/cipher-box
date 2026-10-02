@@ -95,19 +95,23 @@ pub struct WriteScopeNode {
 }
 
 /// Why the name wave leaves a node out of the moved tree (ADR 0065,
-/// CONTEXT.md "Dropped node").
+/// CONTEXT.md "Dropped node"). Serialized as [`DropCause::check`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
+#[cfg_attr(feature = "wasm", serde(rename_all = "kebab-case"))]
 pub enum DropCause {
     /// The adoption gate refuses the record, for any cause but a sequence
-    /// below the floor (D1).
+    /// below the floor or a head block that does not match its CID, or its body
+    /// carries a malformed child ref (D1).
     RecordRefused,
     /// The record is at an epoch no held history link reaches (D1).
     EpochUnreachable,
-    /// A second ref to a node the wave keeps at another name (D2).
-    SecondRef,
-    /// No endpoint serves a record at the name (D3).
+    /// Every endpoint states that no record is at the name (D3).
     NoRecord,
-    /// No endpoint serves the record's head block (D3).
+    /// No endpoint answers for the name (D3).
+    EndpointUnavailable,
+    /// No endpoint serves the record's head block, or one serves a block that
+    /// does not match its CID (D3).
     NoHeadBlock,
     /// The record is below the name's sequence floor (D3).
     BelowSequenceFloor,
@@ -124,7 +128,11 @@ impl DropCause {
     pub fn needs_bound(self) -> bool {
         matches!(
             self,
-            Self::NoRecord | Self::NoHeadBlock | Self::BelowSequenceFloor | Self::EpochAboveRoot
+            Self::NoRecord
+                | Self::EndpointUnavailable
+                | Self::NoHeadBlock
+                | Self::BelowSequenceFloor
+                | Self::EpochAboveRoot
         )
     }
 
@@ -134,8 +142,8 @@ impl DropCause {
         match self {
             Self::RecordRefused => "record-refused",
             Self::EpochUnreachable => "epoch-unreachable",
-            Self::SecondRef => "second-ref",
             Self::NoRecord => "no-record",
+            Self::EndpointUnavailable => "endpoint-unavailable",
             Self::NoHeadBlock => "no-head-block",
             Self::BelowSequenceFloor => "below-sequence-floor",
             Self::EpochAboveRoot => "epoch-above-root",
@@ -155,8 +163,10 @@ pub enum NodeStop {
         reason: ResolveFailure,
         /// Why the node may drop.
         cause: DropCause,
-        /// The name the node sits at, which a drop retires.
-        name: Box<IpnsName>,
+        /// The name a drop retires: the name the node sits at, and only when
+        /// the root's write scope seed derives it for the node, so a drop never
+        /// retires a name outside the scope.
+        retire: Option<Box<IpnsName>>,
     },
     /// A ref met later outranks the one the walk took for a node (D2), so
     /// the walk starts again from the root.
@@ -169,7 +179,27 @@ impl From<ResolveFailure> for NodeStop {
     }
 }
 
-/// A node or a ref the wave left out of the moved tree.
+/// The bound of ADR 0065 D3 for one owed cut: whether each node is past it,
+/// and the count of passes that a node held the wave.
+pub trait NodeBound {
+    /// Whether `node_id` may drop for a cause an endpoint can cause.
+    fn past(&self, node_id: &[u8; 16]) -> bool;
+    /// Count this pass toward `node_id`'s bound.
+    fn held(&self, node_id: &[u8; 16]);
+}
+
+/// A bound that no node is ever past.
+pub struct NoBound;
+
+impl NodeBound for NoBound {
+    fn past(&self, _node_id: &[u8; 16]) -> bool {
+        false
+    }
+
+    fn held(&self, _node_id: &[u8; 16]) {}
+}
+
+/// A node the wave left out of the moved tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DroppedNode {
     /// The node id.
@@ -478,9 +508,9 @@ pub struct RotateScopeWritePlan<'a> {
     /// Whether this scope is the vault anchor — the scope the session's indexed
     /// vault pointer names ([`RepointChannel::VaultPointer`]).
     pub is_vault_anchor: bool,
-    /// Whether the owed entry is past the bound of ADR 0065 D3, so a node
-    /// refused for a cause an endpoint can cause drops too.
-    pub past_bound: bool,
+    /// The bound of ADR 0065 D3 that a node refused for a cause an endpoint
+    /// can cause must be past before it drops.
+    pub bound: &'a dyn NodeBound,
 }
 
 /// A completed write rotation. Holding one is proof the whole subtree was
@@ -496,7 +526,7 @@ pub struct WriteRotationOutcome {
     /// covers all of them, though a resumed wave may have republished some in a
     /// prior run (skipped via `is_republished`).
     pub interior_node_count: usize,
-    /// The nodes and refs the wave left out of the moved tree (ADR 0065).
+    /// The nodes the wave left out of the moved tree (ADR 0065).
     pub dropped: Vec<DroppedNode>,
 }
 
@@ -817,7 +847,7 @@ where
     // 4) Enumerate the subtree from published records. BFS yields the root first,
     //    then level order; the wave processes descendants child-first (reversed) and
     //    the root last.
-    let walk = collect_subtree(resolver, scope_id, resumed_root.as_ref(), plan.past_bound).await?;
+    let walk = collect_subtree(resolver, scope_id, resumed_root.as_ref(), plan.bound).await?;
     let (root, descendants) = walk
         .order
         .split_first()
@@ -1023,7 +1053,7 @@ struct Walk {
     dropped: Vec<DroppedNode>,
     /// The nodes the walk dropped, whose refs each parent removes.
     dropped_ids: BTreeSet<[u8; 16]>,
-    /// The names the dropped nodes sat at, which the wave retires.
+    /// The names of the dropped nodes that the wave retires.
     dropped_names: Vec<IpnsName>,
 }
 
@@ -1033,17 +1063,18 @@ struct Walk {
 ///
 /// A node below the root that the resolver refuses for a cause in its record
 /// bytes drops, and the walk does not descend below it; one refused for a
-/// cause an endpoint can cause drops only `past_bound` (ADR 0065 D1, D3). Any
+/// cause an endpoint can cause drops only once `bound` is past for it (ADR 0065
+/// D1, D3). Before that, the walk counts the pass toward the node's bound, goes
+/// on with the other nodes so each node held counts this pass, then stops. Any
 /// other refusal aborts: a partial subtree is never a complete wave.
 ///
-/// A [`NodeStop::Rewalk`] starts the walk again. The resolver asks for one
-/// only when it settles a second ref for a node a walk met, so the walks are
-/// bounded by the nodes they meet.
+/// A [`NodeStop::Rewalk`] starts the walk again, at most once for each node a
+/// walk met.
 async fn collect_subtree<R: WriteSubtreeResolver>(
     resolver: &R,
     root_id: [u8; 16],
     resumed: Option<&ResumedRoot>,
-    past_bound: bool,
+    bound: &dyn NodeBound,
 ) -> Result<Walk, WriteRotateError> {
     let mut met: BTreeSet<[u8; 16]> = BTreeSet::new();
     let mut rewalks = 0usize;
@@ -1054,6 +1085,7 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
             dropped_ids: BTreeSet::new(),
             dropped_names: Vec::new(),
         };
+        let mut held: Option<([u8; 16], ResolveFailure)> = None;
         let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
         let mut queue: VecDeque<[u8; 16]> = VecDeque::new();
         visited.insert(root_id);
@@ -1073,12 +1105,19 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
                         reason: ResolveFailure::ConflictingChildLabel,
                     });
                 }
-                Err(NodeStop::Refused { cause, name, .. })
-                    if id != root_id && (past_bound || !cause.needs_bound()) =>
+                Err(NodeStop::Refused { cause, retire, .. })
+                    if id != root_id && (!cause.needs_bound() || bound.past(&id)) =>
                 {
                     walk.dropped.push(DroppedNode { node_id: id, cause });
                     walk.dropped_ids.insert(id);
-                    walk.dropped_names.push(*name);
+                    walk.dropped_names.extend(retire.map(|name| *name));
+                    continue;
+                }
+                Err(NodeStop::Refused { reason, cause, .. })
+                    if id != root_id && cause.needs_bound() =>
+                {
+                    bound.held(&id);
+                    held.get_or_insert((id, reason));
                     continue;
                 }
                 Err(NodeStop::Refused { reason, .. } | NodeStop::Stop(reason)) => {
@@ -1088,11 +1127,6 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
                     });
                 }
             };
-            walk.dropped
-                .extend(node.second_refs.iter().map(|(child, _)| DroppedNode {
-                    node_id: *child,
-                    cause: DropCause::SecondRef,
-                }));
             for child in &node.child_node_ids {
                 if visited.insert(*child) {
                     queue.push_back(*child);
@@ -1100,7 +1134,10 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
             }
             walk.order.push(node);
         }
-        return Ok(walk);
+        return match held {
+            Some((node_id, reason)) => Err(WriteRotateError::Resolve { node_id, reason }),
+            None => Ok(walk),
+        };
     }
 }
 

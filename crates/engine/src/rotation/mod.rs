@@ -79,10 +79,10 @@ pub use rotate::{
     ScopeRootPublisher, rotate_scope,
 };
 pub use rotate_write::{
-    DropCause, DroppedNode, NodeStop, RecoveredWave, RepointChannel, RepublishedNode, ResumedRoot,
-    ResumedWriteWave, RotateScopeWritePlan, WritePublishError, WriteRotateError,
-    WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
-    build_repoint_object, derive_write_name, rotate_scope_write,
+    DropCause, DroppedNode, NoBound, NodeBound, NodeStop, RecoveredWave, RepointChannel,
+    RepublishedNode, ResumedRoot, ResumedWriteWave, RotateScopeWritePlan, WritePublishError,
+    WriteRotateError, WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver,
+    WriteWavePublisher, build_repoint_object, derive_write_name, rotate_scope_write,
 };
 pub(crate) use scope_material::{
     Boundaries, WalkedReadEpochs, ascent_node_seed, install_walked_read_epochs, proved_scope_ref,

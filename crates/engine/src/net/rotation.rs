@@ -20,6 +20,7 @@ use std::rc::Rc;
 use futures_channel::mpsc;
 
 use cipherbox_core::content::{encode_content_cid_str, is_wellformed_content_cid};
+use cipherbox_core::error::TrustViolation;
 use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
@@ -3798,7 +3799,7 @@ fn moved_versions(body: &ReadBody) -> &[Version] {
 ///
 /// The wave hands this no authoring material — only routing identity and the one
 /// write seed that signs at the new name ([`RepublishedNode`]) — so every
-/// republish re-resolves the node at its current name through the adoption gate,
+/// republish takes the record its own enumeration gated ([`GatedWaveReads`]),
 /// rewrites the child names the wave moved, and re-seals under the **unchanged**
 /// read key at the **unchanged** read epoch. The read plane's clock never moves
 /// here (#38 D1).
@@ -3880,9 +3881,9 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// is caller-supplied: wiring that fills it from anything but the session
     /// root silently mis-scopes that stage.
     pub session_root_scope_id: [u8; 16],
-    /// The root read this pass gated and has not yet republished
-    /// ([`GatedWaveRoot`]). One rotation pass per net.
-    pub gated_root: GatedWaveRoot,
+    /// The reads this pass gated and has not yet republished
+    /// ([`GatedWaveReads`]). One rotation pass per net.
+    pub gated_reads: GatedWaveReads,
     /// The subtree index the enumeration builds as it descends
     /// ([`WaveSubtree`]). One rotation pass per net.
     pub subtree: WaveSubtree,
@@ -3944,6 +3945,15 @@ impl WaveSubtree {
         };
     }
 
+    /// Whether the root's write scope seed derives `name` for `node_id`.
+    fn derives(&self, node_id: &[u8; 16], name: &IpnsName) -> bool {
+        self.inner
+            .borrow()
+            .root_write_seed
+            .as_ref()
+            .is_some_and(|seed| derive_write_name(seed, node_id) == *name)
+    }
+
     fn record_root_write_seed(&self, seed: &[u8; SECRET_LEN]) {
         self.inner.borrow_mut().root_write_seed = Some(Zeroizing::new(*seed));
     }
@@ -3993,67 +4003,80 @@ impl WaveSubtree {
         let ReadBody::Folder { children, .. } = body else {
             return Ok(found);
         };
-        let mut inner = self.inner.borrow_mut();
-        let inner = &mut *inner;
-        for child in children {
-            if inner.child_scopes.contains(&child.id) {
-                continue;
-            }
-            let name = scope_name(&child.ipns_name).map_err(|_| BodyStop::Malformed)?;
-            if inner.kept.get(&child.id).is_some_and(|kept| *kept != name) {
-                found.second_refs.push((child.id, name));
-                continue;
-            }
-            match inner.names.entry(child.id) {
-                Entry::Occupied(seen) if *seen.get() != name => {
-                    let derived = inner
-                        .root_write_seed
-                        .as_ref()
-                        .map(|seed| derive_write_name(seed, &child.id));
-                    if derived.as_ref() == Some(&name) && derived.as_ref() != Some(seen.get()) {
-                        inner.kept.insert(child.id, name);
-                        return Err(BodyStop::Rewalk);
-                    }
-                    inner.kept.insert(child.id, seen.get().clone());
+        // A body refused part way adds no name and settles no ref.
+        let mut named: BTreeMap<[u8; 16], IpnsName> = BTreeMap::new();
+        let mut settled: Vec<([u8; 16], IpnsName)> = Vec::new();
+        {
+            let inner = self.inner.borrow();
+            for child in children {
+                if inner.child_scopes.contains(&child.id) {
+                    continue;
+                }
+                let name = scope_name(&child.ipns_name).map_err(|_| BodyStop::Malformed)?;
+                if inner.kept.get(&child.id).is_some_and(|kept| *kept != name) {
                     found.second_refs.push((child.id, name));
                     continue;
                 }
-                Entry::Occupied(_) => {}
-                Entry::Vacant(slot) => {
-                    slot.insert(name);
+                let seen = inner
+                    .names
+                    .get(&child.id)
+                    .or_else(|| named.get(&child.id))
+                    .cloned();
+                match seen {
+                    Some(seen) if seen != name => {
+                        let derived = inner
+                            .root_write_seed
+                            .as_ref()
+                            .map(|seed| derive_write_name(seed, &child.id));
+                        if derived.as_ref() == Some(&name) && derived.as_ref() != Some(&seen) {
+                            drop(inner);
+                            self.inner.borrow_mut().kept.insert(child.id, name);
+                            return Err(BodyStop::Rewalk);
+                        }
+                        settled.push((child.id, seen));
+                        found.second_refs.push((child.id, name));
+                        continue;
+                    }
+                    Some(_) => {}
+                    None => {
+                        named.insert(child.id, name);
+                    }
                 }
+                found.ids.push(child.id);
             }
-            found.ids.push(child.id);
         }
+        let mut inner = self.inner.borrow_mut();
+        inner.names.extend(named);
+        inner.kept.extend(settled);
         Ok(found)
     }
 }
 
-/// The scope root's gated read, held from the enumeration that proved it to the
+/// Each node's gated read, held from the enumeration that proved it to the
 /// republish that moves it, and re-parked when that publish fails.
 ///
-/// The root is the one record the wave both reads and re-signs, so a re-fetch
-/// between those two points would let a still-committed writer interpose a
-/// section of its own for the wave to carry forward. Pinning the read keeps the
-/// section the wave re-seals the one it proved.
+/// A re-fetch between those two points would let a still-committed writer
+/// interpose a record of its own: at the root, a section for the wave to carry
+/// forward; at an interior name, a record that stops the wave (ADR 0065).
+/// Pinning the read keeps what the wave re-seals the record it proved.
 #[derive(Default)]
-pub struct GatedWaveRoot {
-    inner: RefCell<Option<(IpnsName, WaveSource)>>,
+pub struct GatedWaveReads {
+    inner: RefCell<BTreeMap<String, WaveSource>>,
 }
 
-impl GatedWaveRoot {
+impl GatedWaveReads {
     fn take(&self, name: &IpnsName) -> Option<WaveSource> {
-        let mut parked = self.inner.borrow_mut();
-        match parked.as_ref() {
-            Some((parked_name, _)) if parked_name == name => {
-                parked.take().map(|(_, source)| source)
-            }
-            _ => None,
-        }
+        self.inner.borrow_mut().remove(name.as_str())
     }
 
     fn park(&self, name: &IpnsName, source: WaveSource) {
-        *self.inner.borrow_mut() = Some((name.clone(), source));
+        self.inner
+            .borrow_mut()
+            .insert(name.as_str().to_owned(), source);
+    }
+
+    fn clear(&self) {
+        self.inner.borrow_mut().clear();
     }
 }
 
@@ -4313,11 +4336,23 @@ where
                     .await
                     .map_err(|e| wave_verdict(GateError::Seam(e)))?;
             }
-            // Our own current record at exactly the floor — the at-floor re-open
-            // below is the path for it. A strictly older sequence is a replay and
-            // stays a fail-closed violation (`net/resolve.rs` splits it the same
-            // way), which an endpoint can serve.
+            // A head block that does not match its CID is what one bad source
+            // serves, not the record's own bytes.
+            Err(GateError::Rejected(rejection))
+                if adopter.assembled_epoch().is_none()
+                    && rejection.reason
+                        == RejectionReason::Trust(TrustViolation::ContentCidMismatch.into()) =>
+            {
+                return Err(WaveRefusal::dropping(
+                    WritePublishError::NotLanded,
+                    DropCause::NoHeadBlock,
+                ));
+            }
             Err(GateError::Rejected(rejection)) => match rejection.reason {
+                // Our own current record at exactly the floor: the at-floor
+                // re-open below is the path for it. A strictly older sequence is
+                // a replay, which a stale endpoint can serve, so it waits for
+                // the bound.
                 RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {}
                 RejectionReason::SequenceNotNewer { .. } => {
                     return Err(WaveRefusal::dropping(
@@ -5180,16 +5215,21 @@ where
         let current_name = match &root {
             Some((name, _)) => {
                 self.subtree.restart();
+                self.gated_reads.clear();
                 name.clone()
             }
             None => self.subtree.name(node_id).ok_or(ResolveFailure::Rejected)?,
         };
-        // Only a node below the root drops (ADR 0065 D1).
+        // Only a node below the root drops (ADR 0065 D1), and a drop retires
+        // only a name the scope's own seed derives for the node.
         let refused = |reason: ResolveFailure, cause: Option<DropCause>| match cause {
             Some(cause) if !is_root => NodeStop::Refused {
                 reason,
                 cause,
-                name: Box::new(current_name.clone()),
+                retire: self
+                    .subtree
+                    .derives(node_id, &current_name)
+                    .then(|| Box::new(current_name.clone())),
             },
             _ => NodeStop::Stop(reason),
         };
@@ -5201,7 +5241,12 @@ where
                     Some(DropCause::NoRecord),
                 ));
             }
-            FanoutRecord::Unavailable(_) => return Err(ResolveFailure::Unavailable.into()),
+            FanoutRecord::Unavailable(_) => {
+                return Err(refused(
+                    ResolveFailure::Unavailable,
+                    Some(DropCause::EndpointUnavailable),
+                ));
+            }
         };
         let source = if let Some((_, resumed_write_epoch)) = root {
             self.root_source(&current_name, &record_bytes, resumed_write_epoch)
@@ -5236,10 +5281,8 @@ where
                 ));
             }
         };
-        // The republish runs off this read ([`GatedWaveRoot`]).
-        if is_root {
-            self.gated_root.park(&current_name, source);
-        }
+        // The republish runs off this read ([`GatedWaveReads`]).
+        self.gated_reads.park(&current_name, source);
         Ok(WriteScopeNode {
             node_id: *node_id,
             current_name,
@@ -5332,31 +5375,18 @@ where
     }
 
     async fn republish(&self, node: &RepublishedNode) -> Result<(), WritePublishError> {
-        let source = match self.gated_root.take(&node.current_name) {
-            Some(parked) => parked,
-            // The owner signs a `directChildScopeIndex` into the moved root, and
-            // only the enumeration proves its entries
-            // ([`WriteWaveNet::record_scope_boundary`]), so a re-read here would
-            // author an unproven one.
-            None if node.is_root => return Err(WritePublishError::Rejected),
-            None => {
-                let record_bytes = fanout_get_verify(self.transport, &node.current_name)
-                    .await
-                    .map(|(_, bytes)| bytes)
-                    .ok_or(WritePublishError::NotLanded)?;
-                self.interior_source(node.node_id, &node.current_name, &record_bytes)
-                    .await
-                    .map_err(|refusal| refusal.error)?
-            }
-        };
-        // The interior path re-opens its own record at the floor, so only the
-        // root's read has to survive a failed publish.
-        let held = node.is_root.then(|| source.clone());
+        // The owner signs a `directChildScopeIndex` into the moved root, and
+        // only the enumeration proves its entries
+        // ([`WriteWaveNet::record_scope_boundary`]), so a node this pass never
+        // gated is refused rather than re-read.
+        let source = self
+            .gated_reads
+            .take(&node.current_name)
+            .ok_or(WritePublishError::Rejected)?;
+        let held = source.clone();
         let published = self.publish_moved(node, source).await;
-        if published.is_err()
-            && let Some(source) = held
-        {
-            self.gated_root.park(&node.current_name, source);
+        if published.is_err() {
+            self.gated_reads.park(&node.current_name, held);
         }
         published
     }
@@ -5709,15 +5739,16 @@ mod tests {
     use super::*;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
 
+    use crate::api::RetireEntry;
     use crate::content::limits::{MAX_RESOLVED_RECORD_BYTES, resealable_root_rest_bytes};
     use crate::content::{ContentKey, ContentProfile, GatewaySource, assemble, frame_and_seal};
     use crate::grants::create::MINT_EPOCH;
     use crate::rotation::sweep::sim;
     use crate::rotation::{
-        CascadeError, CascadeOutcome, CommittedSet, DroppedNode, EnumerationError, PrevEpochSeed,
-        ResealSeeds, RotateScopePlan, RotateScopeWritePlan, ScopeRootIdentity, WriteRotateError,
-        cascade_rotate_scope, derive_write_name, enumerate_eager_set, reseal_scope_root,
-        rotate_scope, rotate_scope_write, sweep_pass,
+        CascadeError, CascadeOutcome, CommittedSet, DroppedNode, EnumerationError, NoBound,
+        NodeBound, PrevEpochSeed, ResealSeeds, RotateScopePlan, RotateScopeWritePlan,
+        ScopeRootIdentity, WriteRotateError, cascade_rotate_scope, derive_write_name,
+        enumerate_eager_set, reseal_scope_root, rotate_scope, rotate_scope_write, sweep_pass,
     };
     use crate::seams::{EndpointId, HttpResponse, SeamResult};
     use crate::sync::pointer::{SessionRole, open_repoint, seal_repoint, vault_pointer_name};
@@ -9736,6 +9767,24 @@ mod tests {
         InMemorySnapshotCache,
     >;
 
+    impl<T: RecordTransport + Clone + 'static, F: FloorStore + 'static, E: Entropy + 'static>
+        Wave<'_, T, F, E>
+    {
+        /// Gate the interior `node` at its current name as the walk does, then
+        /// republish it.
+        async fn republish_walked(&self, node: &RepublishedNode) -> Result<(), WritePublishError> {
+            let (_, record_bytes) = fanout_get_verify(self.transport, &node.current_name)
+                .await
+                .ok_or(WritePublishError::NotLanded)?;
+            let source = self
+                .interior_source(node.node_id, &node.current_name, &record_bytes)
+                .await
+                .map_err(|refusal| refusal.error)?;
+            self.gated_reads.park(&node.current_name, source);
+            self.republish(node).await
+        }
+    }
+
     /// A stand-in authorized set for a wave whose test republishes no root: only
     /// the root re-seal reads it, and it matches no record, so a test that grows
     /// a root publish fails loudly rather than passing on a fabricated plan.
@@ -9792,7 +9841,7 @@ mod tests {
             owner_enc_secret: &harness.enc_secret,
             scope_keys: &WaveSeeds,
             authorized_commitment: plan,
-            gated_root: GatedWaveRoot::default(),
+            gated_reads: GatedWaveReads::default(),
             subtree: WaveSubtree::default(),
             owner_pointer_seed: &OWNER_POINTER_SEED,
             vault_pointer_signer: Some(&harness.vault_pointer),
@@ -10023,7 +10072,7 @@ mod tests {
         let plan = no_root_plan();
         let net = wave(&harness, &owner, &current_root, &plan);
         let moved = order(node_id, &old_name, BTreeMap::new(), false);
-        block_on(net.republish(&moved)).expect("the file republishes");
+        block_on(net.republish_walked(&moved)).expect("the file republishes");
 
         assert_eq!(
             registered_content_cids(&harness, &moved.new_name),
@@ -10053,7 +10102,7 @@ mod tests {
         refused.cache.fail_puts();
         let net = wave(&refused, &owner, &current_root, &plan);
         assert_eq!(
-            block_on(net.republish(&order(node_id, &old_name, BTreeMap::new(), false))),
+            block_on(net.republish_walked(&order(node_id, &old_name, BTreeMap::new(), false))),
             Err(WritePublishError::NotLanded),
         );
         assert_eq!(
@@ -10065,7 +10114,7 @@ mod tests {
         let harness = Harness::plain();
         let old_name = stage_node(&harness, node_id, &body);
         let net = wave(&harness, &owner, &current_root, &plan);
-        block_on(net.republish(&order(node_id, &old_name, BTreeMap::new(), false)))
+        block_on(net.republish_walked(&order(node_id, &old_name, BTreeMap::new(), false)))
             .expect("the node republishes");
         assert_eq!(
             sequence_floor_of(&harness, old_name.as_str().as_bytes()),
@@ -10102,7 +10151,7 @@ mod tests {
         stage_node_at(&harness, node_id, &body, 6);
 
         let net = wave(&harness, &owner, &current_root, &plan);
-        block_on(net.republish(&order(node_id, &name, BTreeMap::new(), false)))
+        block_on(net.republish_walked(&order(node_id, &name, BTreeMap::new(), false)))
             .expect("the node republishes");
         assert_eq!(harness.cache.peek(key), Some(newer));
         assert_eq!(sequence_floor_of(&harness, key), Some(6),);
@@ -10131,7 +10180,7 @@ mod tests {
         let plan = no_root_plan();
         let net = wave(&harness, &owner, &current_root, &plan);
         let moved = order(node_id, &old_name, BTreeMap::new(), false);
-        block_on(net.republish(&moved)).expect("the move publishes anyway");
+        block_on(net.republish_walked(&moved)).expect("the move publishes anyway");
 
         assert_eq!(
             registered_content_cids(&harness, &moved.new_name),
@@ -10208,7 +10257,7 @@ mod tests {
         let plan = no_root_plan();
         let net = wave(&harness, &owner, &current_root, &plan);
         let moved = order(node_id, &old_name, BTreeMap::new(), false);
-        block_on(net.republish(&moved)).expect("the file republishes");
+        block_on(net.republish_walked(&moved)).expect("the file republishes");
 
         assert_eq!(
             registered_content_cids(&harness, &moved.new_name),
@@ -10243,7 +10292,7 @@ mod tests {
         let plan = no_root_plan();
         let net = wave(&harness, &owner, &current_root, &plan);
         let moved = order(node_id, &old_name, BTreeMap::new(), false);
-        block_on(net.republish(&moved)).expect("the file republishes");
+        block_on(net.republish_walked(&moved)).expect("the file republishes");
 
         assert_eq!(
             registered_content_cids(&harness, &moved.new_name),
@@ -10299,7 +10348,7 @@ mod tests {
         let net = wave(&harness, &owner, &current_root, &plan);
         let moved = order(node_id, &old_name, BTreeMap::new(), false);
         assert_eq!(
-            block_on(net.republish(&moved)),
+            block_on(net.republish_walked(&moved)),
             Err(WritePublishError::Rejected),
             "a record below the live read floor is not republished"
         );
@@ -10329,14 +10378,14 @@ mod tests {
         let net = wave(&harness, &owner, &current_root, &plan);
 
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
-        block_on(net.republish(&leaf)).expect("the leaf republishes");
+        block_on(net.republish_walked(&leaf)).expect("the leaf republishes");
         let parent = order(
             parent_id,
             &parent_old,
             one_child(leaf_id, &leaf.new_name),
             false,
         );
-        block_on(net.republish(&parent)).expect("the parent republishes");
+        block_on(net.republish_walked(&parent)).expect("the parent republishes");
 
         let body = read_only_open(&harness, parent_id, &parent.new_name);
         assert_eq!(
@@ -10376,7 +10425,7 @@ mod tests {
 
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
         assert_eq!(
-            block_on(net.republish(&leaf)),
+            block_on(net.republish_walked(&leaf)),
             Err(WritePublishError::NotLanded),
             "the move refuses rather than sealing under a nonce the seam never wrote"
         );
@@ -10439,9 +10488,9 @@ mod tests {
 
         // Child-first, root last — exactly the wave's own order.
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
-        block_on(net.republish(&leaf)).expect("leaf");
+        block_on(net.republish_walked(&leaf)).expect("leaf");
         let mid = order(mid_id, &mid_old, one_child(leaf_id, &leaf.new_name), false);
-        block_on(net.republish(&mid)).expect("mid");
+        block_on(net.republish_walked(&mid)).expect("mid");
         let new_root = order(SCOPE, &root.name, one_child(mid_id, &mid.new_name), true);
         block_on(net.republish(&new_root)).expect("root");
 
@@ -10492,7 +10541,7 @@ mod tests {
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         enumerate_root(&net);
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
-        block_on(net.republish(&leaf)).expect("leaf");
+        block_on(net.republish_walked(&leaf)).expect("leaf");
         let moved = order(SCOPE, &root.name, one_child(leaf_id, &leaf.new_name), true);
         block_on(net.republish(&moved)).expect("the root moves");
 
@@ -10691,9 +10740,9 @@ mod tests {
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         enumerate_root(&net);
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
-        block_on(net.republish(&leaf)).expect("leaf");
+        block_on(net.republish_walked(&leaf)).expect("leaf");
         let mid = order(mid_id, &mid_old, one_child(leaf_id, &leaf.new_name), false);
-        block_on(net.republish(&mid)).expect("mid");
+        block_on(net.republish_walked(&mid)).expect("mid");
         let moved = order(SCOPE, &root.name, one_child(mid_id, &mid.new_name), true);
         block_on(net.republish(&moved)).expect("root");
 
@@ -11864,7 +11913,7 @@ mod tests {
         let stray = derive_write_name(&FRESH_WRITE_SCOPE_SEED, &[0x1b; 16]);
         let bogus = order(node_id, &current, one_child([0x1b; 16], &stray), false);
         assert_eq!(
-            block_on(net.republish(&bogus)),
+            block_on(net.republish_walked(&bogus)),
             Err(WritePublishError::Rejected)
         );
     }
@@ -11884,7 +11933,7 @@ mod tests {
         let current_root = old_root_name();
         let plan = no_root_plan();
         let net = wave(&harness, &owner, &current_root, &plan);
-        block_on(net.republish(&order(node_id, &current, BTreeMap::new(), false)))
+        block_on(net.republish_walked(&order(node_id, &current, BTreeMap::new(), false)))
             .expect("republish");
 
         assert_eq!(
@@ -12269,7 +12318,7 @@ mod tests {
         let node = order(node_id, &current, BTreeMap::new(), false);
 
         assert!(!block_on(net.is_republished(&node.new_name)).expect("query"));
-        block_on(net.republish(&node)).expect("republish");
+        block_on(net.republish_walked(&node)).expect("republish");
         assert!(
             block_on(net.is_republished(&node.new_name)).expect("query"),
             "a resumed wave skips this node off published state, with no in-memory carry"
@@ -12436,7 +12485,7 @@ mod tests {
             min_read_epoch: OWNER_ROOT_EPOCH,
             current_root_name: &root.name,
             is_vault_anchor: true,
-            past_bound: false,
+            bound: &NoBound,
         }
     }
 
@@ -12640,6 +12689,27 @@ mod tests {
         );
     }
 
+    /// A body refused part way leaves no name behind, so its refs win no later
+    /// tie of D2.
+    #[test]
+    fn a_body_with_a_malformed_ref_records_none_of_its_names() {
+        let subtree = WaveSubtree::default();
+        let refused = derive_write_name(&FRESH_WRITE_SCOPE_SEED, &LEAF);
+        let kept = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &LEAF);
+        let mut malformed = ref_to(MID, &kept);
+        malformed.ipns_name = b"not a name".to_vec();
+
+        assert!(matches!(
+            subtree.record_children(&folder(vec![ref_to(LEAF, &refused), malformed])),
+            Err(BodyStop::Malformed)
+        ));
+        let Ok(found) = subtree.record_children(&folder(vec![ref_to(LEAF, &kept)])) else {
+            panic!("the later body records its child");
+        };
+        assert_eq!(found.ids, vec![LEAF]);
+        assert!(found.second_refs.is_empty());
+    }
+
     /// A dropped ref the body does not carry means the enumeration and the
     /// body disagree, so the republish refuses rather than sign either half.
     #[test]
@@ -12724,7 +12794,7 @@ mod tests {
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let mut entropy = SeededEntropy::new(13);
         let plan = RotateScopeWritePlan {
-            past_bound: true,
+            bound: &PastBound,
             ..write_plan(&root, &owner)
         };
 
@@ -12737,6 +12807,234 @@ mod tests {
                 cause: DropCause::NoRecord,
             }]
         );
+    }
+
+    /// A bound every node is past.
+    struct PastBound;
+
+    impl NodeBound for PastBound {
+        fn past(&self, _node_id: &[u8; 16]) -> bool {
+            true
+        }
+
+        fn held(&self, _node_id: &[u8; 16]) {}
+    }
+
+    /// Every name the harness's registry was asked to retire.
+    fn retired_names<T>(harness: &Harness<T>) -> Vec<String> {
+        harness
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.ends_with("/registry/retire"))
+            .flat_map(|request| {
+                serde_json::from_slice::<Vec<RetireEntry>>(
+                    request.body.as_deref().expect("a retire call has a body"),
+                )
+                .expect("a retire body is a JSON array of entries")
+            })
+            .flat_map(|entry| entry.targets)
+            .collect()
+    }
+
+    /// The content CID of the head block `stage` adds to the harness.
+    fn staged_head_cid<T, R>(harness: &Harness<T>, stage: impl FnOnce() -> R) -> (R, String) {
+        let before: BTreeSet<String> = harness
+            .blocks
+            .lock()
+            .expect("lock")
+            .keys()
+            .cloned()
+            .collect();
+        let staged = stage();
+        let added: Vec<String> = harness
+            .blocks
+            .lock()
+            .expect("lock")
+            .keys()
+            .filter(|cid| !before.contains(*cid))
+            .cloned()
+            .collect();
+        let [cid] = added.as_slice() else {
+            panic!("one head block is staged")
+        };
+        (staged, cid.clone())
+    }
+
+    /// ADR 0065 D1: a drop retires the name the scope's seed derives for the
+    /// node, and never a name a ref points at outside that.
+    #[test]
+    fn a_dropped_node_retires_only_a_name_the_scope_derives() {
+        const GONE: [u8; 16] = [0x62; 16];
+        let harness = Harness::plain();
+        // MID's ref points at LEAF's name, where the gate refuses it.
+        let foreign = stage_node(&harness, LEAF, &folder(Vec::new()));
+        let derived = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &GONE);
+        let root = staged_root(
+            &harness,
+            vec![ref_to(MID, &foreign), ref_to(GONE, &derived)],
+            Vec::new(),
+            Vec::new(),
+        );
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        let mut entropy = SeededEntropy::new(13);
+        let plan = RotateScopeWritePlan {
+            bound: &PastBound,
+            ..write_plan(&root, &owner)
+        };
+
+        let outcome = block_on(rotate_scope_write(&mut entropy, &net, &net, &plan))
+            .expect("the wave finishes");
+        assert_eq!(
+            outcome.dropped,
+            vec![
+                DroppedNode {
+                    node_id: MID,
+                    cause: DropCause::RecordRefused,
+                },
+                DroppedNode {
+                    node_id: GONE,
+                    cause: DropCause::NoRecord,
+                },
+            ]
+        );
+        let retired = retired_names(&harness);
+        assert!(retired.contains(&derived.as_str().to_owned()));
+        assert!(
+            !retired.contains(&foreign.as_str().to_owned()),
+            "the name MID's ref points at is LEAF's"
+        );
+    }
+
+    /// A head block that does not match its CID is what one bad gateway
+    /// serves, so the node waits for the bound rather than drop at once.
+    #[test]
+    fn a_wrong_head_block_for_an_honest_node_waits_for_the_bound() {
+        let harness = Harness::plain();
+        let (mid_name, cid) =
+            staged_head_cid(&harness, || stage_node(&harness, MID, &folder(Vec::new())));
+        harness
+            .blocks
+            .lock()
+            .expect("lock")
+            .insert(cid, b"not the block the record names".to_vec());
+        let root = staged_root(
+            &harness,
+            vec![ref_to(MID, &mid_name)],
+            Vec::new(),
+            Vec::new(),
+        );
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        let mut entropy = SeededEntropy::new(13);
+
+        let error = block_on(rotate_scope_write(
+            &mut entropy,
+            &net,
+            &net,
+            &write_plan(&root, &owner),
+        ))
+        .expect_err("the wave stops before the bound");
+        assert!(error.is_retryable());
+        assert!(!retired_names(&harness).contains(&mid_name.as_str().to_owned()));
+
+        let plan = RotateScopeWritePlan {
+            bound: &PastBound,
+            ..write_plan(&root, &owner)
+        };
+        let outcome = block_on(rotate_scope_write(&mut entropy, &net, &net, &plan))
+            .expect("past the bound the wave finishes");
+        assert_eq!(
+            outcome.dropped,
+            vec![DroppedNode {
+                node_id: MID,
+                cause: DropCause::NoHeadBlock,
+            }]
+        );
+    }
+
+    /// No endpoint answers for an interior name: the node waits for the
+    /// bound, then drops (ADR 0065 D3).
+    #[test]
+    fn an_interior_node_no_endpoint_answers_for_drops_only_past_the_bound() {
+        let harness = Harness::plain();
+        let mid_name = stage_node(&harness, MID, &folder(Vec::new()));
+        harness.store.fail_get_for(mid_name.as_str());
+        let root = staged_root(
+            &harness,
+            vec![ref_to(MID, &mid_name)],
+            Vec::new(),
+            Vec::new(),
+        );
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        let mut entropy = SeededEntropy::new(13);
+
+        assert_eq!(
+            block_on(rotate_scope_write(
+                &mut entropy,
+                &net,
+                &net,
+                &write_plan(&root, &owner),
+            )),
+            Err(WriteRotateError::Resolve {
+                node_id: MID,
+                reason: ResolveFailure::Unavailable,
+            })
+        );
+        let plan = RotateScopeWritePlan {
+            bound: &PastBound,
+            ..write_plan(&root, &owner)
+        };
+        let outcome = block_on(rotate_scope_write(&mut entropy, &net, &net, &plan))
+            .expect("past the bound the wave finishes");
+        assert_eq!(
+            outcome.dropped,
+            vec![DroppedNode {
+                node_id: MID,
+                cause: DropCause::EndpointUnavailable,
+            }]
+        );
+    }
+
+    /// The republish re-seals the record its own walk gated, so a refused
+    /// record a still-committed writer puts at an old name after the walk
+    /// does not stop the wave.
+    #[test]
+    fn a_record_written_at_an_old_name_after_the_walk_does_not_stop_the_wave() {
+        let harness = Harness::plain();
+        let (leaf_old, leaf_cid) =
+            staged_head_cid(&harness, || stage_node(&harness, LEAF, &folder(Vec::new())));
+        let mid_old = stage_node(&harness, MID, &folder(vec![ref_to(LEAF, &leaf_old)]));
+        let root = staged_root(
+            &harness,
+            vec![ref_to(MID, &mid_old)],
+            Vec::new(),
+            Vec::new(),
+        );
+        // Signed under MID's old key and naming LEAF's block: a record the
+        // gate refuses, newer than the one the walk read.
+        let fresh = SeededEntropy::first_draw(13);
+        harness.store.seed_record_after_put(
+            derive_write_name(&fresh, &LEAF).as_str(),
+            mid_old.as_str(),
+            record_for(&MID, &leaf_cid, 2),
+        );
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        let mut entropy = SeededEntropy::new(13);
+
+        let outcome = block_on(rotate_scope_write(
+            &mut entropy,
+            &net,
+            &net,
+            &write_plan(&root, &owner),
+        ))
+        .expect("the wave re-seals what it walked");
+        assert_eq!(outcome.dropped, Vec::new());
+        assert_eq!(outcome.interior_node_count, 2);
+        assert!(published_at(&harness, &derive_write_name(&fresh, &MID)));
     }
 
     #[test]

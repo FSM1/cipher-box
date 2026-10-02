@@ -118,11 +118,16 @@ scenario fails the meta-test):
   each lagging node at the root's epoch (ADR 0064); the five ways a revokee
   plants a stop — a record that does not unseal, an epoch that no held link
   reaches, a ref to an id with no record, a record with no served head block,
-  and a second ref to one id — each finish the revoke and report the dropped
-  node, the first two and the last at once and the other two past the bound,
-  which holds before T, before K passes, and over a restart; past the bound
-  the renewal walk renews an owed scope (ADR 0065,
-  `crates/engine/tests/owner_actions.rs`);
+  and a second ref to one id — each finish the revoke: the first two drop at
+  once, the next two past the bound, and the second ref goes with no report.
+  The bound holds before T, for each node until its own K passes, and over a
+  restart, and an honest node new to a wave past T does not drop on its first
+  stop; past T the renewal walk renews an owed scope, and within T it does not
+  (ADR 0065, `crates/engine/tests/owner_actions.rs`). The wave retires only a
+  name the scope derives, waits for the bound on a wrong head block and on an
+  endpoint that does not answer, and re-seals the record its walk gated, so a
+  record written at an old name after the walk does not stop it
+  (`crates/engine/src/net/rotation.rs`);
 - the keyless re-PUT adversary (FSM1/cipher-box-next#38) — forged old-epoch records at old
   names, re-point adoption, the pin-window bound;
 - revocation classification (revocation-signal vs unresolvable vs epoch-lag)

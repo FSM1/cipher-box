@@ -23,15 +23,16 @@ use crate::facade::NodeId;
 use crate::grants::ledger::mint_grant_row;
 use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget,
-    CommittedSet, GrantCutPlan, LaggingNode, NodeRef, NodeStop, PrevEpochSeed, RecoveredWave,
-    RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
-    ResumedRoot, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError, RotateScopePlan,
-    RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError,
-    SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
-    WriteHistory, WritePublishError, WriteRevokeKind, WriteRotateError, WriteRotationOutcome,
-    WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, build_repoint_object,
-    cascade_rotate_scope, derive_write_name, reseal_scope_root, revoke_read_grant,
-    revoke_write_grant, rotate_on_cut, rotate_scope, rotate_scope_write, sweep_pass,
+    CommittedSet, GrantCutPlan, LaggingNode, NoBound, NodeRef, NodeStop, PrevEpochSeed,
+    RecoveredWave, RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot,
+    ResolveFailure, ResumedRoot, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
+    RotateScopePlan, RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity,
+    ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild,
+    SweptNode, SweptScope, WriteHistory, WritePublishError, WriteRevokeKind, WriteRotateError,
+    WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
+    build_repoint_object, cascade_rotate_scope, derive_write_name, reseal_scope_root,
+    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope, rotate_scope_write,
+    sweep_pass,
 };
 use crate::seams::{FloorStore, SeamError, SeamResult};
 use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
@@ -695,7 +696,7 @@ fn write_rotate_family() -> RejectFamily {
             min_read_epoch: CURRENT_READ_EPOCH,
             current_root_name: name,
             is_vault_anchor: false,
-            past_bound: false,
+            bound: &NoBound,
         };
         block_on(rotate_scope_write(
             &mut SeededEntropy::new(ENTROPY_SEED),

@@ -24,13 +24,14 @@ use crate::facade::{Event, NodeId};
 use crate::gate::floor;
 use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
-    GatedRoots, GatedWaveRoot, MovedScopeSeed, OnAccessMisses, OwnerRotationKeys, OwnerRotationNet,
-    PointerConsultArm, RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet,
+    GatedRoots, GatedWaveReads, MovedScopeSeed, OnAccessMisses, OwnerRotationKeys,
+    OwnerRotationNet, PointerConsultArm, RotationAncestry, SweptScopeState, WaveSubtree,
+    WriteWaveNet,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CommittedSet, CutRotator, MAX_ROTATION_ATTEMPTS,
-    ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable, RevokedCommittedSet,
+    NodeBound, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable, RevokedCommittedSet,
     RotateScopePlan, RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity,
     ScopeRootPublisher, WriteHistory, WriteRotateError, WriteRotationOutcome, bounded,
     cascade_rotate_scope, derive_write_name, reseal_scope_root, rotate_scope_write,
@@ -92,9 +93,8 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     /// durable. Nullary: a cut is anchored at one scope root, and the task needs
     /// the name and ancestor seed that scope was read under, not just its id.
     pub sweep: &'a dyn Fn() -> BoxedTask,
-    /// Whether the cut's owed entry is past the bound of ADR 0065 D3
-    /// ([`RotateScopeWritePlan::past_bound`]).
-    pub past_bound: bool,
+    /// The cut's bound of ADR 0065 D3 ([`RotateScopeWritePlan::bound`]).
+    pub bound: &'a dyn NodeBound,
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerCutNet<'_, T, H, C, F, Sch, E, S>
@@ -389,7 +389,7 @@ where
                     payload_version: self.payload_version,
                     current_root_name: self.scope_root_name,
                     session_root_scope_id: self.session_root_scope_id,
-                    gated_root: GatedWaveRoot::default(),
+                    gated_reads: GatedWaveReads::default(),
                     subtree: WaveSubtree::default(),
                 };
                 rotate_scope_write(
@@ -407,7 +407,7 @@ where
                         min_read_epoch,
                         current_root_name: self.scope_root_name,
                         is_vault_anchor,
-                        past_bound: self.past_bound,
+                        bound: self.bound,
                     },
                 )
                 .await
@@ -417,7 +417,7 @@ where
             let _ = self.events.unbounded_send(Event::NodeDropped {
                 scope_root,
                 node_id: NodeId(dropped.node_id),
-                cause: dropped.cause.check().to_owned(),
+                cause: dropped.cause,
             });
         }
         Ok(outcome)

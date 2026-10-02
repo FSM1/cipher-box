@@ -1009,19 +1009,26 @@ closes (FSM1/cipher-box-next#34 D4).
 A node below the root that the wave cannot move is a **dropped node**
 ([ADR 0065](../decisions/0065-the-name-wave-drops-a-node-that-it-cannot-move-and-an-owed-cut-ends-within-a-bound.md)).
 The wave drops at once a node whose record bytes it refuses: an adoption-gate
-refusal other than a sequence below the floor, or an epoch below the gated
-root's that no held history link reaches (D1). Of two refs to one
-node id at different names, it keeps the ref at the name that the root's write
-scope seed derives for that id, else the first ref the walk met, and drops the
-other; a kept ref met after the walk took the other one starts the walk again
-from the root (D2). A stop that an endpoint can cause — every endpoint states
-that no record is at the name, no endpoint serves the head block, or the record
-is below the sequence floor — drops only once the owed entry is past the bound
-below (D3). So does a node at an epoch above the gated root's: a read rotation
-on another owner device can publish one before this device reads its root. A drop removes the ref from the moved parent, does not walk below
-the node, and retires its old name; the wave then moves the other nodes,
-re-points the root and finishes the cut. The wave never adopts or carries a
-refused record, and a stop at the scope root still stops the wave.
+refusal other than a sequence below the floor or a head block that does not
+match its CID, an epoch below the gated root's that no held history link
+reaches, or a malformed child ref in its body (D1). Of two refs to one node id
+at different names, it keeps the ref at the name that the root's write scope
+seed derives for that id, else the first ref the walk met, and removes the
+other ref; the node stays, so no node drops. A kept ref met after the walk took
+the other one starts the walk again from the root (D2). A stop that an endpoint
+can cause — every endpoint states that no record is at the name, no endpoint
+answers for the name, no endpoint serves the head block or one serves a block
+that does not match its CID, the record is below the sequence floor, or the
+record is at an epoch above the gated root's, which a read rotation on another
+owner device can publish — drops a node only past the bound below (D3). A drop
+removes the ref from the moved parent and does not walk below the node. It
+retires the old name only when the root's write scope seed derives that name
+for the node, so a ref to a name outside the scope retires nothing. The wave
+then moves the other nodes, re-points the root and finishes the cut. Each
+republish re-seals the record that the walk gated for that node, so a record
+written at an old name after the walk does not stop the wave. The wave never
+adopts or carries a refused record, and a stop at the scope root still stops
+the wave.
 
 ### Triggers
 
@@ -1066,17 +1073,25 @@ left is refused, retryably, until the move lands; a crossing the queue
 already holds waits for it, uncharged. At the entry's own cut epoch the published state does not tell a read cascade that
 landed from one that did not, so a re-drive after a lost advance runs one more.
 
-Each entry keeps the time of its first stop (ADR 0065 D3). The entry is
-**past the bound** when its first stop is at least T = 7 days old and at least
-K = 3 passes of the current session stopped at it. The count lives in the
-session, so a restart sets it to zero again: a drop rests on stops this session
-saw, and a restart only delays it. A re-drive past the bound drops each node
-that a stop an endpoint can cause holds (rotateScopeWrite above). Past the
-bound, the renewal walk renews in that scope each name the scope root's current
-write seed derives (ADR 0065 D4); before it, ADR 0063 D4 stays. Each drop emits
-`nodeDropped` with the scope root, the node id and the cause (`record-refused`,
-`epoch-unreachable`, `second-ref`, `no-record`, `no-head-block`,
-`below-sequence-floor` or `epoch-above-root`), after the cut lands; the command or the re-drive that
+Each entry keeps the time that its current first step first stopped (ADR 0065
+D3); an advance to a new first step clears it. A node is **past the bound** when
+that time is at least T = 7 days old and the node held the name wave on at least
+K = 3 earlier passes of the current session. A pass counts once for each node,
+whatever its retries. The counts live in the session and end with the write
+cut, so a restart sets them to zero again: a drop rests on stops this session
+saw, and a restart only delays it. A node that is new to the wave waits for its
+own K passes, however long the entry stopped. A re-drive drops each node past
+the bound that a stop an endpoint can cause holds (rotateScopeWrite above).
+
+The renewal bound of ADR 0065 D4 rests on T alone. Once the entry's current
+step has stopped for T, the renewal walk renews in that scope each name that the
+scope root's current write seed derives; before it, ADR 0063 D4 stays. T is
+durable, so a restart does not delay the renewal.
+
+Each drop emits `nodeDropped` with the scope root, the node id and the cause
+(`record-refused`, `epoch-unreachable`, `no-record`, `endpoint-unavailable`,
+`no-head-block`, `below-sequence-floor` or `epoch-above-root`), after the cut
+lands. A removed second ref emits nothing. The command or the re-drive that
 drops a node returns `Ok`.
 
 The **expired-link sweep**

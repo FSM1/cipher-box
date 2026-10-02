@@ -574,8 +574,8 @@ D2, consequence 2). The engine encodes each body; core seals it opaquely. The
 `owed-rotation` body is at format 2: each entry carries the time of its first
 stop, a flag byte then the Unix milliseconds when set, after its cut epoch. A
 format-1 body, which the previous release wrote, decodes with no stop recorded
-(ADR 0065 D3, ADR 0020 D2). The kind is a key-schedule input and **never a wire field**,
-so a blob offered as the wrong store is refused by the AEAD rather than by a
+(ADR 0065 D3, ADR 0020 D2). The kind is a key-schedule input and **never a wire
+field**, so a blob offered as the wrong store is refused by the AEAD rather than by a
 comparison: a decryption failure, not a parse failure. The KAT set is
 `owner_local_accept` (an empty body, plus one populated body per kind, each
 reproducing its exact bytes from a fixed enc + ephemeral, then opening) and

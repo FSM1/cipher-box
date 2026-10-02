@@ -8,7 +8,9 @@ use super::claim_conversion::{ConversionSites, Running};
 use super::*;
 use crate::grants::resume_owed_interior_move;
 use crate::rotation::{RotateOnCutError, WriteRotateError, owed_read_cut};
-use crate::sync::owed_rotation::{OwedEntry, OwedRecordError, OwedRotation, OwedStep, ScopeHold};
+use crate::sync::owed_rotation::{
+    EntryBound, OwedEntry, OwedRecordError, OwedRotation, OwedStep, ScopeHold,
+};
 
 /// What stopped one owed step: a key-material-free check, and its class.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,19 +195,16 @@ where
         self.report_owed(scope, stop);
     }
 
-    /// Count a stop at `scope`'s entry toward the bound of ADR 0065 D3. A
-    /// store that refuses leaves the first stop unset, so a later stop sets it.
+    /// Start the bound of ADR 0065 D3 at `scope`'s entry, if it has not
+    /// started. A store that refuses leaves it unset, so a later stop sets it.
     async fn note_owed_stop(&self, scope: NodeId) {
         let _ = self.owed().note_stop(scope, self.scheduler.now()).await;
     }
 
-    /// Whether the entry at `scope` is past the bound of ADR 0065 D3. A record
-    /// that does not read is not.
-    pub(super) async fn owed_past_bound(&self, scope: NodeId) -> bool {
-        self.owed()
-            .past_bound(scope, self.scheduler.now())
-            .await
-            .unwrap_or(false)
+    /// The bound of ADR 0065 D3 for one pass at `scope`'s entry. `None` when
+    /// the record does not read, so no node is past it.
+    pub(super) async fn owed_bound(&self, scope: NodeId) -> Option<EntryBound<'_>> {
+        self.owed().bound(scope, self.scheduler.now()).await.ok()
     }
 
     /// Settle one re-drive of `scope`'s entry. An entry whose work can never
