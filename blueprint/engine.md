@@ -1121,7 +1121,8 @@ Each drop emits `nodeDropped` with the scope root, the node id and the cause
 (`record-refused`, `epoch-unreachable`, `no-record`, `endpoint-unavailable`,
 `no-head-block`, `below-sequence-floor` or `epoch-above-root`), after the cut
 lands. A removed second ref emits nothing. The command or the re-drive that
-drops a node returns `Ok`.
+drops a node returns `Ok`. The event is a best-effort notice: a host that does
+not listen at the time of the wave gets no notice, and the tree shows the drop.
 
 The **expired-link sweep**
 ([ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)
