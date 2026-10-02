@@ -32,10 +32,10 @@ use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpResponse, RecordTransport, StagingStore, UnixMillis,
 };
-use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
 };
+use cipherbox_engine::sync::{BookkeepingSeal, UNATTRIBUTED_BUDGET};
 use cipherbox_engine::testkit::SeededEntropy;
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, ROOT, SCOPE as ACCOUNT_SCOPE, SECRET, TTL_NANOS, floor_label, fresh_observed,
@@ -421,20 +421,61 @@ fn a_drain_publish_never_re_authors_a_scope_root_at_another_envelope_version() {
         kind: NodeKind::Folder,
     }))
     .expect("the create stages");
-    tick(&world, &engine, &mut tasks);
+    for _ in 0..8 {
+        tick(&world, &engine, &mut tasks);
+    }
 
     assert_eq!(
         record_at(&world, &root_name),
         root_record,
         "the root at the newer version was never republished"
     );
-    assert_eq!(queued(&device), 1, "and the create is still queued");
+    assert_eq!(
+        (queued(&device), dead_letters(&engine)),
+        (1, 0),
+        "and the create is still queued, past the attempt budget"
+    );
 }
 
 /// The drain re-authors a folder through the gate's version rule: a folder a
 /// newer client last wrote is never re-sealed under this build's version.
 #[test]
 fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
+    let (served, after, queued, _) = create_under_a_folder_at_newer_version(1);
+
+    assert_eq!(
+        after,
+        Some(served),
+        "the folder at the newer version was never republished"
+    );
+    assert_eq!(queued, 1, "and the create is still queued");
+}
+
+/// A folder at another envelope version charges no attempt: one pass short
+/// of the unattributed budget, the op is still queued with no dead letter.
+#[test]
+fn a_drain_op_under_a_folder_at_another_envelope_version_charges_no_attempt() {
+    let (served, after, queued, dead_letters) =
+        create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize - 1);
+
+    assert_eq!(
+        (queued, dead_letters),
+        (1, 0),
+        "the op is held, not dead-lettered"
+    );
+    assert_eq!(
+        after,
+        Some(served),
+        "and the folder at the newer version was never republished"
+    );
+}
+
+/// Stage a create under a folder sealed at the next envelope version and run
+/// `passes` drain passes: the folder's record before and after, the ops still
+/// queued, and the dead letters.
+fn create_under_a_folder_at_newer_version(
+    passes: usize,
+) -> (Vec<u8>, Option<Vec<u8>>, usize, usize) {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let folder = NodeId([0x6f; 16]);
@@ -491,12 +532,20 @@ fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
         kind: NodeKind::Folder,
     }))
     .expect("the create stages");
-    tick(&world, &engine, &mut tasks);
-
-    assert_eq!(
+    for _ in 0..passes {
+        tick(&world, &engine, &mut tasks);
+    }
+    (
+        record,
         record_at(&world, &name),
-        Some(record),
-        "the folder at the newer version was never republished"
-    );
-    assert_eq!(queued(&device), 1, "and the create is still queued");
+        queued(&device),
+        dead_letters(&engine),
+    )
+}
+
+fn dead_letters(engine: &Engine<FakeSeamTypes>) -> usize {
+    block_on(engine.status())
+        .expect("the session status reads")
+        .dead_letters
+        .len()
 }
