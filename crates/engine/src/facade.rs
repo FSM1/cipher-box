@@ -8048,6 +8048,7 @@ where {
         let _hold = pass.hold_owed(node)?;
         let owed = OwedEntry {
             cut_epoch: 0,
+            first_stop: None,
             steps: owed_steps.clone(),
         };
         match &over {
