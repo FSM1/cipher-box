@@ -11755,10 +11755,10 @@ where {
         roots
     }
 
-    /// Refuse a command that must name the scope a node lies in until this
-    /// session's boundary walk has landed: before it, no scope root below the
-    /// vault is known and every node reads as the vault root's. A rejected walk
-    /// refuses for good, as [`Self::relocation_anchors`] does.
+    /// Refuse a restore until this session's boundary walk has landed, since a
+    /// restore must name its destination's scope: before the walk, no scope
+    /// root below the vault is known and every node reads as the vault root's.
+    /// A rejected walk refuses for good, as [`Self::relocation_anchors`] does.
     fn refuse_before_the_boundary_walk(&self) -> Result<(), EngineError> {
         if self.state.boundary_walk_rejected.get() {
             return Err(EngineError::TrustViolation {

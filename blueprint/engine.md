@@ -1089,7 +1089,8 @@ entry stands, with the class of the stop (`availability`, `capability` or
 that finds the work can never land, because the cut set never published or the
 recipient left the contact book, drops the entry and emits
 `rotationWorkAbandoned` once. A
-relocation into another scope, a delete, a purge, or a restore that takes a folder with an owed interior move out of the scope it
+relocation into another scope, a delete, a purge, or a restore that takes a
+folder with an owed interior move out of the scope it
 left is refused, retryably, until the move lands; a crossing the queue
 already holds waits for it, uncharged. At the entry's own cut epoch the published state does not tell a read cascade that
 landed from one that did not, so a re-drive after a lost advance runs one more.

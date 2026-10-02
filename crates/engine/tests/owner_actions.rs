@@ -4179,11 +4179,13 @@ fn published_bin_entries(fx: &GrantScenario) -> Vec<BinEntry> {
     index.entries
 }
 
-/// Whether the account's published bin index still holds `node`'s entry.
-fn still_binned(fx: &GrantScenario, node: NodeId) -> bool {
+/// The scope `node`'s entry is filed under in the account's published bin
+/// index, or `None` when the index holds no entry for it.
+fn binned_scope(fx: &GrantScenario, node: NodeId) -> Option<[u8; 16]> {
     published_bin_entries(fx)
-        .iter()
-        .any(|entry| entry.node_id == node.0)
+        .into_iter()
+        .find(|entry| entry.node_id == node.0)
+        .map(|entry| entry.scope_id)
 }
 
 /// A restore re-keys in place under the scope its entry was filed under, so a
@@ -4206,10 +4208,9 @@ fn a_restore_into_a_folder_of_another_scope_is_refused_at_command_time() {
         Err(EngineError::RestoreCrossesScope),
         "the shared folder is another scope than the vault root the entry names"
     );
-    assert!(
-        block_on(fx.owner_device.staging_store.queued_ops())
-            .unwrap()
-            .is_empty(),
+    assert_eq!(
+        queued_ops(&fx.owner_device),
+        0,
         "the refusal stages nothing"
     );
     tick(&fx.world, &fx.engine, &mut fx._tasks);
@@ -4219,7 +4220,10 @@ fn a_restore_into_a_folder_of_another_scope_is_refused_at_command_time() {
             .dead_letters
             .is_empty()
     );
-    assert!(still_binned(&fx, loose), "the entry stands for another try");
+    assert!(
+        binned_scope(&fx, loose).is_some(),
+        "the entry stands for another try"
+    );
 }
 
 /// The owner shares the folder a node was deleted from after the delete, so
@@ -4249,7 +4253,7 @@ fn a_default_restore_into_an_origin_shared_after_the_delete_is_refused() {
         Err(EngineError::RestoreCrossesScope),
         "the origin folder became its own scope after the delete"
     );
-    assert!(still_binned(&fx, draft));
+    assert!(binned_scope(&fx, draft).is_some());
 
     block_on(fx.engine.command(Command::Restore {
         node: draft,
@@ -4257,7 +4261,7 @@ fn a_default_restore_into_an_origin_shared_after_the_delete_is_refused() {
     }))
     .expect("a folder of the entry's own scope takes the restore");
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert!(!still_binned(&fx, draft), "and the restore lands");
+    assert!(binned_scope(&fx, draft).is_none(), "and the restore lands");
     assert!(
         block_on(fx.engine.view())
             .unwrap()
@@ -4288,10 +4292,9 @@ fn a_restore_before_the_first_boundary_walk_is_refused_retryably() {
         block_on(fx.engine.command(Command::Delete { node })).expect("the delete queues");
     }
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert!(
-        published_bin_entries(&fx)
-            .iter()
-            .any(|entry| entry.node_id == draft.0 && entry.scope_id == fx.folder.0),
+    assert_eq!(
+        binned_scope(&fx, draft),
+        Some(fx.folder.0),
         "the draft's entry is filed under the shared folder's scope"
     );
 
@@ -4313,11 +4316,7 @@ fn a_restore_before_the_first_boundary_walk_is_refused_retryably() {
         }))),
         "an in-scope restore is not refused as a crossing before the walk"
     );
-    assert!(
-        block_on(fx.owner_device.staging_store.queued_ops())
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(queued_ops(&fx.owner_device), 0);
 
     tick(&fx.world, &fresh, &mut tasks);
     assert_eq!(
@@ -10604,10 +10603,9 @@ fn a_restore_of_a_binned_folder_above_an_owed_move_out_of_another_scope_is_refus
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     let folder = fx.folder;
     let (outer, _) = bin_a_folder_over_an_owed_move(&mut fx, folder);
-    assert!(
-        published_bin_entries(&fx)
-            .iter()
-            .any(|entry| entry.node_id == outer.0 && entry.scope_id == folder.0),
+    assert_eq!(
+        binned_scope(&fx, outer),
+        Some(folder.0),
         "the entry is filed under the shared folder's scope"
     );
 
