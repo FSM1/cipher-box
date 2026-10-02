@@ -6,13 +6,13 @@
 
 use cipherbox_engine::content::{ByoBearer, ByoKind};
 use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
-use cipherbox_engine::facade::{Command, NodeId, NodeKind, Permission, SiweIntent};
+use cipherbox_engine::facade::{Command, NodeId, NodeKind, Permission, SiweIntent, WriteTarget};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_engine::seams::{OpId, UnixMillis};
 use cipherbox_engine::settings::MAX_BIN_RETENTION_DAYS;
 use cipherbox_engine::wire::BIGINT_TAG;
 use cipherbox_engine::{PinMode, RetentionPolicy};
-use cipherbox_wasm::boundary::{decode_command, decode_siwe_intent};
+use cipherbox_wasm::boundary::{decode_command, decode_siwe_intent, decode_write_target};
 use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::wasm_bindgen_test;
@@ -613,5 +613,61 @@ fn a_siwe_intent_decodes_by_its_name_and_refuses_any_other() {
         JsValue::UNDEFINED,
     ] {
         assert!(decode_siwe_intent(refused).is_err());
+    }
+}
+
+/// A write target is a new file or a new version, told apart by its fields.
+#[wasm_bindgen_test]
+fn a_write_target_decodes_by_its_fields_and_refuses_both() {
+    let read_at = [0xc1, 0xd0];
+    assert_eq!(
+        decode_write_target(object(&[("parent", node(1)), ("name", text("a.txt"))])).ok(),
+        Some(WriteTarget::NewFile {
+            parent: NodeId([1; 16]),
+            name: "a.txt".into(),
+        })
+    );
+    assert_eq!(
+        decode_write_target(object(&[("node", node(2))])).ok(),
+        Some(WriteTarget::Version {
+            node: NodeId([2; 16]),
+            expected_version: None,
+        })
+    );
+    assert_eq!(
+        decode_write_target(object(&[
+            ("node", node(2)),
+            ("expectedVersion", bytes(&read_at))
+        ]))
+        .ok(),
+        Some(WriteTarget::Version {
+            node: NodeId([2; 16]),
+            expected_version: Some(read_at.to_vec()),
+        })
+    );
+    for refused in [
+        object(&[
+            ("parent", node(1)),
+            ("name", text("a.txt")),
+            ("node", node(2)),
+        ]),
+        object(&[
+            ("parent", node(1)),
+            ("name", text("a.txt")),
+            ("expectedVersion", bytes(&read_at)),
+        ]),
+        object(&[
+            ("parent", text("sixteen bytes!!!")),
+            ("name", text("a.txt")),
+        ]),
+        object(&[("parent", node(1)), ("name", JsValue::from(12345))]),
+        object(&[("node", text("sixteen bytes!!!"))]),
+        object(&[("node", bytes(&[2; 15]))]),
+        object(&[("parent", node(1))]),
+        object(&[]),
+        text("a.txt"),
+        JsValue::NULL,
+    ] {
+        assert!(decode_write_target(refused).is_err());
     }
 }

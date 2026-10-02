@@ -30,11 +30,14 @@ import type {
   CommandOutcome,
   DeadLetter,
   DeadLetterReason,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   Event,
   GranteeNameSource,
   InvitePreview,
   LinkPreviewState,
   NodeKind,
+  OpenedStream,
   OpPhase,
   OwedWorkClass,
   PendingApprovalView,
@@ -65,6 +68,7 @@ import type {
   VaultSettingsSummary,
   VaultStorageView,
   VersionEntry,
+  WriteTarget,
 } from '../../wasm/cipherbox_wasm.js';
 
 export type {
@@ -209,43 +213,10 @@ export type RegisteredDeviceDescriptor = RegisteredDevice;
 export type PendingApprovalDescriptor = PendingApprovalView;
 
 /**
- * One step of the device-approval rendezvous (ADR 0009). Every step is a pure
- * function of the exchange transcript; the engine holds no state for it.
+ * One step of the device-approval rendezvous (ADR 0009), and what it produced:
+ * the wasm crate's `DeviceRendezvousStep` and `DeviceRendezvousResult`.
  */
-export type DeviceRendezvousStep =
-  | { kind: 'open'; devicePublicKey: string; scalar: Uint8Array }
-  | {
-      kind: 'approve';
-      devicePublicKey: string;
-      requestId: string;
-      requesterDevicePublicKey: string;
-      ephemeralPublicKey: string;
-      sealScalar: Uint8Array;
-      factorKey: Uint8Array;
-    }
-  | { kind: 'deny'; devicePublicKey: string; requestId: string; ephemeralPublicKey: string }
-  | {
-      kind: 'openFactor';
-      sealedFactor: string;
-      requestId: string;
-      requesterDevicePublicKey: string;
-      /** The approving device and its signature over the whole answer (D4). */
-      responderDevicePublicKey: string;
-      responseSignature: string;
-      scalar: Uint8Array;
-    };
-
-/** What one rendezvous step produced, as data. */
-export type DeviceRendezvousResult =
-  | {
-      kind: 'opened';
-      ephemeralPublicKey: string;
-      requestPayload: Uint8Array;
-      comparisonValue: string;
-    }
-  /** A denial seals nothing, so `sealedFactor` is `null` on that answer. */
-  | { kind: 'response'; sealedFactor: string | null; payload: Uint8Array }
-  | { kind: 'factor'; factorKey: Uint8Array };
+export type { DeviceRendezvousResult, DeviceRendezvousStep };
 
 /** One write intent: the engine `Command`. */
 export type CommandDescriptor = Command;
@@ -268,6 +239,27 @@ export function commandTransfer(command: unknown): Transferable[] {
   return isBuffer(token) ? [token] : [];
 }
 
+/** The name of each `Uint8Array` field on any rendezvous step. */
+type RendezvousBytesField = DeviceRendezvousStep extends infer Step
+  ? Step extends unknown
+    ? { [K in keyof Step]: Step[K] extends Uint8Array ? K : never }[keyof Step]
+    : never
+  : never;
+
+/**
+ * Every buffer a rendezvous step carries is a secret, and the result's opened
+ * factor shares the `factorKey` name. A new buffer field on a step fails the
+ * build here until it is listed, so it cannot cross unscrubbed.
+ */
+const RENDEZVOUS_SECRETS: Record<RendezvousBytesField, true> = {
+  scalar: true,
+  sealScalar: true,
+  factorKey: true,
+};
+
+/** The fields of a rendezvous step or result that hold a secret. */
+export const RENDEZVOUS_SECRET_FIELDS = Object.keys(RENDEZVOUS_SECRETS) as RendezvousBytesField[];
+
 /**
  * The secret buffers a rendezvous step or its result hands over for good, for
  * the transfer list. They move rather than being cloned, so no realm keeps a
@@ -281,14 +273,9 @@ export function commandTransfer(command: unknown): Transferable[] {
  * `postMessage` refuses a transfer list that repeats one.
  */
 export function rendezvousTransfer(value: unknown): Transferable[] {
-  const held = value as {
-    kind?: unknown;
-    scalar?: unknown;
-    sealScalar?: unknown;
-    factorKey?: unknown;
-  } | null;
+  const held = value as Record<string, unknown> | null;
   if (held?.kind === 'open') return [];
-  const buffers = [held?.scalar, held?.sealScalar, held?.factorKey]
+  const buffers = RENDEZVOUS_SECRET_FIELDS.map((field) => held?.[field])
     .filter((field): field is ArrayBufferView => ArrayBuffer.isView(field))
     .map((view) => view.buffer);
   return [...new Set(buffers)] as Transferable[];
@@ -308,14 +295,10 @@ export type CommandOutcomeDescriptor = CommandOutcome;
 export type ForgottenResidual = Omit<Extract<CommandOutcome, { kind: 'forgotten' }>, 'kind'>;
 
 /**
- * Where a streaming write lands: a new file named `name` under `parent`, or a
- * new version of the existing file `node`. Never both (the engine rejects it).
+ * Where a streaming write lands: the engine `WriteTarget`. A new file names
+ * `parent` and `name`; a new version names `node`. The engine refuses both.
  */
-export type WriteTarget =
-  | { parent: Uint8Array; name: string }
-  /** `expectedVersion` is the `contentCid` the caller read; omit it to take
-   * the engine's own anchor derivation. */
-  | { node: Uint8Array; expectedVersion?: Uint8Array };
+export type { WriteTarget };
 
 /** An open write handle's id — the engine's `u64`, opaque to this layer. */
 export type WriteHandle = bigint;
@@ -328,15 +311,12 @@ export type WriteHandle = bigint;
 export type StreamHandle = bigint;
 
 /**
- * A freshly opened read stream and the plaintext size of the version it pinned.
- * The size travels with the handle because a ranged reader must frame its
- * response head against the version the stream serves, not one it measured
- * before the pin.
+ * A freshly opened read stream and the plaintext size of the version it pinned:
+ * the wasm crate's `OpenedStream`. The size travels with the handle because a
+ * ranged reader must frame its response head against the version the stream
+ * serves, not one it measured before the pin.
  */
-export interface OpenedStream {
-  readonly handle: StreamHandle;
-  readonly size: number;
-}
+export type { OpenedStream };
 
 /** One event the engine emitted: the engine `Event`. */
 export type EventDescriptor = Event;

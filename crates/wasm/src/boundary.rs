@@ -10,9 +10,10 @@
 //! (AGENTS.md rule 7). A refusal names no field value: a value can be a name
 //! the member typed.
 
+use crate::rendezvous::DeviceRendezvousStep;
 use cipherbox_engine::content::ByoBearer;
 use cipherbox_engine::devices::MAX_IDENTITY_TOKEN_CHARS;
-use cipherbox_engine::facade::{Command, CommandOutcome, Event, SiweIntent};
+use cipherbox_engine::facade::{Command, CommandOutcome, Event, SiweIntent, WriteTarget};
 use cipherbox_engine::grants::MAX_FRAGMENT_TEXT_LEN;
 use cipherbox_engine::seams::check_bearer;
 use cipherbox_engine::wire::{BIGINT_TAG, KEEP_STORED_BEARER};
@@ -99,6 +100,40 @@ pub fn encode_event(event: &Event) -> Result<Ts<Event>, JsError> {
 pub fn decode_siwe_intent(intent: JsValue) -> Result<SiweIntent, JsError> {
     serde_wasm_bindgen::from_value(intent).map_err(|_| JsError::new("unknown siwe intent"))
 }
+
+/// Decodes where a streaming write lands. Refuses a target that names both a
+/// new file and a version, an unknown field, and a field of the wrong type.
+pub fn decode_write_target(target: JsValue) -> Result<WriteTarget, JsError> {
+    serde_wasm_bindgen::from_value(target)
+        .map_err(|_| JsError::new("the write target does not decode"))
+}
+
+/// Decodes one device-rendezvous step. Each scalar and factor key decodes as an
+/// empty placeholder, then is taken into its zeroizing slot. Refuses an
+/// unknown `kind`, an unknown field, and a field of the wrong type.
+pub fn decode_rendezvous_step(step: &JsValue) -> Result<DeviceRendezvousStep, JsError> {
+    let refused = || JsError::new("the rendezvous step does not decode");
+    if !step.is_object() {
+        return Err(refused());
+    }
+    let copy = Object::assign(&Object::new(), step.unchecked_ref::<Object>());
+    for key in RENDEZVOUS_SECRETS {
+        if Object::has_own(&copy, &key.into()) {
+            Reflect::set(&copy, &key.into(), &Uint8Array::new_with_length(0))
+                .map_err(|_| refused())?;
+        }
+    }
+    let mut decoded: DeviceRendezvousStep =
+        serde_wasm_bindgen::from_value(copy.into()).map_err(|_| refused())?;
+    for (key, slot) in decoded.secrets_mut() {
+        let bytes = field(step, key);
+        let bytes = bytes.dyn_ref::<Uint8Array>().ok_or_else(refused)?;
+        *slot = Zeroizing::new(bytes.to_vec());
+    }
+    Ok(decoded)
+}
+
+const RENDEZVOUS_SECRETS: [&str; 3] = ["scalar", "sealScalar", "factorKey"];
 
 /// Encodes one view, or one list of view rows.
 pub fn encode_view<T: Serialize + ?Sized>(view: &T) -> Result<JsValue, JsError> {

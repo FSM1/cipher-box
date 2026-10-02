@@ -33,7 +33,8 @@ use wasm_bindgen_futures::future_to_promise;
 use zeroize::Zeroizing;
 
 use crate::boundary::{
-    decode_command, decode_siwe_intent, encode_event, encode_outcome, encode_view,
+    decode_command, decode_siwe_intent, decode_write_target, encode_event, encode_outcome,
+    encode_view,
 };
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
@@ -188,6 +189,7 @@ impl EngineHandle {
     /// snapshot event — the engine's non-circular sequence). The secret is
     /// copied into the engine's `Zeroizing` store here and never leaves.
     /// Resolves on success; rejects with the engine error otherwise.
+    #[wasm_bindgen(unchecked_return_type = "Promise<void>")]
     pub fn start(&self, secret: Vec<u8>) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
@@ -241,42 +243,17 @@ impl EngineHandle {
     }
 
     /// Opens a write handle for a file of `size` plaintext bytes, reserving the
-    /// exact sealed total it will occupy. `node` names an existing file for a
-    /// new version; `parent` + `name` create one. `expectedVersion` is the
-    /// `contentCid` the caller read, which anchors the conditional edit where
-    /// the caller's bytes came from; it belongs to a new version alone.
-    /// Resolves with the handle id; rejects with the engine error (an
-    /// over-budget refusal names which budget and how much room is left).
-    #[wasm_bindgen(js_name = beginWrite)]
-    pub fn begin_write(
-        &self,
-        parent: Option<NodeId>,
-        name: Option<String>,
-        node: Option<NodeId>,
-        size: f64,
-        expected_version: Option<Vec<u8>>,
-    ) -> Promise {
+    /// exact sealed total it will occupy. Resolves with the handle id; rejects
+    /// with the decode refusal or the engine error (an over-budget refusal
+    /// names which budget and how much room is left).
+    #[wasm_bindgen(js_name = beginWrite, unchecked_return_type = "Promise<bigint>")]
+    pub fn begin_write(&self, target: Ts<WriteTarget>, size: f64) -> Promise {
+        let target = match decode_write_target(target.js_value()) {
+            Ok(target) => target,
+            Err(refusal) => return Promise::reject(&refusal.into()),
+        };
         let engine = self.engine.clone();
         future_to_promise(async move {
-            let target = match (parent, name, node) {
-                (Some(parent), Some(name), None) if expected_version.is_none() => {
-                    WriteTarget::NewFile {
-                        parent: parent.facade(),
-                        name,
-                    }
-                }
-                (None, None, Some(node)) => WriteTarget::Version {
-                    node: node.facade(),
-                    expected_version,
-                },
-                _ => {
-                    return Err(JsError::new(
-                        "beginWrite takes either (parent, name) or (node), never both; \
-                         expectedVersion belongs to (node)",
-                    )
-                    .into());
-                }
-            };
             // A float-to-int cast saturates rather than failing, so a negative
             // or NaN size would silently reserve zero and only surface as a
             // `contentSizeMismatch` once real chunks arrive.
@@ -299,7 +276,7 @@ impl EngineHandle {
     /// stages every whole chunk it completes; peak heap stays one chunk however
     /// large the file. Rejects — and spends the handle — if the pushes exceed
     /// the declared size.
-    #[wasm_bindgen(js_name = pushChunk)]
+    #[wasm_bindgen(js_name = pushChunk, unchecked_return_type = "Promise<void>")]
     pub fn push_chunk(&self, handle: u64, chunk: Vec<u8>) -> Promise {
         let engine = self.engine.clone();
         // The copy wasm-bindgen makes out of the JS view is plaintext; wipe it
@@ -318,7 +295,7 @@ impl EngineHandle {
 
     /// Closes a write handle and journals its op. Resolves with the durable
     /// queue id; rejects if the pushes did not add up to the declared size.
-    #[wasm_bindgen(js_name = commitWrite)]
+    #[wasm_bindgen(js_name = commitWrite, unchecked_return_type = "Promise<bigint>")]
     pub fn commit_write(&self, handle: u64) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
@@ -334,7 +311,7 @@ impl EngineHandle {
 
     /// Abandons a write handle, releasing its reservation and staged blocks.
     /// Always resolves — an unknown handle is already gone.
-    #[wasm_bindgen(js_name = abortWrite)]
+    #[wasm_bindgen(js_name = abortWrite, unchecked_return_type = "Promise<void>")]
     pub fn abort_write(&self, handle: u64) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
@@ -463,7 +440,10 @@ impl EngineHandle {
 
     /// The bytes this device signs to join the account registry. The account id
     /// comes from the engine's own session.
-    #[wasm_bindgen(js_name = deviceRegistrationChallenge)]
+    #[wasm_bindgen(
+        js_name = deviceRegistrationChallenge,
+        unchecked_return_type = "Promise<Uint8Array>"
+    )]
     pub fn device_registration_challenge(&self, device_public_key: String) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
@@ -497,7 +477,7 @@ impl EngineHandle {
     /// named intent (`"login"` or `"link"`). Resolves with the nonce as a
     /// string; rejects with the engine error, or with a refusal when the intent
     /// names no pool.
-    #[wasm_bindgen(js_name = siweChallenge)]
+    #[wasm_bindgen(js_name = siweChallenge, unchecked_return_type = "Promise<string>")]
     pub fn siwe_challenge(&self, intent: Ts<SiweIntent>) -> Promise {
         let intent = match decode_siwe_intent(intent.js_value()) {
             Ok(intent) => intent,
@@ -518,6 +498,7 @@ impl EngineHandle {
     /// Downloads and decrypts one file node's content through the verified
     /// read pipeline. Resolves with the plaintext bytes as a `Uint8Array`;
     /// rejects with the engine error.
+    #[wasm_bindgen(unchecked_return_type = "Promise<Uint8Array>")]
     pub fn download(&self, node: &NodeId) -> Promise {
         let engine = self.engine.clone();
         let node = node.facade();
@@ -556,7 +537,7 @@ impl EngineHandle {
     /// Downloads and decrypts one prior version of a file, named by its content
     /// root CID. Resolves with the plaintext bytes as a `Uint8Array`; rejects
     /// with the engine error.
-    #[wasm_bindgen(js_name = downloadVersion)]
+    #[wasm_bindgen(js_name = downloadVersion, unchecked_return_type = "Promise<Uint8Array>")]
     pub fn download_version(&self, node: &NodeId, content_cid: Vec<u8>) -> Promise {
         let engine = self.engine.clone();
         let node = node.facade();
@@ -578,7 +559,7 @@ impl EngineHandle {
     /// the handle's whole life so no window can come from a different one.
     /// Resolves with the handle and that version's plaintext size; rejects with
     /// the engine error.
-    #[wasm_bindgen(js_name = openContentStream)]
+    #[wasm_bindgen(js_name = openContentStream, unchecked_return_type = "Promise<OpenedStream>")]
     pub fn open_content_stream(&self, node: &NodeId) -> Promise {
         let engine = self.engine.clone();
         let node = node.facade();
@@ -606,7 +587,10 @@ impl EngineHandle {
                     JsError::new("the pinned version is larger than a read can address").into(),
                 );
             }
-            Ok(OpenedStream::new(handle.0, size as f64).into())
+            match encode_view(&OpenedStream::new(handle.0, size as f64)) {
+                Ok(opened) => Ok(opened),
+                Err(error) => refuse(error.into()),
+            }
         })
     }
 
@@ -614,7 +598,7 @@ impl EngineHandle {
     /// only the leaves the window covers. The range is clamped to the version,
     /// so a window past the end resolves empty. Resolves with the plaintext
     /// bytes as a `Uint8Array`; rejects with the engine error.
-    #[wasm_bindgen(js_name = readStream)]
+    #[wasm_bindgen(js_name = readStream, unchecked_return_type = "Promise<Uint8Array>")]
     pub fn read_stream(&self, handle: u64, offset: f64, length: f64) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
@@ -641,7 +625,7 @@ impl EngineHandle {
     }
 
     /// Releases a read stream. Always resolves — an unknown handle is already gone.
-    #[wasm_bindgen(js_name = closeStream)]
+    #[wasm_bindgen(js_name = closeStream, unchecked_return_type = "Promise<void>")]
     pub fn close_stream(&self, handle: u64) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {

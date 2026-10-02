@@ -14,6 +14,7 @@ import type {
   BinOriginDescriptor,
   ByoKind,
   DeadLetterReason,
+  DeviceRendezvousResult,
   EventDescriptor,
   GranteeNameSource,
   InvitePreviewDescriptor,
@@ -134,6 +135,12 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   writeCutUnfinished: true,
   granteeJoined: true,
   opProgress: true,
+};
+
+const RENDEZVOUS_RESULT_KINDS: Record<DeviceRendezvousResult['kind'], true> = {
+  opened: true,
+  response: true,
+  factor: true,
 };
 
 const STALENESS: Record<Staleness, true> = {
@@ -288,6 +295,12 @@ export function readEvent(event: EventDescriptor): EventDescriptor {
   if (event.kind === 'opProgress') known(OP_PHASES, event.phase, 'op phase');
   if (event.kind === 'rotationWorkOwed') known(OWED_WORK_CLASSES, event.class, 'owed work class');
   return event;
+}
+
+/** Passes a rendezvous result through once its kind is one this build knows. */
+export function readRendezvous(result: DeviceRendezvousResult): DeviceRendezvousResult {
+  known(RENDEZVOUS_RESULT_KINDS, result.kind, 'rendezvous result kind');
+  return result;
 }
 
 /**
