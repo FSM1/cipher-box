@@ -23,6 +23,7 @@
 
 use core::cell::{Cell, RefCell};
 use core::num::NonZeroU64;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -1823,11 +1824,11 @@ impl ChildFault {
 
 /// Which own end a proved capture's node record opens under.
 enum Sealer<'e> {
-    /// The end, with its root when it is not the capture's own scope.
-    End(ScopeEnd<'e>, Option<Box<LoadedRoot>>),
+    End(ScopeEnd<'e>),
     /// A read did not land, so a later pass decides.
     Unanswered,
-    /// No own end opens the record, and the refusal is reported.
+    /// The gate refused the record under every own end it was read under, and
+    /// the refusal is reported.
     Refused,
 }
 
@@ -4273,6 +4274,8 @@ where
         };
         let mut added = Vec::new();
         let mut unfinished = Vec::new();
+        // Each other end's root, read once for the pass; `None` did not read.
+        let mut other_roots: BTreeMap<NodeId, Option<LoadedRoot>> = BTreeMap::new();
         for unlinked in taken {
             // A read leg may link the node again while this pass awaits.
             if self.cells.base.borrow().contains(unlinked.node) {
@@ -4291,11 +4294,11 @@ where
                 continue;
             }
             let deleted_at = standing.map_or(unlinked.deleted_at, |entry| entry.deleted_at);
-            let (end, other_root) = match self
-                .sealing_end(scope, ends, &root, &unlinked, deleted_at)
+            let end = match self
+                .sealing_end(scope, ends, &root, &mut other_roots, &unlinked, deleted_at)
                 .await
             {
-                Sealer::End(end, other_root) => (end, other_root),
+                Sealer::End(end) => end,
                 Sealer::Unanswered => {
                     unfinished.push(unlinked);
                     continue;
@@ -4306,7 +4309,14 @@ where
                 unfinished.push(unlinked);
                 continue;
             }
-            let sealing_root = other_root.as_deref().unwrap_or(&root);
+            let Some(sealing_root) = (if end.root == scope.source.root {
+                Some(&root)
+            } else {
+                other_roots.get(&end.root).and_then(Option::as_ref)
+            }) else {
+                unfinished.push(unlinked);
+                continue;
+            };
             if self
                 .rekey_into_bin(
                     scope,
@@ -4352,17 +4362,20 @@ where
     /// The own end whose key opens the record of `unlinked`'s node: the
     /// capture's own end, then, on a seal-open refusal only, each other own end
     /// that derives the captured name (blueprint/engine.md "Owner capture").
-    /// The refusal under the capture's own end is reported once, and only when
-    /// no end opens the record.
+    /// Any other refusal under the capture's own end is reported at once. A
+    /// seal-open refusal is reported once, and only when no end opens the
+    /// record.
     async fn sealing_end<'e>(
         &self,
         scope: &DrainScope<'e>,
         ends: &[ScopeEnd<'e>],
         root: &LoadedRoot,
+        other_roots: &mut BTreeMap<NodeId, Option<LoadedRoot>>,
         unlinked: &UnlinkedChild,
         deleted_at: u64,
     ) -> Sealer<'e> {
         let node = unlinked.node;
+        let name = scope.source.write_name(&node.0);
         let own = match self
             .opens_under(
                 &scope.source.at(root.epoch),
@@ -4372,16 +4385,24 @@ where
             )
             .await
         {
-            Ok(()) => return Sealer::End(scope.source, None),
+            Ok(()) => return Sealer::End(scope.source),
             Err(fault) if fault.seal_open_failed() => fault,
-            Err(_) => return Sealer::Unanswered,
+            Err(ChildFault::Halt(_)) => return Sealer::Unanswered,
+            Err(fault) => {
+                self.report_fault(&name, fault);
+                return Sealer::Refused;
+            }
         };
         let mut unanswered = false;
         for end in ends.iter().filter(|end| {
             end.root != scope.source.root
                 && end.write_name(&node.0).as_str().as_bytes() == unlinked.ipns_name
         }) {
-            let Ok(other_root) = self.load_scope_root(end).await else {
+            let other_root = match other_roots.entry(end.root) {
+                Entry::Occupied(held) => held.into_mut(),
+                Entry::Vacant(slot) => slot.insert(self.load_scope_root(end).await.ok()),
+            };
+            let Some(other_root) = other_root.as_ref() else {
                 unanswered = true;
                 continue;
             };
@@ -4394,15 +4415,16 @@ where
                 )
                 .await
             {
-                Ok(()) => return Sealer::End(*end, Some(Box::new(other_root))),
-                Err(fault) if fault.seal_open_failed() => {}
-                Err(_) => unanswered = true,
+                Ok(()) => return Sealer::End(*end),
+                Err(ChildFault::Halt(_)) => unanswered = true,
+                // This end does not seal the record.
+                Err(ChildFault::Refused(_)) => {}
             }
         }
         if unanswered {
             return Sealer::Unanswered;
         }
-        self.report_fault(&scope.source.write_name(&node.0), own);
+        self.report_fault(&name, own);
         Sealer::Refused
     }
 
@@ -4431,10 +4453,14 @@ where
             },
             ..*plane
         };
-        self.load_child_node_unreported(&binned, anchor, node, ResolveMode::CacheFirst)
+        match self
+            .load_child_node_unreported(&binned, anchor, node, ResolveMode::CacheFirst)
             .await
-            .map(|_| ())
-            .map_err(|_| fault)
+        {
+            Ok(_) => Ok(()),
+            Err(ChildFault::Halt(halt)) => Err(ChildFault::Halt(halt)),
+            Err(ChildFault::Refused(_)) => Err(fault),
+        }
     }
 
     /// Queue a purge for every entry past the owner's bin retention, so
@@ -5003,16 +5029,21 @@ where
         anchor: Anchor<'_>,
         node: NodeId,
     ) -> Result<(LoadedNode, bool), Halt> {
-        match self
-            .load_child_node(from, anchor, node, ResolveMode::CacheFirst)
+        let fault = match self
+            .load_child_node_unreported(from, anchor, node, ResolveMode::CacheFirst)
             .await
         {
-            Ok(loaded) => Ok((loaded, false)),
-            Err(halt) => self
-                .load_child_node(to, anchor, node, ResolveMode::CacheFirst)
-                .await
-                .map(|loaded| (loaded, true))
-                .map_err(|_| halt),
+            Ok(loaded) => return Ok((loaded, false)),
+            Err(fault) => fault,
+        };
+        // A record that opens under `to` is honest, so the refusal under
+        // `from` is reported only when neither key opens it.
+        match self
+            .load_child_node_unreported(to, anchor, node, ResolveMode::CacheFirst)
+            .await
+        {
+            Ok(loaded) => Ok((loaded, true)),
+            Err(_) => Err(self.report_fault(&from.end.write_name(&node.0), fault)),
         }
     }
 

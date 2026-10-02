@@ -2254,6 +2254,76 @@ fn a_captured_record_no_own_scope_opens_is_one_trust_violation() {
     );
 }
 
+/// The writer that unlinked a node then publishes a signed record with a head
+/// that does not decode at the node's name. The gate refuses it, the capture
+/// is reported once, and nothing bins.
+#[test]
+fn a_captured_node_with_a_malformed_head_is_one_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let (mut engine, mut events, mut tasks) = fx.second_owner_device();
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |_, _| {});
+    let name = write_name(doomed);
+    let cid = fx.blocks.put(b"not an envelope".to_vec());
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &doomed.0).as_bytes()),
+        format!("/ipfs/{cid}").as_bytes(),
+        sequence_at(&fx.world, &name) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+    events_so_far(&mut events);
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 1, "the record is refused once");
+    assert_eq!(
+        bin_scopes_of(&fx, doomed),
+        Vec::<[u8; 16]>::new(),
+        "nothing bins"
+    );
+}
+
+/// The re-key of a capture lands and the bin index publish does not. The
+/// next pass opens the node under the bin's held key and bins it, with no
+/// record reported faulty.
+#[test]
+fn a_capture_whose_bin_publish_failed_bins_on_the_next_pass() {
+    let mut fx = GrantScenario::new();
+    let (mut engine, mut events, mut tasks) = fx.second_owner_device();
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |_, _| {});
+    let bin = BinIndexKeys::derive(&SECRET);
+    fx.world.record_store.fail_put_for(bin.name().as_str());
+    let before = published_head_cid(&fx.world, &write_name(doomed));
+    for _ in 0..8 {
+        if published_head_cid(&fx.world, &write_name(doomed)) != before {
+            break;
+        }
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_ne!(
+        published_head_cid(&fx.world, &write_name(doomed)),
+        before,
+        "the re-key landed"
+    );
+    assert!(bin_scopes_of(&fx, doomed).is_empty(), "and no entry did");
+    fx.world.record_store.heal_put_for(bin.name().as_str());
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        bin_scopes_of(&fx, doomed),
+        vec![SCOPE],
+        "the node bins on a later pass"
+    );
+}
+
 /// A second owner device loads a node in the vault scope. A grant then makes
 /// its folder a scope root, the node converges onto that scope, and a writer
 /// of the scope unlinks it. The departure is the granted scope's capture,
