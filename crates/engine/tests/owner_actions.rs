@@ -10057,6 +10057,7 @@ fn stage_owed_delivery_to_a_stranger(fx: &GrantScenario) {
             fx.folder,
             OwedEntry {
                 cut_epoch: 0,
+                first_stop: None,
                 steps: vec![OwedStep::DeliverGrant {
                     recipient_identity_pk: unknown,
                     write: false,
@@ -10073,6 +10074,7 @@ fn owed_move_from(fx: &GrantScenario, left_scope: NodeId) -> OwedRecord {
         fx.folder,
         OwedEntry {
             cut_epoch: 0,
+            first_stop: None,
             steps: vec![
                 OwedStep::InteriorMove { left_scope },
                 OwedStep::DeliverGrant {
@@ -10235,6 +10237,7 @@ fn bin_a_folder_over_an_owed_move(fx: &mut GrantScenario) -> (NodeId, NodeId) {
             inner,
             OwedEntry {
                 cut_epoch: 0,
+                first_stop: None,
                 steps: vec![OwedStep::InteriorMove { left_scope: ROOT }],
             },
         )]),
@@ -10294,6 +10297,7 @@ fn a_restore_of_a_folder_with_an_owed_move_into_another_scope_is_refused() {
             binned,
             OwedEntry {
                 cut_epoch: 0,
+                first_stop: None,
                 steps: vec![OwedStep::InteriorMove { left_scope: ROOT }],
             },
         )]),

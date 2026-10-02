@@ -20,7 +20,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use crate::facade::NodeId;
-use crate::seams::{SeamError, SeamResult, StagingStore};
+use crate::seams::{SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
 use crate::sync::drain::owner_scoped_key;
 
@@ -32,9 +32,12 @@ use crate::sync::drain::owner_scoped_key;
 /// byte length.
 pub const OWED_ROTATION_PREFIX: &[u8] = b"cbx/or/";
 
-/// The record format tag. The staging store is shared with whatever build
+/// The record format tags. The staging store is shared with whatever build
 /// wrote it, so bytes that merely happen to parse must not read as owed work.
+/// A V2 entry adds the time of its first stop after the cut epoch; a V1 entry
+/// decodes with none recorded (ADR 0065 D3, ADR 0020 D2).
 const FORMAT_V1: u8 = 1;
+const FORMAT_V2: u8 = 2;
 
 /// The most scopes the record holds. A command that would owe one more refuses
 /// before its first publish (ADR 0063 D2).
@@ -86,6 +89,8 @@ impl OwedStep {
 pub struct OwedEntry {
     /// The cut epoch of the published cut this entry finishes. A mint's is 0.
     pub cut_epoch: u64,
+    /// When a step of this entry first stopped, `None` until one does.
+    pub first_stop: Option<UnixMillis>,
     /// The steps still owed, in command order. Empty when only the cut-epoch
     /// floor record is owed.
     pub steps: Vec<OwedStep>,
@@ -463,10 +468,14 @@ fn in_command_order(steps: &[OwedStep]) -> bool {
 }
 
 /// The record an encoding names, or `None` for a tag this build does not
-/// write, a count past the bound, scopes out of order, steps out of command
+/// read, a first-stop flag that is neither 0 nor 1, a count past the bound, scopes out of order, steps out of command
 /// order, an unknown step, or bytes left over.
 fn decode_owed(bytes: &[u8]) -> Option<OwedRecord> {
-    let mut reader = Reader(bytes.strip_prefix(&[FORMAT_V1][..])?);
+    let (&format, rest) = bytes.split_first()?;
+    if format != FORMAT_V1 && format != FORMAT_V2 {
+        return None;
+    }
+    let mut reader = Reader(rest);
     let count = usize::from(reader.byte()?);
     if count > MAX_OWED_ENTRIES {
         return None;
@@ -480,6 +489,14 @@ fn decode_owed(bytes: &[u8]) -> Option<OwedRecord> {
         }
         last = Some(scope);
         let cut_epoch = u64::from_be_bytes(reader.array()?);
+        let first_stop = match format {
+            FORMAT_V1 => None,
+            _ => match reader.byte()? {
+                0 => None,
+                1 => Some(UnixMillis(u64::from_be_bytes(reader.array()?))),
+                _ => return None,
+            },
+        };
         let steps = (0..reader.byte()?)
             .map(|_| match reader.byte()? {
                 1 => Some(OwedStep::InteriorMove {
@@ -503,7 +520,14 @@ fn decode_owed(bytes: &[u8]) -> Option<OwedRecord> {
         if !in_command_order(&steps) {
             return None;
         }
-        record.insert(scope, OwedEntry { cut_epoch, steps });
+        record.insert(
+            scope,
+            OwedEntry {
+                cut_epoch,
+                first_stop,
+                steps,
+            },
+        );
     }
     reader.0.is_empty().then_some(record)
 }
@@ -543,6 +567,7 @@ mod tests {
     fn revoke() -> OwedEntry {
         OwedEntry {
             cut_epoch: 3,
+            first_stop: None,
             steps: vec![OwedStep::ReadCut, OwedStep::WriteCut { write_epoch: 4 }],
         }
     }
@@ -550,6 +575,7 @@ mod tests {
     fn write_grant() -> OwedEntry {
         OwedEntry {
             cut_epoch: 0,
+            first_stop: None,
             steps: vec![
                 OwedStep::InteriorMove {
                     left_scope: node(0),
@@ -724,10 +750,58 @@ mod tests {
         );
         assert_eq!(decode_owed(&[]), None, "no tag at all");
         assert_eq!(
-            decode_owed(&[FORMAT_V1 + 1, 0]),
+            decode_owed(&[FORMAT_V2 + 1, 0]),
             None,
             "another build's tag"
         );
+    }
+
+    /// One revoke entry at `node(1)` in the shape `format` lays out, with
+    /// `first_stop` the V2 field's bytes.
+    fn revoke_bytes(format: u8, first_stop: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![format, 1];
+        bytes.extend_from_slice(&node(1).0);
+        bytes.extend_from_slice(&3u64.to_be_bytes());
+        bytes.extend_from_slice(first_stop);
+        bytes.extend_from_slice(&[2, 2, 3]);
+        bytes.extend_from_slice(&4u64.to_be_bytes());
+        bytes
+    }
+
+    /// The previous release wrote no first stop, so its entry decodes with
+    /// none recorded and the next stop sets it (ADR 0020 D5, ADR 0065 D3).
+    #[test]
+    fn an_entry_written_before_the_first_stop_field_decodes_with_no_stop_recorded() {
+        assert_eq!(
+            decode_owed(&revoke_bytes(FORMAT_V1, &[])),
+            Some(OwedRecord::from([(node(1), revoke())]))
+        );
+    }
+
+    /// An entry that carries its first stop decodes with it, and one with no
+    /// stop decodes with none.
+    #[test]
+    fn an_entry_with_the_first_stop_field_decodes() {
+        let mut stop = vec![1];
+        stop.extend_from_slice(&1_234_567u64.to_be_bytes());
+        let stopped = OwedEntry {
+            first_stop: Some(UnixMillis(1_234_567)),
+            ..revoke()
+        };
+        assert_eq!(
+            decode_owed(&revoke_bytes(FORMAT_V2, &stop)),
+            Some(OwedRecord::from([(node(1), stopped)]))
+        );
+        assert_eq!(
+            decode_owed(&revoke_bytes(FORMAT_V2, &[0])),
+            Some(OwedRecord::from([(node(1), revoke())]))
+        );
+    }
+
+    /// A first-stop flag that is neither absent nor present is refused.
+    #[test]
+    fn an_unknown_first_stop_flag_is_refused() {
+        assert_eq!(decode_owed(&revoke_bytes(FORMAT_V2, &[2])), None);
     }
 
     /// A truncated or extended record is refused whole, never driven in part.
@@ -751,6 +825,7 @@ mod tests {
             node(1),
             OwedEntry {
                 cut_epoch: 1,
+                first_stop: None,
                 steps: vec![OwedStep::WriteCut { write_epoch: 2 }, OwedStep::ReadCut],
             },
         )]);
@@ -819,6 +894,7 @@ mod tests {
                 reread.entry(node(1)).await.expect("the store answers"),
                 Some(OwedEntry {
                     cut_epoch: 3,
+                    first_stop: None,
                     steps: vec![OwedStep::WriteCut { write_epoch: 4 }],
                 }),
                 "a restart reads the advanced entry"

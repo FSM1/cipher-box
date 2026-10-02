@@ -281,6 +281,7 @@ fn an_owed_rotation_record_the_decoder_refuses_is_refused_at_encode() {
     let entropy = RefCell::new(SeededEntropy::new(3));
     let entry = |steps| OwedEntry {
         cut_epoch: 1,
+        first_stop: None,
         steps,
     };
 
