@@ -1601,20 +1601,6 @@ struct GraftedWritePass {
     floors: FloorNamespace,
 }
 
-/// Every grafted scope whose accepted grant the last pass found write-capable
-/// and whose two seeds that pass recovered.
-///
-/// Four facts, all of them from the live resolve rather than the bookmark: the
-/// owner's committed permission, both seeds, the sharer the floor namespace
-/// answers under, and the name the graft rendered the root with. A fifth, the
-/// granting contact's encryption subkey, comes from the verified contact book
-/// (`write_grant_sharer_encs` in [`crate::sync::pass`]). A scope short of any
-/// of them drains nothing this tick and waits for the pass that has them.
-///
-/// `namespace` is [`floor_namespace`]
-/// bound to this pass's own root and proved set, so a bookmark that names one of
-/// this vault's own roots yields no grafted pass rather than a pass that would
-/// ratchet an own scope's floors under a sharer.
 impl GraftedWritePass {
     /// This scope's end, under the cached read seed and its stamp.
     fn source(&self) -> ScopeEnd<'_> {
@@ -1632,6 +1618,20 @@ impl GraftedWritePass {
     }
 }
 
+/// Every grafted scope whose accepted grant the last pass found write-capable
+/// and whose two seeds that pass recovered.
+///
+/// Four facts, all of them from the live resolve rather than the bookmark: the
+/// owner's committed permission, both seeds, the sharer the floor namespace
+/// answers under, and the name the graft rendered the root with. A fifth, the
+/// granting contact's encryption subkey, comes from the verified contact book
+/// (`write_grant_sharer_encs` in [`crate::sync::pass`]). A scope short of any
+/// of them drains nothing this tick and waits for the pass that has them.
+///
+/// `namespace` is [`floor_namespace`]
+/// bound to this pass's own root and proved set, so a bookmark that names one of
+/// this vault's own roots yields no grafted pass rather than a pass that would
+/// ratchet an own scope's floors under a sharer.
 fn grafted_write_passes(
     base: &BaseSnapshot,
     permissions: &BookmarkedPermissions,

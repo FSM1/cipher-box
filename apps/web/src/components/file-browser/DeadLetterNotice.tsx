@@ -32,7 +32,7 @@ const REASONS: Record<DeadLetterReason, string> = {
   graftedScopeVaultSurface:
     'this change is inside a folder someone shared with you, and it needs your own bin or your own storage bookkeeping, which the share does not reach; copy the item into your own vault first, then make the change there',
   newerRelease:
-    'another of your devices saved this item with a newer version of CipherBox, which this one cannot read; update this app, then make the change again',
+    'a device that saved this folder runs a newer version of CipherBox, which this one cannot read; update this app, then make the change again',
 };
 
 /**

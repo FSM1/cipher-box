@@ -2234,7 +2234,19 @@ where
             return Ok(());
         }
 
-        let (mut pass, rebased) = self.open_rebased_pass(scope, queued).await?;
+        let (mut pass, rebased) = match self.open_rebased_pass(scope, queued).await {
+            Ok(opened) => opened,
+            // A newer release rewrites the anchor on each write, so its halt
+            // must reach the valve to be bounded and named.
+            Err(halt @ Halt::ForeignVersion) => {
+                if let Some((op_id, op)) = queued.first() {
+                    self.apply_valve(scope, *op_id, op, halt, attempts, report)
+                        .await;
+                }
+                return Err(halt);
+            }
+            Err(halt) => return Err(halt),
+        };
         for (op_id, reason) in &rebased.dead_letters {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
@@ -2900,8 +2912,9 @@ where
     /// At another epoch than the seed's stamp the seed lags a rotation
     /// ([`epoch_skew`]). At the stamp epoch the gate recovers the record's own
     /// seed again, which re-opens the body: a seed that opens it is a rotation
-    /// that raced ours, so the op waits; one that does not is refused (AGENTS.md rule 6).
-    /// The cached copy has no pass to recover through, so it is charged.
+    /// that raced ours, so the op waits. Any gate refusal of the record is
+    /// refused and reported (AGENTS.md rule 6). The cached copy has no pass to
+    /// recover through and reports nothing.
     async fn unopened_root(
         &self,
         scope: Option<&DrainScope<'_>>,
@@ -2918,7 +2931,7 @@ where
         let floors = source.floors(&self.seams.floors);
         let adopter = self.root_adopter(scope, &floors, source);
         match recover_at_floor(&adopter, source.root_name, record_bytes).await {
-            Err(GateError::Rejected(rejection)) if rejection.stage == GateStage::Unseal => {
+            Err(GateError::Rejected(rejection)) => {
                 refuse_record(&self.seams.events, source.root_name, &rejection)
             }
             Err(GateError::Seam(error)) => seam(error),
@@ -9378,9 +9391,17 @@ mod tests {
     /// tells the member to update, not that the op failed too many times.
     #[test]
     fn a_spent_budget_over_another_envelope_version_names_the_newer_release() {
-        let refused = RecordPublishError::Publish(PublishError::ForeignVersion { version: 2 });
-        let halted = halted_op(classify_publish(refused, 4096), UNATTRIBUTED_BUDGET);
+        let halt = || {
+            classify_publish(
+                RecordPublishError::Publish(PublishError::ForeignVersion { version: 2 }),
+                4096,
+            )
+        };
+        let short = halted_op(halt(), UNATTRIBUTED_BUDGET - 1);
+        assert!(short.report.dead_letters.is_empty());
+        assert_eq!(short.still_queued, vec![short.op_id]);
 
+        let halted = halted_op(halt(), UNATTRIBUTED_BUDGET);
         let reasons: Vec<DeadLetterReason> = halted
             .report
             .dead_letters
@@ -9388,6 +9409,46 @@ mod tests {
             .map(|(_, _, reason)| *reason)
             .collect();
         assert_eq!(reasons, vec![DeadLetterReason::NewerRelease]);
+    }
+
+    /// A newer release rewrites the scope root on each write, so the anchor
+    /// itself is the record at another envelope version. Its halt reaches the
+    /// valve: the head op is bounded by the unattributed budget and is named
+    /// a newer release, never left at the head with no bound.
+    #[test]
+    fn an_anchor_at_another_envelope_version_dead_letters_the_head_as_a_newer_release() {
+        let mut root = harness_root_envelope();
+        root.v = ENVELOPE_V + 1;
+        let harness = drain_harness(Some(root));
+        let op = Op::rename(NodeId([9; 16]), "renamed.txt", 1, UnixMillis(0));
+        let op_id = harness.queue_an_op(&op);
+        let queued = vec![(op_id, op)];
+        let drain = harness.drain();
+        let scope = harness.scope();
+        let mut attempts = Attempts::default();
+        let mut report = DrainReport::default();
+
+        let pass = |attempts: &mut Attempts, report: &mut DrainReport| {
+            block_on(drain.publish_queue(&scope, &queued, report, attempts))
+        };
+        assert_eq!(pass(&mut attempts, &mut report), Err(Halt::ForeignVersion));
+        assert!(
+            report.dead_letters.is_empty(),
+            "one pass is inside the budget"
+        );
+        // The budget's passes but the last, as earlier ticks spend them.
+        for _ in 1..UNATTRIBUTED_BUDGET - 1 {
+            attempts.charge_unattributed(op_id);
+        }
+        assert_eq!(pass(&mut attempts, &mut report), Err(Halt::ForeignVersion));
+
+        let reasons: Vec<DeadLetterReason> = report
+            .dead_letters
+            .iter()
+            .map(|(_, _, reason)| *reason)
+            .collect();
+        assert_eq!(reasons, vec![DeadLetterReason::NewerRelease]);
+        assert!(harness.queued_op_ids().is_empty());
     }
 
     /// This build's own refusal of the bytes it would sign repeats on every
@@ -10068,7 +10129,7 @@ mod tests {
         assert_eq!(
             cached,
             (Some(Halt::UploadAttempt), 0),
-            "the cache is charged"
+            "the cached copy reports nothing"
         );
     }
 
@@ -10084,7 +10145,7 @@ mod tests {
         assert_eq!(
             cached,
             (Some(Halt::UploadAttempt), 0),
-            "the cache is charged"
+            "the cached copy reports nothing"
         );
     }
 
