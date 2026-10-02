@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "efe6c650ebcc",
+  "strategy": "manual-commit",
+  "branch": "fix/login-busy-labels-per-method",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/auth-ui/src/EmailLoginForm.test.tsx",
+    "packages/auth-ui/src/EmailLoginForm.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ef/e6c650ebcc/0/metadata.json",
+      "transcript": "/ef/e6c650ebcc/0/full.jsonl",
+      "compact_transcript": "/ef/e6c650ebcc/0/transcript.jsonl",
+      "content_hash": "/ef/e6c650ebcc/0/content_hash.txt",
+      "prompt": "/ef/e6c650ebcc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 680,
+    "cache_creation_tokens": 89000,
+    "cache_read_tokens": 2026797,
+    "output_tokens": 17345,
+    "api_call_count": 24
+  }
+}

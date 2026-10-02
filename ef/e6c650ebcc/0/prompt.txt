@@ -1,0 +1,9 @@
+small glitch on the login page: when the google login is in progress the email button's text displays `sending code` @/Users/myankelev/.t3/userdata/browser-artifacts/browser-recording-muqa9e2g.mp4
+
+---
+
+also while you're at it, do you think there's any way to style the google login button to be more in line with cipherbox's terminal ui style?
+
+---
+
+and please create issues for all the things being addressed. multiple small issues can be addressed in one PR
