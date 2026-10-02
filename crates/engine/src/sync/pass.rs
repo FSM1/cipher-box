@@ -48,8 +48,9 @@ use crate::rotation::{
     ascent_node_seed, cut_exited_scope, derive_write_name, install_walked_read_epochs,
 };
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloor, SeedFloors, StampedSeed, cached_seed, current_seed, deposit_seed,
-    deposit_write_seed, own_descendant_scopes, refresh_seed_floors, walked_boundary_material,
+    ScopeSeeds, SeedFloor, SeedFloors, StampedSeed, cached_seed, cached_seed_in, current_seed,
+    deposit_seed, deposit_write_seed, own_descendant_scopes, refresh_seed_floors,
+    walked_boundary_material,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
@@ -1627,8 +1628,8 @@ fn grafted_write_passes(
             Some(GraftedWritePass {
                 root,
                 name: IpnsName::parse(core::str::from_utf8(name).ok()?).ok()?,
-                read_scope_seed: cached_seed(read_seeds, scope_id)?,
-                write_scope_seed: cached_seed(write_seeds, scope_id)?,
+                read_scope_seed: cached_seed_in(read_seeds, scope_id, floors)?,
+                write_scope_seed: cached_seed_in(write_seeds, scope_id, floors)?,
                 sharer_identity: EcdsaVerifier::from_sec1(sharers.get(scope_id)?)?,
                 sharer_enc: *sharer_encs.get(scope_id)?,
                 floors,
@@ -1805,13 +1806,8 @@ mod tests {
 
         fn seeds(scope_id: [u8; 16], seed: [u8; 32]) -> RefCell<ScopeSeeds> {
             let cell = RefCell::new(ScopeSeeds::new());
-            deposit_seed(
-                &cell,
-                scope_id,
-                Zeroizing::new(seed),
-                Some(0),
-                FloorNamespace::Own,
-            );
+            let namespace = own_namespace(&sharers())(&scope_id).unwrap_or(FloorNamespace::Own);
+            deposit_seed(&cell, scope_id, Zeroizing::new(seed), Some(0), namespace);
             cell
         }
 

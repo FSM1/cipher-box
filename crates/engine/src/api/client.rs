@@ -698,8 +698,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         format!("{}{}", self.base_url, path)
     }
 
-    /// POST a JSON body without authentication (the challenge/login surface;
-    /// refresh builds its request inline to zeroize the secret-bearing body).
+    /// POST a JSON body without authentication: the challenge, login and
+    /// refresh surface.
     async fn post_json<B: Serialize>(
         &self,
         path: &str,
@@ -837,17 +837,14 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             // Web: no stored token — the HTTP-only cookie rides the Http seam.
             None => None,
         };
-        let request = HttpRequest {
-            method: HttpMethod::Post,
-            url: self.url("/auth/refresh"),
-            headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned())],
-            body: Some(to_json(&RefreshRequest {
-                refresh_token: refresh_token.as_deref().map(String::as_str),
-            })),
-            credentials: HttpCredentials::Include,
-            timeout_ms: Some(self.deadlines.control_ms),
-        };
-        let response = self.http.send(request).await?;
+        let response = self
+            .post_json(
+                "/auth/refresh",
+                &RefreshRequest {
+                    refresh_token: refresh_token.as_deref().map(String::as_str),
+                },
+            )
+            .await?;
         if !is_success(response.status) {
             // A refusal means the session is dead: drop the stale access +
             // refresh material so it is never replayed. Anything else — the

@@ -1043,18 +1043,18 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         else {
             return Ok(None);
         };
-        deposit_seed(
-            render.read_seeds,
-            share.scope_id,
-            Zeroizing::new(*grant.read_scope_seed()),
-            Some(epoch),
-            self.sharer_namespace(share),
-        );
         if !is_own_scope(
             render.own_root,
             &render.own_descendants.borrow(),
             &share.scope_id,
         ) {
+            deposit_seed(
+                render.read_seeds,
+                share.scope_id,
+                Zeroizing::new(*grant.read_scope_seed()),
+                Some(epoch),
+                self.sharer_namespace(share),
+            );
             match (permission == Permission::Write)
                 .then(|| grant.write_scope_seed())
                 .flatten()
@@ -1203,6 +1203,7 @@ mod tests {
     use crate::facade::MAX_FOLDER_CHILDREN;
     use crate::gate::{CUT_EPOCH_SUFFIX, record_cut_epoch_floor};
     use crate::rotation::derive_write_name;
+    use crate::scope_seeds::cached_seed_in;
     use crate::seams::{EndpointId, HttpResponse};
     use crate::seams::{FloorRaise, SeamError, SeamResult};
     use crate::testkit::fakes::InMemoryFloorStore;
@@ -2572,7 +2573,10 @@ mod tests {
             SCOPE,
             Zeroizing::new([0x33; 32]),
             Some(0),
-            FloorNamespace::Own,
+            FloorNamespace::GrantedBy(ContactLabel::of(
+                &label_seed(),
+                &sharer_signer().verifying_key().to_sec1(),
+            )),
         );
 
         fx.pass(0);
@@ -2624,6 +2628,35 @@ mod tests {
         assert!(
             fx.write_seeds.borrow().is_empty(),
             "an own scope's write plane is never a sharer's to supply"
+        );
+    }
+
+    /// The same holds for the read plane: a sharer's grant does not replace the
+    /// read seed of an own scope.
+    #[test]
+    fn a_grant_over_an_own_scope_id_leaves_the_own_read_seed() {
+        const OWN_SEED: [u8; 32] = [0x5a; 32];
+        let fx = RenderedScope::granting(
+            vec![shared_child(0xa1, "photos")],
+            VAULT_ROOT,
+            Permission::Write,
+        );
+        fx.bookmark_at(Permission::Write);
+        fx.own_descendants.borrow_mut().insert(NodeId(SCOPE));
+        deposit_seed(
+            &fx.read_seeds,
+            SCOPE,
+            Zeroizing::new(OWN_SEED),
+            Some(0),
+            FloorNamespace::Own,
+        );
+
+        fx.pass(0);
+
+        let held = cached_seed_in(&fx.read_seeds, &SCOPE, FloorNamespace::Own);
+        assert!(
+            held.is_some_and(|seed| *seed == OWN_SEED),
+            "an own scope's read plane is never a sharer's to supply"
         );
     }
 

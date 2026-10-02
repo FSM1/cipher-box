@@ -1173,8 +1173,7 @@ mod tests {
     }
 
     /// A forgotten share's seed goes when another sharer's grant takes the
-    /// scope id, before that grant's open deposits its own seed: the stamp was
-    /// measured in the first sharer's namespace and bounds nothing in the next.
+    /// scope id, before that grant's open deposits its own seed.
     #[test]
     fn a_seed_of_a_replaced_sharer_is_evicted_before_the_new_share_opens() {
         const NEXT_SHARER: [u8; IDENTITY_PUBLIC_LEN] = [0x03; IDENTITY_PUBLIC_LEN];

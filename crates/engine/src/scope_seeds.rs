@@ -237,6 +237,19 @@ pub(crate) fn walked_boundary_material(
         .collect()
 }
 
+/// The scope's cached seed when it was deposited in `namespace`, without an
+/// eviction pass.
+pub(crate) fn cached_seed_in(
+    cell: &RefCell<ScopeSeeds>,
+    scope_id: &[u8; 16],
+    namespace: FloorNamespace,
+) -> Option<Zeroizing<[u8; 32]>> {
+    cell.borrow()
+        .get(scope_id)
+        .filter(|cached| cached.namespace == namespace)
+        .map(|cached| cached.seed.clone())
+}
+
 /// The scope's cached seed, without an eviction pass.
 pub(crate) fn cached_seed(
     cell: &RefCell<ScopeSeeds>,
@@ -302,9 +315,7 @@ mod tests {
         });
     }
 
-    /// Two grants may carry one scope id, so a stamp holds only in the
-    /// namespace it was measured in: a read in any other namespace evicts the
-    /// seed, whatever that namespace's floor is.
+    /// A read in another namespace evicts the seed ([`CachedSeed`]).
     #[test]
     fn a_cached_seed_read_in_another_namespace_is_evicted() {
         use crate::seams::ContactLabel;
@@ -324,6 +335,11 @@ mod tests {
                 assert!(
                     cell.borrow().contains_key(&SCOPE),
                     "a read in its own namespace keeps the seed"
+                );
+                assert!(cached_seed_in(&cell, &SCOPE, first).is_some());
+                assert!(
+                    cached_seed_in(&cell, &SCOPE, other).is_none(),
+                    "another namespace is not served the seed"
                 );
 
                 refresh_seed_floor(&other.view(&floors), &cell, &SCOPE, SeedFloor::Read).await;

@@ -134,7 +134,7 @@ use crate::rotation::{
 };
 use crate::rotation::{FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloor, StampedSeed, cached_seed, current_seed, deposit_seed,
+    ScopeSeeds, SeedFloor, StampedSeed, cached_seed, cached_seed_in, current_seed, deposit_seed,
     deposit_write_seed, own_descendant_scopes, refresh_seed_floors, seed_names,
     walked_boundary_material,
 };
@@ -11631,7 +11631,16 @@ where {
         let WriteHome::Graft(graft) = home else {
             return Ok(home);
         };
-        let seed = cached_seed(&self.state.scope_write_seeds, &graft.0).ok_or_else(out_of_scope)?;
+        let seed = self
+            .scope_floors(&graft.0)
+            .and_then(|floors| {
+                cached_seed_in(
+                    &self.state.scope_write_seeds,
+                    &graft.0,
+                    FloorNamespace::of(&floors),
+                )
+            })
+            .ok_or_else(out_of_scope)?;
         let chain = core::iter::once(node).chain(rendered.ancestors(node));
         for below in chain.take_while(|below| *below != graft) {
             let Some(published) = rendered.node(below).and_then(|meta| meta.ipns_name.clone())
@@ -20404,7 +20413,10 @@ mod focus_access_tests {
             grafted.0,
             Zeroizing::new([6u8; 32]),
             Some(0),
-            FloorNamespace::Own,
+            FloorNamespace::GrantedBy(crate::seams::ContactLabel::of(
+                &cipherbox_core::kdf::contact_label_seed(&[0x4c; 32]),
+                &[0x02; 33],
+            )),
         );
         engine.note_focus_file(row);
 
