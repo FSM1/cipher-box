@@ -5466,12 +5466,10 @@ impl<T: SeamTypes> Engine<T> {
         // A gate-passing root adopt surfaced the scope read seed: deposit it in
         // the in-memory per-scope cell the child read pipeline derives from.
         if let Some(seed) = outcome.read_scope_seed.take() {
-            deposit_seed(
-                &self.state.scope_read_seeds,
-                root_scope_id,
-                seed,
-                vouched.map(|repoint| repoint.min_read_epoch),
-            );
+            let stamp = outcome
+                .read_seed_epoch
+                .or(vouched.map(|repoint| repoint.min_read_epoch));
+            deposit_seed(&self.state.scope_read_seeds, root_scope_id, seed, stamp);
         }
         let root_name = outcome
             .vault_pointer
@@ -17275,6 +17273,17 @@ mod tests {
         /// Seal + publish the owner vault pointer at index 0, its re-point naming
         /// `root_name` and vouching the read/write floors the cold-seed adopts.
         fn seed_vault_pointer(device: &FakeDevice, root_name: &IpnsName) {
+            seed_vault_pointer_at(device, root_name, EPOCH, 1);
+        }
+
+        /// The owner re-point at index 0, vouching `min_read_epoch`, signed at
+        /// `sequence`.
+        fn seed_vault_pointer_at(
+            device: &FakeDevice,
+            root_name: &IpnsName,
+            min_read_epoch: u64,
+            sequence: u64,
+        ) {
             let read_key =
                 kdf::pointer_read_key(kdf::owner_pointer_seed(&CAP_SECRET).as_bytes(), &SCOPE);
             let mut entropy = SeededEntropy::new(0);
@@ -17288,7 +17297,7 @@ mod tests {
                     scope_id: SCOPE,
                     current_root: root_name.clone(),
                     write_epoch: EPOCH,
-                    min_read_epoch: EPOCH,
+                    min_read_epoch,
                     prev_root: None,
                 },
             )
@@ -17296,7 +17305,7 @@ mod tests {
             let record = IpnsRecord::create_v2(
                 &kdf::vault_pointer_index(&CAP_SECRET, 0),
                 &block,
-                1,
+                sequence,
                 TTL_NANOS,
                 EOL,
             )
@@ -19330,8 +19339,8 @@ mod tests {
             }
         }
 
-        /// Rule 8 at the encode side: a vouch below the durable floor is a
-        /// re-point the cold start refuses, so it is never signed.
+        /// Rule 8 at the encode side: a vouch below the read-epoch floor is never
+        /// signed, and it raises no vouched floor.
         #[test]
         fn a_vouch_below_the_durable_floor_publishes_nothing() {
             let world = FakeWorld::new();
@@ -19379,6 +19388,86 @@ mod tests {
                 "{refused:?}"
             );
             assert_eq!(pointer_records(&device), before, "nothing was published");
+            assert_eq!(
+                block_on(floor::vouched_floor(&device.floors(&CAP_SECRET), &SCOPE)).unwrap(),
+                Some(EPOCH),
+                "a vouch that did not land raises no vouched floor"
+            );
+        }
+
+        /// A started owner session, its device and the vault-root name, with
+        /// the spawned loops dropped.
+        fn started_owner(world: &FakeWorld) -> (Engine<FakeSeamTypes>, FakeDevice, IpnsName) {
+            let device = world.device(&owner_identity().verifying_key().to_sec1());
+            let (head_block, head_cid, root_name) = owner_root();
+            seed_vault_pointer(&device, &root_name);
+            for endpoint in device.record_store.endpoints() {
+                seed_root_record_at(&device, &endpoint, &root_name, &head_cid);
+            }
+            let blocks = Blocks::default();
+            blocks.put(head_block);
+            serve_http(&device, &blocks, 600);
+            let (mut engine, _events) = engine_with_api(
+                &device,
+                ApiBaseUrl::parse("http://api.test").expect("a base"),
+            );
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+                .expect("cold start adopts the owner root");
+            drop(world.scheduler.take_spawned_tasks());
+            (engine, device, root_name)
+        }
+
+        fn pointer_records_of(device: &FakeDevice) -> Vec<Option<Vec<u8>>> {
+            let pointer = vault_pointer_name(&CAP_SECRET, 0);
+            device
+                .record_store
+                .endpoints()
+                .iter()
+                .map(|endpoint| device.record_store.record_at(endpoint, pointer.as_str()))
+                .collect()
+        }
+
+        /// A standing pointer that already vouches the epoch is not signed
+        /// again, and the vouched floor records what it vouches.
+        #[test]
+        fn a_standing_vouch_at_the_epoch_raises_the_vouched_floor_and_publishes_nothing() {
+            let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+            seed_vault_pointer_at(&device, &root_name, EPOCH + 1, 2);
+
+            let api = engine.api.clone().expect("a started session holds the API");
+            let voucher = engine
+                .vault_pointer_voucher(&api)
+                .expect("the session adopted a vault pointer");
+            let before = pointer_records_of(&device);
+            let vouched =
+                block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), EPOCH + 1));
+            assert_eq!(vouched, Ok(()));
+            assert_eq!(pointer_records_of(&device), before, "nothing was published");
+            assert_eq!(
+                block_on(floor::vouched_floor(&device.floors(&CAP_SECRET), &SCOPE)).unwrap(),
+                Some(EPOCH + 1)
+            );
+        }
+
+        /// The vouch lands and the vouched floor does not rise: the error says
+        /// the floor failed, not that nothing was published.
+        #[test]
+        fn a_landed_vouch_whose_floor_does_not_rise_reports_the_floor() {
+            let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+
+            let api = engine.api.clone().expect("a started session holds the API");
+            let voucher = engine
+                .vault_pointer_voucher(&api)
+                .expect("the session adopted a vault pointer");
+            let before = pointer_records_of(&device);
+            device.floor_store.fail_floor_commits();
+            let vouched =
+                block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), EPOCH + 1));
+            device.floor_store.heal_floors();
+            assert_eq!(vouched, Err(RotationPublishError::FloorUnrecorded));
+            assert_ne!(pointer_records_of(&device), before, "the vouch landed");
         }
     }
 

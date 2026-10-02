@@ -119,7 +119,7 @@ where
         }
         floor::raise_vouched_floor(self.floors, &self.scope_id, read_epoch)
             .await
-            .map_err(|_| RotationPublishError::NotPublished)
+            .map_err(|_| RotationPublishError::FloorUnrecorded)
     }
 
     async fn publish_vouch(
@@ -131,7 +131,7 @@ where
             min_read_epoch: read_epoch,
             ..standing.repoint
         };
-        // Rule 8, through the predicate the cold start reads it with.
+        // The produce bar (ADR 0067 D4).
         if floor::repoint_regression(
             self.floors,
             &repoint,

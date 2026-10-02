@@ -956,6 +956,46 @@ fn a_one_device_owner_starts_after_an_unconfirmed_root_that_landed_and_a_tick() 
     );
 }
 
+/// A start whose pointer lags the root it adopts holds the root read seed at
+/// the adopted epoch, so a child read before any tick opens.
+#[test]
+fn a_child_read_right_after_a_lag_start_has_the_root_seed() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("a write at the vault root commits");
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+    let (_, file) = listed(&engine, ROOT)
+        .into_iter()
+        .find(|(name, _)| name == "notes.bin")
+        .expect("the file lists");
+    cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+    tick(&world, &engine, &mut tasks);
+    drop((engine, tasks));
+
+    serve_http(&owner, &blocks, 600);
+    let (mut engine, _events) = engine_on_api(&owner, 45);
+    block_on(engine.start(secret())).expect("the lag start passes");
+    let versions = block_on(engine.file_versions(file));
+    assert!(
+        versions.is_ok(),
+        "the root read seed opens the file record: {versions:?}"
+    );
+}
+
 /// The sequence of the vault-root record the network serves.
 fn published_root_sequence(world: &FakeWorld, root_name: &IpnsName) -> u64 {
     let bytes = world

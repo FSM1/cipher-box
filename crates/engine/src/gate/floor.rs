@@ -23,8 +23,9 @@
 //!    revocation boundary) and `writeEpoch` the write-epoch floor. The
 //!    [`RepointObject`] is authenticated by construction, so no floor moves on
 //!    an unsigned or non-owner re-point (see [`cold_seed`]). It also raises the
-//!    vouched floor ([`vouched_floor`]), which a landed vault-pointer vouch
-//!    raises too ([`raise_vouched_floor`]). The cold-start guard reads it, so a
+//!    vouched floor ([`vouched_floor`]), which a landed vault-pointer vouch, or
+//!    a standing pointer that already vouches the epoch, raises too
+//!    ([`raise_vouched_floor`]). The cold-start guard reads it, so a
 //!    pointer that only lags a root this device adopted is no rollback
 //!    (ADR 0067 D3).
 //! 3. **Pointer `writeEpoch` advances on sight** ([`advance_write_epoch_on_sight`])
@@ -487,11 +488,11 @@ pub async fn mint_revision<F: FloorStore>(
 /// read-epoch floor and the vouched floor to `minReadEpoch` (the revocation
 /// boundary) and the write-epoch floor to `writeEpoch`, all monotonic-max.
 ///
-/// The [`RepointObject`] argument is only obtainable from a successful
+/// The [`RepointObject`] comes from a successful
 /// [`open_pointer_payload`](cipherbox_core::payload::open_pointer_payload),
-/// which authenticates the owner identity signature and the seal — so a forged,
-/// tampered, or non-owner re-point never produces one, and this function never
-/// runs on unauthenticated input. As with [`advance_on_unseal`], the
+/// which authenticates the owner identity signature and the seal, or from the
+/// first-run mint, which builds it from values it derives and then signs it. So
+/// this function never runs on a field the network authored. As with [`advance_on_unseal`], the
 /// trust-critical read-epoch (revocation) floor commits before the write-epoch
 /// floor, so a partial seam failure leaves the fail-closed state (or none at
 /// all, on a backing with an atomic [`FloorStore::commit_floors`]).
@@ -516,26 +517,9 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
     Ok(())
 }
 
-/// The durable floor an owner-vouched re-point would roll back, if any — the
-/// one definition of the two-stage rule, so the consume side
-/// ([`cold_seed_checked`]) and the produce side that must refuse to sign such a
-/// re-point cannot drift apart (AGENTS.md rule 8).
-///
-/// The read-epoch stage runs **only at the vault anchor**, selected from the
-/// re-point's own scope id against `session_root_scope_id`. At the vault anchor
-/// the read epoch is owner-authored, so a vouched `minReadEpoch` below the
-/// durable floor is an unambiguous rollback. At a shared scope a grantee's
-/// legitimate lazy rotation unseal-advances that same floor *past* the
-/// owner-authored `minReadEpoch`, so the identical comparison would
-/// false-positive into a self-inflicted bricked boot.
-///
-/// The write-epoch stage is narrowed on the other axis: only the scope pointer
-/// authors that clock ([`PointerPlane::VaultPointer`]).
-///
-/// The exempt plane is guarded instead by the read-epoch stage above, the
-/// durable [`vault_pointer_index_floor`], and the clock-checked scope-pointer
-/// consult — not by a bound on the lag, which a wave that stops at the anchor
-/// and is never resumed leaves unbounded.
+/// The durable floor an owner-vouched re-point would roll back, if any, at the
+/// produce bar of [`regression_below`]: every path that signs a re-point reads
+/// this one.
 pub async fn repoint_regression<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,
@@ -564,6 +548,29 @@ enum ReadBar {
     Vouched,
 }
 
+/// The durable floor an owner-vouched re-point would roll back, if any — the
+/// one definition of the two-stage rule, read by the consume side
+/// ([`cold_seed_checked`]) and the produce side ([`repoint_regression`]).
+/// The two differ only in [`ReadBar`]. The produce bar is the read-epoch floor,
+/// and each raise of the vouched floor raises the read-epoch floor with it, so
+/// the produce bar is never below the bar the cold start reads and no build
+/// signs a re-point its own cold start refuses (AGENTS.md rule 8, ADR 0067 D4).
+///
+/// The read-epoch stage runs **only at the vault anchor**, selected from the
+/// re-point's own scope id against `session_root_scope_id`. At the vault anchor
+/// the read epoch is owner-authored, so a vouched `minReadEpoch` below the
+/// durable floor is an unambiguous rollback. At a shared scope a grantee's
+/// legitimate lazy rotation unseal-advances that same floor *past* the
+/// owner-authored `minReadEpoch`, so the identical comparison would
+/// false-positive into a self-inflicted bricked boot.
+///
+/// The write-epoch stage is narrowed on the other axis: only the scope pointer
+/// authors that clock ([`PointerPlane::VaultPointer`]).
+///
+/// The exempt plane is guarded instead by the read-epoch stage above, the
+/// durable [`vault_pointer_index_floor`], and the clock-checked scope-pointer
+/// consult — not by a bound on the lag, which a wave that stops at the anchor
+/// and is never resumed leaves unbounded.
 async fn regression_below<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,

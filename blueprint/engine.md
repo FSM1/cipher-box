@@ -305,21 +305,26 @@ above the durable floor advances it the moment it is seen (FSM1/cipher-box-next#
 instant every old-epoch record at the old name fails the gate. `FloorStore` is
 a required constructor argument, fail-closed on regression.
 
-The raises with no unseal (ADR 0067 D2), each a maximum:
+The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
 
-- an owner-signed field: the cold seed (`cold_seed`), a pointer `writeEpoch`
-  on sight (`PointerConsult::run`), and the verified cut epoch
-  (`record_cut_epoch_floor`, ADR 0014);
-- a value this owner device authored, after its publish lands: the read-epoch
-  floor of a cut (`complete_cut`, `rekey_one`), the cut epochs of a cascade
-  (`record_cut_epochs`), the grant floor (`record_grant_floor`), the clear in
-  `effective_revoked_recipients` (ADR 0025 D3), the write-epoch raise after a
-  landed wave (`after_write_wave`, `cut_write_scope`, `redrive_write_cut`), the
-  cut-epoch raise after a landed cut (`rotate_cut` and the owed re-drive), the
-  pointer publish (`publish_pointer_over`), and the vouched floor (below);
-- before the publish, only where it makes the device more restrictive: the
-  revocation floor (`record_revocation_floor`);
-- an epoch a minting device holds by construction: `promote_scope_root`.
+- (a) an owner-signed field bound to the scope: the cold seed at boot
+  (`cold_seed_checked`), a pointer `writeEpoch` on sight
+  (`PointerConsult::run`), the verified cut epoch (`record_cut_epoch_floor`,
+  ADR 0014), and the clear in `effective_revoked_recipients` (ADR 0025 D3);
+- (b) a value this owner device authored, after its publish lands: the
+  read-epoch floor of a cut (`complete_cut`, `rekey_one`; from `flat_root_cut`,
+  `complete_cut` raises to the epoch of a gated resolve), the cut epochs of a
+  cascade (`record_cut_epochs`), the grant floor (`record_grant_floor`), the
+  write-epoch raise after a landed wave (`after_write_wave`, `cut_write_scope`
+  in `facade/claim_conversion.rs`, `redrive_write_cut`), the cut-epoch raise
+  after a landed cut (`rotate_cut`, the owed re-drive, and both raises of
+  `rotate_owed_cut`), the pointer publish (`publish_pointer_over`), the name
+  sequence and adopted-revision marks after a landed owner record
+  (`publish_bin_index`, `publish_settings_above`), and the vouched floor
+  (below); before the publish, only where it makes the device more
+  restrictive: the revocation floor (`record_revocation_floor`);
+- (c) an epoch a minting device holds by construction: `promote_scope_root`,
+  and the cold seed of the first-run mint (`provision_vault`).
 
 **Cold start adopts nothing** until the floor store seeds from the
 owner-signed anchor. The sequence is non-circular by construction (FSM1/cipher-box-next#38 D3):
@@ -333,11 +338,13 @@ revocation boundaries cannot be rolled back.
 guard compares the vouched `minReadEpoch` with the vouched floor: the highest
 `minReadEpoch` that a vault pointer vouched to this device, a floor-store key
 beside the vault-pointer index mark. The cold seed raises it, and so does a
-landed vouch of a vault-root cut or of the cold-start catch-up. A device without
+landed vouch of a vault-root cut or of the cold-start catch-up, or a standing
+pointer that already vouches the epoch (`vouch_over`). A device without
 the key compares with the read-epoch floor. A pointer that only lags a root that
 this device adopted is therefore no rollback, and the gated adopt still raises
 the read-epoch floor, so the session refuses a pre-cut root. The produce side
-(`check_repoint_publishable`, `vouch_over`) signs no re-point below the
+(`check_repoint_publishable`, `vouch_over`, and the first-run mint
+`provision_vault`) signs no re-point below the
 read-epoch floor, and each raise of the vouched floor raises the read-epoch
 floor to at least the same value.
 

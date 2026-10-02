@@ -128,6 +128,9 @@ pub struct ColdStartOutcome {
     /// blob; `None` when nothing adopted. The engine deposits it in its
     /// in-memory per-scope seed cell (never persisted).
     pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    /// The epoch of the record [`read_scope_seed`](Self::read_scope_seed) came
+    /// from, which may be above the epoch the pointer vouches.
+    pub read_seed_epoch: Option<u64>,
     /// The (node id, scope write seed) the same adopt recovered from the
     /// owner-write-blob; `None` when nothing adopted or the root is held
     /// keyless. The drain derives every new node's name and per-name signer
@@ -147,6 +150,7 @@ impl core::fmt::Debug for ColdStartOutcome {
                 "read_scope_seed",
                 &self.read_scope_seed.as_ref().map(|_| "<redacted>"),
             )
+            .field("read_seed_epoch", &self.read_seed_epoch)
             .field(
                 "write_scope_seed",
                 &self.write_scope_seed.as_ref().map(|_| "<redacted>"),
@@ -213,6 +217,7 @@ where
             base,
             rendered,
             read_scope_seed: None,
+            read_seed_epoch: None,
             write_scope_seed: None,
         });
     };
@@ -246,6 +251,11 @@ where
     .map_err(ColdStartError::Seam)?;
     // Project the gate-passing root read-body to its direct children (E7); an
     // own current record at the floor paints from `Resolved::current_at_floor`.
+    let read_seed_epoch = match &resolved.outcome {
+        ResolveOutcome::Adopted(adopted) => Some(adopted.epoch),
+        _ => resolved.current_at_floor.as_ref().map(|at| at.epoch),
+    }
+    .filter(|_| read_scope_seed.is_some());
     let (root_resolve, base) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
             let mut base = base;
@@ -276,6 +286,7 @@ where
         base,
         rendered,
         read_scope_seed,
+        read_seed_epoch,
         write_scope_seed,
     })
 }

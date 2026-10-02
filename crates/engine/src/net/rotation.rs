@@ -5243,9 +5243,7 @@ where
         &self,
         repoint: &RepointObject,
     ) -> Result<(), WritePublishError> {
-        // The produce side of the gate's own rule, through the predicate the
-        // consume side reads it with, at the STRICTER of this pass's two planes
-        // — so a re-point this build signs is one either reader admits (rule 8).
+        // The produce bar (ADR 0067 D4), at the STRICTER of this pass's two planes.
         match floor::repoint_regression(
             self.floors,
             repoint,

@@ -108,19 +108,28 @@ pub enum RotationPublishError {
         /// The node the ref names.
         node_id: [u8; 16],
     },
+    /// The publish landed, and the floor store did not record the floor that
+    /// follows it. Retryable: a re-run reads the landed record and raises again.
+    FloorUnrecorded,
 }
 
 impl RotationPublishError {
     /// Whether re-running the publish could clear this: an availability stall or
     /// a lost race, but never a trust rejection.
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::NotPublished | Self::LostRace)
+        matches!(
+            self,
+            Self::NotPublished | Self::LostRace | Self::FloorUnrecorded
+        )
     }
 
     /// The class label a reject vector carries for this failure.
     pub fn class(&self) -> &'static str {
         match self {
-            Self::NotPublished | Self::LostRace | Self::NotConverged { .. } => "availability",
+            Self::NotPublished
+            | Self::LostRace
+            | Self::NotConverged { .. }
+            | Self::FloorUnrecorded => "availability",
             Self::Rejected => "trust",
         }
     }
@@ -136,6 +145,9 @@ impl core::fmt::Display for RotationPublishError {
             }
             RotationPublishError::NotConverged { .. } => {
                 f.write_str("rotation publish met a held ref that no longer loses the link rank")
+            }
+            RotationPublishError::FloorUnrecorded => {
+                f.write_str("rotation record published, and its floor did not rise")
             }
         }
     }
