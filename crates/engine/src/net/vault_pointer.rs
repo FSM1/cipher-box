@@ -79,7 +79,10 @@ where
     }
 
     /// The standing re-point, refused when it names a root other than
-    /// `root_name`: a vouch over it would prove nothing about that root.
+    /// `root_name`: a vouch over it would prove nothing about that root. Also
+    /// refused below the vouched floor or below the sequence this device
+    /// published at the name: a vouch carries every other field over, so one
+    /// over a replay would sign the rolled-back fields again, above it.
     pub(crate) async fn standing(
         &self,
         root_name: &[u8],
@@ -98,6 +101,18 @@ where
         )
         .map_err(|_| RotationPublishError::Rejected)?;
         if vouched.current_root.as_str().as_bytes() != root_name {
+            return Err(RotationPublishError::Rejected);
+        }
+        let unread = |_| RotationPublishError::NotPublished;
+        let vouched_floor = floor::vouched_floor(self.floors, &self.scope_id)
+            .await
+            .map_err(unread)?;
+        let sequence_floor = floor::sequence_floor(self.floors, self.name().as_str().as_bytes())
+            .await
+            .map_err(unread)?;
+        if vouched_floor.is_some_and(|floor| vouched.min_read_epoch < floor)
+            || sequence_floor.is_some_and(|floor| standing.sequence < floor)
+        {
             return Err(RotationPublishError::Rejected);
         }
         Ok(StandingVouch {
