@@ -9,7 +9,7 @@
   [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)
   D1, D3 and D4, [ADR 0064](./0064-the-name-wave-reads-a-lagging-interior-node.md),
   `blueprint/engine.md` "rotateScopeWrite"
-- **Implemented by:** FSM1/cipher-box#2188
+- **Implemented by:** FSM1/cipher-box#2188, FSM1/cipher-box#2235
 - **Amends:** ADR 0063 D4 (the names the renewal walk skips), ADR 0064 Residuals
 
 ## Context
@@ -30,7 +30,9 @@ head block that does not match its CID; an epoch that no held history link reach
 consequence 8); and a malformed child ref in the body, which drops the parent. The wave removes
 the ref from the moved parent, does not walk below the node, moves the other nodes, re-points the
 root, and finishes the cut. It retires the old name only when the root's write scope seed derives
-that name for the node. The wave never adopts or carries a refused record.
+that name for the node. The same rule applies to a node that the wave moves: an old name that
+neither the root's write scope seed nor the seed one epoch below it derives for the node stays
+registered to its EOL. The wave never adopts or carries a refused record.
 
 **D2 — Of two refs to one node id at different names, the wave keeps the ref at the name that
 the write scope seed of the root it reads derives for that id, and drops the other ref.** That

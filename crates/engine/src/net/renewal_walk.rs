@@ -178,6 +178,9 @@ impl ScopeMaterial {
 struct Plane {
     scope_id: [u8; 16],
     read_seed: Zeroizing<[u8; 32]>,
+    /// The read epoch `read_seed` belongs to ([`ChildAdopter::with_seed_stamp`]);
+    /// `None` for a held key, which binds no epoch.
+    seed_stamp: Option<u64>,
 }
 
 /// One folder on the walk's path, its children in node-id order.
@@ -644,6 +647,7 @@ where
                 let plane = Plane {
                     scope_id,
                     read_seed: admitted.read_scope_seed.clone(),
+                    seed_stamp: Some(admitted.read_epoch),
                 };
                 let (bytes, sequence) = (admitted.record_bytes.clone(), admitted.sequence);
                 self.consider(pass, scope_id, scope_id, &name, &bytes, sequence)
@@ -660,6 +664,7 @@ where
                 let plane = Plane {
                     scope_id,
                     read_seed: keys.held_key(&node_id, bin.deleted_at),
+                    seed_stamp: None,
                 };
                 let body = self.admit(pass, &plane, node_id, &name, true).await?;
                 Some((plane, node_id, body))
@@ -672,15 +677,11 @@ where
                     .find(|root| root.scope_id == scope_id && root.node_id == node_id)?
                     .name
                     .clone();
-                let read_seed = self
-                    .material(pass, scope_id)
-                    .await?
-                    .admitted
-                    .read_scope_seed
-                    .clone();
+                let admitted = &self.material(pass, scope_id).await?.admitted;
                 let plane = Plane {
                     scope_id,
-                    read_seed,
+                    read_seed: admitted.read_scope_seed.clone(),
+                    seed_stamp: Some(admitted.read_epoch),
                 };
                 let body = self.admit(pass, &plane, node_id, &name, false).await?;
                 Some((plane, node_id, body))
@@ -724,7 +725,8 @@ where
             plane.scope_id,
             plane.read_seed.clone(),
             node_id,
-        );
+        )
+        .with_seed_stamp(plane.seed_stamp);
         match resolve_child_record(
             self.transport,
             self.snapshot_cache,
@@ -1053,6 +1055,7 @@ mod tests {
                     unknown: cipherbox_core::seal::PreservedFields::new(),
                 },
                 read_scope_seed: Zeroizing::new([0; 32]),
+                read_epoch: 0,
                 write_scope_seed: Some(Zeroizing::new(current)),
             },
         }

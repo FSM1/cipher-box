@@ -1794,6 +1794,8 @@ pub(crate) struct AdmittedScopeRoot {
     pub(crate) sequence: u64,
     pub(crate) read_body: ReadBody,
     pub(crate) read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
+    /// The read epoch of the admitted record, which `read_scope_seed` belongs to.
+    pub(crate) read_epoch: u64,
     /// `None` when the root is held keyless.
     pub(crate) write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
 }
@@ -1857,6 +1859,7 @@ where
         sequence: gated.sequence,
         read_body: gated.read_body,
         read_scope_seed: gated.read_scope_seed,
+        read_epoch: gated.envelope.epoch,
         write_scope_seed: gated.write_scope_seed,
     })
 }
@@ -3862,6 +3865,9 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// The scope's read override seed. A write rotation cuts no read key, so the
     /// same seed derives every per-node read key on both sides of the wave.
     pub read_scope_seed: &'a [u8; SECRET_LEN],
+    /// The read epoch `read_scope_seed` belongs to
+    /// ([`ChildAdopter::with_seed_stamp`]).
+    pub read_seed_epoch: u64,
     /// The rotating root's own ancestor node seed, required when it is itself an
     /// interior scope root (its record carries an ascent link the gate verifies
     /// against a reader-derived keypair).
@@ -3936,6 +3942,9 @@ struct Discovered {
     /// The write scope seed the gated root's own owner-write blob yielded: the
     /// seed whose names a second ref yields to (ADR 0065 D2).
     root_write_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
+    /// The write scope seed one epoch below the wave, when the recovery
+    /// proved it ([`RecoveredWave::superseded_write_scope_seed`]).
+    superseded_write_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
     /// The name each node with a second ref keeps. Only a derived name
     /// outlives a re-walk. Each re-walk follows a new derived name, and no ref
     /// replaces one, so the re-walks are at most the count of node ids that
@@ -4031,6 +4040,48 @@ impl WaveSubtree {
     fn record_root_write_seed(&self, seed: &[u8; SECRET_LEN]) {
         self.inner.borrow_mut().root_write_seed = Some(Zeroizing::new(*seed));
         self.derived.borrow_mut().clear();
+    }
+
+    fn record_superseded_write_seed(&self, seed: &[u8; SECRET_LEN]) {
+        self.inner.borrow_mut().superseded_write_seed = Some(Zeroizing::new(*seed));
+    }
+
+    /// Whether [`Self::retires`] holds for each of `names` at a node below the
+    /// root that this pass gated. In a resumed wave the root's seed is the new
+    /// one, so a node that drops there retires a name that seed derives.
+    fn retirable(&self, scope_id: &[u8; 16], names: &[IpnsName]) -> bool {
+        let inner = self.inner.borrow();
+        let seeds: Vec<&[u8; SECRET_LEN]> = [&inner.root_write_seed, &inner.superseded_write_seed]
+            .into_iter()
+            .flatten()
+            .map(|seed| &**seed)
+            .collect();
+        let walked: BTreeSet<&[u8; 16]> = inner
+            .gated
+            .keys()
+            .map(|(id, _)| id)
+            .filter(|id| *id != scope_id)
+            .collect();
+        let derived: BTreeSet<String> = walked
+            .into_iter()
+            .flat_map(|id| {
+                seeds
+                    .iter()
+                    .map(move |seed| derive_write_name(seed, id).as_str().to_owned())
+            })
+            .collect();
+        names.iter().all(|name| derived.contains(name.as_str()))
+    }
+
+    /// Backs [`WriteScopeNode::retirable`].
+    fn retires(&self, node_id: &[u8; 16], name: &IpnsName) -> bool {
+        self.derives(node_id, name)
+            || self
+                .inner
+                .borrow()
+                .superseded_write_seed
+                .as_ref()
+                .is_some_and(|seed| derive_write_name(seed, node_id) == *name)
     }
 
     fn record_anchor(&self, anchor: LaggingAnchor) {
@@ -4448,7 +4499,8 @@ where
             self.scope_id,
             Zeroizing::new(*self.read_scope_seed),
             node_id,
-        );
+        )
+        .with_seed_stamp(Some(self.read_seed_epoch));
         match adopter.adopt(name, record_bytes).await {
             Ok(outcome) => {
                 keep_then_commit(
@@ -4718,7 +4770,8 @@ where
     /// of the same scope.
     ///
     /// `None` on anything unreadable: without it the wave tombstones nothing,
-    /// which leaks a registration instead of retiring a live name.
+    /// which leaks a registration instead of retiring a live name. A proved seed
+    /// is also kept for [`Self::retire`].
     fn superseded_write_scope_seed(
         &self,
         envelope: &Envelope,
@@ -4745,7 +4798,11 @@ where
         let payload =
             open_owner_history_link(self.owner_enc_secret, &ctx, &body.write_history_link).ok()?;
         let prev = Zeroizing::new(*payload.prev_seed());
-        (derive_write_name(&prev, &self.scope_id) == *superseded_root_name).then_some(prev)
+        if derive_write_name(&prev, &self.scope_id) != *superseded_root_name {
+            return None;
+        }
+        self.subtree.record_superseded_write_seed(&prev);
+        Some(prev)
     }
 
     /// Fetch and adoption-gate this scope's root at `name`, refusing an envelope
@@ -5386,6 +5443,7 @@ where
         self.gated_reads.park(&current_name, source);
         Ok(WriteScopeNode {
             node_id: *node_id,
+            retirable: self.subtree.retires(node_id, &current_name),
             current_name,
             child_node_ids: children.ids,
             second_refs: children.second_refs,
@@ -5497,6 +5555,9 @@ where
         if !root_retire_ready() && old_names.iter().any(|name| name == self.current_root_name) {
             return Err(WritePublishError::Rejected);
         }
+        if !self.subtree.retirable(&self.scope_id, old_names) {
+            return Err(WritePublishError::Rejected);
+        }
         // Re-read here, not at the enumeration: a rise since then leaves the
         // wave's moved copies below the live floor, and tombstoning the old
         // names would strand the subtree at both. Fail closed with nothing
@@ -5526,9 +5587,7 @@ where
         &self,
         repoint: &RepointObject,
     ) -> Result<(), WritePublishError> {
-        // The produce side of the gate's own rule, through the predicate the
-        // consume side reads it with, at the STRICTER of this pass's two planes
-        // — so a re-point this build signs is one either reader admits (rule 8).
+        // The produce bar (ADR 0067 D4), at the STRICTER of this pass's two planes.
         match floor::repoint_regression(
             self.floors,
             repoint,
@@ -10028,6 +10087,7 @@ mod tests {
             events: &harness.events,
             scope_id: SCOPE,
             read_scope_seed: &OWNER_ROOT_SCOPE_SEED,
+            read_seed_epoch: OWNER_ROOT_EPOCH,
             parent_node_seed: None,
             owner,
             owner_enc_secret: &harness.enc_secret,
@@ -12218,21 +12278,36 @@ mod tests {
         );
     }
 
+    /// A root staged over one interior node, MID, and MID's name.
+    fn staged_over_mid(harness: &Harness<InMemoryRecordStore>) -> (OwnerRootFixture, IpnsName) {
+        let mid_name = stage_node(harness, MID, &folder(Vec::new()));
+        let root = staged_root(
+            harness,
+            vec![ref_to(MID, &mid_name)],
+            Vec::new(),
+            Vec::new(),
+        );
+        (root, mid_name)
+    }
+
+    /// The enumeration's gated reads of the root and of MID.
+    fn walk_root_and_mid<T: RecordTransport + Clone>(net: &Wave<'_, T>) {
+        block_on(net.resolve_node(&SCOPE, None)).expect("the root resolves");
+        block_on(net.resolve_node(&MID, None)).expect("the walk adopts MID");
+    }
+
     #[test]
     fn retire_refuses_a_batch_naming_the_lingering_root() {
         // Retirement is irreversible, so the guard is release-active, not a debug
         // assert.
         let harness = Harness::plain();
+        let (root, interior) = staged_over_mid(&harness);
         let owner = owner_identity();
-        let current_root = old_root_name();
-        let plan = no_root_plan();
-        let net = wave(&harness, &owner, &current_root, &plan);
-        let interior = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &[0x3a; 16]);
-        // Stands in for the enumeration's gated read of the subtree.
-        net.subtree.record_read_epoch(OWNER_ROOT_EPOCH);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        walk_root_and_mid(&net);
 
         assert_eq!(
-            block_on(net.retire(&[interior.clone(), current_root.clone()])),
+            block_on(net.retire(&[interior.clone(), root.name.clone()])),
             Err(WritePublishError::Rejected)
         );
         block_on(net.retire(&[interior])).expect("an interior-only batch retires");
@@ -12260,11 +12335,10 @@ mod tests {
         // Release-active: retirement is irreversible, and the moved copies the
         // tombstones hand the subtree to sit below the risen floor.
         let harness = Harness::plain();
-        let root = staged_childless_root(&harness);
+        let (root, interior) = staged_over_mid(&harness);
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
-        block_on(net.resolve_node(&SCOPE, None)).expect("the enumeration gates the subtree");
-        let interior = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &[0x3a; 16]);
+        walk_root_and_mid(&net);
 
         block_on(
             harness
@@ -12284,11 +12358,10 @@ mod tests {
         // Strictly below, not at: the wave's own gated read leaves the floor at
         // the epoch its records carry, so the common case must not self-refuse.
         let harness = Harness::plain();
-        let root = staged_childless_root(&harness);
+        let (root, interior) = staged_over_mid(&harness);
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
-        block_on(net.resolve_node(&SCOPE, None)).expect("the enumeration gates the subtree");
-        let interior = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &[0x3a; 16]);
+        walk_root_and_mid(&net);
 
         assert_eq!(
             block_on(floor::read_epoch_floor(&harness.floors, &SCOPE)).expect("floor read"),
@@ -12803,6 +12876,7 @@ mod tests {
             WriteScopeNode {
                 node_id: SCOPE,
                 current_name: staged.root.name.clone(),
+                retirable: true,
                 child_node_ids: vec![MID],
                 second_refs: Vec::new(),
             },
@@ -13382,6 +13456,107 @@ mod tests {
         );
     }
 
+    /// A node that still sits at the name the superseded seed derives, as a
+    /// wave that crashed past its flip leaves it, retires that name.
+    #[test]
+    fn a_node_at_its_superseded_name_is_retirable() {
+        const SUPERSEDED: [u8; 32] = [0x4d; 32];
+        let harness = Harness::plain();
+        let mid_name = stage_node_under(&harness, MID, &folder(Vec::new()), &SUPERSEDED);
+        let root = staged_root(
+            &harness,
+            vec![ref_to(MID, &mid_name)],
+            Vec::new(),
+            Vec::new(),
+        );
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        block_on(net.resolve_node(&SCOPE, None)).expect("the root resolves");
+        // Stands in for the recovery that proves the superseded seed.
+        net.subtree.record_superseded_write_seed(&SUPERSEDED);
+
+        let mid = block_on(net.resolve_node(&MID, None)).expect("the walk adopts MID");
+        assert_eq!(mid.current_name, mid_name);
+        assert!(mid.retirable);
+    }
+
+    /// A retire of a name that no write scope seed of the wave derives for a
+    /// node it walked never reaches the registry: it can be a live name of
+    /// another scope.
+    #[test]
+    fn retire_refuses_a_name_outside_the_walked_scope() {
+        let harness = Harness::plain();
+        let (root, mid_name) = staged_over_mid(&harness);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        walk_root_and_mid(&net);
+
+        for outside in [
+            derive_write_name(&[0x4e; 32], &MID),
+            derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &LEAF),
+        ] {
+            assert_eq!(
+                block_on(net.retire(&[mid_name.clone(), outside])),
+                Err(WritePublishError::Rejected),
+            );
+        }
+        assert_eq!(retired_names(&harness), Vec::<String>::new());
+        block_on(net.retire(std::slice::from_ref(&mid_name))).expect("a walked name retires");
+        assert_eq!(retired_names(&harness), vec![mid_name.as_str().to_owned()]);
+    }
+
+    /// MID's stop after the floor rose to `epoch` between the root read and
+    /// the read of MID, with MID sealed at `epoch` under a key the wave does
+    /// not hold.
+    fn interior_stop_after_a_floor_rise(epoch: u64) -> NodeStop {
+        let harness = Harness::plain();
+        let (root, _) = staged_over_mid(&harness);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        block_on(net.resolve_node(&SCOPE, None)).expect("the root resolves");
+        block_on(harness.floors.raise_epoch_floor(&SCOPE, epoch)).expect("the floor rises");
+        stage_node_sealed_at(&harness, MID, &folder(Vec::new()), 2, (epoch, &[0x13; 32]));
+
+        block_on(net.resolve_node(&MID, None)).expect_err("the held seed opens nothing")
+    }
+
+    /// A cut raised the floor after the wave took its read seed. A record at
+    /// the new floor needs a seed the wave does not hold, so it accuses no
+    /// writer and waits for the bound.
+    #[test]
+    fn a_record_at_a_floor_risen_after_the_root_read_is_no_trust_verdict() {
+        let stop = interior_stop_after_a_floor_rise(OWNER_ROOT_EPOCH + 1);
+        assert!(
+            matches!(
+                stop,
+                NodeStop::Refused {
+                    reason: ResolveFailure::Unavailable,
+                    cause: DropCause::EpochAboveRoot,
+                    ..
+                }
+            ),
+            "earned {stop:?}"
+        );
+    }
+
+    /// At the epoch of the wave's read seed, a body that does not open is
+    /// tampering.
+    #[test]
+    fn a_record_at_the_read_seeds_epoch_that_does_not_open_stays_rejected() {
+        let stop = interior_stop_after_a_floor_rise(OWNER_ROOT_EPOCH);
+        assert!(
+            matches!(
+                stop,
+                NodeStop::Refused {
+                    reason: ResolveFailure::Rejected,
+                    cause: DropCause::RecordRefused,
+                    ..
+                }
+            ),
+            "earned {stop:?}"
+        );
+    }
+
     /// ADR 0065 D2: a body whose derived refs outrank many refs the walk took
     /// asks for one re-walk, and the re-walk reads no record or head block
     /// again.
@@ -13521,6 +13696,10 @@ mod tests {
         .expect("the wave finishes");
         assert!(outcome.dropped.is_empty());
         assert_eq!(outcome.interior_node_count, 4, "P, Q, R, and Y all move");
+        assert!(
+            !retired_names(&harness).contains(&y_named.as_str().to_owned()),
+            "Y's name is one the root's seed does not derive"
+        );
     }
 
     /// ADR 0065 D2: two refs at names the seed does not derive come before
@@ -14014,6 +14193,64 @@ mod tests {
             staged.root.name,
             "the recovered seed derives the name this root succeeded"
         );
+    }
+
+    /// A second rotation retires the names the seed one epoch below it
+    /// derives, which a wave that crashed past its flip left registered.
+    #[test]
+    fn a_second_wave_retires_the_names_the_superseded_seed_derives() {
+        let harness = Harness::plain();
+        let staged = staged_scope(&harness);
+        let owner = owner_identity();
+        let first = {
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            block_on(rotate_scope_write(
+                &mut SeededEntropy::new(67),
+                &net,
+                &net,
+                &write_plan(&staged.root, &owner),
+            ))
+            .expect("the first wave completes")
+        };
+        let section = published_section(&harness, &first.new_root_name);
+        let before = retired_names(&harness).len();
+        // The device adopts the flip before it rotates again.
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            OWNER_ROOT_EPOCH + 1,
+        ))
+        .expect("the write epoch floor advances");
+
+        let net = wave(&harness, &owner, &first.new_root_name, &section.commitment);
+        let plan = RotateScopeWritePlan {
+            commitment: &section.commitment,
+            commitment_sig: &section.commitment_sig,
+            current_write_epoch: OWNER_ROOT_EPOCH + 1,
+            current_root_name: &first.new_root_name,
+            ..write_plan(&staged.root, &owner)
+        };
+        block_on(rotate_scope_write(
+            &mut SeededEntropy::new(71),
+            &net,
+            &net,
+            &plan,
+        ))
+        .expect("the second wave completes");
+
+        let retired = &retired_names(&harness)[before..];
+        for node in [MID, LEAF] {
+            let superseded = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &node);
+            assert!(
+                retired.contains(&superseded.as_str().to_owned()),
+                "the second wave retires {node:?} at its superseded name"
+            );
+        }
     }
 
     #[test]

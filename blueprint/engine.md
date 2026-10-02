@@ -202,7 +202,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   EOL; the one carve-out is the vault settings resolve, whose reader is always
   its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
-  (FSM1/cipher-box-next#34 D4). Interior old names batch-retire at name-wave completion; the old
+  (FSM1/cipher-box-next#34 D4). Interior old names batch-retire at name-wave completion, under
+  the seed rule of "rotateScopeWrite" (ADR 0065 D1); the old
   scope-root name lingers until the migration window closes (open edge
   below). An abandoned op retires the **whole** set its
   publish charged — the name it registered and every block it uploaded, root
@@ -287,8 +288,10 @@ reject at decode in core (FSM1/cipher-box-next#39 D7); the gate surfaces them as
 The **floor law** (FSM1/cipher-box-next#39 D4, superseding FSM1/cipher-box-next#26 D4's blob-seeded floors): floors
 advance only on an AAD-confirmed unseal and cold-seed from the re-point
 object's owner-vouched epochs (`writeEpoch`, `minReadEpoch`); a grant blob's
-epoch field is an advisory routing hint. One exception, and the list of them is
-closed: the `cutEpoch` of a grant-set commitment that passed stage 2 whole
+epoch field is an advisory routing hint. A floor rises with no unseal only at
+the closed list of sites below
+([ADR 0067](../decisions/0067-the-floor-law-admits-a-closed-list-of-raises-and-the-cold-start-guard-reads-a-vouched-floor.md)
+D1, D2): a new site needs an ADR. One of them: the `cutEpoch` of a grant-set commitment that passed stage 2 whole
 raises that scope's cut-epoch floor with no unseal, under the sharer-scoped key
 ([ADR 0014](../decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)
 D1–D5). The owner signs that field and the signed preimage names the scope root
@@ -302,6 +305,27 @@ above the durable floor advances it the moment it is seen (FSM1/cipher-box-next#
 instant every old-epoch record at the old name fails the gate. `FloorStore` is
 a required constructor argument, fail-closed on regression.
 
+The raises with no unseal (ADR 0067 D2), each a maximum, by the source of D1:
+
+- (a) an owner-signed field bound to the scope: the cold seed at boot
+  (`cold_seed_checked`), a pointer `writeEpoch` on sight
+  (`PointerConsult::run`), the verified cut epoch (`record_cut_epoch_floor`,
+  ADR 0014), and the clear in `effective_revoked_recipients` (ADR 0025 D3);
+- (b) a value this owner device authored, after its publish lands: the
+  read-epoch floor of a cut (`complete_cut`, `rekey_one`; from `flat_root_cut`,
+  `complete_cut` raises to the epoch of a gated resolve), the cut epochs of a
+  cascade (`record_cut_epochs`), the grant floor (`record_grant_floor`), the
+  write-epoch raise after a landed wave (`after_write_wave`, `cut_write_scope`
+  in `facade/claim_conversion.rs`, `redrive_write_cut`), the cut-epoch raise
+  after a landed cut (`rotate_cut`, the owed re-drive, and both raises of
+  `rotate_owed_cut`), the pointer publish (`publish_pointer_over`), the name
+  sequence and adopted-revision marks after a landed owner record
+  (`publish_bin_index`, `publish_settings_above`), and the vouched floor
+  (below); before the publish, only where it makes the device more
+  restrictive: the revocation floor (`record_revocation_floor`);
+- (c) an epoch a minting device holds by construction: `promote_scope_root`,
+  and the cold seed of the first-run mint (`provision_vault`).
+
 **Cold start adopts nothing** until the floor store seeds from the
 owner-signed anchor. The sequence is non-circular by construction (FSM1/cipher-box-next#38 D3):
 own vault → scope/vault pointer (first act) → floors seeded → current root
@@ -309,6 +333,20 @@ name → envelope grant blob → seeds → render. Residual, honestly scoped
 (FSM1/cipher-box-next#39 D4): a cold device can be shown a view missing at most grantee-triggered
 epochs (which revoke nobody — pure staleness) plus within-epoch staleness;
 revocation boundaries cannot be rolled back.
+
+**The vouched floor** (ADR 0067 D3, D4). At the vault anchor, the cold-start
+guard compares the vouched `minReadEpoch` with the vouched floor: the highest
+`minReadEpoch` that a vault pointer vouched to this device, a floor-store key
+beside the vault-pointer index mark. The cold seed raises it, and so does a
+landed vouch of a vault-root cut or of the cold-start catch-up, or a standing
+pointer that already vouches the epoch (`vouch_over`). A device without
+the key compares with the read-epoch floor. A pointer that only lags a root that
+this device adopted is therefore no rollback, and the gated adopt still raises
+the read-epoch floor, so the session refuses a pre-cut root. The produce side
+(`check_repoint_publishable`, `vouch_over`, and the first-run mint
+`provision_vault`) signs no re-point below the
+read-epoch floor, and each raise of the vouched floor raises the read-epoch
+floor to at least the same value.
 
 **The first-run rule** (ADR 0022 as amended by ADR 0034). The vault-pointer walk
 reads a name as absent only when every routing endpoint answered and every
@@ -667,8 +705,19 @@ the grantee that removed it stops reading it.
   binning one would seal a live node under a key no reader derives. The base
   cannot prove a departure: a folder this device did not load, or loaded before
   the move, does not show the new link. So the drain holds the capture and walks
-  the scope: it reads every node fresh through the gate, then reads each one
-  again, from a read budget the tick shares across its passes. The walk starts
+  the whole vault from its root, each proved scope under its own material: it
+  reads every node fresh through the gate, then reads each one again, from a
+  read budget the tick shares across its passes. A walk that meets a child it
+  cannot read, at a name its scope's write seed does not derive or below a
+  scope root with no material this tick, holds every capture of the scope, as a
+  failed read does. Residual: this hold has no exit and sends no event, so a
+  writer of the scope, or a ref a name wave left at an old name, holds that
+  scope's captures for the session; the per-scope cap bounds them. Residual: a
+  change to any vault folder during a walk starts it again, so in an active
+  vault a capture waits until the vault is quiet; the walk does not narrow, as a
+  narrow walk bins a live node. Residual: a bad ref in one scope holds the
+  captures of every scope. Residual: the walk bound of 65,536 nodes applies to
+  the whole vault. The walk starts
   after the device saw the departure and proves only that departure. The walk
   makes one attempt at a read on each pass, up to three attempts. A refused
   record, a record served tied, a second read that shows another record, or a
@@ -682,9 +731,8 @@ the grantee that removed it stops reading it.
   set of 4096, so a peer with write access to four scopes can make every other
   scope drop its new captures. Residual: a settled proof waits for an adoption
   slot, so its snapshot ages; the risk is low, because an honest move publishes
-  the destination before the source. A child that does not publish under a name
-  this scope's write seed derives is a scope root, which the authored delete
-  refuses for the same reason.
+  the destination before the source. A capture of a scope root, proved or by
+  its name, drops before any read.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.
@@ -715,7 +763,10 @@ items 4, 6 and 7, ADR 0043).
   from the entry's `originParent`, and journaled on the op. A destination the
   vault no longer holds is its own refusal, so a host can offer another folder
   rather than report a generic failure; one lost between the queue and the drain
-  is the same `destinationGone` dead letter a move gets.
+  is the same `destinationGone` dead letter a move gets. A destination in another
+  scope than the one the entry was filed under is refused at command time with
+  `restoreCrossesScope`, until a cross-scope re-seal lands; this includes a
+  default restore whose origin folder was shared after the delete.
 - **A purge proves the node unlinked before it destroys anything.** The bin entry
   alone is not that proof: the soft delete writes the entry, unlinks, then
   republishes the parent, so a parent publish that spends its attempt budget
@@ -1023,7 +1074,10 @@ that does not land both stays owed (below) rather than leaving the
 cold-start anchor naming a root the scope has moved off. Inventory swap rides the
 normal paths: wave publishes enroll new names via register-first; interior old
 names batch-retire at completion; the old root lingers until the migration window
-closes (FSM1/cipher-box-next#34 D4).
+closes (FSM1/cipher-box-next#34 D4). The retire takes only a name that the root's
+write scope seed, or the seed one epoch below it, derives for a node the walk
+gated, and refuses the whole batch otherwise; an old name of a moved node that
+neither seed derives stays registered to its EOL (ADR 0065 D1).
 
 A node below the root that the wave cannot move is a **dropped node**
 ([ADR 0065](../decisions/0065-the-name-wave-drops-a-node-that-it-cannot-move-and-an-owed-cut-ends-within-a-bound.md)).
@@ -1086,8 +1140,8 @@ entry stands, with the class of the stop (`availability`, `capability` or
 that finds the work can never land, because the cut set never published or the
 recipient left the contact book, drops the entry and emits
 `rotationWorkAbandoned` once. A
-relocation into another scope, a delete, a purge, or a restore into another
-scope that takes a folder with an owed interior move out of the scope it
+relocation into another scope, a delete, a purge, or a restore that takes a
+folder with an owed interior move out of the scope it
 left is refused, retryably, until the move lands; a crossing the queue
 already holds waits for it, uncharged. At the entry's own cut epoch the published state does not tell a read cascade that
 landed from one that did not, so a re-drive after a lost advance runs one more.
@@ -1117,7 +1171,8 @@ Each drop emits `nodeDropped` with the scope root, the node id and the cause
 (`record-refused`, `epoch-unreachable`, `no-record`, `endpoint-unavailable`,
 `no-head-block`, `below-sequence-floor` or `epoch-above-root`), after the cut
 lands. A removed second ref emits nothing. The command or the re-drive that
-drops a node returns `Ok`.
+drops a node returns `Ok`. The event is a best-effort notice: a host that does
+not listen at the time of the wave gets no notice, and the tree shows the drop.
 
 The **expired-link sweep**
 ([ADR 0025](../decisions/0025-revocation-under-the-link-first-model.md)

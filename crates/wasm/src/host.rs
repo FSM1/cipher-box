@@ -666,6 +666,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::InvalidSecret => "invalidSecret",
         EngineError::UnknownNode => "unknownNode",
         EngineError::RestoreTargetGone => "restoreTargetGone",
+        EngineError::RestoreCrossesScope => "restoreCrossesScope",
         EngineError::NotBinned => "notBinned",
         EngineError::NotAFolder => "notAFolder",
         EngineError::NotAFile => "notAFile",

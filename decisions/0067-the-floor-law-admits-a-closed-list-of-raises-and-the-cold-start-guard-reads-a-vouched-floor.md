@@ -13,7 +13,7 @@
   [ADR 0041](./0041-a-rotation-reads-every-floor-again-before-it-seals.md),
   [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md),
   `blueprint/engine.md` "Adoption gate and floors"
-- **Implemented by:** not yet implemented
+- **Implemented by:** FSM1/cipher-box#2212 (D1 to D4)
 - **Amends:** ADR 0014 D2 and E3 (the closed list of raises with no unseal)
 
 ## Context
@@ -43,8 +43,9 @@ new raise enters the list only through an ADR or an amendment, also when it fits
 **D3 — The cold-start guard at the vault anchor reads a vouched floor.** The vouched floor is the
 highest `minReadEpoch` that a vault pointer vouched to this device. It is a floor-store key in
 the epoch namespace, the root scope id with its own suffix, the same shape as the vault-pointer
-index mark. It rises in `cold_seed`, when the vouch of a vault-root cut lands, and when
-`catch_up_vault_pointer` lands its vouch. The read-epoch stage of `repoint_regression` compares
+index mark. It rises in `cold_seed`, when the vouch of a vault-root cut lands, when
+`catch_up_vault_pointer` lands its vouch, and when `vouch_over` reads a standing pointer that
+already vouches the epoch. The read-epoch stage of `cold_seed_checked` compares
 the vouched `minReadEpoch` with this key. A device without the key compares with the read-epoch
 floor, as on main. The gated adopt still raises the read-epoch floor, so the gate still refuses
 a pre-cut vault root in the session.
@@ -90,13 +91,8 @@ refuses a pointer that only lags a root that this device adopted but did not vou
 
 1. `CONTEXT.md` "Floor law": "One exception, and the list of them is closed" becomes the three
    sources of D1 and the closed list of D2.
-2. `blueprint/engine.md` "Adoption gate and floors" names each raise: `complete_cut`,
-   `rekey_one`, `record_revocation_floor` (before the publish), `record_cut_epochs`,
-   `record_grant_floor`, the clear in `effective_revoked_recipients` (ADR 0025 D3),
-   `PointerConsult::run`, the write-epoch raise after a landed wave (`after_write_wave`,
-   `cut_write_scope`, `redrive_write_cut`), the cut-epoch raise after a landed cut (`rotate_cut`
-   and the owed re-drive), `publish_pointer_over`, `promote_scope_root`, and D3. The cold-start
-   paragraph states D3 and D4.
+2. `blueprint/engine.md` "Adoption gate and floors" names each raise by its D1 source. The
+   cold-start paragraph states D3 and D4.
 3. `blueprint/core.md`: no change. The new key takes the `name-label` of ADR 0016 D1 like every
    floor-store key.
 4. `blueprint/testing.md` floor-law matrix: a one-device owner restarts after a vouch that ran
@@ -110,7 +106,7 @@ refuses a pointer that only lags a root that this device adopted but did not vou
    guard rests on the last value that this release wrote.
 7. A device that is locked out at the upgrade has no key, so it stays locked out until a vouch
    lands.
-8. The `gate/floor.rs` module doc lists the raises of D1 and cites this ADR.
+8. The `gate/floor.rs` module doc cites this ADR and the blueprint list.
 9. ADR 0014 D2 and E3 carry an "Amended by ADR 0067 D1" sentence.
 
 ## Residuals
