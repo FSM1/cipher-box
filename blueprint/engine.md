@@ -667,8 +667,14 @@ the grantee that removed it stops reading it.
   binning one would seal a live node under a key no reader derives. The base
   cannot prove a departure: a folder this device did not load, or loaded before
   the move, does not show the new link. So the drain holds the capture and walks
-  the scope: it reads every node fresh through the gate, then reads each one
-  again, from a read budget the tick shares across its passes. The walk starts
+  the scope and each proved scope below it, each under its own material: it
+  reads every node fresh through the gate, then reads each one again, from a
+  read budget the tick shares across its passes. A walk that meets a child it
+  cannot read, at a name its scope's write seed does not derive or below a
+  scope root with no material this tick, holds every capture of the scope, as a
+  failed read does. Residual: this hold has no exit and sends no event, so a
+  writer of the scope, or a ref a name wave left at an old name, holds that
+  scope's captures for the session; the per-scope cap bounds them. The walk starts
   after the device saw the departure and proves only that departure. The walk
   makes one attempt at a read on each pass, up to three attempts. A refused
   record, a record served tied, a second read that shows another record, or a
@@ -682,9 +688,9 @@ the grantee that removed it stops reading it.
   set of 4096, so a peer with write access to four scopes can make every other
   scope drop its new captures. Residual: a settled proof waits for an adoption
   slot, so its snapshot ages; the risk is low, because an honest move publishes
-  the destination before the source. A child that does not publish under a name
-  this scope's write seed derives is a scope root, which the authored delete
-  refuses for the same reason.
+  the destination before the source. A proved scope root, or a child that does
+  not publish under a name this scope's write seed derives, is a scope root,
+  which the authored delete refuses for the same reason.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.

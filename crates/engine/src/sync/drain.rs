@@ -190,12 +190,14 @@ fn admissible_staged_block(key: &[u8], block: Vec<u8>) -> Result<Vec<u8>, Halt> 
 
 /// Whether `child` publishes under the name this scope's write seed derives.
 ///
-/// A child that does not is a scope root: its subtree is sealed under a
-/// grantee's own seed, and cutting that grantee needs a re-key the bin does not
-/// carry, so a delete of it stays hard (ADR 0010 item 3). Every other reader in
-/// the delete path derives the child's name the same way and never reads this
-/// field, so a child the comparison rejects is one this scope's write plane
-/// does not name either.
+/// This tests the name only. A write scope root fails it, but a granted root
+/// keeps the name its parent derives, so a caller that must stop at every scope
+/// root also checks the pass's `scope_roots`. A scope root's subtree is sealed
+/// under a grantee's own seed, and cutting that grantee needs a re-key the bin
+/// does not carry, so a delete of it stays hard (ADR 0010 item 3). Every other
+/// reader in the delete path derives the child's name the same way and never
+/// reads this field, so a child the comparison rejects is one this scope's
+/// write plane does not name either.
 fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
     end.write_name(&child.id).as_str().as_bytes() == child.ipns_name
 }
@@ -851,27 +853,47 @@ pub(crate) struct CaptureProofs {
     overflowed: bool,
 }
 
-/// A fresh read of every node of one scope, then a second read of each, which
-/// proves which held captures no folder names (blueprint/engine.md "Owner
-/// capture"). A node whose second read shows another record moved during the
-/// walk, so the walk is not a snapshot and starts again.
+/// A fresh read of every node of one scope and of the scopes below it, then a
+/// second read of each, which proves which held captures no folder names
+/// (blueprint/engine.md "Owner capture"). A node whose second read shows
+/// another record moved during the walk, so the walk is not a snapshot and
+/// starts again.
 struct CaptureWalk {
     cohort: BTreeSet<CaptureKey>,
-    pending: Vec<NodeId>,
+    /// Each node still to read, with the scope root whose end reads it.
+    pending: Vec<(NodeId, NodeId)>,
     seen: BTreeSet<NodeId>,
     /// Cohort nodes some folder names.
     linked: BTreeSet<NodeId>,
-    /// Each node read, with the record read.
-    read: Vec<(NodeId, RecordMark)>,
+    /// Each node read, with the scope root whose end read it and the record
+    /// read.
+    read: Vec<(NodeId, NodeId, RecordMark)>,
+    /// The anchor of each scope below the walked one, from its root's read.
+    anchors: BTreeMap<NodeId, WalkAnchor>,
     /// How many of `read` the second read has confirmed.
     confirmed: usize,
     /// The unanswered attempts at the walk's next read: the last of `pending`,
     /// or `read[confirmed]` once every node is read one time.
     unanswered: u8,
-    /// A folder names a child at a name this scope's write seed does not
-    /// derive, and no proved scope root has that id. The walk cannot read it,
-    /// so a settled walk proves no capture.
+    /// A folder names a child the walk cannot read: one at a name its scope's
+    /// write seed does not derive, or a proved scope root this tick holds no
+    /// end for. A settled walk then proves no capture.
     blind: bool,
+}
+
+/// What a scope root's read gives the reads below it.
+struct WalkAnchor {
+    epoch: u64,
+    history_links: Vec<SignedSealed>,
+}
+
+impl WalkAnchor {
+    fn anchor(&self) -> Anchor<'_> {
+        Anchor {
+            epoch: self.epoch,
+            history_links: &self.history_links,
+        }
+    }
 }
 
 /// Which record a walk read: two reads with one mark read the same bytes.
@@ -885,6 +907,8 @@ struct RecordMark {
 struct WalkRead {
     mark: RecordMark,
     children: Vec<ChildRef>,
+    /// Set when the node is a scope root.
+    anchor: Option<WalkAnchor>,
 }
 
 /// Why a walk read gave no [`WalkRead`].
@@ -914,25 +938,27 @@ impl CaptureWalk {
     fn new(root: NodeId, cohort: BTreeSet<CaptureKey>) -> Self {
         Self {
             cohort,
-            pending: vec![root],
+            pending: vec![(root, root)],
             seen: BTreeSet::from([root]),
             linked: BTreeSet::new(),
             read: Vec::new(),
+            anchors: BTreeMap::new(),
             confirmed: 0,
             unanswered: 0,
             blind: false,
         }
     }
 
-    /// Record what one folder names: a cohort node it links, and each child of
-    /// this scope still to read. A child's kind is wire data, so a child marked
-    /// as a file is read too: its body, not its ref, says if it names children.
-    /// A read-granted scope root shares this scope's write seed, so only
-    /// `scope_roots` marks it as a boundary.
-    /// Answers `false` when the walk holds more than `bound` nodes.
+    /// Record what one folder of the scope at `end` names: a cohort node it
+    /// links, and each child still to read. A child's kind is wire data, so a
+    /// child marked as a file is read too: its body, not its ref, says if it
+    /// names children. A granted scope root keeps the name its parent derives,
+    /// so only `scope_roots` marks it, and the walk reads it under its own end
+    /// from `ends`. Answers `false` when the walk holds more than `bound` nodes.
     fn visit(
         &mut self,
         end: &ScopeEnd<'_>,
+        ends: &[ScopeEnd<'_>],
         scope_roots: &[NodeId],
         children: &[ChildRef],
         bound: usize,
@@ -942,13 +968,14 @@ impl CaptureWalk {
             if names_node(&self.cohort, id) {
                 self.linked.insert(id);
             }
-            if scope_roots.contains(&id) {
-                continue;
-            }
-            if !names_this_scope(end, child) {
+            if ends.iter().any(|end| end.root == id) {
+                if self.seen.insert(id) {
+                    self.pending.push((id, id));
+                }
+            } else if scope_roots.contains(&id) || !names_this_scope(end, child) {
                 self.blind = true;
             } else if self.seen.insert(id) {
-                self.pending.push(id);
+                self.pending.push((id, end.root));
             }
         }
         self.seen.len() <= bound
@@ -1959,8 +1986,13 @@ where
         *self.bin_expiries.borrow_mut() = TickShare::new(MAX_BIN_EXPIRIES, passes.len());
         *self.capture_reads.borrow_mut() = TickShare::new(MAX_CAPTURE_WALK_READS, passes.len());
         let mut journalled = Vec::new();
+        let ends: Vec<ScopeEnd<'_>> = passes
+            .iter()
+            .filter(|scope| !scope.is_grafted())
+            .map(|scope| scope.source)
+            .collect();
         for scope in &passes {
-            let mut report = self.run_queue(scope, exits).await;
+            let mut report = self.run_queue(scope, &ends, exits).await;
             journalled.append(&mut report.journalled_deletes);
             self.surface_drain_report(&report);
         }
@@ -2024,13 +2056,14 @@ where
     /// clear what the pass orphaned in this scope's own bin. A tick runs one of
     /// these per scope it holds and [`settle`](Self::settle) once, because
     /// everything settle touches is keyed by the identity.
-    async fn run_queue<R: ScopeExitRotator>(
+    async fn run_queue<'e, R: ScopeExitRotator>(
         &self,
-        scope: &DrainScope<'_>,
+        scope: &DrainScope<'e>,
+        ends: &[ScopeEnd<'e>],
         exits: &R,
     ) -> DrainReport {
         let (report, queued_purges) = self.drain_queue(scope, exits).await;
-        self.adopt_observed_unlinks(scope).await;
+        self.adopt_observed_unlinks(scope, ends).await;
         // A queue this pass could not read cannot say which purges are already
         // queued, and the sweep stages ops: it waits rather than duplicating.
         if let Some(queued) = queued_purges {
@@ -4128,7 +4161,7 @@ where
     /// One index load and one index publish serve the whole pass, and at most
     /// [`MAX_BIN_ADOPTIONS`] captures ride it, so a peer that unlinks a large
     /// folder cannot spend the tick.
-    async fn adopt_observed_unlinks(&self, scope: &DrainScope<'_>) {
+    async fn adopt_observed_unlinks<'e>(&self, scope: &DrainScope<'e>, ends: &[ScopeEnd<'e>]) {
         let eligible = self.prune_captures(scope);
         let overflowed = self
             .cells
@@ -4156,7 +4189,7 @@ where
         let Ok(root) = self.load_scope_root(&scope.source).await else {
             return;
         };
-        let proved = self.prove_captures(scope, &root, eligible).await;
+        let proved = self.prove_captures(scope, ends, &root, eligible).await;
         let taken = self.take_captures(scope, &proved);
         if taken.is_empty() {
             return;
@@ -4328,8 +4361,8 @@ where
     /// seal a live node under a key no reader derives. A proved scope root, or a
     /// child that does not publish under a name this scope's write seed derives,
     /// is a scope root, which the authored delete refuses for the same reason.
-    /// A name longer than
-    /// this build ever authors is a peer's, and no entry carries it.
+    /// A name longer than this build ever authors is a peer's, and no entry
+    /// carries it.
     fn prune_captures(&self, scope: &DrainScope<'_>) -> BTreeSet<CaptureKey> {
         let base = self.cells.base.borrow();
         let mut eligible = BTreeSet::new();
@@ -4384,9 +4417,10 @@ where
     /// The cohort keeps only captures still held, so a walk proves nothing about
     /// a capture the set dropped. A capture some folder names leaves the set
     /// unbinned.
-    async fn prove_captures(
+    async fn prove_captures<'e>(
         &self,
-        scope: &DrainScope<'_>,
+        scope: &DrainScope<'e>,
+        ends: &[ScopeEnd<'e>],
         root: &LoadedRoot,
         eligible: BTreeSet<CaptureKey>,
     ) -> BTreeSet<CaptureKey> {
@@ -4407,7 +4441,7 @@ where
             walk = Some(CaptureWalk::new(scope_root, unproved));
         }
         if let Some(mut walk) = walk {
-            match self.step_walk(scope, root, &mut walk).await {
+            match self.step_walk(scope, ends, root, &mut walk).await {
                 WalkStep::Unfinished => proofs.walk = Some(walk),
                 WalkStep::Restart => {}
                 WalkStep::Overflowed => {
@@ -4439,18 +4473,21 @@ where
         ready
     }
 
-    /// Spend this pass's share of the tick's walk reads on `walk`.
-    async fn step_walk(
+    /// Spend this pass's share of the tick's walk reads on `walk`. `ends` are
+    /// the tick's own scope ends, which read the scopes below this one.
+    async fn step_walk<'e>(
         &self,
-        scope: &DrainScope<'_>,
+        scope: &DrainScope<'e>,
+        ends: &[ScopeEnd<'e>],
         root: &LoadedRoot,
         walk: &mut CaptureWalk,
     ) -> WalkStep {
-        let plane = scope.source.at(root.epoch);
         let share = self.capture_reads.borrow().share();
         let mut spent = 0;
         let step = loop {
-            if walk.pending.is_empty() && walk.confirmed == walk.read.len() {
+            // A blind walk proves nothing, so its first pass, which finds every
+            // link, is all it needs.
+            if walk.pending.is_empty() && (walk.blind || walk.confirmed == walk.read.len()) {
                 break WalkStep::Settled;
             }
             if spent == share {
@@ -4458,11 +4495,28 @@ where
             }
             spent += 1;
             let second = walk.pending.is_empty();
-            let node = match walk.pending.last() {
-                Some(node) => *node,
-                None => walk.read[walk.confirmed].0,
+            let (node, at) = match walk.pending.last() {
+                Some(next) => *next,
+                None => {
+                    let (node, at, _) = walk.read[walk.confirmed];
+                    (node, at)
+                }
             };
-            let read = match self.walk_read(scope, &plane, root.anchor(), node).await {
+            let end = if at == scope.source.root {
+                Some(scope.source)
+            } else {
+                ends.iter().find(|end| end.root == at).copied()
+            };
+            let anchor = if at == scope.source.root {
+                Some(root.anchor())
+            } else {
+                walk.anchors.get(&at).map(WalkAnchor::anchor)
+            };
+            let read = match end {
+                Some(end) => self.walk_read(scope, &end, anchor, node).await,
+                None => Err(WalkReadFault::Unanswered),
+            };
+            let read = match read {
                 Ok(read) => read,
                 Err(WalkReadFault::Untrusted) => break WalkStep::Restart,
                 Err(WalkReadFault::Unanswered) => {
@@ -4476,16 +4530,25 @@ where
             };
             walk.unanswered = 0;
             if second {
-                if read.mark != walk.read[walk.confirmed].1 {
+                if read.mark != walk.read[walk.confirmed].2 {
                     break WalkStep::Restart;
                 }
                 walk.confirmed += 1;
                 continue;
             }
             walk.pending.pop();
-            walk.read.push((node, read.mark));
+            walk.read.push((node, at, read.mark));
+            if let Some(anchor) = read.anchor
+                && at != scope.source.root
+            {
+                walk.anchors.insert(at, anchor);
+            }
+            let Some(end) = end else {
+                break WalkStep::Restart;
+            };
             if !walk.visit(
-                &plane.end,
+                &end,
+                ends,
                 scope.scope_roots,
                 &read.children,
                 self.capture_walk_nodes,
@@ -4497,43 +4560,46 @@ where
         step
     }
 
-    /// One node of the walk's scope, read through the gate from the record
-    /// plane and never from the cache. A file body names no children.
+    /// One node of the walk, read under `end` through the gate from the record
+    /// plane and never from the cache. A node below the root needs the root's
+    /// `anchor`. A file body names no children.
     async fn walk_read(
         &self,
         scope: &DrainScope<'_>,
-        plane: &SealPlane<'_>,
-        anchor: Anchor<'_>,
+        end: &ScopeEnd<'_>,
+        anchor: Option<Anchor<'_>>,
         node: NodeId,
     ) -> Result<WalkRead, WalkReadFault> {
         let fault = |halt: Halt| match halt {
             Halt::RecordRefused => WalkReadFault::Untrusted,
             _ => WalkReadFault::Unanswered,
         };
-        if node == plane.end.root {
+        if node == end.root {
             let resolved = self
-                .gated_scope_root(scope, &plane.end, ResolveMode::NoCache)
+                .gated_scope_root(scope, end, ResolveMode::NoCache)
                 .await
                 .map_err(fault)?;
             if !resolved.tied.is_empty() {
                 return Err(WalkReadFault::Untrusted);
             }
             let record =
-                resolved_bytes(resolved, plane.end.root_name, &self.seams.events).map_err(fault)?;
-            let root = self
-                .open_root_record(&plane.end, &record)
-                .await
-                .map_err(fault)?;
+                resolved_bytes(resolved, end.root_name, &self.seams.events).map_err(fault)?;
+            let root = self.open_root_record(end, &record).await.map_err(fault)?;
             return Ok(WalkRead {
                 mark: RecordMark {
                     sequence: root.state.sequence,
                     digest: cipherbox_core::suite::hash::hash(&record),
                 },
                 children: root.state.children,
+                anchor: Some(WalkAnchor {
+                    epoch: root.epoch,
+                    history_links: root.history_links,
+                }),
             });
         }
+        let anchor = anchor.ok_or(WalkReadFault::Unanswered)?;
         let loaded = self
-            .load_child_node(plane, anchor, node, ResolveMode::NoCache)
+            .load_child_node(&end.at(anchor.epoch), anchor, node, ResolveMode::NoCache)
             .await
             .map_err(fault)?;
         if loaded.tied {
@@ -4548,6 +4614,7 @@ where
                 ReadBody::Folder { children, .. } => children,
                 ReadBody::File { .. } => Vec::new(),
             },
+            anchor: None,
         })
     }
 
@@ -4711,7 +4778,10 @@ where
                     pending.extend(
                         children
                             .iter()
-                            .filter(|child| names_this_scope(&from.end, child))
+                            .filter(|child| {
+                                names_this_scope(&from.end, child)
+                                    && !scope.scope_roots.contains(&NodeId(child.id))
+                            })
                             .map(|child| NodeId(child.id)),
                     );
                     Vec::new()
@@ -10214,7 +10284,11 @@ mod tests {
             let root_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &root));
             harness.seams.http = serve(&BTreeMap::from([(cid, block), (root_cid, root)]));
             *harness.state.observed_unlinks.borrow_mut() = vec![unlinked.clone()];
-            block_on(harness.drain().adopt_observed_unlinks(&harness.scope()));
+            block_on(
+                harness
+                    .drain()
+                    .adopt_observed_unlinks(&harness.scope(), &[]),
+            );
             let retained = harness.state.observed_unlinks.borrow();
             assert_eq!(retained.len(), 1);
             assert_eq!(
@@ -10241,7 +10315,11 @@ mod tests {
         let unlinked = capture(&harness.write_scope_seed);
         harness.scope_roots.push(unlinked.node);
         *harness.state.observed_unlinks.borrow_mut() = vec![unlinked.clone()];
-        block_on(harness.drain().adopt_observed_unlinks(&harness.scope()));
+        block_on(
+            harness
+                .drain()
+                .adopt_observed_unlinks(&harness.scope(), &[]),
+        );
         assert!(harness.state.observed_unlinks.borrow().is_empty());
         assert_eq!(
             harness
@@ -10418,7 +10496,7 @@ mod tests {
             harness
                 .drain()
                 .with_capture_walk_bounds(reads, folders)
-                .adopt_observed_unlinks(&harness.scope()),
+                .adopt_observed_unlinks(&harness.scope(), &[]),
         );
     }
 
@@ -10622,7 +10700,7 @@ mod tests {
             &RecordingRotator::default(),
         ));
 
-        block_on(drain.adopt_observed_unlinks(&harness.scope()));
+        block_on(drain.adopt_observed_unlinks(&harness.scope(), &[]));
 
         let reads: usize = core::iter::once(HARNESS_ROOT)
             .chain(folders.iter().copied())
@@ -10755,7 +10833,11 @@ mod tests {
     fn a_grafted_pass_bins_no_capture_and_starves_no_set() {
         let grafted = grafted_harness();
         *grafted.state.observed_unlinks.borrow_mut() = vec![capture(&grafted.write_scope_seed)];
-        block_on(grafted.drain().adopt_observed_unlinks(&grafted.scope()));
+        block_on(
+            grafted
+                .drain()
+                .adopt_observed_unlinks(&grafted.scope(), &[]),
+        );
         assert!(
             grafted.state.observed_unlinks.borrow().is_empty(),
             "the capture leaves the bounded set rather than being held for ever",
@@ -10771,7 +10853,7 @@ mod tests {
 
         let own = drain_harness(Some(harness_root_envelope()));
         *own.state.observed_unlinks.borrow_mut() = vec![capture(&own.write_scope_seed)];
-        block_on(own.drain().adopt_observed_unlinks(&own.scope()));
+        block_on(own.drain().adopt_observed_unlinks(&own.scope(), &[]));
         assert_eq!(
             own.state.observed_unlinks.borrow().len(),
             1,
