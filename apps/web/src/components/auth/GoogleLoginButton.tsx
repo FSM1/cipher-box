@@ -140,7 +140,7 @@ export function GoogleLoginButton({ clientId, onCredential, disabled }: GoogleLo
         data-testid="google-login-button"
         className={targetClass(disabled, busy)}
         aria-disabled={disabled || busy}
-        aria-hidden={busy}
+        aria-hidden={busy || undefined}
       />
       {busy && (
         <div className="google-login-status" aria-live="polite">

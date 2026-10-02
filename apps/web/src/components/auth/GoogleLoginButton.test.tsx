@@ -138,7 +138,7 @@ describe('GoogleLoginButton', () => {
     await waitFor(() => expect(gis.rendered).toBeGreaterThan(0));
 
     expect(screen.queryByText(/authenticating with google/)).toBeNull();
-    expect(screen.getByTestId('google-login-button').getAttribute('aria-hidden')).not.toBe('true');
+    expect(screen.getByTestId('google-login-button').getAttribute('aria-hidden')).toBeNull();
   });
 
   it('still offers the button after a sign-in that came back', async () => {
