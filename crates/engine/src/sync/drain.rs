@@ -856,9 +856,9 @@ pub(crate) struct CaptureProofs {
     overflowed: bool,
 }
 
-/// A fresh read of every node of one scope and of the scopes below it, then a
-/// second read of each, which proves which held captures no folder names
-/// (blueprint/engine.md "Owner capture"). A node whose second read shows
+/// A fresh read of every node of the vault, each proved scope under its own
+/// end, then a second read of each, which proves which held captures of one
+/// scope no folder names (blueprint/engine.md "Owner capture"). A node whose second read shows
 /// another record moved during the walk, so the walk is not a snapshot and
 /// starts again.
 struct CaptureWalk {
@@ -870,7 +870,8 @@ struct CaptureWalk {
     linked: BTreeSet<NodeId>,
     /// Each node read, as `pending` holds it, with the record read.
     read: Vec<((NodeId, NodeId), RecordMark)>,
-    /// The anchor of each scope below the walked one, from its root's read.
+    /// The anchor of each scope the walk entered, from its root's read, but
+    /// the capture's own scope, whose pass holds its anchor.
     anchors: BTreeMap<NodeId, WalkAnchor>,
     /// How many of `read` the second read has confirmed.
     confirmed: usize,
@@ -4488,7 +4489,7 @@ where
     }
 
     /// Spend this pass's share of the tick's walk reads on `walk`. `ends` are
-    /// the tick's own scope ends, which read the scopes below this one.
+    /// the tick's own scope ends, which read every scope the walk enters.
     async fn step_walk<'e>(
         &self,
         scope: &DrainScope<'e>,
@@ -10311,6 +10312,27 @@ mod tests {
                 "only a same-scope capture may begin resolving the subtree for re-keying",
             );
         }
+    }
+
+    /// An interior scope's walk starts at the vault root when the tick holds
+    /// the vault end. With no vault end it cannot read the scopes above, so it
+    /// proves nothing.
+    #[test]
+    fn an_interior_capture_walk_starts_at_the_vault_root_or_proves_nothing() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let ascent = Zeroizing::new([0x31; 32]);
+        let mut interior = harness.scope();
+        interior.source.root = NodeId([0x32; 16]);
+        interior.source.ascent_node_seed = Some(&ascent);
+        let vault = harness.scope().source;
+        let cohort = BTreeSet::from([(NodeId([0x43; 16]), 9)]);
+
+        let walk = CaptureWalk::from_vault_root(&interior, &[], cohort.clone());
+        assert!(walk.blind, "no vault end: the walk proves nothing");
+
+        let walk = CaptureWalk::from_vault_root(&interior, &[interior.source, vault], cohort);
+        assert!(!walk.blind);
+        assert_eq!(walk.pending, vec![(vault.root, vault.root)]);
     }
 
     /// A read-granted scope root shares its parent scope's write seed, so its

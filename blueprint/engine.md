@@ -674,7 +674,12 @@ the grantee that removed it stops reading it.
   scope root with no material this tick, holds every capture of the scope, as a
   failed read does. Residual: this hold has no exit and sends no event, so a
   writer of the scope, or a ref a name wave left at an old name, holds that
-  scope's captures for the session; the per-scope cap bounds them. The walk starts
+  scope's captures for the session; the per-scope cap bounds them. Residual: a
+  change to any vault folder during a walk starts it again, so in an active
+  vault a capture waits until the vault is quiet; the walk does not narrow, as a
+  narrow walk bins a live node. Residual: a bad ref in one scope holds the
+  captures of every scope. Residual: the walk bound of 65,536 nodes applies to
+  the whole vault. The walk starts
   after the device saw the departure and proves only that departure. The walk
   makes one attempt at a read on each pass, up to three attempts. A refused
   record, a record served tied, a second read that shows another record, or a
