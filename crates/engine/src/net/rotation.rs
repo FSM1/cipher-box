@@ -1173,7 +1173,9 @@ where
         // as a vacant one and switch the rollback bar off, which is the whole
         // authority a device holding no floor for this scope has
         // ([`FanoutRecord`]).
-        match fanout_get_classified(self.transport, &name).await {
+        // The read the rollback bar checks is also the CAS bar, so a flip that
+        // lands after it loses the publish its race.
+        let observed = match fanout_get_classified(self.transport, &name).await {
             FanoutRecord::Unavailable(_) => return Err(RotationPublishError::NotPublished),
             FanoutRecord::Found(standing, _) => {
                 // A standing block this build cannot open is a bar it cannot
@@ -1194,16 +1196,17 @@ where
                 if prior.write_epoch >= repoint.write_epoch && &prior != repoint {
                     return Err(RotationPublishError::Rejected);
                 }
+                Observed::record(&name, standing.sequence)
             }
-            FanoutRecord::Absent => {}
-        }
+            FanoutRecord::Absent => Observed::unread(&name),
+        };
         // The same name-to-signer bind every held pointer clears: a key arm
         // whose read and signing edges disagree would publish at a routing key
         // no renewal here can re-sign (`enrol_scope_pointer`).
         if IpnsName::from_public_key(&signer.verifying_key()) != name {
             return Err(RotationPublishError::Rejected);
         }
-        let record_bytes = publish_pointer_inline(
+        let record_bytes = publish_pointer_over(
             PointerPipeline {
                 transport: self.transport,
                 api: self.api,
@@ -1211,7 +1214,7 @@ where
                 scheduler: self.scheduler,
                 profile: self.profile,
             },
-            &name,
+            &observed,
             &signer,
             &block,
         )
@@ -2490,6 +2493,12 @@ where
         held_outside: &[HeldNode],
     ) -> Result<Vec<NodeRef>, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
+        // The promoted root replaces the record read at the node's own name, and
+        // that read is the CAS basis. At any other name the publish would have
+        // no read to build on.
+        if node.ipns_name != name.as_str().as_bytes() {
+            return Err(RotationPublishError::Rejected);
+        }
         // The interior move this promotion heads seals under the same seed.
         let override_seed = self.moved_seed.recover(self.keys.enc_secret, record)?;
         let source = self
@@ -2513,12 +2522,7 @@ where
             // A read grant cuts no write scope, so the promoted root keeps
             // signing under the write seed of the scope it is leaving.
             write_scope_seed: Some(source.write_scope_seed.clone()),
-            // The record the promotion replaces, where the node keeps its name.
-            observed: if node.ipns_name == name.as_str().as_bytes() {
-                current.observed
-            } else {
-                Observed::unread(&name)
-            },
+            observed: current.observed,
         };
         floor::seed_scope_root_write_epoch(self.floors, &record.scope_id, record.write_epoch)
             .await
@@ -6799,6 +6803,69 @@ mod tests {
             standing_pointer(&harness, &pointer),
             standing,
             "and the re-point it could not read is still the one standing",
+        );
+    }
+
+    /// Another device flips the pointer between the read the rollback bar
+    /// checks and the publish. The publish builds on the checked read, so it
+    /// loses the race rather than signing an older re-point over the flip.
+    #[test]
+    fn a_mint_loses_to_a_pointer_flip_that_lands_after_its_rollback_check() {
+        let harness = Harness::plain();
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        let record_at = |write_epoch: u64, sequence: u64| {
+            let block = seal_repoint(
+                SessionRole::Owner,
+                &mut SeededEntropy::new(5),
+                &OwnerSeeds.pointer_read_key(&CHILD_SCOPE),
+                PAYLOAD_VERSION,
+                &owner_identity(),
+                &RepointObject {
+                    scope_id: CHILD_SCOPE,
+                    current_root: vault_root([0xb0; 16], Vec::new()).name,
+                    write_epoch,
+                    min_read_epoch: MINT_EPOCH,
+                    prev_root: None,
+                },
+            )
+            .expect("owner seals the re-point");
+            IpnsRecord::create_v2(
+                &scope_pointer_signer(&OWNER_POINTER_SEED, &CHILD_SCOPE),
+                &block,
+                sequence,
+                TTL_NANOS,
+                EOL,
+            )
+            .marshal()
+        };
+        let flipped = record_at(MINT_EPOCH + 2, 3);
+        for endpoint in harness.store.endpoints() {
+            harness
+                .store
+                .seed_record(&endpoint, pointer.as_str(), flipped.clone());
+        }
+        // The rollback check's fan-out reads the re-point from before the flip.
+        harness.store.serve_gets_for_after(
+            pointer.as_str(),
+            0,
+            harness.store.endpoints().len(),
+            Some(record_at(MINT_EPOCH, 1)),
+        );
+
+        let signer = owner_identity();
+        let raced = block_on(harness.pointer_mint(&signer).vouch_scope(&RepointObject {
+            scope_id: CHILD_SCOPE,
+            current_root: vault_root([0xc0; 16], Vec::new()).name,
+            write_epoch: MINT_EPOCH + 1,
+            min_read_epoch: MINT_EPOCH,
+            prev_root: None,
+        }));
+
+        assert_eq!(raced, Err(RotationPublishError::LostRace));
+        assert_eq!(
+            standing_pointer(&harness, &pointer),
+            vec![Some(flipped); harness.store.endpoints().len()],
+            "the flip still stands",
         );
     }
 
@@ -13850,6 +13917,34 @@ mod tests {
         block_on(net.promote_scope_root(&scope, &node, &promoted(&node), &[]))
             .expect("the promotion lands");
         assert_eq!(sequence_at(&harness, &name), Some(8));
+    }
+
+    /// A promotion re-seals the root at the name its read came from, so a
+    /// record naming another name is refused with nothing signed at either.
+    #[test]
+    fn a_promotion_to_another_name_than_the_node_holds_signs_nothing() {
+        let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        let net = harness.net(&[]);
+        let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        let node = swept.children[0].clone();
+        let elsewhere = derive_write_name(&FRESH_WRITE_SCOPE_SEED, &node.node_id);
+        let record = promoted(&NodeRef {
+            node_id: node.node_id,
+            ipns_name: elsewhere.as_str().as_bytes().to_vec(),
+        });
+        let name = scope_name(&node.ipns_name).expect("a valid name");
+        let sequence_before = sequence_at(&harness, &name);
+
+        assert_eq!(
+            block_on(net.promote_scope_root(&scope, &node, &record, &[])),
+            Err(RotationPublishError::Rejected),
+        );
+        assert_eq!(sequence_at(&harness, &name), sequence_before);
+        assert_eq!(
+            sequence_at(&harness, &elsewhere),
+            None,
+            "nothing was signed at the other name"
+        );
     }
 
     /// The node id of the folder a grant promotes to a scope root — the scope
