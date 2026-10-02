@@ -9,7 +9,7 @@
   [ADR 0008](./0008-cipherbox-issues-the-identity-token.md) D1 (CipherBox issues the identity
   token), [ADR 0009](./0009-device-approval-is-a-bound-rendezvous.md) D3 (the comparison value)
   and D4 (device keys sign both halves), and the `blueprint/api.md` section "Identity and auth"
-- **Implemented by:** not built; one later slice under FSM1/cipher-box#2012. The spend at
+- **Implemented by:** FSM1/cipher-box#2210 (D1 to D3, the clients, and the e2e approver sign-in). The spend at
   registration landed with FSM1/cipher-box#2092.
 - **Amends:** ADR 0039 D2
 
