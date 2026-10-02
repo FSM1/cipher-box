@@ -92,8 +92,9 @@ still spends the token.
    accepts it more than once.
 10. The token lifetime stays 300 seconds. A spent row lives until its token expires, plus a grace.
 11. No backfill: an existing account stays unbound until its next login that follows an
-    exchange, and until then its registrations are refused. The rendezvous session still maps a
-    subject to an account through `account_devices`.
+    exchange, and until then its registrations are refused and it gets no rendezvous. The
+    rendezvous session maps a subject to an account through the bind, and still needs a
+    registered device on that account (ADR 0039 D3).
 12. Privacy: today the API links an account to a subject, and so to the unsalted hash of its
     provider identifier, only when a device registers. After the bind it links every account that
     signs in through an exchange.
