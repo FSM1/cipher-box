@@ -13440,6 +13440,30 @@ mod tests {
         );
     }
 
+    /// A node that still sits at the name the superseded seed derives, as a
+    /// wave that crashed past its flip leaves it, retires that name.
+    #[test]
+    fn a_node_at_its_superseded_name_is_retirable() {
+        const SUPERSEDED: [u8; 32] = [0x4d; 32];
+        let harness = Harness::plain();
+        let mid_name = stage_node_under(&harness, MID, &folder(Vec::new()), &SUPERSEDED);
+        let root = staged_root(
+            &harness,
+            vec![ref_to(MID, &mid_name)],
+            Vec::new(),
+            Vec::new(),
+        );
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        block_on(net.resolve_node(&SCOPE, None)).expect("the root resolves");
+        // Stands in for the recovery that proves the superseded seed.
+        net.subtree.record_superseded_write_seed(&SUPERSEDED);
+
+        let mid = block_on(net.resolve_node(&MID, None)).expect("the walk adopts MID");
+        assert_eq!(mid.current_name, mid_name);
+        assert!(mid.retirable);
+    }
+
     /// A retire of a name that no write scope seed of the wave derives for a
     /// node it walked never reaches the registry: it can be a live name of
     /// another scope.

@@ -9,7 +9,7 @@
   [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)
   D1, D3 and D4, [ADR 0064](./0064-the-name-wave-reads-a-lagging-interior-node.md),
   `blueprint/engine.md` "rotateScopeWrite"
-- **Implemented by:** FSM1/cipher-box#2188
+- **Implemented by:** FSM1/cipher-box#2188, FSM1/cipher-box#2235
 - **Amends:** ADR 0063 D4 (the names the renewal walk skips), ADR 0064 Residuals
 
 ## Context
