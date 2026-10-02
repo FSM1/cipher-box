@@ -961,6 +961,11 @@ pub(crate) struct ScopeEnd<'a> {
     pub(crate) root_name: &'a IpnsName,
     /// The scope read seed per-node read keys derive from.
     pub(crate) read_scope_seed: &'a Zeroizing<[u8; 32]>,
+    /// The stamp of `read_scope_seed` (`deposit_seed`): its own epoch, or a
+    /// floor at or below it when the seed's record sat at the floor. Floors
+    /// only rise, so a root that passes the floor check at the stamp is at the
+    /// seed's own epoch. `None` where no stamp is known.
+    pub(crate) read_seed_stamp: Option<u64>,
     /// The scope write seed per-node IPNS names and signers derive from.
     pub(crate) write_scope_seed: &'a Zeroizing<[u8; 32]>,
     /// `nodeSeed(enclosingOverrideSeed, scopeId)` — the ascent authority the
@@ -1198,15 +1203,15 @@ pub(crate) fn owed_cuts(pending: &BTreeSet<NodeId>, vault_root: NodeId) -> Vec<N
         .collect()
 }
 
-/// What a scope root whose own record sits at another epoch than the plane
-/// binds costs the op that met it.
+/// What a scope root whose own record sits at another epoch than the end's
+/// plane or seed costs the op that met it.
 ///
 /// The anchor's epoch is this pass's own, and a rotation that moved it heals at
 /// the next pass boundary, so the op waits. A second end's comes from the tick's
 /// boundary walk, and only a fresh walk changes it: charged, or a superseded end
 /// holds the queue head for good.
-fn epoch_skew(scope: &DrainScope<'_>, plane: &SealPlane<'_>) -> Halt {
-    if plane.end.root == scope.source.root {
+fn epoch_skew(scope: &DrainScope<'_>, end: &ScopeEnd<'_>) -> Halt {
+    if end.root == scope.source.root {
         Halt::Unclassified
     } else {
         Halt::UploadAttempt
@@ -2724,7 +2729,13 @@ where
         scope: &DrainScope<'_>,
         record_bytes: &[u8],
     ) -> Result<(Pass, FolderState), Halt> {
-        let root = self.open_root_record(&scope.source, record_bytes).await?;
+        let root = self
+            .open_root_record(
+                &scope.source,
+                record_bytes,
+                epoch_skew(scope, &scope.source),
+            )
+            .await?;
         let pass = Pass {
             root: scope.source.root,
             epoch: root.epoch,
@@ -2744,7 +2755,8 @@ where
         source: &ScopeEnd<'_>,
     ) -> Result<LoadedRoot, Halt> {
         let record_bytes = self.resolve_scope_root(scope, source).await?;
-        self.open_root_record(source, &record_bytes).await
+        self.open_root_record(source, &record_bytes, epoch_skew(scope, source))
+            .await
     }
 
     /// The scope root as this device last held it: the cached record, opened.
@@ -2756,16 +2768,22 @@ where
             .await
             .map_err(seam)?
             .ok_or(Halt::Unclassified)?;
-        self.open_root_record(source, &record_bytes).await
+        self.open_root_record(source, &record_bytes, Halt::UploadAttempt)
+            .await
     }
 
     /// One scope root's record as currently published: its envelope's carried
     /// fields, its unsealed folder body, the scope epoch and the ratchet its
     /// grant section carries.
+    ///
+    /// A body the session seed does not open at the seed's own epoch is a seed
+    /// the gate passed in place of ours (CONTEXT.md "Owner blob"), and is
+    /// refused. At another epoch the seed lags a rotation and takes `lagged`.
     async fn open_root_record(
         &self,
         source: &ScopeEnd<'_>,
         record_bytes: &[u8],
+        lagged: Halt,
     ) -> Result<LoadedRoot, Halt> {
         let (sequence, envelope, _) = assemble_head_envelope(
             &self.seams.gateway,
@@ -2796,7 +2814,16 @@ where
         let observed = Observed::gated(source.root_name, sequence, envelope.v)
             .map_err(|_| Halt::Unclassified)?;
         let read_key = source.read_key(&source.root.0);
-        let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::UploadAttempt)?;
+        let body = open_read_body(&envelope, &read_key).map_err(|e| {
+            if source.read_seed_stamp != Some(envelope.epoch) {
+                return lagged;
+            }
+            let rejection = GateRejection {
+                stage: GateStage::Unseal,
+                reason: RejectionReason::Trust(e),
+            };
+            refuse_record(&self.seams.events, source.root_name, &rejection)
+        })?;
         let ReadBody::Folder {
             created_at,
             modified_at,
@@ -3114,7 +3141,7 @@ where
     ) -> Result<FolderState, Halt> {
         let root = self.resolve_and_open_scope_root(scope, &plane.end).await?;
         if root.epoch != plane.epoch {
-            return Err(epoch_skew(scope, plane));
+            return Err(epoch_skew(scope, &plane.end));
         }
         if plane.end.root != pass.root {
             pass.hold_second_ratchet(plane.end.root, root.epoch, root.history_links);
@@ -3601,6 +3628,7 @@ where
         let binned = SealPlane {
             end: ScopeEnd {
                 read_scope_seed: &held,
+                read_seed_stamp: None,
                 ..plane.end
             },
             ..plane
@@ -3683,6 +3711,7 @@ where
         let binned = SealPlane {
             end: ScopeEnd {
                 read_scope_seed: &held,
+                read_seed_stamp: None,
                 ..binned_under.end
             },
             ..binned_under
@@ -4504,7 +4533,7 @@ where
             let record =
                 resolved_bytes(resolved, plane.end.root_name, &self.seams.events).map_err(fault)?;
             let root = self
-                .open_root_record(&plane.end, &record)
+                .open_root_record(&plane.end, &record, epoch_skew(scope, &plane.end))
                 .await
                 .map_err(fault)?;
             return Ok(WalkRead {
@@ -4644,6 +4673,7 @@ where
         let binned = SealPlane {
             end: ScopeEnd {
                 read_scope_seed: &held,
+                read_seed_stamp: None,
                 ..plane.end
             },
             ..*plane
@@ -4965,6 +4995,7 @@ where
         let sealed_under = held.as_ref().map_or(plane, |held| SealPlane {
             end: ScopeEnd {
                 read_scope_seed: held,
+                read_seed_stamp: None,
                 ..scope.source
             },
             ..plane
@@ -8043,6 +8074,7 @@ mod tests {
                 root: self.root,
                 root_name: &self.name,
                 read_scope_seed: &self.read_scope_seed,
+                read_seed_stamp: None,
                 write_scope_seed: &self.write_scope_seed,
                 ascent_node_seed: None,
                 floor_namespace: FloorNamespace::Own,
@@ -8553,12 +8585,12 @@ mod tests {
         );
 
         assert_eq!(
-            epoch_skew(&scope, &source.end().at(SOURCE_EPOCH)),
+            epoch_skew(&scope, &source.end()),
             Halt::Unclassified,
             "the anchor's epoch is the pass's own, and the next pass reopens on it"
         );
         assert_eq!(
-            epoch_skew(&scope, &destination.end().at(DESTINATION_EPOCH)),
+            epoch_skew(&scope, &destination.end()),
             Halt::UploadAttempt,
             "a second end's is the walk's, and no retry of this pass refreshes it"
         );
@@ -9569,6 +9601,7 @@ mod tests {
                     root,
                     root_name: &self.root_name,
                     read_scope_seed: &self.read_scope_seed,
+                    read_seed_stamp: Some(OWNER_ROOT_EPOCH),
                     write_scope_seed: &self.write_scope_seed,
                     ascent_node_seed: None,
                     floor_namespace,
@@ -9785,6 +9818,61 @@ mod tests {
                 block_on(drain.load_scope_root(&scope.source)).err(),
                 Some(Halt::Unclassified),
                 "{case}",
+            );
+        }
+    }
+
+    /// Anchor a pass on the harness root under a read seed that does not open
+    /// it, stamped `stamp`: the halt, and how many abuse events it raised.
+    fn anchor_under_a_foreign_seed(stamp: Option<u64>) -> (Option<Halt>, usize) {
+        let foreign = Zeroizing::new([0x77; 32]);
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        let record = block_on(
+            harness
+                .seams
+                .snapshot_cache
+                .get(harness.root_name.as_str().as_bytes()),
+        )
+        .expect("the cache reads")
+        .expect("the root is cached");
+        let answer = {
+            let drain = harness.drain();
+            let anchored = harness.scope();
+            let scope = DrainScope {
+                source: ScopeEnd {
+                    read_scope_seed: &foreign,
+                    read_seed_stamp: stamp,
+                    ..anchored.source
+                },
+                ..anchored
+            };
+            block_on(drain.open_root_candidate(&scope, &record)).err()
+        };
+        let reported = core::iter::from_fn(|| harness.events.try_recv().ok())
+            .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+            .count();
+        (answer, reported)
+    }
+
+    /// At the seed's own epoch the gate passed another seed in place of the
+    /// session's, so the root is refused and reported.
+    #[test]
+    fn a_root_the_seed_does_not_open_at_its_own_epoch_is_refused() {
+        assert_eq!(
+            anchor_under_a_foreign_seed(Some(OWNER_ROOT_EPOCH)),
+            (Some(Halt::RecordRefused), 1)
+        );
+    }
+
+    /// At another epoch, or with no stamp, the seed may lag a rotation: the
+    /// anchor waits uncharged and nobody is accused.
+    #[test]
+    fn a_root_the_seed_does_not_open_at_another_epoch_is_a_skew() {
+        for stamp in [Some(OWNER_ROOT_EPOCH - 1), None] {
+            assert_eq!(
+                anchor_under_a_foreign_seed(stamp),
+                (Some(Halt::Unclassified), 0),
+                "stamp {stamp:?}"
             );
         }
     }
