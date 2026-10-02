@@ -23,6 +23,7 @@ use super::REGISTRY_BATCH_MAX;
 use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
 use super::eol::{self, renewal_eol_from};
 use super::fanout::{FanoutRecord, fanout_get_classified};
+use super::fork::{Fork, holds_renewal};
 use super::liveness::{EolRenewResult, HeldKey, HeldRecord, HeldRecords, hold_if_unchanged};
 use super::publish::{
     Observed, PublishError, PublishOutcome, PublishVerdict, SignatureGate, head_cid_from_value,
@@ -74,6 +75,9 @@ const JOURNAL_UNREADABLE: &str = "the doomed-name journal does not list or open,
 const CURSOR_UNREAD: &str = "the renewal cursor does not read, so the renewal walk renews nothing";
 /// Why the walk does not renew a name the endpoints agree holds no record.
 const NO_RECORD: &str = "the name holds no record the renewal walk can renew";
+/// Why the walk does not yet renew a name the endpoints serve forked.
+const FORK_HELD: &str =
+    "the endpoints serve a same-sequence fork of the name, so the renewal waits for it to heal";
 /// Why the walk does not renew a name whose acknowledged sequence is unreadable.
 const ACK_UNREADABLE: &str = "the retire ledger's acknowledged sequence does not open";
 /// Why the walk renews every name as if no scope had owed work this pass.
@@ -155,6 +159,9 @@ pub(crate) struct WalkReport {
     /// The owned scope roots with a write cut that did not finish and no owed
     /// entry on this device (ADR 0063 consequence 8).
     pub(crate) underived: Vec<[u8; 16]>,
+    /// The names, each with its sequence, the pass read as a same-sequence
+    /// fork (ADR 0066 D2).
+    pub(crate) forked: Vec<(String, u64)>,
 }
 
 /// A scope's material as this pass admitted its root.
@@ -505,6 +512,11 @@ where
                     .await
                     {
                         Ok(mut admitted) => {
+                            if let Some(fork) = admitted.fork {
+                                pass.report
+                                    .forked
+                                    .push((scope.name.as_str().to_owned(), fork.sequence));
+                            }
                             if admitted.write_scope_seed.is_none() {
                                 admitted.write_scope_seed = scope.write_seed.clone();
                             }
@@ -652,8 +664,12 @@ where
                     read_seed: admitted.read_scope_seed.clone(),
                     seed_stamp: Some(admitted.read_epoch),
                 };
-                let (bytes, sequence) = (admitted.record_bytes.clone(), admitted.sequence);
-                self.consider(pass, scope_id, scope_id, &name, &bytes, sequence)
+                let (bytes, sequence, fork) = (
+                    admitted.record_bytes.clone(),
+                    admitted.sequence,
+                    admitted.fork,
+                );
+                self.consider(pass, scope_id, scope_id, &name, &bytes, sequence, fork)
                     .await;
                 Some((plane, scope_id, body))
             }
@@ -740,7 +756,12 @@ where
         )
         .await
         {
-            Ok(ChildRecord::Admitted(adopted, bytes)) => {
+            Ok(ChildRecord::Admitted(adopted, bytes, fork)) => {
+                if let Some(fork) = fork {
+                    pass.report
+                        .forked
+                        .push((name.as_str().to_owned(), fork.sequence));
+                }
                 self.consider(
                     pass,
                     plane.scope_id,
@@ -748,6 +769,7 @@ where
                     name,
                     &bytes,
                     adopted.sequence,
+                    fork,
                 )
                 .await;
                 Some(adopted.read_body)
@@ -778,7 +800,8 @@ where
 
     /// Queue a renewal of the record the gate admitted at `sequence`, when its
     /// EOL is inside the window and no other write can come between (ADR 0061
-    /// D3 step 2).
+    /// D3 step 2), and no served `fork` holds it back (ADR 0066 D3).
+    #[expect(clippy::too_many_arguments, reason = "one renewal decision's inputs")]
     async fn consider(
         &self,
         pass: &mut Pass<'_>,
@@ -787,13 +810,21 @@ where
         name: &IpnsName,
         admitted: &[u8],
         sequence: u64,
+        fork: Option<Fork>,
     ) {
         let Ok(verified) = IpnsRecord::unmarshal(admitted).and_then(|record| record.verify(name))
         else {
             return;
         };
-        let due = eol::needs_renewal(self.scheduler.now(), &verified.validity, WALK_WINDOW);
+        let now = self.scheduler.now();
+        let due = eol::needs_renewal(now, &verified.validity, WALK_WINDOW);
         if !due || verified.sequence != sequence {
+            return;
+        }
+        if holds_renewal(fork, now, &verified.validity) {
+            pass.report
+                .failed
+                .push((name.as_str().to_owned(), FORK_HELD));
             return;
         }
         let Some(head_cid) = head_cid_from_value(&verified.value) else {
@@ -1060,6 +1091,7 @@ mod tests {
                 read_scope_seed: Zeroizing::new([0; 32]),
                 read_epoch: 0,
                 write_scope_seed: Some(Zeroizing::new(current)),
+                fork: None,
             },
         }
     }

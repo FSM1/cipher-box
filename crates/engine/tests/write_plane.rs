@@ -4103,6 +4103,136 @@ fn a_split_where_our_root_holds_the_first_endpoint_heals_above_both_records() {
     assert_eq!(queued(&second), 0);
 }
 
+/// Two devices of one owner each sign a root at one sequence, and the
+/// endpoints split between the two records. A device that reads the split on
+/// two ticks reports one fork, and accuses nobody (ADR 0066 D2).
+#[test]
+fn a_fork_at_the_root_is_reported_once_in_a_session_and_accuses_nobody() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let second = world.device(b"alice-second-device");
+    let (mut engine_a, mut events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &second, 7);
+    let (base, _) = published(&world.record_store, ROOT);
+    let base_record = root_record(&world, 0);
+    let endpoints = world.record_store.endpoints();
+
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let ours = root_record(&world, 0);
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, write_name(ROOT).as_str(), base_record.clone());
+    }
+    block_on(engine_b.command(Command::Create {
+        parent: ROOT,
+        name: "notes".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_b, &mut tasks_b);
+    let theirs = root_record(&world, 0);
+    assert_ne!(ours, theirs);
+    assert_eq!(root_sequence(&world, 0), base + 1, "both sign one sequence");
+    world
+        .record_store
+        .seed_record(&endpoints[0], write_name(ROOT).as_str(), ours);
+    drop(events_so_far(&mut events_a));
+
+    tick(&world, &engine_a, &mut tasks_a);
+    tick(&world, &engine_a, &mut tasks_a);
+    let events = events_so_far(&mut events_a);
+    let forks: Vec<&Event> = events
+        .iter()
+        .filter(|event| matches!(event, Event::SameSequenceFork { .. }))
+        .collect();
+    assert_eq!(
+        forks,
+        [&Event::SameSequenceFork {
+            routing_key: write_name(ROOT).as_str().to_owned(),
+        }],
+        "one fork event for two reads of one fork"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
+        "a fork accuses nobody"
+    );
+}
+
+/// A restart reads the root from its cached copy, while the endpoints serve
+/// only the other side of a fork. The boot read sees the fork, and the session
+/// reports it once.
+#[test]
+fn a_restart_that_finds_a_fork_against_its_cached_root_reports_it_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let second = world.device(b"alice-second-device");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &second, 7);
+    let base_record = root_record(&world, 0);
+    let endpoints = world.record_store.endpoints();
+
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let ours = root_record(&world, 0);
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, write_name(ROOT).as_str(), base_record.clone());
+    }
+    block_on(engine_b.command(Command::Create {
+        parent: ROOT,
+        name: "notes".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_b, &mut tasks_b);
+    let theirs = root_record(&world, 0);
+    assert_ne!(ours, theirs);
+    for endpoint in 0..endpoints.len() {
+        assert_eq!(
+            root_record(&world, endpoint),
+            theirs,
+            "only theirs is served"
+        );
+    }
+    drop(engine_a);
+    drop(tasks_a);
+    drop(world.scheduler.take_spawned_tasks());
+
+    let (engine_a, mut events_a, mut tasks_a) = boot(&world, &blocks, &first, 43);
+    tick(&world, &engine_a, &mut tasks_a);
+    tick(&world, &engine_a, &mut tasks_a);
+    let forks = events_so_far(&mut events_a)
+        .into_iter()
+        .filter(|event| matches!(event, Event::SameSequenceFork { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        forks,
+        [Event::SameSequenceFork {
+            routing_key: write_name(ROOT).as_str().to_owned(),
+        }],
+        "the boot read reports the fork once"
+    );
+}
+
 /// A lost race, then a restart before the retry. The restarted session holds
 /// no memory of the race, and a read can leave our own losing record as its
 /// cached copy. The retry still rebases onto the record our op does not read as
@@ -5691,37 +5821,63 @@ fn a_walk_that_read_the_destination_before_the_move_starts_again() {
 /// The walk's first read of the destination shows a fork at the sequence the
 /// move published, which does not name the node. The second read shows the
 /// move's record at that same sequence, so the walk is no snapshot and starts
-/// again.
+/// again. The served record is the pick whichever side carries the higher
+/// signed `data` (ADR 0066 D2).
 #[test]
 fn a_walk_whose_second_read_shows_another_record_at_one_sequence_starts_again() {
-    let mut scene = CaptureScene::new();
-    scene.tick_second(2);
-    scene.move_leaf_right();
-    let right_name = write_name(scene.right);
-    let endpoints = scene.world.record_store.endpoints();
-    let (sequence, _) = published(&scene.world.record_store, scene.right);
-    let fork = folder_record_with(
-        &scene.world.record_store,
-        &scene.blocks,
-        scene.right,
-        vec![child_ref(scene.inner.0, "inner", CoreNodeKind::Folder)],
-        sequence,
-        EOL,
-    );
-    scene.world.record_store.serve_gets_for_after(
-        right_name.as_str(),
-        0,
-        endpoints.len(),
-        Some(fork),
-    );
-    scene.tick_second(4);
+    let signed_data = |name: &IpnsName, bytes: &[u8]| {
+        IpnsRecord::unmarshal(bytes)
+            .and_then(|record| record.verify(name))
+            .expect("the record verifies")
+            .data
+    };
+    for fork_ranks_higher in [true, false] {
+        let mut scene = CaptureScene::new();
+        scene.tick_second(2);
+        scene.move_leaf_right();
+        let right_name = write_name(scene.right);
+        let endpoints = scene.world.record_store.endpoints();
+        let (sequence, _) = published(&scene.world.record_store, scene.right);
+        let moved = scene
+            .world
+            .record_store
+            .record_at(&endpoints[0], right_name.as_str())
+            .expect("the move is published");
+        let fork = (0..64)
+            .map(|variant| {
+                folder_record_with(
+                    &scene.world.record_store,
+                    &scene.blocks,
+                    scene.right,
+                    vec![child_ref(
+                        scene.inner.0,
+                        &format!("inner-{variant}"),
+                        CoreNodeKind::Folder,
+                    )],
+                    sequence,
+                    EOL,
+                )
+            })
+            .find(|fork| {
+                (signed_data(&right_name, fork) > signed_data(&right_name, &moved))
+                    == fork_ranks_higher
+            })
+            .expect("a variant on each side of the order");
+        scene.world.record_store.serve_gets_for_after(
+            right_name.as_str(),
+            0,
+            endpoints.len(),
+            Some(fork),
+        );
+        scene.tick_second(4);
 
-    assert!(
-        scene.binned().is_empty(),
-        "two records at one sequence prove no departure"
-    );
-    assert!(scene.leaf_opens_under_the_scope());
-    scene.assert_second_reads_the_leaf_under_right();
+        assert!(
+            scene.binned().is_empty(),
+            "two records at one sequence prove no departure (fork higher: {fork_ranks_higher})"
+        );
+        assert!(scene.leaf_opens_under_the_scope());
+        scene.assert_second_reads_the_leaf_under_right();
+    }
 }
 
 /// A proof is spent when its bin publish does not land. A node relinked before
