@@ -114,4 +114,28 @@ describe('the recovery phrase form', () => {
     expect((screen.getByTestId('recovery-submit') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByTestId('recovery-cancel') as HTMLButtonElement).disabled).toBe(true);
   });
+
+  // The cancel signs the member out, which also makes the host busy.
+  it('does not claim an unlock while the host is busy with something else', () => {
+    renderForm({ busy: true });
+
+    const button = screen.getByTestId('recovery-submit');
+    expect(button.textContent).toBe('unlock');
+    expect(button.classList.contains('terminal-btn--loading')).toBe(false);
+  });
+
+  it('reports its own attempt until it settles', async () => {
+    let finish!: () => void;
+    const attempt = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    renderForm({ onSubmit: () => attempt });
+
+    fireEvent.change(field(), { target: { value: PHRASE } });
+    submit();
+    expect(screen.getByTestId('recovery-submit').textContent).toBe('unlocking...');
+
+    await act(async () => finish());
+    expect(screen.getByTestId('recovery-submit').textContent).toBe('unlock');
+  });
 });
