@@ -436,7 +436,7 @@ export function readTransfer(read: unknown): Transferable[] {
 
 /** A UI → worker request. `id` correlates the eventual response. */
 export type WorkerRequest =
-  | { type: 'start'; id: number; secret: ArrayBuffer; accountId: string }
+  | { type: 'start'; id: number; secret: ArrayBuffer; accountId: string; identityToken?: string }
   | { type: 'command'; id: number; command: CommandDescriptor }
   | { type: 'read'; id: number; read: ReadDescriptor }
   | { type: 'beginWrite'; id: number; target: WriteTarget; size: number }

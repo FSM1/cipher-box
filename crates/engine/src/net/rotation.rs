@@ -50,7 +50,7 @@ use super::author::{
     author_scope_root_with_section, report_carried_cut,
 };
 use super::child::{ChildAdopter, LaggingAnchor, LaggingRead, lagging_epoch, open_under_anchor};
-use super::last_known_good::{keep_newest_last_known_good, keep_then_commit};
+use super::last_known_good::keep_then_commit;
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::pointer_fetch::{
     ConsultedPointer, PointerConsult, PointerConsultError, RecordPointerFetch,
@@ -430,20 +430,19 @@ struct ResealableRoot {
     over_sequence: Option<u64>,
 }
 
-/// The record a republish of `root` at `name` builds on, clearing
-/// `over_sequence` ([`ResealableRoot`]).
+/// The record a republish of `root` builds on, clearing `over_sequence`
+/// ([`ResealableRoot`]).
 fn root_observed(
-    name: &IpnsName,
     root: &GatedScopeRoot,
     over_sequence: Option<u64>,
 ) -> Result<Observed, PublishError> {
-    Ok(Observed::gated(name, root.sequence, root.envelope.v)?.clearing(over_sequence.unwrap_or(0)))
+    Ok(root.observed()?.clearing(over_sequence.unwrap_or(0)))
 }
 
 impl RepublishBase {
-    /// The base a republish of `resealable` at `name` carries forward.
-    fn over(resealable: ResealableRoot, name: &IpnsName) -> Result<Self, PublishError> {
-        let observed = root_observed(name, &resealable.root, resealable.over_sequence)?;
+    /// The base a republish of `resealable` carries forward.
+    fn over(resealable: ResealableRoot) -> Result<Self, PublishError> {
+        let observed = root_observed(&resealable.root, resealable.over_sequence)?;
         Ok(Self {
             read_body: resealable.root.read_body,
             unknown: resealable.root.envelope.unknown,
@@ -590,6 +589,8 @@ impl RootAnchor {
 /// owner recovered from its own blobs. Terminal owner of those seeds: they
 /// zeroize when the value is dropped.
 struct GatedScopeRoot {
+    /// The name the gate passed the record at.
+    name: IpnsName,
     envelope: Envelope,
     section: GrantSection,
     read_body: ReadBody,
@@ -603,11 +604,18 @@ struct GatedScopeRoot {
     write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
 }
 
+impl GatedScopeRoot {
+    /// The record this read gated, as the basis an author builds on
+    /// ([`Observed::gated`]).
+    fn observed(&self) -> Result<Observed, PublishError> {
+        Observed::gated(&self.name, self.sequence, self.envelope.v)
+    }
+}
+
 /// One scope root as this pass gated it, plus the write plane read out of it:
-/// the name it was gated at, the authenticated record, its unsealed write body,
-/// and the write epoch that body opened under.
+/// the authenticated record, its unsealed write body, and the write epoch that
+/// body opened under.
 struct GatedWritePlane {
-    name: IpnsName,
     root: GatedScopeRoot,
     write_body: WriteBody,
     write_epoch: u64,
@@ -710,14 +718,15 @@ fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
 
 /// [`record_publish_verdict`] for a failure of the publish pipeline itself.
 fn rotation_publish_verdict(error: PublishError) -> RotationPublishError {
-    match error {
-        PublishError::RecordTooLarge { .. } => RotationPublishError::NotPublished,
-        error => match error.verdict() {
-            PublishVerdict::Refused => RotationPublishError::Rejected,
-            PublishVerdict::RegistryRefused | PublishVerdict::NotLanded => {
-                RotationPublishError::NotPublished
-            }
-        },
+    match error.verdict() {
+        PublishVerdict::Refused | PublishVerdict::RefusedUnaddressed => {
+            RotationPublishError::Rejected
+        }
+        PublishVerdict::RefusedOversized
+        | PublishVerdict::RegistryRefused
+        | PublishVerdict::NotLanded
+        | PublishVerdict::PutUnacknowledged
+        | PublishVerdict::PutRefused => RotationPublishError::NotPublished,
     }
 }
 
@@ -799,6 +808,7 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
         // own verdict.
         .ok_or(RootGateVerdict::Rejected)?;
     Ok(GatedScopeRoot {
+        name: name.clone(),
         envelope: recovered.envelope,
         section: recovered.grant_section,
         read_body: recovered.read_body,
@@ -811,7 +821,7 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
 /// A rotation root read the gate passed, with any floor advance not yet
 /// committed.
 enum RootPass {
-    Pending(Box<(Candidate, PendingAdoption, RecoveredSeeds)>),
+    Pending(Box<(IpnsName, Candidate, PendingAdoption, RecoveredSeeds)>),
     /// This reader's own already-adopted record, recovered at the floor
     /// ([`reread_at_floor`]): nothing left to commit.
     AtFloor(Box<GatedScopeRoot>),
@@ -824,12 +834,13 @@ impl RootPass {
     ) -> Result<GatedScopeRoot, RootGateVerdict> {
         match self {
             Self::Pending(pass) => {
-                let (candidate, pending, seeds) = *pass;
+                let (name, candidate, pending, seeds) = *pass;
                 let adopted = adopter
                     .commit_root(pending)
                     .await
                     .map_err(|_| RootGateVerdict::Unavailable)?;
                 Ok(GatedScopeRoot {
+                    name,
                     envelope: candidate.envelope,
                     section: candidate.grant_section,
                     sequence: adopted.sequence,
@@ -871,7 +882,12 @@ async fn gate_root_pass<H: Http, F: FloorStore>(
             if !bound(&candidate.envelope, &candidate.grant_section) {
                 return Err(RootGateVerdict::Rejected);
             }
-            Ok(RootPass::Pending(Box::new((candidate, pending, seeds))))
+            Ok(RootPass::Pending(Box::new((
+                name.clone(),
+                candidate,
+                pending,
+                seeds,
+            ))))
         }
         Err(GateError::Seam(_)) => Err(RootGateVerdict::Unavailable),
         Err(GateError::Rejected(rejection))
@@ -911,7 +927,7 @@ async fn gated_root<H: Http, F: FloorStore>(
 }
 
 /// [`gate_root_pass`], committed after `record_bytes` is left as last-known-good
-/// ([`keep_newest_last_known_good`]).
+/// ([`keep_then_commit`]).
 async fn gated_root_cached<H: Http, F: FloorStore, S: SnapshotCache>(
     adopter: &RootAdopter<'_, H, F>,
     snapshot_cache: &S,
@@ -1160,7 +1176,9 @@ where
         // as a vacant one and switch the rollback bar off, which is the whole
         // authority a device holding no floor for this scope has
         // ([`FanoutRecord`]).
-        match fanout_get_classified(self.transport, &name).await {
+        // The read the rollback bar checks is also the CAS bar, so a flip that
+        // lands after it loses the publish its race.
+        let observed = match fanout_get_classified(self.transport, &name).await {
             FanoutRecord::Unavailable(_) => return Err(RotationPublishError::NotPublished),
             FanoutRecord::Found(standing, _) => {
                 // A standing block this build cannot open is a bar it cannot
@@ -1181,16 +1199,17 @@ where
                 if prior.write_epoch >= repoint.write_epoch && &prior != repoint {
                     return Err(RotationPublishError::Rejected);
                 }
+                Observed::record(&name, standing.sequence)
             }
-            FanoutRecord::Absent => {}
-        }
+            FanoutRecord::Absent => Observed::unread(&name),
+        };
         // The same name-to-signer bind every held pointer clears: a key arm
         // whose read and signing edges disagree would publish at a routing key
         // no renewal here can re-sign (`enrol_scope_pointer`).
         if IpnsName::from_public_key(&signer.verifying_key()) != name {
             return Err(RotationPublishError::Rejected);
         }
-        let record_bytes = publish_pointer_inline(
+        let record_bytes = publish_pointer_over(
             PointerPipeline {
                 transport: self.transport,
                 api: self.api,
@@ -1198,7 +1217,7 @@ where
                 scheduler: self.scheduler,
                 profile: self.profile,
             },
-            &name,
+            &observed,
             &signer,
             &block,
         )
@@ -1294,8 +1313,12 @@ where
     .await
     .map_err(|error| match error.verdict() {
         PublishVerdict::RegistryRefused => PointerPublishFailure::RegistryFull,
-        PublishVerdict::Refused => PointerPublishFailure::Rejected,
-        PublishVerdict::NotLanded => PointerPublishFailure::NotLanded,
+        PublishVerdict::Refused
+        | PublishVerdict::RefusedUnaddressed
+        | PublishVerdict::RefusedOversized => PointerPublishFailure::Rejected,
+        PublishVerdict::NotLanded
+        | PublishVerdict::PutUnacknowledged
+        | PublishVerdict::PutRefused => PointerPublishFailure::NotLanded,
     })?;
     match receipt.outcome {
         PublishOutcome::Published { sequence } => {
@@ -2048,7 +2071,6 @@ where
             &write_body.direct_child_scope_index,
         );
         Ok(GatedWritePlane {
-            name,
             root,
             write_body,
             write_epoch,
@@ -2185,15 +2207,14 @@ where
         anchor: RootAnchor,
     ) -> Result<CascadeTarget, ResolveFailure> {
         let GatedWritePlane {
-            name,
             root,
             write_body,
             write_epoch,
             over_sequence,
         } = self.gated_write_plane(scope, anchor).await?;
-        let observed =
-            root_observed(&name, &root, over_sequence).map_err(|_| ResolveFailure::Rejected)?;
+        let observed = root_observed(&root, over_sequence).map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
+            name: _,
             envelope,
             section,
             read_body,
@@ -2444,7 +2465,6 @@ where
                 self.gated_root(record.scope_id, &name)
                     .await
                     .map_err(|verdict| publish_verdict(verdict.into()))?,
-                &name,
             )
             .map_err(|_| RotationPublishError::Rejected)?,
         };
@@ -2476,6 +2496,12 @@ where
         held_outside: &[HeldNode],
     ) -> Result<Vec<NodeRef>, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
+        // The promoted root replaces the record read at the node's own name, and
+        // that read is the CAS basis. At any other name the publish would have
+        // no read to build on.
+        if node.ipns_name != name.as_str().as_bytes() {
+            return Err(RotationPublishError::Rejected);
+        }
         // The interior move this promotion heads seals under the same seed.
         let override_seed = self.moved_seed.recover(self.keys.enc_secret, record)?;
         let source = self
@@ -2499,12 +2525,7 @@ where
             // A read grant cuts no write scope, so the promoted root keeps
             // signing under the write seed of the scope it is leaving.
             write_scope_seed: Some(source.write_scope_seed.clone()),
-            // The record the promotion replaces, where the node keeps its name.
-            observed: if node.ipns_name == name.as_str().as_bytes() {
-                Observed::record(&name, current.sequence)
-            } else {
-                Observed::unread(&name)
-            },
+            observed: current.observed,
         };
         floor::seed_scope_root_write_epoch(self.floors, &record.scope_id, record.write_epoch)
             .await
@@ -2759,9 +2780,9 @@ where
             .gated_root(granted)
             .await
             .map_err(ResolveFailure::from)?;
-        let observed = root_observed(&granted.ipns_name, &gated, None)
-            .map_err(|_| ResolveFailure::Rejected)?;
+        let observed = root_observed(&gated, None).map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
+            name: _,
             envelope,
             section,
             read_body,
@@ -3128,7 +3149,8 @@ where
         sequence: u64,
         envelope: Envelope,
     ) -> Result<SweptNode, SweepResolveFailure> {
-        refuse_foreign_version(envelope.v).map_err(|_| SweepResolveFailure::VersionSkew)?;
+        let observed = Observed::gated(name, sequence, envelope.v)
+            .map_err(|_| SweepResolveFailure::VersionSkew)?;
         if envelope.id != child.node_id || envelope.scope != source.scope_id {
             return Err(SweepResolveFailure::Rejected);
         }
@@ -3148,7 +3170,7 @@ where
             .await?;
         Ok(SweptNode {
             current_read_epoch: envelope.epoch,
-            sequence,
+            observed,
             read_body,
             carried_unknown: envelope.unknown,
             carried_epoch_tag_unknown: envelope.epoch_tag_unknown,
@@ -3272,8 +3294,8 @@ where
             .gated_root(scope.scope_id, &name)
             .await
             .map_err(SweepResolveFailure::from)?;
-        let observed = root_observed(&name, &root, over_sequence)
-            .map_err(|_| SweepResolveFailure::VersionSkew)?;
+        let observed =
+            root_observed(&root, over_sequence).map_err(|_| SweepResolveFailure::VersionSkew)?;
         self.open_write_seed_on_access(&mut root, scope.scope_id)
             .await
             .map_err(SweepResolveFailure::from)?;
@@ -3285,6 +3307,7 @@ where
             .await
             .map_err(SweepResolveFailure::from)?;
         let GatedScopeRoot {
+            name: _,
             envelope,
             section,
             read_body,
@@ -3386,7 +3409,7 @@ where
             envelope,
         )
         .await
-        .map(SweptChild::Interior)
+        .map(|node| SweptChild::Interior(Box::new(node)))
     }
 }
 
@@ -3440,6 +3463,11 @@ where
         };
         let preflighted = preflight(&binding, seal.read_key, &head)
             .map_err(|_| RotationPublishError::NotPublished)?;
+        // Release-active: the read the re-seal builds on must be of the name it
+        // publishes at, or the publish signs over another node's record.
+        if node.observed.name() != name {
+            return Err(RotationPublishError::Rejected);
+        }
         let signer = SessionIdentity::write_name_signer(write_scope_seed, &node.node_id);
         let receipt = publish_record(
             self.transport,
@@ -3448,8 +3476,7 @@ where
             self.scheduler,
             self.profile,
             &RecordPublishRequest {
-                // The interior read the sweep carried the node's sequence from.
-                observed: &Observed::record(name, node.sequence),
+                observed: node.observed,
                 signer: &signer,
                 head: &preflighted,
                 content_cids: Vec::new(),
@@ -3503,7 +3530,7 @@ where
             &InteriorRecord {
                 node_id: node.node_id,
                 ipns_name: node.ipns_name,
-                sequence: node.sequence,
+                observed: node.observed,
                 read_body: node.read_body,
                 carried_unknown: node.carried_unknown,
                 carried_epoch_tag_unknown: node.carried_epoch_tag_unknown,
@@ -3762,7 +3789,7 @@ where
             envelope,
         )
         .await
-        .map(MovingChild::Pending)
+        .map(|node| MovingChild::Pending(Box::new(node)))
     }
 }
 
@@ -4332,8 +4359,12 @@ pub(super) fn publish_record_verdict(error: RecordPublishError) -> WritePublishE
 pub(super) fn wave_publish_verdict(error: PublishError) -> WritePublishError {
     match error.verdict() {
         PublishVerdict::RegistryRefused => WritePublishError::RegistryFull,
-        PublishVerdict::Refused => WritePublishError::Rejected,
-        PublishVerdict::NotLanded => WritePublishError::NotLanded,
+        PublishVerdict::Refused
+        | PublishVerdict::RefusedUnaddressed
+        | PublishVerdict::RefusedOversized => WritePublishError::Rejected,
+        PublishVerdict::NotLanded
+        | PublishVerdict::PutUnacknowledged
+        | PublishVerdict::PutRefused => WritePublishError::NotLanded,
     }
 }
 
@@ -4399,7 +4430,7 @@ where
     /// gated these bytes lands on the at-floor re-open instead — which is also
     /// the only child path that keeps the envelope's preserved fields. The
     /// adopted bytes are cached before that floor moves
-    /// ([`keep_newest_last_known_good`]).
+    /// ([`keep_then_commit`]).
     async fn interior_source(
         &self,
         node_id: [u8; 16],
@@ -4416,14 +4447,14 @@ where
         );
         match adopter.adopt(name, record_bytes).await {
             Ok(outcome) => {
-                keep_newest_last_known_good(self.snapshot_cache, name, record_bytes)
-                    .await
-                    .map_err(|e| wave_verdict(GateError::Seam(e)))?;
-                outcome
-                    .pass
-                    .commit(self.floors)
-                    .await
-                    .map_err(|e| wave_verdict(GateError::Seam(e)))?;
+                keep_then_commit(
+                    self.snapshot_cache,
+                    name,
+                    record_bytes,
+                    outcome.pass.commit(self.floors),
+                )
+                .await
+                .map_err(|e| wave_verdict(GateError::Seam(e)))?;
             }
             // A head block that does not match its CID is what one bad source
             // serves, not the record's own bytes.
@@ -4532,12 +4563,9 @@ where
         adopted: Adopted,
         envelope: Envelope,
     ) -> Result<WaveSource, WaveRefusal> {
-        if envelope.v != ENVELOPE_V {
-            return Err(WaveRefusal::dropping(
-                WritePublishError::Rejected,
-                DropCause::RecordRefused,
-            ));
-        }
+        refuse_foreign_version(envelope.v).map_err(|_| {
+            WaveRefusal::dropping(WritePublishError::Rejected, DropCause::RecordRefused)
+        })?;
         Ok(WaveSource {
             read_body: adopted.read_body,
             read_epoch,
@@ -4568,8 +4596,8 @@ where
         )
         .await
         .map_err(|verdict| wave_read_verdict(verdict.into()))?;
+        refuse_foreign_version(gated.envelope.v).map_err(|_| WritePublishError::Rejected)?;
         let envelope = gated.envelope;
-        refuse_foreign_version(envelope.v).map_err(|_| WritePublishError::Rejected)?;
         // The root gate binds `envelope.scope` but not `envelope.id`, and every
         // AAD this republish authors binds the id — so a root whose record claims
         // another node would be re-sealed under a key no reader re-derives.
@@ -7069,6 +7097,69 @@ mod tests {
             standing_pointer(&harness, &pointer),
             standing,
             "and the re-point it could not read is still the one standing",
+        );
+    }
+
+    /// Another device flips the pointer between the read the rollback bar
+    /// checks and the publish. The publish builds on the checked read, so it
+    /// loses the race rather than signing an older re-point over the flip.
+    #[test]
+    fn a_mint_loses_to_a_pointer_flip_that_lands_after_its_rollback_check() {
+        let harness = Harness::plain();
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        let record_at = |write_epoch: u64, sequence: u64| {
+            let block = seal_repoint(
+                SessionRole::Owner,
+                &mut SeededEntropy::new(5),
+                &OwnerSeeds.pointer_read_key(&CHILD_SCOPE),
+                PAYLOAD_VERSION,
+                &owner_identity(),
+                &RepointObject {
+                    scope_id: CHILD_SCOPE,
+                    current_root: vault_root([0xb0; 16], Vec::new()).name,
+                    write_epoch,
+                    min_read_epoch: MINT_EPOCH,
+                    prev_root: None,
+                },
+            )
+            .expect("owner seals the re-point");
+            IpnsRecord::create_v2(
+                &scope_pointer_signer(&OWNER_POINTER_SEED, &CHILD_SCOPE),
+                &block,
+                sequence,
+                TTL_NANOS,
+                EOL,
+            )
+            .marshal()
+        };
+        let flipped = record_at(MINT_EPOCH + 2, 3);
+        for endpoint in harness.store.endpoints() {
+            harness
+                .store
+                .seed_record(&endpoint, pointer.as_str(), flipped.clone());
+        }
+        // The rollback check's fan-out reads the re-point from before the flip.
+        harness.store.serve_gets_for_after(
+            pointer.as_str(),
+            0,
+            harness.store.endpoints().len(),
+            Some(record_at(MINT_EPOCH, 1)),
+        );
+
+        let signer = owner_identity();
+        let raced = block_on(harness.pointer_mint(&signer).vouch_scope(&RepointObject {
+            scope_id: CHILD_SCOPE,
+            current_root: vault_root([0xc0; 16], Vec::new()).name,
+            write_epoch: MINT_EPOCH + 1,
+            min_read_epoch: MINT_EPOCH,
+            prev_root: None,
+        }));
+
+        assert_eq!(raced, Err(RotationPublishError::LostRace));
+        assert_eq!(
+            standing_pointer(&harness, &pointer),
+            vec![Some(flipped); harness.store.endpoints().len()],
+            "the flip still stands",
         );
     }
 
@@ -9999,14 +10090,26 @@ mod tests {
         body: &ReadBody,
         sequence: u64,
     ) -> IpnsName {
+        stage_node_sealed(harness, node_id, body, sequence, ENVELOPE_V)
+    }
+
+    /// [`stage_node_at`] under envelope version `v`.
+    fn stage_node_sealed<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        node_id: [u8; 16],
+        body: &ReadBody,
+        sequence: u64,
+        v: u64,
+    ) -> IpnsName {
         let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &node_id);
         let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
-        stage_node_sealed_at(
+        stage_sealed_under(
             harness,
             node_id,
             body,
             sequence,
-            (OWNER_ROOT_EPOCH, &read_key),
+            (OWNER_ROOT_EPOCH, &read_key, v),
+            &OWNER_ROOT_WRITE_SCOPE_SEED,
         )
     }
 
@@ -10016,14 +10119,14 @@ mod tests {
         node_id: [u8; 16],
         body: &ReadBody,
         sequence: u64,
-        sealed: (u64, &[u8; 32]),
+        (epoch, read_key): (u64, &[u8; 32]),
     ) -> IpnsName {
         stage_sealed_under(
             harness,
             node_id,
             body,
             sequence,
-            sealed,
+            (epoch, read_key, ENVELOPE_V),
             &OWNER_ROOT_WRITE_SCOPE_SEED,
         )
     }
@@ -10043,7 +10146,7 @@ mod tests {
             node_id,
             body,
             1,
-            (OWNER_ROOT_EPOCH, &read_key),
+            (OWNER_ROOT_EPOCH, &read_key, ENVELOPE_V),
             write_scope_seed,
         )
     }
@@ -10053,19 +10156,11 @@ mod tests {
         node_id: [u8; 16],
         body: &ReadBody,
         sequence: u64,
-        (epoch, read_key): (u64, &[u8; 32]),
+        (epoch, read_key, v): (u64, &[u8; 32], u64),
         write_scope_seed: &[u8; SECRET_LEN],
     ) -> IpnsName {
-        let envelope = seal_read_body(
-            read_key,
-            &[19u8; 24],
-            ENVELOPE_V,
-            node_id,
-            SCOPE,
-            epoch,
-            body,
-        )
-        .expect("the interior body seals");
+        let envelope = seal_read_body(read_key, &[19u8; 24], v, node_id, SCOPE, epoch, body)
+            .expect("the interior body seals");
         let block = encode_envelope(&envelope).expect("the head encodes");
         let cid = root_block_cid(&block);
         harness
@@ -10264,6 +10359,30 @@ mod tests {
                 .store
                 .record_at(&harness.store.endpoints()[0], old_name.as_str()),
             "the adopted bytes are last-known-good at that floor",
+        );
+    }
+
+    /// The wave re-seals an interior node under this build's envelope version,
+    /// so a node a newer client last wrote is refused at the read rather than
+    /// downgraded at its new name.
+    #[test]
+    fn the_wave_refuses_an_interior_node_at_another_envelope_version() {
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let node_id = [0x0e; 16];
+        let harness = Harness::plain();
+        let old_name = stage_node_sealed(&harness, node_id, &interior_body(), 1, ENVELOPE_V + 1);
+        let moved = order(node_id, &old_name, BTreeMap::new(), false);
+
+        let net = wave(&harness, &owner, &current_root, &plan);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected),
+        );
+        assert!(
+            !published_at(&harness, &moved.new_name),
+            "nothing reached the new name"
         );
     }
 
@@ -14195,7 +14314,7 @@ mod tests {
                 &InteriorRecord {
                     node_id,
                     ipns_name: name.as_str().as_bytes(),
-                    sequence: 1,
+                    observed: &gated_at(&name),
                     read_body: &interior_body(),
                     carried_unknown: &carried_unknown,
                     carried_epoch_tag_unknown: &PreservedFields::new(),
@@ -14801,6 +14920,34 @@ mod tests {
         assert_eq!(sequence_at(&harness, &name), Some(8));
     }
 
+    /// A promotion re-seals the root at the name its read came from, so a
+    /// record naming another name is refused with nothing signed at either.
+    #[test]
+    fn a_promotion_to_another_name_than_the_node_holds_signs_nothing() {
+        let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        let net = harness.net(&[]);
+        let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        let node = swept.children[0].clone();
+        let elsewhere = derive_write_name(&FRESH_WRITE_SCOPE_SEED, &node.node_id);
+        let record = promoted(&NodeRef {
+            node_id: node.node_id,
+            ipns_name: elsewhere.as_str().as_bytes().to_vec(),
+        });
+        let name = scope_name(&node.ipns_name).expect("a valid name");
+        let sequence_before = sequence_at(&harness, &name);
+
+        assert_eq!(
+            block_on(net.promote_scope_root(&scope, &node, &record, &[])),
+            Err(RotationPublishError::Rejected),
+        );
+        assert_eq!(sequence_at(&harness, &name), sequence_before);
+        assert_eq!(
+            sequence_at(&harness, &elsewhere),
+            None,
+            "nothing was signed at the other name"
+        );
+    }
+
     /// The node id of the folder a grant promotes to a scope root — the scope
     /// the interior nodes below it join.
     const GRANTED_FOLDER: [u8; 16] = [0x9c; 16];
@@ -14813,18 +14960,22 @@ mod tests {
         })
     }
 
-    /// One interior node handed over verbatim, at the sequence the staged record
-    /// carries.
+    /// A gated read of `name` at the sequence a staged record carries.
+    fn gated_at(name: &IpnsName) -> Observed {
+        Observed::gated(name, 1, ENVELOPE_V).expect("this build's envelope version")
+    }
+
+    /// One interior node handed over verbatim, read at `observed`.
     fn interior_record_of<'a>(
         node_id: [u8; 16],
-        ipns_name: &'a [u8],
+        observed: &'a Observed,
         body: &'a ReadBody,
         empty: &'a PreservedFields,
     ) -> InteriorRecord<'a> {
         InteriorRecord {
             node_id,
-            ipns_name,
-            sequence: 1,
+            ipns_name: observed.name().as_str().as_bytes(),
+            observed,
             read_body: body,
             carried_unknown: empty,
             carried_epoch_tag_unknown: empty,
@@ -14853,7 +15004,7 @@ mod tests {
             &InteriorRecord {
                 node_id: child.node_id,
                 ipns_name: &child.ipns_name,
-                sequence: node.sequence,
+                observed: &node.observed,
                 read_body: &node.read_body,
                 carried_unknown: &node.carried_unknown,
                 carried_epoch_tag_unknown: &node.carried_epoch_tag_unknown,
@@ -14909,7 +15060,7 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(root.scope_id, name.as_str().as_bytes(), &body, &empty),
+                &interior_record_of(root.scope_id, &gated_at(&name), &body, &empty),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -14943,7 +15094,7 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(node_id, elsewhere.as_str().as_bytes(), &body, &empty),
+                &interior_record_of(node_id, &gated_at(&elsewhere), &body, &empty),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -14973,7 +15124,7 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(node_id, name.as_str().as_bytes(), &body, &empty),
+                &interior_record_of(node_id, &gated_at(&name), &body, &empty),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -15081,7 +15232,7 @@ mod tests {
             block_on(net.reseal_interior_node(
                 &scope,
                 &root,
-                &interior_record_of(node_id, name.as_str().as_bytes(), &body, &empty),
+                &interior_record_of(node_id, &gated_at(&name), &body, &empty),
             )),
             Err(RotationPublishError::Rejected),
         );
@@ -15115,7 +15266,7 @@ mod tests {
                     node_id,
                     ipns_name: name.as_str().as_bytes(),
                     read_epoch: swept.current_read_epoch,
-                    sequence: 1,
+                    observed: &gated_at(&name),
                     read_body: &body,
                     carried_unknown: &empty,
                     carried_epoch_tag_unknown: &empty,

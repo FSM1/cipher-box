@@ -62,7 +62,7 @@ pub fn arm(app: &AppHandle, headless: Headless) -> Result<(), String> {
         // The secret is the engine's from here: `start` takes it by value and
         // it is zeroized where it dies, exactly as the IPC path leaves it.
         let started = match crate::session::session_env(&app) {
-            Ok(env) => app.state::<EngineHost>().start(dev_key, env).await,
+            Ok(env) => app.state::<EngineHost>().start(dev_key, None, env).await,
             Err(refusal) => Err(refusal),
         };
         if let Err(refusal) = started {

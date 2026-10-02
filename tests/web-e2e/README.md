@@ -84,7 +84,10 @@ The `release` project runs the same specs' counterpart against a bundle built
 `device-approval.spec.ts` gives each device its own browser context: its own
 engine, and its own identity key in its own IndexedDB. One context signs in and
 registers as an approver; the other stays cold, which is the state of a device
-that cannot yet reconstruct.
+that cannot yet reconstruct. The approver's sign-in presents the identity token
+through the introspection hook, so the login binds the account to the subject,
+as a sign-in that follows an exchange does (ADR 0058 D2). A registration from an
+unbound account is refused.
 
 The suite drives the shipped relay client
 (`apps/web/src/auth/deviceApprovalApi.ts`) from the test process rather than from

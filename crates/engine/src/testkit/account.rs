@@ -22,7 +22,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::{
     FakeDevice, FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec,
-    SeededEntropy, owner_root_fixture, requested_cid,
+    SeededEntropy, owner_root_fixture_sealed, requested_cid,
 };
 use crate::NodeId;
 use crate::api::{REGISTRY_BATCH_REFUSED, RetireEntry};
@@ -580,7 +580,18 @@ pub fn seed_account_with(
     grants: Vec<GrantRow>,
     children: Vec<ChildRef>,
 ) -> IpnsName {
-    let account = author_account(blocks, grants, children, 1);
+    seed_account_sealed(world, blocks, grants, children, ENVELOPE_V)
+}
+
+/// [`seed_account_with`] over a root sealed under envelope version `v`.
+pub fn seed_account_sealed(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    grants: Vec<GrantRow>,
+    children: Vec<ChildRef>,
+    v: u64,
+) -> IpnsName {
+    let account = author_account(blocks, grants, children, 1, v);
     for endpoint in world.record_store.endpoints() {
         world.record_store.seed_record(
             &endpoint,
@@ -607,7 +618,7 @@ pub fn seed_account_published_after_put(
     blocks: &Blocks,
     revealed_by: &IpnsName,
 ) -> IpnsName {
-    let account = author_account(blocks, Vec::new(), Vec::new(), 2);
+    let account = author_account(blocks, Vec::new(), Vec::new(), 2, ENVELOPE_V);
     for endpoint in world.record_store.endpoints() {
         world.record_store.seed_record(
             &endpoint,
@@ -631,31 +642,37 @@ struct AuthoredAccount {
     pointer_record: Vec<u8>,
 }
 
-/// Author the owner root and the re-point naming it, and put the root's head
-/// block on the block plane. The pointer publishes at `pointer_sequence`.
+/// Author the owner root under envelope version `v` and the re-point naming it,
+/// and put the root's head block on the block plane. The pointer publishes at
+/// `pointer_sequence`.
 fn author_account(
     blocks: &Blocks,
     grants: Vec<GrantRow>,
     children: Vec<ChildRef>,
     pointer_sequence: u64,
+    v: u64,
 ) -> AuthoredAccount {
-    let fixture = owner_root_fixture(OwnerRootSpec {
-        writer_pseudonym: &owner_pseudonym(),
-        pointer_read_key: owner_pointer_read_key(),
-        owner_identity: &owner_identity(),
-        owner_enc: &kdf::enc_subkey(&SECRET).public(),
-        scope_id: SCOPE,
-        root_id: ROOT.0,
-        children,
-        child_scope_index: Vec::new(),
-        parent_node_seed: None,
-        // At the read epoch, so the cold-seeded write floor opens the
-        // owner-write-blob and the owner recovers its scope write seed — the
-        // seed the drain derives every new node's name and signer from.
-        owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
-        write_history_link: Vec::new(),
-        grants,
-    });
+    let fixture = owner_root_fixture_sealed(
+        OwnerRootSpec {
+            writer_pseudonym: &owner_pseudonym(),
+            pointer_read_key: owner_pointer_read_key(),
+            owner_identity: &owner_identity(),
+            owner_enc: &kdf::enc_subkey(&SECRET).public(),
+            scope_id: SCOPE,
+            root_id: ROOT.0,
+            children,
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            // At the read epoch, so the cold-seeded write floor opens the
+            // owner-write-blob and the owner recovers its scope write seed — the
+            // seed the drain derives every new node's name and signer from.
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants,
+        },
+        OWNER_ROOT_EPOCH,
+        v,
+    );
     blocks.put(fixture.head_block.clone());
 
     let root_signer = {

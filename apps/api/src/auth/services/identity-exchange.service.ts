@@ -16,6 +16,8 @@ export interface IdentityGrant {
   /** The signed-in address, when the method carries one; for display only. */
   email: string | null;
   expiresAt: Date;
+  /** The token lifetime in seconds, so a client times it on its own clock. */
+  expiresIn: number;
 }
 
 /**
@@ -72,7 +74,10 @@ export class IdentityExchangeService {
     email: string | null
   ): Promise<IdentityGrant> {
     const verifierId = await this.subjects.resolve(method, identifier);
-    const { token, expiresAt } = await this.tokens.sign({ subject: verifierId, method });
-    return { token, verifierId, email, expiresAt };
+    const { token, expiresAt, expiresIn } = await this.tokens.sign({
+      subject: verifierId,
+      method,
+    });
+    return { token, verifierId, email, expiresAt, expiresIn };
   }
 }

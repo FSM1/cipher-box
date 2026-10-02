@@ -14,6 +14,20 @@ import {
 export const SECRET_HEX = '0f'.repeat(32);
 export const FAKE_NONCE = 'nonce123456789ab';
 export const FAKE_IDENTITY_TOKEN = 'header.payload.signature';
+/** The token lifetime the fake exchange grants, in seconds. */
+export const FAKE_TOKEN_LIFETIME_S = 300;
+export const FAKE_NOW = new Date('2030-01-01T00:00:00Z');
+
+/** A clock a test moves by hand. */
+export function fakeClock(start: Date = FAKE_NOW) {
+  let at = start.getTime();
+  return {
+    now: () => new Date(at),
+    advance: (ms: number) => {
+      at += ms;
+    },
+  };
+}
 
 /** What web's collectors do: the UI already holds the provider's answer. */
 export interface WebCollected {
@@ -35,6 +49,7 @@ export function fakeExchange() {
     token: FAKE_IDENTITY_TOKEN,
     verifierId: `subject-for-${method}`,
     email,
+    expiresIn: FAKE_TOKEN_LIFETIME_S,
   });
   const exchange: IdentityExchange = {
     fromGoogleToken(idToken) {
@@ -129,14 +144,16 @@ export function fakeFacade(overrides: Partial<LoginFacade> = {}) {
   const calls = {
     secrets: [] as Uint8Array[],
     accounts: [] as string[],
+    identityTokens: [] as Array<string | undefined>,
     logouts: 0,
     forgets: 0,
   };
   const facade: LoginFacade = {
-    start(secret, accountId) {
+    start(secret, accountId, identityToken) {
       calls.secrets.push(new Uint8Array(secret).slice());
       calls.accounts.push(accountId);
-      return overrides.start?.(secret, accountId) ?? Promise.resolve();
+      calls.identityTokens.push(identityToken);
+      return overrides.start?.(secret, accountId, identityToken) ?? Promise.resolve();
     },
     logout() {
       calls.logouts += 1;

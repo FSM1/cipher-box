@@ -55,6 +55,12 @@ export class IdentityTokenResponseDto {
 
   @ApiProperty({ description: 'Token expiry, ISO 8601' })
   expiresAt!: string;
+
+  @ApiProperty({
+    description: 'Token lifetime in seconds; a client times the token on its own clock',
+    example: 300,
+  })
+  expiresIn!: number;
 }
 
 export class JwksResponseDto {

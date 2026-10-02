@@ -11,6 +11,7 @@ describe('auth.store', () => {
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
+      saveDevice: false,
     });
   });
 
@@ -29,6 +30,7 @@ describe('auth.store', () => {
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
+      saveDevice: false,
     });
   });
 
@@ -62,7 +64,18 @@ describe('auth.store', () => {
     expect(authStore.getState()).toMatchObject({
       factorPolicy: true,
       recoveryPhraseHeld: false,
+      saveDevice: false,
     });
+  });
+
+  it('keeps the request to save this device across the sign-in, and drops it on sign-out', () => {
+    authStore.saveDevice(true);
+
+    authStore.signedIn('email', 'user@example.com');
+    expect(authStore.getState().saveDevice).toBe(true);
+
+    authStore.signedOut();
+    expect(authStore.getState().saveDevice).toBe(false);
   });
 
   it('accepts a wallet login with no email', () => {
@@ -95,6 +108,7 @@ describe('auth.store', () => {
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
+      saveDevice: false,
     });
   });
 

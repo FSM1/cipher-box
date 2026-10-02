@@ -36,7 +36,11 @@ export interface LoginSecretExporter {
  * per host: a WASM worker on web, Tauri IPC on desktop.
  */
 export interface LoginFacade {
-  start(secret: ArrayBuffer, accountId: string): Promise<void>;
+  /**
+   * `identityToken` is the token of the exchange this start follows, which the
+   * engine's login presents to bind the account to its subject (ADR 0058 D2).
+   */
+  start(secret: ArrayBuffer, accountId: string, identityToken?: string): Promise<void>;
   logout(): Promise<void>;
   /**
    * Erases the durable seams a logout keeps ("forget this device"). Optional
@@ -47,6 +51,35 @@ export interface LoginFacade {
    * flow reads only whether it refused.
    */
   forgetDevice?(): Promise<unknown>;
+}
+
+/**
+ * The identity token a start may present, and the clock that decides whether
+ * it still can. The deadline counts from `receivedAt` on the host's own clock,
+ * so skew between the host and the API does not move it.
+ */
+export interface StartIdentity {
+  token: string;
+  /** When the exchange that minted the token answered. */
+  receivedAt: Date;
+  /** The token lifetime in seconds from `receivedAt`. */
+  expiresIn: number;
+  now: () => Date;
+}
+
+/**
+ * How long before its expiry a token stops being presented. The login refuses
+ * a token that no longer verifies (ADR 0058 D2), so one that could expire in
+ * flight is withheld, and the account binds at its next sign-in instead.
+ */
+const IDENTITY_TOKEN_MARGIN_MS = 30_000;
+
+/** The token, if the clock still leaves it the margin; `undefined` otherwise. */
+function presentableToken(identity: StartIdentity | null): string | undefined {
+  if (identity === null) return undefined;
+  const deadline =
+    identity.receivedAt.getTime() + identity.expiresIn * 1000 - IDENTITY_TOKEN_MARGIN_MS;
+  return identity.now().getTime() < deadline ? identity.token : undefined;
 }
 
 /** The secp256k1 scalar length `crates/engine/src/session.rs` requires. */
@@ -88,14 +121,16 @@ export async function exportLoginSecret(exporter: LoginSecretExporter): Promise<
  */
 export async function handOffLoginSecret(
   facade: LoginFacade,
-  exporter: LoginSecretExporter
+  exporter: LoginSecretExporter,
+  identity: StartIdentity | null = null
 ): Promise<void> {
   // Read before the export, so a session that cannot name its account never
   // mints a secret buffer.
   const accountId = exporter.accountId();
   const secret = await exportLoginSecret(exporter);
   try {
-    await facade.start(secret, accountId);
+    // The clock is read after the export, the last await before the start.
+    await facade.start(secret, accountId, presentableToken(identity));
   } finally {
     if (secret.byteLength > 0) new Uint8Array(secret).fill(0);
   }

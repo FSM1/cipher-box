@@ -2122,7 +2122,7 @@ mod tests {
             ApiBaseUrl::offline(),
             GatewayConfig::disabled(),
         );
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the engine starts");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]), None)).expect("the engine starts");
         let spill = SpillArea::seeded(
             tempfile::tempdir().expect("a spill dir").keep(),
             Box::new(SeededEntropy::new(11)),

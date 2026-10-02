@@ -28,7 +28,7 @@ import type { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
 import type { WebCoreKitSession } from '../auth/coreKit';
-import { DeviceIdentity } from '../auth/deviceIdentity';
+import { DeviceIdentity, DeviceKeyUnusableError } from '../auth/deviceIdentity';
 import { MemoryDeviceKeys, SerialLocks } from './storeFakes';
 
 import { IdentityProvider } from '../auth/IdentityProvider';
@@ -50,6 +50,8 @@ export const FAKE_NONCE = 'nonce123456789ab';
 
 /** The identity token the fake exchange mints, whichever method asked. */
 export const FAKE_IDENTITY_TOKEN = 'header.payload.signature';
+/** The token lifetime the fake exchange grants, in seconds. */
+export const FAKE_TOKEN_LIFETIME_S = 300;
 
 /** The one phrase the fake session enrolls and accepts; 24 words, as a real one is. */
 export const FAKE_PHRASE = `${'word '.repeat(23)}last`;
@@ -148,6 +150,8 @@ export interface EngineCalls {
   started: ArrayBuffer[];
   /** What each buffer held on arrival, before the handoff scrubbed it. */
   secrets: Uint8Array[];
+  /** The identity token each start presented, `undefined` for one with none. */
+  startTokens: Array<string | undefined>;
   /** The wallet links, kept apart from `siwe`: a link is not a login. */
   siweLinks: { message: string; signature: Uint8Array }[];
   siweChallenges: number;
@@ -260,6 +264,7 @@ export function fakeEngineClient(
   const calls: EngineCalls = {
     started: [],
     secrets: [],
+    startTokens: [],
     logouts: 0,
     siweLinks: [],
     siweChallenges: 0,
@@ -300,9 +305,10 @@ export function fakeEngineClient(
       return () => sessionEndListeners.delete(listener);
     },
     facade: {
-      async start(secret: ArrayBuffer, accountId: string) {
+      async start(secret: ArrayBuffer, accountId: string, identityToken?: string) {
         calls.started.push(secret);
         calls.secrets.push(new Uint8Array(secret).slice());
+        calls.startTokens.push(identityToken);
         await (overrides.start?.() ?? Promise.resolve());
         holds(accountId);
       },
@@ -461,11 +467,15 @@ export interface CoreKitCalls {
  * verifies one, and a test binds a dispatched signature to what was signed.
  */
 class FakeDeviceIdentity extends DeviceIdentity {
-  constructor(private readonly calls: CoreKitCalls) {
+  constructor(
+    private readonly calls: CoreKitCalls,
+    private readonly unusable: boolean
+  ) {
     super(new MemoryDeviceKeys(), new SerialLocks(), 'fake-device-identity');
   }
 
   override publicKeyHex(): Promise<string> {
+    if (this.unusable) return Promise.reject(new DeviceKeyUnusableError());
     return Promise.resolve(FAKE_DEVICE_PUBLIC_KEY);
   }
 
@@ -497,6 +507,8 @@ export function fakeCoreKitSession(
     identityToken?: string | null;
     /** A browser holding no identity key, as one is left after `forgetDevice`. */
     noDeviceIdentity?: boolean;
+    /** A browser whose WebCrypto holds no Ed25519, so reading the key refuses. */
+    deviceKeyUnusable?: boolean;
   } = {}
 ) {
   const calls: CoreKitCalls = {
@@ -511,7 +523,7 @@ export function fakeCoreKitSession(
     adopted: [],
     adoptedBytes: [],
   };
-  const device = new FakeDeviceIdentity(calls);
+  const device = new FakeDeviceIdentity(calls, options.deviceKeyUnusable ?? false);
   let identityToken =
     options.identityToken === undefined ? FAKE_IDENTITY_TOKEN : options.identityToken;
   let loggedIn = options.loggedIn ?? false;
@@ -609,6 +621,7 @@ export function fakeIdentityExchange(overrides: Partial<IdentityExchange> = {}):
     token: FAKE_IDENTITY_TOKEN,
     verifierId: `subject-for-${method}`,
     email,
+    expiresIn: FAKE_TOKEN_LIFETIME_S,
   });
   const exchange: IdentityExchange = {
     fromGoogleToken(idToken) {

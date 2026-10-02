@@ -28,18 +28,12 @@ function renderForm(
     onSendCode: (email: string) => Promise<void>;
     onVerify: (email: string, code: string) => Promise<void>;
     disabled: boolean;
-    busy: boolean;
   }> = {}
 ) {
   const onSendCode = vi.fn(overrides.onSendCode ?? (() => Promise.resolve()));
   const onVerify = vi.fn(overrides.onVerify ?? (() => Promise.resolve()));
   render(
-    <EmailLoginForm
-      onSendCode={onSendCode}
-      onVerify={onVerify}
-      disabled={overrides.disabled}
-      busy={overrides.busy}
-    />
+    <EmailLoginForm onSendCode={onSendCode} onVerify={onVerify} disabled={overrides.disabled} />
   );
   return { onSendCode, onVerify };
 }
@@ -148,6 +142,29 @@ describe('EmailLoginForm', () => {
 
     typeAddress('member@example.test');
     await waitFor(() => expect(onSendCode).toHaveBeenLastCalledWith('member@example.test'));
+  });
+
+  // The host disables this form for any method's transition; only its own send is a send.
+  it('does not claim a send that another method is making', () => {
+    renderForm({ disabled: true });
+
+    const button = screen.getByTestId('email-login-button');
+    expect(button.textContent).toBe('[CONTINUE]');
+    expect(button.hasAttribute('disabled')).toBe(true);
+    expect(button.classList.contains('terminal-btn--loading')).toBe(false);
+  });
+
+  it('reports its own send until it settles', async () => {
+    const send = deferred();
+    renderForm({ onSendCode: () => send.promise });
+
+    typeAddress('member@example.test');
+    const button = screen.getByTestId('email-login-button');
+    expect(button.textContent).toBe('sending code...');
+    expect(button.classList.contains('terminal-btn--loading')).toBe(true);
+
+    await send.reject(new Error('too many requests'));
+    expect(screen.getByTestId('email-login-button').textContent).toBe('[CONTINUE]');
   });
 
   it('sends nothing while the tab cannot accept a login', () => {

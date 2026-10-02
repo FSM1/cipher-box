@@ -21,6 +21,8 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use crate::entropy::Entropy;
 use crate::facade::NodeId;
 use crate::grants::ledger::mint_grant_row;
+use crate::net::author::ENVELOPE_V;
+use crate::net::publish::Observed;
 use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget,
     CommittedSet, GrantCutPlan, LaggingNode, NoBound, NodeRef, NodeStop, PrevEpochSeed,
@@ -38,6 +40,14 @@ use crate::seams::{FloorStore, SeamError, SeamResult};
 use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
 use crate::testkit::reject::{RejectFamily, RejectVector, family, refusal};
 use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
+
+/// A gated read at `sequence` under a fixture name: what a scripted resolver
+/// hands back for a swept node whose name no publish reaches.
+#[must_use]
+pub fn swept_observed(sequence: u64) -> Observed {
+    let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5e; 32]).verifying_key());
+    Observed::gated(&name, sequence, ENVELOPE_V).expect("this build's envelope version")
+}
 
 /// Every rotation reject family, in a fixed order. Deterministic: two calls
 /// give byte-identical output.
@@ -828,13 +838,13 @@ fn sweep_family() -> RejectFamily {
         children: vec![child.clone()],
         direct_child_scope_index,
     };
-    let lagging = SweptChild::Interior(SweptNode {
+    let lagging = SweptChild::Interior(Box::new(SweptNode {
         current_read_epoch: SWEEP_SCOPE_EPOCH - 1,
-        sequence: 7,
+        observed: swept_observed(7),
         read_body: empty_folder(),
         carried_unknown: PreservedFields::new(),
         carried_epoch_tag_unknown: PreservedFields::new(),
-    });
+    }));
 
     let run = |name: &'static str, seam: ScriptedSweep| {
         refusal!(

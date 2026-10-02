@@ -49,6 +49,7 @@ use zeroize::Zeroizing;
 use super::eager_set::ResolveFailure;
 use super::rotate::RotationPublishError;
 use crate::grants::child_index::{canonicalize, repair_observed};
+use crate::net::publish::Observed;
 use crate::owner_keys::OwnerSeedKeys;
 use crate::seams::{BoxedTask, Scheduler};
 use cipherbox_core::hex::lower as hex_lower;
@@ -114,9 +115,10 @@ pub struct SweptScope {
 pub struct SweptNode {
     /// The published record's read epoch — the epoch-lag operand.
     pub current_read_epoch: u64,
-    /// That record's sequence: the CAS basis a re-seal must publish above, since
-    /// nothing on this read path raises the name's durable sequence floor to it.
-    pub sequence: u64,
+    /// The gated read of that record: the CAS basis a re-seal must publish
+    /// above, since nothing on this read path raises the name's durable
+    /// sequence floor to it.
+    pub observed: Observed,
     /// The node's unsealed read body.
     pub read_body: ReadBody,
     /// Top-level envelope fields a republish preserves byte-stable (#27 D10).
@@ -129,7 +131,7 @@ pub struct SweptNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SweptChild {
     /// An ordinary interior node: sweepable, and descended into.
-    Interior(SweptNode),
+    Interior(Box<SweptNode>),
     /// The child's record is a **scope root**, carrying the name the resolver
     /// gated it current at. The walk stops here, and — when the scope's index
     /// does not name it — repairs the index with this name (#38 D6).
@@ -274,9 +276,9 @@ pub struct LaggingNode<'a> {
     pub ipns_name: &'a [u8],
     /// The scope's current read epoch: what the node is re-sealed up to.
     pub read_epoch: u64,
-    /// The sequence of the record this body came from — the CAS basis the
-    /// re-seal must land above ([`SweptNode::sequence`]).
-    pub sequence: u64,
+    /// The read this body came from — the CAS basis the re-seal must land
+    /// above ([`SweptNode::observed`]).
+    pub observed: &'a Observed,
     /// The body carried forward verbatim.
     pub read_body: &'a ReadBody,
     /// Envelope fields a republish preserves byte-stable (#27 D10).
@@ -688,7 +690,7 @@ where
                     if node.current_read_epoch >= swept.current_read_epoch {
                         outcome.already_converged.push(child.node_id);
                     } else {
-                        lagging.push((resolved, node));
+                        lagging.push((resolved, *node));
                     }
                 }
             }
@@ -725,7 +727,7 @@ where
             node_id: node.node_id,
             ipns_name: &node.ipns_name,
             read_epoch: swept.current_read_epoch,
-            sequence: swept_node.sequence,
+            observed: &swept_node.observed,
             read_body: &swept_node.read_body,
             carried_unknown: &swept_node.carried_unknown,
             carried_epoch_tag_unknown: &swept_node.carried_epoch_tag_unknown,

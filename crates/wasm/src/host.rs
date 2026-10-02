@@ -188,15 +188,22 @@ impl EngineHandle {
     /// derivation, vault-pointer resolve, floor cold-seed, root adoption, first
     /// snapshot event — the engine's non-circular sequence). The secret is
     /// copied into the engine's `Zeroizing` store here and never leaves.
+    /// `identityToken` is the token of the exchange this start follows, which
+    /// the login presents (ADR 0058 D2); a restored session passes none.
     /// Resolves on success; rejects with the engine error otherwise.
     #[wasm_bindgen(unchecked_return_type = "Promise<void>")]
-    pub fn start(&self, secret: Vec<u8>) -> Promise {
+    pub fn start(
+        &self,
+        secret: Vec<u8>,
+        #[wasm_bindgen(js_name = identityToken)] identity_token: Option<String>,
+    ) -> Promise {
+        let identity_token = identity_token.map(Zeroizing::new);
         let engine = self.engine.clone();
         future_to_promise(async move {
             engine
                 .write()
                 .await
-                .start(LoginSecret::new(secret))
+                .start(LoginSecret::new(secret), identity_token)
                 .await
                 .map_err(engine_error)?;
             Ok(JsValue::UNDEFINED)

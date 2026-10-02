@@ -191,6 +191,29 @@ class ReadHost extends StubEngineHost {
   }
 }
 
+describe('serveEngine start', () => {
+  it('hands the host the identity token the start carried', async () => {
+    const starts: Array<[string | undefined, string | undefined]> = [];
+    class StartHost extends ReadHost {
+      override start(...[, accountId, identityToken]: [ArrayBuffer?, string?, string?]) {
+        starts.push([accountId, identityToken]);
+        return Promise.resolve();
+      }
+    }
+    const { scope, worker } = loopback();
+    serveEngine(scope, new StartHost());
+    const transport = new LocalTransport(worker);
+
+    await transport.start(new ArrayBuffer(32), TEST_ACCOUNT_ID, 'identity.jwt');
+    await transport.start(new ArrayBuffer(32), TEST_ACCOUNT_ID);
+
+    expect(starts).toEqual([
+      [TEST_ACCOUNT_ID, 'identity.jwt'],
+      [TEST_ACCOUNT_ID, undefined],
+    ]);
+  });
+});
+
 describe('serveEngine read requests', () => {
   it('serves a snapshot read end to end over the transport', async () => {
     const { scope, worker } = loopback();

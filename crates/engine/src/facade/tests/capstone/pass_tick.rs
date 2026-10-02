@@ -59,7 +59,7 @@ fn resolve_tick_loop_populates_the_held_set() {
     // gate-passing Adopt that surfaces the owner write seed.
     seed_vault_pointer(&device, &root_name);
     let (mut engine, _events) = engine_on(&device);
-    block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+    block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None)).unwrap();
     assert!(
         engine.state.held_records.borrow().is_empty(),
         "nothing held until the record appears"
@@ -698,7 +698,7 @@ fn staleness_rungs_transition_and_emit_once_per_change() {
     }
     device.http.enqueue_response(head_response(&head_block));
     let (mut engine, mut events) = engine_on(&device);
-    block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+    block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None)).unwrap();
     assert_eq!(
         drain(&mut events),
         vec![Event::SnapshotUpdated],

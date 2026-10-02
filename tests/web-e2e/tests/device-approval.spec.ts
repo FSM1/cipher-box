@@ -13,6 +13,7 @@
  */
 
 import type { PendingApprovalDescriptor } from '@cipherbox/client';
+import type { IdentityCredential } from '@cipherbox/login';
 import type { ApprovalSession } from '@web/auth/deviceApprovalApi';
 import { expect, test as base } from '../fixtures';
 import { mintIdentity } from '../identity';
@@ -45,7 +46,8 @@ interface Account {
 }
 
 /**
- * The approver registers before the relay session is minted: a rendezvous
+ * The approver signs in through the exchange, which binds the account to the
+ * subject, and registers before the relay session is minted: a rendezvous
  * session is issued only for an identity some device on the account can answer
  * for. Every context this opens is closed when the test ends.
  */
@@ -53,14 +55,14 @@ const test = base.extend<{ account: Account }>({
   account: async ({ browser, baseURL }, use) => {
     const identity = await mintIdentity(baseURL!);
     const opened: ApprovalDevice[] = [];
-    const open = async (signIn = false) => {
+    const open = async (signIn?: IdentityCredential) => {
       const device = await openDevice(browser, identity.verifierId, signIn);
       opened.push(device);
       return device;
     };
 
     try {
-      const approver = await open(true);
+      const approver = await open(identity);
       await approver.register(identity.token);
       await use({
         approver,
