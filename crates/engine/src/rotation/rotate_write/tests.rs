@@ -167,6 +167,7 @@ impl WriteSubtreeResolver for FakeResolver {
         Ok(WriteScopeNode {
             node_id: *node_id,
             current_name,
+            retirable: true,
             child_node_ids: children,
             second_refs: Vec::new(),
         })

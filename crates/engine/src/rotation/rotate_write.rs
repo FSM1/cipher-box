@@ -87,6 +87,10 @@ pub struct WriteScopeNode {
     /// The node's current (old-epoch) `ipnsName` — retired at completion (an
     /// interior node) or left to linger (the root).
     pub current_name: IpnsName,
+    /// Whether the root's write scope seed derives `current_name` for this
+    /// node. The wave retires no other name, as for a dropped node (ADR 0065
+    /// D1).
+    pub retirable: bool,
     /// The node's direct children within this write scope.
     pub child_node_ids: Vec<[u8; 16]>,
     /// The refs this node's body gives a child at a second name, which the
@@ -878,7 +882,7 @@ where
         .await?;
         // Retire only a superseded name, never one a node still lives at
         // (never orphan).
-        if node.current_name != new_name {
+        if node.current_name != new_name && node.retirable {
             interior_old_names.push(node.current_name.clone());
         }
         // The names the epoch below the live one sat at derive from its own
