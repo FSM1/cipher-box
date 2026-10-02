@@ -8,6 +8,7 @@
 //! dry run, each of which reopens the block under the key its reader will
 //! re-derive, so a head no reader could open cannot reach the network.
 
+use cipherbox_core::content::decode_content_cid_str;
 use cipherbox_core::error::CodecError;
 use cipherbox_core::seal::{
     decode_envelope, decode_grant_section, grant_section_bytes, open_bin_index, open_read_body,
@@ -23,9 +24,11 @@ use super::publish::{
 };
 use crate::api::{ApiClient, ApiError};
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
-use crate::content::root_block_cid;
+use crate::content::provider::place_block;
+use crate::content::{ByoIpfsConfig, ProviderError, root_block_cid};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
+use crate::settings::Placement;
 
 /// The identity an authored envelope must claim, as the caller believes it —
 /// carried alongside the envelope rather than read out of it.
@@ -201,6 +204,9 @@ pub struct RecordPublishRequest<'a> {
 pub enum RecordPublishError {
     /// The head block upload failed; nothing was published.
     Upload(ApiError),
+    /// The member's own provider did not take the head block under its own
+    /// address; nothing was published.
+    Placement(ProviderError),
     /// The API did not echo the address we declared, so it is not answering
     /// about the block we uploaded. Publishing our CID on that answer would
     /// sign a pointer to a block nothing confirmed — refused fail-closed. The
@@ -216,7 +222,8 @@ pub enum RecordPublishError {
     Publish(PublishError),
 }
 
-/// Publish one authored record: upload its head block, then run the
+/// Publish one authored record: place its head block where the session's
+/// placement puts bytes (hosted when it decided none), then run the
 /// register-first CAS publish and hand back the signed bytes. Only
 /// [`PublishOutcome::Published`] bytes may be self-adopted — adopting an
 /// unconfirmed publish would advance the sequence floor and destroy the
@@ -256,16 +263,34 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let uploaded = api
-        .upload(&request.head.cid, &request.head.block)
-        .await
-        .map_err(RecordPublishError::Upload)?;
-    if uploaded.cid != request.head.cid {
-        return Err(RecordPublishError::HeadCidMismatch {
-            expected: request.head.cid.clone(),
-            returned: uploaded.cid,
-        });
-    }
+    let placement = api.placement().unwrap_or(Placement::Hosted);
+    publish_record_placed(
+        transport, api, floors, scheduler, profile, request, &placement, mark,
+    )
+    .await
+}
+
+/// [`publish_record_marked`], with the head block placed on the legs of
+/// `placement` rather than the session's.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn publish_record_placed<T, H, C, F, Sch>(
+    transport: &T,
+    api: &ApiClient<H, C>,
+    floors: &F,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    request: &RecordPublishRequest<'_>,
+    placement: &Placement,
+    mark: Option<PutMark<'_>>,
+) -> Result<PublishReceipt, RecordPublishError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    place_head(api, placement, request.head).await?;
 
     publish_marked(
         transport,
@@ -284,6 +309,55 @@ where
     )
     .await
     .map_err(RecordPublishError::Publish)
+}
+
+/// Put a head block on every leg `placement` names, the same as a content
+/// version (ADR 0029 D1). Only the hosted leg can fail a dual write (D3).
+async fn place_head<H: Http, C: CredentialStore>(
+    api: &ApiClient<H, C>,
+    placement: &Placement,
+    head: &PreflightedHead,
+) -> Result<(), RecordPublishError> {
+    match placement {
+        Placement::Hosted => hosted_head(api, head).await,
+        Placement::External(config) => member_head(api, config, head)
+            .await
+            .map_err(RecordPublishError::Placement),
+        Placement::Dual(config) => {
+            hosted_head(api, head).await?;
+            // The mirror is best effort: a miss leaves the hosted copy to serve.
+            let _ = member_head(api, config, head).await;
+            Ok(())
+        }
+    }
+}
+
+async fn hosted_head<H: Http, C: CredentialStore>(
+    api: &ApiClient<H, C>,
+    head: &PreflightedHead,
+) -> Result<(), RecordPublishError> {
+    let uploaded = api
+        .upload(&head.cid, &head.block)
+        .await
+        .map_err(RecordPublishError::Upload)?;
+    if uploaded.cid != head.cid {
+        return Err(RecordPublishError::HeadCidMismatch {
+            expected: head.cid.clone(),
+            returned: uploaded.cid,
+        });
+    }
+    Ok(())
+}
+
+/// [`place_block`] holds the member's node to the head block's own address.
+async fn member_head<H: Http, C: CredentialStore>(
+    api: &ApiClient<H, C>,
+    config: &ByoIpfsConfig,
+    head: &PreflightedHead,
+) -> Result<(), ProviderError> {
+    let cid =
+        decode_content_cid_str(&head.cid).map_err(|_| ProviderError::MalformedBlockAddress)?;
+    place_block(config, &cid, &head.block, api.http(), api.deadlines()).await
 }
 
 #[cfg(test)]
@@ -370,6 +444,72 @@ mod tests {
                 expected: authored.cid,
                 returned: "bafkreisomeotherblock".to_owned(),
             }
+        );
+        assert!(
+            device
+                .record_store
+                .record_at(&device.record_store.endpoints()[0], name.as_str())
+                .is_none(),
+            "nothing reached the record plane"
+        );
+    }
+
+    /// Under `External` the member's node is the head's only leg, so it is held
+    /// to the same address check as the hosted store, and the hosted ingress is
+    /// never asked.
+    #[test]
+    fn a_member_node_that_reports_another_address_publishes_nothing() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let binding = binding();
+        let authored = head(&binding);
+        let preflighted = preflight(&binding, &READ_KEY, &authored).expect("dry run");
+        let config = ByoIpfsConfig {
+            endpoint: "https://kubo.member.test".to_owned(),
+            kind: crate::content::ByoKind::Kubo,
+            access_token: crate::content::ByoBearer::None,
+        };
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        )
+        .with_placement(std::rc::Rc::new(core::cell::RefCell::new(Some(
+            crate::settings::SessionPlacement::member(Ok(Placement::External(config))),
+        ))));
+        let other = root_block_cid(b"another block");
+        device.http.enqueue_response(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: format!("{{\"Key\":\"{other}\",\"Size\":0}}\n").into_bytes(),
+        });
+        let signer = Ed25519Signer::from_seed([9u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+
+        let outcome = block_on(publish_record(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &RecordPublishRequest {
+                observed: &Observed::unread(&name),
+                signer: &signer,
+                head: &preflighted,
+                content_cids: Vec::new(),
+            },
+        ));
+
+        assert_eq!(
+            outcome.unwrap_err(),
+            RecordPublishError::Placement(ProviderError::AddressMismatch)
+        );
+        let requests = device.http.requests();
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.url.starts_with("https://kubo.member.test")),
+            "only the member's node was asked"
         );
         assert!(
             device

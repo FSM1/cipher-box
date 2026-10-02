@@ -88,9 +88,9 @@ use cipherbox_engine::{
     EventStream, GatewayConfig, LapsedHead, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
     MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpKind, OpPhase, OverBudgetCause, Permission,
     Placement, PlacementRefusal, PrevEpochSeed, QueueHold, QueueHoldReason, RecordReader,
-    RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
-    Unopened, WriteHistory, WriteTarget, decode_queue, load_bin_index, publish_bin_index,
-    reseal_scope_root, stage_op,
+    RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, SessionPlacement, StoragePolicy,
+    SyncTimingProfile, Unopened, WriteHistory, WriteTarget, decode_queue, load_bin_index,
+    publish_bin_index, reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -13178,11 +13178,17 @@ fn seed_vault_settings(
     settings: &VaultSettings,
 ) {
     serve_http(device, blocks, 8);
+    // A device on a BYO account writes under `External`, so its head bypasses
+    // the hosted refusal.
+    let session = blocks
+        .advisory()
+        .then(|| SessionPlacement::member(Ok(Placement::External(member_node(ByoKind::Kubo)))));
     let api = ApiClient::new(
         device.http.clone(),
         device.credential_store.clone(),
         String::new(),
-    );
+    )
+    .with_placement(std::rc::Rc::new(RefCell::new(session)));
     block_on(publish_settings(
         &device.record_store,
         &api,
@@ -13207,6 +13213,7 @@ fn an_external_write_places_every_block_on_the_members_node_and_none_on_the_host
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
     seed_settings(&world, &alice, &blocks, PinMode::External);
+    let seeded = uploaded_cids(&alice);
     blocks.set_quota(1_000, 1_000);
 
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
@@ -13230,20 +13237,84 @@ fn an_external_write_places_every_block_on_the_members_node_and_none_on_the_host
         !registered.is_empty(),
         "every mode still registers for union-liveness accounting"
     );
-    assert_eq!(
-        blocks.member_node_cids(),
-        registered,
-        "the member's node holds exactly the block set the registration names"
-    );
-    let hosted = uploaded_cids(&alice);
+    let (sequence, photo_head) = published(&world.record_store, photo);
+    assert_eq!(sequence, 1, "the version still published its own record");
+    let (_, root_head) = published(&world.record_store, ROOT);
+    let held = blocks.member_node_cids();
     assert!(
-        registered.iter().all(|cid| !hosted.contains(cid)),
-        "not one of the version's blocks took the hosted path"
+        registered.iter().all(|cid| held.contains(cid)),
+        "the member's node holds every block the registration names"
+    );
+    assert!(
+        held.contains(&photo_head) && held.contains(&root_head),
+        "and the record head blocks too"
     );
     assert_eq!(
-        published(&world.record_store, photo).0,
-        1,
-        "the version still published its own record"
+        uploaded_cids(&alice),
+        seeded,
+        "not one block, record heads included, took the hosted path"
+    );
+}
+
+/// A device that writes under `External` has set the account's BYO flag, so the
+/// hosted ingress refuses it. The save back to `Hosted` must still land, or the
+/// device can never leave `External` from the app.
+#[test]
+fn an_external_device_saves_its_way_back_to_hosted() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::External);
+    let seeded = uploaded_cids(&alice);
+
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+    assert!(blocks.advisory(), "the External write flagged the account");
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: VaultSettings {
+                pin_mode: PinMode::Hosted,
+                byo: None,
+                retention: RetentionPolicy::KeepAll,
+                bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+            },
+        })),
+        Ok(CommandOutcome::Done),
+        "the save back to Hosted lands"
+    );
+    assert_eq!(
+        uploaded_cids(&alice),
+        seeded,
+        "the save placed its head where the session still writes"
+    );
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "after.bin".into(),
+        },
+        &(0..50u8).collect::<Vec<_>>(),
+    )
+    .expect("a Hosted write commits");
+    tick(&world, &engine, &mut tasks);
+    let after = child_id(&engine, ROOT, "after.bin");
+    let (sequence, head) = published(&world.record_store, after);
+    assert_eq!(sequence, 1, "the next write publishes under Hosted");
+    assert!(
+        uploaded_cids(&alice).contains(&head),
+        "and its head block took the hosted path"
     );
 }
 
@@ -13329,11 +13400,10 @@ fn a_hold_under_an_external_placement_clears_without_a_quota_probe() {
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    seed_settings(&world, &alice, &blocks, PinMode::External);
+    seed_settings(&world, &alice, &blocks, PinMode::Hosted);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
-    // The record head block still traverses the hosted ingress, so it is what
-    // the account quota can refuse under an external placement.
+    // The hold is taken under `Hosted`, and the member then moves to `External`.
     blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("QUOTA_EXCEEDED")))));
     create(&mut engine, "photos");
     tick(&world, &engine, &mut tasks);
@@ -13343,6 +13413,15 @@ fn a_hold_under_an_external_placement_clears_without_a_quota_probe() {
     );
 
     blocks.accept_uploads();
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: VaultSettings {
+            pin_mode: PinMode::External,
+            byo: Some(member_node(ByoKind::Kubo)),
+            retention: RetentionPolicy::KeepAll,
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+        },
+    }))
+    .expect("the move to External lands");
     blocks.set_quota_down(true);
     let probes = || {
         alice
@@ -13406,8 +13485,12 @@ fn a_dual_write_publishes_and_reports_the_leg_the_members_node_did_not_take() {
         !uploaded_cids(&alice).is_empty(),
         "the hosted leg took the bytes"
     );
+    let held = blocks.member_node_cids();
     assert!(
-        blocks.member_node_cids().is_empty(),
+        registered_content_cids(&alice, &write_name(photo))
+            .iter()
+            .chain([&published(&world.record_store, photo).1])
+            .all(|cid| !held.contains(cid)),
         "the offline node took none"
     );
     let emitted = events_so_far(&mut events);
@@ -13477,10 +13560,15 @@ fn a_dual_write_places_the_same_block_set_on_both_legs() {
         registered.iter().all(|cid| hosted.contains(cid)),
         "the hosted leg took every block"
     );
-    assert_eq!(
-        blocks.member_node_cids(),
-        registered,
+    let held = blocks.member_node_cids();
+    assert!(
+        registered.iter().all(|cid| held.contains(cid)),
         "and the member's node holds the same addresses, under its own hashing"
+    );
+    let (_, head) = published(&world.record_store, photo);
+    assert!(
+        hosted.contains(&head) && held.contains(&head),
+        "the record head block went to both legs"
     );
     assert!(
         !events_so_far(&mut events).iter().any(|event| matches!(
@@ -13521,9 +13609,9 @@ fn a_mirror_refusal_the_op_retries_past_leaves_nothing_to_report() {
     let mut registered = registered_content_cids(&alice, &write_name(photo));
     registered.sort();
     registered.dedup();
-    assert_eq!(
-        blocks.member_node_cids(),
-        registered,
+    let held = blocks.member_node_cids();
+    assert!(
+        registered.iter().all(|cid| held.contains(cid)),
         "the retry put the refused block on the member's node"
     );
     assert!(
@@ -13901,9 +13989,9 @@ fn a_running_session_re_decides_its_placement_from_the_live_settings_record() {
     write_photo(&mut engine, "photo.bin");
     tick(&world, &engine, &mut tasks);
     let first = version_blocks(&alice, &engine, "photo.bin");
-    assert_eq!(
-        blocks.member_node_cids(),
-        first,
+    let held = blocks.member_node_cids();
+    assert!(
+        first.iter().all(|cid| held.contains(cid)),
         "the first version went to the member's own node"
     );
     let hosted = uploaded_cids(&alice);
@@ -13916,6 +14004,7 @@ fn a_running_session_re_decides_its_placement_from_the_live_settings_record() {
     // The member switches the account to hosted from another device. This
     // session is never restarted.
     seed_settings(&world, &alice, &blocks, PinMode::Hosted);
+    let held = blocks.member_node_cids();
     tick_past_the_settings_recheck(&world, &engine, &mut tasks);
 
     write_photo(&mut engine, "photo2.bin");
@@ -13928,7 +14017,7 @@ fn a_running_session_re_decides_its_placement_from_the_live_settings_record() {
     );
     assert_eq!(
         blocks.member_node_cids(),
-        first,
+        held,
         "and the revoked provider receives nothing further"
     );
     assert!(

@@ -92,6 +92,8 @@ pub fn orphaned_head(error: &RecordPublishError) -> bool {
             matches!(error, ApiError::Transport(_) | ApiError::Decode(_))
         }
         RecordPublishError::HeadCidMismatch { .. } => true,
+        // The member's own node holds no pin row to retire.
+        RecordPublishError::Placement(_) => false,
         RecordPublishError::Publish(error) => match error.verdict() {
             // The head block is already uploaded and charged when publish
             // refuses, and no record naming it reached the transport.

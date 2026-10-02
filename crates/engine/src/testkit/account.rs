@@ -272,9 +272,11 @@ impl Blocks {
             .insert(declared.to_owned(), block);
     }
 
-    /// The block stored under `cid`, if the plane holds one.
+    /// The block stored under `cid`, if the plane holds one. A network fetch
+    /// reaches the member's own node too.
     pub fn get(&self, cid: &str) -> Option<Vec<u8>> {
-        self.store.lock().expect("lock").get(cid).cloned()
+        let hosted = self.store.lock().expect("lock").get(cid).cloned();
+        hosted.or_else(|| self.member_node.lock().expect("lock").get(cid).cloned())
     }
 
     /// Serve `block` under `cid` whatever it hashes to: a plane that answers
@@ -450,6 +452,16 @@ impl Blocks {
                 .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
                 .map(|(_, value)| value.clone())
                 .expect("upload declares its CID");
+            // The API's own refusal: a BYO account's bytes bypass the hosted
+            // ingress, record heads included.
+            if self.advisory() {
+                return Ok(HttpResponse {
+                    status: 409,
+                    headers: Vec::new(),
+                    body: br#"{"statusCode":409,"message":"Hosted ingress is unavailable for BYO accounts"}"#
+                        .to_vec(),
+                });
+            }
             let block = request.body.clone().unwrap_or_default();
             if let Some(hook) = self.on_upload.lock().expect("lock").as_mut()
                 && let Some(reply) = hook(&block)

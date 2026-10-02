@@ -71,7 +71,7 @@ use crate::net::author::{
 use crate::net::last_known_good::keep_then_commit;
 use crate::net::publish::{Observed, PublishError, PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
-    HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
+    HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record_placed,
 };
 use crate::net::retire::{
     Acknowledged, LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger,
@@ -7058,7 +7058,7 @@ where
             outcome,
             record_bytes,
             winner,
-        } = publish_record(
+        } = publish_record_placed(
             &self.seams.transport,
             &self.seams.api,
             &plane.end.floors(&self.seams.floors),
@@ -7070,6 +7070,8 @@ where
                 head: &preflighted,
                 content_cids,
             },
+            self.inputs.placement.as_ref().unwrap_or(&Placement::Hosted),
+            None,
         )
         .await
         .map_err(|error| {
@@ -7592,6 +7594,7 @@ async fn yield_now() {
 fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     match error {
         RecordPublishError::Upload(error) => classify_upload(error, refused_bytes),
+        RecordPublishError::Placement(error) => classify_placement(error),
         RecordPublishError::Publish(PublishError::Register(error)) => classify_register(error),
         RecordPublishError::HeadCidMismatch { .. } | RecordPublishError::Publish(_) => {
             Halt::Unclassified

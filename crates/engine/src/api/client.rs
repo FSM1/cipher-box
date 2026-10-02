@@ -8,6 +8,7 @@
 //! Refresh is single-flight with one retry-then-fail on 401.
 
 use core::cell::RefCell;
+use std::rc::Rc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -34,6 +35,7 @@ use crate::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, SeamError,
     bearer_header, item_id_is_legal,
 };
+use crate::settings::{Placement, SessionPlacement};
 
 const CONTENT_TYPE: &str = "Content-Type";
 const APPLICATION_JSON: &str = "application/json";
@@ -88,6 +90,9 @@ pub struct ApiClient<H: Http, C: CredentialStore> {
     accelerator: SessionBearer,
     refresh_waiters: RefreshWaiters,
     deadlines: DeadlinePolicy,
+    /// The session's placement, which a record head block follows
+    /// ([`Self::placement`]).
+    placement: Rc<RefCell<Option<SessionPlacement>>>,
 }
 
 impl<H: Http, C: CredentialStore> ApiClient<H, C> {
@@ -106,7 +111,31 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             accelerator: SessionBearer::default(),
             refresh_waiters: RefCell::new(None),
             deadlines: DeadlinePolicy::default(),
+            placement: Rc::default(),
         }
+    }
+
+    /// Read the session's placement from the caller's cell, so every record
+    /// publish over this client follows each re-decide.
+    #[must_use]
+    pub fn with_placement(mut self, placement: Rc<RefCell<Option<SessionPlacement>>>) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    /// The placement the session decided, or `None` where it decided none.
+    pub(crate) fn placement(&self) -> Option<Placement> {
+        self.placement.borrow().as_ref()?.decision.clone().ok()
+    }
+
+    /// The Http seam this client drives.
+    pub(crate) fn http(&self) -> &H {
+        &self.http
+    }
+
+    /// The deadlines this client holds its requests to.
+    pub(crate) fn deadlines(&self) -> &DeadlinePolicy {
+        &self.deadlines
     }
 
     /// Hold every API leg to `deadlines` instead of the shipped default.

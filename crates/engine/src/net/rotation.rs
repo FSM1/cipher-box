@@ -711,7 +711,9 @@ fn author_verdict(refusal: AuthorError) -> RotationPublishError {
 fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => RotationPublishError::Rejected,
-        RecordPublishError::Upload(_) => RotationPublishError::NotPublished,
+        RecordPublishError::Upload(_) | RecordPublishError::Placement(_) => {
+            RotationPublishError::NotPublished
+        }
         RecordPublishError::Publish(error) => rotation_publish_verdict(error),
     }
 }
@@ -4350,7 +4352,9 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
 pub(super) fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. } => WritePublishError::Rejected,
-        RecordPublishError::Upload(_) => WritePublishError::NotLanded,
+        RecordPublishError::Upload(_) | RecordPublishError::Placement(_) => {
+            WritePublishError::NotLanded
+        }
         RecordPublishError::Publish(error) => wave_publish_verdict(error),
     }
 }

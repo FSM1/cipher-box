@@ -52,8 +52,8 @@ const METADATA: [IpAddr; 3] = [
 pub enum PinMode {
     /// CipherBox's hosted pin store (the default). Quota is authoritative.
     Hosted,
-    /// The member's own provider only. No content block reaches the hosted
-    /// store; record heads and registration still do.
+    /// The member's own provider only. No block reaches the hosted store; only
+    /// registration does.
     External,
     /// Both hosted and the member's own provider.
     Dual,

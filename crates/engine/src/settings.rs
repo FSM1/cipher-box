@@ -242,8 +242,8 @@ pub fn summarize_settings(load: &SettingsLoad) -> VaultSettingsSummary {
 pub enum Placement {
     /// CipherBox's hosted pin store only.
     Hosted,
-    /// The member's own provider only. No *content* block reaches the hosted
-    /// store; record heads and registration still traverse it
+    /// The member's own provider only. No block, record heads included,
+    /// reaches the hosted store; only registration traverses the API
     /// (blueprint/engine.md "Content plane").
     External(ByoIpfsConfig),
     /// Both legs.

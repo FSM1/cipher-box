@@ -5353,7 +5353,8 @@ impl<T: SeamTypes> Engine<T> {
                 base_url.unwrap_or_default().to_owned(),
             )
             .with_session_bearers(self.session_bearer.clone(), self.accelerator_bearer.clone())
-            .with_deadlines(self.deadlines),
+            .with_deadlines(self.deadlines)
+            .with_placement(self.state.placement.clone()),
         );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
