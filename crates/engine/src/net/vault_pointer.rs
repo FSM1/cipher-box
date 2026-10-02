@@ -80,15 +80,14 @@ where
     }
 
     /// The standing re-point, refused when it names a root other than
-    /// `root_name`: a vouch over it would prove nothing about that root. Also
-    /// refused below the vouched floor or below the sequence this device
-    /// published at the name: a vouch carries every other field over, so one
-    /// over a replay would sign the rolled-back fields again, above it.
+    /// `root_name`, or sits below the vouched floor or the sequence this device
+    /// published: a vouch signs every other field of it again.
     pub(crate) async fn standing(
         &self,
         root_name: &[u8],
     ) -> Result<StandingVouch, RotationPublishError> {
-        let standing = match fanout_get_classified(self.transport, &self.name()).await {
+        let name = self.name();
+        let standing = match fanout_get_classified(self.transport, &name).await {
             FanoutRecord::Found(record, _) => record,
             FanoutRecord::Absent => return Err(RotationPublishError::Rejected),
             FanoutRecord::Unavailable(_) => return Err(RotationPublishError::NotPublished),
@@ -112,7 +111,7 @@ where
         }
         floor::check_sequence(
             self.floors,
-            self.name().as_str().as_bytes(),
+            name.as_str().as_bytes(),
             standing.sequence,
             Strictness::AtOrAboveFloor,
         )

@@ -486,14 +486,18 @@ fn vouched_min_read_epoch(world: &FakeWorld) -> u64 {
     vault_repoint(world).min_read_epoch
 }
 
+/// The vault-pointer record at the first endpoint.
+fn vault_pointer_record(world: &FakeWorld) -> Option<Vec<u8>> {
+    let endpoint = world.record_store.endpoints()[0].clone();
+    world
+        .record_store
+        .record_at(&endpoint, vault_pointer_name(&SECRET, 0).as_str())
+}
+
 /// The re-point the vault pointer at index 0 carries.
 fn vault_repoint(world: &FakeWorld) -> RepointObject {
     let name = vault_pointer_name(&SECRET, 0);
-    let endpoint = world.record_store.endpoints()[0].clone();
-    let bytes = world
-        .record_store
-        .record_at(&endpoint, name.as_str())
-        .expect("the vault pointer is published");
+    let bytes = vault_pointer_record(world).expect("the vault pointer is published");
     let record = IpnsRecord::unmarshal(&bytes).expect("a record");
     let entry = record.verify(&name).expect("the record verifies");
     cipherbox_engine::sync::pointer::open_repoint(
@@ -1089,14 +1093,6 @@ fn a_replayed_pre_cut_pointer_is_refused_after_a_landed_vouch() {
     assert_start_refuses_a_rolled_back_pointer(&blocks, &owner, 43);
 }
 
-/// The vault-pointer record at the first endpoint.
-fn vault_pointer_record(world: &FakeWorld) -> Option<Vec<u8>> {
-    let endpoint = world.record_store.endpoints()[0].clone();
-    world
-        .record_store
-        .record_at(&endpoint, vault_pointer_name(&SECRET, 0).as_str())
-}
-
 /// The network serves a pointer below the sequence this device published at
 /// the name, at the epoch the device vouched: the start goes on, and its
 /// catch-up does not sign that pointer's fields again.
@@ -1240,9 +1236,7 @@ fn no_command_runs_a_write_cut_of_the_vault_root() {
         let name = command.name();
         let cut = block_on_while_ticking(engine.command(command), &mut tasks);
         assert!(cut.is_ok(), "{name} below the vault root: {cut:?}");
-        for _ in 0..4 {
-            tick(&world, &engine, &mut tasks);
-        }
+        tick_n(&world, &engine, &mut tasks, 4);
     }
     drop(world.scheduler.take_spawned_tasks());
 
