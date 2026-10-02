@@ -1033,10 +1033,9 @@ pub(crate) struct ScopeEnd<'a> {
     pub(crate) root_name: &'a IpnsName,
     /// The scope read seed per-node read keys derive from.
     pub(crate) read_scope_seed: &'a Zeroizing<[u8; 32]>,
-    /// The stamp of `read_scope_seed` (`deposit_seed`): its own epoch, or a
-    /// floor at or below it when the seed's record sat at the floor. Floors
-    /// only rise, so a root that passes the floor check at the stamp is at the
-    /// seed's own epoch. `None` where no stamp is known.
+    /// The stamp of `read_scope_seed` (`deposit_seed`), or `None` where no
+    /// stamp is known. Floors only rise, so a root that passes the floor check
+    /// at the stamp is at the seed's own epoch.
     pub(crate) read_seed_stamp: Option<u64>,
     /// The scope write seed per-node IPNS names and signers derive from.
     pub(crate) write_scope_seed: &'a Zeroizing<[u8; 32]>,
@@ -1060,6 +1059,18 @@ impl<'a> ScopeEnd<'a> {
     /// record's seal needs.
     fn at(self, epoch: u64) -> SealPlane<'a> {
         SealPlane { end: self, epoch }
+    }
+
+    /// This end with the bin's held key as its read seed, which has no stamp.
+    fn under_held_key<'b>(self, held: &'b Zeroizing<[u8; 32]>) -> ScopeEnd<'b>
+    where
+        'a: 'b,
+    {
+        ScopeEnd {
+            read_scope_seed: held,
+            read_seed_stamp: None,
+            ..self
+        }
     }
 
     /// The per-node read key (`node-seed` → `read-key`) this scope's records are
@@ -2234,19 +2245,14 @@ where
             return Ok(());
         }
 
-        let (mut pass, rebased) = match self.open_rebased_pass(scope, queued).await {
-            Ok(opened) => opened,
-            // A newer release rewrites the anchor on each write, so its halt
-            // must reach the valve to be bounded and named.
-            Err(halt @ Halt::ForeignVersion) => {
-                if let Some((op_id, op)) = queued.first() {
-                    self.apply_valve(scope, *op_id, op, halt, attempts, report)
-                        .await;
-                }
-                return Err(halt);
-            }
-            Err(halt) => return Err(halt),
-        };
+        let opened = self.open_rebased_pass(scope, queued).await;
+        // A newer release rewrites the anchor on each write, so its halt must
+        // reach the valve to be bounded and named.
+        if let (Err(halt @ Halt::ForeignVersion), Some((op_id, op))) = (&opened, queued.first()) {
+            self.apply_valve(scope, *op_id, op, *halt, attempts, report)
+                .await;
+        }
+        let (mut pass, rebased) = opened?;
         for (op_id, reason) in &rebased.dead_letters {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
@@ -2832,7 +2838,7 @@ where
     /// grant section carries.
     ///
     /// `scope` is the pass that resolved the bytes, and `None` for the cached
-    /// copy ([`Self::unopened_root`]).
+    /// copy ([`Self::load_scope_root`]).
     async fn open_root_record(
         &self,
         scope: Option<&DrainScope<'_>>,
@@ -2866,7 +2872,7 @@ where
         .await
         .map_err(|_| Halt::UploadAttempt)?;
         let observed = Observed::gated(source.root_name, sequence, envelope.v)
-            .map_err(|_| Halt::ForeignVersion)?;
+            .map_err(classify_publish_error)?;
         let read_key = source.read_key(&source.root.0);
         let Ok(body) = open_read_body(&envelope, &read_key) else {
             return Err(self
@@ -3087,8 +3093,8 @@ where
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, adopter, &name, &record_bytes, lagging)
             .await?;
-        let observed = Observed::gated(&name, adopted.sequence, envelope.v)
-            .map_err(|_| Halt::ForeignVersion)?;
+        let observed =
+            Observed::gated(&name, adopted.sequence, envelope.v).map_err(classify_publish_error)?;
         // Re-sealing a node at an epoch above the scope's would cross the AAD
         // epoch binding.
         if adopted.epoch > anchor.epoch {
@@ -3719,11 +3725,7 @@ where
         }
         let held = self.inputs.bin_keys.held_key(&target.0, entry.deleted_at);
         let binned = SealPlane {
-            end: ScopeEnd {
-                read_scope_seed: &held,
-                read_seed_stamp: None,
-                ..plane.end
-            },
+            end: plane.end.under_held_key(&held),
             ..plane
         };
         self.rekey_subtree(
@@ -3802,11 +3804,7 @@ where
         }
         let held = self.inputs.bin_keys.held_key(&target.0, deleted_at);
         let binned = SealPlane {
-            end: ScopeEnd {
-                read_scope_seed: &held,
-                read_seed_stamp: None,
-                ..binned_under.end
-            },
+            end: binned_under.end.under_held_key(&held),
             ..binned_under
         };
         // The walk runs under the held key because that is what seals the whole
@@ -4807,11 +4805,7 @@ where
     ) -> Result<(), Halt> {
         let held = self.inputs.bin_keys.held_key(&root.0, deleted_at);
         let binned = SealPlane {
-            end: ScopeEnd {
-                read_scope_seed: &held,
-                read_seed_stamp: None,
-                ..plane.end
-            },
+            end: plane.end.under_held_key(&held),
             ..*plane
         };
         self.rekey_subtree(scope, plane, &binned, anchor, root)
@@ -5129,11 +5123,7 @@ where
             .map(|(deleted_at, (target, _))| self.inputs.bin_keys.held_key(&target.0, deleted_at));
         let plane = scope.source.at(root.epoch);
         let sealed_under = held.as_ref().map_or(plane, |held| SealPlane {
-            end: ScopeEnd {
-                read_scope_seed: held,
-                read_seed_stamp: None,
-                ..scope.source
-            },
+            end: scope.source.under_held_key(held),
             ..plane
         });
         let mut proven = Vec::new();
@@ -8173,7 +8163,7 @@ fn publish_basis(served: Option<Served>, built_on: &(Observed, Vec<u8>)) -> Resu
     }
     match served.observed {
         Some(gated) if served.sequence == built_on.0.sequence() => {
-            gated.map_err(|_| Halt::ForeignVersion)
+            gated.map_err(classify_publish_error)
         }
         _ => Ok(built_on.0.clone()),
     }
@@ -9402,13 +9392,10 @@ mod tests {
         assert_eq!(short.still_queued, vec![short.op_id]);
 
         let halted = halted_op(halt(), UNATTRIBUTED_BUDGET);
-        let reasons: Vec<DeadLetterReason> = halted
-            .report
-            .dead_letters
-            .iter()
-            .map(|(_, _, reason)| *reason)
-            .collect();
-        assert_eq!(reasons, vec![DeadLetterReason::NewerRelease]);
+        assert_eq!(
+            dead_letter_reasons(&halted.report),
+            vec![DeadLetterReason::NewerRelease]
+        );
     }
 
     /// A newer release rewrites the scope root on each write, so the anchor
@@ -9442,13 +9429,19 @@ mod tests {
         }
         assert_eq!(pass(&mut attempts, &mut report), Err(Halt::ForeignVersion));
 
-        let reasons: Vec<DeadLetterReason> = report
+        assert_eq!(
+            dead_letter_reasons(&report),
+            vec![DeadLetterReason::NewerRelease]
+        );
+        assert!(harness.queued_op_ids().is_empty());
+    }
+
+    fn dead_letter_reasons(report: &DrainReport) -> Vec<DeadLetterReason> {
+        report
             .dead_letters
             .iter()
             .map(|(_, _, reason)| *reason)
-            .collect();
-        assert_eq!(reasons, vec![DeadLetterReason::NewerRelease]);
-        assert!(harness.queued_op_ids().is_empty());
+            .collect()
     }
 
     /// This build's own refusal of the bytes it would sign repeats on every
@@ -10111,7 +10104,8 @@ mod tests {
         };
         [false, true].map(|cached| {
             let answer = open(&harness, cached);
-            let reported = core::iter::from_fn(|| harness.events.try_recv().ok())
+            let reported = drain_events(&mut harness.events)
+                .into_iter()
                 .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
                 .count();
             (answer, reported)
