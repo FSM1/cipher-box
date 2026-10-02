@@ -32,10 +32,10 @@ use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpResponse, RecordTransport, StagingStore, UnixMillis,
 };
-use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
 };
+use cipherbox_engine::sync::{BookkeepingSeal, UNATTRIBUTED_BUDGET};
 use cipherbox_engine::testkit::SeededEntropy;
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, ROOT, SCOPE as ACCOUNT_SCOPE, SECRET, TTL_NANOS, floor_label, fresh_observed,
@@ -421,14 +421,20 @@ fn a_drain_publish_never_re_authors_a_scope_root_at_another_envelope_version() {
         kind: NodeKind::Folder,
     }))
     .expect("the create stages");
-    tick(&world, &engine, &mut tasks);
+    for _ in 0..8 {
+        tick(&world, &engine, &mut tasks);
+    }
 
     assert_eq!(
         record_at(&world, &root_name),
         root_record,
         "the root at the newer version was never republished"
     );
-    assert_eq!(queued(&device), 1, "and the create is still queued");
+    assert_eq!(
+        (queued(&device), dead_letters(&engine)),
+        (1, 0),
+        "and the create is still queued, past the attempt budget"
+    );
 }
 
 /// The drain re-authors a folder through the gate's version rule: a folder a
@@ -445,12 +451,12 @@ fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
     assert_eq!(queued, 1, "and the create is still queued");
 }
 
-/// A folder at another envelope version holds the op until this device runs
-/// a release that reads that version: past the attempt budget, the op is still
-/// queued and no write is lost to a dead letter.
+/// A folder at another envelope version charges no attempt: one pass short
+/// of the unattributed budget, the op is still queued with no dead letter.
 #[test]
-fn a_drain_op_under_a_folder_at_another_envelope_version_stays_queued() {
-    let (served, after, queued, dead_letters) = create_under_a_folder_at_newer_version(8);
+fn a_drain_op_under_a_folder_at_another_envelope_version_charges_no_attempt() {
+    let (served, after, queued, dead_letters) =
+        create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize - 1);
 
     assert_eq!(
         (queued, dead_letters),
@@ -529,14 +535,17 @@ fn create_under_a_folder_at_newer_version(
     for _ in 0..passes {
         tick(&world, &engine, &mut tasks);
     }
-    let dead_letters = block_on(engine.status())
-        .expect("the session status reads")
-        .dead_letters
-        .len();
     (
         record,
         record_at(&world, &name),
         queued(&device),
-        dead_letters,
+        dead_letters(&engine),
     )
+}
+
+fn dead_letters(engine: &Engine<FakeSeamTypes>) -> usize {
+    block_on(engine.status())
+        .expect("the session status reads")
+        .dead_letters
+        .len()
 }

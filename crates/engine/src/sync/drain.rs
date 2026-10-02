@@ -7614,6 +7614,9 @@ fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
 fn classify_publish_error(error: PublishError) -> Halt {
     match error {
         PublishError::Register(error) => classify_register(error),
+        // Another device runs a newer release: the op waits for this one to
+        // update rather than spend its attempts.
+        PublishError::ForeignVersion { .. } => Halt::Unclassified,
         error => match error.verdict() {
             PublishVerdict::Refused
             | PublishVerdict::RefusedUnaddressed
@@ -9148,6 +9151,18 @@ mod tests {
         );
     }
 
+    /// A record at another envelope version charges no attempt.
+    #[test]
+    fn a_foreign_version_refusal_charges_no_attempt() {
+        assert_eq!(
+            classify_publish(
+                RecordPublishError::Publish(PublishError::ForeignVersion { version: 2 }),
+                4096
+            ),
+            Halt::Unclassified
+        );
+    }
+
     /// This build's own refusal of the bytes it would sign repeats on every
     /// retry over the same inputs, so it spends the attempt budget and is never
     /// an outage.
@@ -9160,7 +9175,6 @@ mod tests {
                 at: 2,
                 epoch: 1,
             },
-            PublishError::ForeignVersion { version: 2 },
             PublishError::EmptyHeadCid,
             PublishError::EmptyInlineValue,
             PublishError::RecordTooLarge {
