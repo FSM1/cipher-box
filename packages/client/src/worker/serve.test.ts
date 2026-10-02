@@ -515,6 +515,8 @@ describe('serveEngine event pump over the real EngineHost', () => {
         pumped.length > 0
           ? Promise.resolve(pumped.shift())
           : new Promise<EventDescriptor | undefined>(() => undefined),
+      free: () => undefined,
+      [Symbol.dispose]: () => undefined,
     };
     const wasm = {
       EngineHandle: function EngineHandle() {

@@ -84,27 +84,16 @@ impl NodeId {
 }
 
 /// A freshly opened read stream and the plaintext size of the version it
-/// pinned (`Engine::stream_size`).
-#[wasm_bindgen]
+/// pinned (`Engine::stream_size`). It crosses as plain data, so a host can
+/// hand it to another realm.
+#[derive(serde::Serialize, tsify::Tsify)]
+#[tsify(large_number_types_as_bigints)]
 pub struct OpenedStream {
-    handle: u64,
-    size: f64,
-}
-
-#[wasm_bindgen]
-impl OpenedStream {
     /// The handle every window of this stream is read against.
-    #[wasm_bindgen(getter)]
-    pub fn handle(&self) -> u64 {
-        self.handle
-    }
-
+    handle: u64,
     /// The pinned version's plaintext size in bytes. A JS number, not a
     /// `bigint`, so it pairs with the whole-number offsets `readStream` takes.
-    #[wasm_bindgen(getter)]
-    pub fn size(&self) -> f64 {
-        self.size
-    }
+    size: f64,
 }
 
 impl OpenedStream {
@@ -170,176 +159,267 @@ pub fn read_ipns_record(ipns_name: &str, record: &[u8]) -> Result<IpnsRecordRead
 // to be approved has no session to issue a command through.
 // ---------------------------------------------------------------------------
 
+/// The device-approval rendezvous steps and what each produces.
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-mod rendezvous {
+pub mod rendezvous {
     use super::*;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+    use tsify::Ts;
     use zeroize::Zeroizing;
 
-    /// What a requester needs to open a rendezvous: the key it offers, the bytes it
-    /// must sign over that key, and the digits its screen shows.
-    #[wasm_bindgen]
-    pub struct DeviceRendezvous {
-        ephemeral_public_key: String,
-        request_payload: Vec<u8>,
-        comparison_value: String,
+    use crate::boundary::{decode_rendezvous_step, encode_view};
+
+    /// A scalar or a factor key the host handed in.
+    pub type Secret = Zeroizing<Vec<u8>>;
+
+    const SCALAR: &str = "scalar";
+    const SEAL_SCALAR: &str = "sealScalar";
+    const FACTOR_KEY: &str = "factorKey";
+
+    /// Refuses real bytes. Serde has buffered them unwiped by the time this
+    /// runs, so a secret that skipped its placeholder fails the decode rather
+    /// than passing silently.
+    fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Secret, D::Error> {
+        let placeholder = Zeroizing::new(cipherbox_engine::wire::bytes::deserialize(deserializer)?);
+        if !placeholder.is_empty() {
+            return Err(de::Error::custom("a secret field skipped its placeholder"));
+        }
+        Ok(placeholder)
     }
 
-    #[wasm_bindgen]
-    impl DeviceRendezvous {
-        /// The compressed secp256k1 key a factor must be sealed to.
-        #[wasm_bindgen(getter, js_name = ephemeralPublicKey)]
-        pub fn ephemeral_public_key(&self) -> String {
-            self.ephemeral_public_key.clone()
-        }
+    fn as_bytes<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(bytes)
+    }
 
-        /// The bytes the requesting device signs.
-        #[wasm_bindgen(getter, js_name = requestPayload)]
-        pub fn request_payload(&self) -> Vec<u8> {
-            self.request_payload.clone()
-        }
+    /// One step of the rendezvous. Every step is a pure function of the
+    /// exchange transcript; the engine holds no state for it.
+    #[derive(Deserialize, tsify::Tsify)]
+    #[serde(
+        tag = "kind",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase",
+        deny_unknown_fields
+    )]
+    pub enum DeviceRendezvousStep {
+        /// Open a rendezvous from 32 fresh random bytes. The scalar stays with
+        /// the caller: it is what opens the factor an approver seals back.
+        Open {
+            /// The requesting device's key.
+            device_public_key: String,
+            /// The rendezvous scalar.
+            #[serde(deserialize_with = "secret")]
+            #[tsify(type = "Uint8Array")]
+            scalar: Secret,
+        },
+        /// Seal a fresh factor to the requester and build the answer to sign.
+        Approve {
+            /// The approving device's key.
+            device_public_key: String,
+            /// The rendezvous being answered.
+            request_id: String,
+            /// The requesting device's key.
+            requester_device_public_key: String,
+            /// The key the requester offered.
+            ephemeral_public_key: String,
+            /// 32 fresh random bytes on every call.
+            #[serde(deserialize_with = "secret")]
+            #[tsify(type = "Uint8Array")]
+            seal_scalar: Secret,
+            /// The factor the requester adopts.
+            #[serde(deserialize_with = "secret")]
+            #[tsify(type = "Uint8Array")]
+            factor_key: Secret,
+        },
+        /// Build the denial to sign. A denial seals nothing.
+        Deny {
+            /// The denying device's key.
+            device_public_key: String,
+            /// The rendezvous being answered.
+            request_id: String,
+            /// The key the requester offered.
+            ephemeral_public_key: String,
+        },
+        /// Adopt the factor an approver sealed, with the scalar that opened the
+        /// rendezvous.
+        OpenFactor {
+            /// The sealed factor, base64.
+            sealed_factor: String,
+            /// The rendezvous it answers.
+            request_id: String,
+            /// This device's key.
+            requester_device_public_key: String,
+            /// The approving device (D4).
+            responder_device_public_key: String,
+            /// The approver's signature over its whole answer (D4).
+            response_signature: String,
+            /// The scalar that opened the rendezvous.
+            #[serde(deserialize_with = "secret")]
+            #[tsify(type = "Uint8Array")]
+            scalar: Secret,
+        },
+    }
 
-        /// The digits this screen shows, for the member to compare with the
-        /// approver's. Both sides derive them from the same two requester fields.
-        #[wasm_bindgen(getter, js_name = comparisonValue)]
-        pub fn comparison_value(&self) -> String {
-            self.comparison_value.clone()
+    impl DeviceRendezvousStep {
+        /// Each secret slot of this step, by its JS field name; see
+        /// [`crate::boundary::take_rendezvous_secrets`].
+        pub(crate) fn secrets_mut(&mut self) -> Vec<(&'static str, &mut Secret)> {
+            match self {
+                Self::Open { scalar, .. } | Self::OpenFactor { scalar, .. } => {
+                    vec![(SCALAR, scalar)]
+                }
+                Self::Approve {
+                    seal_scalar,
+                    factor_key,
+                    ..
+                } => vec![(SEAL_SCALAR, seal_scalar), (FACTOR_KEY, factor_key)],
+                Self::Deny { .. } => Vec::new(),
+            }
         }
     }
 
-    /// What an approver sends: the sealed factor, if it approved, and the bytes it
-    /// must sign over its whole answer.
-    #[wasm_bindgen]
-    pub struct DeviceApprovalResponse {
-        sealed_factor: Option<String>,
-        payload: Vec<u8>,
+    /// What one rendezvous step produced.
+    #[derive(Serialize, tsify::Tsify)]
+    #[serde(
+        tag = "kind",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )]
+    #[tsify(missing_as_null)]
+    pub enum DeviceRendezvousResult {
+        /// What a requester offers and must sign, and the digits its screen
+        /// shows.
+        Opened {
+            /// The compressed secp256k1 key a factor must be sealed to.
+            ephemeral_public_key: String,
+            /// The bytes the requesting device signs.
+            #[serde(serialize_with = "as_bytes")]
+            #[tsify(type = "Uint8Array")]
+            request_payload: Vec<u8>,
+            /// The digits this screen shows, for the member to compare with
+            /// the approver's.
+            comparison_value: String,
+        },
+        /// What an approver sends and must sign.
+        Response {
+            /// The sealed fresh factor, base64; `null` on a denial.
+            sealed_factor: Option<String>,
+            /// The bytes the approving device signs.
+            #[serde(serialize_with = "as_bytes")]
+            #[tsify(type = "Uint8Array")]
+            payload: Vec<u8>,
+        },
+        /// The opened factor. The encode copies it into JS straight from this
+        /// zeroizing owner, so no unwiped copy stays in linear memory.
+        Factor {
+            /// The factor key.
+            #[serde(serialize_with = "as_bytes")]
+            #[tsify(type = "Uint8Array")]
+            factor_key: Secret,
+        },
     }
 
-    #[wasm_bindgen]
-    impl DeviceApprovalResponse {
-        /// The sealed fresh factor, base64; absent on a denial.
-        #[wasm_bindgen(getter, js_name = sealedFactor)]
-        pub fn sealed_factor(&self) -> Option<String> {
-            self.sealed_factor.clone()
-        }
-
-        /// The bytes the approving device signs.
-        #[wasm_bindgen(getter)]
-        pub fn payload(&self) -> Vec<u8> {
-            self.payload.clone()
-        }
+    /// Runs one rendezvous step. Throws the check name of a malformed field or
+    /// a refused answer, and a refusal for a step that does not decode.
+    #[wasm_bindgen(js_name = deviceRendezvous, unchecked_return_type = "DeviceRendezvousResult")]
+    pub fn device_rendezvous(step: Ts<DeviceRendezvousStep>) -> Result<JsValue, JsError> {
+        encode_view(&run(decode_rendezvous_step(&step.js_value())?)?)
     }
 
-    /// Open a rendezvous from 32 fresh random bytes. The scalar stays with the
-    /// caller: it is what opens the factor an approver seals back.
-    #[wasm_bindgen(js_name = openDeviceRendezvous)]
-    pub fn open_device_rendezvous(
-        device_public_key: &str,
-        rendezvous_scalar: Vec<u8>,
-    ) -> Result<DeviceRendezvous, JsError> {
-        let ephemeral_public_key =
-            cipherbox_engine::rendezvous_public_key(&*scalar32(rendezvous_scalar)?)
+    fn run(step: DeviceRendezvousStep) -> Result<DeviceRendezvousResult, JsError> {
+        match step {
+            DeviceRendezvousStep::Open {
+                device_public_key,
+                scalar,
+            } => {
+                let ephemeral_public_key =
+                    cipherbox_engine::rendezvous_public_key(&*scalar32(&scalar)?)
+                        .map_err(malformed_device_field)?;
+                let request_payload = cipherbox_engine::approval_request_payload(
+                    &device_public_key,
+                    &ephemeral_public_key,
+                )
                 .map_err(malformed_device_field)?;
-        let request_payload =
-            cipherbox_engine::approval_request_payload(device_public_key, &ephemeral_public_key)
+                let comparison_value =
+                    cipherbox_engine::comparison_value(&device_public_key, &ephemeral_public_key)
+                        .map_err(malformed_device_field)?;
+                Ok(DeviceRendezvousResult::Opened {
+                    ephemeral_public_key,
+                    request_payload,
+                    comparison_value,
+                })
+            }
+            DeviceRendezvousStep::Approve {
+                device_public_key,
+                request_id,
+                requester_device_public_key,
+                ephemeral_public_key,
+                seal_scalar,
+                factor_key,
+            } => {
+                let sealed_factor = cipherbox_engine::seal_factor(
+                    &ephemeral_public_key,
+                    &request_id,
+                    &requester_device_public_key,
+                    &*scalar32(&seal_scalar)?,
+                    &factor_key,
+                )
                 .map_err(malformed_device_field)?;
-        let comparison_value =
-            cipherbox_engine::comparison_value(device_public_key, &ephemeral_public_key)
+                let payload = cipherbox_engine::approval_response_payload(
+                    &device_public_key,
+                    &request_id,
+                    cipherbox_engine::ApprovalDecision::Approve,
+                    &ephemeral_public_key,
+                    &sealed_factor,
+                )
                 .map_err(malformed_device_field)?;
-        Ok(DeviceRendezvous {
-            ephemeral_public_key,
-            request_payload,
-            comparison_value,
-        })
+                Ok(DeviceRendezvousResult::Response {
+                    sealed_factor: Some(sealed_factor),
+                    payload,
+                })
+            }
+            DeviceRendezvousStep::Deny {
+                device_public_key,
+                request_id,
+                ephemeral_public_key,
+            } => {
+                let payload = cipherbox_engine::approval_response_payload(
+                    &device_public_key,
+                    &request_id,
+                    cipherbox_engine::ApprovalDecision::Deny,
+                    &ephemeral_public_key,
+                    "",
+                )
+                .map_err(malformed_device_field)?;
+                Ok(DeviceRendezvousResult::Response {
+                    sealed_factor: None,
+                    payload,
+                })
+            }
+            // The approver's signature over the answer is verified first, so a
+            // relayed envelope nobody signed for is never opened (D4).
+            DeviceRendezvousStep::OpenFactor {
+                sealed_factor,
+                request_id,
+                requester_device_public_key,
+                responder_device_public_key,
+                response_signature,
+                scalar,
+            } => {
+                let factor_key = cipherbox_engine::adopt_factor(
+                    &sealed_factor,
+                    &request_id,
+                    &requester_device_public_key,
+                    &responder_device_public_key,
+                    &response_signature,
+                    &*scalar32(&scalar)?,
+                )
+                .map_err(|refusal| JsError::new(refusal.check()))?;
+                Ok(DeviceRendezvousResult::Factor { factor_key })
+            }
+        }
     }
 
-    /// Seal a fresh factor to the requester and build the answer to sign.
-    /// `seal_scalar` must be 32 fresh random bytes on every call.
-    #[wasm_bindgen(js_name = approveDeviceRendezvous)]
-    pub fn approve_device_rendezvous(
-        device_public_key: &str,
-        request_id: &str,
-        requester_device_public_key: &str,
-        ephemeral_public_key: &str,
-        seal_scalar: Vec<u8>,
-        factor_key: Vec<u8>,
-    ) -> Result<DeviceApprovalResponse, JsError> {
-        let factor_key = Zeroizing::new(factor_key);
-        let sealed_factor = cipherbox_engine::seal_factor(
-            ephemeral_public_key,
-            request_id,
-            requester_device_public_key,
-            &*scalar32(seal_scalar)?,
-            &factor_key,
-        )
-        .map_err(malformed_device_field)?;
-        let payload = cipherbox_engine::approval_response_payload(
-            device_public_key,
-            request_id,
-            cipherbox_engine::ApprovalDecision::Approve,
-            ephemeral_public_key,
-            &sealed_factor,
-        )
-        .map_err(malformed_device_field)?;
-        Ok(DeviceApprovalResponse {
-            sealed_factor: Some(sealed_factor),
-            payload,
-        })
-    }
-
-    /// Build the denial to sign. A denial seals nothing.
-    #[wasm_bindgen(js_name = denyDeviceRendezvous)]
-    pub fn deny_device_rendezvous(
-        device_public_key: &str,
-        request_id: &str,
-        ephemeral_public_key: &str,
-    ) -> Result<DeviceApprovalResponse, JsError> {
-        let payload = cipherbox_engine::approval_response_payload(
-            device_public_key,
-            request_id,
-            cipherbox_engine::ApprovalDecision::Deny,
-            ephemeral_public_key,
-            "",
-        )
-        .map_err(malformed_device_field)?;
-        Ok(DeviceApprovalResponse {
-            sealed_factor: None,
-            payload,
-        })
-    }
-
-    /// Adopt the factor an approver sealed, with the scalar that opened the
-    /// rendezvous. The approver's signature over the answer is verified first,
-    /// so a relayed envelope nobody signed for is never opened (D4).
-    ///
-    /// The plaintext crosses into JS from the borrowed slice while its zeroizing
-    /// owner is still alive: a `Vec` return would hand wasm-bindgen a buffer it
-    /// frees without clearing, leaving the factor in linear memory for the life of
-    /// the tab.
-    #[wasm_bindgen(js_name = openDeviceFactor)]
-    pub fn open_device_factor(
-        sealed_factor: &str,
-        request_id: &str,
-        requester_device_public_key: &str,
-        responder_device_public_key: &str,
-        response_signature: &str,
-        rendezvous_scalar: Vec<u8>,
-    ) -> Result<js_sys::Uint8Array, JsError> {
-        let opened = cipherbox_engine::adopt_factor(
-            sealed_factor,
-            request_id,
-            requester_device_public_key,
-            responder_device_public_key,
-            response_signature,
-            &*scalar32(rendezvous_scalar)?,
-        )
-        .map_err(|refusal| JsError::new(refusal.check()))?;
-        Ok(js_sys::Uint8Array::from(opened.as_slice()))
-    }
-
-    /// Adopt a scalar the host handed in. Taken by value and held zeroizing, so the
-    /// copy wasm-bindgen makes in linear memory does not outlive the call.
-    fn scalar32(bytes: Vec<u8>) -> Result<Zeroizing<[u8; 32]>, JsError> {
-        let bytes = Zeroizing::new(bytes);
+    fn scalar32(bytes: &Secret) -> Result<Zeroizing<[u8; 32]>, JsError> {
         <[u8; 32]>::try_from(bytes.as_slice())
             .map(Zeroizing::new)
             .map_err(|_| JsError::new("a rendezvous scalar is 32 bytes"))

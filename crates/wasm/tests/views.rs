@@ -19,6 +19,7 @@ use cipherbox_engine::{
     ReclaimStallReason, RegisteredDevice, ResolutionClass, RetentionPolicy, SettingsHold,
     SettingsOrigin, Unopened, VaultSettingsSummary,
 };
+use cipherbox_wasm::OpenedStream;
 use cipherbox_wasm::boundary::encode_view;
 use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
 use serde::Serialize;
@@ -650,4 +651,14 @@ fn the_account_lists_cross_as_arrays_of_rows() {
     assert_eq!(field(&version, "modifiedAt"), big(7));
 
     assert_eq!(rows(crossed::<[VersionEntry]>(&[])).length(), 0);
+}
+
+/// An opened stream crosses as plain data: the handle a `bigint`, the size a
+/// number.
+#[wasm_bindgen_test]
+fn an_opened_stream_crosses_as_its_handle_and_size() {
+    let opened = crossed(&OpenedStream::new(u64::MAX, 4096.0));
+    assert_eq!(keys(&opened), ["handle", "size"]);
+    assert_eq!(field(&opened, "handle"), big(u64::MAX));
+    assert_eq!(field(&opened, "size"), JsValue::from(4096.0));
 }

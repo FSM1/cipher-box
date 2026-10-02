@@ -14,6 +14,7 @@ import type {
   BinOriginDescriptor,
   ByoKind,
   DeadLetterReason,
+  DeviceRendezvousResult,
   DropCause,
   EventDescriptor,
   GranteeNameSource,
@@ -49,12 +50,6 @@ import type { EngineWasm, WasmNodeId } from './engineWasm.js';
  */
 function invalidField(field: string, value: unknown): Error {
   return new Error(`invalid request field ${field}: ${value === null ? 'null' : typeof value}`);
-}
-
-/** An untrusted wire object; a non-object carries no fields at all. */
-export function record(value: unknown, field: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null) throw invalidField(field, value);
-  return value as Record<string, unknown>;
 }
 
 export function bytes(value: unknown, field: string): Uint8Array {
@@ -136,6 +131,12 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   writeCutUnfinished: true,
   granteeJoined: true,
   opProgress: true,
+};
+
+const RENDEZVOUS_RESULT_KINDS: Record<DeviceRendezvousResult['kind'], true> = {
+  opened: true,
+  response: true,
+  factor: true,
 };
 
 const STALENESS: Record<Staleness, true> = {
@@ -301,6 +302,12 @@ export function readEvent(event: EventDescriptor): EventDescriptor {
   if (event.kind === 'rotationWorkOwed') known(OWED_WORK_CLASSES, event.class, 'owed work class');
   if (event.kind === 'nodeDropped') known(DROP_CAUSES, event.cause, 'drop cause');
   return event;
+}
+
+/** Passes a rendezvous result through once its kind is one this build knows. */
+export function readRendezvous(result: DeviceRendezvousResult): DeviceRendezvousResult {
+  known(RENDEZVOUS_RESULT_KINDS, result.kind, 'rendezvous result kind');
+  return result;
 }
 
 /**
