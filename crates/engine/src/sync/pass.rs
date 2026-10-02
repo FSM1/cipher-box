@@ -48,8 +48,9 @@ use crate::rotation::{
     ascent_node_seed, cut_exited_scope, derive_write_name, install_walked_read_epochs,
 };
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloor, SeedFloors, StampedSeed, cached_seed, current_seed, deposit_seed,
-    deposit_write_seed, own_descendant_scopes, refresh_seed_floors, walked_boundary_material,
+    ScopeSeeds, SeedFloor, SeedFloors, StampedSeed, cached_seed, cached_seed_in, current_seed,
+    deposit_seed, deposit_write_seed, own_descendant_scopes, refresh_seed_floors,
+    walked_boundary_material,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
@@ -511,7 +512,13 @@ where
                     ResolveOutcome::Adopted(adopted) => Some(adopted.epoch),
                     _ => floors_before.read,
                 };
-                deposit_seed(&state.scope_read_seeds, self.root_id, seed, stamp);
+                deposit_seed(
+                    &state.scope_read_seeds,
+                    self.root_id,
+                    seed,
+                    stamp,
+                    FloorNamespace::Own,
+                );
             }
             if let Some((node_id, seed)) = surfaced.write_scope_seed.take() {
                 deposit_write_seed(
@@ -520,6 +527,7 @@ where
                     seed,
                     Some(&pass.root_name),
                     floors_before.write,
+                    FloorNamespace::Own,
                 );
             }
         }
@@ -1620,8 +1628,8 @@ fn grafted_write_passes(
             Some(GraftedWritePass {
                 root,
                 name: IpnsName::parse(core::str::from_utf8(name).ok()?).ok()?,
-                read_scope_seed: cached_seed(read_seeds, scope_id)?,
-                write_scope_seed: cached_seed(write_seeds, scope_id)?,
+                read_scope_seed: cached_seed_in(read_seeds, scope_id, floors)?,
+                write_scope_seed: cached_seed_in(write_seeds, scope_id, floors)?,
                 sharer_identity: EcdsaVerifier::from_sec1(sharers.get(scope_id)?)?,
                 sharer_enc: *sharer_encs.get(scope_id)?,
                 floors,
@@ -1678,6 +1686,7 @@ fn install_descendant_scopes(
             scope.scope_id,
             scope.read_scope_seed.clone(),
             Some(scope.adopted.epoch),
+            FloorNamespace::Own,
         );
         if let Ok(write) = &scope.write {
             deposit_write_seed(
@@ -1686,6 +1695,7 @@ fn install_descendant_scopes(
                 write.seed.clone(),
                 Some(&scope.name),
                 Some(write.epoch),
+                FloorNamespace::Own,
             );
         }
         let root = NodeId(scope.scope_id);
@@ -1796,7 +1806,8 @@ mod tests {
 
         fn seeds(scope_id: [u8; 16], seed: [u8; 32]) -> RefCell<ScopeSeeds> {
             let cell = RefCell::new(ScopeSeeds::new());
-            deposit_seed(&cell, scope_id, Zeroizing::new(seed), Some(0));
+            let namespace = own_namespace(&sharers())(&scope_id).expect("SHARED has a sharer");
+            deposit_seed(&cell, scope_id, Zeroizing::new(seed), Some(0), namespace);
             cell
         }
 
@@ -1878,6 +1889,17 @@ mod tests {
             let empty = RefCell::new(ScopeSeeds::new());
             let write_permitted =
                 BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]);
+            let other = FloorNamespace::GrantedBy(crate::seams::ContactLabel::of(
+                &label_seed(),
+                &[0x03; IDENTITY_PUBLIC_LEN],
+            ));
+            let foreign = |seed: [u8; 32]| {
+                let cell = RefCell::new(ScopeSeeds::new());
+                deposit_seed(&cell, SHARED, Zeroizing::new(seed), Some(0), other);
+                cell
+            };
+            let (foreign_read, foreign_write) =
+                (foreign(READ_SCOPE_SEED), foreign(WRITE_SCOPE_SEED));
 
             for (case, permissions, sharers, sharer_encs, read_seeds, write_seeds) in [
                 (
@@ -1919,6 +1941,14 @@ mod tests {
                     BTreeMap::new(),
                     &read,
                     &write,
+                ),
+                (
+                    "the seeds were deposited under another sharer",
+                    write_permitted.clone(),
+                    sharers(),
+                    encs(),
+                    &foreign_read,
+                    &foreign_write,
                 ),
             ] {
                 assert!(
@@ -2544,6 +2574,7 @@ mod report_tests {
             PROMOTED.0,
             Zeroizing::new(held),
             Some(stamp),
+            FloorNamespace::Own,
         );
     }
 

@@ -735,7 +735,7 @@ async fn reqwest_http_round_trips_request_and_response() {
             method: HttpMethod::Post,
             url: format!("{}/echo", server.base_url()),
             headers: vec![("x-cipherbox".into(), "seam".into())],
-            body: Some(b"request-payload".to_vec()),
+            body: Some(b"request-payload".to_vec().into()),
             credentials: HttpCredentials::Omit,
             timeout_ms: None,
         })

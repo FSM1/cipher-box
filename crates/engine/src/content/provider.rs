@@ -265,7 +265,7 @@ fn kubo_block_put(
             config,
             Some(format!("multipart/form-data; boundary={boundary}")),
         ),
-        body: Some(body),
+        body: Some(body.into()),
         credentials: HttpCredentials::Omit,
         timeout_ms: Some(timeout_ms),
     }
@@ -284,7 +284,7 @@ fn pin_by_cid(
         url: format!("{}{path}", base(config)),
         headers: headers(config, Some(APPLICATION_JSON.to_owned())),
         // The CID is base32 alphanumerics, so it needs no JSON escaping.
-        body: Some(format!("{{\"{field}\":\"{cid}\"}}").into_bytes()),
+        body: Some(format!("{{\"{field}\":\"{cid}\"}}").into_bytes().into()),
         credentials: HttpCredentials::Omit,
         timeout_ms: Some(timeout_ms),
     }
@@ -954,7 +954,7 @@ mod tests {
         );
         let tail = format!("\r\n--{boundary}--\r\n");
         assert_eq!(
-            *body,
+            **body,
             [head.as_bytes(), &block, tail.as_bytes()].concat(),
             "the block rides the declared boundary verbatim"
         );
@@ -1045,7 +1045,7 @@ mod tests {
             let request = &http.requests()[0];
             assert_eq!(request.url, format!("https://ipfs.member.test{path}"));
             assert_eq!(
-                request.body.as_deref(),
+                request.body.as_deref().map(Vec::as_slice),
                 Some(format!("{{\"{field}\":\"{address}\"}}").as_bytes()),
                 "the request names the address and carries no block bytes"
             );

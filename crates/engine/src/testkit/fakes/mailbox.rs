@@ -187,7 +187,9 @@ impl InMemoryMailbox {
             .1
             .trim_start_matches('/');
         Some(match (request.method, tail) {
-            (HttpMethod::Post, "") => Ok(self.serve_post(request.body.as_deref())),
+            (HttpMethod::Post, "") => {
+                Ok(self.serve_post(request.body.as_deref().map(Vec::as_slice)))
+            }
             (HttpMethod::Get, "") if *self.poll_failing.lock().expect("lock") => {
                 Err(SeamError::new("mailbox poll outage"))
             }

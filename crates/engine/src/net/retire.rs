@@ -1396,7 +1396,7 @@ mod tests {
             let (cid, leaves, root_block) = (cid.clone(), leaves.clone(), root_block.clone());
             http.enqueue_derived(move |request| {
                 if request.url.ends_with("/registry/retire") {
-                    let sent = retire_targets(request.body.as_deref().unwrap_or_default());
+                    let sent = retire_targets(request.body.as_deref().map_or(&[], Vec::as_slice));
                     return Ok(retire_answer((sent == leaves).then_some(1)));
                 }
                 if requested_cid(&request.url) == cid {
