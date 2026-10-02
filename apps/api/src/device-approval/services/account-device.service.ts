@@ -2,6 +2,7 @@ import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/co
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import { User } from '../../auth/entities/user.entity';
 import {
   IdentityTokenService,
   type VerifiedIdentityToken,
@@ -114,10 +115,10 @@ export class AccountDeviceService {
   }
 
   /**
-   * The lock spans both invariants this claim rests on. `subject:` serializes
-   * the one-account-per-identity-subject check against a concurrent registration
-   * for the same subject; `account:` serializes the per-account cap, whose count
-   * and insert are separate statements and would otherwise both pass at cap - 1.
+   * The lock spans both invariants this claim rests on. `subject:` serializes the
+   * read of the bind against a login that writes it; `account:` serializes the
+   * per-account cap, whose count and insert are separate statements and would
+   * otherwise both pass at cap - 1.
    */
   private async claim(
     userId: string,
@@ -132,6 +133,20 @@ export class AccountDeviceService {
         this.lockTimeoutMs
       );
       await this.identityTokens.spend(manager, identity);
+
+      // ADR 0058 D3: the unique bind is what ties a subject to one account.
+      const account = await manager
+        .getRepository(User)
+        .findOne({ where: { id: userId }, select: ['id', 'identitySubjectId'] });
+      if (!account?.identitySubjectId) {
+        throw new ConflictException('This account has no bound identity subject');
+      }
+      if (account.identitySubjectId !== identitySubjectId) {
+        throw new ConflictException(
+          'The identity token names a subject other than the one bound to this account'
+        );
+      }
+
       const repo = manager.getRepository(AccountDevice);
       const now = this.clock.now();
 
@@ -140,18 +155,8 @@ export class AccountDeviceService {
         throw new ConflictException('Device key is registered to another account');
       }
 
-      // One identity subject reaches one account, or a pre-reconstruction device
-      // presenting that identity could be steered onto an account it is not for.
-      const claimedElsewhere = await repo.findOne({ where: { identitySubjectId } });
-      if (claimedElsewhere && claimedElsewhere.userId !== userId) {
-        throw new ConflictException('Identity is already linked to another account');
-      }
-
       if (existing) {
-        // The identity a device reaches its account through is fixed at
-        // registration. Letting a re-touch rewrite it would make
-        // `accountForIdentitySubject` last-writer-wins over the account's own
-        // rows, which is the mapping a pre-reconstruction device is steered by.
+        // The subject on a row is fixed at registration; a re-touch never rewrites it.
         if (existing.identitySubjectId !== identitySubjectId) {
           throw new ConflictException('Device key is registered under another identity');
         }
@@ -195,10 +200,17 @@ export class AccountDeviceService {
     await this.deviceRepository.delete({ id, userId });
   }
 
-  /** The account a pre-reconstruction device reaches by presenting this identity. */
+  /**
+   * The account a pre-reconstruction device reaches by presenting this identity:
+   * the account bound to the subject (ADR 0058 D1), and only while it has a
+   * registered device that can approve (ADR 0039 D3).
+   */
   async accountForIdentitySubject(identitySubjectId: string): Promise<string | null> {
-    const row = await this.deviceRepository.findOne({ where: { identitySubjectId } });
-    return row?.userId ?? null;
+    const account = await this.dataSource
+      .getRepository(User)
+      .findOne({ where: { identitySubjectId }, select: ['id'] });
+    if (!account) return null;
+    return (await this.deviceRepository.existsBy({ userId: account.id })) ? account.id : null;
   }
 
   /** Whether this account has registered exactly this device key. */
