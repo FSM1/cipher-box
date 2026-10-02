@@ -1,8 +1,7 @@
 /**
  * What a failed staging spec leaves in its public report: refused and failed
- * requests, console errors and alert text. A trace stays off, since it records
- * the session bearer and the accelerator pseudonym; this log reads no header
- * and no body, and redacts each line.
+ * requests, console errors and alert text. Unlike a trace, this log reads no
+ * header and no body, and it redacts each line.
  */
 
 import type { Page } from '@playwright/test';

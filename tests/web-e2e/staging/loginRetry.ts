@@ -20,7 +20,7 @@ export function devnetFault(refusal: string): DevnetFault | null {
   return DEVNET_FAULTS.find(([, pattern]) => pattern.test(refusal))?.[0] ?? null;
 }
 
-/** The wait before each retry of a devnet fault: 3.5 minutes in total. */
+/** The wait before each retry of a devnet fault. */
 export const DEVNET_BACKOFF_MS: readonly number[] = [15_000, 30_000, 60_000, 105_000];
 
 /** What a sign-in does after a refused attempt. */
@@ -36,8 +36,8 @@ export type NextStep =
 export function nextStep(attempt: number, refusal: string, runExhausted: boolean): NextStep {
   const fault = devnetFault(refusal);
   if (fault === null) return { action: 'fail', fault, result: 'refused' };
-  const waitMs = runExhausted ? undefined : DEVNET_BACKOFF_MS[attempt];
-  if (waitMs === undefined) return { action: 'fail', fault, result: 'exhausted' };
+  const waitMs = DEVNET_BACKOFF_MS[attempt];
+  if (runExhausted || waitMs === undefined) return { action: 'fail', fault, result: 'exhausted' };
   return { action: 'retry', fault, waitMs };
 }
 
@@ -54,13 +54,19 @@ export function markRunExhausted(outputDir: string): void {
   writeFileSync(join(outputDir, EXHAUSTED_FILE), '');
 }
 
+/** A devnet fault that a sign-in waited out, on its 1-based attempt. */
+export interface AbsorbedFault {
+  fault: DevnetFault;
+  attempt: number;
+}
+
 /**
  * One sign-in, as the stats see it: the faults it absorbed, by attempt, and how
  * it ended. `exhausted` failed on a devnet fault after the last wait; `refused`
  * failed at once on any other refusal. It holds no identity, path or token.
  */
 export interface SignInRecord {
-  faults: ReadonlyArray<{ fault: DevnetFault; attempt: number }>;
+  faults: readonly AbsorbedFault[];
   result: 'signed-in' | 'recovered' | 'exhausted' | 'refused';
 }
 

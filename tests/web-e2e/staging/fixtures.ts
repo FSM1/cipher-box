@@ -23,6 +23,7 @@ import {
   nextStep,
   runExhausted,
   SIGN_IN_ANNOTATION,
+  type AbsorbedFault,
   type SignInRecord,
 } from './loginRetry';
 import { installTestWallet, TEST_WALLET_NAME, type TestWallet } from './wallet';
@@ -168,22 +169,21 @@ export async function signIn(page: Page): Promise<number> {
  * waits for `signedIn`. Returns the milliseconds the successful attempt took.
  *
  * The auth network refuses a login under its own load, which the panel draws as
- * a banner and not as a navigation. {@link nextStep} decides what follows a
- * refusal: a devnet fault waits out its window, then reloads the same address,
- * fragment included, and tries again. The thrown error lists each refused
- * request of the last attempt by host, path and status only, and is redacted,
- * since it lands in a public log. Each sign-in leaves a {@link SignInRecord} annotation, which
- * the staging reporter sums.
+ * a banner and not as a navigation. {@link nextStep} decides whether a refusal
+ * reloads the same address, fragment included, and tries again. The thrown
+ * error is redacted, since it lands in a public log.
  */
 export async function signInWithWallet(page: Page, signedIn: Locator): Promise<number> {
   const login = new LoginPage(page);
-  const faults: Array<SignInRecord['faults'][number]> = [];
+  const info = test.info();
+  const outputDir = info.project.outputDir;
+  const faults: AbsorbedFault[] = [];
   const annotate = (result: SignInRecord['result']): void => {
-    const record: SignInRecord = { faults, result };
-    test.info().annotations.push({ type: SIGN_IN_ANNOTATION, description: JSON.stringify(record) });
+    info.annotations.push({
+      type: SIGN_IN_ANNOTATION,
+      description: JSON.stringify({ faults, result } satisfies SignInRecord),
+    });
   };
-
-  const outputDir = test.info().project.outputDir;
 
   for (let attempt = 0; ; attempt += 1) {
     const attemptStarted = Date.now();
@@ -191,11 +191,11 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
     await expect(login.walletButton).toBeEnabled({ timeout: 60_000 });
 
     const failed: string[] = [];
-    const record = (response: Response): void => {
+    const noteRefused = (response: Response): void => {
       if (response.status() < 400) return;
       failed.push(`${requestTarget(response.url())} ${response.status()}`);
     };
-    page.on('response', record);
+    page.on('response', noteRefused);
     const started = Date.now();
     let refusal: string | null;
     try {
@@ -205,7 +205,7 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
         .click();
       refusal = await login.refusal(signedIn, 300_000);
     } finally {
-      page.off('response', record);
+      page.off('response', noteRefused);
     }
     if (refusal === null) {
       annotate(faults.length === 0 ? 'signed-in' : 'recovered');
@@ -224,7 +224,7 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
         )
       );
     }
-    test.info().setTimeout(test.info().timeout + (Date.now() - attemptStarted) + step.waitMs);
+    info.setTimeout(info.timeout + (Date.now() - attemptStarted) + step.waitMs);
     await page.waitForTimeout(step.waitMs);
   }
 }
