@@ -12,9 +12,9 @@ use zeroize::Zeroizing;
 ///
 /// A pure byte mover over `reqwest` with rustls: it sends exactly the
 /// request the engine describes — no headers the engine did not ask for —
-/// and returns the response verbatim. Non-2xx statuses are responses, not
-/// errors; a seam `Err` is reserved for transport-level failure (unreachable,
-/// aborted). The rotating refresh token is injected by the engine as an
+/// and returns the response verbatim, less any `Set-Cookie`. Non-2xx statuses
+/// are responses, not errors; a seam `Err` is reserved for transport-level
+/// failure (unreachable, aborted). The rotating refresh token is injected by the engine as an
 /// `Authorization`/cookie header here; this seam never persists it. The client
 /// [`new`](Self::new) builds keeps no cookie jar, so desktop has no ambient
 /// credentials for [`cipherbox_engine::seams::HttpCredentials`] to scope;

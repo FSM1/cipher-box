@@ -159,7 +159,7 @@ impl fmt::Debug for HttpRequest {
 pub struct HttpResponse {
     /// Status code.
     pub status: u16,
-    /// Header name/value pairs as received.
+    /// Header name/value pairs as received, less any `Set-Cookie`.
     pub headers: Vec<(String, String)>,
     /// Response body bytes. A body can carry a credential (the refresh
     /// token a rotation returns), so the engine reader that owns it last
