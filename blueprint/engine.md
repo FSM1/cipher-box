@@ -705,8 +705,19 @@ the grantee that removed it stops reading it.
   binning one would seal a live node under a key no reader derives. The base
   cannot prove a departure: a folder this device did not load, or loaded before
   the move, does not show the new link. So the drain holds the capture and walks
-  the scope: it reads every node fresh through the gate, then reads each one
-  again, from a read budget the tick shares across its passes. The walk starts
+  the whole vault from its root, each proved scope under its own material: it
+  reads every node fresh through the gate, then reads each one again, from a
+  read budget the tick shares across its passes. A walk that meets a child it
+  cannot read, at a name its scope's write seed does not derive or below a
+  scope root with no material this tick, holds every capture of the scope, as a
+  failed read does. Residual: this hold has no exit and sends no event, so a
+  writer of the scope, or a ref a name wave left at an old name, holds that
+  scope's captures for the session; the per-scope cap bounds them. Residual: a
+  change to any vault folder during a walk starts it again, so in an active
+  vault a capture waits until the vault is quiet; the walk does not narrow, as a
+  narrow walk bins a live node. Residual: a bad ref in one scope holds the
+  captures of every scope. Residual: the walk bound of 65,536 nodes applies to
+  the whole vault. The walk starts
   after the device saw the departure and proves only that departure. The walk
   makes one attempt at a read on each pass, up to three attempts. A refused
   record, a record served tied, a second read that shows another record, or a
@@ -720,9 +731,8 @@ the grantee that removed it stops reading it.
   set of 4096, so a peer with write access to four scopes can make every other
   scope drop its new captures. Residual: a settled proof waits for an adoption
   slot, so its snapshot ages; the risk is low, because an honest move publishes
-  the destination before the source. A child that does not publish under a name
-  this scope's write seed derives is a scope root, which the authored delete
-  refuses for the same reason.
+  the destination before the source. A capture of a scope root, proved or by
+  its name, drops before any read.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.
