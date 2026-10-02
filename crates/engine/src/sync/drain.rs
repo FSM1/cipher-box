@@ -5045,7 +5045,13 @@ where
                 ReadBody::Folder { .. } => Vec::new(),
             };
             let name = dest.end.write_name(&node.0);
-            let observed = self.destination_observed(&name).await?;
+            // Where both ends derive one name, the gated load is the basis, so
+            // a write that lands after it loses this publish its CAS race.
+            let observed = if node_loaded.name == name {
+                node_loaded.observed
+            } else {
+                self.destination_observed(&name).await?
+            };
             let published = self
                 .publish_node(
                     scope,
@@ -5072,9 +5078,10 @@ where
         Ok(resealed)
     }
 
-    /// What `name` serves now, as the basis a crossing's publish there signs
-    /// above. Record-verified only: the name can hold a record another scope
-    /// sealed, which no gate of the destination end opens.
+    /// What `name`, a name the crossing moves a node to, serves now: the basis
+    /// the publish there signs above. Record-verified only, because the name can
+    /// hold a record another scope sealed, which no gate of the destination end
+    /// opens.
     async fn destination_observed(&self, name: &IpnsName) -> Result<Observed, Halt> {
         match fanout_get_classified(&self.seams.transport, name).await {
             FanoutRecord::Found(record, _) => Ok(Observed::record(name, record.sequence)),

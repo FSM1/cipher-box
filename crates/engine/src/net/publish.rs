@@ -144,7 +144,7 @@ impl Observed {
     }
 
     /// A record-verified read of `name` at `sequence` that no gate opened —
-    /// the pointer plane, or a revival basis.
+    /// the pointer plane, a revival basis, or a name a crossing moves a node to.
     pub(crate) fn record(name: &IpnsName, sequence: u64) -> Self {
         Self {
             name: name.clone(),
