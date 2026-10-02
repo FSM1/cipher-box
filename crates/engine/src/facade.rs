@@ -9902,7 +9902,7 @@ where {
     /// scope's own root, which resolves on its own leg, is never read here.
     /// Answers the nodes a leg attempted, and whether any node was left unread:
     /// a scope with no material, a leg that could not answer, or a scope root
-    /// no walk proved.
+    /// that is not this vault's own.
     async fn navigation_legs(
         &self,
         root: NodeId,
@@ -9919,17 +9919,22 @@ where {
         let Some(session) = self.session.as_ref() else {
             return (attempted, true);
         };
-        let proved = self.state.descendant_scope_roots.borrow().clone();
+        // A root this session minted is its own before any walk proves it, so
+        // its floors and seed are the owner's (`floor_namespace`).
+        let own = own_descendant_scopes(
+            &self.state.descendant_scope_roots,
+            &self.state.minted_scope_roots,
+        );
         let unproved = self.state.unproved_scope_roots.borrow().clone();
         let mut by_scope: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
         {
             let base = self.state.snapshot.borrow();
-            let scope_roots = self.navigation_boundaries();
+            let scope_roots = focus_scope_roots(&own, &unproved);
             for node in nodes {
                 let scope = scope_root_of(&base, node, &scope_roots);
                 if node != scope {
                     by_scope.entry(scope).or_default().push(node);
-                } else if !proved.contains(&node) {
+                } else if !own.contains(&node) {
                     unread = true;
                 }
             }
@@ -9942,14 +9947,15 @@ where {
             sharers: &sharers,
             contact_label_seed: session.contact_label_seed(),
             own_root: root.0,
-            proved: &proved,
+            proved: &own,
             unproved: &unproved,
             base: &self.state.snapshot,
             root_name: root_name.as_ref(),
         };
         for (scope, nodes) in by_scope {
-            // The leg context knows only the proved set, so the seed of a scope
-            // no authority answers for, such as a forgotten share, goes here.
+            // The leg context knows only this vault's own scopes, so the seed of
+            // a scope no authority answers for, such as a forgotten share, goes
+            // here.
             if self.scope_floors(&scope.0).is_none() {
                 self.state.scope_read_seeds.borrow_mut().remove(&scope.0);
             }

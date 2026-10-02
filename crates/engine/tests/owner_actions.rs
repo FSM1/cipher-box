@@ -81,7 +81,7 @@ use cipherbox_engine::{
     DeadLetterReason, DropCause, Engine, EngineError, Event, EventStream, GatewayConfig,
     InvitePreview, LinkPreviewState, LoginSecret, NodeId, NodeKind, OwedWorkClass, Permission,
     PreviewEntry, PreviewNames, RecordReader, ScopeEpochs, SessionBearer, SharePointer,
-    SharingInviteLink, StoragePolicy, SyncTimingProfile, decode_queue, load_bin_index,
+    SharingInviteLink, StoragePolicy, SyncTimingProfile, WriteTarget, decode_queue, load_bin_index,
     poll_verified, post_sealed,
 };
 
@@ -5941,6 +5941,65 @@ fn a_navigation_right_after_a_grant_reads_no_new_scope_root_as_a_child() {
         .map(|child| child.name)
         .collect();
     assert_eq!(listed, vec!["after-the-grant.bin".to_owned()]);
+}
+
+/// The navigation's file leg reads a file of a scope root the owner just
+/// minted under that root's own seed and floors, before any walk proves it.
+#[test]
+fn a_navigation_right_after_a_grant_reads_a_file_of_the_new_scope() {
+    let mut fx = GrantScenario::new();
+    block_on(fx.engine.command(Command::Create {
+        parent: fx.folder,
+        name: "doc.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a metadata create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let doc = block_on(fx.engine.view())
+        .expect("a rendered view")
+        .children(fx.folder)
+        .into_iter()
+        .find(|child| child.name == "doc.bin")
+        .expect("the file is listed")
+        .id;
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    // A second owner device writes the bytes, so only the network carries the
+    // size this device paints.
+    let (mut second, _second_events, mut second_tasks) = fx.second_owner_device();
+    block_on(second.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the second device opens the folder");
+    tick(&fx.world, &second, &mut second_tasks);
+    let handle = block_on(second.begin_write(
+        WriteTarget::Version {
+            node: doc,
+            expected_version: None,
+        },
+        200,
+    ))
+    .expect("a version write opens");
+    block_on(second.push_chunk(handle, &[7u8; 200])).expect("the bytes stage");
+    block_on(second.commit_write(handle)).expect("the version commits");
+    for _ in 0..3 {
+        tick(&fx.world, &second, &mut second_tasks);
+    }
+
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the granted folder takes the focus");
+
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    let size = block_on(fx.engine.snapshot(fx.folder))
+        .expect("the granted folder opens")
+        .children
+        .into_iter()
+        .find(|child| child.id == doc)
+        .and_then(|child| child.size);
+    assert_eq!(size, Some(200), "the navigation read the file's version");
 }
 
 /// A revoke runs several gated scope-root reads, so its refusal names the read
