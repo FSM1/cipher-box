@@ -69,9 +69,7 @@ use crate::net::author::{
     author_scope_root_envelope, new_child, report_carried_cut,
 };
 use crate::net::last_known_good::keep_then_commit;
-use crate::net::publish::{
-    Observed, PublishError, PublishOutcome, PublishReceipt, refuse_foreign_version,
-};
+use crate::net::publish::{Observed, PublishError, PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
@@ -2784,7 +2782,8 @@ where
         )
         .await
         .map_err(|_| Halt::UploadAttempt)?;
-        refuse_foreign_version(envelope.v).map_err(|_| Halt::Unclassified)?;
+        let observed = Observed::gated(source.root_name, sequence, envelope.v)
+            .map_err(|_| Halt::Unclassified)?;
         let read_key = source.read_key(&source.root.0);
         let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::UploadAttempt)?;
         let ReadBody::Folder {
@@ -2814,7 +2813,7 @@ where
                 modified_at,
                 children,
                 body_unknown: unknown,
-                sequence,
+                sequence: observed.sequence(),
             },
             epoch,
             history_links: section.history_links,
@@ -4668,7 +4667,7 @@ where
             }
             let (loaded, already_moved) = self.load_doomed(from, to, anchor, node).await?;
             let LoadedNode {
-                name,
+                observed,
                 envelope_unknown,
                 epoch_tag_unknown,
                 body,
@@ -4701,7 +4700,7 @@ where
                     scope,
                     to,
                     node,
-                    Observed::unread(&name),
+                    observed,
                     false,
                     &body,
                     content_cids,
@@ -5404,12 +5403,19 @@ where
                 ReadBody::Folder { .. } => Vec::new(),
             };
             let name = dest.end.write_name(&node.0);
+            // Where both ends derive one name, the gated load is the basis, so
+            // a write that lands after it loses this publish its CAS race.
+            let observed = if node_loaded.name == name {
+                node_loaded.observed
+            } else {
+                self.destination_observed(&name).await?
+            };
             let published = self
                 .publish_node(
                     scope,
                     dest,
                     node,
-                    Observed::unread(&name),
+                    observed,
                     false,
                     &body,
                     content_cids,
@@ -5428,6 +5434,18 @@ where
             resealed.held.push((node.0, published.held));
         }
         Ok(resealed)
+    }
+
+    /// What `name`, a name the crossing moves a node to, serves now: the basis
+    /// the publish there signs above. Record-verified only, because the name can
+    /// hold a record another scope sealed, which no gate of the destination end
+    /// opens.
+    async fn destination_observed(&self, name: &IpnsName) -> Result<Observed, Halt> {
+        match fanout_get_classified(&self.seams.transport, name).await {
+            FanoutRecord::Found(record, _) => Ok(Observed::record(name, record.sequence)),
+            FanoutRecord::Absent => Ok(Observed::unread(name)),
+            FanoutRecord::Unavailable(_) => Err(Halt::Unclassified),
+        }
     }
 
     /// One node of the moved subtree, opened under the end it still belongs to.

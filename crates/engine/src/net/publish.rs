@@ -143,7 +143,7 @@ impl Observed {
     }
 
     /// A record-verified read of `name` at `sequence` that no gate opened —
-    /// the pointer plane, or a revival basis.
+    /// the pointer plane, a revival basis, or a name a crossing moves a node to.
     pub(crate) fn record(name: &IpnsName, sequence: u64) -> Self {
         Self {
             name: name.clone(),
@@ -184,7 +184,8 @@ impl Observed {
 }
 
 /// [`Observed::gated`]'s version rule, for a read whose record carries its
-/// fields to a publish at another name, or to no publish.
+/// fields to a publish at another name, or to no publish. A read that a publish
+/// at its own name builds on takes the rule through [`Observed::gated`].
 pub(crate) fn refuse_foreign_version(version: u64) -> Result<(), PublishError> {
     if version != ENVELOPE_V {
         return Err(PublishError::ForeignVersion { version });
@@ -340,8 +341,8 @@ pub enum PublishError {
     MarkUnrecorded(SeamError),
 }
 
-/// A publish failure on rule 6's retryable-versus-trust axis
-/// ([`PublishError::verdict`]).
+/// A publish failure on rule 6's retryable-versus-trust axis, split as finely
+/// as any author reads it ([`PublishError::verdict`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublishVerdict {
     /// The registry refused the register-first step.
@@ -349,25 +350,32 @@ pub enum PublishVerdict {
     /// This build's own release-active refusal of the bytes it would sign: a
     /// retry over the same inputs reaches it again.
     Refused,
-    /// Nothing durable is proven; a retry may land.
+    /// [`Self::Refused`], reached before the request addressed any head block.
+    RefusedUnaddressed,
+    /// [`Self::Refused`] for size: the record is over the cap, and its size
+    /// follows a body a committed writer can grow.
+    RefusedOversized,
+    /// Stopped before the PUT; a retry may land.
     NotLanded,
+    /// The PUT left and no endpoint acknowledged it.
+    PutUnacknowledged,
+    /// Every endpoint stated a refusal of the PUT.
+    PutRefused,
 }
 
 impl PublishError {
-    /// The one translation every author's own verdict folds from.
+    /// The verdict every author's own translation folds from.
     pub fn verdict(&self) -> PublishVerdict {
         match self {
             Self::Register(_) => PublishVerdict::RegistryRefused,
-            Self::EmptyHeadCid
-            | Self::EmptyInlineValue
-            | Self::RecordTooLarge { .. }
-            | Self::BelowBar { .. }
-            | Self::ForeignVersion { .. }
-            | Self::SequenceExhausted => PublishVerdict::Refused,
-            Self::AllEndpointsFailed
-            | Self::AllEndpointsRefused
-            | Self::FloorRead(_)
-            | Self::MarkUnrecorded(_) => PublishVerdict::NotLanded,
+            Self::EmptyHeadCid | Self::EmptyInlineValue => PublishVerdict::RefusedUnaddressed,
+            Self::RecordTooLarge { .. } => PublishVerdict::RefusedOversized,
+            Self::BelowBar { .. } | Self::ForeignVersion { .. } | Self::SequenceExhausted => {
+                PublishVerdict::Refused
+            }
+            Self::FloorRead(_) | Self::MarkUnrecorded(_) => PublishVerdict::NotLanded,
+            Self::AllEndpointsFailed => PublishVerdict::PutUnacknowledged,
+            Self::AllEndpointsRefused => PublishVerdict::PutRefused,
         }
     }
 }

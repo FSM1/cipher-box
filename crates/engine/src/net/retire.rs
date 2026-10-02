@@ -26,7 +26,7 @@ use crate::content::{
     ContentPlane, ContentProfile, Expansion, Gateway, RetireTarget, expand_retire_targets,
     expand_staged_root, read_block,
 };
-use crate::net::publish::PublishError;
+use crate::net::publish::PublishVerdict;
 use crate::net::record_publish::RecordPublishError;
 use crate::seams::{
     CredentialStore, DebtOrigin, Http, OwedPage, OwedRetire, OwingRecord, RetireLedger, SeamError,
@@ -92,23 +92,20 @@ pub fn orphaned_head(error: &RecordPublishError) -> bool {
             matches!(error, ApiError::Transport(_) | ApiError::Decode(_))
         }
         RecordPublishError::HeadCidMismatch { .. } => true,
-        RecordPublishError::Publish(error) => match error {
+        RecordPublishError::Publish(error) => match error.verdict() {
             // The head block is already uploaded and charged when publish
             // refuses, and no record naming it reached the transport.
-            PublishError::Register(_)
-            | PublishError::FloorRead(_)
-            | PublishError::BelowBar { .. }
-            | PublishError::ForeignVersion { .. }
-            | PublishError::RecordTooLarge { .. }
-            | PublishError::SequenceExhausted
-            | PublishError::MarkUnrecorded(_) => true,
+            PublishVerdict::RegistryRefused
+            | PublishVerdict::Refused
+            | PublishVerdict::RefusedOversized
+            | PublishVerdict::NotLanded => true,
             // Nothing was ever addressed, so there is no CID to retire.
-            PublishError::EmptyHeadCid | PublishError::EmptyInlineValue => false,
+            PublishVerdict::RefusedUnaddressed => false,
             // Neither no ack nor a stated refusal proves nothing stored: an
             // endpoint can state a refusal and keep the record. Unpinning a
             // head a live record may still name is loss, where the row is only
             // a leak (ADR 0047 D4, ADR 0060).
-            PublishError::AllEndpointsFailed | PublishError::AllEndpointsRefused => false,
+            PublishVerdict::PutUnacknowledged | PublishVerdict::PutRefused => false,
         },
     }
 }
