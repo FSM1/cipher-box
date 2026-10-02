@@ -65,6 +65,27 @@ async function started(wasm: EngineWasm): Promise<EngineHost> {
   return host;
 }
 
+describe('EngineHost start', () => {
+  it('hands the engine the identity token beside the secret', async () => {
+    const calls: unknown[][] = [];
+    const wasm = {
+      EngineHandle: class {
+        start(...args: unknown[]): Promise<void> {
+          calls.push(args);
+          return Promise.resolve();
+        }
+      },
+      NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+    } as unknown as EngineWasm;
+    const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+
+    await host.start(new ArrayBuffer(32), TEST_ACCOUNT_ID, 'identity.jwt');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toBe('identity.jwt');
+  });
+});
+
 async function permissiveHost(): Promise<{ host: EngineHost; calls: unknown[][] }> {
   const calls: unknown[][] = [];
   const record =
