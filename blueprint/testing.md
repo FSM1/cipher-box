@@ -115,10 +115,26 @@ scenario fails the meta-test):
   grantee flat, sweep idempotence, concurrent sweepers, resumed name waves
   via the history link; a write revoke over a nested subtree, a downgrade just
   after a manual read rotation, and a write grant just after a read revoke move
-  each lagging node at the root's epoch, a lagging grandchild that does not
-  open under the ratchet's seed is a trust violation, and a child whose epoch
-  no held link reaches is reported unreachable, not as a trust violation
-  (ADR 0064, `crates/engine/tests/owner_actions.rs`);
+  each lagging node at the root's epoch (ADR 0064); the five ways a revokee
+  plants a stop — a record that does not unseal, an epoch that no held link
+  reaches, a ref to an id with no record, a record with no served head block,
+  and a second ref to one id — each finish the revoke: the first two drop at
+  once, the next two past the bound, and the second ref goes with no report.
+  The bound holds before T, for each node until its own K passes, and over a
+  restart, and an honest node new to a wave past T does not drop on its first
+  stop; a new ref to nothing on each pass ends at the entry count, also
+  beside a down endpoint and at a record that does not verify, an honest
+  node that no endpoint answers waits past the entry count, command re-drives
+  inside one pass count once, and a node that resolves starts its count again;
+  past T the renewal walk renews an owed scope, and within T it does not
+  (ADR 0065, `crates/engine/tests/owner_actions.rs`). The wave retires only a
+  name the scope derives, waits for the bound on a wrong head block and on an
+  endpoint that does not answer, and re-seals the record its walk gated, so a
+  record written at an old name after the walk does not stop it; a body of many
+  outranking refs re-walks one time and reads nothing again, and a derived ref
+  met after two others is kept, a re-walk keeps the first ref of its own
+  walk, and a held node is read once across a re-walk
+  (`crates/engine/src/net/rotation.rs`);
 - the keyless re-PUT adversary (FSM1/cipher-box-next#38) — forged old-epoch records at old
   names, re-point adoption, the pin-window bound;
 - revocation classification (revocation-signal vs unresolvable vs epoch-lag)

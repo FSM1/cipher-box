@@ -6,10 +6,9 @@
 //! The authenticity anchor is the block's `contentCid`: every fetched block is
 //! run through [`cipherbox_core::content::verify_cid`] against the requested
 //! CID, and a mismatch fails **closed** as a [`TrustViolation`] — never a silent
-//! degrade to staleness (AGENTS.md rule 6). Only availability (transport error,
-//! non-2xx, or an over-cap body) rotates to the next source; a mismatch is
-//! terminal, because a content-address disagreement is an integrity signal to
-//! surface, not a retryable fetch miss.
+//! degrade to staleness (AGENTS.md rule 6). A read tries each source in turn:
+//! one source that serves bytes the address does not commit cannot decide the
+//! read, and the mismatch surfaces only when no source serves the block.
 
 use core::cell::RefCell;
 use core::fmt;
@@ -298,12 +297,11 @@ pub fn is_plane_anchor(cid_str: &str, expected_cid: &[u8], plane: ContentPlane) 
 /// anchor either way.
 ///
 /// Tries each source in [`Gateway`] order; returns the first block that
-/// verifies. A CID mismatch on any response is terminal
-/// ([`ReadError::TrustViolation`]); every availability failure — transport
-/// error, non-2xx, or an over-cap body — rotates to the next source. All
-/// sources exhausted without a verified block is [`ReadError::Unavailable`],
-/// unless at least one source served an over-cap body, which surfaces as
-/// [`ReadError::TooLarge`].
+/// verifies. A CID mismatch, a transport error, a non-2xx and an over-cap body
+/// each rotate to the next source. All sources exhausted without a verified
+/// block is [`ReadError::TrustViolation`] when a source served a mismatch,
+/// else [`ReadError::TooLarge`] when one served an over-cap body, else
+/// [`ReadError::Unavailable`].
 pub async fn read_block(
     gateway: &Gateway,
     http: &impl Http,
@@ -321,6 +319,7 @@ pub async fn read_block(
     // remembered so an exhausted source set surfaces TooLarge rather than a plain
     // no-source Unavailable.
     let mut over_cap: Option<(usize, usize)> = None;
+    let mut mismatch = None;
     for source in gateway.sources() {
         let response = match fetch(source, http, cid_str, gateway.deadlines.block_fetch_ms).await {
             Ok(response) => response,
@@ -347,15 +346,16 @@ pub async fn read_block(
             over_cap = Some((response.body.len(), MAX_RESOLVED_RECORD_BYTES));
             continue;
         }
-        // Every 2xx body is verified before it can be returned. A mismatch is a
-        // fail-closed trust violation, not a reason to try another source.
-        return verify_cid(expected_cid, &response.body)
-            .map(|()| response.body)
-            .map_err(ReadError::TrustViolation);
+        // Every 2xx body is verified before it can be returned.
+        match verify_cid(expected_cid, &response.body) {
+            Ok(()) => return Ok(response.body),
+            Err(violation) => mismatch = Some(violation),
+        }
     }
-    match over_cap {
-        Some((size, limit)) => Err(ReadError::TooLarge { size, limit }),
-        None => Err(ReadError::Unavailable),
+    match (mismatch, over_cap) {
+        (Some(violation), _) => Err(ReadError::TrustViolation(violation)),
+        (None, Some((size, limit))) => Err(ReadError::TooLarge { size, limit }),
+        (None, None) => Err(ReadError::Unavailable),
     }
 }
 
@@ -627,12 +627,32 @@ mod tests {
             ReadError::TrustViolation(e) => assert_eq!(e.check(), "content-cid-mismatch"),
             other => panic!("expected a trust violation, got {other:?}"),
         }
-        // Terminal: the mismatch is not retried against the public fallback.
         assert_eq!(
             http.requests().len(),
-            1,
-            "a mismatch does not rotate sources"
+            2,
+            "the read tries the public fallback"
         );
+    }
+
+    /// One source that serves wrong bytes does not decide the read.
+    #[test]
+    fn a_mismatch_at_one_source_rotates_to_a_source_that_serves_the_block() {
+        let leaf = one_leaf();
+        let mut tampered = leaf.sealed.clone();
+        *tampered.last_mut().unwrap() ^= 0x01;
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(tampered));
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        let block = block_on(read_block(
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .expect("the second source serves the block");
+        assert_eq!(block, leaf.sealed);
     }
 
     #[test]

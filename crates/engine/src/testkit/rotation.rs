@@ -25,15 +25,16 @@ use crate::net::author::ENVELOPE_V;
 use crate::net::publish::Observed;
 use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget,
-    CommittedSet, GrantCutPlan, LaggingNode, NodeRef, PrevEpochSeed, RecoveredWave, RepointChannel,
-    RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, ResumedRoot,
-    RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError, RotateScopePlan,
-    RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError,
-    SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
-    WriteHistory, WritePublishError, WriteRevokeKind, WriteRotateError, WriteRotationOutcome,
-    WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, build_repoint_object,
-    cascade_rotate_scope, derive_write_name, reseal_scope_root, revoke_read_grant,
-    revoke_write_grant, rotate_on_cut, rotate_scope, rotate_scope_write, sweep_pass,
+    CommittedSet, GrantCutPlan, LaggingNode, NoBound, NodeRef, NodeStop, PrevEpochSeed,
+    RecoveredWave, RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot,
+    ResolveFailure, ResumedRoot, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
+    RotateScopePlan, RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity,
+    ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild,
+    SweptNode, SweptScope, WriteHistory, WritePublishError, WriteRevokeKind, WriteRotateError,
+    WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
+    build_repoint_object, cascade_rotate_scope, derive_write_name, reseal_scope_root,
+    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope, rotate_scope_write,
+    sweep_pass,
 };
 use crate::seams::{FloorStore, SeamError, SeamResult};
 use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
@@ -655,7 +656,7 @@ impl WriteSubtreeResolver for UndrivenWave {
         &self,
         _node_id: &[u8; 16],
         _resumed: Option<&ResumedRoot>,
-    ) -> Result<WriteScopeNode, ResolveFailure> {
+    ) -> Result<WriteScopeNode, NodeStop> {
         panic!("the owner gate must refuse before the wave resolves")
     }
     async fn recover_wave(&self) -> Result<RecoveredWave, ResolveFailure> {
@@ -705,6 +706,7 @@ fn write_rotate_family() -> RejectFamily {
             min_read_epoch: CURRENT_READ_EPOCH,
             current_root_name: name,
             is_vault_anchor: false,
+            bound: &NoBound,
         };
         block_on(rotate_scope_write(
             &mut SeededEntropy::new(ENTROPY_SEED),
@@ -944,6 +946,7 @@ impl crate::rotation::CutRotator for PermissiveRotator {
             new_write_epoch: CURRENT_WRITE_EPOCH + 1,
             new_root_name: derive_write_name(&[0x58; 32], &SCOPE),
             interior_node_count: 0,
+            dropped: Vec::new(),
         })
     }
 }

@@ -8,7 +8,9 @@ use super::claim_conversion::{ConversionSites, Running};
 use super::*;
 use crate::grants::resume_owed_interior_move;
 use crate::rotation::{RotateOnCutError, WriteRotateError, owed_read_cut};
-use crate::sync::owed_rotation::{OwedEntry, OwedRecordError, OwedRotation, OwedStep, ScopeHold};
+use crate::sync::owed_rotation::{
+    EntryBound, OwedEntry, OwedRecordError, OwedRotation, OwedStep, ScopeHold,
+};
 
 /// What stopped one owed step: a key-material-free check, and its class.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,7 +191,20 @@ where
     /// leaves the entry holding the steps before them, which still re-drive.
     pub(crate) async fn stop_owed(&self, scope: NodeId, steps: Vec<OwedStep>, stop: OwedStop) {
         let _ = self.owed().leave(scope, steps).await;
+        self.note_owed_stop(scope).await;
         self.report_owed(scope, stop);
+    }
+
+    /// Start the bound of ADR 0065 D3 at `scope`'s entry, if it has not
+    /// started. A store that refuses leaves it unset, so a later stop sets it.
+    async fn note_owed_stop(&self, scope: NodeId) {
+        let _ = self.owed().note_stop(scope, self.scheduler.now()).await;
+    }
+
+    /// The bound of ADR 0065 D3 for one pass at `scope`'s entry. `None` when
+    /// the record does not read, so no node is past it.
+    pub(super) async fn owed_bound(&self, scope: NodeId) -> Option<EntryBound<'_>> {
+        self.owed().bound(scope, self.scheduler.now()).await.ok()
     }
 
     /// Settle one re-drive of `scope`'s entry. An entry whose work can never
@@ -206,6 +221,7 @@ where
                 Redriven::Dropped
             }
             Err(stop) => {
+                self.note_owed_stop(scope).await;
                 self.report_owed(scope, stop);
                 Redriven::StillOwed
             }
@@ -332,6 +348,7 @@ where
         let Some(_running) = Running::take(self.running) else {
             return;
         };
+        self.owed.next_pass();
         // A record that does not read is read again by the next pass.
         let Ok(scopes) = self.owed().scopes().await else {
             return;

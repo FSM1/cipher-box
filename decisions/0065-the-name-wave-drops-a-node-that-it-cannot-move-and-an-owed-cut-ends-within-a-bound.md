@@ -9,7 +9,7 @@
   [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)
   D1, D3 and D4, [ADR 0064](./0064-the-name-wave-reads-a-lagging-interior-node.md),
   `blueprint/engine.md` "rotateScopeWrite"
-- **Implemented by:** not yet implemented
+- **Implemented by:** FSM1/cipher-box#2188
 - **Amends:** ADR 0063 D4 (the names the renewal walk skips), ADR 0064 Residuals
 
 ## Context
@@ -25,23 +25,38 @@ revokee planted gives the revokee no new power.
 ## Decision
 
 **D1 — The name wave drops an interior node that it refuses for a cause in the record bytes.**
-The causes are: the adoption gate refuses the record, except a sequence below the floor; and an
-epoch that no held history link reaches (ADR 0064 consequence 8). The wave removes the ref from
-the moved parent, does not walk below the node, retires the old name, moves the other nodes,
-re-points the root, and finishes the cut. The wave never adopts or carries a refused record.
+The causes are: the adoption gate refuses the record, except a sequence below the floor and a
+head block that does not match its CID; an epoch that no held history link reaches (ADR 0064
+consequence 8); and a malformed child ref in the body, which drops the parent. The wave removes
+the ref from the moved parent, does not walk below the node, moves the other nodes, re-points the
+root, and finishes the cut. It retires the old name only when the root's write scope seed derives
+that name for the node. The wave never adopts or carries a refused record.
 
 **D2 — Of two refs to one node id at different names, the wave keeps the ref at the name that
-the scope's old write seed derives for that id, and drops the other ref.** Today this conflict
-(`ConflictingChildLabel` in `record_children`) stops the wave.
+the write scope seed of the root it reads derives for that id, and drops the other ref.** That
+seed is the old seed, or the new seed in a resumed wave. If neither name is derived, the wave
+keeps the first ref that its last walk meets. A derived ref met after the wave kept another ref
+replaces it, and the walk starts again, at most one time for each node id. Before this ADR, the conflict
+(`ConflictingChildLabel`) stopped the wave.
 
 **D3 — A stop that an endpoint can cause drops only after a bound.** The causes are: no record at
-the name, no endpoint that serves the head block, and a record below the sequence floor. The owed
-entry keeps the time of its first stop. A re-drive retries such a node. When the entry has stopped
-for longer than the bound and over a minimum count of passes, the next re-drive drops the node as
-D1 does. No drop rests on one answer from the endpoint set.
+the name, no endpoint that answers for the name, no endpoint that serves a head block that matches
+its CID, a record below the sequence floor, and a record at an epoch above the gated root's, which a
+read rotation on another owner device can publish. The owed entry keeps the time that its current
+first step first stopped; an advance to a new first step clears it. A re-drive retries such a node.
+When the entry has stopped for longer than the bound, the next re-drive drops a node as D1 does
+when that node held the wave over a minimum count of passes. It also drops the node when the
+entry held the wave over that count past the bound and the cause is one that a revokee can plant
+on a fresh id: no record, no matching head block, an epoch above the root's, or no endpoint that
+answers when at least one endpoint said the name has no record or served bytes that do not verify.
+Thus a new node on each pass does not hold the cut. A drop of another cause, such as every endpoint
+failed, never rests on one answer from the endpoint set. A residual stays: past the entry count, a
+node with a plantable cause drops on one answer, including an honest node that one endpoint fails
+while another says it has no record.
 
-**D4 — After the bound of D3, the renewal walk renews in an owed scope each name that the scope
-root's current write seed derives.** Before the bound, ADR 0063 D4 stays. Such a renewal signs no
+**D4 — After the time of the bound of D3, the renewal walk renews in an owed scope each name
+that the scope root's current write seed derives.** The count of passes does not apply here.
+Before that time, ADR 0063 D4 stays. Such a renewal signs no
 name under a seed that does not derive it (ADR 0061 D4), and gives the revokee no new access. Thus
 a stop at the scope root also does not lapse the scope.
 
@@ -52,11 +67,11 @@ a stop at the scope root also does not lapse the scope.
 - **Drop by class at once, with no bound (option 1).** A record whose head block no endpoint
   serves still stops the wave for ever. A drop of an absent record rests on one answer from the
   endpoint set, so an endpoint set that states "absent" in error makes the owner drop a real node.
-- **Cut first and move the refused nodes later (option 3).** It keeps the most data. But it needs
-  a new `OwedStep` variant, which the previous release cannot decode, so it lands over two
-  releases (ADR 0020). A parent ref points at a name with no record until the move. Until the
-  bound, the revokee can write at the old name, and the late move takes that record into the new
-  tree.
+- **Cut first and move the refused nodes later (option 3).** It keeps the most data. It needs a
+  new `OwedStep` variant, which the previous release cannot decode, so it lands over two releases
+  (ADR 0020), as the time of the first stop of D3 does. A parent ref points at a name with no
+  record until the move. Until the bound, the revokee can write at the old name, and the late
+  move takes that record into the new tree.
 - **Stop and ask the owner (option 4).** The revokee keeps write access until the owner acts,
   with no limit. The owner sees only a node id and a class, which is not sufficient for a good
   decision. It needs a new command, a new event and host UI on web and desktop.

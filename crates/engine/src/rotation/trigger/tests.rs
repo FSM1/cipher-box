@@ -656,6 +656,7 @@ impl CutRotator for FakeCutRotator {
             new_write_epoch: 2,
             new_root_name: derive_write_name(&[0x77; 32], &[0x01; 16]),
             interior_node_count: 0,
+            dropped: Vec::new(),
         })
     }
 }

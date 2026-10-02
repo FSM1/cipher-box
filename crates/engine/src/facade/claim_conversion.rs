@@ -20,7 +20,7 @@ use crate::grants::{
     link_of_sender, post_share_pointer_at,
 };
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys};
-use crate::rotation::{Boundaries, RotateOnCutError, cut_for_write_scope};
+use crate::rotation::{Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope};
 use crate::sync::BookkeepingSeal;
 use crate::sync::owed_rotation::OwedCell;
 
@@ -407,6 +407,7 @@ where
         vault_pointer_signer: Option<&Ed25519Signer>,
     ) -> Result<CutRotationReport, RotateOnCutError> {
         let sweep = self.cut.sweep;
+        let owed_bound = self.owed_bound(node).await;
         let rotator = OwnerCutNet {
             transport: self.transport,
             api: self.api,
@@ -430,6 +431,9 @@ where
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.cut.vault_root.0,
             sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
+            bound: owed_bound
+                .as_ref()
+                .map_or(&NoBound as &dyn NodeBound, |bound| bound),
         };
         rotate_on_cut(&rotator, node, cut).await
     }

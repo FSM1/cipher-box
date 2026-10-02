@@ -174,6 +174,7 @@ use crate::sync::render::{RenderKey, RenderMemo};
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use cipherbox_core::hex::lower as hex_lower;
 
+pub use crate::rotation::DropCause;
 pub use crate::sync::drain::{QueueHold, QueueHoldReason};
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
@@ -2350,6 +2351,27 @@ pub enum Event {
         /// Key-material-free classification of why the work was dropped.
         detail: String,
     },
+    /// A write-scope cut left a node out of the moved tree: the subtree below
+    /// it leaves the tree and lapses at its EOL (ADR 0065, CONTEXT.md "Dropped
+    /// node").
+    NodeDropped {
+        /// The scope root the cut moved.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
+        scope_root: NodeId,
+        /// The node the cut left out.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::node_id::serialize"),
+            tsify(type = "Uint8Array")
+        )]
+        node_id: NodeId,
+        /// Why the cut left it out.
+        cause: DropCause,
+    },
     /// The renewal walk met an owned scope root whose name its write seed does
     /// not derive: a write cut that did not finish, which only the device that
     /// owes it finishes. Its names lapse until then (ADR 0063 consequence 8).
@@ -2465,6 +2487,16 @@ impl fmt::Debug for Event {
                 .debug_struct("RotationWorkAbandoned")
                 .field("scope_root", scope_root)
                 .field("detail", detail)
+                .finish(),
+            Self::NodeDropped {
+                scope_root,
+                node_id,
+                cause,
+            } => f
+                .debug_struct("NodeDropped")
+                .field("scope_root", scope_root)
+                .field("node_id", node_id)
+                .field("cause", cause)
                 .finish(),
             Self::WriteCutUnfinished { scope_root } => f
                 .debug_struct("WriteCutUnfinished")
@@ -8086,9 +8118,10 @@ where {
             });
         }
         let _hold = pass.hold_owed(node)?;
+        // A re-run keeps the time its standing entry first stopped.
         let owed = OwedEntry {
             cut_epoch: 0,
-            first_stop: None,
+            first_stop: over.as_ref().and_then(|standing| standing.first_stop),
             steps: owed_steps.clone(),
         };
         match &over {
