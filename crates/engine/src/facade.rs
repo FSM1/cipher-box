@@ -5515,6 +5515,11 @@ impl<T: SeamTypes> Engine<T> {
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
         *self.state.current_root_name.borrow_mut() = root_name.clone();
+        if let (Some(sequence), Some(name)) = (outcome.forked, &root_name) {
+            self.state
+                .fork_sightings
+                .report(&self.events, name.as_str(), sequence);
+        }
         // The same adopt recovered the scope write seed: the drain derives every
         // new node's `ipnsName` and its narrow per-name signer from it.
         if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
@@ -6427,6 +6432,7 @@ where {
         let bin_keys = self.secrets.tick_bin_keys.clone();
         let publishing = self.state.publishing.clone();
         let orphan_heads = self.state.orphan_heads.clone();
+        let fork_sightings = self.state.fork_sightings.clone();
         let roots_walked = self.state.scope_roots_walked.clone();
         let owed_driven = self.state.owed_rotation_driven.clone();
         let unfinished_write_cuts = self.state.unfinished_write_cuts.clone();
@@ -6584,6 +6590,9 @@ where {
                         let _ = events.unbounded_send(Event::WriteCutUnfinished {
                             scope_root: NodeId(scope),
                         });
+                    }
+                    for (routing_key, sequence) in &report.forked {
+                        fork_sightings.report(&events, routing_key, *sequence);
                     }
                 }
                 LivenessControl::Continue

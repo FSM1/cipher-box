@@ -119,11 +119,13 @@ bytes (FSM1/cipher-box-next#28 D2).
   D2). At the sequence floor, another record the fan-out serves at that
   sequence, or a fetched record whose bytes differ from the cached copy at
   that sequence, is a same-sequence fork. The vault root resolve, the gated
-  child resolve, and the root admit of the boundary walk and the renewal walk
-  report it as its own outcome, never as a trust violation: the reader paints
-  the pick as it paints a record at the floor and sends one `sameSequenceFork`
-  event for each name and sequence in a session (ADR 0066 D1, D2). A forced
-  refresh reads no cache, so it sees a fork through the fan-out alone.
+  child resolve, the drain's gated reads, and the root admit of the boundary
+  walk and the renewal walk report it as its own outcome, never as a trust
+  violation: the reader paints the pick, which can be the cached side, as it
+  paints a record at the floor, and sends one `sameSequenceFork` event for
+  each name and sequence in a session, the boot read included (ADR 0066 D1,
+  D2). A forced refresh renders nothing from the cache, but the copy its
+  last-known-good write replaces is still evidence of a fork.
   The keeper can then hold the drain's own losing record, so at a split at the
   floor the drain rebases onto a gated record of the scope root, or of a
   folder the head op writes, on which its head op does not read as applied.

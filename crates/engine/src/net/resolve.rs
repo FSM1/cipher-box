@@ -15,11 +15,13 @@
 
 use core::cell::RefCell;
 
-use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
+use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use zeroize::Zeroizing;
 
 use super::fanout::fanout_get_tied_classified;
-use super::last_known_good::{cached_another, keep_newest_last_known_good, keep_then_commit};
+use super::last_known_good::{
+    cached_fork, keep_newest_last_known_good, keep_then_commit, outranks,
+};
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::head_cid_from_value;
 use crate::facade::NodeId;
@@ -221,10 +223,11 @@ pub struct Resolved {
     pub last_known_good: Option<Vec<u8>>,
     /// The gate verdict on the freshest fetched record.
     pub outcome: ResolveOutcome,
-    /// The read-body an own [`ResolveOutcome::Current`] root carries, recovered
-    /// at the floor by the same stages an adopt runs. A quarantine release rests
-    /// on an absence a poll of this session established, so a root that resolves
-    /// `Current` must still paint the base (ADR 0011 D4).
+    /// The read-body an own root carries when it resolves
+    /// [`ResolveOutcome::Current`] or [`ResolveOutcome::Forked`] (the pick's),
+    /// recovered at the floor by the same stages an adopt runs. A quarantine
+    /// release rests on an absence a poll of this session established, so a
+    /// root at the floor must still paint the base (ADR 0011 D4).
     pub current_at_floor: Option<Adopted>,
 }
 
@@ -365,10 +368,9 @@ where
                 )
             }
             // A record at exactly the durable sequence floor is our own current
-            // record re-fetched, or one side of a same-sequence fork when
-            // another record at that sequence is served or, cache-first,
-            // cached — no update, never a violation; its verified bytes ride
-            // out so the liveness loop holds them without a re-fetch.
+            // record re-fetched, or one side of a same-sequence fork (ADR 0066)
+            // — no update, never a violation; its verified bytes ride out so
+            // the liveness loop holds them without a re-fetch.
             // A strictly older sequence is a replay/rollback and stays a
             // fail-closed trust violation, as does every other gate rejection —
             // including one the equal-floor recovery reaches.
@@ -381,11 +383,25 @@ where
                     // adopts nothing. A non-owner adopter yields neither.
                     match adopter.recover_own_scope_material(name, &bytes).await {
                         Ok(material) => {
-                            let forked = !tied.is_empty()
-                                || cached_another(name, last_known_good.as_deref(), &bytes);
-                            if material.is_some() {
-                                keep_newest_last_known_good(snapshot_cache, name, &bytes).await?;
-                            }
+                            let held = match material {
+                                Some(_) => {
+                                    keep_newest_last_known_good(snapshot_cache, name, &bytes)
+                                        .await?
+                                }
+                                None => last_known_good.clone(),
+                            };
+                            let cached = cached_fork(name, held, &bytes);
+                            let forked = !tied.is_empty() || cached.is_some();
+                            // The cached side of a fork can be the order's pick.
+                            let (verified, bytes, material) = match cached {
+                                Some(cached) if outranks(name, &cached, &bytes) => {
+                                    match readmit_at_floor(adopter, name, &cached).await {
+                                        Some((verified, material)) => (verified, cached, material),
+                                        None => (verified, bytes, material),
+                                    }
+                                }
+                                _ => (verified, bytes, material),
+                            };
                             let recovered = material.map(|material| GatedParts {
                                 hold: material
                                     .write_scope_seed
@@ -444,6 +460,30 @@ where
         tied,
         absent,
     })
+}
+
+/// Gate `record_bytes` again at the durable sequence floor: its verified record
+/// and the owner material it recovers there, or `None` when it no longer
+/// admits there.
+async fn readmit_at_floor<A: Adopter>(
+    adopter: &A,
+    name: &IpnsName,
+    record_bytes: &[u8],
+) -> Option<(VerifiedRecord, Option<OwnScopeMaterial>)> {
+    let verified = IpnsRecord::unmarshal(record_bytes)
+        .and_then(|record| record.verify(name))
+        .ok()?;
+    match adopter.adopt(name, record_bytes).await {
+        Err(GateError::Rejected(GateRejection {
+            reason: RejectionReason::SequenceNotNewer { floor, sequence },
+            ..
+        })) if floor == sequence => adopter
+            .recover_own_scope_material(name, record_bytes)
+            .await
+            .ok()
+            .map(|material| (verified, material)),
+        _ => None,
+    }
 }
 
 /// The transient insert-time input for a held record: the resolve/gate path has
@@ -616,6 +656,7 @@ mod tests {
 
     const TTL_NANOS: u64 = 2_000_000_000;
     const VALUE: &[u8] = b"/ipfs/bafyfixturehead";
+    const DAY_MILLIS: u64 = 24 * 60 * 60 * 1000;
 
     #[derive(Clone, Copy)]
     enum Verdict {
@@ -798,7 +839,17 @@ mod tests {
     /// `signer`'s record at `sequence` that points at `value`, at the one EOL
     /// every fixture record carries.
     fn record_of(signer: &Ed25519Signer, value: &[u8], sequence: u64) -> Vec<u8> {
-        let validity = eol::eol_from(UnixMillis(0));
+        record_at_eol(signer, value, sequence, UnixMillis(DAY_MILLIS))
+    }
+
+    /// The same, at the EOL a write signed at `signed` carries.
+    fn record_at_eol(
+        signer: &Ed25519Signer,
+        value: &[u8],
+        sequence: u64,
+        signed: UnixMillis,
+    ) -> Vec<u8> {
+        let validity = eol::eol_from(signed);
         IpnsRecord::create_v2(signer, value, sequence, TTL_NANOS, &validity).marshal()
     }
 
@@ -840,8 +891,8 @@ mod tests {
     }
 
     /// The endpoints serve one record at the floor, and the cache holds
-    /// another at that sequence: a cache-first read reports a fork. A forced
-    /// refresh reads no cache, so it sees none.
+    /// another at that sequence: a cache-first read reports a fork and takes
+    /// the order's pick, the cached side when it ranks above the served one.
     #[test]
     fn a_record_at_the_floor_that_differs_from_the_cached_one_is_a_fork() {
         let world = FakeWorld::new();
@@ -854,35 +905,70 @@ mod tests {
                 .record_store
                 .seed_record(&endpoint, name.as_str(), served.clone());
         }
-        let cached = record_of(&signer, b"/ipfs/cached", 3);
+        let below = record_at_eol(&signer, b"/ipfs/cached", 3, UnixMillis(0));
+        let above = record_of(&signer, b"/ipfs/cached", 3);
+        assert!(above < served, "at one EOL the cached bytes rank above");
 
-        block_on(device.snapshot_cache.put(name.as_str().as_bytes(), &cached))
-            .expect("seed the cached copy");
-        let resolve = |mode| {
-            block_on(resolve_gated(
+        for (cached, pick) in [(&below, &served), (&above, &above)] {
+            block_on(device.snapshot_cache.put(name.as_str().as_bytes(), cached))
+                .expect("seed the cached copy");
+            let outcome = block_on(resolve_gated(
                 &device.record_store,
                 &device.snapshot_cache,
                 &StubAdopter::new(Verdict::EqualSequence),
                 &name,
-                mode,
+                ResolveMode::CacheFirst,
             ))
             .expect("the resolve settles")
             .resolved
-            .outcome
-        };
+            .outcome;
+            assert_eq!(
+                outcome,
+                ResolveOutcome::Forked {
+                    record_bytes: pick.clone(),
+                    sequence: 3,
+                }
+            );
+        }
+    }
+
+    /// A forced refresh renders nothing from the cache, but the copy the
+    /// keeper replaces is still evidence of a fork.
+    #[test]
+    fn a_forced_refresh_reports_the_fork_its_keeper_write_replaces() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let (write_scope_seed, node_id) = ([5u8; 32], [6u8; 16]);
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let served = record_of(&signer, b"/ipfs/served", 3);
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), served.clone());
+        }
+        let key = name.as_str().as_bytes();
+        let cached = record_at_eol(&signer, b"/ipfs/cached", 3, UnixMillis(0));
+        block_on(device.snapshot_cache.put(key, &cached)).expect("seed the cached copy");
+
+        let outcome = block_on(resolve_gated(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter::own_current(write_scope_seed, node_id),
+            &name,
+            ResolveMode::NoCache,
+        ))
+        .expect("the resolve settles")
+        .resolved
+        .outcome;
         assert_eq!(
-            resolve(ResolveMode::CacheFirst),
+            outcome,
             ResolveOutcome::Forked {
                 record_bytes: served.clone(),
                 sequence: 3,
             }
         );
-        assert_eq!(
-            resolve(ResolveMode::NoCache),
-            ResolveOutcome::Current {
-                record_bytes: served
-            }
-        );
+        assert_eq!(device.snapshot_cache.peek(key), Some(served));
     }
 
     /// A fork does not excuse a record at the floor that fails the floor

@@ -399,6 +399,8 @@ mod tests {
         captured: RefCell<Vec<NodeId>>,
         /// What the last pass charged itself.
         verdict: Cell<RefreshVerdict>,
+        /// The fork events the last pass sent.
+        forks_reported: Cell<usize>,
     }
 
     impl FolderLeg {
@@ -472,6 +474,7 @@ mod tests {
                 head_block,
                 captured: RefCell::new(Vec::new()),
                 verdict: Cell::new(RefreshVerdict::Reconciled),
+                forks_reported: Cell::new(0),
             }
         }
 
@@ -540,7 +543,13 @@ mod tests {
                 .map(|unlinked| unlinked.node)
                 .collect();
             drop(events);
-            core::iter::from_fn(|| rx.try_recv().ok())
+            let sent: Vec<Event> = core::iter::from_fn(|| rx.try_recv().ok()).collect();
+            self.forks_reported.set(
+                sent.iter()
+                    .filter(|event| matches!(event, Event::SameSequenceFork { .. }))
+                    .count(),
+            );
+            sent.iter()
                 .any(|event| matches!(event, Event::AttributableAbuse { .. }))
         }
 
@@ -627,6 +636,46 @@ mod tests {
         assert_eq!(leg.parent_of(OWN_CHILD), Some(NodeId(OWN_ROOT)));
         assert_eq!(leg.name_of(OWN_CHILD), "my-note");
         assert!(reported, "a body that names a vault node is attributable");
+    }
+
+    /// A forced refresh of a folder it already adopted, whose cached copy is the
+    /// other side of a same-sequence fork: the leg reports the fork, renders the
+    /// folder, and accuses nobody.
+    #[test]
+    fn a_folder_whose_cached_copy_is_the_other_fork_side_is_reported() {
+        let leg = FolderLeg::new(SCOPE_A, vec![child_ref(HONEST, "a-photo", 1)]);
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+        assert!(!leg.run(SCOPE_A, Some(&scope_roots())));
+        assert_eq!(leg.forks_reported.get(), 0);
+
+        let served = block_on(leg.snapshot_cache.get(folder_name().as_str().as_bytes()))
+            .expect("cache read")
+            .expect("the first pass cached the folder");
+        let served = IpnsRecord::unmarshal(&served)
+            .and_then(|record| record.verify(&folder_name()))
+            .expect("the cached record verifies");
+        let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &FOLDER);
+        let other_side = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(write_seed.as_bytes()),
+            &served.value,
+            1,
+            2_000_000_000,
+            "2098-01-01T00:00:00Z",
+        )
+        .marshal();
+        block_on(
+            leg.snapshot_cache
+                .put(folder_name().as_str().as_bytes(), &other_side),
+        )
+        .expect("cache write");
+
+        assert!(
+            !leg.run(SCOPE_A, Some(&scope_roots())),
+            "a fork accuses nobody"
+        );
+        assert_eq!(leg.forks_reported.get(), 1);
+        assert_eq!(leg.listing(FOLDER), vec!["a-photo".to_owned()]);
     }
 
     /// A refusal is not a removal. An id a later bookmark contests is already

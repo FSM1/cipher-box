@@ -4169,6 +4169,70 @@ fn a_fork_at_the_root_is_reported_once_in_a_session_and_accuses_nobody() {
     );
 }
 
+/// A restart reads the root from its cached copy, while the endpoints serve
+/// only the other side of a fork. The boot read sees the fork, and the session
+/// reports it once.
+#[test]
+fn a_restart_that_finds_a_fork_against_its_cached_root_reports_it_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let second = world.device(b"alice-second-device");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &second, 7);
+    let base_record = root_record(&world, 0);
+    let endpoints = world.record_store.endpoints();
+
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let ours = root_record(&world, 0);
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, write_name(ROOT).as_str(), base_record.clone());
+    }
+    block_on(engine_b.command(Command::Create {
+        parent: ROOT,
+        name: "notes".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_b, &mut tasks_b);
+    let theirs = root_record(&world, 0);
+    assert_ne!(ours, theirs);
+    for endpoint in 0..endpoints.len() {
+        assert_eq!(
+            root_record(&world, endpoint),
+            theirs,
+            "only theirs is served"
+        );
+    }
+    drop(engine_a);
+    drop(tasks_a);
+    drop(world.scheduler.take_spawned_tasks());
+
+    let (engine_a, mut events_a, mut tasks_a) = boot(&world, &blocks, &first, 43);
+    tick(&world, &engine_a, &mut tasks_a);
+    tick(&world, &engine_a, &mut tasks_a);
+    let forks = events_so_far(&mut events_a)
+        .into_iter()
+        .filter(|event| matches!(event, Event::SameSequenceFork { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        forks,
+        [Event::SameSequenceFork {
+            routing_key: write_name(ROOT).as_str().to_owned(),
+        }],
+        "the boot read reports the fork once"
+    );
+}
+
 /// A lost race, then a restart before the retry. The restarted session holds
 /// no memory of the race, and a read can leave our own losing record as its
 /// cached copy. The retry still rebases onto the record our op does not read as

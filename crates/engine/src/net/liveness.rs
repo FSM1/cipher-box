@@ -849,8 +849,7 @@ mod tests {
     }
 
     /// A held name inside the renewal window, where one endpoint serves
-    /// another record at its sequence: the renewal would bury one side of the
-    /// fork, so it does not sign (ADR 0066 D3).
+    /// another record at its sequence, is not signed over (ADR 0066 D3).
     #[test]
     fn a_held_name_the_endpoints_serve_forked_is_not_renewed() {
         let world = FakeWorld::new();
@@ -875,7 +874,6 @@ mod tests {
             .record_store
             .seed_record(&endpoint, name.as_str(), other);
         scheduler.advance(Duration::from_secs(65 * DAY));
-        device.http.enqueue_response(ok_200());
 
         let results = block_on(eol_renew_pass(
             &device.record_store,

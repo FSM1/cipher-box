@@ -611,6 +611,7 @@ impl SessionState {
             observed_unlinks: &self.observed_unlinks,
             pending_scope_exits: &self.pending_scope_exits,
             publishing: &self.publishing,
+            forks: &self.fork_sightings,
         }
     }
 }

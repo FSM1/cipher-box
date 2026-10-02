@@ -299,7 +299,7 @@ fn the_walk_does_not_renew_a_name_that_resolved_as_a_fork() {
 
     world.scheduler.advance(DAY * 65);
     let started = world.scheduler.now();
-    let (engine, _events, mut tasks) = boot(&world, &blocks, &device, 2);
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 2);
     until_the_first_walk(&world, &engine, &mut tasks);
 
     assert_eq!(
@@ -307,6 +307,12 @@ fn the_walk_does_not_renew_a_name_that_resolved_as_a_fork() {
         before.sequence,
         "the forked file stays at S"
     );
+    let forks = core::iter::from_fn(|| events.try_next())
+        .filter(|event| {
+            matches!(event, Event::SameSequenceFork { routing_key } if routing_key == name.as_str())
+        })
+        .count();
+    assert_eq!(forks, 1, "the walk reports the file's fork once");
     assert_renewed_at_start(
         &world,
         &write_name(ROOT),

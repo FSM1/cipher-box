@@ -133,6 +133,9 @@ pub struct ColdStartOutcome {
     /// keyless. The drain derives every new node's name and per-name signer
     /// from it (never persisted).
     pub write_scope_seed: Option<([u8; 16], Zeroizing<[u8; 32]>)>,
+    /// The sequence of a same-sequence fork the root resolve met, which the
+    /// session reports (ADR 0066 D2).
+    pub forked: Option<u64>,
 }
 
 impl core::fmt::Debug for ColdStartOutcome {
@@ -151,6 +154,7 @@ impl core::fmt::Debug for ColdStartOutcome {
                 "write_scope_seed",
                 &self.write_scope_seed.as_ref().map(|_| "<redacted>"),
             )
+            .field("forked", &self.forked)
             .finish()
     }
 }
@@ -214,6 +218,7 @@ where
             rendered,
             read_scope_seed: None,
             write_scope_seed: None,
+            forked: None,
         });
     };
 
@@ -244,6 +249,10 @@ where
     )
     .await
     .map_err(ColdStartError::Seam)?;
+    let forked = match resolved.outcome {
+        ResolveOutcome::Forked { sequence, .. } => Some(sequence),
+        _ => None,
+    };
     // Project the gate-passing root read-body to its direct children (E7); an
     // own current record at the floor paints from `Resolved::current_at_floor`.
     let (root_resolve, base) = match resolved.outcome {
@@ -279,6 +288,7 @@ where
         rendered,
         read_scope_seed,
         write_scope_seed,
+        forked,
     })
 }
 

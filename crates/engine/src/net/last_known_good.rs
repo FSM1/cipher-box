@@ -22,45 +22,57 @@ use crate::seams::{SeamError, SnapshotCache};
 /// failed its floor commit leaves a newer copy — so the put compares sequences
 /// rather than trusting the order of passes, and holds the name's [`NameLock`]
 /// across the read and the put so two passes cannot interleave them.
+///
+/// Answers the copy it found, read under the same lock, so a caller holds the
+/// evidence of a same-sequence fork that this write can replace.
 pub(crate) async fn keep_newest_last_known_good<S: SnapshotCache>(
     snapshot_cache: &S,
     name: &IpnsName,
     record_bytes: &[u8],
-) -> Result<(), SeamError> {
+) -> Result<Option<Vec<u8>>, SeamError> {
     let key = name.as_str().as_bytes();
     let _writing = NameLock::acquire(key).await;
-    let Some(cached) = snapshot_cache.get(key).await? else {
-        return snapshot_cache.put(key, record_bytes).await;
-    };
-    if cached == record_bytes {
-        return Ok(());
+    let cached = snapshot_cache.get(key).await?;
+    let keep = cached.as_deref().is_some_and(|cached| {
+        cached == record_bytes
+            || verified_rank(name, cached).is_some_and(|(held_sequence, _)| {
+                verified_rank(name, record_bytes).is_none_or(|(sequence, _)| {
+                    held_sequence > sequence
+                        || (held_sequence == sequence && !outranks(name, record_bytes, cached))
+                })
+            })
+    });
+    if !keep {
+        snapshot_cache.put(key, record_bytes).await?;
     }
-    if let Some((held_sequence, held_eol)) = verified_rank(name, &cached) {
-        let keep = match &verified_rank(name, record_bytes) {
-            None => true,
-            Some((sequence, eol)) => {
-                held_sequence > *sequence
-                    || (held_sequence == *sequence
-                        && !ranks_above((eol, record_bytes), (&held_eol, &cached)))
-            }
-        };
-        if keep {
-            return Ok(());
-        }
-    }
-    snapshot_cache.put(key, record_bytes).await
+    Ok(cached)
 }
 
-/// Whether `cached`, the last-known-good copy of `name` read before the keeper
-/// writes `record_bytes`, is another verified record at its sequence: evidence
-/// of a same-sequence fork (ADR 0066 D1).
-pub(crate) fn cached_another(name: &IpnsName, cached: Option<&[u8]>, record_bytes: &[u8]) -> bool {
+/// `cached`, a copy of `name` the cache held, when it is another verified
+/// record at the sequence of `record_bytes`: evidence of a same-sequence fork
+/// (ADR 0066 D1).
+pub(crate) fn cached_fork(
+    name: &IpnsName,
+    cached: Option<Vec<u8>>,
+    record_bytes: &[u8],
+) -> Option<Vec<u8>> {
     let sequence = |bytes: &[u8]| verified_rank(name, bytes).map(|(sequence, _)| sequence);
-    cached.is_some_and(|cached| {
+    cached.filter(|cached| {
         cached != record_bytes
             && sequence(cached).is_some()
             && sequence(cached) == sequence(record_bytes)
     })
+}
+
+/// Whether `candidate` ranks above `held` ([`ranks_above`]), two records of
+/// `name` at one sequence. A record that does not verify ranks below.
+pub(crate) fn outranks(name: &IpnsName, candidate: &[u8], held: &[u8]) -> bool {
+    match (verified_rank(name, candidate), verified_rank(name, held)) {
+        (Some((_, candidate_eol)), Some((_, held_eol))) => {
+            ranks_above((&candidate_eol, candidate), (&held_eol, held))
+        }
+        (candidate, _) => candidate.is_some(),
+    }
 }
 
 /// Leave `record_bytes` as `name`'s last-known-good, then run `commit`, the
@@ -262,12 +274,12 @@ mod tests {
         cache.release();
         assert!(matches!(
             older_pass.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(()))
+            Poll::Ready(Ok(_))
         ));
         if newer_done.is_pending() {
             newer_done = newer_pass.as_mut().poll(&mut cx);
         }
-        assert!(matches!(newer_done, Poll::Ready(Ok(()))));
+        assert!(matches!(newer_done, Poll::Ready(Ok(_))));
 
         let cached = cache.inner.peek(name.as_str().as_bytes());
         assert_eq!(

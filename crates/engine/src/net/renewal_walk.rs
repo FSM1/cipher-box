@@ -150,6 +150,9 @@ pub(crate) struct WalkReport {
     /// The owned scope roots with a write cut that did not finish and no owed
     /// entry on this device (ADR 0063 consequence 8).
     pub(crate) underived: Vec<[u8; 16]>,
+    /// The names, each with its sequence, the pass read as a same-sequence
+    /// fork and did not renew (ADR 0066 D3).
+    pub(crate) forked: Vec<(String, u64)>,
 }
 
 /// A scope's material as this pass admitted its root.
@@ -487,6 +490,11 @@ where
                     .await
                     {
                         Ok(mut admitted) => {
+                            if admitted.forked {
+                                pass.report
+                                    .forked
+                                    .push((scope.name.as_str().to_owned(), admitted.sequence));
+                            }
                             if admitted.write_scope_seed.is_none() {
                                 admitted.write_scope_seed = scope.write_seed.clone();
                             }
@@ -737,9 +745,13 @@ where
                 .await;
                 Some(adopted.read_body)
             }
-            // A renewal at `S + 1` would bury the side the order did not pick
-            // (ADR 0066 D3).
-            Ok(ChildRecord::Forked(adopted)) => Some(adopted.read_body),
+            // No renewal over a fork (ADR 0066 D3).
+            Ok(ChildRecord::Forked(adopted)) => {
+                pass.report
+                    .forked
+                    .push((name.as_str().to_owned(), adopted.sequence));
+                Some(adopted.read_body)
+            }
             Ok(ChildRecord::Absent) => {
                 pass.report
                     .failed
