@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.10.0](https://github.com/FSM1/cipher-box/compare/v2.9.2...v2.10.0) (2026-10-02)
+
+
+### Features
+
+* **api:** bind the identity subject to the account at login and read it at registration ([#2210](https://github.com/FSM1/cipher-box/issues/2210)) ([5c5e5f3](https://github.com/FSM1/cipher-box/commit/5c5e5f34b385d8c6a7dfa8350224a02db1d71035))
+* **engine:** decode the first stop time of an owed rotation entry ([#2181](https://github.com/FSM1/cipher-box/issues/2181)) ([71fdc54](https://github.com/FSM1/cipher-box/commit/71fdc545b47244381d9ab597822b0b419f2eb4b9))
+* **engine:** keep owed rotation work durable and finish it at the sync pass ([#2165](https://github.com/FSM1/cipher-box/issues/2165)) ([6e9f492](https://github.com/FSM1/cipher-box/commit/6e9f492fad38cb7f2f53620b040c2e0d6f9ecbe6))
+* **web:** save this device at sign-in and name why a registration is closed ([#2207](https://github.com/FSM1/cipher-box/issues/2207)) ([3262a63](https://github.com/FSM1/cipher-box/commit/3262a630349dc6d95ccbe146d222c36d69e6ce0c))
+
+
+### Bug Fixes
+
+* **api:** chunk a registry register call under a published body limit ([#2218](https://github.com/FSM1/cipher-box/issues/2218)) ([659c02c](https://github.com/FSM1/cipher-box/commit/659c02cc64d2daac1ad4e1c18f5a3dfdff239cb9))
+* **api:** point a linked login method at the account's subject ([#2203](https://github.com/FSM1/cipher-box/issues/2203)) ([838cf7a](https://github.com/FSM1/cipher-box/commit/838cf7aef374105f99df9a3e44f758063f0157c7))
+* **ci:** download Kubo from official GitHub releases ([#2228](https://github.com/FSM1/cipher-box/issues/2228)) ([7982d99](https://github.com/FSM1/cipher-box/commit/7982d99bc82ec2031e1da590b1b9d54705364bd0))
+* **engine:** bin an owner capture only after a fresh walk of its scope ([#2179](https://github.com/FSM1/cipher-box/issues/2179)) ([c9de176](https://github.com/FSM1/cipher-box/commit/c9de1763a88cbec0c252b5a5ebc1650fc9567835))
+* **engine:** classify a child seal failure against the epoch of the held seed ([#2183](https://github.com/FSM1/cipher-box/issues/2183)) ([5b57932](https://github.com/FSM1/cipher-box/commit/5b579328f63090c801e42504c30e08ad6713261f))
+* **engine:** hold a superseded drain end through its proof and route each publish author through the gate ([#2182](https://github.com/FSM1/cipher-box/issues/2182)) ([c62e29c](https://github.com/FSM1/cipher-box/commit/c62e29c994328fb7b393ecd5dd5c5760f0fa2fd3))
+* **web:** key each login method's busy label on its own transition ([#2195](https://github.com/FSM1/cipher-box/issues/2195)) ([cc3da8f](https://github.com/FSM1/cipher-box/commit/cc3da8f2a92476087f70ccd29187044a2f6cefc8))
+* **web:** preserve the identity token across initial tab election ([#2215](https://github.com/FSM1/cipher-box/issues/2215)) ([939c00c](https://github.com/FSM1/cipher-box/commit/939c00cb482b622f4eb49f7f3dfde240b95022d9))
+
 ## [2.9.2](https://github.com/FSM1/cipher-box/compare/v2.9.1...v2.9.2) (2026-10-01)
 
 
