@@ -1,6 +1,6 @@
 # ADR 0066 — A different record at the sequence floor is a fork, not a trust violation
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-02
 - **Date:** 2026-10-02
 - **Relates to:** FSM1/cipher-box#1984 (a record at the floor replaces another with no evidence),
   [ADR 0016](./0016-a-durable-sequence-floor-key-is-a-name-label-not-the-name.md),
