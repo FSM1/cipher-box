@@ -452,6 +452,54 @@ fn no_renewal_signs_over_a_vault_root_the_endpoints_serve_forked() {
     assert_renewed_at_start(&world, &write_name(file), &file_before, started, "the file");
 }
 
+/// A vault root at `S + 1` after two writes, served as the first write's
+/// record at `S` on every endpoint 45 days later, with a gate-passing tie of
+/// the second write's value at `S`.
+fn a_root_left_with_a_tie() -> (FakeWorld, Blocks, IpnsName, Vec<u8>) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let device = world.device(b"the device that wrote");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 1);
+    write_file(&world, &mut engine, &mut tasks, ROOT, "note.txt");
+    let root = write_name(ROOT);
+    let first_bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], root.as_str())
+        .expect("the root is published");
+    let first = record_at(&world, &root);
+    create_folder(&world, &mut engine, &mut tasks, ROOT, "more");
+    let tie = re_signed(ROOT, &first, &record_at(&world, &root).value);
+    drop(tasks);
+    drop(engine);
+    drop(world.scheduler.take_spawned_tasks());
+    serve_forked(&world, &root, &first_bytes, first_bytes.clone());
+    world.scheduler.advance(DAY * 45);
+    (world, blocks, root, tie)
+}
+
+/// One endpoint serves a fork of the vault root to a single read, and the
+/// renewal walk is that read: the walk holds the renewal back, and the session
+/// still sends one fork event for it.
+#[test]
+fn a_root_fork_only_the_renewal_walk_reads_sends_one_fork_event() {
+    // The one GET that serves the tie moves until the walk is its reader.
+    let walk_only = (0..64).find_map(|answered| {
+        let (world, blocks, root, tie) = a_root_left_with_a_tie();
+        world
+            .record_store
+            .serve_gets_for_after(root.as_str(), answered, 1, Some(tie));
+        let events = later_session_events(&world, &blocks, b"a later session");
+        let reported = reported(&events, root.as_str());
+        (reported.1 == 1).then_some(reported)
+    });
+
+    assert_eq!(
+        walk_only.expect("one placement of the tie reaches the walk alone"),
+        (1, 1)
+    );
+}
+
 /// A name with more EOL left than the walk window is not renewed.
 #[test]
 fn a_name_outside_the_walk_window_is_left_alone() {

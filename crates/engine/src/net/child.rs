@@ -498,8 +498,7 @@ where
         let held = keep_served_last_known_good(snapshot_cache, name, &record_bytes)
             .await
             .map_err(unavailable)?;
-        // Under `NoCache` the resolve read no cached copy, so the keeper's
-        // answer is the only evidence of a side the cache holds.
+        // The keeper gives back the copy it replaced, which is fork evidence.
         if let Some((pick, _)) = &gated.held_record
             && fork.is_none()
         {

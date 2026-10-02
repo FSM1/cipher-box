@@ -46,8 +46,8 @@ sends one event for each name and sequence in a session. The tie goes to the hig
 bytes; boxo `selectRecord` also takes the higher bytes, but over the full record, so a pick can
 still differ when an endpoint adds unsigned fields. A cached record that no endpoint serves is
 evidence but never the pick: the served record replaces it as last-known-good, and the fork
-clears. The drain reads the other records from
-the fork outcome, and its rebase heals the fork as it does today.
+clears. The drain reads the other records from `tied`, and its rebase heals the fork as it does
+today.
 
 **D3 — The renewal walk holds back the renewal of a name that the endpoints serve forked, until
 30 days of EOL are left.** A renewal at `S + 1` buries the record that the order did not pick, on

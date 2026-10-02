@@ -506,6 +506,11 @@ where
                     .await
                     {
                         Ok(mut admitted) => {
+                            if let Some(fork) = admitted.fork {
+                                pass.report
+                                    .forked
+                                    .push((scope.name.as_str().to_owned(), fork.sequence));
+                            }
                             if admitted.write_scope_seed.is_none() {
                                 admitted.write_scope_seed = scope.write_seed.clone();
                             }
