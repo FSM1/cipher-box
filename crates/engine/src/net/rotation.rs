@@ -528,8 +528,8 @@ impl<'a> RootFallback<'a> {
     }
 }
 
-/// The fan-out reads of this module do not report a failed endpoint yet, so
-/// each one counts as answered.
+/// The fan-out reads of this module report no failed endpoint, so each one
+/// passes as answered. The inverse of `endpoint_failed` in ADR 0071.
 const FANOUT_ANSWERED: bool = true;
 
 /// `verdict` after a fan-out: a cause that an endpoint can give, met while an
