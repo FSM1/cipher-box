@@ -535,6 +535,25 @@ pub fn revoke_grants(
     )
 }
 
+/// The cut of an owner command whose scope root read ran on the last copy of
+/// that root (ADR 0068 D5): the copy cannot prove that its grant set is
+/// current, so the cut removes every row, not only `requested`. Each tag in
+/// `requested` must be committed, as for [`revoke_grants`].
+pub fn cut_from_last_copy(
+    plan: &GrantCutPlan<'_>,
+    requested: &BTreeSet<[u8; 32]>,
+) -> Result<RevokedCommittedSet, RevokeError> {
+    authorize_cut(plan)?;
+    if requested.is_empty() {
+        return Err(RevokeError::NotGranted);
+    }
+    for tag in requested {
+        committed_permission(plan, tag)?;
+    }
+    let every_row = plan.commitment.entries.iter().map(|e| e.tag).collect();
+    revoke_grants(plan, &every_row)
+}
+
 /// How far a write revoke cuts.
 ///
 /// Either way the committed-set edit alone revokes nothing on the write plane:

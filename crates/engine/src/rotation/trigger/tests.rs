@@ -229,6 +229,38 @@ fn revoke_removes_tag_from_both_and_resigns() {
     fx.verify(&cut);
 }
 
+/// ADR 0068 D5: a cut from the last copy removes every row and names every
+/// recipient, so the wave moves a write row out too.
+#[test]
+fn a_cut_from_the_last_copy_keeps_no_row() {
+    let fx = Fixture::new();
+    let cut = cut_from_last_copy(&fx.plan(), &BTreeSet::from([link_tag()])).expect("cut");
+
+    assert!(cut.commitment.entries.is_empty());
+    assert!(cut.grant_ledger.is_empty());
+    assert_eq!(cut.commitment.cut_epoch, 1);
+    assert_eq!(cut.revoked_recipients.len(), 3);
+    assert_eq!(
+        cut.planes,
+        RotationPlanes {
+            read: true,
+            write: true
+        }
+    );
+    fx.verify(&cut);
+    assert_eq!(
+        cut_from_last_copy(&fx.plan(), &BTreeSet::from([[0xc3; 32]])),
+        Err(RevokeError::NotGranted)
+    );
+    assert_eq!(
+        cut_from_last_copy(
+            &fx.plan_signed_by(&stranger()),
+            &BTreeSet::from([link_tag()])
+        ),
+        Err(RevokeError::UnauthorizedSigner)
+    );
+}
+
 #[test]
 fn a_cut_names_the_recipient_it_removed_and_no_survivor() {
     // The cascade carries this down every descendant, where a blinded tag

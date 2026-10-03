@@ -15209,10 +15209,10 @@ fn a_write_revoke_reads_past_a_replayed_pre_cut_root() {
     assert_the_revokee_is_cut(&fx, &revokee_seed);
 }
 
-/// ADR 0068 D3: a downgrade over a planted root publishes no cut set at the
-/// old name. The wave re-mints the demoted set at the moved root.
+/// ADR 0068 D3 and D5: a downgrade over a planted root publishes no cut set
+/// at the old name. The wave re-mints a set with no row at the moved root.
 #[test]
-fn a_downgrade_runs_on_the_last_copy_of_a_planted_root() {
+fn a_downgrade_over_a_planted_root_keeps_no_grant_row() {
     let mut fx = GrantScenario::new();
     let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
     let old_root = fx.granted_scope_repoint().current_root;
@@ -15229,23 +15229,15 @@ fn a_downgrade_runs_on_the_last_copy_of_a_planted_root() {
         derive_write_name(&revokee_seed, &folder.0),
         moved.current_root
     );
-    assert_eq!(
-        fx.committed_permission(&moved.current_root),
-        Some(CorePermission::Read),
-        "the moved root commits the demoted row"
-    );
-    assert_eq!(
-        fx.granted_blob_carries_write_seed(&moved.current_root),
-        Some(false),
-        "and its blob carries no write scope seed"
-    );
+    assert_no_grant_at(&fx, &moved.current_root);
     assert_eq!(published_value(&fx.world, &old_root), planted);
 }
 
-/// ADR 0068 D3: a read revoke moves no root, so a planted root keeps the
-/// stop, and the trust event names the refused record.
+/// ADR 0068 D3 and D5: a read revoke over a planted root keeps no row, so it
+/// also cuts the write grantee that planted it, and the wave moves the root.
+/// The trust event names the refused record.
 #[test]
-fn a_read_revoke_over_a_planted_root_keeps_the_stop() {
+fn a_read_revoke_over_a_planted_root_also_cuts_the_write_grantee() {
     let mut fx = GrantScenario::new();
     let (_, _, writer_seed) = write_granted_nested_subtree(&mut fx);
     assert_eq!(
@@ -15257,13 +15249,110 @@ fn a_read_revoke_over_a_planted_root_keeps_the_stop() {
     plant_root_at(&fx, &writer_seed, sequence);
     let planted = published_value(&fx.world, &old_root);
 
-    let outcome = revoke_the_bystander(&mut fx);
+    assert_eq!(revoke_the_bystander(&mut fx), Ok(CommandOutcome::Done));
 
-    assert!(outcome.is_err(), "the read revoke stops: {outcome:?}");
     let events = events_so_far(&mut fx._events);
     assert!(root_refusals(&fx, &events, sequence) > 0);
-    assert!(!owes_any(&events), "no work stays owed");
+    assert_the_revokee_is_cut(&fx, &writer_seed);
+    assert_no_grant_at(&fx, &fx.granted_scope_repoint().current_root);
     assert_eq!(published_value(&fx.world, &old_root), planted);
+}
+
+/// ADR 0068 D5: the last copy cannot prove that its grant set is current, so
+/// a revoke over a planted root keeps no row of another grantee and seals the
+/// fresh seed to nobody. The owner then shares again over the moved root.
+#[test]
+fn a_revoke_over_a_planted_root_keeps_no_other_grant_row() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let old_root = fx.granted_scope_repoint().current_root;
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &old_root) + 1);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(derive_write_name(&revokee_seed, &fx.folder.0), moved);
+    assert_no_grant_at(&fx, &moved);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done),
+        "the owner shares again over the root the cut published"
+    );
+    assert_eq!(
+        committed_rows(&fx, &fx.granted_scope_repoint().current_root),
+        1
+    );
+}
+
+/// ADR 0068 D5: a revoke over a root the gate admits keeps the other rows.
+#[test]
+fn a_revoke_over_a_gated_root_keeps_the_other_grant_rows() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_eq!(committed_rows(&fx, &moved), 1, "the bystander row stays");
+    assert_eq!(opened_blobs(&fx, &moved, &BYSTANDER_SECRET), 1);
+    assert_eq!(opened_blobs(&fx, &moved, &RECIPIENT_SECRET), 0);
+}
+
+/// The rows the grant-set commitment at `name` commits.
+fn committed_rows(fx: &GrantScenario, name: &IpnsName) -> usize {
+    published_grant_section_at(&fx.world, &fx.blocks, name)
+        .expect("a scope root answers at the name")
+        .commitment
+        .entries
+        .len()
+}
+
+/// The grant blobs at `name` that the holder of `secret` opens.
+fn opened_blobs(fx: &GrantScenario, name: &IpnsName, secret: &[u8; 32]) -> usize {
+    let section =
+        published_grant_section_at(&fx.world, &fx.blocks, name).expect("a scope root answers");
+    let enc = kdf::enc_subkey(secret);
+    section
+        .grant_blobs
+        .iter()
+        .filter(|blob| {
+            (0..=section.commitment.cut_epoch + 4).any(|epoch| {
+                open_grant_blob(
+                    &enc,
+                    &blob.enc,
+                    &AadContext {
+                        v: ENVELOPE_V,
+                        id: fx.folder.0,
+                        scope: fx.folder.0,
+                        epoch,
+                        struct_tag: STRUCT_TAG_GRANT_BLOB,
+                    },
+                    &blob.ciphertext,
+                )
+                .is_ok()
+            })
+        })
+        .count()
+}
+
+/// The scope root at `name` commits no row and carries no grant blob that the
+/// recipient or the bystander opens.
+fn assert_no_grant_at(fx: &GrantScenario, name: &IpnsName) {
+    assert_eq!(committed_rows(fx, name), 0, "no committed row");
+    let section =
+        published_grant_section_at(&fx.world, &fx.blocks, name).expect("a scope root answers");
+    assert!(section.grant_blobs.is_empty(), "no grant blob");
+    for secret in [&RECIPIENT_SECRET, &BYSTANDER_SECRET] {
+        assert_eq!(opened_blobs(fx, name, secret), 0);
+    }
 }
 
 /// ADR 0068 D1 and D4: the read cut lands, the wave stops at its re-point,
@@ -15644,8 +15733,12 @@ fn a_different_cut_over_a_cut_that_never_landed_reports_the_replaced_work() {
     );
     plant_an_unserved_head(&fx, &revokee_seed, grandchild);
     let old_root = fx.granted_scope_repoint().current_root;
-    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &old_root) + 1);
+    let honest = published_value(&fx.world, &old_root);
+    let sequence = sequence_at(&fx.world, &old_root) + 1;
+    plant_root_at(&fx, &revokee_seed, sequence);
     let _ = revoke_the_recipient(&mut fx);
+    // The root the gate admits stands again, so the next cut keeps its rows.
+    sign_at(&fx, &revokee_seed, fx.folder, &honest, sequence + 1);
     let _ = events_so_far(&mut fx._events);
 
     let _ = revoke_the_bystander(&mut fx);

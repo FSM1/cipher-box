@@ -130,9 +130,9 @@ use crate::rotation::{
     Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
     RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys,
     SweepOutcome, SweepResolveFailure, SweepRun, SweepTaskFactory, WalkedReadEpochs, WriteHistory,
-    WriteRevokeKind, bounded, cut_for_write_scope, derive_write_name, record_grant_floor,
-    reseal_at_current_epoch, reseal_scope_root, revoke_grants, revoke_write_grant, rotate_on_cut,
-    run_sweep, run_sweep_job,
+    WriteRevokeKind, bounded, cut_for_write_scope, cut_from_last_copy, derive_write_name,
+    record_grant_floor, reseal_at_current_epoch, reseal_scope_root, revoke_grants,
+    revoke_write_grant, rotate_on_cut, run_sweep, run_sweep_job,
 };
 use crate::rotation::{FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
 use crate::scope_seeds::{
@@ -7770,7 +7770,7 @@ where {
         let target = self
             .owner_scope(node, api, owner_keys(), check, unindexed)
             .await?;
-        let current = OwnerRotationNet {
+        let net = OwnerRotationNet {
             root_fallback: Some(RootFallback::new(
                 target.scope.scope_id,
                 RootWait::Command,
@@ -7782,30 +7782,42 @@ where {
                 target.ancestry(),
                 PointerConsultArm::Refused,
             )
-        }
-        .resolve_anchored(&target.scope)
-        .await
-        .map_err(|e| target.resolve_error(check, e))?;
+        };
+        let current = net
+            .resolve_anchored(&target.scope)
+            .await
+            .map_err(|e| target.resolve_error(check, e))?;
         let tags = select(&target, &current).await?;
-        self.cut_at(node, &target, &current, CutKind::Revoke(&tags))
-            .await?;
+        self.cut_at(
+            node,
+            &target,
+            &current,
+            CutKind::Revoke(&tags),
+            net.fell_back(),
+        )
+        .await?;
         Ok(tags)
     }
 
     /// Cut the rows `kind` names out of the owner-signed set `current`
     /// publishes at `target` in one cut, and drive the cut through the planes
-    /// it demands.
+    /// it demands. A `current` read from its last copy keeps no row.
     async fn cut_at(
         &self,
         node: NodeId,
         target: &OwnerScope,
         current: &CascadeTarget,
         kind: CutKind<'_>,
+        from_last_copy: bool,
     ) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let plan = GrantCutPlan::over(current, &scope_root_name, session.identity());
         let cut = match kind {
+            CutKind::Revoke(tags) if from_last_copy => cut_from_last_copy(&plan, tags),
+            CutKind::Downgrade(tag) if from_last_copy => {
+                cut_from_last_copy(&plan, &BTreeSet::from([*tag]))
+            }
             CutKind::Revoke(tags) => revoke_grants(&plan, tags),
             CutKind::Downgrade(tag) => {
                 revoke_write_grant(&plan, tag, WriteRevokeKind::DowngradeToRead)
@@ -8795,6 +8807,7 @@ where {
                     &gated.target,
                     &gated.current,
                     CutKind::Downgrade(&held.tag),
+                    gated.net.fell_back(),
                 )
                 .await
             }
