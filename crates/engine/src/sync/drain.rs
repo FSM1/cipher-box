@@ -4458,6 +4458,8 @@ where
             .await
         {
             Ok(loaded) => return Ok((loaded, false)),
+            // A refusal for another reason does not open under another key.
+            Err(fault @ ChildFault::Refused(_)) if !fault.seal_open_failed() => return Err(fault),
             Err(fault) => fault,
         };
         match self

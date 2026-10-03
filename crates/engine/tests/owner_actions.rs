@@ -2310,8 +2310,7 @@ fn a_capture_whose_bin_publish_failed_bins_on_the_next_pass() {
 }
 
 /// The sequence-floor reads of the node's name that answer before the
-/// re-key's held-key read: two for each of the capture pass's two opens and
-/// the re-key's read under the scope key.
+/// re-key's held-key read.
 const HELD_KEY_READ_BUDGET: u64 = 6;
 
 /// The same, with the re-key's held-key read failing after the scope key
@@ -2330,6 +2329,10 @@ fn a_held_key_read_with_no_answer_is_no_trust_violation() {
         tick(&fx.world, &engine, &mut tasks);
     }
     assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert!(
+        bin_scopes_of(&fx, doomed).is_empty(),
+        "the held-key read did not answer"
+    );
     device.floor_store.heal_floors();
     for _ in 0..8 {
         tick(&fx.world, &engine, &mut tasks);
