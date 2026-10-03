@@ -9,8 +9,9 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
 
-use super::fanout::{FanoutRecord, fanout_get_classified};
+use super::fanout::{TiedFetch, fanout_get_tied_classified};
 use super::publish::Observed;
+use super::resolve::below_floor;
 use super::rotation::{PointerPipeline, publish_pointer_over};
 use crate::api::ApiClient;
 use crate::entropy::Entropy;
@@ -87,10 +88,15 @@ where
         root_name: &[u8],
     ) -> Result<StandingVouch, RotationPublishError> {
         let name = self.name();
-        let standing = match fanout_get_classified(self.transport, &name).await {
-            FanoutRecord::Found(record, _) => record,
-            FanoutRecord::Absent => return Err(RotationPublishError::Rejected),
-            FanoutRecord::Unavailable(_) => return Err(RotationPublishError::NotPublished),
+        let TiedFetch {
+            pick,
+            absent,
+            endpoint_failed,
+        } = fanout_get_tied_classified(self.transport, &name).await;
+        let standing = match pick {
+            Some((record, _, _)) => record,
+            None if absent => return Err(RotationPublishError::Rejected),
+            None => return Err(RotationPublishError::NotPublished),
         };
         let vouched = open_repoint(
             self.pointer_read_key.as_bytes(),
@@ -116,10 +122,7 @@ where
             Strictness::AtOrAboveFloor,
         )
         .await
-        .map_err(|error| match error {
-            GateError::Seam(_) => RotationPublishError::NotPublished,
-            GateError::Rejected(_) => RotationPublishError::Rejected,
-        })?;
+        .map_err(|error| standing_verdict(error, endpoint_failed))?;
         Ok(StandingVouch {
             sequence: standing.sequence,
             repoint: vouched,
@@ -223,5 +226,41 @@ where
         anchor
             .vouch_read_epoch(&record.ipns_name, record.read_epoch)
             .await
+    }
+}
+
+/// The standing re-point's sequence check on rule 6's axis: a record below the
+/// floor while an endpoint failed is unavailable (ADR 0071 D1).
+fn standing_verdict(error: GateError, endpoint_failed: bool) -> RotationPublishError {
+    match error {
+        GateError::Rejected(rejection) if !(endpoint_failed && below_floor(&rejection.reason)) => {
+            RotationPublishError::Rejected
+        }
+        _ => RotationPublishError::NotPublished,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gate::{GateRejection, GateStage, RejectionReason};
+
+    fn sequence(floor: u64, sequence: u64) -> GateError {
+        GateError::Rejected(GateRejection {
+            stage: GateStage::Sequence,
+            reason: RejectionReason::SequenceNotNewer { floor, sequence },
+        })
+    }
+
+    #[test]
+    fn a_below_floor_standing_pointer_is_unavailable_only_while_an_endpoint_fails() {
+        assert_eq!(
+            standing_verdict(sequence(3, 2), true),
+            RotationPublishError::NotPublished
+        );
+        assert_eq!(
+            standing_verdict(sequence(3, 2), false),
+            RotationPublishError::Rejected
+        );
     }
 }

@@ -129,6 +129,8 @@ bytes (FSM1/cipher-box-next#28 D2).
   The keeper can then hold the drain's own losing record, so at a split at the
   floor the drain rebases onto a gated record of the scope root, or of a
   folder the head op writes, on which its head op does not read as applied.
+  A pick strictly below the sequence floor, from a fan-out where an endpoint
+  failed, reads as unavailable, not as a trust violation (ADR 0071 D1).
 - **Publish**: register-first, fail-closed — the API registration call
   precedes a name's first publish and publish blocks on it; ordinary writes
   send single-item batches, name waves and sweeps send bulk (FSM1/cipher-box-next#34 D2). Core
@@ -307,6 +309,16 @@ A gate failure is never mere staleness: the engine pins last-known-good,
 raises the withheld-update escalation where applicable, and never renders the
 rejected record. Duplicate `id`s and duplicate `ipnsName`s within a scope
 reject at decode in core (FSM1/cipher-box-next#39 D7); the gate surfaces them as trust violations.
+One exception
+([ADR 0071](../decisions/0071-a-below-floor-record-while-an-endpoint-fails-is-unavailable-not-a-trust-violation.md)
+D1, D2): a gated fan-out read where an endpoint failed (a transport failure,
+a 5xx, a 408, a 429, a 3xx or a timeout; a 404, another 4xx, a body over the
+cap and a served record that verifies are answers), and
+whose freshest record is strictly below the sequence floor, is unavailable. It
+adopts nothing, raises no floor, keeps last-known-good, and sends no trust
+event; a command returns a retryable `Seam`. The exception covers the
+sequence stage alone. When every endpoint answered, a below-floor pick stays a
+trust violation (D4).
 
 The **floor law** (FSM1/cipher-box-next#39 D4, superseding FSM1/cipher-box-next#26 D4's blob-seeded floors): floors
 advance only on an AAD-confirmed unseal and cold-seed from the re-point

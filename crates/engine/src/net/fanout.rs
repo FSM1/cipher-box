@@ -13,7 +13,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 
 use super::eol::ranks_above;
 use super::fork::verified;
-use crate::seams::{EndpointId, RecordTransport};
+use crate::seams::{EndpointId, RecordTransport, SeamError};
 
 /// Hard ceiling on one signed IPNS record fetched from a `/routing/v1`
 /// endpoint. The IPNS spec caps a record at 10 KiB, and the endpoint set
@@ -35,7 +35,7 @@ pub enum PutOutcome {
 }
 
 impl PutOutcome {
-    fn of(result: &Result<(), crate::seams::SeamError>) -> Self {
+    fn of(result: &Result<(), SeamError>) -> Self {
         match result {
             Ok(()) => Self::Accepted,
             Err(error) => match error.status() {
@@ -119,9 +119,11 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
 /// A class, never bytes: the diagnostics that carry it must hold no record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointFailure {
-    /// Unreachable, refused, non-2xx, or late.
+    /// No answer about the name ([`get_failure`]).
     Transport,
-    /// The endpoint served more than [`MAX_RECORD_BYTES`].
+    /// An HTTP answer about the name other than 2xx or 404.
+    Status,
+    /// The endpoint served more than the byte cap.
     OverCap,
     /// The bytes did not decode as an IPNS record.
     Malformed,
@@ -133,6 +135,7 @@ impl core::fmt::Display for EndpointFailure {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::Transport => "transport",
+            Self::Status => "status",
             Self::OverCap => "over-cap",
             Self::Malformed => "malformed",
             Self::Unverified => "unverified",
@@ -249,20 +252,29 @@ pub async fn fanout_get_under<T: RecordTransport>(
     scan(transport, name).await.classify(rule)
 }
 
-/// [`fanout_get_classified`], and whether an endpoint answered for the name:
-/// with no record, or with bytes that it served. A transport failure is no
-/// answer.
+/// What [`fanout_get_answered`] read at a name.
+pub(crate) struct AnsweredFetch {
+    /// [`fanout_get_classified`]'s answer.
+    pub(crate) record: FanoutRecord,
+    /// [`Scan::answered`].
+    pub(crate) answered: bool,
+    /// [`TiedFetch::endpoint_failed`].
+    pub(crate) endpoint_failed: bool,
+}
+
+/// [`fanout_get_classified`], and what the endpoints said beside it.
 pub(crate) async fn fanout_get_answered<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
-) -> (FanoutRecord, bool) {
+) -> AnsweredFetch {
     let scan = scan(transport, name).await;
-    let answered = scan.vacant > 0
-        || scan
-            .failures
-            .iter()
-            .any(|(_, failure)| *failure != EndpointFailure::Transport);
-    (scan.classify(VacancyRule::Unanimous), answered)
+    let answered = scan.answered();
+    let endpoint_failed = scan.endpoint_failed();
+    AnsweredFetch {
+        record: scan.classify(VacancyRule::Unanimous),
+        answered,
+        endpoint_failed,
+    }
 }
 
 /// The freshest verified record, and every other record another endpoint
@@ -275,22 +287,48 @@ pub(crate) async fn fanout_get_tied<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
 ) -> Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)> {
-    fanout_get_tied_classified(transport, name).await.0
+    fanout_get_tied_classified(transport, name).await.pick
 }
 
-/// [`fanout_get_tied`], and whether the endpoints agree the name holds no
-/// record when none serves one, under [`VacancyRule::Unanimous`].
+/// What [`fanout_get_tied_classified`] read at a name.
+pub(crate) struct TiedFetch {
+    /// [`fanout_get_tied`]'s answer.
+    pub(crate) pick: Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)>,
+    /// No endpoint served a record, and the endpoints agree the name holds
+    /// none, under [`VacancyRule::Unanimous`].
+    pub(crate) absent: bool,
+    /// An endpoint gave no answer about the name, so a below-floor pick is
+    /// unavailable, not a rollback (ADR 0071 D1, D2).
+    pub(crate) endpoint_failed: bool,
+}
+
+/// [`fanout_get_verify`], and [`TiedFetch::endpoint_failed`].
+pub(crate) async fn fanout_get_verify_failed<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> Option<(VerifiedRecord, Vec<u8>, bool)> {
+    let TiedFetch {
+        pick,
+        endpoint_failed,
+        ..
+    } = fanout_get_tied_classified(transport, name).await;
+    pick.map(|(verified, bytes, _)| (verified, bytes, endpoint_failed))
+}
+
+/// [`fanout_get_tied`], and what the endpoints said beside the pick.
 pub(crate) async fn fanout_get_tied_classified<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
-) -> (Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)>, bool) {
+) -> TiedFetch {
     let scan = scan(transport, name).await;
     let absent = scan.absent(VacancyRule::Unanimous);
+    let endpoint_failed = scan.endpoint_failed();
     let Scan { best, tied, .. } = scan;
-    (
-        best.map(|(verified, bytes)| (verified, bytes, tied)),
+    TiedFetch {
+        pick: best.map(|(verified, bytes)| (verified, bytes, tied)),
         absent,
-    )
+        endpoint_failed,
+    }
 }
 
 /// Every endpoint's answer to one fan-out GET, before a caller reads it.
@@ -306,6 +344,25 @@ struct Scan {
 }
 
 impl Scan {
+    /// Whether a GET failed as [`EndpointFailure::Transport`].
+    fn endpoint_failed(&self) -> bool {
+        self.failures
+            .iter()
+            .any(|(_, failure)| *failure == EndpointFailure::Transport)
+    }
+
+    /// Whether an endpoint answered for the name: with no record, or with
+    /// bytes that it served.
+    fn answered(&self) -> bool {
+        self.vacant > 0
+            || self.failures.iter().any(|(_, failure)| {
+                !matches!(
+                    failure,
+                    EndpointFailure::Transport | EndpointFailure::Status
+                )
+            })
+    }
+
     /// Whether the endpoints agree the name holds no record, by `rule`.
     fn absent(&self, rule: VacancyRule) -> bool {
         self.best.is_none()
@@ -345,8 +402,8 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
                 scan.vacant += 1;
                 continue;
             }
-            Err(_) => {
-                scan.failures.push((endpoint, EndpointFailure::Transport));
+            Err(error) => {
+                scan.failures.push((endpoint, get_failure(&error)));
                 continue;
             }
         };
@@ -390,6 +447,20 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
         }
     }
     scan
+}
+
+/// The class of a failed GET.
+fn get_failure(error: &SeamError) -> EndpointFailure {
+    if error.is_over_cap() {
+        return EndpointFailure::OverCap;
+    }
+    // ADR 0071 D2. A 408 or 429 states nothing about the name; a 3xx is a
+    // failure so that both hosts agree (web `fetch` refuses a redirect with no
+    // status).
+    match error.status() {
+        None | Some(300..=399 | 408 | 429 | 500..=599) => EndpointFailure::Transport,
+        Some(_) => EndpointFailure::Status,
+    }
 }
 
 /// The signed `data` of `record_bytes`, when it verifies under `name`.
@@ -607,6 +678,65 @@ mod tests {
                 FanoutRecord::Unavailable(_)
             ),
             "no endpoint answered at all, so nothing is known about the name"
+        );
+    }
+
+    /// ADR 0071 D2: a "no record" answer is an answer, and only a transport
+    /// failure is an endpoint that failed.
+    #[test]
+    fn only_a_transport_failure_beside_a_pick_is_a_failed_endpoint() {
+        use crate::net::eol::eol_from;
+        use crate::seams::UnixMillis;
+
+        let signer = Ed25519Signer::from_seed([4u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let record = IpnsRecord::create_v2(
+            &signer,
+            b"/ipfs/old",
+            2,
+            1,
+            &eol_from(UnixMillis(5_000_000)),
+        )
+        .marshal();
+        let eps = vec![EndpointId::new("lagging"), EndpointId::new("other")];
+        let store = InMemoryRecordStore::new(eps.clone());
+        store.seed_record(&eps[0], name.as_str(), record);
+
+        let fetch = block_on(fanout_get_tied_classified(&store, &name));
+        assert!(fetch.pick.is_some());
+        assert!(!fetch.endpoint_failed, "a 404 is an answer");
+
+        for (status, failed) in [
+            (403, false),
+            (410, false),
+            (302, true),
+            (408, true),
+            (429, true),
+            (500, true),
+            (503, true),
+        ] {
+            store.answer_get_at(&eps[1], status);
+            let fetch = block_on(fanout_get_tied_classified(&store, &name));
+            assert!(fetch.pick.is_some());
+            assert_eq!(fetch.endpoint_failed, failed, "status {status}");
+        }
+
+        store.heal_endpoint(&eps[1]);
+        store.fail_endpoint(&eps[1]);
+        let fetch = block_on(fanout_get_tied_classified(&store, &name));
+        assert!(fetch.pick.is_some());
+        assert!(fetch.endpoint_failed, "no answer at all");
+    }
+
+    #[test]
+    fn a_seam_over_cap_body_is_an_answer() {
+        assert_eq!(
+            get_failure(&SeamError::over_cap("too large")),
+            EndpointFailure::OverCap
+        );
+        assert_eq!(
+            get_failure(&SeamError::new("offline")),
+            EndpointFailure::Transport
         );
     }
 

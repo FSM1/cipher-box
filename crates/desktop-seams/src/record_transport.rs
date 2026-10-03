@@ -30,7 +30,7 @@ fn trim_slashes(base_url: String) -> EndpointId {
 }
 
 fn over_cap(observed: usize, limit: usize) -> SeamError {
-    SeamError::new(format!(
+    SeamError::over_cap(format!(
         "record_transport get body: {observed} bytes exceeds the {limit}-byte cap"
     ))
 }
@@ -137,10 +137,11 @@ impl RecordTransport for ReqwestRecordTransport {
             return Ok(None);
         }
         if !status.is_success() {
-            return Err(SeamError::new(format!(
-                "record_transport get: status {}",
-                status.as_u16()
-            )));
+            let status = status.as_u16();
+            return Err(SeamError::http_status(
+                format!("record_transport get: status {status}"),
+                status,
+            ));
         }
         if !serves_record_bytes(&response) {
             return Ok(None);

@@ -665,6 +665,43 @@ async fn reqwest_record_transport_reports_the_status_of_a_rejected_put() {
     }
 }
 
+/// The engine tells an endpoint that answered from one that did not (ADR 0071
+/// D2), so a rejected GET reports its status, and an over-cap body says so.
+#[tokio::test]
+async fn reqwest_record_transport_reports_the_status_or_cap_of_a_rejected_get() {
+    let server = MockServer::start();
+    let statuses = [403_u16, 429, 503];
+    let transport = ReqwestRecordTransport::new(
+        statuses.map(|status| format!("{}/status-{status}", server.base_url())),
+        None,
+    )
+    .expect("client builds");
+    for (endpoint, status) in transport.endpoints().iter().zip(statuses) {
+        let error = transport
+            .get_record(endpoint, "k51-refused-name", 1024, None)
+            .await
+            .expect_err("a non-2xx answer other than 404 is no record");
+
+        assert_eq!(error.status(), Some(status));
+        assert!(!error.is_over_cap());
+    }
+
+    let transport =
+        ReqwestRecordTransport::new(vec![server.base_url()], None).expect("client builds");
+    let endpoint = transport.endpoints().remove(0);
+    transport
+        .put_record(&endpoint, "k51-large-name", &[7; 64])
+        .await
+        .expect("the store accepts the record");
+    let error = transport
+        .get_record(&endpoint, "k51-large-name", 16, None)
+        .await
+        .expect_err("a body over the cap is refused");
+
+    assert!(error.is_over_cap());
+    assert_eq!(error.status(), None);
+}
+
 #[tokio::test]
 async fn reqwest_record_transport_reads_a_200_text_answer_as_no_record() {
     let server = MockServer::start();
