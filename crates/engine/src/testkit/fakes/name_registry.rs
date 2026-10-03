@@ -47,7 +47,7 @@ impl InMemoryNameRegistry {
         Some(Ok(HttpResponse {
             status,
             headers: Vec::new(),
-            body,
+            body: body.into(),
         }))
     }
 }

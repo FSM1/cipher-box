@@ -310,7 +310,7 @@ fn json(status: u16, body: Vec<u8>) -> HttpResponse {
     HttpResponse {
         status,
         headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
-        body,
+        body: body.into(),
     }
 }
 

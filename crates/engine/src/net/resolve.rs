@@ -1465,7 +1465,7 @@ mod tests {
         device.http.enqueue_response(crate::seams::HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
         let results = block_on(eol_renew_pass(
             &device.record_store,
@@ -1711,7 +1711,7 @@ mod tests {
         device.http.enqueue_response(crate::seams::HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
         let results = block_on(eol_renew_pass(
             &device.record_store,
@@ -1838,7 +1838,7 @@ mod tests {
         device.http.enqueue_response(crate::seams::HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
         let results = block_on(eol_renew_pass(
             &device.record_store,
@@ -1930,7 +1930,7 @@ mod tests {
             device.http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: Vec::new(),
+                body: Vec::new().into(),
             });
         };
 

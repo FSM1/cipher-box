@@ -147,7 +147,7 @@ fn publish_under(
     device.http.enqueue_response(HttpResponse {
         status: 200,
         headers: Vec::new(),
-        body: Vec::new(),
+        body: Vec::new().into(),
     });
     block_on(publish(
         &device.record_store,

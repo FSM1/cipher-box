@@ -987,7 +987,7 @@ async fn fetch_block(cid: &str) -> Vec<u8> {
         response.status, 200,
         "the gateway serves the pinned block at {cid}"
     );
-    response.body
+    response.into_body()
 }
 
 /// Hosted ingress pins under the **caller-computed** content address
@@ -2055,6 +2055,13 @@ async fn test_login_body(base: &str, handle: &str) -> serde_json::Value {
     assert_eq!(
         response.status, 200,
         "test login is available on the contract stack"
+    );
+    assert!(
+        !response
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("set-cookie")),
+        "the seam hands over no Set-Cookie, which carries the refresh token"
     );
     serde_json::from_slice(&response.body).expect("login json")
 }
