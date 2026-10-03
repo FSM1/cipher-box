@@ -132,6 +132,9 @@ const OWED_CUT_NEVER_LANDED: &str = "owed-cut-never-landed";
 /// The check a command reports for an entry whose cut never landed, which a
 /// different command replaced.
 const OWED_CUT_REPLACED: &str = "owed-cut-replaced";
+/// A re-drive read the last copy of the root, so its cut removed every grant
+/// row and grant delivery (ADR 0068 D5).
+const OWED_GRANTS_DROPPED: &str = "owed-grants-dropped-from-last-copy";
 /// The folder answers as no scope root, and nothing owner-signed proves the
 /// promotion never ran.
 const OWED_MOVE_NOT_PROMOTED: &str = "owed-interior-move-not-promoted";
@@ -599,8 +602,8 @@ where
             self.owed().set_not_landed(scope, false);
             let published = self.owed_scope(sites, scope, "owed-cut", true).await?;
             let copy_epoch = published.current.commitment.cut_epoch;
-            // The cut set of a cut from the last copy is the same every time
-            // (ADR 0068 D5), so the re-drive builds it again.
+            // A cut from the last copy keeps no row (ADR 0068 D5), so the
+            // re-drive signs that cut again.
             if published.fell_back && copy_epoch.checked_add(1) == Some(entry.cut_epoch) {
                 return self
                     .redrive_recut(sites, scope, &entry.steps, published)
@@ -723,6 +726,18 @@ where
             )
             .await
             .map_err(|e| stop(EngineError::from_owed_record(e)))?;
+        // The first re-sign moves the entry to the new cut epoch; a later pass
+        // signs the same cut again and tells nothing new.
+        let drops = !cut.revoked_recipients.is_empty()
+            || remaining
+                .iter()
+                .any(|step| matches!(step, OwedStep::DeliverGrant { .. }));
+        if drops && standing.cut_epoch != cut.commitment.cut_epoch {
+            let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
+                scope_root: scope,
+                detail: OWED_GRANTS_DROPPED.to_owned(),
+            });
+        }
         let report = self
             .rotate_planes(
                 scope,

@@ -16549,7 +16549,8 @@ fn a_revoke_over_an_owed_wave_and_a_planted_root_keeps_no_grant_row() {
 }
 
 /// ADR 0068 D5: a downgrade over a write scope whose wave a stranded share
-/// owes, at a planted root, keeps no grant row.
+/// owes, at a planted root. The re-drive that the command runs first cuts
+/// every row from the last copy, so the grantee holds no row to downgrade.
 #[test]
 fn a_downgrade_over_a_stranded_write_scope_at_a_planted_root_keeps_no_grant_row() {
     let mut fx = GrantScenario::new();
@@ -16563,8 +16564,14 @@ fn a_downgrade_over_a_stranded_write_scope_at_a_planted_root_keeps_no_grant_row(
         true,
     );
 
-    let _ = downgrade_the_recipient(&mut fx);
+    let outcome = downgrade_the_recipient(&mut fx);
 
+    assert_eq!(
+        outcome,
+        Err(EngineError::MalformedInput {
+            check: "grant-recipient-not-granted"
+        })
+    );
     let moved = fx.granted_scope_repoint().current_root;
     assert_ne!(moved, stalled, "a wave moved the root");
     assert_no_grant_at(&fx, &moved);
@@ -16670,4 +16677,126 @@ fn a_link_expiry_does_not_replace_an_owed_wave_whose_cut_landed() {
         "nothing is replaced"
     );
     assert_eq!(fx.link_entries(), 1, "the sweep waits for the owed wave");
+}
+
+/// ADR 0068 D5: the owed wave of a new write share re-drives from the last
+/// copy of a planted root. The cut removes the new grantee's row and the
+/// delivery, and the host learns it once.
+#[test]
+fn a_redrive_that_drops_a_new_share_from_the_last_copy_tells_the_host_once() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    let stalled = write_name(fx.folder);
+    plant_root_served_at(
+        &fx,
+        &WRITE_SCOPE_SEED,
+        fx.folder,
+        sequence_at(&fx.world, &stalled) + 1,
+        true,
+    );
+
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(
+        abandoned(&mut fx._events),
+        vec![(fx.folder, "owed-grants-dropped-from-last-copy".to_owned())]
+    );
+}
+
+/// ADR 0068 D5: device A holds no owed entry and reads a planted root from
+/// its last copy, at a name that its write seed does not derive. The downgrade
+/// does not settle the scope on that copy; its own cut keeps no row.
+#[test]
+fn a_downgrade_with_no_owed_entry_at_a_planted_root_keeps_no_grant_row() {
+    let mut fx = GrantScenario::new();
+    let (mut other, _other_events, mut other_tasks) = fx.second_owner_device();
+    fx.strand_the_owed_wave();
+    tick(&fx.world, &other, &mut other_tasks);
+    let stalled = write_name(fx.folder);
+    plant_root_served_at(
+        &fx,
+        &WRITE_SCOPE_SEED,
+        fx.folder,
+        sequence_at(&fx.world, &stalled) + 1,
+        true,
+    );
+
+    let outcome = command_on(
+        &fx,
+        &mut other,
+        Command::ChangePermission {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        },
+    );
+
+    assert_eq!(outcome, Some(Ok(CommandOutcome::Done)));
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved, stalled, "the downgrade moved the root");
+    assert_no_grant_at(&fx, &moved);
+}
+
+/// ADR 0068 D5: device A owes the wave of a cut whose set keeps the
+/// bystander. Device B then revokes the bystander, and the write grantee
+/// plants at the root. A sync pass on A re-drives the wave from its last copy,
+/// which still keeps the bystander, and the root it moves to keeps no row.
+#[test]
+fn a_redrive_after_another_device_revoked_keeps_no_grant_row() {
+    let mut fx = GrantScenario::new();
+    let (mut other, _other_events, _other_tasks) = fx.second_owner_device();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let granted = fx.granted_scope_repoint().current_root;
+    let section =
+        published_grant_section_at(&fx.world, &fx.blocks, &granted).expect("the granted root");
+    let writer_seed = grantee_write_scope_seed(&section, &granted, &fx.folder.0, 1);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let folder = fx.folder;
+    owe_the_wave(&mut fx, folder);
+    assert_eq!(
+        command_on(
+            &fx,
+            &mut other,
+            Command::Revoke {
+                node: folder,
+                recipient_identity_public_key: bystander_identity(),
+            },
+        ),
+        Some(Ok(CommandOutcome::Done)),
+        "device B revokes the bystander"
+    );
+    let old_root = derive_write_name(&writer_seed, &folder.0);
+    plant_root_at(&fx, &writer_seed, sequence_at(&fx.world, &old_root) + 1);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved, old_root, "the wave moved the root");
+    assert_no_grant_at(&fx, &moved);
+}
+
+/// Run `command` on `engine` across the retries of its bounded steps.
+fn command_on(
+    fx: &GrantScenario,
+    engine: &mut Engine<FakeSeamTypes>,
+    command: Command,
+) -> Option<Result<CommandOutcome, EngineError>> {
+    let cadence = engine.profile().poll_cadence;
+    let mut future = pin!(engine.command(command));
+    let mut cx = Context::from_waker(Waker::noop());
+    (0..64).find_map(|_| match future.as_mut().poll(&mut cx) {
+        Poll::Ready(outcome) => Some(outcome),
+        Poll::Pending => {
+            fx.world.scheduler.advance(cadence);
+            None
+        }
+    })
 }
