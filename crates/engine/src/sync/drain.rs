@@ -76,7 +76,7 @@ use crate::net::record_publish::{
 };
 use crate::net::retire::{
     Acknowledged, LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger,
-    drain_owed_retires, orphaned_head, retire,
+    drain_owed_retires, linked_nowhere, orphaned_head, retire,
 };
 use crate::net::{
     Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldKey, HeldRecord, HeldRecords, HeldValue,
@@ -6556,7 +6556,8 @@ where
     /// journals it only after the unlink is live, so the detachment is already a
     /// published fact. Reading the node instead would settle nothing — a hard
     /// delete leaves the record resolvable at its own name until its EOL lapses,
-    /// and it names its content the whole time.
+    /// and it names its content the whole time. A tombstoned node the base
+    /// links again is not retired ([`linked_nowhere`]), so its debt waits.
     async fn live_owing_record(
         &self,
         scope: &DrainScope<'_>,
@@ -6572,6 +6573,9 @@ where
             })
         };
         if owing == OwingRecord::Retired {
+            if !linked_nowhere(&self.cells.base.borrow(), node) {
+                return None;
+            }
             return reaching(BTreeSet::new());
         }
         let (plane, root) = self.ledger_plane(end).await?;
@@ -10912,6 +10916,26 @@ mod tests {
                 "only a same-scope capture may begin resolving the subtree for re-keying",
             );
         }
+    }
+
+    #[test]
+    fn a_retired_debt_of_a_node_the_base_links_waits() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let node = NodeId([0x48; 16]);
+        let settle = || {
+            block_on(harness.drain().live_owing_record(
+                &harness.scope(),
+                node.0,
+                OwingRecord::Retired,
+            ))
+        };
+        assert!(settle().is_some(), "an unlinked retired node settles");
+        {
+            let mut base = harness.state.snapshot.borrow_mut();
+            base.upsert_node(NodeMeta::new(node, "moved", crate::facade::NodeKind::File));
+            base.link(HARNESS_ROOT, node, 1);
+        }
+        assert!(settle().is_none(), "a linked retired node waits");
     }
 
     /// An interior scope's walk starts at the vault root when the tick holds
