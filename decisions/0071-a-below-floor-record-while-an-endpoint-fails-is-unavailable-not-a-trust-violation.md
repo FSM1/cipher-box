@@ -1,6 +1,6 @@
 # ADR 0071 — A below-floor record while an endpoint fails is unavailable, not a trust violation
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-03
 - **Date:** 2026-10-03
 - **Relates to:** FSM1/cipher-box#2264 (a revoke stops as a trust violation while an endpoint
   fails), [ADR 0022](./0022-a-first-run-cold-start-tolerates-a-failed-public-routing-endpoint.md)
