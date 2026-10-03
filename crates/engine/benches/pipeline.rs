@@ -256,6 +256,12 @@ impl Adopter for AcceptingAdopter {
             node_id: ROOT_ID,
             read_scope_seed: None,
             version: net::author::ENVELOPE_V,
+            bar: cipherbox_engine::net::PublishBar {
+                scope_id: [0; 16],
+                read_epoch: 1,
+                write_epoch: None,
+                cut_epoch: None,
+            },
         })
     }
 

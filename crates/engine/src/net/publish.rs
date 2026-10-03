@@ -219,6 +219,14 @@ impl Observed {
     }
 }
 
+/// A gated read that [`Observed::gated`] refused, with the record bytes the
+/// gate admitted, so a renewal can report it once the record is due.
+#[derive(Debug, Clone)]
+pub(crate) struct RefusedRead {
+    pub(crate) error: PublishError,
+    pub(crate) bytes: Vec<u8>,
+}
+
 /// [`Observed::gated`]'s version rule, for a read that no publish at its own
 /// name builds on: a name wave's interior source, which publishes at a fresh
 /// name, a moved node, and a read-side label.

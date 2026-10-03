@@ -4608,6 +4608,10 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Ok(Some(PublishOutcome::Unconfirmed { sequence })) => {
                 format!("published sequence {sequence} but it did not resolve back")
             }
+            Err(crate::net::PublishError::ForeignVersion { version }) => format!(
+                "a newer release wrote this record at envelope version {version}, so this \
+                 build does not renew it"
+            ),
             Err(error) => error.to_string(),
             // A no-renewal (comfortably ahead) or a clean republish is not a
             // failure — nothing to surface.
@@ -13449,6 +13453,7 @@ mod tests {
             signer: kdf::settings_ipns_keypair(&SETTINGS_SECRET),
             value: HeldValue::Head(head.to_owned()),
             content_cids: Vec::new(),
+            envelope: None,
         }
     }
 
@@ -13532,6 +13537,7 @@ mod tests {
             signer,
             value: HeldValue::Inline(ours.to_vec()),
             content_cids: Vec::new(),
+            envelope: None,
         };
         (store, held)
     }
@@ -17002,6 +17008,12 @@ mod tests {
                     node_id: [0u8; 16],
                     read_scope_seed: None,
                     version: ENVELOPE_V,
+                    bar: crate::net::PublishBar {
+                        scope_id: [0; 16],
+                        read_epoch: 1,
+                        write_epoch: None,
+                        cut_epoch: None,
+                    },
                 })
             }
 

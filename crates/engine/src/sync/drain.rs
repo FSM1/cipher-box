@@ -69,7 +69,9 @@ use crate::net::author::{
     author_scope_root_envelope, new_child, report_carried_cut,
 };
 use crate::net::last_known_good::keep_then_commit;
-use crate::net::publish::{Observed, PublishError, PublishOutcome, PublishReceipt, PublishVerdict};
+use crate::net::publish::{
+    Observed, PublishBar, PublishError, PublishOutcome, PublishReceipt, PublishVerdict,
+};
 use crate::net::record_publish::{
     HeadBinding, MirrorLeg, RecordPublishError, RecordPublishRequest, preflight,
     publish_record_placed,
@@ -79,9 +81,10 @@ use crate::net::retire::{
     drain_owed_retires, linked_nowhere, orphaned_head, retire,
 };
 use crate::net::{
-    Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldKey, HeldRecord, HeldRecords, HeldValue,
-    LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter, assemble_head_envelope,
-    fanout_get_classified, fanout_get_verify, observed_at, resolve, resolve_gated,
+    Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey, HeldRecord,
+    HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
+    assemble_head_envelope, fanout_get_classified, fanout_get_verify, observed_at, resolve,
+    resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
@@ -610,8 +613,9 @@ impl From<PublishHalt> for Halt {
 
 /// One head publish that reached the transport.
 enum HeadPublish {
-    /// Our record confirmed at its name.
-    Confirmed(Vec<u8>),
+    /// Our record confirmed at its name, and the floors its head was proven
+    /// against.
+    Confirmed(Vec<u8>, Option<PublishBar>),
     /// A lost CAS race at `sequence`, with the winning record when the
     /// confirm read one.
     Lost {
@@ -7105,16 +7109,16 @@ where
                 observed.clearing(floor.unwrap_or(0).saturating_add(u64::from(ATTEMPT_BUDGET)))
             }
         };
-        let record_bytes = match self
+        let (record_bytes, bar) = match self
             .publish_head(plane, &observed, &node.0, &head, content_cids.clone())
             .await
             .map_err(PublishHalt::before_the_put)?
         {
-            HeadPublish::Confirmed(record_bytes) => {
+            HeadPublish::Confirmed(record_bytes, bar) => {
                 if acked != Acknowledged::Nothing {
                     let _ = ledger.forget_acknowledged(&owner, node.0).await;
                 }
-                record_bytes
+                (record_bytes, bar)
             }
             // Its bytes may still surface at `sequence`, so the next publish
             // here signs above it rather than tying it.
@@ -7171,6 +7175,10 @@ where
                 // The same list the publish registered, so a sub-EOL renewal
                 // re-pins exactly the content this record points at.
                 content_cids,
+                envelope: bar.map(|bar| HeldEnvelope {
+                    version: head.envelope.v,
+                    bar,
+                }),
             },
         })
     }
@@ -7262,7 +7270,9 @@ where
             classify_publish(error, head.block.len() as u64)
         })?;
         match outcome {
-            PublishOutcome::Published { .. } => Ok(HeadPublish::Confirmed(record_bytes)),
+            PublishOutcome::Published { .. } => {
+                Ok(HeadPublish::Confirmed(record_bytes, preflighted.bar()))
+            }
             PublishOutcome::LostRace {
                 published_sequence, ..
             } => Ok(HeadPublish::Lost {
@@ -8353,6 +8363,7 @@ mod tests {
             tied: Vec::new(),
             absent: false,
             observed: None,
+            envelope: None,
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
@@ -8382,6 +8393,7 @@ mod tests {
             tied,
             absent: false,
             observed: None,
+            envelope: None,
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
@@ -8416,6 +8428,7 @@ mod tests {
                 tied: Vec::new(),
                 absent: false,
                 observed: None,
+                envelope: None,
             },
             &refused_name(),
             &events,

@@ -27,7 +27,7 @@ use super::adopter::{LocalHead, assemble_head_envelope, reject};
 use super::fanout::fanout_get_verify;
 use super::fork::{Fork, cached_fork, fork_of};
 use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
-use super::publish::{Observed, PublishError};
+use super::publish::{Observed, PublishBar, RefusedRead};
 use super::resolve::{AdoptOutcome, Adopter, GatePass, ResolveOutcome, resolve_gated};
 use crate::content::Gateway;
 use crate::gate::{Adopted, GateError, GateStage, RejectionReason, floor};
@@ -391,7 +391,7 @@ pub(crate) enum ChildRecord {
 
 pub(crate) struct AdmittedChild {
     pub(crate) adopted: Adopted,
-    pub(crate) observed: Result<Observed, PublishError>,
+    pub(crate) observed: Result<Observed, RefusedRead>,
     pub(crate) fork: Option<Fork>,
 }
 
@@ -471,9 +471,15 @@ where
     };
     let (record_bytes, current) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
-            let observed = gated.observed.ok_or_else(|| {
-                ChildResolveError::Unavailable("the gated observation is not held".to_owned())
-            })?;
+            let unheld =
+                || ChildResolveError::Unavailable("the gated observation is not held".to_owned());
+            let observed = match gated.observed.ok_or_else(unheld)? {
+                Ok(observed) => Ok(observed),
+                Err(error) => Err(RefusedRead {
+                    error,
+                    bytes: gated.held_record.ok_or_else(unheld)?.1,
+                }),
+            };
             return Ok(ChildRecord::Admitted(Box::new(AdmittedChild {
                 adopted,
                 observed,
@@ -537,7 +543,13 @@ fn admitted_child(
     envelope: &Envelope,
     fork: Option<Fork>,
 ) -> ChildRecord {
-    let observed = Observed::gated(name, adopted.sequence, envelope.v, record_bytes);
+    let observed =
+        Observed::gated(name, adopted.sequence, envelope.v, record_bytes).map_err(|error| {
+            RefusedRead {
+                error,
+                bytes: record_bytes.to_vec(),
+            }
+        });
     ChildRecord::Admitted(Box::new(AdmittedChild {
         adopted,
         observed,
@@ -706,6 +718,12 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
             node_id: envelope.id,
             read_scope_seed: None,
             version: envelope.v,
+            bar: PublishBar {
+                scope_id: self.scope_id,
+                read_epoch: envelope.epoch,
+                write_epoch: None,
+                cut_epoch: None,
+            },
         })
     }
 

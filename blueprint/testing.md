@@ -193,6 +193,11 @@ scenario fails the meta-test):
   vault root back with 45 days left and reports it, renews over it with 25
   days left, and renews over a tie of one value, and the renewal set renews
   over a fork inside 30 days (`tests/renewal_walk.rs`, `net::liveness`).
+  A child or a vault root at a foreign envelope version is not renewed by the
+  walk or the renewal set, and the walk emits `renewalFailed` with a version
+  detail; a scope floor raised during the registration makes the walk refuse
+  (`tests/renewal_walk.rs`); the renewal set refuses a held node at a foreign
+  version or below its scope bar (`net::liveness`).
   A lagging endpoint (ADR 0071): with two endpoints, where one lags one
   sequence and the other fails or answers 429, a revoke gets
   `EngineError::Seam`, a read

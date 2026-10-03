@@ -698,6 +698,7 @@ fn held_settings_record(head: &str, sequence: u64) -> HeldRecord {
         signer: kdf::settings_ipns_keypair(&SECRET),
         value: HeldValue::Head(head.to_owned()),
         content_cids: Vec::new(),
+        envelope: None,
     }
 }
 

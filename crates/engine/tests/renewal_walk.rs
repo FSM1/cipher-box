@@ -1554,7 +1554,7 @@ fn a_tombstoned_node_the_base_links_nowhere_is_not_renewed() {
 }
 
 #[test]
-fn a_walk_reads_but_does_not_renew_a_child_at_a_foreign_envelope_version() {
+fn a_walk_reports_and_does_not_renew_a_child_at_a_foreign_envelope_version() {
     use cipherbox_core::seal::{encode_envelope, seal_read_body};
     use cipherbox_engine::net::author::ENVELOPE_V;
 
@@ -1600,11 +1600,17 @@ fn a_walk_reads_but_does_not_renew_a_child_at_a_foreign_envelope_version() {
     }
     let served = record_at(&world, &name);
     world.scheduler.advance(DAY * 45);
-    let (device, engine, _tasks) = start_later(&world, &blocks, b"new reader");
+    let device = world.device(b"new reader");
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
     assert_eq!(
         record_at(&world, &name).data,
         served.data,
         "a newer envelope is not re-signed"
+    );
+    assert!(
+        renewal_failed(&mut events, name.as_str(), "envelope version"),
+        "the refused renewal is reported with its version"
     );
     assert_eq!(
         block_on(engine.read_content(node)).expect("the newer envelope remains readable"),
@@ -1672,7 +1678,7 @@ fn a_walk_refuses_each_scope_floor_raised_during_registration() {
 }
 
 #[test]
-fn a_walk_reads_but_does_not_renew_a_root_at_a_foreign_envelope_version() {
+fn a_walk_reports_and_does_not_renew_a_root_at_a_foreign_envelope_version() {
     use cipherbox_engine::net::author::ENVELOPE_V;
     use cipherbox_engine::testkit::account::seed_account_sealed;
 
@@ -1695,13 +1701,30 @@ fn a_walk_reads_but_does_not_renew_a_root_at_a_foreign_envelope_version() {
             .seed_record(&endpoint, name.as_str(), bytes.clone());
     }
     world.scheduler.advance(DAY * 45);
-    let (_device, engine, _tasks) = start_later(&world, &blocks, b"new reader");
+    let device = world.device(b"new reader");
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &device, 2);
+    until_the_first_walk(&world, &engine, &mut tasks);
+    assert!(
+        renewal_failed(&mut events, name.as_str(), "envelope version"),
+        "the refused renewal is reported with its version"
+    );
     assert!(block_on(engine.view()).is_ok(), "the root remains readable");
     assert_eq!(
         world
             .record_store
             .record_at(&world.record_store.endpoints()[0], name.as_str()),
-        Some(bytes),
+        Some(bytes.clone()),
         "the root is never re-signed"
+    );
+    // Inside the liveness threshold the held root takes the same rule.
+    world.scheduler.advance(DAY * 20);
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        world
+            .record_store
+            .record_at(&world.record_store.endpoints()[0], name.as_str()),
+        Some(bytes),
+        "the liveness loop does not re-sign the held root"
     );
 }

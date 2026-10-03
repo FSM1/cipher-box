@@ -56,7 +56,10 @@ cursor that does not open or decode, or a replayed older one, costs only work.
 
 1. The gate admits the record: the root adopt (`gate::adopt`) for a scope root, or the gated child
    resolve for any other node. Each adopts, or re-opens at the floor (`open_at_floor`) a record
-   that this device already adopted. The admitted sequence is S.
+   that this device already adopted. The admitted sequence is S. Amended on 2026-10-03: the walk
+   does not renew a record at an envelope version that this build does not author, and reports it
+   as a failed renewal with a version detail; the liveness loop takes the same rule and the scope
+   bar.
 2. The walk skips a name that a delete doomed, that the retire ledger owes a retire, that the
    parent no longer names, or that the drain has a publish of in flight. Amended by ADR 0063 D4
    on 2026-10-01: the walk also skips every name in a scope that has an owed rotation entry.

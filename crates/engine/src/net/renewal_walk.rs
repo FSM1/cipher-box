@@ -26,7 +26,7 @@ use super::fanout::{FanoutRecord, fanout_get_classified};
 use super::fork::{Fork, holds_renewal};
 use super::liveness::{EolRenewResult, HeldKey, HeldRecord, HeldRecords, hold_if_unchanged};
 use super::publish::{
-    Observed, PublishBar, PublishError, PublishOutcome, PublishVerdict, SignatureGate,
+    Observed, PublishBar, PublishError, PublishOutcome, PublishVerdict, RefusedRead, SignatureGate,
     head_cid_from_value, put_and_confirm,
 };
 use super::register::register;
@@ -663,8 +663,12 @@ where
                     read_seed: admitted.read_scope_seed.clone(),
                     seed_stamp: Some(admitted.read_epoch),
                 };
-                let (observed, fork) = (admitted.observed.clone(), admitted.fork);
-                self.consider(pass, scope_id, scope_id, observed, fork)
+                let (name, observed, fork) = (
+                    material.name.clone(),
+                    admitted.observed.clone(),
+                    admitted.fork,
+                );
+                self.consider(pass, scope_id, scope_id, &name, observed, fork)
                     .await;
                 Some((plane, scope_id, body))
             }
@@ -762,7 +766,7 @@ where
                         .forked
                         .push((name.as_str().to_owned(), fork.sequence));
                 }
-                self.consider(pass, plane.scope_id, node_id, observed, fork)
+                self.consider(pass, plane.scope_id, node_id, name, observed, fork)
                     .await;
                 Some(adopted.read_body)
             }
@@ -790,30 +794,35 @@ where
         }
     }
 
-    /// Queue a renewal of the record the gate admitted at `sequence`, when its
-    /// EOL is inside the window and no other write can come between (ADR 0061
-    /// D3 step 2), and no served `fork` holds it back (ADR 0066 D3).
+    /// Queue a renewal of the record the gate admitted, when its EOL is inside
+    /// the window and no other write can come between (ADR 0061 D3 step 2), and
+    /// no served `fork` holds it back (ADR 0066 D3). A record the token refused
+    /// is reported as a failed renewal instead.
     async fn consider(
         &self,
         pass: &mut Pass<'_>,
         material_scope: [u8; 16],
         node_id: [u8; 16],
-        observed: Result<Observed, PublishError>,
+        name: &IpnsName,
+        observed: Result<Observed, RefusedRead>,
         fork: Option<Fork>,
     ) {
-        let Ok(observed) = observed else {
-            return;
+        let bytes = match &observed {
+            Ok(observed) => observed.bytes(),
+            Err(refused) => refused.bytes.as_slice(),
         };
-        let name = observed.name();
-        let sequence = observed.sequence();
-        let Ok(verified) =
-            IpnsRecord::unmarshal(observed.bytes()).and_then(|record| record.verify(name))
+        let Ok(verified) = IpnsRecord::unmarshal(bytes).and_then(|record| record.verify(name))
         else {
             return;
         };
+        let sequence = verified.sequence;
         let now = self.scheduler.now();
         let due = eol::needs_renewal(now, &verified.validity, WALK_WINDOW);
-        if !due || verified.sequence != sequence {
+        if !due
+            || observed
+                .as_ref()
+                .is_ok_and(|observed| observed.sequence() != sequence)
+        {
             return;
         }
         if holds_renewal(fork, now, &verified.validity) {
@@ -870,6 +879,16 @@ where
                 return;
             }
         }
+        let observed = match observed {
+            Ok(observed) => observed,
+            Err(refused) => {
+                pass.report.renewals.push(EolRenewResult {
+                    routing_key: key.to_owned(),
+                    outcome: Err(refused.error),
+                });
+                return;
+            }
+        };
         pass.due.push(Due {
             node_id,
             name: name.clone(),

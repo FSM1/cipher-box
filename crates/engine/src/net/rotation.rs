@@ -58,7 +58,7 @@ use super::pointer_fetch::{
 };
 use super::publish::{
     InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome, PublishVerdict,
-    publish_inline, refuse_foreign_version,
+    RefusedRead, publish_inline, refuse_foreign_version,
 };
 use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
@@ -1432,6 +1432,7 @@ fn hold_scope_pointer(
             signer,
             value: HeldValue::Inline(block),
             content_cids: Vec::new(),
+            envelope: None,
         },
     );
 }
@@ -1846,7 +1847,7 @@ async fn write_plane_of_gated<F: FloorStore>(
 
 /// One owned scope root as the renewal walk admitted it (ADR 0061 D3 step 1).
 pub(crate) struct AdmittedScopeRoot {
-    pub(crate) observed: Result<Observed, PublishError>,
+    pub(crate) observed: Result<Observed, RefusedRead>,
     pub(crate) bar: PublishBar,
     pub(crate) read_body: ReadBody,
     pub(crate) read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
@@ -1924,7 +1925,10 @@ where
         },
     )?;
     Ok(AdmittedScopeRoot {
-        observed: gated.observed,
+        observed: gated.observed.map_err(|error| RefusedRead {
+            error,
+            bytes: record_bytes,
+        }),
         bar: PublishBar {
             scope_id,
             read_epoch: gated.envelope.epoch,
@@ -5965,6 +5969,7 @@ fn enrol_scope_pointer<K>(
             signer,
             value: HeldValue::Inline(consulted.value),
             content_cids: Vec::new(),
+            envelope: None,
         });
     }
 }
@@ -12729,6 +12734,7 @@ mod tests {
             signer: Ed25519Signer::from_seed([0x11; 32]),
             value: HeldValue::Head("bafyrootheadblock".to_owned()),
             content_cids: Vec::new(),
+            envelope: None,
         };
         harness
             .held
@@ -15982,6 +15988,7 @@ mod tests {
                 signer: kdf::ipns_keypair(write_seed.as_bytes()),
                 value: HeldValue::Head(root.head_cid_str.clone()),
                 content_cids: Vec::new(),
+                envelope: None,
             },
         );
         (harness, root)
@@ -16224,6 +16231,7 @@ mod tests {
             signer: scope_pointer_signer(&OWNER_POINTER_SEED, &SCOPE),
             value: HeldValue::Inline(b"the flip's own confirmed block".to_vec()),
             content_cids: Vec::new(),
+            envelope: None,
         };
         harness
             .held
