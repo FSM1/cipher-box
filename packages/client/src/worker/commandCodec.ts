@@ -160,6 +160,7 @@ const OP_PHASES: Record<OpProgressPhase, true> = {
 };
 
 const DEAD_LETTER_REASONS: Record<DeadLetterReason, true> = {
+  targetIsScopeRoot: true,
   targetGone: true,
   destinationGone: true,
   destinationInsideTarget: true,
@@ -328,6 +329,8 @@ function checkQueueHold(hold: QueueHoldDescriptor | null): void {
       break;
     case 'bin-index':
       known(BIN_INDEX_HOLD_CHECKS, hold.check, 'bin-index hold check');
+      break;
+    case 'delete-plane':
       break;
     default:
       throw new Error(`unknown WASM queue hold reason: ${(hold as { reason: unknown }).reason}`);

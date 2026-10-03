@@ -100,12 +100,12 @@ describe('installIntrospection', () => {
 
       engine.emit({ kind: 'snapshotUpdated' });
       engine.emit({ kind: 'stalenessChanged', staleness: 'stale' });
-      engine.emit({ kind: 'deadLetter', opId: 7n, reason: 'targetGone' });
+      engine.emit({ kind: 'deadLetter', target: null, opId: 7n, reason: 'targetGone' });
 
       expect(window.__CIPHERBOX_ENGINE__?.events()).toEqual([
         { kind: 'snapshotUpdated' },
         { kind: 'stalenessChanged', staleness: 'stale' },
-        { kind: 'deadLetter', opId: '7', reason: 'targetGone' },
+        { kind: 'deadLetter', target: null, opId: '7', reason: 'targetGone' },
       ]);
     });
 

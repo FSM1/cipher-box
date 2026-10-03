@@ -93,6 +93,14 @@ pub mod node_id {
 pub mod opt_node_id {
     use super::*;
 
+    /// Writes the id as bytes, or null.
+    pub fn serialize<S: Serializer>(id: &Option<NodeId>, serializer: S) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(
+            &id.as_ref().map(|id| serde_bytes::Bytes::new(&id.0)),
+            serializer,
+        )
+    }
+
     #[derive(Deserialize)]
     struct Wire(#[serde(with = "node_id")] NodeId);
 
@@ -459,6 +467,15 @@ pub enum QueueHold {
         /// The load outcome.
         check: BinIndexHoldCheck,
     },
+    /// Held until the delete's target record proves its plane.
+    DeletePlane {
+        /// The held op.
+        op_id: OpId,
+        /// The node the held delete targets.
+        #[serde(serialize_with = "node_id::serialize")]
+        #[tsify(type = "Uint8Array")]
+        node: NodeId,
+    },
 }
 
 impl From<facade::QueueHold> for QueueHold {
@@ -476,6 +493,7 @@ impl From<facade::QueueHold> for QueueHold {
                 check: settings.check(),
             },
             QueueHoldReason::BinIndex(check) => Self::BinIndex { op_id, node, check },
+            QueueHoldReason::DeletePlane => Self::DeletePlane { op_id, node },
         }
     }
 }

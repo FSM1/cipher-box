@@ -33,7 +33,7 @@ class FakeHost extends StubEngineHost {
     this.commandCount += 1;
     if (descriptor.kind === 'manualRefresh') {
       for (let opId = 1n; opId <= 10n; opId += 1n)
-        this.pushEvent({ kind: 'deadLetter', opId, reason: 'undecodable' });
+        this.pushEvent({ kind: 'deadLetter', opId, target: null, reason: 'undecodable' });
       return { kind: 'done' };
     }
     // First call is slow, later calls fast → responses arrive out of order.

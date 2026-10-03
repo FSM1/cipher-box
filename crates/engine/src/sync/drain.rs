@@ -34,8 +34,8 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     BinEntry, BinIndex, ChildRef, Envelope, GrantSetCommitment, NodeKind, PreservedFields,
-    ReadBody, SignedSealed, Version, decode_grant_section, grant_section_bytes, open_content_key,
-    open_read_body,
+    ReadBody, SignedSealed, Version, decode_grant_section, grant_section_bytes, has_grant_section,
+    open_content_key, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -84,8 +84,8 @@ use crate::net::retire::{
 use crate::net::{
     Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey, HeldRecord,
     HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
-    assemble_head_envelope, fanout_get_classified, fanout_get_verify, observed_at, resolve,
-    resolve_gated,
+    assemble_head_envelope, fanout_get_classified, fanout_get_verify, fanout_get_verify_failed,
+    observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
@@ -207,6 +207,14 @@ fn admissible_staged_block(key: &[u8], block: Vec<u8>) -> Result<Vec<u8>, Halt> 
 /// either.
 fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
     end.write_name(&child.id).as_str().as_bytes() == child.ipns_name
+}
+
+/// Whether `op` deletes a scope root this session knows of. A grafted pass
+/// authors in another vault, whose roots this set does not hold.
+fn deletes_a_known_scope_root(scope: &DrainScope<'_>, op: &Op) -> bool {
+    !scope.is_grafted()
+        && matches!(op.kind, OpKind::Delete { .. })
+        && scope.known_scope_roots.contains(&op.target)
 }
 
 /// Whether `child` is a node of this scope rather than a scope root. A granted
@@ -419,6 +427,9 @@ enum Halt {
     /// (CONTEXT.md "Epoch lag"). Charged nothing, and re-driven at the pass that
     /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
+    /// The delete has no current proof of its target's plane. Not a failure of
+    /// the op: it holds the head uncharged ([`QueueHoldReason::DeletePlane`]).
+    DeletePlaneUnavailable,
     /// The op carries a folder whose interior move is owed (ADR 0063) out of
     /// the scope the move re-seals it into. Charged nothing, and re-driven at
     /// the pass after the one that lands the move.
@@ -748,6 +759,12 @@ pub enum QueueHoldReason {
     /// of it — otherwise stops every queued operation for the account with no
     /// cause the member can see (blueprint/engine.md "Bin index record").
     BinIndex(BinIndexHoldCheck),
+    /// The delete's target record did not prove the plane the delete re-seals
+    /// it under. The exit is a pass that proves it.
+    ///
+    /// Reported for the same reason as [`Self::BinIndex`]: a party who
+    /// withholds the target's record otherwise stops the queue in silence.
+    DeletePlane,
 }
 
 /// The queue head is held over rather than failed: it keeps its place and its
@@ -757,7 +774,7 @@ pub enum QueueHoldReason {
 /// has another arm's state to clear. The cell belongs to the tick rather than
 /// to one pass: a tick runs one pass per proved scope over one identity-wide
 /// queue, so a hold one pass takes is still the head's when the next pass of
-/// the same tick opens ([`bin_index_hold_exits`]).
+/// the same tick opens ([`probed_hold_exits`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueHold {
     /// The held op.
@@ -768,20 +785,24 @@ pub struct QueueHold {
     pub reason: QueueHoldReason,
 }
 
-/// Whether a halt frees a [`QueueHoldReason::BinIndex`] hold.
+/// Whether a halt frees a hold whose exit is the pass itself:
+/// [`QueueHoldReason::BinIndex`] or [`QueueHoldReason::DeletePlane`].
 ///
 /// The exit is a classified verdict on the held op itself. A pass whose scope
 /// does not author that op takes [`Halt::Unclassified`] for it and knows
-/// nothing about the bin plane, so a later pass of the same tick must not drop
+/// nothing about the held plane, so a later pass of the same tick must not drop
 /// the hold an earlier one took — the head would then wait with no cause the
 /// member can see.
-fn bin_index_hold_exits(hold: Option<QueueHold>, halted: OpId, halt: Halt) -> bool {
+fn probed_hold_exits(hold: Option<QueueHold>, halted: OpId, halt: Halt) -> bool {
     let Some(hold) = hold else {
         return false;
     };
-    matches!(hold.reason, QueueHoldReason::BinIndex(_))
-        && hold.op_id == halted
-        && !matches!(halt, Halt::HeldByBinIndex(_) | Halt::Unclassified)
+    let still_held = match hold.reason {
+        QueueHoldReason::BinIndex(_) => matches!(halt, Halt::HeldByBinIndex(_)),
+        QueueHoldReason::DeletePlane => halt == Halt::DeletePlaneUnavailable,
+        QueueHoldReason::Quota { .. } | QueueHoldReason::Settings(_) => return false,
+    };
+    hold.op_id == halted && !still_held && halt != Halt::Unclassified
 }
 
 /// The captures one pass adopts into the bin. A peer chooses both the trigger
@@ -1238,6 +1259,8 @@ pub(crate) struct DrainScope<'a> {
     /// over link ancestry can tell which scope owns a node
     /// ([`crate::sync::tick::scope_root_of`]).
     pub(crate) scope_roots: &'a [NodeId],
+    /// Includes boundaries whose material the current walk could not prove.
+    pub(crate) known_scope_roots: &'a [NodeId],
     /// The proved scope roots whose own records carry no write plane this
     /// device opens. No pass will ever take an op below one, so the valve
     /// charges rather than stalls ([`halt_below_another_scope_root`]).
@@ -2285,6 +2308,7 @@ where
                 .insert(*op_id, (Some(*target), *reason));
             let _ = self.seams.events.unbounded_send(Event::DeadLetter {
                 op_id: *op_id,
+                target: Some(*target),
                 reason: *reason,
             });
         }
@@ -2499,16 +2523,35 @@ where
             return Ok(());
         }
 
-        let opened = self.open_rebased_pass(scope, queued).await;
+        // The command refuses the same set, so a delete queued before a grant
+        // leaves the same way whether or not this walk proved the root.
+        let refused: Vec<(OpId, DeadLetterReason)> = queued
+            .iter()
+            .filter(|(_, op)| deletes_a_known_scope_root(scope, op))
+            .map(|(op_id, _)| (*op_id, DeadLetterReason::TargetIsScopeRoot))
+            .collect();
+        let rest: Vec<(OpId, Op)>;
+        let pending = if refused.is_empty() {
+            queued
+        } else {
+            rest = queued
+                .iter()
+                .filter(|(_, op)| !deletes_a_known_scope_root(scope, op))
+                .cloned()
+                .collect();
+            &rest[..]
+        };
+
+        let opened = self.open_rebased_pass(scope, pending).await;
         // A newer release rewrites the anchor on each write, so its halt must
         // reach the valve to be bounded and named.
-        if let (Err(halt @ Halt::ForeignVersion), Some((op_id, op))) = (&opened, queued.first()) {
+        if let (Err(halt @ Halt::ForeignVersion), Some((op_id, op))) = (&opened, pending.first()) {
             self.apply_valve(scope, *op_id, op, *halt, attempts, report)
                 .await;
         }
         let (mut pass, rebased) = opened?;
         let kept = self.kept_ids(scope).await?;
-        for (op_id, reason) in &rebased.dead_letters {
+        for (op_id, reason) in refused.iter().chain(&rebased.dead_letters) {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
             };
@@ -2537,7 +2580,7 @@ where
         // its parent already references.
         for (op_id, reason) in &rebased.dropped {
             if *reason == DropReason::AlreadySatisfied
-                && let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id)
+                && let Some((_, op)) = pending.iter().find(|(id, _)| id == op_id)
                 && matches!(op.kind, OpKind::Delete { to_bin: true, .. })
             {
                 self.mirror.replace(OpMirror::outside_op());
@@ -2639,10 +2682,10 @@ where
         attempts: &mut Attempts,
         report: &mut DrainReport,
     ) {
-        // The bin plane has no probe of its own — the load is the only one — so
-        // its hold exits here, on a classified halt at the held op. Every other
-        // reason has an exit the pre-pass gate can try.
-        if bin_index_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
+        // The bin index load and the delete's plane proof are their own probes,
+        // so their holds exit here, on a classified halt at the held op. Every
+        // other reason has an exit the pre-pass gate can try.
+        if probed_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
             self.release_hold();
         }
         // A kept op leaves with no notice, as its rebase dead letter does.
@@ -2766,6 +2809,9 @@ where
             Halt::HeldByBinIndex(check) => {
                 self.hold_head(op_id, op, QueueHoldReason::BinIndex(check));
             }
+            Halt::DeletePlaneUnavailable => {
+                self.hold_head(op_id, op, QueueHoldReason::DeletePlane);
+            }
         }
     }
 
@@ -2788,10 +2834,11 @@ where
                         return false;
                     }
                 }
-                // The bin index load is its own probe, so this reason neither
-                // stops a pass nor clears before one: [`Self::apply_valve`] and
-                // [`Self::establish_bin_index`] are its exits.
-                QueueHoldReason::BinIndex(_) => return true,
+                // The bin index load and the delete's plane proof are their
+                // own probes, so neither reason stops a pass nor clears before
+                // one: [`Self::apply_valve`] is the exit of both, and
+                // [`Self::establish_bin_index`] also frees a bin index hold.
+                QueueHoldReason::BinIndex(_) | QueueHoldReason::DeletePlane => return true,
             }
         }
         self.release_hold();
@@ -4124,6 +4171,9 @@ where
         // the origin link resolved onto: a node joins the scope of the parent
         // that names it.
         let plane = scope.folder_plane(pass, origin)?;
+        if !scope.is_grafted() {
+            self.prove_delete_plane(scope, pass, &plane, &child).await?;
+        }
 
         // The soft branch earns its bin entry and its re-key before the unlink;
         // the hard branch earns its doomed manifest. Both then unlink and
@@ -4222,6 +4272,104 @@ where
             (false, None) => {}
         }
         Ok(())
+    }
+
+    /// An index can omit a scope root, so only the target's own record proves its plane.
+    async fn prove_delete_plane(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &Pass,
+        plane: &SealPlane<'_>,
+        child: &ChildRef,
+    ) -> Result<(), Halt> {
+        let name = crate::net::rotation::scope_name(&child.ipns_name)
+            .map_err(|_| Halt::DeletePlaneUnavailable)?;
+        let (_, bytes, endpoint_failed) = fanout_get_verify_failed(&self.seams.transport, &name)
+            .await
+            .ok_or(Halt::DeletePlaneUnavailable)?;
+        let fault = |error| match error {
+            GateError::Seam(_) => Halt::DeletePlaneUnavailable,
+            GateError::Rejected(rejection)
+                if endpoint_failed && crate::net::resolve::below_floor(&rejection.reason) =>
+            {
+                Halt::DeletePlaneUnavailable
+            }
+            GateError::Rejected(rejection) => refuse_record(&self.seams.events, &name, &rejection),
+        };
+        let (_, envelope, _) =
+            assemble_head_envelope(&self.seams.gateway, &self.seams.http, &name, &bytes, None)
+                .await
+                .map_err(fault)?;
+        let floors = plane.end.floors(&self.seams.floors);
+        if has_grant_section(&envelope) {
+            let parent_seed = kdf::node_seed(plane.end.read_scope_seed, &child.id);
+            let adopter = RootAdopter::new(
+                &self.seams.gateway,
+                &self.seams.http,
+                &floors,
+                scope.enc_secret,
+                scope.owner_identity,
+                child.id,
+            )
+            .under_parent_node_seed(Zeroizing::new(*parent_seed.as_bytes()));
+            match adopter.adopt(&name, &bytes).await {
+                Ok(_) => {}
+                Err(GateError::Rejected(GateRejection {
+                    reason: RejectionReason::SequenceNotNewer { floor, sequence },
+                    ..
+                })) if floor == sequence => {
+                    adopter
+                        .recover_own_scope_material(&name, &bytes)
+                        .await
+                        .map_err(fault)?
+                        .ok_or(Halt::DeletePlaneUnavailable)?;
+                }
+                Err(error) => return Err(fault(error)),
+            }
+            return Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot));
+        }
+        // A failed endpoint can withhold the grant, and the record from before
+        // it still opens under the parent plane.
+        if endpoint_failed {
+            return Err(Halt::DeletePlaneUnavailable);
+        }
+        if !names_this_scope(&plane.end, child) {
+            return Err(Halt::DeletePlaneUnavailable);
+        }
+        let seed = seed_for_lagging(
+            plane.end.root.0,
+            plane.end.read_scope_seed,
+            pass.anchor_for(plane)?,
+            envelope.epoch,
+        )
+        .map_err(|_| Halt::DeletePlaneUnavailable)?;
+        let adopter = self.child_adopter(plane, &floors, NodeId(child.id));
+        match adopter.open_interior_under(&name, &bytes, &seed).await {
+            Ok(_) => Ok(()),
+            Err(
+                error @ GateError::Rejected(GateRejection {
+                    stage: GateStage::Unseal,
+                    ..
+                }),
+            ) => {
+                // An interrupted soft delete may already have sealed the target into the bin.
+                let index = self.carried_bin_index().await?;
+                let entry = index
+                    .entries
+                    .iter()
+                    .find(|entry| entry.node_id == child.id && entry.scope_id == plane.end.root.0);
+                let Some(entry) = entry else {
+                    return Err(fault(error));
+                };
+                let held = self.inputs.bin_keys.held_key(&child.id, entry.deleted_at);
+                adopter
+                    .open_interior_under(&name, &bytes, &held)
+                    .await
+                    .map_err(fault)?;
+                Ok(())
+            }
+            Err(error) => Err(fault(error)),
+        }
     }
 
     /// A vanished parent link does not discharge the bin entry's access cut.
@@ -8830,6 +8978,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         | Halt::HeldBySettings(_)
         | Halt::HeldByBinIndex(_)
         | Halt::Cancelled
+        | Halt::DeletePlaneUnavailable
         | Halt::OtherBinScope => None,
         Halt::Unclassified => Some("the upload did not complete"),
         Halt::ForeignVersion => Some("another device runs a newer release; update this app"),
@@ -9157,6 +9306,7 @@ mod tests {
             source: source.end(),
             destination: Some(destination.end().at(DESTINATION_EPOCH)),
             scope_roots: roots,
+            known_scope_roots: roots,
             keyless_roots: &[],
             charges_the_identity: true,
             enc_secret: &seams.enc_secret,
@@ -10711,6 +10861,7 @@ mod tests {
         read_scope_seed: Zeroizing<[u8; 32]>,
         write_scope_seed: Zeroizing<[u8; 32]>,
         scope_roots: Vec<NodeId>,
+        known_scope_roots: Vec<NodeId>,
         keyless_roots: Vec<NodeId>,
         enc_secret: X25519Secret,
         owner_identity: EcdsaVerifier,
@@ -10759,6 +10910,7 @@ mod tests {
                 },
                 destination: None,
                 scope_roots: &self.scope_roots,
+                known_scope_roots: &self.known_scope_roots,
                 keyless_roots: &self.keyless_roots,
                 charges_the_identity: false,
                 enc_secret: &self.enc_secret,
@@ -10903,6 +11055,7 @@ mod tests {
             read_scope_seed: Zeroizing::new(OWNER_ROOT_SCOPE_SEED),
             write_scope_seed,
             scope_roots: vec![HARNESS_ROOT],
+            known_scope_roots: vec![HARNESS_ROOT],
             keyless_roots: Vec::new(),
             enc_secret,
             owner_identity: EcdsaSigner::from_scalar(&HARNESS_SECRET)
@@ -13195,7 +13348,11 @@ mod tests {
             panic!("the dead letter is retained");
         };
         let events = drain_events(&mut harness.events);
-        assert!(events.contains(&Event::DeadLetter { op_id, reason }));
+        assert!(events.contains(&Event::DeadLetter {
+            op_id,
+            target: Some(NodeId([9; 16])),
+            reason
+        }));
         assert!(events.contains(&Event::SnapshotUpdated));
     }
 

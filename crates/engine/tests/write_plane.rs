@@ -3530,10 +3530,7 @@ fn a_permanently_refused_upload_reports_the_attempt_and_the_dead_letter() {
         "the stopped transfer reaches the host"
     );
     assert!(
-        emitted.contains(&Event::DeadLetter {
-            op_id,
-            reason: DeadLetterReason::PayloadRefused,
-        }),
+        dead_lettered_for(&emitted, op_id, DeadLetterReason::PayloadRefused),
         "and the dead letter says it will never publish"
     );
 }
@@ -9937,10 +9934,11 @@ fn an_over_cap_413_is_permanent_and_its_reason_reaches_the_host() {
         "the reason is on the read surface, not just the event"
     );
     assert!(
-        events_so_far(&mut events).contains(&Event::DeadLetter {
+        dead_lettered_for(
+            &events_so_far(&mut events),
             op_id,
-            reason: DeadLetterReason::PayloadRefused
-        }),
+            DeadLetterReason::PayloadRefused
+        ),
         "the dead letter reaches the host with its reason"
     );
     assert!(
@@ -10392,10 +10390,7 @@ fn a_dead_letter_no_preserved_set_will_hold_still_reaches_the_host() {
     };
     assert_eq!(dead_letters, vec![refused]);
     assert!(
-        events_so_far(&mut events).contains(&Event::DeadLetter {
-            op_id: refused.op_id,
-            reason: refused.reason
-        }),
+        dead_lettered_for(&events_so_far(&mut events), refused.op_id, refused.reason),
         "the abandonment the refusal decided reaches the host, not only the read surface"
     );
     assert!(
@@ -13222,6 +13217,14 @@ fn events_so_far(events: &mut EventStream) -> Vec<Event> {
         out.push(event);
     }
     out
+}
+
+/// Whether `events` carry the dead letter of `op_id` for `reason`.
+fn dead_lettered_for(events: &[Event], op_id: OpId, reason: DeadLetterReason) -> bool {
+    events.iter().any(|event| {
+        matches!(event, Event::DeadLetter { op_id: id, reason: why, .. }
+            if *id == op_id && *why == reason)
+    })
 }
 
 /// Whether the events since the last read accuse anybody.

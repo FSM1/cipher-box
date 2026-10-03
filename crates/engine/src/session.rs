@@ -352,7 +352,7 @@ pub(crate) struct SessionState {
     /// (`install_unproved_scopes`). A boundary with no material still splits
     /// the focus window (`focus_scope_roots`) and still names a crossing a
     /// relocation is classified against
-    /// ([`relocation_scope_roots`](crate::facade::Engine::relocation_scope_roots)).
+    /// ([`SessionState::named_scope_roots`]).
     pub(crate) unproved_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// Whether the last boundary walk to reach a verdict met a trust rejection.
     /// While it stands the session refuses every relocation, because a walk
@@ -441,7 +441,7 @@ pub(crate) struct SessionState {
     /// The folders this session's own grants promoted into scope roots. The
     /// mint is the one moment a session proves it promoted a folder, so it is
     /// the only writer; read by
-    /// [`relocation_scope_roots`](crate::facade::Engine::relocation_scope_roots).
+    /// [`SessionState::named_scope_roots`].
     pub(crate) minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// The conversion entries the last conversion pass counted.
     pub(crate) pending_invite_claims: Rc<RefCell<ClaimCounts>>,
@@ -527,6 +527,39 @@ pub(crate) struct SessionState {
 }
 
 impl SessionState {
+    /// Every scope boundary this session has named: the roots its own grants
+    /// minted, the roots a gated descent proved, and the roots the walk named
+    /// without material. Wider than the set the drain drives, which lists only
+    /// the scopes it holds a seed pair for: a boundary the drain cannot author
+    /// is one a relocation must still be classified against.
+    pub(crate) fn named_scope_roots(&self) -> Vec<NodeId> {
+        let mut roots: BTreeSet<NodeId> = self
+            .minted_scope_roots
+            .borrow()
+            .union(&self.descendant_scope_roots.borrow())
+            .copied()
+            .collect();
+        roots.extend(self.unproved_scope_roots.borrow().iter().copied());
+        roots.into_iter().collect()
+    }
+
+    /// Every node this session knows publishes its record **as** a scope root:
+    /// the [named](Self::named_scope_roots) boundaries, plus the roots of the
+    /// shares this vault received. Both author through
+    /// `net::author::encode_scope_root`, so both owe the re-seal reservation
+    /// the boundary charges.
+    pub(crate) fn known_scope_roots(&self) -> Vec<NodeId> {
+        let mut roots = self.named_scope_roots();
+        roots.extend(
+            self.bookmarked_scope_roots
+                .borrow()
+                .iter()
+                .copied()
+                .map(NodeId),
+        );
+        roots
+    }
+
     /// Latches the boundary walk landed and wakes every navigation waiting on it.
     pub(crate) fn land_boundary_walk(&self) {
         self.boundary_walk_landed.set(true);

@@ -153,7 +153,8 @@ pub fn sample_events(op_id: u64) -> Result<Vec<JsValue>, JsError> {
     [
         facade::Event::DeadLetter {
             op_id: OpId(op_id),
-            reason: facade::DeadLetterReason::Undecodable,
+            target: Some(facade::NodeId([9; 16])),
+            reason: facade::DeadLetterReason::TargetIsScopeRoot,
         },
         facade::Event::OpProgress {
             op_id: Some(OpId(op_id)),

@@ -36,6 +36,12 @@ describe('how a share refusal reads to the member', () => {
 });
 
 describe('how a refused sharing command reads to the member', () => {
+  it('explains why a formerly shared folder still cannot be deleted', () => {
+    expect(refusalText('unsupported target: delete-target-is-a-scope-root')).toBe(
+      'this folder was shared and cannot be deleted, even after all access is revoked'
+    );
+  });
+
   it('says a check the dialog can hit in words', () => {
     expect(refusalText('unsupported target: grant-row-is-a-link')).toContain('mint a new one');
     expect(refusalText('malformed input: invalid-grantee-name')).toContain(

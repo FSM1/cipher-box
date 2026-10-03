@@ -2251,6 +2251,13 @@ pub enum Event {
     DeadLetter {
         /// The dead-lettered op.
         op_id: OpId,
+        /// The target when the op could be decoded.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::opt_node_id::serialize"),
+            tsify(type = "Uint8Array | null")
+        )]
+        target: Option<NodeId>,
         /// Why it dead-lettered — the four reasons need four different messages.
         reason: DeadLetterReason,
     },
@@ -2448,7 +2455,7 @@ impl fmt::Debug for Event {
                 .debug_struct("WithheldUpdateEscalation")
                 .field("ipns_name", &RedactedBytes::of(ipns_name))
                 .finish(),
-            Self::DeadLetter { op_id, reason } => f
+            Self::DeadLetter { op_id, reason, .. } => f
                 .debug_struct("DeadLetter")
                 .field("op_id", op_id)
                 .field("reason", reason)
@@ -3963,7 +3970,7 @@ fn refuse_non_empty_vacate(
 
 /// Whether `node`'s own record is authored as a scope root, and so is held to
 /// the re-seal reservation: the vault root always is, and the interior roots
-/// are the ones this session knows ([`Engine::authored_scope_roots`]).
+/// are the ones this session knows ([`SessionState::known_scope_roots`]).
 fn answers_as_a_scope_root(rendered: &Snapshot, node: NodeId, scope_roots: &[NodeId]) -> bool {
     node == rendered.root || scope_roots.contains(&node)
 }
@@ -6069,6 +6076,7 @@ impl<T: SeamTypes> Engine<T> {
                 .events
                 .unbounded_send(Event::DeadLetter {
                     op_id: *op_id,
+                    target: None,
                     reason: *reason,
                 })
                 .is_ok()
@@ -6868,7 +6876,13 @@ where {
                 refuse_unlawful_name(&name)?;
                 let rendered = self.render().await?;
                 self.write_home(&rendered, parent, TargetRole::Parent)?;
-                refuse_full_parent(&rendered, parent, None, None, &self.authored_scope_roots())?;
+                refuse_full_parent(
+                    &rendered,
+                    parent,
+                    None,
+                    None,
+                    &self.state.known_scope_roots(),
+                )?;
                 let target = self.mint_node_id()?;
                 let base_sequence = rendered.record_sequence(parent).unwrap_or(1);
                 let node = match kind {
@@ -6887,6 +6901,12 @@ where {
                 // A received share holds no scope this vault owes work at.
                 if home == WriteHome::Vault {
                     refuse_an_owed_move_under(&rendered, node, &self.owed_moves().await?)?;
+                    // A scope root's seed and grant section are not its parent's plane.
+                    if answers_as_a_scope_root(&rendered, node, &self.state.known_scope_roots()) {
+                        return Err(EngineError::UnsupportedTarget {
+                            check: "delete-target-is-a-scope-root",
+                        });
+                    }
                 }
                 let to_bin = home == WriteHome::Vault && self.bin_retention_days() > 0;
                 // Both anchors snapshot the target's own sequence for the
@@ -6905,7 +6925,7 @@ where {
                 }
                 refuse_outside_vault(&rendered, into)?;
                 self.refuse_before_the_boundary_walk()?;
-                let lands_in = scope_of(&rendered, into, &self.relocation_scope_roots());
+                let lands_in = scope_of(&rendered, into, &self.state.named_scope_roots());
                 if lands_in != NodeId(entry.scope_id) {
                     return Err(EngineError::RestoreCrossesScope);
                 }
@@ -6916,7 +6936,7 @@ where {
                     .filter(|(_, left)| *left != lands_in)
                     .collect();
                 refuse_an_owed_move_in_the_bin(&rendered, node, &leaving)?;
-                refuse_full_parent(&rendered, into, None, None, &self.authored_scope_roots())?;
+                refuse_full_parent(&rendered, into, None, None, &self.state.known_scope_roots())?;
                 let base_sequence = rendered.record_sequence(into).unwrap_or(1);
                 let op = Op::restore(
                     node,
@@ -6951,7 +6971,7 @@ where {
                     &rendered,
                     node,
                     &new_name,
-                    &self.authored_scope_roots(),
+                    &self.state.known_scope_roots(),
                 )?;
                 let seq = rendered.record_sequence(node).unwrap_or(1);
                 self.stage_and_notify(&Op::rename(node, new_name, seq, authored_at))
@@ -6993,7 +7013,7 @@ where {
                     new_parent,
                     Some(node),
                     None,
-                    &self.authored_scope_roots(),
+                    &self.state.known_scope_roots(),
                 )?;
                 let (park, arrive) = relocation_legs(
                     plan,
@@ -7033,7 +7053,7 @@ where {
                     new_parent,
                     Some(node),
                     replacing,
-                    &self.authored_scope_roots(),
+                    &self.state.known_scope_roots(),
                 )?;
                 refuse_non_empty_vacate(&rendered, replacing)?;
                 if let Some(replaced) = replacing {
@@ -10213,7 +10233,13 @@ where {
                 refuse_unlawful_name(name)?;
                 let rendered = self.render().await?;
                 self.write_home(&rendered, *parent, TargetRole::Parent)?;
-                refuse_full_parent(&rendered, *parent, None, None, &self.authored_scope_roots())?;
+                refuse_full_parent(
+                    &rendered,
+                    *parent,
+                    None,
+                    None,
+                    &self.state.known_scope_roots(),
+                )?;
                 None
             }
             WriteTarget::Version {
@@ -10501,7 +10527,7 @@ where {
                 observed,
             });
         }
-        let scope_roots = self.authored_scope_roots();
+        let scope_roots = self.state.known_scope_roots();
         let rendered = self.render().await?;
         // Re-checked here, not only at `begin_write`: a `NewFile` handle takes no
         // place in the folder until it commits, so handles opened together all
@@ -10824,7 +10850,7 @@ where {
             })
             .collect();
         let folder_name = rendered_name(&rendered, folder);
-        let scope = scope_of(&rendered, folder, &self.authored_scope_roots());
+        let scope = scope_of(&rendered, folder, &self.state.known_scope_roots());
         let granted = self
             .state
             .bookmarked_permissions
@@ -11688,7 +11714,7 @@ where {
         // zeroizes when the adopter drops.
         let scope_id = {
             let base = self.state.snapshot.borrow();
-            let mut roots = self.authored_scope_roots();
+            let mut roots = self.state.known_scope_roots();
             roots.push(base.root);
             enclosing_scope_root(&base, node, &roots)
                 .ok_or_else(no_seed)?
@@ -11871,25 +11897,6 @@ where {
         .map_err(EngineError::from_seam)
     }
 
-    /// Every scope boundary this session has named: the roots its own grants
-    /// minted, the roots a gated descent proved (`install_descendant_scopes` in
-    /// [`crate::sync::pass`]), and the roots the walk named without material
-    /// ([`unproved_scope_roots`](SessionState::unproved_scope_roots)). Wider than the
-    /// set the drain drives, which lists only the scopes it holds a seed pair
-    /// for: a boundary the drain cannot author is one a relocation must still
-    /// be classified against.
-    fn relocation_scope_roots(&self) -> Vec<NodeId> {
-        let mut roots: BTreeSet<NodeId> = self
-            .state
-            .minted_scope_roots
-            .borrow()
-            .union(&self.state.descendant_scope_roots.borrow())
-            .copied()
-            .collect();
-        roots.extend(self.state.unproved_scope_roots.borrow().iter().copied());
-        roots.into_iter().collect()
-    }
-
     /// The grafted roots whose write pass this session has proved: the last
     /// tick built a drain pass for the root, and the live permission and the
     /// in-memory write seed still stand. A restart admits nothing until a tick
@@ -11948,24 +11955,6 @@ where {
             }
         }
         Ok(home)
-    }
-
-    /// Every node this session knows publishes its record **as** a scope root:
-    /// the boundaries a relocation names, plus the roots of the shares this
-    /// vault received. Both author through `net::author::encode_scope_root`, so
-    /// both owe the re-seal reservation the boundary charges
-    /// ([`folder_listing_budget`]).
-    fn authored_scope_roots(&self) -> Vec<NodeId> {
-        let mut roots = self.relocation_scope_roots();
-        roots.extend(
-            self.state
-                .bookmarked_scope_roots
-                .borrow()
-                .iter()
-                .copied()
-                .map(NodeId),
-        );
-        roots
     }
 
     /// Refuse a restore until this session's boundary walk has landed, since a
@@ -12032,14 +12021,14 @@ where {
                     to,
                     from_parent,
                     new_parent,
-                    &self.authored_scope_roots(),
+                    &self.state.known_scope_roots(),
                 )?,
             ));
         }
-        let scope_roots = self.relocation_scope_roots();
+        let scope_roots = self.state.named_scope_roots();
         let plan = classify_crossing(rendered, from_parent, new_parent, &scope_roots)?;
         refuse_moving_a_scope_root(rendered, node, plan, &scope_roots)?;
-        refuse_full_parking_folder(rendered, node, plan, &self.authored_scope_roots())?;
+        refuse_full_parking_folder(rendered, node, plan, &self.state.known_scope_roots())?;
         Ok((
             from_parent,
             rendered.record_sequence(node).unwrap_or(1),
@@ -12322,7 +12311,13 @@ where {
                 )
             }
             OpKind::Create { parent, name, node } => {
-                refuse_full_parent(&rendered, *parent, None, None, &self.authored_scope_roots())?;
+                refuse_full_parent(
+                    &rendered,
+                    *parent,
+                    None,
+                    None,
+                    &self.state.known_scope_roots(),
+                )?;
                 Op::create(
                     self.mint_node_id()?,
                     *parent,
@@ -17394,6 +17389,7 @@ mod tests {
                 block_on(events.next()),
                 Some(Event::DeadLetter {
                     op_id: OpId(1),
+                    target: None,
                     reason: DeadLetterReason::Undecodable
                 })
             );
@@ -17509,6 +17505,7 @@ mod tests {
                 block_on(events.next()),
                 Some(Event::DeadLetter {
                     op_id: OpId(1),
+                    target: None,
                     reason: DeadLetterReason::Undecodable
                 })
             );
@@ -17564,6 +17561,7 @@ mod tests {
                 block_on(events.next()),
                 Some(Event::DeadLetter {
                     op_id: OpId(1),
+                    target: None,
                     reason: DeadLetterReason::Undecodable
                 })
             );
@@ -17590,6 +17588,7 @@ mod tests {
                 block_on(events.next()),
                 Some(Event::DeadLetter {
                     op_id: OpId(1),
+                    target: None,
                     reason: DeadLetterReason::Undecodable
                 })
             );
