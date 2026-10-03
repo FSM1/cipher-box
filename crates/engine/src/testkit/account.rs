@@ -471,7 +471,8 @@ impl Blocks {
                     status: 409,
                     headers: Vec::new(),
                     body: br#"{"statusCode":409,"message":"Hosted ingress is unavailable for BYO accounts"}"#
-                        .to_vec(),
+                        .to_vec()
+                        .into(),
                 });
             }
             let block = request.body.as_deref().cloned().unwrap_or_default();
