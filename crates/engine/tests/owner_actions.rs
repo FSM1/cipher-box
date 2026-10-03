@@ -6593,7 +6593,8 @@ fn a_tick_whose_walk_fails_reads_no_new_scope_root_as_a_child() {
 }
 
 /// A revoke runs several gated scope-root reads, so its refusal names the read
-/// that refused.
+/// that refused. The command read runs on the last copy, and a read-only cut
+/// keeps the stop at the read cascade (ADR 0068 D1 and D3).
 #[test]
 fn a_revoke_refused_by_the_gate_names_the_read_that_refused() {
     let mut fx = GrantScenario::new();
@@ -6613,7 +6614,11 @@ fn a_revoke_refused_by_the_gate_names_the_read_that_refused() {
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
         })),
         Err(EngineError::TrustViolation {
-            message: "descendant record rejected by adoption gate at [scope-root]".to_owned(),
+            message: format!(
+                "read-plane cascade failed: cascade resolve of scope [{}] failed: \
+                 descendant record rejected by adoption gate",
+                hex_lower(&fx.folder.0)
+            ),
         })
     );
 }
