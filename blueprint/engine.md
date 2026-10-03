@@ -311,7 +311,14 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    interior record below the floor is opened only by the four readers that the
    "sweep" section names.
 6. **Unseal** — success required; core's trust-violation error class carries
-   through fail-closed.
+   through fail-closed. While an owed entry holds the interior move of a scope
+   root, an interior node of that root opens one time under the seed and the
+   floors of the scope its epoch tag names, which must be the entry's root or
+   the scope the folder left; any other scope is refused here, and a bound scope
+   whose read seed this device does not hold yet is availability for that node
+   ([ADR 0072](../decisions/0072-an-interior-node-of-a-root-with-an-owed-interior-move-opens-under-the-scope-its-tag-names.md)
+   D1). This read runs at the named scope's floors, so it is not a reader below
+   the read-epoch floor.
 
 **One section, one signer** (stage 3, ADR 0032 D8): the rule, its work bound
 and the splice it closes are core's (core.md "One section, one signer",
@@ -1421,7 +1428,9 @@ surviving committed grants uniformly in the republish it already does.
   writer gains no capability, because the ascent link and the source name key
   already let it author in the granted scope. A stalled interior move,
   write-scope cut or grant delivery is owed rotation work, which the sync
-  pass re-drives through the resume path (ADR 0063 D1, D3). An **append**, on an existing
+  pass re-drives through the resume path (ADR 0063 D1, D3). While the interior
+  move is owed, the focus and navigation legs read each interior node under the
+  scope its epoch tag names (ADR 0072 D1). An **append**, on an existing
   scope root: one more row and grant blob, the commitment re-signed, and the root published
   once at the current epoch — no new seed, no re-seal of the subtree, no
   converge step; the new grantee reads the whole history of the scope (D6). A
