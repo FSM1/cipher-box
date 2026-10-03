@@ -110,8 +110,8 @@ describe('the marker files of a listing', () => {
   });
 });
 
-/** A dialog element that shows from `from` ms after the fake opens until `until` ms. */
-function mark(from: number, until = Infinity): DialogMark {
+/** A dialog element that shows `text` from `from` ms after the fake opens until `until` ms. */
+function mark(from: number, until = Infinity, text: string | null = ''): DialogMark {
   const opened = Date.now();
   const shown = () => {
     const at = Date.now() - opened;
@@ -119,7 +119,7 @@ function mark(from: number, until = Infinity): DialogMark {
   };
   return {
     isVisible: async () => shown(),
-    textContent: async () => '',
+    textContent: async () => text,
     waitFor: ({ timeout }) =>
       new Promise((resolve, reject) => {
         const poll = setInterval(() => {
@@ -150,7 +150,7 @@ describe('the cycle grants read', () => {
     await expect(grantsRead(dialog(), 'cycle', 100)).rejects.toStrictEqual(
       new SoakFailure(
         'grants-unread',
-        'the share dialog of cycle/ showed the unavailable note after 0.1 s'
+        'the share dialog of cycle/ showed the unavailable note in 0.1 s'
       )
     );
   });
@@ -158,21 +158,18 @@ describe('the cycle grants read', () => {
   it('tells a dialog that drew neither the table nor the note', async () => {
     const marks = dialog({ unavailable: mark(Infinity) });
     await expect(grantsRead(marks, 'cycle', 100)).rejects.toStrictEqual(
-      new SoakFailure(
-        'grants-unread',
-        'the share dialog of cycle/ showed no people table after 0.1 s'
-      )
+      new SoakFailure('grants-unread', 'the share dialog of cycle/ showed no people table in 0.1 s')
     );
   });
 
   it('adds the refusal the dialog shows where its read threw', async () => {
     const marks = dialog({
-      error: { ...mark(0), textContent: async () => ' resolve failed: unavailable ' },
+      error: mark(0, Infinity, ' resolve failed: unavailable '),
     });
     await expect(grantsRead(marks, 'cycle', 100)).rejects.toStrictEqual(
       new SoakFailure(
         'grants-unread',
-        'the share dialog of cycle/ showed the unavailable note after 0.1 s, refused: resolve failed: unavailable'
+        'the share dialog of cycle/ showed the unavailable note in 0.1 s, refused: resolve failed: unavailable'
       )
     );
   });
@@ -181,5 +178,27 @@ describe('the cycle grants read', () => {
     const closed = new Error('Target page, context or browser has been closed');
     const marks = dialog({ people: { ...mark(Infinity), waitFor: () => Promise.reject(closed) } });
     await expect(grantsRead(marks, 'cycle', 100)).rejects.toBe(closed);
+  });
+
+  it('fails at once where the dialog shows a refusal', async () => {
+    const marks = dialog({ error: mark(20, Infinity, 'resolve failed: unavailable') });
+    const started = Date.now();
+    await expect(grantsRead(marks, 'cycle', 60_000)).rejects.toStrictEqual(
+      new SoakFailure(
+        'grants-unread',
+        'the share dialog of cycle/ showed the unavailable note in 60 s, refused: resolve failed: unavailable'
+      )
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('omits the refusal where the error shows no text', async () => {
+    const marks = dialog({ error: mark(0, Infinity, null) });
+    await expect(grantsRead(marks, 'cycle', 100)).rejects.toStrictEqual(
+      new SoakFailure(
+        'grants-unread',
+        'the share dialog of cycle/ showed the unavailable note in 0.1 s'
+      )
+    );
   });
 });

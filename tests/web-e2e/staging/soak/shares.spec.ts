@@ -200,12 +200,12 @@ test('the cycle folder mints, converts and revokes a read link in one night', as
   );
 
   // A failed night can leave the grantee granted, which would hold the next join off a claim.
-  await check('cycle leftover grants', 'grants-unread', async () => {
+  await check('cycle leftover grants', 'cycle-epoch-flat', async () => {
     await share.open(CYCLE_FOLDER);
     await grantsRead(
       {
-        people: share.page.getByTestId('share-people'),
-        unavailable: share.page.getByTestId('share-grants-unavailable'),
+        people: share.people,
+        unavailable: share.grantsUnavailable,
         error: share.error,
       },
       CYCLE_FOLDER,

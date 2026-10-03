@@ -96,7 +96,7 @@ export function cycleEpochStepped(before: bigint, after: bigint): void {
 export interface DialogMark {
   waitFor(options: { timeout: number }): Promise<void>;
   isVisible(): Promise<boolean>;
-  textContent(): Promise<string | null>;
+  textContent(options: { timeout: number }): Promise<string | null>;
 }
 
 /** The parts of the share dialog that tell if its own read of the folder landed. */
@@ -106,30 +106,43 @@ export interface GrantsMarks {
   readonly error: DialogMark;
 }
 
+const REFUSAL_TEXT_MS = 1_000;
+
+const isTimeout = (error: unknown) => error instanceof Error && error.name === 'TimeoutError';
+
+/** Waits for `mark`; a timeout settles the wait, any other error rejects it. */
+async function shownWithin(mark: DialogMark, timeout: number): Promise<void> {
+  await mark.waitFor({ timeout }).catch((error: unknown) => {
+    if (!isTimeout(error)) throw error;
+  });
+}
+
 /**
  * The dialog draws the unavailable note until its own read lands, so only a
- * missing table past `timeout` is a failed read.
+ * missing table past `timeout`, or a refusal, is a failed read.
  */
 export async function grantsRead(
   marks: GrantsMarks,
   folder: string,
   timeout: number
 ): Promise<void> {
-  try {
-    await marks.people.waitFor({ timeout });
-  } catch (error) {
-    if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
-    const shown = (await marks.unavailable.isVisible())
-      ? 'the unavailable note'
-      : 'no people table';
-    const refusal = (await marks.error.isVisible())
-      ? `, refused: ${(await marks.error.textContent())?.trim()}`
-      : '';
-    throw new SoakFailure(
-      'grants-unread',
-      `the share dialog of ${folder}/ showed ${shown} after ${timeout / 1000} s${refusal}`
-    );
-  }
+  const waits = [shownWithin(marks.people, timeout), shownWithin(marks.error, timeout)];
+  // The losing wait must not surface as an unhandled rejection.
+  for (const wait of waits) wait.catch(() => undefined);
+  await Promise.race(waits);
+  if (await marks.people.isVisible()) return;
+  const shown = (await marks.unavailable.isVisible()) ? 'the unavailable note' : 'no people table';
+  const text = (await marks.error.isVisible())
+    ? await marks.error.textContent({ timeout: REFUSAL_TEXT_MS }).catch((error: unknown) => {
+        if (isTimeout(error)) return null;
+        throw error;
+      })
+    : null;
+  const refusal = text?.trim() ? `, refused: ${text.trim()}` : '';
+  throw new SoakFailure(
+    'grants-unread',
+    `the share dialog of ${folder}/ showed ${shown} in ${timeout / 1000} s${refusal}`
+  );
 }
 
 /** The newest markers `soak/shared` keeps, so a holder reads them all inside its budget. */
