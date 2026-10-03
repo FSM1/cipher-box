@@ -2180,6 +2180,71 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
     assert_held_in_the_vault_scope(&fx, keep, deep, "second device");
 }
 
+/// A second owner device loads a node in the vault scope. A read grant then
+/// makes its folder a scope root, the node converges onto that scope, and a
+/// writer of the scope unlinks it. The departure is the granted scope's
+/// capture, which bins there with no faulty record reported.
+#[test]
+fn a_node_a_read_grant_moved_bins_in_the_granted_scope() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let doomed =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "doomed");
+    let (mut second, mut events, mut tasks) = fx.second_owner_device();
+    for node in [fx.folder, inner] {
+        block_on(second.command(Command::SetFocus { node: Some(node) })).unwrap();
+        tick(&fx.world, &second, &mut tasks);
+    }
+    assert_eq!(
+        block_on(second.view()).unwrap().children(inner).len(),
+        1,
+        "the second device loads the doomed node"
+    );
+    block_on(second.command(Command::SetFocus { node: None })).unwrap();
+    tick(&fx.world, &second, &mut tasks);
+    assert_eq!(
+        fx.grant_folder_at(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    for node in [inner, doomed] {
+        converge_into_granted_scope(&fx, node);
+    }
+    tick(&fx.world, &second, &mut tasks);
+    let (seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        inner,
+        &read_key_under(&seed, inner),
+        fx.folder.0,
+        |children| children.retain(|child| child.id != doomed.0),
+    );
+    events_so_far(&mut events);
+    block_on(second.command(Command::SetFocus { node: Some(inner) })).unwrap();
+    for _ in 0..8 {
+        tick(&fx.world, &second, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        published_bin_entries(&fx)
+            .into_iter()
+            .filter(|entry| entry.node_id == doomed.0)
+            .map(|entry| entry.scope_id)
+            .collect::<Vec<_>>(),
+        vec![fx.folder.0],
+        "the unlinked node bins in the scope that seals it"
+    );
+}
+
 /// A granted folder keeps the ref its parent named it by, under the parent's
 /// write seed, so the vault scope's capture walk reads it under its own end.
 /// Another writer's unlink in the vault scope then bins, and no record is

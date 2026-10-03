@@ -30,7 +30,7 @@ use super::publish::{
     put_and_confirm,
 };
 use super::register::register;
-use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger};
+use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger, linked_nowhere};
 use super::rotation::{AdmittedScopeRoot, ScopeRootAdmission, admit_owned_scope_root, scope_name};
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::bin_index::BinIndexKeys;
@@ -46,6 +46,7 @@ use crate::seams::{
 use crate::session::SessionIdentity;
 use crate::sync::doomed::{journalled_keys, open_reclamation};
 use crate::sync::owed_rotation::{OwedCell, OwedRotation};
+use crate::sync::render::BaseSnapshot;
 use crate::sync::tick::ResolveMode;
 use crate::sync::{BookkeepingSeal, owner_tag};
 
@@ -118,6 +119,8 @@ pub(crate) struct WalkGuards<'a> {
     pub(crate) orphan_heads: &'a OrphanHeads,
     /// The renewal set, whose entry for a renewed name follows the renewal.
     pub(crate) held: &'a RefCell<HeldRecords>,
+    /// The base tree, which decides whether a tombstoned node is retired.
+    pub(crate) base: &'a BaseSnapshot,
 }
 
 /// The seams and keys one walk pass runs over.
@@ -853,8 +856,8 @@ where
         }
         let ledger = StagingRetireLedger::new(self.staging, self.seal);
         match ledger.tombstoned(&pass.owner_tag, node_id).await {
-            Ok(false) => {}
-            Ok(true) => return,
+            Ok(true) if linked_nowhere(&self.guards.base.borrow(), node_id) => return,
+            Ok(_) => {}
             Err(_) => {
                 pass.kept_back = true;
                 return;
