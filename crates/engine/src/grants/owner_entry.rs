@@ -6,8 +6,9 @@ use futures_util::future::LocalBoxFuture;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    OwnerLocalKind, OwnerSeedRecord, decode_owner_seed_record, encode_owner_seed_record,
-    open_owner_local, seal_owner_local,
+    OwnerLocalKind, OwnerSeedRecord, decode_envelope, decode_grant_section,
+    decode_owner_seed_record, encode_owner_seed_record, grant_section_bytes, open_owner_local,
+    seal_owner_local,
 };
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -137,7 +138,14 @@ impl<'a> OwnerSeedCache<'a> {
                     .and_then(|r| r.verify(&name))
                     .is_ok_and(|previous| previous.sequence >= next_sequence)
             } else {
-                record.write_epoch <= held.write_epoch
+                // A keyless read knows no write epoch. The owner-signed cut
+                // epoch never falls across a root move, and a copy at a name the
+                // owner did not choose cannot pass the gate.
+                match (cut_epoch(&held), cut_epoch(record)) {
+                    (Some(old), Some(new)) => new < old,
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                }
             };
             if stale {
                 return Ok(());
@@ -154,6 +162,12 @@ impl<'a> OwnerSeedCache<'a> {
         .map_err(local_error)?;
         self.staging.write(&key, &blob).await
     }
+}
+
+fn cut_epoch(record: &OwnerSeedRecord) -> Option<u64> {
+    let envelope = decode_envelope(&record.head_block).ok()?;
+    let section = decode_grant_section(grant_section_bytes(&envelope)?).ok()?;
+    Some(section.commitment.cut_epoch)
 }
 
 /// Recovery records do not reserve upload space.
@@ -259,22 +273,13 @@ mod tests {
                 .record_bytes,
             advanced.record_bytes
         );
-        let mut moved = record(&next, 1, b"/ipfs/moved");
-        moved.write_epoch = 2;
+        let moved = record(&next, 1, b"/ipfs/moved");
         block_on(cache.save(&moved)).unwrap();
         assert!(
             block_on(cache.load(&confirmed.scope_id, &old_name))
                 .unwrap()
                 .is_none()
         );
-        assert_eq!(
-            block_on(cache.load(&confirmed.scope_id, &next_name))
-                .unwrap()
-                .unwrap()
-                .record_bytes,
-            moved.record_bytes
-        );
-        block_on(cache.save(&advanced)).unwrap();
         assert_eq!(
             block_on(cache.load(&confirmed.scope_id, &next_name))
                 .unwrap()

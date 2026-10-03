@@ -1140,16 +1140,20 @@ mod tests {
         /// Build the fixture, optionally authoring a real owner-write-blob at
         /// `owb_write_epoch` (the write plane's own clock).
         fn build(owb_write_epoch: Option<u64>) -> Self {
-            let owner_identity = owner_identity();
             // Distinct recipient key per authored write epoch — the owner-write-blob's
             // HPKE key derives from `owner_enc` alone under a fixed ephemeral
             // ([`OwnerRootSpec`]), so one key across epochs reuses the keystream.
             let mut enc_scalar = [0x33u8; 32];
             enc_scalar[0] = enc_scalar[0]
                 .wrapping_add(u8::try_from(owb_write_epoch.unwrap_or(0)).unwrap_or(u8::MAX));
+            Self::build_at(owb_write_epoch, enc_scalar, [0x55; 16])
+        }
+
+        /// The same scope's root under `root_id`, so at another name.
+        fn build_at(owb_write_epoch: Option<u64>, enc_scalar: [u8; 32], root_id: [u8; 16]) -> Self {
+            let owner_identity = owner_identity();
             let owner_enc = X25519Secret::from_scalar(enc_scalar);
             let scope_id = [0x44; 16];
-            let root_id = [0x55; 16];
 
             let OwnerRootFixture {
                 name,
@@ -1751,6 +1755,56 @@ mod tests {
             let keyless = epoch > OWB_WRITE_EPOCH;
             assert_eq!(saved.write_epoch, if keyless { 0 } else { OWB_WRITE_EPOCH });
         }
+    }
+
+    /// A keyless read at the name a root move chose replaces the entry at the
+    /// old name, so a broken owner blob there still recovers after a restart.
+    #[test]
+    fn a_keyless_read_at_a_moved_name_keeps_recovery_open() {
+        use crate::testkit::{SeededEntropy, fakes::InMemoryStagingStore};
+        let old = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let mut enc_scalar = [0x33u8; 32];
+        enc_scalar[0] = enc_scalar[0].wrapping_add(OWB_WRITE_EPOCH as u8);
+        let mut moved = Fixture::build_at(None, enc_scalar, [0x56; 16]);
+        assert_ne!(moved.name, old.name);
+        let staging = InMemoryStagingStore::default();
+        let labels = kdf::contact_label_seed(&[0x28; 32]);
+        let entropy = RefCell::new(SeededEntropy::new(96));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &old.scope_id, OWB_WRITE_EPOCH);
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let read = |fx: &Fixture, sequence| {
+            http.enqueue_response(ok_response(fx.head_block.clone()));
+            let cache = OwnerSeedCache::new(&staging, &fx.owner_enc, &entropy, &labels);
+            let adopter = fx
+                .adopter(&http, &floors, &fx.owner_identity_verifier, &gw)
+                .with_owner_seed_cache(Some(cache));
+            let pass = block_on(adopter.adopt(&fx.name, &fx.record(sequence)))?.pass;
+            let GatePass::Deferred(pass) = pass else {
+                panic!("deferred");
+            };
+            block_on(adopter.commit_adoption(pass)).unwrap();
+            Ok::<_, GateError>(())
+        };
+        read(&old, 1).unwrap();
+        read(&moved, 1).unwrap();
+        moved.envelope.read_sealed[0] ^= 1;
+        moved.head_block = encode_envelope(&moved.envelope).unwrap();
+        moved.head_cid_str = root_block_cid(&moved.head_block);
+        let Err(GateError::Rejected(rejection)) = read(&moved, 2) else {
+            panic!("the broken owner blob is refused");
+        };
+        assert!(owner_seed_refused(&rejection));
+        let offline = ScriptedHttp::default();
+        let cache = OwnerSeedCache::new(&staging, &moved.owner_enc, &entropy, &labels);
+        let restarted = moved
+            .adopter(&offline, &floors, &moved.owner_identity_verifier, &gw)
+            .with_owner_seed_cache(Some(cache));
+        let recovered = block_on(restarted.recover_cached_owner_root(&moved.name))
+            .expect("recovery")
+            .expect("the copy at the moved name survives");
+        assert_eq!(recovered.sequence, 1);
     }
 
     /// A writer drops the write blob, then plants a broken owner blob. The

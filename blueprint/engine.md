@@ -1640,7 +1640,9 @@ surviving committed grants uniformly in the republish it already does.
   refused read does not refresh it. At one name, only a greater sequence
   replaces the entry. The gate holds the epoch floors, so a keyless root at the
   floor also replaces it. A confirmed read at a new name replaces the old
-  name's entry only with a greater write epoch. A corrupt local entry is absent;
+  name's entry unless its owner-signed cut epoch is lower; the gate binds that
+  grant set to the name. A keyless entry recovers reads but cannot drive a cut.
+  A corrupt local entry is absent;
   the next confirmed read can replace it. A local seam failure is never abuse.
   On the read and on the rotation fallback it means that the source has no
   copy, and the network record keeps its trust verdict.

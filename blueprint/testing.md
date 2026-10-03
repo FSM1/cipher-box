@@ -457,10 +457,11 @@ owner blob with a different seed. The scope-walk test covers a refused
 descendant with a healthy root. Cache tests cover name replacement,
 equal-sequence forks, scope deletion, account isolation, and upload budget
 exclusion. A keyless root at one name replaces the entry, so a later broken
-owner blob still recovers after a restart. A local store fault keeps the trust
-verdict of the network record, and a fault in one fallback source leaves the
-other source. A store fault on the entry does not stop a scope delete, and the
-delete removes the entry before its completing publish.
+owner blob still recovers after a restart. A keyless read at a moved name
+replaces the entry at the old name. A local store fault keeps the trust verdict
+of the network record, and a fault in one fallback source leaves the other
+source. A store fault on the entry does not stop a scope delete, and the delete
+removes the entry before its completing publish.
 
 ## The DX hook — the environment-scoped timing profile
 

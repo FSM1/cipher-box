@@ -17379,7 +17379,7 @@ fn a_restarted_owner_cuts_a_disagreeing_seed_from_its_durable_copy() {
         let planted = published_value(&fx.world, &name);
         fx.blocks.fail_block(honest_cid);
         block_on(fx.owner_device.snapshot_cache.clear()).unwrap();
-        fx = restart_owner(fx);
+        restart_owner(&mut fx);
         assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
         let events = events_so_far(&mut fx._events);
         assert!(root_refusals(&fx, &events, sequence) > 0);
@@ -17418,15 +17418,6 @@ fn scope_copy(fx: &GrantScenario) -> Option<(Vec<u8>, Vec<u8>)> {
             .ok()?;
             (record.scope_id == fx.folder.0).then_some((key, blob))
         })
-}
-
-/// Drop the owner engine and its loops, then cold-start it on the same device.
-fn restart_owner(mut fx: GrantScenario) -> GrantScenario {
-    drop(fx.engine);
-    drop(fx._tasks);
-    drop(fx.world.scheduler.take_spawned_tasks());
-    (fx.engine, fx._events, fx._tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
-    fx
 }
 
 /// A granted folder, read twice, with the durable copy its confirmed scope saved.
@@ -17476,11 +17467,10 @@ fn a_store_fault_on_the_scope_copy_does_not_stop_the_delete() {
     );
 }
 
-/// The copy goes before the publish that completes the delete. A restart in
-/// that window leaves a live scope with no copy, and its next confirmed read
-/// saves the copy again.
+/// The copy goes before the publish that completes the delete. A live scope
+/// that lost its copy in that window gets it again at its next confirmed read.
 #[test]
-fn a_restart_between_the_copy_removal_and_the_publish_keeps_the_scope_readable() {
+fn a_delete_drops_the_copy_before_its_publish_and_a_live_scope_saves_it_again() {
     let (mut fx, key, _) = folder_with_scope_copy();
     let root = write_name(ROOT);
     let linked = published_value(&fx.world, &root);
@@ -17496,7 +17486,7 @@ fn a_restart_between_the_copy_removal_and_the_publish_keeps_the_scope_readable()
 
     let (mut fx, key, _) = granted_with_scope_copy();
     block_on(fx.owner_device.staging_store.remove_staged_bytes(&key)).unwrap();
-    fx = restart_owner(fx);
+    restart_owner(&mut fx);
     for _ in 0..2 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
