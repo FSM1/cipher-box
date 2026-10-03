@@ -93,7 +93,7 @@ pub mod node_id {
 pub mod opt_node_id {
     use super::*;
 
-    /// Writes a known id as bytes, or null when the op could not be decoded.
+    /// Writes the id as bytes, or null.
     pub fn serialize<S: Serializer>(id: &Option<NodeId>, serializer: S) -> Result<S::Ok, S::Error> {
         serde::Serialize::serialize(
             &id.as_ref().map(|id| serde_bytes::Bytes::new(&id.0)),

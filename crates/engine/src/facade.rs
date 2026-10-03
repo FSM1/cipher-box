@@ -6890,7 +6890,7 @@ where {
                 if home == WriteHome::Vault {
                     refuse_an_owed_move_under(&rendered, node, &self.owed_moves().await?)?;
                     // A scope root's seed and grant section are not its parent's plane.
-                    if node == rendered.root || self.state.known_scope_roots().contains(&node) {
+                    if answers_as_a_scope_root(&rendered, node, &self.state.known_scope_roots()) {
                         return Err(EngineError::UnsupportedTarget {
                             check: "delete-target-is-a-scope-root",
                         });
@@ -11920,8 +11920,9 @@ where {
         Ok(home)
     }
 
-    /// A restore must know its destination's scope before it queues the re-key.
-    /// The boundary walk names the scope roots below the vault.
+    /// Refuse a restore until this session's boundary walk has landed, since a
+    /// restore must name its destination's scope: before the walk, no scope
+    /// root below the vault is known and every node reads as the vault root's.
     /// A rejected walk refuses for good, as [`Self::relocation_anchors`] does.
     fn refuse_before_the_boundary_walk(&self) -> Result<(), EngineError> {
         if self.state.boundary_walk_rejected.get() {

@@ -38,9 +38,10 @@ const BIN_INDEX_CAUSES: Record<BinIndexHoldCheck, string> = {
 
 /**
  * The held queue head, when the member's own settings refused it, the owner's
- * bin index did not resolve for it, or a delete's target record did not arrive. The over-quota hold is the upload panel's,
- * which renders the figure it carries. A hold clears, so the notice follows the
- * snapshot and goes when the hold does.
+ * bin index did not resolve for it, or a delete's target record did not arrive.
+ * The over-quota hold is the upload panel's, which renders the figure it
+ * carries. A hold clears, so the notice follows the snapshot and goes when the
+ * hold does.
  */
 export function QueueHoldNotice({ view }: { view: SnapshotDescriptor | null }) {
   const hold = view?.queueHold ?? null;

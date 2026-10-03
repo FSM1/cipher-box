@@ -3305,17 +3305,35 @@ fn deleting_a_granted_scope_root_refuses_before_any_publish() {
     }
 }
 
+/// Restarts the owner engine on the same device, before its first boundary walk.
+fn restart_owner(fx: &mut GrantScenario) {
+    fx._tasks.clear();
+    let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    fx.engine = engine;
+    fx._events = events;
+    fx._tasks = tasks;
+}
+
+fn dead_lettered_as_scope_root(
+    events: &[Event],
+    op_id: cipherbox_engine::seams::OpId,
+    folder: NodeId,
+) -> bool {
+    events.iter().any(|event| {
+        matches!(event,
+            Event::DeadLetter { op_id: reported, target, reason: DeadLetterReason::TargetIsScopeRoot }
+                if *reported == op_id && *target == Some(folder)
+        )
+    })
+}
+
 /// A held delete is a reported hold on its target, and strict FIFO keeps each
 /// later op behind it until a pass proves the target's plane.
 #[test]
 fn an_offline_delete_of_a_plain_folder_queues_and_waits_for_its_plane() {
     let mut fx = GrantScenario::new();
     let name = write_name(fx.folder);
-    fx._tasks.clear();
-    let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
-    fx.engine = engine;
-    fx._events = events;
-    fx._tasks = tasks;
+    restart_owner(&mut fx);
     fx.world.record_store.fail_get_for(name.as_str());
     let op_id = block_on(fx.engine.command(Command::Delete { node: fx.folder }))
         .expect("an offline delete queues before the first boundary walk")
@@ -3420,11 +3438,7 @@ fn assert_a_known_root_delete_dead_letters(
     fx: &mut GrantScenario,
     op_id: cipherbox_engine::seams::OpId,
 ) {
-    fx._tasks.clear();
-    let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
-    fx.engine = engine;
-    fx._events = events;
-    fx._tasks = tasks;
+    restart_owner(fx);
     block_on(fx.engine.command(Command::Create {
         parent: ROOT,
         name: "after the refused delete".into(),
@@ -3437,10 +3451,7 @@ fn assert_a_known_root_delete_dead_letters(
 
     assert_eq!(queued_ops(&fx.owner_device), 0);
     let events = events_so_far(&mut fx._events);
-    assert!(events.iter().any(|event| matches!(event,
-        Event::DeadLetter { op_id: reported, target, reason: DeadLetterReason::TargetIsScopeRoot }
-            if *reported == op_id && *target == Some(fx.folder)
-    )));
+    assert!(dead_lettered_as_scope_root(&events, op_id, fx.folder));
     let status = block_on(fx.engine.status()).unwrap();
     assert_eq!(status.dead_letters.len(), 1);
     assert_eq!(status.dead_letters[0].op_id, op_id);
@@ -3504,11 +3515,7 @@ fn assert_unindexed_delete_is_refused(mislabeled: bool) {
         publish_value_at(&fx.world, ROOT, format!("/ipfs/{cid}").as_bytes());
     }
     let op_id = stage_legacy_folder_delete(&fx);
-    fx._tasks.clear();
-    let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
-    fx.engine = engine;
-    fx._events = events;
-    fx._tasks = tasks;
+    restart_owner(&mut fx);
     let parent_sequence = sequence_at(&fx.world, &write_name(ROOT));
     let name = write_name(fx.folder);
     fx.world.record_store.fail_get_for(name.as_str());
@@ -3527,10 +3534,7 @@ fn assert_unindexed_delete_is_refused(mislabeled: bool) {
     fx.world.record_store.heal_get_for(name.as_str());
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     let events = events_so_far(&mut fx._events);
-    assert!(events.iter().any(|event| matches!(event,
-        Event::DeadLetter { op_id: reported, target, reason: DeadLetterReason::TargetIsScopeRoot }
-            if *reported == op_id && *target == Some(fx.folder)
-    )));
+    assert!(dead_lettered_as_scope_root(&events, op_id, fx.folder));
     assert!(
         !events
             .iter()
@@ -3675,10 +3679,7 @@ fn a_queued_delete_loses_to_a_grant_on_another_owner_device() {
                 .iter()
                 .any(|event| matches!(event, Event::AttributableAbuse { .. }))
         );
-        assert!(events.iter().any(|event| matches!(event,
-            Event::DeadLetter { op_id: reported, target, reason: DeadLetterReason::TargetIsScopeRoot }
-                if *reported == op_id && *target == Some(fx.folder)
-        )));
+        assert!(dead_lettered_as_scope_root(&events, op_id, fx.folder));
         let status = block_on(fx.engine.status()).unwrap();
         assert_eq!(status.dead_letters.len(), 1);
         assert_eq!(status.dead_letters[0].op_id, op_id);

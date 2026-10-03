@@ -213,13 +213,10 @@ there is no `block_on` freeze of the whole mount behind one slow call.
   staged bytes recoverable to a local "recovered files" export; nothing is
   silently dropped and the kernel is never retro-failed (it was acked at
   journal time — the dead-letter surface is the compensation channel).
-- **Scope-root deletes** are refused at journal time when the engine knows the
-  target is a scope root. A folder stays a scope root after all grants are
-  revoked. An unknown folder can queue offline. The drain dead-letters a
-  queued delete of a known scope root as `TargetIsScopeRoot`. It holds any
-  other delete as a reported hold until it proves the target's plane, and a
-  target that proves to be a scope root dead-letters the same way. The tray
-  reports the refusal, and the engine status names the hold. The kernel is not
+- **Scope-root deletes** follow `blueprint/engine.md` "Delete branch": a known
+  scope root is refused at journal time, and a queued delete dead-letters as
+  `TargetIsScopeRoot` or holds until its plane is proved. The tray reports the
+  refusal, and the engine status names the hold. The kernel is not
   retro-failed.
 - **Scope-exit rotation** is invisible to the FS layer: a cross-scope `relink`
   triggers detection and rotation inside the engine's op pipeline

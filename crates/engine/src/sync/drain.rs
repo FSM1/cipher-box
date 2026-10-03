@@ -777,7 +777,7 @@ pub struct QueueHold {
 ///
 /// The exit is a classified verdict on the held op itself. A pass whose scope
 /// does not author that op takes [`Halt::Unclassified`] for it and knows
-/// nothing about the bin plane, so a later pass of the same tick must not drop
+/// nothing about the held plane, so a later pass of the same tick must not drop
 /// the hold an earlier one took — the head would then wait with no cause the
 /// member can see.
 fn probed_hold_exits(hold: Option<QueueHold>, halted: OpId, halt: Halt) -> bool {
@@ -2479,12 +2479,11 @@ where
             .filter(|(_, op)| deletes_a_known_scope_root(scope, op))
             .map(|(op_id, _)| (*op_id, DeadLetterReason::TargetIsScopeRoot))
             .collect();
-        let all = queued;
         let kept: Vec<(OpId, Op)>;
-        let queued = if refused.is_empty() {
-            all
+        let pending = if refused.is_empty() {
+            queued
         } else {
-            kept = all
+            kept = queued
                 .iter()
                 .filter(|(_, op)| !deletes_a_known_scope_root(scope, op))
                 .cloned()
@@ -2492,16 +2491,16 @@ where
             &kept[..]
         };
 
-        let opened = self.open_rebased_pass(scope, queued).await;
+        let opened = self.open_rebased_pass(scope, pending).await;
         // A newer release rewrites the anchor on each write, so its halt must
         // reach the valve to be bounded and named.
-        if let (Err(halt @ Halt::ForeignVersion), Some((op_id, op))) = (&opened, queued.first()) {
+        if let (Err(halt @ Halt::ForeignVersion), Some((op_id, op))) = (&opened, pending.first()) {
             self.apply_valve(scope, *op_id, op, *halt, attempts, report)
                 .await;
         }
         let (mut pass, rebased) = opened?;
         for (op_id, reason) in refused.iter().chain(&rebased.dead_letters) {
-            let Some((_, op)) = all.iter().find(|(id, _)| id == op_id) else {
+            let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
             };
             // A terminally unrebasable op keeps its staged bytes, and this is
@@ -2522,7 +2521,7 @@ where
         // its parent already references.
         for (op_id, reason) in &rebased.dropped {
             if *reason == DropReason::AlreadySatisfied
-                && let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id)
+                && let Some((_, op)) = pending.iter().find(|(id, _)| id == op_id)
                 && matches!(op.kind, OpKind::Delete { to_bin: true, .. })
             {
                 self.mirror.replace(OpMirror::outside_op());
@@ -2613,9 +2612,9 @@ where
         attempts: &mut Attempts,
         report: &mut DrainReport,
     ) {
-        // The bin plane has no probe of its own — the load is the only one — so
-        // its hold exits here, on a classified halt at the held op. Every other
-        // reason has an exit the pre-pass gate can try.
+        // The bin index load and the delete's plane proof are their own probes,
+        // so their holds exit here, on a classified halt at the held op. Every
+        // other reason has an exit the pre-pass gate can try.
         if probed_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
             self.release_hold();
         }
@@ -2757,8 +2756,8 @@ where
                 }
                 // The bin index load and the delete's plane proof are their
                 // own probes, so neither reason stops a pass nor clears before
-                // one: [`Self::apply_valve`] and [`Self::establish_bin_index`]
-                // are the exits.
+                // one: [`Self::apply_valve`] is the exit of both, and
+                // [`Self::establish_bin_index`] also frees a bin index hold.
                 QueueHoldReason::BinIndex(_) | QueueHoldReason::DeletePlane => return true,
             }
         }
@@ -3956,10 +3955,8 @@ where
         plane: &SealPlane<'_>,
         child: &ChildRef,
     ) -> Result<(), Halt> {
-        let name = core::str::from_utf8(&child.ipns_name)
-            .ok()
-            .and_then(|name| IpnsName::parse(name).ok())
-            .ok_or(Halt::DeletePlaneUnavailable)?;
+        let name = crate::net::rotation::scope_name(&child.ipns_name)
+            .map_err(|_| Halt::DeletePlaneUnavailable)?;
         let (_, bytes, endpoint_failed) = fanout_get_verify_failed(&self.seams.transport, &name)
             .await
             .ok_or(Halt::DeletePlaneUnavailable)?;

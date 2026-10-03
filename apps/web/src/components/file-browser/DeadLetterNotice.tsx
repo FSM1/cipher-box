@@ -1,9 +1,9 @@
 import type { DeadLetterDescriptor, DeadLetterReason } from '@cipherbox/client';
+import { SCOPE_ROOT_DELETE_REFUSAL } from '../../sharing/shareRefusals';
 
 /** Why the op is terminal, in the words the reader needs, not the engine's. */
 const REASONS: Record<DeadLetterReason, string> = {
-  targetIsScopeRoot:
-    'this folder was shared and cannot be deleted, even after all access is revoked',
+  targetIsScopeRoot: SCOPE_ROOT_DELETE_REFUSAL,
   targetGone: 'its target no longer exists',
   destinationGone: 'its destination no longer exists',
   destinationInsideTarget: 'the destination is inside the folder being moved',
