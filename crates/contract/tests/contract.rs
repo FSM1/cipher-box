@@ -299,10 +299,7 @@ async fn production_ignores_the_test_profile_auth_limit_override() {
             .send(HttpRequest {
                 method: HttpMethod::Post,
                 url: format!("{prod}/auth/challenge"),
-                headers: vec![(
-                    "content-type".to_owned(),
-                    "application/json".to_owned().into(),
-                )],
+                headers: vec![header("content-type", "application/json")],
                 body: Some(b"{}".to_vec().into()),
                 credentials: HttpCredentials::Include,
                 timeout_ms: Some(10_000),
@@ -979,10 +976,7 @@ async fn fetch_block(cid: &str) -> Vec<u8> {
         .send(HttpRequest {
             method: HttpMethod::Get,
             url: format!("{gateway}/ipfs/{cid}?format=raw"),
-            headers: vec![(
-                "Accept".to_owned(),
-                "application/vnd.ipld.raw".to_owned().into(),
-            )],
+            headers: vec![header("Accept", "application/vnd.ipld.raw")],
             body: None,
             credentials: HttpCredentials::Omit,
             timeout_ms: Some(30_000),
@@ -1996,21 +1990,20 @@ async fn post_json_body(
     serde_json::from_slice(&response.body).expect("json body")
 }
 
+/// One request header; the value moves into its wiping buffer.
+fn header(name: &str, value: impl Into<String>) -> (String, Zeroizing<String>) {
+    (name.to_owned(), Zeroizing::new(value.into()))
+}
+
 async fn post_json_response(
     base: &str,
     path: &str,
     bearer: Option<&str>,
     body: serde_json::Value,
 ) -> HttpResponse {
-    let mut headers = vec![(
-        "content-type".to_string(),
-        "application/json".to_string().into(),
-    )];
+    let mut headers = vec![header("content-type", "application/json")];
     if let Some(token) = bearer {
-        headers.push((
-            "authorization".to_string(),
-            format!("Bearer {token}").into(),
-        ));
+        headers.push(header("authorization", format!("Bearer {token}")));
     }
     let response = ReqwestHttp::new()
         .send(HttpRequest {
@@ -2046,10 +2039,7 @@ async fn test_login_body(base: &str, handle: &str) -> serde_json::Value {
         .send(HttpRequest {
             method: HttpMethod::Post,
             url: format!("{base}/auth/test-login"),
-            headers: vec![(
-                "content-type".to_string(),
-                "application/json".to_string().into(),
-            )],
+            headers: vec![header("content-type", "application/json")],
             body: Some(
                 serde_json::to_vec(
                     &serde_json::json!({ "handle": handle, "secret": test_login_secret() }),
@@ -2085,10 +2075,7 @@ async fn test_login_body(base: &str, handle: &str) -> serde_json::Value {
 /// asks the API whether a read accelerator credential is still good.
 async fn get_status(base: &str, path: &str, bearer: Option<&str>) -> u16 {
     let headers = match bearer {
-        Some(token) => vec![(
-            "authorization".to_string(),
-            format!("Bearer {token}").into(),
-        )],
+        Some(token) => vec![header("authorization", format!("Bearer {token}"))],
         None => Vec::new(),
     };
     ReqwestHttp::new()
@@ -2264,10 +2251,7 @@ async fn the_device_approval_surface_is_mounted_and_fails_closed() {
         .send(HttpRequest {
             method: HttpMethod::Get,
             url: format!("{base}/devices"),
-            headers: vec![(
-                "authorization".to_string(),
-                format!("Bearer {token}").into(),
-            )],
+            headers: vec![header("authorization", format!("Bearer {token}"))],
             body: None,
             credentials: HttpCredentials::Include,
             timeout_ms: Some(10_000),

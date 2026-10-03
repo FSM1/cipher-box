@@ -135,8 +135,8 @@ pub struct HttpRequest {
     pub url: String,
     /// Header name/value pairs, in send order. A value can carry a credential
     /// (the `Authorization` bearer), so the seam that sends it last wipes it.
-    /// The wipe covers these buffers only: the JS string `http_request_to_js`
-    /// makes, the browser `fetch` and reqwest keep their own copies.
+    /// The wipe covers these buffers only: `http_request_to_js`, the browser
+    /// `fetch` and reqwest keep their own copies.
     pub headers: Vec<(String, Zeroizing<String>)>,
     /// Request body bytes, if any. A body can carry a credential (an identity
     /// token, a refresh token), so the seam that sends it last wipes it.

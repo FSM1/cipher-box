@@ -698,13 +698,7 @@ mod tests {
         ))
         .unwrap();
 
-        let request = &http.requests()[0];
-        let (_, value) = request
-            .headers
-            .iter()
-            .find(|(name, _)| name == AUTHORIZATION)
-            .expect("the probe carries the configured bearer");
-        crate::testkit::assert_wipes_on_drop(value);
+        crate::testkit::assert_bearer_wipes_on_drop(&http.requests()[0]);
     }
 
     #[test]

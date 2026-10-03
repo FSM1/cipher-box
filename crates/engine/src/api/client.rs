@@ -1723,13 +1723,7 @@ mod tests {
 
         block_on(client.register(&[])).expect("register");
 
-        let request = http.requests().pop().unwrap();
-        let (_, value) = request
-            .headers
-            .iter()
-            .find(|(name, _)| name == AUTHORIZATION)
-            .expect("an authed request carries a bearer");
-        crate::testkit::assert_wipes_on_drop(value);
+        crate::testkit::assert_bearer_wipes_on_drop(&http.requests().pop().unwrap());
     }
 
     #[test]
