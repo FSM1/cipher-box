@@ -2514,14 +2514,8 @@ where
         // A dropped relocation is the move already landed, so its cut has no
         // publish left to derive the planes from and the replay's own verdict is
         // all there is.
-        // A kept op's crossing owed its cut when it first published.
-        for (op_id, root) in &rebased.dropped_scope_exits {
-            if !queued
-                .iter()
-                .any(|(id, op)| id == op_id && kept(*op_id, op))
-            {
-                self.owe_scope_exit(scope, *root).await;
-            }
+        for root in &rebased.dropped_scope_exits {
+            self.owe_scope_exit(scope, *root).await;
         }
 
         for applied in &rebased.applied {
@@ -2605,7 +2599,7 @@ where
         if bin_index_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
             self.release_hold();
         }
-        // As a kept op's rebase dead letter leaves.
+        // A kept op leaves with no notice, as its rebase dead letter does.
         if matches!(halt, Halt::Permanent(_))
             && keeps(&op.kind)
             && self.kept_ids(scope).await.is_ok_and(|kept| kept(op_id, op))

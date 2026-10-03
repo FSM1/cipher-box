@@ -2226,7 +2226,19 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     )
     .expect("the grantee's version commits");
     tick_n(&world, &engine_r, &mut tasks_r, 4);
-    assert_eq!(queued(&recipient), 0, "the edit published and is kept");
+    let holds_the_edit = || {
+        let raw =
+            block_on(StagingStore::queued_ops(&recipient.staging_store)).expect("the queue reads");
+        decode_queue(
+            &RecordReader::new(&kdf::enc_subkey(&RECIPIENT_SECRET)),
+            &raw,
+        )
+        .mine
+        .iter()
+        .any(|(_, op)| op.target == file)
+    };
+    assert_eq!(queued(&recipient), 0, "the edit published");
+    assert!(holds_the_edit(), "and the queue keeps it");
 
     assert_eq!(
         block_on(engine_t.command(Command::ChangePermission {
@@ -2240,6 +2252,7 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     // The grantee's passes see the downgrade, so the kept edit's scope is a
     // proved root with no write seed.
     tick_n(&world, &engine_r, &mut tasks_r, 2);
+    assert!(!holds_the_edit(), "the kept edit left the queue");
     let own_root = block_on(engine_r.view()).expect("a rendered view").root();
     block_on(engine_r.command(Command::Create {
         parent: own_root,
@@ -2250,14 +2263,4 @@ fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
     tick_n(&world, &engine_r, &mut tasks_r, 4);
 
     assert_eq!(queued(&recipient), 0, "the later op published");
-    let raw =
-        block_on(StagingStore::queued_ops(&recipient.staging_store)).expect("the queue reads");
-    let enc_subkey = kdf::enc_subkey(&RECIPIENT_SECRET);
-    assert!(
-        !decode_queue(&RecordReader::new(&enc_subkey), &raw)
-            .mine
-            .iter()
-            .any(|(_, op)| op.target == file),
-        "and the kept edit left the queue"
-    );
 }

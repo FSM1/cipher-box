@@ -964,17 +964,19 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   not change: a record bearing another identity's tag, or a format version or
   intent grammar this build does not implement, stays retained (ADR 0020
   Consequence 4). A published create, delete or content edit stays queued as a
-  kept op, with a sealed note
-  of its scope root, write epoch and publish time, until the live root of its
-  write scope shows it (ADR 0069). Every other op kind leaves at its publish.
-  With no flip, a kept op waits at its write epoch for at most T = 7 days. At a
-  flip (a new write epoch or a new nearest scope root), once the base read its
-  node at the live name, the standard rebase decides: a landed op drops, and a
-  lost op applies again under the new seed. A content edit reads its file's
-  live record first, and it landed when the history names its version. A
-  second apply that cannot land leaves with no notice. A device with no new
-  seed reads the old tree, where the op is satisfied, so the op leaves with no
-  notice. A kept op is not pending (ADR 0069 D7).
+  kept op, with a sealed note of its scope root, write epoch and publish time,
+  until the live root of its write scope shows it (ADR 0069). Every other op
+  kind leaves at its publish. With no flip, a kept op waits at its write epoch
+  for at most T = 7 days. At a flip (a new write epoch or a new nearest scope
+  root), once the base read its node at the live name, the standard rebase
+  decides: a landed op drops, and a lost op applies again under the new seed.
+  A content edit reads its file's live record first, and it landed when the
+  history names its version. A second apply that a rebase or a permanent halt
+  refuses leaves with no notice. A device with no new seed rebases the op on
+  the old tree it last read: where that tree shows the op, the op leaves with
+  no notice; where it does not, the apply finds no write seed, and the op
+  dead-letters with a notice once its attempt budget is spent. A kept op is
+  not pending (ADR 0069 D7).
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
   (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer
@@ -1267,13 +1269,13 @@ rebases and signs above.
 - Revoked writers: a revoked writer inserts a record only inside the name wave,
   at a name the wave has not yet rotated. The inserted record keeps its epoch
   label for a sweep-length window, and the label attests nothing.
-- Late writes: a write that a revoked or downgraded writer puts in the old tree
-  after the walk leaves the queue of its own device with no notice, and the
-  dead letter of ADR 0069 D3 is not landed. A rename, a move or a history edit
-  that lands in the old tree after the walk is lost, because only a create, a
-  delete and a content edit stay kept. A kept op whose device sees no flip
-  within T leaves the queue at T, so a flip after T loses the write
-  (ADR 0069).
+- Late writes: a write that a revoked or downgraded writer puts in the old
+  tree after the walk leaves the queue of its own device with no notice when
+  the old tree it last read shows the write, and the dead letter of ADR 0069
+  D3 is not landed. A rename, a move or a history edit that lands in the old
+  tree after the walk is lost, because only a create, a delete and a content
+  edit stay kept. A kept op whose device sees no flip within T leaves the
+  queue at T, so a flip after T loses the write (ADR 0069).
 - Kept ops over a later writer: the op does not record its result, so the
   check cannot tell a lost op from a later change. A kept create links again
   a node that a later writer deleted, with its initial content. A kept edit
