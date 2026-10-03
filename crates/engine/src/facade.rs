@@ -4611,8 +4611,8 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
                 format!("published sequence {sequence} but it did not resolve back")
             }
             Err(crate::net::PublishError::ForeignVersion { version }) => format!(
-                "a newer release wrote this record at envelope version {version}, so this \
-                 build does not renew it"
+                "the record is at envelope version {version}, which this build does not \
+                 author, so this build does not renew it"
             ),
             Err(error) => error.to_string(),
             // A no-renewal (comfortably ahead) or a clean republish is not a

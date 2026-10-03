@@ -456,7 +456,11 @@ where
     let Some((verified, _bytes)) = fanout_get_verify(transport, name).await else {
         return Ok(None);
     };
-    if !eol::needs_renewal(scheduler.now(), &verified.validity, EOL_RENEW_THRESHOLD) {
+    // A newer write supersedes the held record: re-signing its head would roll
+    // the name back, or tie that write with a later EOL.
+    if verified.sequence != held_record.sequence
+        || !eol::needs_renewal(scheduler.now(), &verified.validity, EOL_RENEW_THRESHOLD)
+    {
         return Ok(None);
     }
     let observed = Observed::gated(
@@ -1288,5 +1292,58 @@ mod tests {
             })
         );
         assert_eq!(seq_at(&device, &name), 1, "the record is not re-signed");
+    }
+
+    #[test]
+    fn a_held_node_that_a_newer_write_superseded_is_not_renewed() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let (name, mut held) = seeded_held(&device, [5u8; 32], [6u8; 16], "bafyheld", 0);
+        held.envelope = Some(HeldEnvelope {
+            version: ENVELOPE_V,
+            bar: PublishBar {
+                scope_id: SCOPE,
+                read_epoch: 1,
+                write_epoch: None,
+                cut_epoch: None,
+            },
+            namespace: FloorNamespace::Own,
+        });
+        // Another device wrote at 2; this device's floor and held record stay at 1.
+        let newer = IpnsRecord::create_v2(
+            &held.signer,
+            b"/ipfs/bafynewer",
+            2,
+            TTL_NANOS,
+            &eol::eol_from(UnixMillis(0)),
+        )
+        .marshal();
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), newer.clone());
+        }
+        world.scheduler.advance(Duration::from_secs(65 * DAY));
+        device.http.enqueue_response(ok_200());
+        let results = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &[held],
+        ));
+        assert_eq!(outcome_of(&results, &name).outcome, Ok(None));
+        let endpoint = device.record_store.endpoints()[0].clone();
+        assert_eq!(
+            device.record_store.record_at(&endpoint, name.as_str()),
+            Some(newer),
+            "the newer write stands"
+        );
     }
 }
