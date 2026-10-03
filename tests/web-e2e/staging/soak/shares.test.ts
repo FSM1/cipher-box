@@ -181,7 +181,11 @@ describe('the cycle grants read', () => {
   });
 
   it('fails at once where the dialog shows a refusal', async () => {
-    const marks = dialog({ error: mark(20, Infinity, 'resolve failed: unavailable') });
+    // A people wait that never settles and holds no timer past the test.
+    const marks = dialog({
+      people: { ...mark(Infinity), waitFor: () => new Promise<void>(() => undefined) },
+      error: mark(20, Infinity, 'resolve failed: unavailable'),
+    });
     const started = Date.now();
     await expect(grantsRead(marks, 'cycle', 60_000)).rejects.toStrictEqual(
       new SoakFailure(
