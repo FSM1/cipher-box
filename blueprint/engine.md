@@ -762,8 +762,8 @@ the grantee that removed it stops reading it.
   sends one trust violation and drops the capture. When no own scope opens it,
   the drain sends one trust violation and drops the capture; a read with no
   answer keeps the capture for a later pass. One pass spends at most 64 such
-  reads, and a capture it does not finish resumes at its next scope on a
-  later pass.
+  reads. A capture it does not finish goes first on a later pass, which reads
+  the scopes not yet read before the scopes with no answer.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.
