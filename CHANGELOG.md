@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.11.0](https://github.com/FSM1/cipher-box/compare/v2.10.0...v2.11.0) (2026-10-03)
+
+
+### Features
+
+* **engine:** the name wave drops a node it cannot move ([#2188](https://github.com/FSM1/cipher-box/issues/2188)) ([1812134](https://github.com/FSM1/cipher-box/commit/18121349ba0c26071ab63f38543c538237382b24))
+
+
+### Bug Fixes
+
+* **engine:** bind a cached seed to its floor namespace and wipe request bodies at the seam ([#2219](https://github.com/FSM1/cipher-box/issues/2219)) ([6202fd1](https://github.com/FSM1/cipher-box/commit/6202fd117fc26df6042d6c9a07297a12b650458b))
+* **engine:** give the drain the gated resolve token and charge its own publish refusals ([#2221](https://github.com/FSM1/cipher-box/issues/2221)) ([e93a932](https://github.com/FSM1/cipher-box/commit/e93a932c652c145bd554bfef754419f5faa91487))
+* **engine:** hold a minted scope root at the navigation leg and name the refused scope read ([#2247](https://github.com/FSM1/cipher-box/issues/2247)) ([11e3df6](https://github.com/FSM1/cipher-box/commit/11e3df6d91cd90dcf5f264ca3e47eb9623350b74))
+* **engine:** hold a retired debt of a node that the base links again ([#2252](https://github.com/FSM1/cipher-box/issues/2252)) ([6802071](https://github.com/FSM1/cipher-box/commit/6802071aefedbe40a4de707626f32a80d12ad6b7))
+* **engine:** place a record head block where the session places bytes ([#2234](https://github.com/FSM1/cipher-box/issues/2234)) ([e07a73b](https://github.com/FSM1/cipher-box/commit/e07a73b56d6a8b9fdcfa7784f6472a230c101ae5))
+* **engine:** read a below-floor record as unavailable while an endpoint fails ([#2268](https://github.com/FSM1/cipher-box/issues/2268)) ([3ca6a10](https://github.com/FSM1/cipher-box/commit/3ca6a10a4e4b074b63897a181c0f46eb861d7f97))
+* **engine:** read a vouched floor at the cold-start guard of the vault anchor ([#2212](https://github.com/FSM1/cipher-box/issues/2212)) ([2b1fc08](https://github.com/FSM1/cipher-box/commit/2b1fc08b9d0629f4b198685f7218865fd8cf04a8))
+* **engine:** refuse a restore into another scope when the command is given ([#2242](https://github.com/FSM1/cipher-box/issues/2242)) ([fd4c9a1](https://github.com/FSM1/cipher-box/commit/fd4c9a1b0361d57719dcf5f28498111f8e83b6b4))
+* **engine:** refuse a scope root the session seed does not open at its own epoch ([#2250](https://github.com/FSM1/cipher-box/issues/2250)) ([a3fad27](https://github.com/FSM1/cipher-box/commit/a3fad27a52d518dc06b9610cb544d861e24d4c00))
+* **engine:** refuse a vault-pointer vouch over a pointer below the vouched floor or the published sequence ([#2251](https://github.com/FSM1/cipher-box/issues/2251)) ([879e9d3](https://github.com/FSM1/cipher-box/commit/879e9d34d1ce0da3c59c7afcd7aed6d5aad88966))
+* **engine:** report a different record at the sequence floor as a same-sequence fork ([#2209](https://github.com/FSM1/cipher-box/issues/2209)) ([38eefa3](https://github.com/FSM1/cipher-box/commit/38eefa37790d3a34bf0ee364d486743e1f5cda5d))
+* **engine:** stamp the wave and walk read seeds and keep retire inside the scope ([#2235](https://github.com/FSM1/cipher-box/issues/2235)) ([51410f8](https://github.com/FSM1/cipher-box/commit/51410f85e002ecc5374c2b3d47dd2d5f1b487f30))
+* **engine:** stop the owner-capture walk at scope roots and at folders it cannot read ([#2223](https://github.com/FSM1/cipher-box/issues/2223)) ([4cc305c](https://github.com/FSM1/cipher-box/commit/4cc305c592ca9ebaec8f6646635549c85ee91189))
+* **engine:** wipe a response body through the HTTP seam ([#2245](https://github.com/FSM1/cipher-box/issues/2245)) ([ed61172](https://github.com/FSM1/cipher-box/commit/ed61172afa65c03da77cba3825fee28b2baa1cca))
+
 ## [2.10.0](https://github.com/FSM1/cipher-box/compare/v2.9.2...v2.10.0) (2026-10-02)
 
 
