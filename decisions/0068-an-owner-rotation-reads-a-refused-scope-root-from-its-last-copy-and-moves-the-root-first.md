@@ -10,7 +10,7 @@
   D2, D4 and D5, [ADR 0064](./0064-the-name-wave-reads-a-lagging-interior-node.md),
   [ADR 0065](./0065-the-name-wave-drops-a-node-that-it-cannot-move-and-an-owed-cut-ends-within-a-bound.md)
   D1, D3 and D4, `blueprint/engine.md` "rotateScopeWrite" and "Adoption gate and floors"
-- **Implemented by:** not yet implemented
+- **Implemented by:** FSM1/cipher-box#2270 (D1 to D4, and the amendment of 2026-10-03)
 - **Amends:** ADR 0065 D4 (a stop at the scope root does not lapse the scope), ADR 0065 Residuals
 
 ## Context
@@ -34,6 +34,11 @@ that no endpoint serves falls back only past the bound of ADR 0065 D3. Each fall
 trust event with the scope root and the refused sequence. Readers that are not an owner rotation
 do not change.
 
+Amended on 2026-10-03: the bound applies to the re-drive only. The reads of an owner command fall
+back at once also for a cause that an endpoint can give: a head block that no endpoint serves or
+that does not match its CID, and a record below the sequence floor. A root that leaves no room for
+its re-seal also falls back at once.
+
 **D2 — A confirmed scope root publish by the owner is a last-known-good copy.** Thus a plant after
 the cut set lands finds the cut-set root in the cache.
 
@@ -47,6 +52,13 @@ the stop: a current writer planted the root, and the trust event names it.
 does not carry the cut set. When no copy carries it, the re-drive finds the cut as never landed,
 drops the entry with `rotationWorkAbandoned`, and the owner runs the command again. After a
 fallback, the cut-epoch floor rises only when the cut set lands.
+
+Amended on 2026-10-03: an entry whose cut never landed stays with its first stop. A run of the
+command again replaces its steps and its cut epoch, and keeps its first stop. The re-drive drops
+the entry only when the owner runs no command again within the bound. The bound for a scope starts
+at the first stop of an owner rotation on that scope and survives an abandon and a run again. Each
+sync pass that re-drives the entry counts as a pass: the pass places an owed scope whose refused
+root was the one failure of its boundary walk. The durable `owed-rotation` body does not change.
 
 ## Alternatives considered
 
@@ -83,6 +95,10 @@ fallback, the cut-epoch floor rises only when the cut set lands.
 5. ADR 0065 D4 and ADR 0065 Residuals carry an "Amended by ADR 0068" sentence.
 
 ## Residuals
+
+- Honest lag (amended on 2026-10-03): when another owner device published the root and no endpoint
+  serves its head block yet, a command runs on the older copy, and what that device published goes,
+  surfaced by the trust event.
 
 - A device with no copy that passes the gate keeps the stop, and the scope lapses. Does option 3
   follow, or does the owner accept this?

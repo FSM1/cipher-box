@@ -1135,16 +1135,17 @@ the cut set landed
 ([ADR 0068](../decisions/0068-an-owner-rotation-reads-a-refused-scope-root-from-its-last-copy-and-moves-the-root-first.md)
 D1). The copy runs the full gate again. A root that leaves no room for its
 re-seal falls back at once. A head block that no endpoint serves, one that does
-not match its CID, and a record below the sequence floor fall back only past the
-bound below. That bound accrues only in a re-drive, so such a cause stops the
-command read. Each fallback sends one trust event with the scope root and the
-refused sequence. A
+not match its CID, and a record below the sequence floor fall back at once on an
+owner command, and in a re-drive only past the bound below (ADR 0068 D1, amended
+on 2026-10-03). A root with no record at all does not fall back. Each fallback
+sends one trust event with the scope root and the refused sequence. A
 confirmed scope root publish by the owner is a last copy (D2). A rotation whose
 root read fell back publishes nothing more at the old root name (D3). A cut
 that moves the write plane runs its wave first; the root republish at the new
 name re-mints the grant section from the cut set, never from the copy, and the
 read cut then runs at the new root. A cut that does not move the write plane
-keeps the stop.
+keeps the stop, so a read revoke over a root that leaves no room for its re-seal
+stops, as over any other refused root.
 
 ### Triggers
 
@@ -1190,8 +1191,13 @@ recipient left the contact book, drops the entry and emits
 takes it from the owner's own published root, through the last copy when the
 gate refuses that root, and runs the write cut before the read cut when its read
 fell back. When no root carries the cut set, the re-drive finds the cut never
-landed, and the owner runs the command again. After a fallback, the cut-epoch
-floor rises only when the cut set lands (ADR 0068 D4). A
+landed and keeps the entry with its first stop. A run of the command again
+replaces the steps and the cut epoch of that entry and keeps its first stop, so
+the bound of a node in its wave runs on across the runs. The re-drive drops the
+entry, with `rotationWorkAbandoned`, only when no command ran there within the
+bound. A sync pass re-drives an owed scope whose refused root was the one
+failure of its boundary walk. After a fallback, the cut-epoch floor rises only
+when the cut set lands (ADR 0068 D4, amended on 2026-10-03). A
 relocation into another scope, a delete, a purge, or a restore that takes a
 folder with an owed interior move out of the scope it
 left is refused, retryably, until the move lands; a crossing the queue
@@ -1249,6 +1255,9 @@ rebases and signs above.
   (ADR 0068). A device with no such copy keeps the stop, and the scope lapses.
   After a fallback the wave runs first, so the revokee keeps read access, with
   no write access, until the read cut lands, at the latest in the next sync pass.
+  When another owner device published the root and no endpoint serves its head
+  block yet, a command runs on the older copy, and what that device published
+  goes, surfaced by the trust event (ADR 0068).
 - Dropped nodes: the subtree under a dropped node leaves the tree and lapses at
   its EOL, and an endpoint set that fails to serve a real node past the bound
   drops it (ADR 0065).
