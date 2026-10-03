@@ -2240,6 +2240,144 @@ fn a_captured_record_no_own_scope_opens_is_one_trust_violation() {
     );
 }
 
+/// The writer that unlinked a node leaves it at a record below the vault
+/// scope's read epoch, with a seal that the seed the scope's history gives
+/// for that epoch does not open. The gate refuses it, the capture is reported
+/// once, and nothing bins.
+#[test]
+fn a_captured_record_below_the_epoch_floor_that_does_not_open_is_one_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let (mut engine, mut events, mut tasks) = fx.second_owner_device();
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |fx, doomed| {
+        let (_, epoch, _) = published_seal(
+            &fx.world,
+            &fx.blocks,
+            &write_name(doomed),
+            &read_key_of(doomed),
+        );
+        reseal_interior_node(&fx.world, &fx.blocks, doomed, SCOPE, &[0x42; 32], epoch);
+        assert_eq!(
+            block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
+            Ok(CommandOutcome::Done)
+        );
+    });
+    events_so_far(&mut events);
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 1, "the record is refused once");
+    assert_eq!(
+        bin_scopes_of(&fx, doomed),
+        Vec::<[u8; 16]>::new(),
+        "nothing bins"
+    );
+}
+
+/// The record reads one capture pass spends to find sealing scopes, as the
+/// drain bounds them.
+const MAX_SEALER_READS: usize = 64;
+
+/// Six read grants leave seven own scopes that derive one captured name. A
+/// writer unlinks eight nodes and leaves each at a record that no own key
+/// opens. Each pass reads within its bound, a capture the pass does not finish
+/// resumes on a later pass, and each record is reported once.
+#[test]
+fn the_search_for_sealing_scopes_reads_within_its_bound_and_resumes() {
+    let mut fx = GrantScenario::new();
+    for i in 0..6 {
+        let folder = create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            ROOT,
+            &format!("granted {i}"),
+        );
+        assert_eq!(
+            block_on(fx.engine.command(Command::Grant {
+                node: folder,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission: Permission::Read,
+                grantee_name: None,
+            })),
+            Ok(CommandOutcome::Done)
+        );
+    }
+    let device = fx.world.device(b"the owner's second device");
+    let (mut engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &device);
+    tick(&fx.world, &engine, &mut tasks);
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
+    let doomed: Vec<NodeId> = (0..8)
+        .map(|i| {
+            create_published_folder(
+                &fx.world,
+                &mut fx.engine,
+                &mut fx._tasks,
+                plain,
+                &format!("doomed {i}"),
+            )
+        })
+        .collect();
+    block_on(engine.command(Command::SetFocus { node: Some(plain) })).unwrap();
+    tick(&fx.world, &engine, &mut tasks);
+    assert_eq!(block_on(engine.view()).unwrap().children(plain).len(), 8);
+    for node in &doomed {
+        let (_, epoch, _) = published_seal(
+            &fx.world,
+            &fx.blocks,
+            &write_name(*node),
+            &read_key_of(*node),
+        );
+        reseal_interior_node(&fx.world, &fx.blocks, *node, SCOPE, &[0x42; 32], epoch);
+    }
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        plain,
+        &read_key_of(plain),
+        SCOPE,
+        |children| children.clear(),
+    );
+    events_so_far(&mut events);
+    let names: Vec<Vec<u8>> = doomed
+        .iter()
+        .map(|node| write_name(*node).as_str().as_bytes().to_vec())
+        .collect();
+    let reads = || {
+        device
+            .snapshot_cache
+            .reads()
+            .iter()
+            .filter(|key| names.contains(key))
+            .count()
+    };
+    let mut reported = Vec::new();
+    for _ in 0..8 {
+        let before = reads();
+        tick(&fx.world, &engine, &mut tasks);
+        assert!(
+            reads() - before <= MAX_SEALER_READS,
+            "one pass reads within its bound"
+        );
+        reported.push(abuse_events(&mut events));
+    }
+    assert_eq!(
+        reported.iter().sum::<usize>(),
+        8,
+        "each record is reported once"
+    );
+    assert!(
+        reported.iter().all(|count| *count < 8),
+        "no one pass reads every record under every end"
+    );
+    assert!(
+        doomed
+            .iter()
+            .all(|node| bin_scopes_of(&fx, *node).is_empty()),
+        "nothing bins"
+    );
+}
+
 /// The writer that unlinked a node then publishes a signed record with a head
 /// that does not decode at the node's name. The gate refuses it, the capture
 /// is reported once, and nothing bins.
@@ -2298,6 +2436,29 @@ fn a_capture_whose_bin_publish_failed_bins_on_the_next_pass() {
     let mut fx = GrantScenario::new();
     let device = fx.world.device(b"the owner's second device");
     let (doomed, engine, mut events, mut tasks) = rekeyed_with_no_entry(&mut fx, &device);
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        bin_scopes_of(&fx, doomed),
+        vec![SCOPE],
+        "the node bins on a later pass"
+    );
+}
+
+/// The same, with a rotation of the vault scope before the next pass: the
+/// re-keyed record is then below the read-epoch floor, and it still opens
+/// under the bin's held key, so the node bins with no record reported faulty.
+#[test]
+fn a_capture_whose_bin_publish_failed_bins_after_a_rotation() {
+    let mut fx = GrantScenario::new();
+    let device = fx.world.device(b"the owner's second device");
+    let (doomed, engine, mut events, mut tasks) = rekeyed_with_no_entry(&mut fx, &device);
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
+        Ok(CommandOutcome::Done)
+    );
     for _ in 0..8 {
         tick(&fx.world, &engine, &mut tasks);
     }

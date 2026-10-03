@@ -777,6 +777,12 @@ const MAX_HELD_CAPTURES: usize = 4096;
 /// past it drops unbinned (blueprint/engine.md "Owner capture").
 const MAX_HELD_CAPTURES_PER_SCOPE: usize = 1024;
 
+/// The record reads one pass spends to find the scopes that seal its
+/// captures. Many own scopes can derive one captured name, so a record that no
+/// own key opens costs reads for each of them; a capture that the pass does
+/// not finish resumes at its next end on a later pass.
+const MAX_SEALER_READS: usize = 64;
+
 /// The unanswered attempts a capture walk makes at one node read, one for each
 /// pass, before it starts again.
 const MAX_CAPTURE_READ_ATTEMPTS: u8 = 3;
@@ -870,6 +876,9 @@ pub(crate) struct CaptureProofs {
     walk: Option<CaptureWalk>,
     /// A walk of this scope passed [`MAX_CAPTURE_WALK_NODES`].
     overflowed: bool,
+    /// For a capture whose sealing scope a pass did not find within
+    /// [`MAX_SEALER_READS`], the root of the next end to read it under.
+    sealer_next: BTreeMap<NodeId, NodeId>,
 }
 
 /// A fresh read of every node of the vault, each proved scope under its own
@@ -1819,6 +1828,34 @@ impl ChildFault {
     fn seal_open_failed(&self) -> bool {
         matches!(self, Self::Refused(rejection)
             if rejection.reason == RejectionReason::Trust(TrustViolation::SealOpenFailed.into()))
+    }
+}
+
+/// The seed a record below the read-epoch floor opens under.
+#[derive(Clone, Copy)]
+enum EpochSeed {
+    /// The one the scope's backward ratchet recovers for the record's epoch.
+    Ratchet,
+    /// The plane's own seed: the bin's held key seals a node at any epoch.
+    Held,
+}
+
+/// What one pass's search for sealing scopes has: the root of each other end,
+/// read once, and the reads left of [`MAX_SEALER_READS`].
+struct SealerPass {
+    /// `None` did not read.
+    roots: BTreeMap<NodeId, Option<Rc<LoadedRoot>>>,
+    reads: usize,
+}
+
+impl SealerPass {
+    /// Spend `reads`, or answer `false` when the pass has not that many left.
+    fn spend(&mut self, reads: usize) -> bool {
+        let Some(left) = self.reads.checked_sub(reads) else {
+            return false;
+        };
+        self.reads = left;
+        true
     }
 }
 
@@ -3010,7 +3047,7 @@ where
         node: NodeId,
         mode: ResolveMode,
     ) -> Result<LoadedNode, Halt> {
-        self.load_child_node_unreported(plane, anchor, node, mode)
+        self.load_child_node_unreported(plane, anchor, node, mode, EpochSeed::Ratchet)
             .await
             .map_err(|fault| self.report_fault(&plane.end.write_name(&node.0), fault))
     }
@@ -3023,6 +3060,7 @@ where
         anchor: Anchor<'_>,
         node: NodeId,
         mode: ResolveMode,
+        epoch_seed: EpochSeed,
     ) -> Result<LoadedNode, ChildFault> {
         let name = plane.end.write_name(&node.0);
         let floors = plane.end.floors(&self.seams.floors);
@@ -3053,8 +3091,17 @@ where
             },
             _ => (resolved_bytes(resolved, &name, &self.seams.events)?, None),
         };
-        self.open_child_record(plane, anchor, &adopter, name, record_bytes, lagging, tied)
-            .await
+        self.open_child_record(
+            plane,
+            anchor,
+            &adopter,
+            name,
+            record_bytes,
+            lagging,
+            tied,
+            epoch_seed,
+        )
+        .await
     }
 
     /// The halt `fault` takes, with a refusal reported against `name`.
@@ -3076,9 +3123,18 @@ where
         record_bytes: Vec<u8>,
         lagging: Option<u64>,
         tied: bool,
+        epoch_seed: EpochSeed,
     ) -> Result<LoadedNode, ChildFault> {
         let (adopted, envelope) = self
-            .open_for_reauthor(plane, anchor, adopter, &name, &record_bytes, lagging)
+            .open_for_reauthor(
+                plane,
+                anchor,
+                adopter,
+                &name,
+                &record_bytes,
+                lagging,
+                epoch_seed,
+            )
             .await?;
         let observed =
             Observed::gated(&name, adopted.sequence, envelope.v).map_err(|_| Halt::Unclassified)?;
@@ -3103,6 +3159,7 @@ where
     /// the seed this scope's backward key-regression ratchet recovers for that
     /// epoch (CONTEXT.md "Lazy wave"). The publish path re-seals whatever comes
     /// back at the anchor's epoch, which carries the wave one node further.
+    #[expect(clippy::too_many_arguments, reason = "one record's full opening")]
     async fn open_for_reauthor(
         &self,
         plane: &SealPlane<'_>,
@@ -3111,6 +3168,7 @@ where
         name: &IpnsName,
         record_bytes: &[u8],
         lagging: Option<u64>,
+        epoch_seed: EpochSeed,
     ) -> Result<(Adopted, Envelope), ChildFault> {
         let lagging = match lagging {
             Some(epoch) => epoch,
@@ -3123,11 +3181,22 @@ where
                 Err(GateError::Seam(_)) => return Err(Halt::UploadAttempt.into()),
             },
         };
-        let seed = seed_for_lagging(plane.end.root.0, plane.end.read_scope_seed, anchor, lagging)?;
+        let ratcheted;
+        let seed: &[u8; 32] = match epoch_seed {
+            EpochSeed::Ratchet => {
+                ratcheted =
+                    seed_for_lagging(plane.end.root.0, plane.end.read_scope_seed, anchor, lagging)?;
+                &ratcheted
+            }
+            EpochSeed::Held => plane.end.read_scope_seed,
+        };
         adopter
-            .open_interior_under(name, record_bytes, &seed)
+            .open_interior_under(name, record_bytes, seed)
             .await
-            .map_err(|_| Halt::UploadAttempt.into())
+            .map_err(|error| match error {
+                GateError::Rejected(rejection) => ChildFault::Refused(rejection),
+                GateError::Seam(_) => Halt::UploadAttempt.into(),
+            })
     }
 
     /// Make `folder` and every ancestor between it and the root of the plane it
@@ -3256,6 +3325,7 @@ where
                 record_bytes.to_vec(),
                 None,
                 true,
+                EpochSeed::Ratchet,
             )
             .await
             .map_err(|fault| self.report_fault(&name, fault))?;
@@ -4275,7 +4345,10 @@ where
         let mut added = Vec::new();
         let mut unfinished = Vec::new();
         // Each other end's root, read once for the pass; `None` did not read.
-        let mut other_roots: BTreeMap<NodeId, Option<Rc<LoadedRoot>>> = BTreeMap::new();
+        let mut sealer = SealerPass {
+            roots: BTreeMap::new(),
+            reads: MAX_SEALER_READS,
+        };
         for unlinked in taken {
             // A read leg may link the node again while this pass awaits.
             if self.cells.base.borrow().contains(unlinked.node) {
@@ -4295,7 +4368,7 @@ where
             }
             let deleted_at = standing.map_or(unlinked.deleted_at, |entry| entry.deleted_at);
             let (end, other_root) = match self
-                .sealing_end(scope, ends, &root, &mut other_roots, &unlinked, deleted_at)
+                .sealing_end(scope, ends, &root, &mut sealer, &unlinked, deleted_at)
                 .await
             {
                 Sealer::End(end, other_root) => (end, other_root),
@@ -4354,18 +4427,22 @@ where
 
     /// The own end whose key opens the record of `unlinked`'s node
     /// (blueprint/engine.md "Owner capture"). A seal-open refusal is reported
-    /// only when no end opens the record.
+    /// only when no end opens the record. Each [`Self::opens_under`] costs two
+    /// reads of `sealer`, and each root it loads one.
     async fn sealing_end<'e>(
         &self,
         scope: &DrainScope<'e>,
         ends: &[ScopeEnd<'e>],
         root: &LoadedRoot,
-        other_roots: &mut BTreeMap<NodeId, Option<Rc<LoadedRoot>>>,
+        sealer: &mut SealerPass,
         unlinked: &UnlinkedChild,
         deleted_at: u64,
     ) -> Sealer<'e> {
         let node = unlinked.node;
         let name = scope.source.write_name(&node.0);
+        if !sealer.spend(2) {
+            return Sealer::Unanswered;
+        }
         let own = match self
             .opens_under(
                 &scope.source.at(root.epoch),
@@ -4375,27 +4452,44 @@ where
             )
             .await
         {
-            Ok(()) => return Sealer::End(scope.source, None),
+            Ok(()) => {
+                self.resume_sealer_at(scope, node, None);
+                return Sealer::End(scope.source, None);
+            }
             Err(fault) if fault.seal_open_failed() => fault,
             Err(ChildFault::Halt(_)) => return Sealer::Unanswered,
             Err(fault) => {
+                self.resume_sealer_at(scope, node, None);
                 self.report_fault(&name, fault);
                 return Sealer::Refused;
             }
         };
-        let mut unanswered = false;
-        for end in ends.iter().filter(|end| {
-            end.root != scope.source.root
-                && end.write_name(&node.0).as_str().as_bytes() == unlinked.ipns_name
-        }) {
-            let other_root = match other_roots.entry(end.root) {
+        let resume = self.sealer_resumes_at(scope, node);
+        let mut others: Vec<&ScopeEnd<'e>> = ends
+            .iter()
+            .filter(|end| {
+                end.root != scope.source.root
+                    && resume.is_none_or(|from| end.root >= from)
+                    && end.write_name(&node.0).as_str().as_bytes() == unlinked.ipns_name
+            })
+            .collect();
+        others.sort_by_key(|end| end.root);
+        // The first end with no answer, which a resume must read again.
+        let mut unanswered: Option<NodeId> = None;
+        for end in others {
+            let root_reads = usize::from(!sealer.roots.contains_key(&end.root));
+            if !sealer.spend(2 + root_reads) {
+                self.resume_sealer_at(scope, node, Some(unanswered.unwrap_or(end.root)));
+                return Sealer::Unanswered;
+            }
+            let other_root = match sealer.roots.entry(end.root) {
                 Entry::Occupied(held) => held.into_mut(),
                 Entry::Vacant(slot) => {
                     slot.insert(self.load_scope_root(end).await.ok().map(Rc::new))
                 }
             };
             let Some(other_root) = other_root.clone() else {
-                unanswered = true;
+                unanswered.get_or_insert(end.root);
                 continue;
             };
             match self
@@ -4407,17 +4501,46 @@ where
                 )
                 .await
             {
-                Ok(()) => return Sealer::End(*end, Some(other_root)),
-                Err(ChildFault::Halt(_)) => unanswered = true,
+                Ok(()) => {
+                    self.resume_sealer_at(scope, node, None);
+                    return Sealer::End(*end, Some(other_root));
+                }
+                Err(ChildFault::Halt(_)) => {
+                    unanswered.get_or_insert(end.root);
+                }
                 // This end does not seal the record.
                 Err(ChildFault::Refused(_)) => {}
             }
         }
-        if unanswered {
+        if let Some(first) = unanswered {
+            self.resume_sealer_at(scope, node, Some(first));
             return Sealer::Unanswered;
         }
+        self.resume_sealer_at(scope, node, None);
         self.report_fault(&name, own);
         Sealer::Refused
+    }
+
+    /// The root of the next end a capture of `node` reads under, if a pass
+    /// stopped its search.
+    fn sealer_resumes_at(&self, scope: &DrainScope<'_>, node: NodeId) -> Option<NodeId> {
+        self.cells
+            .capture_proofs
+            .borrow()
+            .get(&scope.source.root)?
+            .sealer_next
+            .get(&node)
+            .copied()
+    }
+
+    /// Keep `next` as the end a capture of `node` resumes at, or forget it.
+    fn resume_sealer_at(&self, scope: &DrainScope<'_>, node: NodeId, next: Option<NodeId>) {
+        let mut proofs = self.cells.capture_proofs.borrow_mut();
+        let proofs = proofs.entry(scope.source.root).or_default();
+        match next {
+            Some(root) => proofs.sealer_next.insert(node, root),
+            None => proofs.sealer_next.remove(&node),
+        };
     }
 
     /// Whether `node`'s record opens under `plane`, or under the bin's held key
@@ -4442,8 +4565,8 @@ where
             .map(|_| ())
     }
 
-    /// `node`'s record read under `from`, else under `to`, with whether `to`
-    /// opened it. A record that opens under `to` is honest, so the fault under
+    /// `node`'s record read under `from`, else under the bin's held key `to`,
+    /// with whether `to` opened it. A record that opens under `to` is honest, so the fault under
     /// `from` is given back only when `to` refuses it too; a `to` read with no
     /// answer gives back its halt.
     async fn load_under_either(
@@ -4454,7 +4577,13 @@ where
         node: NodeId,
     ) -> Result<(LoadedNode, bool), ChildFault> {
         let fault = match self
-            .load_child_node_unreported(from, anchor, node, ResolveMode::CacheFirst)
+            .load_child_node_unreported(
+                from,
+                anchor,
+                node,
+                ResolveMode::CacheFirst,
+                EpochSeed::Ratchet,
+            )
             .await
         {
             Ok(loaded) => return Ok((loaded, false)),
@@ -4463,7 +4592,7 @@ where
             Err(fault) => fault,
         };
         match self
-            .load_child_node_unreported(to, anchor, node, ResolveMode::CacheFirst)
+            .load_child_node_unreported(to, anchor, node, ResolveMode::CacheFirst, EpochSeed::Held)
             .await
         {
             Ok(loaded) => Ok((loaded, true)),
@@ -4646,6 +4775,9 @@ where
             .remove(&scope_root)
             .unwrap_or_default();
         proofs.proved.retain(|key| eligible.contains(key));
+        proofs
+            .sealer_next
+            .retain(|node, _| names_node(&eligible, *node));
         let unproved: BTreeSet<CaptureKey> = eligible.difference(&proofs.proved).copied().collect();
         let mut walk = proofs.walk.take().and_then(|mut walk| {
             walk.cohort.retain(|key| unproved.contains(key));

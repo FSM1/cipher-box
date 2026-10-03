@@ -755,11 +755,13 @@ the grantee that removed it stops reading it.
   node's record through the gate under the capture's own scope, then, on a
   seal-open refusal only, under each other own scope whose write seed derives
   the captured name. A node a re-key already moved opens under the bin's held
-  key. The scope that opens the record is the one the node re-keys and bins
-  under. Any other refusal under the capture's own scope sends one trust
-  violation and drops the capture. When no own scope opens it, the drain sends
-  one trust violation and drops the capture; a read with no answer keeps the
-  capture for a later pass.
+  key, at any epoch. The scope that opens the record is the one the node
+  re-keys and bins under. Any other refusal under the capture's own scope
+  sends one trust violation and drops the capture. When no own scope opens it,
+  the drain sends one trust violation and drops the capture; a read with no
+  answer keeps the capture for a later pass. One pass spends at most 64 such
+  reads, and a capture it does not finish resumes at its next scope on a
+  later pass.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.
