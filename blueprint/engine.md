@@ -1226,7 +1226,12 @@ recipient left the contact book, drops the entry and emits
 takes it from the owner's own published root, through the last copy when the
 gate refuses that root, and runs the write cut before the read cut when its read
 fell back. When no root carries the cut set, the re-drive finds the cut never
-landed and keeps the entry with its first stop. A run of the same command again
+landed and keeps the entry with its first stop. One exception: when the read
+fell back and the copy is one cut epoch below the entry, the re-drive signs the
+cut of every row again at the entry's cut epoch, with zero rows too, on each
+pass while the plant stands (ADR 0068 D5). A re-drive that reads a copy with
+rows signs that cut at a new cut epoch, also for the owed wave of a new write
+share, and sends `rotationWorkAbandoned` once. A run of the same command again
 replaces the steps and the cut epoch of that entry and keeps its first stop, so
 the bound of a node in its wave runs on across the runs. Another command, or a
 link expiry, replaces the entry and tells the host with `rotationWorkAbandoned`.

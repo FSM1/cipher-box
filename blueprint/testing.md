@@ -151,7 +151,9 @@ scenario fails the meta-test):
   and no blob, nothing more publishes at the old root name, a cut from the copy
   keeps no grant row of any recipient while a cut from a gated root keeps the
   other rows, a read revoke over a writer's plant cuts the writer too, a
-  re-drive from the copy and a revoke over an owed wave keep no grant row, a
+  re-drive from the copy and a revoke over an owed wave keep no grant row, as
+  does a re-drive after another owner device revoked a grantee and a downgrade
+  with no owed entry, a re-drive that drops a new share tells the host once, a
   read revoke that stops at an absent root head block leaves nothing owed, a
   link expiry does not replace an owed wave whose cut landed, a read
   cut that stops at the moved root ends in the next re-drive,
