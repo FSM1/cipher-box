@@ -1,6 +1,6 @@
 # ADR 0073: The owner seed cache keeps a confirmed root on one device
 
-- **Status:** Proposed
+- **Status:** Implemented
 - **Date:** 2026-10-03
 - **Relates to:** [#2139](https://github.com/FSM1/cipher-box/issues/2139),
   FSM1/cipher-box-next#39 D6, ADR 0002, ADR 0006, ADR 0068
