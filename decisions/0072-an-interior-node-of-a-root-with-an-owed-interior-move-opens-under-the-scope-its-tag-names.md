@@ -1,6 +1,6 @@
 # ADR 0072 — An interior node of a root with an owed interior move opens under the scope its tag names
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-03
 - **Date:** 2026-10-03
 - **Relates to:** FSM1/cipher-box#2248 (the tick focus leg reports an interior node of a grant
   with an owed interior move as abuse),
@@ -73,12 +73,14 @@ shape changes.
    partial reseal and a restart each give no abuse event at the tick focus leg and at the
    navigation leg; a record whose tag names a bound scope that does not open it, and a record
    whose tag names a third scope, each give exactly one trust violation.
+5. When the owed record does not read, the leg cannot tell that an interior move is owed. The
+   leg then groups by the proved scope roots, as before this ADR, and a false abuse event is
+   accepted in that state. The leg does not report the interior as unavailable, because that
+   hides a hostile record (AGENTS.md rule 6).
+6. Only the device that holds the entry applies D1 (ADR 0063 consequence 6). A second owner
+   device or a grantee that reads the interior during the owed window can still report a false
+   abuse event. This residual is accepted. It ends when the owed move lands.
 
 ## Residuals
 
-- When the owed record does not read, the leg cannot tell that an interior move is owed. The
-  owner chooses: group by the proved scope roots and accept a false abuse event in that state, or
-  report each interior node of a minted root as unavailable until the record reads.
-- Only the device that holds the entry applies D1 (ADR 0063 consequence 6). A second owner device
-  or a grantee that reads the interior during the owed window can still report a false abuse
-  event. The owner chooses whether that residual is accepted.
+None.
