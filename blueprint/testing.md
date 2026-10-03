@@ -151,6 +151,15 @@ scenario fails the meta-test):
 - the offline queue — FIFO replay through rebase, dead-letter on
   revoked-while-offline with staged bytes preserved, staging-budget
   fail-fast;
+- the retire ledger (ADR 0070) — the new build decodes a version 2 entry and
+  an unversioned entry (ADR 0020 D5), round-trips a version 3 entry of each
+  origin, and reads a damaged name as unwritten (`net::retire`); `owe` refuses
+  a name that is not an IPNS name (`tests/encode_refusals.rs`); a dropped
+  version and a hard delete in a write-granted folder retire under the file's
+  own name (`tests/owner_actions.rs`); a named debt of a deleted node that the
+  base links again at that name, in the vault scope or below an interior
+  scope, reads its live record and spares what it names, and waits when the
+  record does not pass the gate (`sync::drain`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
   S + 1 with a fresh validity after the passes that ADR 0061 consequence 2
@@ -212,8 +221,8 @@ re-sign records with any key it holds; every crypto-review finding (FSM1/cipher-
 gets a pinned regression scenario.
 
 The engine also ships **its own KAT vectors**, under core's regime but for the
-formats and predicates core cannot reach: the content-DAG root and the
-rotation and check-surface reject families. The stage-3 **one section, one
+formats and predicates core cannot reach: the content-DAG root, the
+retire-ledger entry, and the rotation and check-surface reject families. The stage-3 **one section, one
 signer** vectors are core's, in the KAT `grant` family (ADR 0052 D4). The
 engine vectors are written only by
 `cargo run -p cipherbox-engine --example kat_gen`, and the **Engine simulation

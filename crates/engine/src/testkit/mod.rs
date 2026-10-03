@@ -24,6 +24,7 @@ pub mod fakes;
 pub mod name_law;
 mod owner_root;
 pub mod reject;
+pub mod retire_entry;
 pub mod rotation;
 mod world;
 
