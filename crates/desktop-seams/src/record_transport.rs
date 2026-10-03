@@ -125,7 +125,7 @@ impl RecordTransport for ReqwestRecordTransport {
         if let Some(bearer) = bearer {
             let (name, value) = bearer_header(bearer)
                 .map_err(|_| SeamError::new("record_transport get: bearer is unusable"))?;
-            request = request.header(name, value);
+            request = request.header(name, value.as_str());
         }
         let mut response = request
             .send()

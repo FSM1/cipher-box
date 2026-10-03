@@ -3,7 +3,10 @@ import { emptyLedger, formatLedger, LEDGER_HEADER, parseLedger } from './ledger'
 import { SoakFailure } from './reasons';
 import {
   cycleEpochStepped,
+  grantsRead,
   linkPrefix,
+  type DialogMark,
+  type GrantsMarks,
   markerDates,
   parseEpochs,
   sharedEpochHeld,
@@ -104,5 +107,102 @@ describe('the marker files of a listing', () => {
         'marker-2026-10-01 (1).txt',
       ])
     ).toEqual(['2026-09-30', '2026-10-02']);
+  });
+});
+
+/** A dialog element that shows `text` from `from` ms after the fake opens until `until` ms. */
+function mark(from: number, until = Infinity, text: string | null = ''): DialogMark {
+  const opened = Date.now();
+  const shown = () => {
+    const at = Date.now() - opened;
+    return at >= from && at < until;
+  };
+  return {
+    isVisible: async () => shown(),
+    textContent: async () => text,
+    waitFor: ({ timeout }) =>
+      new Promise((resolve, reject) => {
+        const poll = setInterval(() => {
+          if (shown()) {
+            clearInterval(poll);
+            resolve();
+          } else if (Date.now() - opened > timeout) {
+            clearInterval(poll);
+            reject(Object.assign(new Error('timed out'), { name: 'TimeoutError' }));
+          }
+        }, 5);
+      }),
+  };
+}
+
+/** A dialog that keeps the unavailable note; fresh per call, as a mark times from its creation. */
+function dialog(marks: Partial<GrantsMarks> = {}): GrantsMarks {
+  return { people: mark(Infinity), unavailable: mark(0), error: mark(Infinity), ...marks };
+}
+
+describe('the cycle grants read', () => {
+  it('waits out the unavailable note the dialog draws before its read lands', async () => {
+    const marks = dialog({ people: mark(50), unavailable: mark(0, 50) });
+    await expect(grantsRead(marks, 'cycle', 1_000)).resolves.toBeUndefined();
+  });
+
+  it('fails grants-unread with the budget where the unavailable note stays', async () => {
+    await expect(grantsRead(dialog(), 'cycle', 100)).rejects.toStrictEqual(
+      new SoakFailure(
+        'grants-unread',
+        'the share dialog of cycle/ showed the unavailable note in 0.1 s'
+      )
+    );
+  });
+
+  it('tells a dialog that drew neither the table nor the note', async () => {
+    const marks = dialog({ unavailable: mark(Infinity) });
+    await expect(grantsRead(marks, 'cycle', 100)).rejects.toStrictEqual(
+      new SoakFailure('grants-unread', 'the share dialog of cycle/ showed no people table in 0.1 s')
+    );
+  });
+
+  it('adds the refusal the dialog shows where its read threw', async () => {
+    const marks = dialog({
+      error: mark(0, Infinity, ' resolve failed: unavailable '),
+    });
+    await expect(grantsRead(marks, 'cycle', 100)).rejects.toStrictEqual(
+      new SoakFailure(
+        'grants-unread',
+        'the share dialog of cycle/ showed the unavailable note in 0.1 s, refused: resolve failed: unavailable'
+      )
+    );
+  });
+
+  it('passes on an error that is not a timeout', async () => {
+    const closed = new Error('Target page, context or browser has been closed');
+    const marks = dialog({ people: { ...mark(Infinity), waitFor: () => Promise.reject(closed) } });
+    await expect(grantsRead(marks, 'cycle', 100)).rejects.toBe(closed);
+  });
+
+  it('fails at once where the dialog shows a refusal', async () => {
+    // A people wait that never settles and holds no timer past the test.
+    const marks = dialog({
+      people: { ...mark(Infinity), waitFor: () => new Promise<void>(() => undefined) },
+      error: mark(20, Infinity, 'resolve failed: unavailable'),
+    });
+    const started = Date.now();
+    await expect(grantsRead(marks, 'cycle', 60_000)).rejects.toStrictEqual(
+      new SoakFailure(
+        'grants-unread',
+        'the share dialog of cycle/ showed the unavailable note in 60 s, refused: resolve failed: unavailable'
+      )
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('omits the refusal where the error shows no text', async () => {
+    const marks = dialog({ error: mark(0, Infinity, null) });
+    await expect(grantsRead(marks, 'cycle', 100)).rejects.toStrictEqual(
+      new SoakFailure(
+        'grants-unread',
+        'the share dialog of cycle/ showed the unavailable note in 0.1 s'
+      )
+    );
   });
 });

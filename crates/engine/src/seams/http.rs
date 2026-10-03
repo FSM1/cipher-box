@@ -39,7 +39,7 @@ pub struct InvalidBearer;
 /// splits or injects a header at the host transport.
 ///
 /// Separate from [`bearer_header`] so a caller that only asks the question —
-/// a config gate — never materializes a second, non-zeroized copy of the
+/// a config gate — never materializes a second copy of the
 /// credential just to throw it away.
 pub fn check_bearer(token: &str) -> Result<(), InvalidBearer> {
     if token.is_empty() || !token.bytes().all(|byte| matches!(byte, 0x21..=0x7e)) {
@@ -50,17 +50,27 @@ pub fn check_bearer(token: &str) -> Result<(), InvalidBearer> {
 
 /// Builds the `Authorization: Bearer …` pair for a token meeting
 /// [`check_bearer`].
-pub fn bearer_header(token: &str) -> Result<(String, String), InvalidBearer> {
+pub fn bearer_header(token: &str) -> Result<(String, Zeroizing<String>), InvalidBearer> {
     check_bearer(token)?;
-    Ok((AUTHORIZATION.to_owned(), format!("Bearer {token}")))
+    Ok((AUTHORIZATION.to_owned(), bearer_value(token)))
+}
+
+/// The `Bearer …` value, written into a buffer of its final size so no
+/// growth frees a smaller copy unwiped. The caller applies [`check_bearer`].
+pub(crate) fn bearer_value(token: &str) -> Zeroizing<String> {
+    const SCHEME: &str = "Bearer ";
+    let mut value = Zeroizing::new(String::with_capacity(SCHEME.len() + token.len()));
+    value.push_str(SCHEME);
+    value.push_str(token);
+    value
 }
 
 /// Formats headers as their names only. Header values ride this seam
 /// carrying live credentials (`Authorization` bearer JWTs, refresh
 /// cookies) and must never reach logs.
-struct HeaderNames<'a>(&'a [(String, String)]);
+struct HeaderNames<'a, V>(&'a [(String, V)]);
 
-impl fmt::Debug for HeaderNames<'_> {
+impl<V> fmt::Debug for HeaderNames<'_, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list()
             .entries(self.0.iter().map(|(name, _)| name))
@@ -123,8 +133,11 @@ pub struct HttpRequest {
     pub method: HttpMethod,
     /// Absolute URL.
     pub url: String,
-    /// Header name/value pairs, in send order.
-    pub headers: Vec<(String, String)>,
+    /// Header name/value pairs, in send order. A value can carry a credential
+    /// (the `Authorization` bearer), so the seam that sends it last wipes it.
+    /// The wipe covers these buffers only: `http_request_to_js`, the browser
+    /// `fetch` and reqwest keep their own copies.
+    pub headers: Vec<(String, Zeroizing<String>)>,
     /// Request body bytes, if any. A body can carry a credential (an identity
     /// token, a refresh token), so the seam that sends it last wipes it.
     pub body: Option<Zeroizing<Vec<u8>>>,
@@ -256,7 +269,10 @@ mod tests {
         let request = HttpRequest {
             method: HttpMethod::Post,
             url: "https://api.example/auth/refresh".into(),
-            headers: vec![("Authorization".into(), "Bearer secret-jwt".into())],
+            headers: vec![(
+                "Authorization".into(),
+                "Bearer secret-jwt".to_owned().into(),
+            )],
             body: Some(b"refresh-token-bytes".to_vec().into()),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(10_000),
@@ -270,12 +286,14 @@ mod tests {
 
     #[test]
     fn a_usable_bearer_becomes_the_authorization_pair() {
+        let token = "eyJhbGciOi.J9-_~+/=";
+        let (name, value) = bearer_header(token).unwrap();
+        assert_eq!(name, AUTHORIZATION);
+        assert_eq!(value.as_str(), "Bearer eyJhbGciOi.J9-_~+/=");
         assert_eq!(
-            bearer_header("eyJhbGciOi.J9-_~+/=").unwrap(),
-            (
-                AUTHORIZATION.to_owned(),
-                "Bearer eyJhbGciOi.J9-_~+/=".to_owned()
-            )
+            value.capacity(),
+            "Bearer ".len() + token.len(),
+            "the buffer gets its final size before the write, so it never grows"
         );
         assert!(bearer_header("!").is_ok(), "0x21, the low edge");
         assert!(bearer_header("~").is_ok(), "0x7e, the high edge");
