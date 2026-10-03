@@ -235,12 +235,12 @@ fn a_record_below_any_floor_of_its_bar_is_refused_at_the_signature() {
 fn a_gated_read_at_another_envelope_version_yields_no_token() {
     let name = pointer_name();
     assert_eq!(
-        Observed::gated(&name, 1, ENVELOPE_V + 1),
+        Observed::gated(&name, 1, ENVELOPE_V + 1, &[]),
         Err(PublishError::ForeignVersion {
             version: ENVELOPE_V + 1
         }),
     );
-    assert!(Observed::gated(&name, 1, ENVELOPE_V).is_ok());
+    assert!(Observed::gated(&name, 1, ENVELOPE_V, &[]).is_ok());
 }
 
 /// The signature lands strictly above the observed record even where the
@@ -252,7 +252,7 @@ fn the_signature_lands_above_both_the_observed_record_and_the_floor() {
     let device = world.device(b"me");
     let signer = Ed25519Signer::from_seed([0x51; 32]);
     let name = name_of(&signer);
-    let observed = Observed::gated(&name, 7, ENVELOPE_V).unwrap();
+    let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();
     assert_eq!(
         publish_under(&device, &signer, &observed, None),
         Ok(PublishOutcome::Published { sequence: 8 }),
@@ -266,7 +266,7 @@ fn the_signature_lands_above_both_the_observed_record_and_the_floor() {
             .raise_sequence_floor(name.as_str().as_bytes(), 9),
     )
     .unwrap();
-    let observed = Observed::gated(&name, 2, ENVELOPE_V).unwrap();
+    let observed = Observed::gated(&name, 2, ENVELOPE_V, &[]).unwrap();
     assert_eq!(
         publish_under(&device, &signer, &observed, None),
         Ok(PublishOutcome::Published { sequence: 10 }),
@@ -280,7 +280,7 @@ fn an_observed_record_at_the_sequence_ceiling_is_refused() {
     let device = world.device(b"me");
     let signer = Ed25519Signer::from_seed([0x53; 32]);
     let name = name_of(&signer);
-    let observed = Observed::gated(&name, u64::MAX, ENVELOPE_V).unwrap();
+    let observed = Observed::gated(&name, u64::MAX, ENVELOPE_V, &[]).unwrap();
     assert_eq!(
         publish_under(&device, &signer, &observed, None),
         Err(PublishError::SequenceExhausted),
@@ -571,4 +571,92 @@ fn dead_letters(engine: &Engine<FakeSeamTypes>) -> usize {
         .expect("the session status reads")
         .dead_letters
         .len()
+}
+
+#[test]
+fn a_root_publish_refuses_a_floor_raised_after_its_head_upload() {
+    use cipherbox_core::seal::decode_envelope;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let name = seed_account(&world, &blocks);
+    let before = record_at(&world, &name);
+    let device = world.device(b"owner");
+    let (mut engine, _events, _tasks) = booted(&world, &blocks, &device);
+    let fired = Arc::new(AtomicBool::new(false));
+    let (floors, raised) = (device.floor_store.clone(), fired.clone());
+    blocks.refuse_upload(Box::new(move |bytes| {
+        if let Ok(envelope) = decode_envelope(bytes)
+            && envelope.id == ROOT.0
+            && !raised.swap(true, Ordering::SeqCst)
+        {
+            block_on(
+                floors.raise_epoch_floor(
+                    &[
+                        cipherbox_engine::sync::owner_tag(&kdf::enc_subkey(&SECRET)).as_slice(),
+                        floor_label(&ACCOUNT_SCOPE).as_slice(),
+                    ]
+                    .concat(),
+                    envelope.epoch + 1,
+                ),
+            )
+            .expect("the concurrent floor raise lands");
+        }
+        None
+    }));
+
+    assert!(block_on(engine.command(Command::RotateNow { node: ROOT })).is_err());
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "the head reached the upload window"
+    );
+    assert_eq!(
+        record_at(&world, &name),
+        before,
+        "the stale root was never PUT"
+    );
+}
+
+#[test]
+fn a_revival_at_the_sequence_ceiling_is_refused_by_the_publish_gate() {
+    use cipherbox_engine::net::{ReviveError, ReviveRequest, revive};
+
+    let world = FakeWorld::new();
+    let device = world.device(b"owner");
+    let signer = Ed25519Signer::from_seed([0x77; 32]);
+    let name = name_of(&signer);
+    let recovered =
+        IpnsRecord::create_v2(&signer, b"/ipfs/bafyhead", u64::MAX, TTL_NANOS, EOL).marshal();
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    for body in [recovered, Vec::new()] {
+        device.http.enqueue_response(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: body.into(),
+        });
+    }
+    assert_eq!(
+        block_on(revive(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &device.scheduler,
+            &SyncTimingProfile::CI,
+            ReviveRequest {
+                name: &name,
+                signer: &signer,
+                content_cids: Vec::new()
+            },
+        )),
+        Err(ReviveError::Publish(PublishError::SequenceExhausted))
+    );
+    assert!(nothing_reached_the_transport(&device, &name));
 }

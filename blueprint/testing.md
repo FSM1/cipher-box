@@ -98,6 +98,12 @@ fake HTTP serves the API's mailbox routes from (ADR 0044), and seeded entropy.
 No network, no docker, no wall clock — CAS races and multi-day EOL timelines
 execute in milliseconds.
 
+The **Engine simulation tests** PR gate also runs the engine unit tests,
+`encode_refusals`, and `renewal_walk` in release mode. Together they exercise
+the shared produce-side gate through root rotation, the name wave, the drain,
+renewal, and revival, including floor changes before signing, foreign envelope
+versions, and sequence exhaustion.
+
 The **simulation harness** is this strategy's center of gravity: N engine
 instances (owner, write-grantee, read-grantee, revokee, adversary) share one
 fake record store and mailbox and are stepped deterministically on virtual

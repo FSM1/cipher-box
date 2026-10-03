@@ -2871,7 +2871,7 @@ where
         )
         .await
         .map_err(|_| Halt::UploadAttempt)?;
-        let observed = Observed::gated(source.root_name, sequence, envelope.v)
+        let observed = Observed::gated(source.root_name, sequence, envelope.v, record_bytes)
             .map_err(classify_publish_error)?;
         let read_key = source.read_key(&source.root.0);
         let Ok(body) = open_read_body(&envelope, &read_key) else {
@@ -3093,8 +3093,8 @@ where
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, adopter, &name, &record_bytes, lagging)
             .await?;
-        let observed =
-            Observed::gated(&name, adopted.sequence, envelope.v).map_err(classify_publish_error)?;
+        let observed = Observed::gated(&name, adopted.sequence, envelope.v, &record_bytes)
+            .map_err(classify_publish_error)?;
         // Re-sealing a node at an epoch above the scope's would cross the AAD
         // epoch binding.
         if adopted.epoch > anchor.epoch {
@@ -7212,7 +7212,7 @@ where
             adopted.pass.commit(&floors),
         )
         .await
-        .map(|adopted| Observed::gated(name, adopted.sequence, version))
+        .map(|adopted| Observed::gated(name, adopted.sequence, version, record_bytes))
         .map_err(GateError::Seam)
     }
 
@@ -8300,7 +8300,7 @@ mod tests {
                 folder,
                 FolderState {
                     plane_root,
-                    observed: Observed::gated(&name, 1, ENVELOPE_V)
+                    observed: Observed::gated(&name, 1, ENVELOPE_V, &[])
                         .expect("this build's envelope version"),
                     name,
                     record: Vec::new(),
@@ -9336,7 +9336,7 @@ mod tests {
         let name = derive_write_name(&Zeroizing::new([4; 32]), &[5; 16]);
         let ours = b"our record at 3".to_vec();
         let built_on = (
-            Observed::gated(&name, 3, ENVELOPE_V).expect("this build's version"),
+            Observed::gated(&name, 3, ENVELOPE_V, &[]).expect("this build's version"),
             ours.clone(),
         );
         let forked = |version| {
@@ -9344,7 +9344,7 @@ mod tests {
                 3,
                 b"another record at 3".to_vec(),
                 vec![ours.clone()],
-                Some(Observed::gated(&name, 3, version)),
+                Some(Observed::gated(&name, 3, version, &[])),
             ))
         };
 

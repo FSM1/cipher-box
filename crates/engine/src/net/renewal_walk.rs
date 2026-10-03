@@ -26,8 +26,8 @@ use super::fanout::{FanoutRecord, fanout_get_classified};
 use super::fork::{Fork, holds_renewal};
 use super::liveness::{EolRenewResult, HeldKey, HeldRecord, HeldRecords, hold_if_unchanged};
 use super::publish::{
-    Observed, PublishError, PublishOutcome, PublishVerdict, SignatureGate, head_cid_from_value,
-    put_and_confirm,
+    Observed, PublishBar, PublishError, PublishOutcome, PublishVerdict, SignatureGate,
+    head_cid_from_value, put_and_confirm,
 };
 use super::register::register;
 use super::retire::{Acknowledged, OrphanHeads, StagingRetireLedger, linked_nowhere};
@@ -230,8 +230,8 @@ struct Due {
     node_id: [u8; 16],
     name: IpnsName,
     signer: Ed25519Signer,
-    admitted: Vec<u8>,
-    sequence: u64,
+    observed: Observed,
+    bar: PublishBar,
     value: Vec<u8>,
     head_cid: String,
 }
@@ -656,7 +656,6 @@ where
         match root {
             WalkRoot::Scope(scope_id) => {
                 let material = self.material(pass, scope_id).await?;
-                let name = material.name.clone();
                 let admitted = &material.admitted;
                 let body = admitted.read_body.clone();
                 let plane = Plane {
@@ -664,12 +663,8 @@ where
                     read_seed: admitted.read_scope_seed.clone(),
                     seed_stamp: Some(admitted.read_epoch),
                 };
-                let (bytes, sequence, fork) = (
-                    admitted.record_bytes.clone(),
-                    admitted.sequence,
-                    admitted.fork,
-                );
-                self.consider(pass, scope_id, scope_id, &name, &bytes, sequence, fork)
+                let (observed, fork) = (admitted.observed.clone(), admitted.fork);
+                self.consider(pass, scope_id, scope_id, observed, fork)
                     .await;
                 Some((plane, scope_id, body))
             }
@@ -756,22 +751,19 @@ where
         )
         .await
         {
-            Ok(ChildRecord::Admitted(adopted, bytes, fork)) => {
+            Ok(ChildRecord::Admitted(read)) => {
+                let super::child::AdmittedChild {
+                    adopted,
+                    observed,
+                    fork,
+                } = *read;
                 if let Some(fork) = fork {
                     pass.report
                         .forked
                         .push((name.as_str().to_owned(), fork.sequence));
                 }
-                self.consider(
-                    pass,
-                    plane.scope_id,
-                    node_id,
-                    name,
-                    &bytes,
-                    adopted.sequence,
-                    fork,
-                )
-                .await;
+                self.consider(pass, plane.scope_id, node_id, observed, fork)
+                    .await;
                 Some(adopted.read_body)
             }
             Ok(ChildRecord::Absent) => {
@@ -801,18 +793,21 @@ where
     /// Queue a renewal of the record the gate admitted at `sequence`, when its
     /// EOL is inside the window and no other write can come between (ADR 0061
     /// D3 step 2), and no served `fork` holds it back (ADR 0066 D3).
-    #[expect(clippy::too_many_arguments, reason = "one renewal decision's inputs")]
     async fn consider(
         &self,
         pass: &mut Pass<'_>,
         material_scope: [u8; 16],
         node_id: [u8; 16],
-        name: &IpnsName,
-        admitted: &[u8],
-        sequence: u64,
+        observed: Result<Observed, PublishError>,
         fork: Option<Fork>,
     ) {
-        let Ok(verified) = IpnsRecord::unmarshal(admitted).and_then(|record| record.verify(name))
+        let Ok(observed) = observed else {
+            return;
+        };
+        let name = observed.name();
+        let sequence = observed.sequence();
+        let Ok(verified) =
+            IpnsRecord::unmarshal(observed.bytes()).and_then(|record| record.verify(name))
         else {
             return;
         };
@@ -830,14 +825,14 @@ where
         let Some(head_cid) = head_cid_from_value(&verified.value) else {
             return;
         };
-        let Some(signer) = pass
-            .materials
-            .get(&material_scope)
-            .and_then(Option::as_ref)
-            .and_then(|material| material.signer_for(&node_id, name))
-        else {
+        let Some(material) = pass.materials.get(&material_scope).and_then(Option::as_ref) else {
             return;
         };
+        let Some(signer) = material.signer_for(&node_id, name) else {
+            return;
+        };
+        // ADR 0021: an unchanged lagging child renews under its gated root's ratchet.
+        let bar = material.admitted.bar;
         if pass.doomed.unreadable.contains(&material_scope) {
             pass.kept_back = true;
             return;
@@ -880,8 +875,8 @@ where
             node_id,
             name: name.clone(),
             signer,
-            admitted: admitted.to_vec(),
-            sequence,
+            observed,
+            bar,
             value: verified.value,
             head_cid,
         });
@@ -926,17 +921,17 @@ where
     /// and the durable floor still sits at `S`. `None` when either moved.
     async fn renew(&self, due: &Due) -> Option<Result<Option<PublishOutcome>, PublishError>> {
         match fanout_get_classified(self.transport, &due.name).await {
-            FanoutRecord::Found(_, live) if live == due.admitted => {}
+            FanoutRecord::Found(_, live) if live == due.observed.bytes() => {}
             FanoutRecord::Unavailable(_) => return Some(Err(PublishError::AllEndpointsFailed)),
             FanoutRecord::Found(..) | FanoutRecord::Absent => return None,
         }
-        let observed = Observed::record(&due.name, due.sequence);
-        let gate = match SignatureGate::read(self.floors, &observed, None).await {
+        let gate = match SignatureGate::read_for_renewal(self.floors, &due.observed, due.bar).await
+        {
             Ok(gate) => gate,
             Err(error) => return Some(Err(error)),
         };
         // No await from here to the signature.
-        if gate.sequence_floor() != Some(due.sequence)
+        if gate.sequence_floor() != Some(due.observed.sequence())
             || self.guards.publishing.borrow().contains(due.name.as_str())
         {
             return None;
@@ -983,7 +978,7 @@ where
                 record_bytes: renewed.to_vec(),
                 ..held
             },
-            Some(&due.admitted),
+            Some(due.observed.bytes()),
         );
     }
 }
@@ -1080,8 +1075,13 @@ mod tests {
         ScopeMaterial {
             name: derive_write_name(&current, &[0; 16]),
             admitted: AdmittedScopeRoot {
-                record_bytes: Vec::new(),
-                sequence: 1,
+                observed: Ok(Observed::unread(&derive_write_name(&current, &[0; 16]))),
+                bar: PublishBar {
+                    scope_id: [0; 16],
+                    read_epoch: 0,
+                    write_epoch: None,
+                    cut_epoch: None,
+                },
                 read_body: ReadBody::Folder {
                     created_at: 0,
                     modified_at: 0,

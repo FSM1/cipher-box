@@ -377,7 +377,7 @@ where
                     }
                 })
                 .await?;
-                let observed = Some(Observed::gated(name, adopted.sequence, version));
+                let observed = Some(Observed::gated(name, adopted.sequence, version, &bytes));
                 // The adopt left the floor at the pick, so a tie gates there.
                 let fork = fork_of(
                     &verified,
@@ -440,6 +440,7 @@ where
                                     name,
                                     material.at_floor.sequence,
                                     material.version,
+                                    &bytes,
                                 )),
                                 current_at_floor: Some(material.at_floor),
                                 fork: None,

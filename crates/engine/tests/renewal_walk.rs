@@ -1552,3 +1552,156 @@ fn a_tombstoned_node_the_base_links_nowhere_is_not_renewed() {
         "the retired file is not renewed"
     );
 }
+
+#[test]
+fn a_walk_reads_but_does_not_renew_a_child_at_a_foreign_envelope_version() {
+    use cipherbox_core::seal::{encode_envelope, seal_read_body};
+    use cipherbox_engine::net::author::ENVELOPE_V;
+
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        vec![write_file(&world, engine, tasks, ROOT, "newer.txt")]
+    });
+    let node = nodes[0];
+    let name = write_name(node);
+    let before = record_at(&world, &name);
+    let cid = std::str::from_utf8(&before.value)
+        .unwrap()
+        .strip_prefix("/ipfs/")
+        .unwrap();
+    let envelope = decode_envelope(&blocks.get(cid).unwrap()).unwrap();
+    let read_key = kdf::read_key(kdf::node_seed(&READ_SCOPE_SEED, &node.0).as_bytes());
+    let body = open_read_body(&envelope, read_key.as_bytes()).unwrap();
+    let newer = seal_read_body(
+        read_key.as_bytes(),
+        &[0x7b; 24],
+        ENVELOPE_V + 1,
+        node.0,
+        SCOPE,
+        envelope.epoch,
+        &body,
+    )
+    .unwrap();
+    let cid = blocks.put(encode_envelope(&newer).unwrap());
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
+    let bytes = IpnsRecord::create_v2(
+        &signer,
+        format!("/ipfs/{cid}").as_bytes(),
+        before.sequence + 1,
+        2_000_000_000,
+        &eol_from(world.scheduler.now()),
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), bytes.clone());
+    }
+    let served = record_at(&world, &name);
+    world.scheduler.advance(DAY * 45);
+    let (device, engine, _tasks) = start_later(&world, &blocks, b"new reader");
+    assert_eq!(
+        record_at(&world, &name).data,
+        served.data,
+        "a newer envelope is not re-signed"
+    );
+    assert_eq!(
+        block_on(engine.read_content(node)).expect("the newer envelope remains readable"),
+        b"a note nobody opens again"
+    );
+    assert!(
+        !device
+            .http
+            .requests()
+            .iter()
+            .any(|request| registers(request, name.as_str())),
+        "the refused renewal never registers"
+    );
+}
+
+#[test]
+fn a_walk_refuses_each_scope_floor_raised_during_registration() {
+    for (axis, suffix) in [
+        ("read", SCOPE.to_vec()),
+        ("write", [SCOPE.as_slice(), b"/write-epoch"].concat()),
+        ("cut", [SCOPE.as_slice(), b"/cut-epoch"].concat()),
+    ] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+            vec![write_file(&world, engine, tasks, ROOT, "due.txt")]
+        });
+        let name = write_name(nodes[0]);
+        let before = record_at(&world, &name);
+        world.scheduler.advance(DAY * 45);
+        let device = world.device(b"later");
+        let fired = Arc::new(AtomicBool::new(false));
+        let (raised, floors, key) = (
+            fired.clone(),
+            device.floor_store.clone(),
+            name.as_str().to_owned(),
+        );
+        serve_with(&device, &blocks, 4000, move |request| {
+            if registers(request, &key) && !raised.swap(true, Ordering::SeqCst) {
+                block_on(
+                    floors.raise_epoch_floor(
+                        &[
+                            owner_tag(&kdf::enc_subkey(&SECRET)).as_slice(),
+                            floor_label(&suffix).as_slice(),
+                        ]
+                        .concat(),
+                        u64::MAX,
+                    ),
+                )
+                .unwrap();
+            }
+        });
+        let (engine, _events, mut tasks) = boot_served(&world, &device, 2);
+        until_the_first_walk(&world, &engine, &mut tasks);
+        assert!(
+            fired.load(Ordering::SeqCst),
+            "{axis}: the walk reached registration"
+        );
+        assert_eq!(
+            record_at(&world, &name).data,
+            before.data,
+            "{axis}: the renewal gate refused"
+        );
+    }
+}
+
+#[test]
+fn a_walk_reads_but_does_not_renew_a_root_at_a_foreign_envelope_version() {
+    use cipherbox_engine::net::author::ENVELOPE_V;
+    use cipherbox_engine::testkit::account::seed_account_sealed;
+
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let name = seed_account_sealed(&world, &blocks, Vec::new(), Vec::new(), ENVELOPE_V + 1);
+    let before = record_at(&world, &name);
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
+    let bytes = IpnsRecord::create_v2(
+        &signer,
+        &before.value,
+        before.sequence,
+        2_000_000_000,
+        &eol_from(world.scheduler.now()),
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), bytes.clone());
+    }
+    world.scheduler.advance(DAY * 45);
+    let (_device, engine, _tasks) = start_later(&world, &blocks, b"new reader");
+    assert!(block_on(engine.view()).is_ok(), "the root remains readable");
+    assert_eq!(
+        world
+            .record_store
+            .record_at(&world.record_store.endpoints()[0], name.as_str()),
+        Some(bytes),
+        "the root is never re-signed"
+    );
+}

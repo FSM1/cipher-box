@@ -130,6 +130,7 @@ pub enum BarFloor {
 pub struct Observed {
     name: IpnsName,
     sequence: u64,
+    bytes: Vec<u8>,
 }
 
 impl Observed {
@@ -139,6 +140,7 @@ impl Observed {
         Self {
             name: name.clone(),
             sequence: 0,
+            bytes: Vec::new(),
         }
     }
 
@@ -148,6 +150,7 @@ impl Observed {
         Self {
             name: name.clone(),
             sequence,
+            bytes: Vec::new(),
         }
     }
 
@@ -157,9 +160,18 @@ impl Observed {
     /// client's record under its own `v` would mint structures whose AAD this
     /// build can never reproduce, and republishing it would downgrade `v` — the
     /// rollback the read-body AAD defends against.
-    pub fn gated(name: &IpnsName, sequence: u64, version: u64) -> Result<Self, PublishError> {
+    pub fn gated(
+        name: &IpnsName,
+        sequence: u64,
+        version: u64,
+        bytes: &[u8],
+    ) -> Result<Self, PublishError> {
         refuse_foreign_version(version)?;
-        Ok(Self::record(name, sequence))
+        Ok(Self {
+            name: name.clone(),
+            sequence,
+            bytes: bytes.to_vec(),
+        })
     }
 
     /// This observation, also clearing `sequence`: a record this device's own
@@ -172,9 +184,24 @@ impl Observed {
         }
     }
 
-    /// The name the record was read at, and the publish signs for.
+    /// Carry a gated source to a fresh name during a name wave. Its sequence
+    /// belongs to the old name; the destination keeps its own durable floor.
+    pub(crate) fn at_fresh_name(&self, name: &IpnsName) -> Self {
+        Self {
+            name: name.clone(),
+            sequence: 0,
+            bytes: Vec::new(),
+        }
+    }
+
+    /// The name the publish signs for.
     pub fn name(&self) -> &IpnsName {
         &self.name
+    }
+
+    /// The gated record bytes, empty for a fresh name or a record-only observation.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
     /// The sequence the publish signs strictly above.
@@ -195,6 +222,20 @@ pub(crate) fn refuse_foreign_version(version: u64) -> Result<(), PublishError> {
 
 /// One publish request: the observed name and its node signing key, the head
 /// (metadata) CID to point at, and the content CIDs to register for pinning.
+///
+/// A publish cannot omit its observation:
+/// ```compile_fail
+/// use cipherbox_core::suite::ed25519::Ed25519Signer;
+/// use cipherbox_engine::net::PublishRequest;
+/// fn unobserved(signer: &Ed25519Signer) {
+///     let _ = PublishRequest {
+///         signer,
+///         head_cid: "bafyhead".into(),
+///         content_cids: Vec::new(),
+///         bar: None,
+///     };
+/// }
+/// ```
 pub struct PublishRequest<'a> {
     /// The record the publish builds on, and the name it publishes under (its
     /// Ed25519 key is [`Self::signer`]'s).
@@ -382,37 +423,15 @@ impl PublishError {
 
 impl core::fmt::Display for PublishError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Register(_) => f.write_str("register-first publish failed"),
-            Self::AllEndpointsFailed => f.write_str("all record endpoints failed"),
-            Self::AllEndpointsRefused => f.write_str("every record endpoint refused the record"),
-            Self::FloorRead(_) => f.write_str("durable floor read failed"),
-            Self::EmptyHeadCid => f.write_str("empty head CID (never published)"),
-            Self::EmptyInlineValue => f.write_str("empty inline value (never published)"),
-            Self::RecordTooLarge { size, limit } => write!(
-                f,
-                "record of {size} bytes over the {limit}-byte cap (never published)"
-            ),
-            Self::BelowBar { floor, at, epoch } => {
-                let axis = match floor {
-                    BarFloor::Read => "read",
-                    BarFloor::Write => "write",
-                    BarFloor::Cut => "cut",
-                };
-                write!(
-                    f,
-                    "{axis} epoch {epoch} below the durable floor {at} (never published)"
-                )
-            }
-            Self::ForeignVersion { version } => write!(
-                f,
-                "envelope version {version} is not the one this build authors (never published)"
-            ),
-            Self::SequenceExhausted => {
-                f.write_str("no sequence above the durable floor (never published)")
-            }
-            Self::MarkUnrecorded(_) => f.write_str("durable mark write failed (never published)"),
-        }
+        f.write_str(match self.verdict() {
+            PublishVerdict::RegistryRefused => "register-first publish failed",
+            PublishVerdict::Refused => "record refused by the produce-side gate (never published)",
+            PublishVerdict::RefusedUnaddressed => "empty record value (never published)",
+            PublishVerdict::RefusedOversized => "record exceeds the byte cap (never published)",
+            PublishVerdict::NotLanded => "durable publish state could not be read or written",
+            PublishVerdict::PutUnacknowledged => "all record endpoints failed",
+            PublishVerdict::PutRefused => "every record endpoint refused the record",
+        })
     }
 }
 
@@ -456,6 +475,25 @@ impl<'a> SignatureGate<'a> {
         Ok(Self {
             observed,
             bar,
+            sequence_floor,
+        })
+    }
+
+    /// Renewal's exact-sequence skip must read the sequence after all epoch
+    /// awaits (ADR 0061 D3). The root bar authenticates an unchanged value,
+    /// including a lagging interior admitted under its ratchet (ADR 0021).
+    pub(crate) async fn read_for_renewal<F: FloorStore>(
+        floors: &F,
+        observed: &'a Observed,
+        bar: PublishBar,
+    ) -> Result<Self, PublishError> {
+        let at = bar.read_floors(floors).await?;
+        let sequence_floor = floor::sequence_floor(floors, observed.name.as_str().as_bytes())
+            .await
+            .map_err(PublishError::FloorRead)?;
+        Ok(Self {
+            observed,
+            bar: Some((bar, at)),
             sequence_floor,
         })
     }
@@ -790,4 +828,61 @@ pub(crate) fn head_cid_from_value(value: &[u8]) -> Option<String> {
         .strip_prefix(IPFS_PREFIX)
         .filter(|cid| !cid.is_empty())
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::seams::SeamResult;
+    use crate::testkit::{block_on, fakes::InMemoryFloorStore};
+
+    struct ConcurrentAdopt {
+        inner: InMemoryFloorStore,
+        name: IpnsName,
+    }
+
+    impl FloorStore for ConcurrentAdopt {
+        async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner
+                .raise_sequence_floor(self.name.as_str().as_bytes(), 8)
+                .await?;
+            self.inner.epoch_floor(key).await
+        }
+        async fn sequence_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.sequence_floor(key).await
+        }
+        async fn raise_epoch_floor(&self, key: &[u8], value: u64) -> SeamResult<u64> {
+            self.inner.raise_epoch_floor(key, value).await
+        }
+        async fn raise_sequence_floor(&self, key: &[u8], value: u64) -> SeamResult<u64> {
+            self.inner.raise_sequence_floor(key, value).await
+        }
+        async fn clear(&self) -> SeamResult<()> {
+            self.inner.clear().await
+        }
+    }
+
+    #[test]
+    fn a_renewal_sees_a_sequence_advanced_during_its_epoch_reads() {
+        let signer = Ed25519Signer::from_seed([0x53; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let floors = ConcurrentAdopt {
+            inner: InMemoryFloorStore::default(),
+            name: name.clone(),
+        };
+        block_on(floors.raise_sequence_floor(name.as_str().as_bytes(), 7)).unwrap();
+        let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();
+        let bar = PublishBar {
+            scope_id: [0; 16],
+            read_epoch: 1,
+            write_epoch: Some(1),
+            cut_epoch: Some(0),
+        };
+        let gate = block_on(SignatureGate::read_for_renewal(&floors, &observed, bar)).unwrap();
+        assert_eq!(
+            gate.sequence_floor(),
+            Some(8),
+            "renewal skips the observation at 7"
+        );
+    }
 }

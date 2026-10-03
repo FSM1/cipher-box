@@ -314,6 +314,8 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
 /// floor: what a gate pass surfaces, off the candidate the rejected adopt
 /// authenticated. Terminal owner of the recovered seeds — they zeroize on drop.
 pub(crate) struct RecoveredScopeRoot {
+    /// The write epoch authenticated by the owner-write-blob, if recovered.
+    pub(crate) write_epoch: Option<u64>,
     /// The record's envelope.
     pub(crate) envelope: Envelope,
     /// The sequence the recovery re-verified and re-imposed the floor at.
@@ -401,10 +403,11 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         let node_seed = kdf::node_seed(&read_scope_seed, &env.id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
         let read_body = open_read_body(env, &read_key).map_err(|e| reject(GateStage::Unseal, e))?;
-        let write_scope_seed = self
+        let (write_scope_seed, write_epoch) = self
             .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
             .await?;
         Ok(Some(RecoveredScopeRoot {
+            write_epoch,
             envelope: candidate.envelope,
             sequence,
             grant_section: candidate.grant_section,
@@ -432,7 +435,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         } = self.gate_root(name, record_bytes).await?;
 
         let env = &candidate.envelope;
-        let write_scope_seed = self
+        let (write_scope_seed, write_epoch) = self
             .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
             .await?;
         let node_id = env.id;
@@ -440,6 +443,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             candidate,
             pending,
             RecoveredSeeds {
+                write_epoch,
                 read_scope_seed,
                 write_scope_seed,
                 node_id,
@@ -526,6 +530,8 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
 /// The seeds one root gate pass recovered for this reader, plus the node id the
 /// held set and the drain key on. Terminal owner of both seeds.
 pub(crate) struct RecoveredSeeds {
+    /// The write epoch authenticated by the owner-write-blob, if recovered.
+    pub(crate) write_epoch: Option<u64>,
     /// The scope read seed the child read pipeline derives per-node read keys
     /// from.
     pub(crate) read_scope_seed: Zeroizing<[u8; 32]>,
@@ -644,14 +650,16 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         enc_secret: &X25519Secret,
         env: &Envelope,
         owb: &SignedOwnerWriteBlob,
-    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+    ) -> Result<(Option<Zeroizing<[u8; 32]>>, Option<u64>), GateError> {
         let Some(wf) = floor::write_epoch_floor(self.floors, &self.root_scope_id)
             .await
             .map_err(GateError::Seam)?
         else {
-            return Ok(None);
+            return Ok((None, None));
         };
-        Ok(open_write_scope_seed_at(enc_secret, env, owb, wf))
+        let seed = open_write_scope_seed_at(enc_secret, env, owb, wf);
+        let epoch = seed.as_ref().map(|_| wf);
+        Ok((seed, epoch))
     }
 
     /// The scope write seed this reader is entitled to: the owner recovers it
@@ -662,14 +670,14 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         env: &Envelope,
         section: &GrantSection,
         grant_write_scope_seed: Option<Zeroizing<[u8; 32]>>,
-    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+    ) -> Result<(Option<Zeroizing<[u8; 32]>>, Option<u64>), GateError> {
         match (&self.seeds, &section.owner_write_blob) {
             (SeedSource::Owner(enc_secret), Some(owb)) => {
                 self.recover_write_scope_seed(enc_secret, env, owb).await
             }
             // Re-authorable, NOT a trust failure — held keyless.
-            (SeedSource::Owner(_), None) => Ok(None),
-            (SeedSource::Grantee { .. }, _) => Ok(grant_write_scope_seed),
+            (SeedSource::Owner(_), None) => Ok((None, None)),
+            (SeedSource::Grantee { .. }, _) => Ok((grant_write_scope_seed, None)),
         }
     }
 }

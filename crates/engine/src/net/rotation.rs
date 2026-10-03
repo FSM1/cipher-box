@@ -58,7 +58,7 @@ use super::pointer_fetch::{
 };
 use super::publish::{
     InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome, PublishVerdict,
-    publish_inline, refuse_foreign_version,
+    publish_inline,
 };
 use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
@@ -438,7 +438,7 @@ fn root_observed(
     root: &GatedScopeRoot,
     over_sequence: Option<u64>,
 ) -> Result<Observed, PublishError> {
-    Ok(root.observed()?.clearing(over_sequence.unwrap_or(0)))
+    Ok(root.observed.clone()?.clearing(over_sequence.unwrap_or(0)))
 }
 
 impl RepublishBase {
@@ -591,8 +591,8 @@ impl RootAnchor {
 /// owner recovered from its own blobs. Terminal owner of those seeds: they
 /// zeroize when the value is dropped.
 struct GatedScopeRoot {
-    /// The name the gate passed the record at.
-    name: IpnsName,
+    write_epoch: Option<u64>,
+    observed: Result<Observed, PublishError>,
     envelope: Envelope,
     section: GrantSection,
     read_body: ReadBody,
@@ -604,14 +604,6 @@ struct GatedScopeRoot {
     /// `None` when the root is held keyless — no owner-write-blob, or no
     /// durable write-epoch floor to open it under.
     write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
-}
-
-impl GatedScopeRoot {
-    /// The record this read gated, as the basis an author builds on
-    /// ([`Observed::gated`]).
-    fn observed(&self) -> Result<Observed, PublishError> {
-        Observed::gated(&self.name, self.sequence, self.envelope.v)
-    }
 }
 
 /// One scope root as this pass gated it, plus the write plane read out of it:
@@ -812,7 +804,8 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
         // own verdict.
         .ok_or(RootGateVerdict::Rejected)?;
     Ok(GatedScopeRoot {
-        name: name.clone(),
+        write_epoch: recovered.write_epoch,
+        observed: Observed::gated(name, *sequence, recovered.envelope.v, record_bytes),
         envelope: recovered.envelope,
         section: recovered.grant_section,
         read_body: recovered.read_body,
@@ -844,7 +837,13 @@ impl RootPass {
                     .await
                     .map_err(|_| RootGateVerdict::Unavailable)?;
                 Ok(GatedScopeRoot {
-                    name,
+                    write_epoch: seeds.write_epoch,
+                    observed: Observed::gated(
+                        &name,
+                        adopted.sequence,
+                        candidate.envelope.v,
+                        &candidate.record_bytes,
+                    ),
                     envelope: candidate.envelope,
                     section: candidate.grant_section,
                     sequence: adopted.sequence,
@@ -1827,10 +1826,8 @@ async fn write_plane_of_gated<F: FloorStore>(
 
 /// One owned scope root as the renewal walk admitted it (ADR 0061 D3 step 1).
 pub(crate) struct AdmittedScopeRoot {
-    /// The record bytes the gate admitted.
-    pub(crate) record_bytes: Vec<u8>,
-    /// The admitted sequence.
-    pub(crate) sequence: u64,
+    pub(crate) observed: Result<Observed, PublishError>,
+    pub(crate) bar: PublishBar,
     pub(crate) read_body: ReadBody,
     pub(crate) read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
     /// The read epoch of the admitted record, which `read_scope_seed` belongs to.
@@ -1902,8 +1899,13 @@ where
         RootGateVerdict::Rejected | RootGateVerdict::NotResealable => ScopeRootAdmission::Rejected,
     })?;
     Ok(AdmittedScopeRoot {
-        record_bytes,
-        sequence: gated.sequence,
+        observed: gated.observed,
+        bar: PublishBar {
+            scope_id,
+            read_epoch: gated.envelope.epoch,
+            write_epoch: gated.write_epoch,
+            cut_epoch: Some(gated.section.commitment.cut_epoch),
+        },
         read_body: gated.read_body,
         read_scope_seed: gated.read_scope_seed,
         read_epoch: gated.envelope.epoch,
@@ -2267,7 +2269,8 @@ where
         } = self.gated_write_plane(scope, anchor).await?;
         let observed = root_observed(&root, over_sequence).map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
-            name: _,
+            write_epoch: _,
+            observed: _,
             envelope,
             section,
             read_body,
@@ -2835,7 +2838,8 @@ where
             .map_err(ResolveFailure::from)?;
         let observed = root_observed(&gated, None).map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
-            name: _,
+            write_epoch: _,
+            observed: _,
             envelope,
             section,
             read_body,
@@ -3202,7 +3206,7 @@ where
         sequence: u64,
         envelope: Envelope,
     ) -> Result<SweptNode, SweepResolveFailure> {
-        let observed = Observed::gated(name, sequence, envelope.v)
+        let observed = Observed::gated(name, sequence, envelope.v, record_bytes)
             .map_err(|_| SweepResolveFailure::VersionSkew)?;
         if envelope.id != child.node_id || envelope.scope != source.scope_id {
             return Err(SweepResolveFailure::Rejected);
@@ -3243,7 +3247,8 @@ where
         sequence: u64,
         envelope: &Envelope,
     ) -> Result<ReadBody, SweepResolveFailure> {
-        refuse_foreign_version(envelope.v).map_err(|_| SweepResolveFailure::VersionSkew)?;
+        Observed::gated(name, sequence, envelope.v, record_bytes)
+            .map_err(|_| SweepResolveFailure::VersionSkew)?;
         if envelope.id != node.node_id {
             return Err(SweepResolveFailure::Rejected);
         }
@@ -3360,7 +3365,8 @@ where
             .await
             .map_err(SweepResolveFailure::from)?;
         let GatedScopeRoot {
-            name: _,
+            write_epoch: _,
+            observed: _,
             envelope,
             section,
             read_body,
@@ -3761,7 +3767,10 @@ where
         )
         .await
         .map_err(ResolveFailure::from)?;
-        refuse_foreign_version(gated.envelope.v).map_err(|_| ResolveFailure::Rejected)?;
+        gated
+            .observed
+            .as_ref()
+            .map_err(|_| ResolveFailure::Rejected)?;
         let GatedWriteBody {
             body: write_body,
             epoch: write_epoch,
@@ -4252,6 +4261,7 @@ impl GatedWaveReads {
 /// under, and the envelope fields carried forward byte-stable (#27 D10).
 #[derive(Clone)]
 struct WaveSource {
+    observed: Observed,
     read_body: ReadBody,
     read_epoch: u64,
     read_key: Zeroizing<[u8; SECRET_LEN]>,
@@ -4595,7 +4605,9 @@ where
             }
         }
         match adopter.open_carried_at_floor(name, record_bytes).await {
-            Ok((adopted, envelope)) => self.interior_wave_source(adopted.epoch, adopted, envelope),
+            Ok((adopted, envelope)) => {
+                self.interior_wave_source(name, record_bytes, adopted.epoch, adopted, envelope)
+            }
             Err(GateError::Rejected(rejection)) => {
                 self.lagging_source(&adopter, name, record_bytes, rejection)
                     .await
@@ -4650,7 +4662,7 @@ where
         .map_err(WaveRefusal::of_gate)?
         {
             LaggingRead::Opened(adopted, envelope) => {
-                self.interior_wave_source(anchor.epoch, adopted, *envelope)
+                self.interior_wave_source(name, record_bytes, anchor.epoch, adopted, *envelope)
             }
             LaggingRead::Unreachable(_) => Err(WaveRefusal::dropping(
                 WritePublishError::Unreadable,
@@ -4663,14 +4675,18 @@ where
     /// current read seed.
     fn interior_wave_source(
         &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
         read_epoch: u64,
         adopted: Adopted,
         envelope: Envelope,
     ) -> Result<WaveSource, WaveRefusal> {
-        refuse_foreign_version(envelope.v).map_err(|_| {
-            WaveRefusal::dropping(WritePublishError::Rejected, DropCause::RecordRefused)
-        })?;
+        let observed =
+            Observed::gated(name, adopted.sequence, envelope.v, record_bytes).map_err(|_| {
+                WaveRefusal::dropping(WritePublishError::Rejected, DropCause::RecordRefused)
+            })?;
         Ok(WaveSource {
+            observed,
             read_body: adopted.read_body,
             read_epoch,
             read_key: read_key_for(self.read_scope_seed, &envelope.id),
@@ -4700,7 +4716,7 @@ where
         )
         .await
         .map_err(|verdict| wave_read_verdict(verdict.into()))?;
-        refuse_foreign_version(gated.envelope.v).map_err(|_| WritePublishError::Rejected)?;
+        let observed = gated.observed.map_err(|_| WritePublishError::Rejected)?;
         let envelope = gated.envelope;
         // The root gate binds `envelope.scope` but not `envelope.id`, and every
         // AAD this republish authors binds the id — so a root whose record claims
@@ -4734,6 +4750,7 @@ where
         .map_err(wave_read_verdict)?;
         let signer = write_body_signer(&gated.section, envelope.scope, envelope.epoch);
         Ok(WaveSource {
+            observed,
             read_body: gated.read_body,
             read_epoch: envelope.epoch,
             read_key: read_key_for(&read_scope_seed, &envelope.id),
@@ -4869,7 +4886,10 @@ where
         )
         .await
         .map_err(ResolveFailure::from)?;
-        refuse_foreign_version(gated.envelope.v).map_err(|_| ResolveFailure::Rejected)?;
+        gated
+            .observed
+            .as_ref()
+            .map_err(|_| ResolveFailure::Rejected)?;
         if gated.envelope.id != self.scope_id {
             return Err(ResolveFailure::Rejected);
         }
@@ -5239,6 +5259,7 @@ where
             return Err(WritePublishError::Rejected);
         }
         let WaveSource {
+            observed,
             mut read_body,
             read_epoch,
             read_key,
@@ -5367,7 +5388,7 @@ where
             self.profile,
             &RecordPublishRequest {
                 // The wave moves the node to a name it has not read.
-                observed: &Observed::unread(&node.new_name),
+                observed: &observed.at_fresh_name(&node.new_name),
                 signer: &node.signer,
                 head: &preflighted,
                 content_cids,
@@ -15384,7 +15405,7 @@ mod tests {
 
     /// A gated read of `name` at the sequence a staged record carries.
     fn gated_at(name: &IpnsName) -> Observed {
-        Observed::gated(name, 1, ENVELOPE_V).expect("this build's envelope version")
+        Observed::gated(name, 1, ENVELOPE_V, &[]).expect("this build's envelope version")
     }
 
     /// One interior node handed over verbatim, read at `observed`.
