@@ -6429,7 +6429,7 @@ mod tests {
                         .headers
                         .iter()
                         .find(|(name, _)| name.eq_ignore_ascii_case("x-content-cid"))
-                        .map(|(_, value)| value.clone())
+                        .map(|(_, value)| value.as_str().to_owned())
                         .ok_or_else(|| SeamError::new("upload without a content CID"))?;
                     let body = request.body.as_deref().cloned().unwrap_or_default();
                     let size = body.len();

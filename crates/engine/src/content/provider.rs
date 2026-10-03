@@ -19,7 +19,7 @@ use crate::content::DAG_ROOT_CODEC;
 use crate::deadlines::DeadlinePolicy;
 use crate::seams::{
     AUTHORIZATION, CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse,
-    check_bearer,
+    bearer_value, check_bearer,
 };
 
 /// Ceiling on what a BYO provider may answer with. The endpoint is
@@ -326,16 +326,16 @@ fn base(config: &ByoIpfsConfig) -> &str {
 
 /// The bearer the config carries, plus a content type when the request has a
 /// body. The configured access token is the only credential a BYO endpoint gets.
-fn headers(config: &ByoIpfsConfig, content_type: Option<String>) -> Vec<(String, String)> {
+fn headers(
+    config: &ByoIpfsConfig,
+    content_type: Option<String>,
+) -> Vec<(String, Zeroizing<String>)> {
     let mut headers = Vec::new();
     if let Some(token) = config.access_token.token() {
-        headers.push((
-            AUTHORIZATION.to_owned(),
-            format!("Bearer {}", token.as_str()),
-        ));
+        headers.push((AUTHORIZATION.to_owned(), bearer_value(token)));
     }
     if let Some(content_type) = content_type {
-        headers.push((CONTENT_TYPE.to_owned(), content_type));
+        headers.push((CONTENT_TYPE.to_owned(), content_type.into()));
     }
     headers
 }
@@ -683,8 +683,22 @@ mod tests {
             request
                 .headers
                 .iter()
-                .any(|(n, v)| n == AUTHORIZATION && v == "Bearer psa-key")
+                .any(|(n, v)| n == AUTHORIZATION && v.as_str() == "Bearer psa-key")
         );
+    }
+
+    #[test]
+    fn the_byo_bearer_reaches_the_seam_in_a_wiping_value() {
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok());
+        block_on(test_connection(
+            &config(ByoKind::Psa, Some("psa-key")),
+            &http,
+            &DeadlinePolicy::default(),
+        ))
+        .unwrap();
+
+        crate::testkit::assert_bearer_wipes_on_drop(&http.requests()[0]);
     }
 
     #[test]
@@ -1055,7 +1069,7 @@ mod tests {
                 request
                     .headers
                     .iter()
-                    .any(|(n, v)| n == CONTENT_TYPE && v == APPLICATION_JSON)
+                    .any(|(n, v)| n == CONTENT_TYPE && v.as_str() == APPLICATION_JSON)
             );
         }
     }
