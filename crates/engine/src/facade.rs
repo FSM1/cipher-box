@@ -159,6 +159,7 @@ use crate::sync::BookkeepingSeal;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{EngineSeams, owner_scoped_key, published_op_mark};
+use crate::sync::kept_op::retain_pending;
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
@@ -5995,7 +5996,10 @@ impl<T: SeamTypes> Engine<T> {
             .queued_ops()
             .await
             .map_err(ColdStartError::Seam)?;
-        let scan = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
+        let mut scan = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
+        self.retain_pending_ops(session, &mut scan.mine)
+            .await
+            .map_err(ColdStartError::Seam)?;
         let pending: Vec<_> = scan.mine.into_iter().map(|(_id, op)| op).collect();
 
         // The preserved set outlives the process and the notice map does not, so
@@ -11797,13 +11801,34 @@ where {
     /// entries are dropped from the render here; the cold-start path
     /// dead-letters and removes them from the durable queue.
     ///
-    /// Rides the session's queue memo ([`memoized_scan`]).
+    /// Rides the session's queue memo ([`memoized_scan`]). A kept op is not
+    /// pending: its version is live, and the drain alone reads it again
+    /// (ADR 0069 D7).
     async fn scan_queue(&self) -> Result<QueueScan, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let reader = RecordReader::new(session.enc_subkey());
-        memoized_scan(&self.seams.staging_store, &reader, &self.state.queue_scan)
+        let mut scan = memoized_scan(&self.seams.staging_store, &reader, &self.state.queue_scan)
             .await
-            .map_err(EngineError::from_seam)
+            .map_err(EngineError::from_seam)?;
+        self.retain_pending_ops(session, &mut scan.mine)
+            .await
+            .map_err(EngineError::from_seam)?;
+        Ok(scan)
+    }
+
+    /// Drop this session's kept ops from `ops` ([`retain_pending`]).
+    async fn retain_pending_ops<O>(
+        &self,
+        session: &SessionIdentity,
+        ops: &mut Vec<(OpId, O)>,
+    ) -> SeamResult<()> {
+        retain_pending(
+            &self.seams.staging_store,
+            BookkeepingSeal::new(session.enc_subkey(), &*self.entropy),
+            session.enc_subkey(),
+            ops,
+        )
+        .await
     }
 
     /// This session's pending ops, FIFO.
@@ -18434,9 +18459,11 @@ mod tests {
                 names
             }
 
+            /// The ops still pending: a kept op has published.
             fn queued(&self) -> usize {
-                block_on(self.device.staging_store.queued_ops())
+                block_on(self.engine.scan_queue())
                     .expect("the queue reads")
+                    .mine
                     .len()
             }
 

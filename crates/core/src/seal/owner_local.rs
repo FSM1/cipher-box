@@ -70,11 +70,14 @@ pub enum OwnerLocalKind {
     /// The owner rotation steps that stopped after their first publish, per
     /// scope (ADR 0063 D1).
     OwedRotation,
+    /// The published ops a writer keeps until the live root shows them, with
+    /// the scope and write epoch each published under (ADR 0069 D4).
+    KeptOps,
 }
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::ReceivedShares,
         Self::ContactBook,
         Self::RetireLedger,
@@ -84,6 +87,7 @@ impl OwnerLocalKind {
         Self::GranteeNames,
         Self::RenewalCursor,
         Self::OwedRotation,
+        Self::KeptOps,
     ];
 
     /// The kind's stable name — the `info` suffix and the manifest key.
@@ -98,6 +102,7 @@ impl OwnerLocalKind {
             Self::GranteeNames => "grantee-names",
             Self::RenewalCursor => "renewal-cursor",
             Self::OwedRotation => "owed-rotation",
+            Self::KeptOps => "kept-ops",
         }
     }
 
@@ -113,6 +118,7 @@ impl OwnerLocalKind {
             Self::GranteeNames => 0x08,
             Self::RenewalCursor => 0x09,
             Self::OwedRotation => 0x0a,
+            Self::KeptOps => 0x0b,
         }
     }
 
@@ -323,6 +329,7 @@ mod tests {
                 OwnerLocalKind::GranteeNames => 6,
                 OwnerLocalKind::RenewalCursor => 7,
                 OwnerLocalKind::OwedRotation => 8,
+                OwnerLocalKind::KeptOps => 9,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],

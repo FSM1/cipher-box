@@ -700,6 +700,11 @@
         "name": "owed-rotation",
         "discriminator": 10,
         "hpkeInfo": "cipherbox/v2/owner-local/owed-rotation"
+      },
+      {
+        "name": "kept-ops",
+        "discriminator": 11,
+        "hpkeInfo": "cipherbox/v2/owner-local/kept-ops"
       }
     ],
     "reserved": [
@@ -710,11 +715,11 @@
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 11
+      "count": 12
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 82,
+      "count": 100,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",

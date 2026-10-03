@@ -566,7 +566,7 @@ the owner tag bound into the AAD and never serialized. What is new is the
 `received-shares` (`0x01`), `contact-book` (`0x02`), `retire-ledger` (`0x04`),
 `doomed-journal` (`0x05`), `scope-exit-debt` (`0x06`), `pending-conversions`
 (`0x07`), `grantee-names` (`0x08`), `renewal-cursor` (`0x09`, ADR 0061 D2),
-`owed-rotation` (`0x0a`, ADR 0063 D1) —
+`owed-rotation` (`0x0a`, ADR 0063 D1), `kept-ops` (`0x0b`, ADR 0069 D4) —
 whose discriminator rides the AAD and whose
 name completes the HPKE `info` string `cipherbox/v2/owner-local/<name>`. Kind
 `0x03`, the retired `invite-records` store, stays reserved for ever (ADR 0023

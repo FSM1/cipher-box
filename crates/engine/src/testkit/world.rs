@@ -152,6 +152,34 @@ impl FakeDevice {
         }
     }
 
+    /// The queued ops whose last record has not confirmed: every queued op
+    /// above the one published-op mark this device holds. It reads the mark
+    /// alone, not the engine's kept-op notes, so it does not share the rule a
+    /// test checks.
+    pub async fn pending_ops(
+        &self,
+    ) -> crate::seams::SeamResult<Vec<(crate::seams::OpId, Vec<u8>)>> {
+        use crate::seams::StagingStore;
+        let mut marks = Vec::new();
+        for key in self.staging_store.staged_keys().await? {
+            if key.starts_with(crate::sync::PUBLISHED_OP_MARK_PREFIX)
+                && let Some(bytes) = self.staging_store.staged_bytes(&key).await?
+            {
+                marks.push(u64::from_be_bytes(
+                    bytes.as_slice().try_into().expect("an 8-byte mark"),
+                ));
+            }
+        }
+        assert!(
+            marks.len() <= 1,
+            "one identity's published-op mark per device"
+        );
+        let mark = marks.first().copied();
+        let mut queued = self.staging_store.queued_ops().await?;
+        queued.retain(|(op_id, _)| mark.is_none_or(|mark| op_id.0 > mark));
+        Ok(queued)
+    }
+
     /// This device's floors as the engine keys them for the session `secret`
     /// starts: [`OwnerScopedFloorStore`] namespaces every key by identity, so a
     /// raw read of the shared store finds none of the engine's own floors.
