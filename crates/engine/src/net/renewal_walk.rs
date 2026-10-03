@@ -9,7 +9,7 @@ use core::cell::RefCell;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{ChildRef, NodeKind, ReadBody};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -20,7 +20,9 @@ use self::cursor::{
     CursorStore, DeferredRoot, MAX_CURSOR_PATH, MAX_DEFERRED_ROOTS, RenewalCursor, WalkRoot,
 };
 use super::REGISTRY_BATCH_MAX;
-use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
+use super::child::{
+    AdmittedChild, ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record,
+};
 use super::eol::{self, renewal_eol_from};
 use super::fanout::{FanoutRecord, fanout_get_classified};
 use super::fork::{Fork, holds_renewal};
@@ -756,7 +758,7 @@ where
         .await
         {
             Ok(ChildRecord::Admitted(read)) => {
-                let super::child::AdmittedChild {
+                let AdmittedChild {
                     adopted,
                     observed,
                     fork,
@@ -811,8 +813,7 @@ where
             Ok(observed) => observed.bytes(),
             Err(refused) => refused.bytes.as_slice(),
         };
-        let Ok(verified) = IpnsRecord::unmarshal(bytes).and_then(|record| record.verify(name))
-        else {
+        let Some(verified) = super::fork::verified(name, bytes) else {
             return;
         };
         let sequence = verified.sequence;

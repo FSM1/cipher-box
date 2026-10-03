@@ -4,12 +4,8 @@
 - **Date:** 2026-09-30
 - **Relates to:** `blueprint/engine.md` "Resolve/publish pipeline" (Liveness) and "sweep",
   `blueprint/api.md` "Republisher module and recovery", the `CONTEXT.md` terms "Write seed",
-  "History link" and "Name wave", [ADR 0006](./0006-owner-local-sealed-store.md) and ADR 0030 D11
-  (the owner-local structure), [ADR 0010](./0010-recycle-bin-is-an-owner-sealed-index.md),
-  [ADR 0013](./0013-a-lapsed-bin-index-record-is-rewritten-not-refused.md),
-  [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md),
-  [ADR 0033](./0033-every-attacker-sized-field-has-one-canonical-form-and-a-symmetric-fail-closed-bound.md),
-  and ADR 0062 (the revival of a lapsed name)
+  "History link" and "Name wave", ADR 0006 and ADR 0030 D11 (the owner-local structure), ADR 0010,
+  ADR 0013, ADR 0020, ADR 0033, and ADR 0062 (the revival of a lapsed name)
 - **Implemented by:** FSM1/cipher-box#2112 (D1 to D4)
 - **Amends:** [ADR 0057](./0057-an-observer-outside-a-session-reads-a-verified-record-and-adopts-nothing.md) Context
 
@@ -55,11 +51,10 @@ cursor that does not open or decode, or a replayed older one, costs only work.
 `floor + 1`, and only when no other write can come between.** The order for each renewal:
 
 1. The gate admits the record: the root adopt (`gate::adopt`) for a scope root, or the gated child
-   resolve for any other node. Each adopts, or re-opens at the floor (`open_at_floor`) a record
-   that this device already adopted. The admitted sequence is S. Amended on 2026-10-03: the walk
-   does not renew a record at an envelope version that this build does not author, and reports it
-   as a failed renewal with a version detail; the liveness loop takes the same rule and the scope
-   bar.
+   resolve for any other node. Each adopts, or re-opens at the floor (`open_at_floor`) a record that
+   this device already adopted. The admitted sequence is S. Amended on 2026-10-03: the walk does not
+   renew a record at an envelope version that this build does not author, and reports it as a failed
+   renewal with a version detail; the liveness loop takes the same rule and the scope bar.
 2. The walk skips a name that a delete doomed, that the retire ledger owes a retire, that the
    parent no longer names, or that the drain has a publish of in flight. Amended by ADR 0063 D4
    on 2026-10-01: the walk also skips every name in a scope that has an owed rotation entry.
@@ -73,10 +68,8 @@ cursor that does not open or decode, or a replayed older one, costs only work.
 6. The walk signs at S + 1 with the EOL `eol_from(now)` minus one day, so a write that another
    device signs at S + 1 at the same time has the later EOL, while that device's clock is less
    than one day behind.
-7. Every reader sides with the endpoints: at one sequence, the fan-out resolve (`fanout::scan`)
-   and the last-known-good keeper (`keep_newest_last_known_good`) take the record with the later
-   EOL. Today both keep the first record that they hold, so a device that adopted a renewal can
-   refuse the real write as `SequenceNotNewer`, or start from a cache that does not show it.
+7. Every reader sides with the endpoints: at one sequence, the fan-out resolve (`fanout::scan`) and
+   the last-known-good keeper (`keep_newest_last_known_good`) take the record with the later EOL.
    Amended by ADR 0066 D2 on 2026-10-02: at one sequence and one EOL, the higher signed `data`
    bytes win, and a different record at the floor is a same-sequence fork.
 

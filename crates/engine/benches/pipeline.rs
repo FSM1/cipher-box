@@ -28,7 +28,7 @@ use cipherbox_engine::testkit::account::{
     Blocks, EOL, TTL_NANOS, fresh_observed, owner_identity, serve_http,
 };
 use cipherbox_engine::testkit::fakes::{
-    InMemoryCredentialStore, InMemoryFloorStore, InMemorySnapshotCache, ScriptedHttp,
+    ADMITTED_BAR, InMemoryCredentialStore, InMemoryFloorStore, InMemorySnapshotCache, ScriptedHttp,
 };
 use cipherbox_engine::testkit::{
     FakeDevice, FakeWorld, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_SCOPE_SEED,
@@ -256,12 +256,7 @@ impl Adopter for AcceptingAdopter {
             node_id: ROOT_ID,
             read_scope_seed: None,
             version: net::author::ENVELOPE_V,
-            bar: cipherbox_engine::net::PublishBar {
-                scope_id: [0; 16],
-                read_epoch: 1,
-                write_epoch: None,
-                cut_epoch: None,
-            },
+            bar: ADMITTED_BAR,
         })
     }
 

@@ -783,12 +783,7 @@ mod tests {
                     node_id: self.grant.map(|(_, id)| id).unwrap_or([0u8; 16]),
                     read_scope_seed: None,
                     version: self.version,
-                    bar: crate::net::PublishBar {
-                        scope_id: [0; 16],
-                        read_epoch: 1,
-                        write_epoch: None,
-                        cut_epoch: None,
-                    },
+                    bar: crate::testkit::fakes::ADMITTED_BAR,
                 }),
                 Verdict::DeferSequence => Ok(super::AdoptOutcome {
                     pass: GatePass::DeferredSequence(PendingSequenceRaise::new(
@@ -808,12 +803,7 @@ mod tests {
                     node_id: [0u8; 16],
                     read_scope_seed: None,
                     version: self.version,
-                    bar: crate::net::PublishBar {
-                        scope_id: [0; 16],
-                        read_epoch: 1,
-                        write_epoch: None,
-                        cut_epoch: None,
-                    },
+                    bar: crate::testkit::fakes::ADMITTED_BAR,
                 }),
                 Verdict::TrustViolation => Err(GateError::Rejected(GateRejection {
                     stage: GateStage::RecordVerify,
@@ -867,12 +857,7 @@ mod tests {
                     epoch: 0,
                 },
                 version: self.version,
-                bar: crate::net::PublishBar {
-                    scope_id: [0; 16],
-                    read_epoch: 1,
-                    write_epoch: None,
-                    cut_epoch: None,
-                },
+                bar: crate::testkit::fakes::ADMITTED_BAR,
             }))
         }
     }

@@ -319,7 +319,9 @@ mod tests {
     use crate::seams::{EndpointId, FloorStore, SeamResult, SnapshotCache};
     use crate::sync::op::Op;
     use crate::sync::pointer::{PointerRecord, SessionRole, seal_repoint, vault_pointer_name};
-    use crate::testkit::fakes::{InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache};
+    use crate::testkit::fakes::{
+        ADMITTED_BAR, InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache,
+    };
     use crate::testkit::{SeededEntropy, block_on};
 
     const SECRET: &[u8] = b"cold-start-login-secret-fixture";
@@ -439,12 +441,7 @@ mod tests {
                     node_id: [0u8; 16],
                     read_scope_seed: None,
                     version: ENVELOPE_V,
-                    bar: crate::net::PublishBar {
-                        scope_id: [0; 16],
-                        read_epoch: 1,
-                        write_epoch: None,
-                        cut_epoch: None,
-                    },
+                    bar: ADMITTED_BAR,
                 })
         }
 
@@ -483,12 +480,7 @@ mod tests {
                     epoch: 1,
                 },
                 version: ENVELOPE_V,
-                bar: crate::net::PublishBar {
-                    scope_id: [0; 16],
-                    read_epoch: 1,
-                    write_epoch: None,
-                    cut_epoch: None,
-                },
+                bar: ADMITTED_BAR,
             }))
         }
     }

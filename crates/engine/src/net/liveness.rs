@@ -415,9 +415,8 @@ where
         .map(|receipt| Some(receipt.outcome))
 }
 
-/// [`eol_republish`] for a held node record: the token carries its envelope
-/// version, so a version this build does not author is refused once the record
-/// is due, and the signature clears the scope bar.
+/// [`eol_republish`] for a held node record under its [`HeldEnvelope`]: a
+/// foreign version is refused only once the record is due.
 #[allow(clippy::too_many_arguments)]
 async fn eol_renew_sealed<T, H, C, F, Sch>(
     transport: &T,
@@ -437,9 +436,7 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let Ok(held_record) =
-        IpnsRecord::unmarshal(&held.record_bytes).and_then(|record| record.verify(name))
-    else {
+    let Some(held_record) = super::fork::verified(name, &held.record_bytes) else {
         return Ok(None);
     };
     let Some((verified, _bytes)) = fanout_get_verify(transport, name).await else {

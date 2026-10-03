@@ -17008,12 +17008,7 @@ mod tests {
                     node_id: [0u8; 16],
                     read_scope_seed: None,
                     version: ENVELOPE_V,
-                    bar: crate::net::PublishBar {
-                        scope_id: [0; 16],
-                        read_epoch: 1,
-                        write_epoch: None,
-                        cut_epoch: None,
-                    },
+                    bar: crate::testkit::fakes::ADMITTED_BAR,
                 })
             }
 

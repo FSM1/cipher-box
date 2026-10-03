@@ -199,22 +199,22 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
     }
 }
 
-impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
-    /// The floors a renewal of this scope root clears, as the gate admitted it.
-    fn root_bar(
-        &self,
-        envelope: &Envelope,
-        section: &GrantSection,
-        write_epoch: Option<u64>,
-    ) -> PublishBar {
-        PublishBar {
-            scope_id: self.root_scope_id,
-            read_epoch: envelope.epoch,
-            write_epoch,
-            cut_epoch: Some(section.commitment.cut_epoch),
-        }
+/// The floors a renewal of a scope root clears, as the gate admitted it.
+pub(super) fn root_bar(
+    scope_id: [u8; 16],
+    envelope: &Envelope,
+    section: &GrantSection,
+    write_epoch: Option<u64>,
+) -> PublishBar {
+    PublishBar {
+        scope_id,
+        read_epoch: envelope.epoch,
+        write_epoch,
+        cut_epoch: Some(section.commitment.cut_epoch),
     }
+}
 
+impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     /// [`assemble_candidate`] over this adopter's own gateway, HTTP seam, and
     /// held local head.
     async fn assemble_candidate(
@@ -283,7 +283,8 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         let (candidate, pending, seeds) = self.gate_and_recover(name, record_bytes).await?;
         Ok(AdoptOutcome {
             pass: GatePass::Deferred(pending),
-            bar: self.root_bar(
+            bar: root_bar(
+                self.root_scope_id,
                 &candidate.envelope,
                 &candidate.grant_section,
                 seeds.write_epoch,
@@ -308,7 +309,12 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             .recover_own_scope_root(name, record_bytes)
             .await?
             .map(|root| OwnScopeMaterial {
-                bar: self.root_bar(&root.envelope, &root.grant_section, root.write_epoch),
+                bar: root_bar(
+                    self.root_scope_id,
+                    &root.envelope,
+                    &root.grant_section,
+                    root.write_epoch,
+                ),
                 node_id: root.envelope.id,
                 read_scope_seed: root.read_scope_seed,
                 write_scope_seed: root.write_scope_seed,

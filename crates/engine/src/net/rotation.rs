@@ -43,7 +43,7 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
 use super::adopter::{
-    LocalHead, RecoveredSeeds, RootAdopter, fetch_head_block, open_write_scope_seed_at,
+    LocalHead, RecoveredSeeds, RootAdopter, fetch_head_block, open_write_scope_seed_at, root_bar,
 };
 use super::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
@@ -1929,12 +1929,7 @@ where
             error,
             bytes: record_bytes,
         }),
-        bar: PublishBar {
-            scope_id,
-            read_epoch: gated.envelope.epoch,
-            write_epoch: gated.write_epoch,
-            cut_epoch: Some(gated.section.commitment.cut_epoch),
-        },
+        bar: root_bar(scope_id, &gated.envelope, &gated.section, gated.write_epoch),
         read_body: gated.read_body,
         read_scope_seed: gated.read_scope_seed,
         read_epoch: gated.envelope.epoch,

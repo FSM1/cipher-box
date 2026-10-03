@@ -154,9 +154,10 @@ bytes (FSM1/cipher-box-next#28 D2).
   normal CAS path. A held node record carries its envelope version and its
   scope bar (`HeldEnvelope`): the renewal does not sign a version that this
   build does not author, or a record whose scope floors rose above the bar,
-  and sends `renewalFailed` for it, as the renewal walk does. The same pass then runs a bounded part of the **renewal
-  walk** (ADR 0061 D1 to D4), which reaches every other name of the vault. A
-  session renews only a name whose signer derives from a write seed it holds:
+  and sends `renewalFailed` for it, as the renewal walk does. The same pass
+  then runs a bounded part of the **renewal walk** (ADR 0061 D1 to D4), which
+  reaches every other name of the vault.
+  A session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
   set. The renewal walk holds back the renewal of a name the endpoints serve
   forked while more than 30 days of its EOL are left, because a record at
@@ -175,10 +176,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   walk window. It does not renew a record at an envelope version that this
   build does not author, and emits `renewalFailed` with a version detail for
   it; the signature clears the scope bar of the admitted root (ADR 0061 D3
-  as amended on 2026-10-03). It skips a doomed name, a name the retire ledger owes a retire,
-  a name the parent no longer names, and a name the drain is publishing. It
-  registers in batches, reads the name again after the registration, reads the
-  durable floor with no await before the signature, and signs at `floor + 1`
+  as amended on 2026-10-03). It skips a doomed name, a name the retire ledger
+  owes a retire, a name the parent no longer names, and a name the drain is
+  publishing. It registers in batches, reads the name again after the
+  registration, reads the durable floor with no await before the signature,
+  and signs at `floor + 1`
   with an EOL one day short of `eol_from(now)`. A `LostRace` is not retried in
   that cycle. The numbers: at most 500 visits for each pass, a walk window of
   60 days of EOL left, and a new cycle no sooner than 7 days after the previous

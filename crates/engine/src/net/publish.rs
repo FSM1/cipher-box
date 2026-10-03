@@ -228,8 +228,7 @@ pub(crate) struct RefusedRead {
 }
 
 /// [`Observed::gated`]'s version rule, for a read that no publish at its own
-/// name builds on: a name wave's interior source, which publishes at a fresh
-/// name, a moved node, and a read-side label.
+/// name builds on.
 pub(crate) fn refuse_foreign_version(version: u64) -> Result<(), PublishError> {
     if version != ENVELOPE_V {
         return Err(PublishError::ForeignVersion { version });
