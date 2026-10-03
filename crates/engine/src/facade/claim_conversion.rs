@@ -156,6 +156,12 @@ pub(crate) trait ConversionSites {
         node: NodeId,
         index: &[ChildScopeRef],
     ) -> Result<Vec<ChildScopeRef>, EngineError>;
+
+    /// Whether an owner command runs the re-drive, so its root reads fall back
+    /// at once (ADR 0068 D1).
+    fn command(&self) -> bool {
+        false
+    }
 }
 
 /// What a write-scope cut needs beyond the conversion itself (ADR 0024 D4).
@@ -1102,6 +1108,10 @@ pub(super) struct EngineSites<'a, T: SeamTypes> {
 }
 
 impl<T: SeamTypes> ConversionSites for EngineSites<'_, T> {
+    fn command(&self) -> bool {
+        true
+    }
+
     async fn place(&self, node: NodeId) -> Result<OwnerScope, EngineError> {
         let owner_identity = self.session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(self.session);

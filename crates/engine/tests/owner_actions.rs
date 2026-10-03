@@ -15548,6 +15548,35 @@ fn a_revoke_over_honest_lag_runs_on_the_older_copy() {
     );
 }
 
+/// ADR 0068 D1 as amended: the read cut lands, the wave stops at its
+/// re-point, and the revokee then publishes a root whose head block no source
+/// holds. The revoke run again re-drives the cut from the last copy at once,
+/// and ends in one pass.
+#[test]
+fn a_rerun_over_a_head_block_plant_after_the_cut_stands_ends_in_one_pass() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the wave is owed");
+    fx.world.record_store.heal_put_for(pointer.as_str());
+    let old_root = derive_write_name(&revokee_seed, &fx.folder.0);
+    let sequence = sequence_at(&fx.world, &old_root) + 1;
+    plant_root_served_at(&fx, &revokee_seed, sequence, false);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    let events = events_so_far(&mut fx._events);
+    assert!(
+        root_refusals(&fx, &events, sequence) > 0,
+        "the drop is reported"
+    );
+    assert_eq!(owed_or_abandoned(&events, fx.folder), (false, false));
+    assert_eq!(fx.granted_scope_repoint().write_epoch, 3, "the wave landed");
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+}
+
 /// ADR 0068 as amended: the read cut lands, the wave stops at its re-point,
 /// and the revokee then plants at the root. The boundary walk refuses the
 /// planted root, and the sync pass still re-drives the owed wave from the last

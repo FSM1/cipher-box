@@ -7,7 +7,9 @@
 use super::claim_conversion::{ConversionSites, Running};
 use super::*;
 use crate::grants::resume_owed_interior_move;
-use crate::rotation::{NoBound, RotateOnCutError, WriteRotateError, owed_read_cut};
+use crate::rotation::{
+    AtOnce, NoBound, NodeBound, RotateOnCutError, WriteRotateError, owed_read_cut,
+};
 use crate::sync::owed_rotation::bound_elapsed;
 use crate::sync::owed_rotation::{
     EntryBound, OwedEntry, OwedRecordError, OwedRotation, OwedStep, ScopeHold,
@@ -648,7 +650,12 @@ where
         };
         let bound = self.owed_bound(node).await;
         let net = if cut {
-            self.cut_net(&target, bound.as_ref().map_or(&NoBound, |b| b))
+            let root_bound: &dyn NodeBound = if sites.command() {
+                &AtOnce
+            } else {
+                bound.as_ref().map_or(&NoBound, |b| b)
+            };
+            self.cut_net(&target, root_bound)
         } else {
             self.net(&target, PointerConsultArm::Refused)
         };
@@ -799,7 +806,7 @@ where
             self.identity,
         ))
         .map_err(|e| stop(EngineError::from_revoke(e)))?;
-        self.rotate_planes(node, &target, &scope_root_name, &cut, None, false)
+        self.rotate_planes(node, &target, &scope_root_name, &cut, None, sites.command())
             .await
             .map_err(cut_stop)?;
         Ok(())
@@ -843,7 +850,7 @@ where
             ))
             .map_err(|e| stop(EngineError::from_revoke(e)))?;
             let write = self
-                .rotate_planes(node, &target, &scope_root_name, &cut, None, false)
+                .rotate_planes(node, &target, &scope_root_name, &cut, None, sites.command())
                 .await
                 .map_err(cut_stop)?
                 .write
