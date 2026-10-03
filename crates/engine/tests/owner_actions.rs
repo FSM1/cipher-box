@@ -53,7 +53,7 @@ use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
 use cipherbox_engine::seams::{
-    BoxedTask, ContactLabel, FloorStore, Mailbox, RecordTransport, Scheduler,
+    BoxedTask, ContactLabel, EndpointId, FloorStore, Mailbox, RecordTransport, Scheduler,
     SharerScopedFloorStore, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::VaultSettings;
@@ -14716,4 +14716,156 @@ fn a_node_new_to_an_entry_past_its_time_does_not_drop_on_its_first_stop() {
         vec![(fx.folder, grandchild, DropCause::NoHeadBlock)]
     );
     assert_revoke_finished(&mut fx, &revokee_seed, child);
+}
+
+// ---------------------------------------------------------------------------
+// A lagging endpoint while another endpoint fails (ADR 0071)
+// ---------------------------------------------------------------------------
+
+/// A grant, then a file created under `parent` while endpoint B refuses PUTs:
+/// B serves the record at `parent` one sequence below A. Returns (A, B).
+fn lag_one_endpoint(fx: &mut GrantScenario, parent: NodeId) -> (EndpointId, EndpointId) {
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let endpoints = fx.world.record_store.endpoints();
+    let (a, b) = (endpoints[0].clone(), endpoints[1].clone());
+    fx.world.record_store.fail_put_endpoint(&b);
+    block_on(fx.engine.command(Command::Create {
+        parent,
+        name: "upload.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.world.record_store.heal_put_endpoint(&b);
+    let name = write_name(parent);
+    assert_eq!(
+        sequence_served_by(&fx.world, &b, &name) + 1,
+        sequence_served_by(&fx.world, &a, &name),
+        "B lags A by one sequence"
+    );
+    (a, b)
+}
+
+fn sequence_served_by(world: &FakeWorld, endpoint: &EndpointId, name: &IpnsName) -> u64 {
+    let bytes = world
+        .record_store
+        .record_at(endpoint, name.as_str())
+        .expect("the endpoint holds a record");
+    IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(name))
+        .expect("the record verifies")
+        .sequence
+}
+
+fn revoke_recipient(fx: &mut GrantScenario) -> Result<CommandOutcome, EngineError> {
+    block_on(fx.engine.command(Command::Revoke {
+        node: fx.folder,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+    }))
+}
+
+fn assert_revoke_unavailable_while_a_fails(parent_of: fn(&GrantScenario) -> NodeId) {
+    let mut fx = GrantScenario::new();
+    let parent = parent_of(&fx);
+    let (a, _) = lag_one_endpoint(&mut fx, parent);
+    events_so_far(&mut fx._events);
+    fx.world.record_store.fail_endpoint(&a);
+
+    let outcome = revoke_recipient(&mut fx);
+    assert!(
+        matches!(outcome, Err(EngineError::Seam { .. })),
+        "a below-floor pick while an endpoint fails is unavailable: {outcome:?}"
+    );
+    assert_eq!(abuse_events(&mut fx._events), 0, "no trust event");
+
+    fx.world.record_store.heal_endpoint(&a);
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+}
+
+#[test]
+fn a_revoke_over_a_lagging_granted_root_while_an_endpoint_fails_is_unavailable() {
+    assert_revoke_unavailable_while_a_fails(|fx| fx.folder);
+}
+
+#[test]
+fn a_revoke_over_a_lagging_vault_root_while_an_endpoint_fails_is_unavailable() {
+    assert_revoke_unavailable_while_a_fails(|_| ROOT);
+}
+
+#[test]
+fn a_revoke_over_a_lagging_endpoint_with_every_endpoint_up_finishes() {
+    let mut fx = GrantScenario::new();
+    let folder = fx.folder;
+    lag_one_endpoint(&mut fx, folder);
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+}
+
+/// [`lag_one_endpoint`], then A serves B's old record too: every endpoint
+/// answers, and the freshest record is below the floor.
+fn every_endpoint_serves_below_floor(parent_of: fn(&GrantScenario) -> NodeId) -> GrantScenario {
+    let mut fx = GrantScenario::new();
+    let parent = parent_of(&fx);
+    let (a, b) = lag_one_endpoint(&mut fx, parent);
+    let name = write_name(parent);
+    let old = fx
+        .world
+        .record_store
+        .record_at(&b, name.as_str())
+        .expect("B holds the old record");
+    fx.world.record_store.seed_record(&a, name.as_str(), old);
+    events_so_far(&mut fx._events);
+    fx
+}
+
+#[test]
+fn a_revoke_over_a_below_floor_record_from_every_endpoint_stays_a_trust_violation() {
+    let mut fx = every_endpoint_serves_below_floor(|fx| fx.folder);
+    let outcome = revoke_recipient(&mut fx);
+    assert!(
+        matches!(outcome, Err(EngineError::TrustViolation { .. })),
+        "every endpoint answered, so the below-floor pick is a rollback: {outcome:?}"
+    );
+}
+
+#[test]
+fn a_read_of_a_below_floor_record_from_every_endpoint_stays_abuse() {
+    let granted_root: fn(&GrantScenario) -> NodeId = |fx| fx.folder;
+    for parent_of in [granted_root, |_| ROOT] {
+        let mut fx = every_endpoint_serves_below_floor(parent_of);
+        let parent = parent_of(&fx);
+        block_on(fx.engine.command(Command::SetFocus { node: Some(parent) }))
+            .expect("the focus moves");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        assert!(abuse_events(&mut fx._events) > 0, "a trust event");
+    }
+}
+
+fn assert_read_stale_while_a_fails(parent_of: fn(&GrantScenario) -> NodeId) {
+    let mut fx = GrantScenario::new();
+    let parent = parent_of(&fx);
+    let (a, _) = lag_one_endpoint(&mut fx, parent);
+    let children = |fx: &GrantScenario| {
+        block_on(fx.engine.view())
+            .expect("a rendered view")
+            .children(parent)
+            .len()
+    };
+    let before = children(&fx);
+    events_so_far(&mut fx._events);
+    fx.world.record_store.fail_endpoint(&a);
+
+    block_on(fx.engine.command(Command::SetFocus { node: Some(parent) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(abuse_events(&mut fx._events), 0, "no trust event");
+    assert_eq!(children(&fx), before, "last-known-good stays");
+}
+
+#[test]
+fn a_focus_read_of_a_lagging_granted_root_while_an_endpoint_fails_is_stale_not_abuse() {
+    assert_read_stale_while_a_fails(|fx| fx.folder);
+}
+
+#[test]
+fn a_tick_read_of_a_lagging_vault_root_while_an_endpoint_fails_is_stale_not_abuse() {
+    assert_read_stale_while_a_fails(|_| ROOT);
 }

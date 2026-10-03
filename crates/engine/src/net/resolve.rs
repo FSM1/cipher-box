@@ -350,8 +350,9 @@ where
         ResolveMode::NoCache => None,
     };
 
-    let (fetched, absent) = fanout_get_tied_classified(transport, name).await;
-    let (fetched, tied) = match fetched {
+    let fetch = fanout_get_tied_classified(transport, name).await;
+    let absent = fetch.absent;
+    let (fetched, tied) = match fetch.pick {
         Some((verified, bytes, tied)) => (Some((verified, bytes)), tied),
         None => (None, Vec::new()),
     };
@@ -461,6 +462,13 @@ where
                         ),
                         Err(GateError::Seam(error)) => return Err(error),
                     }
+                }
+                // ADR 0071 D1: a failed endpoint can hide the record the
+                // floor came from, so this is staleness, not a rollback.
+                RejectionReason::SequenceNotNewer { floor, sequence }
+                    if sequence < floor && fetch.endpoint_failed =>
+                {
+                    (ResolveOutcome::NoUpdate, GatedParts::default())
                 }
                 _ => (
                     ResolveOutcome::TrustViolation(rejection),

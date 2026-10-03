@@ -186,6 +186,12 @@ scenario fails the meta-test):
   vault root back with 45 days left and reports it, renews over it with 25
   days left, and renews over a tie of one value, and the renewal set renews
   over a fork inside 30 days (`tests/renewal_walk.rs`, `net::liveness`).
+  A lagging endpoint (ADR 0071): with two endpoints, where one lags one
+  sequence and the other fails, a revoke gets `EngineError::Seam` and a read
+  sends no abuse event; with both endpoints up and both serving the old
+  record, each stays a trust violation; the revoke finishes after the failed
+  endpoint recovers; the fix tests fail on the code before ADR 0071
+  (`tests/owner_actions.rs`, `net::fanout`).
   `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
   wave left at its old name, which nothing renews; `tests/write_plane.rs`
   covers a renewal inside the drain's window, and a lost race on a scope root

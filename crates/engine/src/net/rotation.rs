@@ -85,8 +85,8 @@ use crate::grants::{
     recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
 use crate::net::fanout::{
-    FanoutRecord, fanout_get_answered, fanout_get_classified, fanout_get_tied,
-    fanout_get_tied_classified, fanout_get_verify,
+    FanoutRecord, fanout_get_answered, fanout_get_classified, fanout_get_tied_classified,
+    fanout_get_verify,
 };
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
@@ -757,6 +757,21 @@ enum RootGateVerdict {
     /// step over the record ([`OwnerRotationNet::last_known_good_root`]); every
     /// other reader folds it back into one.
     NotResealable,
+    /// The sequence stage refused a record strictly below the floor. A
+    /// rejection, unless the fan-out that served it met a failed endpoint
+    /// ([`Self::after_fanout`]).
+    BelowFloor,
+}
+
+impl RootGateVerdict {
+    /// A below-floor pick from a fan-out with a failed endpoint is
+    /// unavailable, not a rollback (ADR 0071 D1).
+    fn after_fanout(self, endpoint_failed: bool) -> Self {
+        match self {
+            Self::BelowFloor if endpoint_failed => Self::Unavailable,
+            verdict => verdict,
+        }
+    }
 }
 
 impl From<RootGateVerdict> for ResolveFailure {
@@ -765,7 +780,8 @@ impl From<RootGateVerdict> for ResolveFailure {
             RootGateVerdict::Unavailable => Self::Unavailable,
             RootGateVerdict::Rejected
             | RootGateVerdict::Superseded
-            | RootGateVerdict::NotResealable => Self::Rejected,
+            | RootGateVerdict::NotResealable
+            | RootGateVerdict::BelowFloor => Self::Rejected,
         }
     }
 }
@@ -774,7 +790,9 @@ impl From<RootGateVerdict> for SweepResolveFailure {
     fn from(verdict: RootGateVerdict) -> Self {
         match verdict {
             RootGateVerdict::Unavailable => Self::Unavailable,
-            RootGateVerdict::Rejected | RootGateVerdict::NotResealable => Self::Rejected,
+            RootGateVerdict::Rejected
+            | RootGateVerdict::NotResealable
+            | RootGateVerdict::BelowFloor => Self::Rejected,
             RootGateVerdict::Superseded => Self::Superseded,
         }
     }
@@ -798,8 +816,8 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
     let RejectionReason::SequenceNotNewer { floor, sequence } = reason else {
         return Err(RootGateVerdict::Rejected);
     };
-    if sequence != floor {
-        return Err(RootGateVerdict::Rejected);
+    if sequence < floor {
+        return Err(RootGateVerdict::BelowFloor);
     }
     let recovered = adopter
         .recover_own_scope_root(name, record_bytes)
@@ -1090,9 +1108,9 @@ pub(crate) struct WalkedBoundaries {
 /// rejection is a trust verdict here (ADR 0003 D2).
 fn walk_verdict(verdict: RootGateVerdict, scope_id: [u8; 16]) -> WalkFailure {
     match verdict {
-        RootGateVerdict::Rejected | RootGateVerdict::NotResealable => {
-            WalkFailure::Rejected { scope_id }
-        }
+        RootGateVerdict::Rejected
+        | RootGateVerdict::NotResealable
+        | RootGateVerdict::BelowFloor => WalkFailure::Rejected { scope_id },
         RootGateVerdict::Unavailable | RootGateVerdict::Superseded => WalkFailure::Unavailable,
     }
 }
@@ -1465,9 +1483,8 @@ where
             child.scope_id,
         )
         .under_parent_node_seed(parent_node_seed.clone());
-        let (pick, record_bytes, tied) = fanout_get_tied(self.transport, &name)
-            .await
-            .ok_or(WalkFailure::Unavailable)?;
+        let fetch = fanout_get_tied_classified(self.transport, &name).await;
+        let (pick, record_bytes, tied) = fetch.pick.ok_or(WalkFailure::Unavailable)?;
         let (gated, fork) = gated_root_forked(
             &adopter,
             self.snapshot_cache,
@@ -1478,7 +1495,9 @@ where
             Some(child.scope_id),
         )
         .await
-        .map_err(|verdict| walk_verdict(verdict, child.scope_id))?;
+        .map_err(|verdict| {
+            walk_verdict(verdict.after_fanout(fetch.endpoint_failed), child.scope_id)
+        })?;
         let (write, grandchildren) = self
             .write_plane(&gated, &name, child.scope_id, RootAnchor::Descendant)
             .await;
@@ -1878,10 +1897,11 @@ where
         Some(seed) => adopter.under_parent_node_seed(seed.clone()),
         None => adopter,
     };
-    let (pick, record_bytes, tied) = match fanout_get_tied_classified(transport, name).await {
-        (Some((pick, record_bytes, tied)), _) => (pick, record_bytes, tied),
-        (None, true) => return Err(ScopeRootAdmission::Gone),
-        (None, false) => return Err(ScopeRootAdmission::Unavailable),
+    let fetch = fanout_get_tied_classified(transport, name).await;
+    let (pick, record_bytes, tied) = match fetch.pick {
+        Some(pick) => pick,
+        None if fetch.absent => return Err(ScopeRootAdmission::Gone),
+        None => return Err(ScopeRootAdmission::Unavailable),
     };
     let (gated, fork) = gated_root_forked(
         &adopter,
@@ -1893,14 +1913,18 @@ where
         None,
     )
     .await
-    .map_err(|verdict| match verdict {
-        // A rotation publishes before it raises the floor, so a root below
-        // its own floor is a stale read that converges, as for `walk_verdict`.
-        RootGateVerdict::Unavailable | RootGateVerdict::Superseded => {
-            ScopeRootAdmission::Unavailable
-        }
-        RootGateVerdict::Rejected | RootGateVerdict::NotResealable => ScopeRootAdmission::Rejected,
-    })?;
+    .map_err(
+        |verdict| match verdict.after_fanout(fetch.endpoint_failed) {
+            // A rotation publishes before it raises the floor, so a root below
+            // its own floor is a stale read that converges, as for `walk_verdict`.
+            RootGateVerdict::Unavailable | RootGateVerdict::Superseded => {
+                ScopeRootAdmission::Unavailable
+            }
+            RootGateVerdict::Rejected
+            | RootGateVerdict::NotResealable
+            | RootGateVerdict::BelowFloor => ScopeRootAdmission::Rejected,
+        },
+    )?;
     Ok(AdmittedScopeRoot {
         record_bytes,
         sequence: gated.sequence,
@@ -1966,7 +1990,8 @@ where
         anchor: RootAnchor,
     ) -> Result<ResealableRoot, RootGateVerdict> {
         let adopter = self.root_adopter(scope_id);
-        let Some((verified, record_bytes)) = fanout_get_verify(self.transport, name).await else {
+        let fetch = fanout_get_tied_classified(self.transport, name).await;
+        let Some((verified, record_bytes, _)) = fetch.pick else {
             return Err(RootGateVerdict::Unavailable);
         };
         // This arm's own fallback reads the cached copy back
@@ -2004,7 +2029,7 @@ where
                 );
                 stepped_over
             }
-            Err(verdict) => Err(verdict),
+            Err(verdict) => Err(verdict.after_fanout(fetch.endpoint_failed)),
         }
     }
 

@@ -275,22 +275,38 @@ pub(crate) async fn fanout_get_tied<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
 ) -> Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)> {
-    fanout_get_tied_classified(transport, name).await.0
+    fanout_get_tied_classified(transport, name).await.pick
 }
 
-/// [`fanout_get_tied`], and whether the endpoints agree the name holds no
-/// record when none serves one, under [`VacancyRule::Unanimous`].
+/// What [`fanout_get_tied_classified`] read at a name.
+pub(crate) struct TiedFetch {
+    /// [`fanout_get_tied`]'s answer.
+    pub(crate) pick: Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)>,
+    /// No endpoint served a record, and the endpoints agree the name holds
+    /// none, under [`VacancyRule::Unanimous`].
+    pub(crate) absent: bool,
+    /// An endpoint gave no answer about the name, so a below-floor pick is
+    /// unavailable, not a rollback (ADR 0071 D1, D2).
+    pub(crate) endpoint_failed: bool,
+}
+
+/// [`fanout_get_tied`], and what the endpoints said beside the pick.
 pub(crate) async fn fanout_get_tied_classified<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
-) -> (Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)>, bool) {
+) -> TiedFetch {
     let scan = scan(transport, name).await;
     let absent = scan.absent(VacancyRule::Unanimous);
+    let endpoint_failed = scan
+        .failures
+        .iter()
+        .any(|(_, failure)| *failure == EndpointFailure::Transport);
     let Scan { best, tied, .. } = scan;
-    (
-        best.map(|(verified, bytes)| (verified, bytes, tied)),
+    TiedFetch {
+        pick: best.map(|(verified, bytes)| (verified, bytes, tied)),
         absent,
-    )
+        endpoint_failed,
+    }
 }
 
 /// Every endpoint's answer to one fan-out GET, before a caller reads it.
@@ -608,6 +624,37 @@ mod tests {
             ),
             "no endpoint answered at all, so nothing is known about the name"
         );
+    }
+
+    /// ADR 0071 D2: a "no record" answer is an answer, and only a transport
+    /// failure is an endpoint that failed.
+    #[test]
+    fn only_a_transport_failure_beside_a_pick_is_a_failed_endpoint() {
+        use crate::net::eol::eol_from;
+        use crate::seams::UnixMillis;
+
+        let signer = Ed25519Signer::from_seed([4u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let record = IpnsRecord::create_v2(
+            &signer,
+            b"/ipfs/old",
+            2,
+            1,
+            &eol_from(UnixMillis(5_000_000)),
+        )
+        .marshal();
+        let eps = vec![EndpointId::new("lagging"), EndpointId::new("other")];
+        let store = InMemoryRecordStore::new(eps.clone());
+        store.seed_record(&eps[0], name.as_str(), record);
+
+        let fetch = block_on(fanout_get_tied_classified(&store, &name));
+        assert!(fetch.pick.is_some());
+        assert!(!fetch.endpoint_failed, "a 404 is an answer");
+
+        store.fail_endpoint(&eps[1]);
+        let fetch = block_on(fanout_get_tied_classified(&store, &name));
+        assert!(fetch.pick.is_some());
+        assert!(fetch.endpoint_failed);
     }
 
     /// One endpoint's "no record" against a set of failures is not evidence
