@@ -21,8 +21,8 @@ use cipherbox_engine::net::renewal_walk::cursor::{
 };
 use cipherbox_engine::net::retire::{NODE_TOMBSTONE_PREFIX, StagingRetireLedger};
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, HttpMethod, HttpRequest, HttpResponse, RecordTransport, Scheduler,
-    SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, FloorStore, HttpMethod, HttpRequest, HttpResponse, RecordTransport, RetireLedger,
+    Scheduler, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::{BookkeepingSeal, doomed_journal_key, owner_tag};
 use cipherbox_engine::testkit::account::{Blocks, SCOPE, SECRET, floor_label, seed_account};
@@ -997,7 +997,9 @@ fn a_refused_registration_keeps_the_cursor_for_the_next_pass() {
                 return Ok(HttpResponse {
                     status: 503,
                     headers: Vec::new(),
-                    body: b"{\"statusCode\":503,\"message\":\"unavailable\"}".to_vec(),
+                    body: b"{\"statusCode\":503,\"message\":\"unavailable\"}"
+                        .to_vec()
+                        .into(),
                 });
             }
             blocks.reply(request)
@@ -1280,7 +1282,9 @@ fn a_4xx_registration_refusal_moves_the_cursor_at_once() {
                 return Ok(HttpResponse {
                     status: 409,
                     headers: Vec::new(),
-                    body: b"{\"statusCode\":409,\"message\":\"conflict\"}".to_vec(),
+                    body: b"{\"statusCode\":409,\"message\":\"conflict\"}"
+                        .to_vec()
+                        .into(),
                 });
             }
             blocks.reply(request)
@@ -1432,14 +1436,14 @@ fn a_401_after_the_refresh_keeps_the_cursor_for_the_next_pass() {
                         r#"{{"accessToken":"jwt-1","refreshToken":"{}","acceleratorToken":"gw-1"}}"#,
                         "a".repeat(64)
                     )
-                    .into_bytes(),
+                    .into_bytes().into(),
                 });
             }
             if registers(request, &key) && refusing.load(Ordering::SeqCst) {
                 return Ok(HttpResponse {
                     status: 401,
                     headers: Vec::new(),
-                    body: b"{\"statusCode\":401,\"message\":\"unauthorized\"}".to_vec(),
+                    body: b"{\"statusCode\":401,\"message\":\"unauthorized\"}".to_vec().into(),
                 });
             }
             blocks.reply(request)
@@ -1493,5 +1497,58 @@ fn a_cursor_that_does_not_read_skips_the_pass_and_keeps_the_cursor() {
     assert!(
         renewal_failed(&mut events, write_name(ROOT).as_str(), "renewal cursor"),
         "the stall is reported"
+    );
+}
+
+/// Tombstone `node` on `device`, as the drain does when it journals a hard
+/// delete's debt.
+fn tombstone(device: &FakeDevice, node: NodeId) {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(9));
+    block_on(
+        StagingRetireLedger::new(&device.staging_store, BookkeepingSeal::new(&enc, &entropy))
+            .tombstone(&owner_tag(&enc), node.0),
+    )
+    .expect("tombstone the node");
+}
+
+/// A tombstoned node the base links again is live elsewhere, and its debt
+/// waits: the walk renews its record, so the content is never lost.
+#[test]
+fn a_tombstoned_node_the_base_links_still_renews() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (node, name, before) = a_file_node_left_for_65_days(&world, &blocks);
+    let started = world.scheduler.now();
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    tombstone(&device, node);
+    tick(&world, &engine, &mut tasks);
+    assert_renewed_at_start(&world, &name, &before, started, "the linked file");
+}
+
+/// A tombstoned node the base links nowhere is retired: the walk reaches it
+/// through its bin entry and does not renew it.
+#[test]
+fn a_tombstoned_node_the_base_links_nowhere_is_not_renewed() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let nodes = written_then_left(&world, &blocks, |engine, tasks| {
+        let file = write_file(&world, engine, tasks, ROOT, "binned.txt");
+        block_on(engine.command(Command::Delete { node: file })).expect("the delete stages");
+        tick(&world, engine, tasks);
+        vec![file]
+    });
+    let name = write_name(nodes[0]);
+    let before = record_at(&world, &name);
+    world.scheduler.advance(DAY * 65);
+    let device = world.device(b"a later session");
+    let (engine, _events, mut tasks) = boot_to_the_first_walk(&world, &blocks, &device, 2);
+    tombstone(&device, nodes[0]);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        record_at(&world, &name).sequence,
+        before.sequence,
+        "the retired file is not renewed"
     );
 }

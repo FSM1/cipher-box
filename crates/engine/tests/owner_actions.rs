@@ -81,7 +81,7 @@ use cipherbox_engine::{
     DeadLetterReason, DropCause, Engine, EngineError, Event, EventStream, GatewayConfig,
     InvitePreview, LinkPreviewState, LoginSecret, NodeId, NodeKind, OwedWorkClass, Permission,
     PreviewEntry, PreviewNames, RecordReader, ScopeEpochs, SessionBearer, SharePointer,
-    SharingInviteLink, StoragePolicy, SyncTimingProfile, decode_queue, load_bin_index,
+    SharingInviteLink, StoragePolicy, SyncTimingProfile, WriteTarget, decode_queue, load_bin_index,
     poll_verified, post_sealed,
 };
 
@@ -2178,6 +2178,71 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
     );
     assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
     assert_held_in_the_vault_scope(&fx, keep, deep, "second device");
+}
+
+/// A second owner device loads a node in the vault scope. A read grant then
+/// makes its folder a scope root, the node converges onto that scope, and a
+/// writer of the scope unlinks it. The departure is the granted scope's
+/// capture, which bins there with no faulty record reported.
+#[test]
+fn a_node_a_read_grant_moved_bins_in_the_granted_scope() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let doomed =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "doomed");
+    let (mut second, mut events, mut tasks) = fx.second_owner_device();
+    for node in [fx.folder, inner] {
+        block_on(second.command(Command::SetFocus { node: Some(node) })).unwrap();
+        tick(&fx.world, &second, &mut tasks);
+    }
+    assert_eq!(
+        block_on(second.view()).unwrap().children(inner).len(),
+        1,
+        "the second device loads the doomed node"
+    );
+    block_on(second.command(Command::SetFocus { node: None })).unwrap();
+    tick(&fx.world, &second, &mut tasks);
+    assert_eq!(
+        fx.grant_folder_at(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    for node in [inner, doomed] {
+        converge_into_granted_scope(&fx, node);
+    }
+    tick(&fx.world, &second, &mut tasks);
+    let (seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        inner,
+        &read_key_under(&seed, inner),
+        fx.folder.0,
+        |children| children.retain(|child| child.id != doomed.0),
+    );
+    events_so_far(&mut events);
+    block_on(second.command(Command::SetFocus { node: Some(inner) })).unwrap();
+    for _ in 0..8 {
+        tick(&fx.world, &second, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        published_bin_entries(&fx)
+            .into_iter()
+            .filter(|entry| entry.node_id == doomed.0)
+            .map(|entry| entry.scope_id)
+            .collect::<Vec<_>>(),
+        vec![fx.folder.0],
+        "the unlinked node bins in the scope that seals it"
+    );
 }
 
 /// A granted folder keeps the ref its parent named it by, under the parent's
@@ -6478,6 +6543,144 @@ fn a_snapshot_row_carries_the_ipns_name_of_a_published_child() {
     for row in [file, folder] {
         assert_eq!(row.ipns_name.as_deref(), Some(write_name(row.id).as_str()));
     }
+}
+
+/// A navigation into a folder the owner granted on this device lands before
+/// any walk proves the new scope root. The navigation leg must hold it as a
+/// scope root, never read its record as an ordinary child and report the
+/// owner's own honest record as abuse.
+#[test]
+fn a_navigation_right_after_a_grant_reads_no_new_scope_root_as_a_child() {
+    let mut fx = GrantScenario::new();
+    events_so_far(&mut fx._events);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the granted folder takes the focus");
+    block_on(fx.engine.command(Command::Create {
+        parent: fx.folder,
+        name: "after-the-grant.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a metadata create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    let listed: Vec<String> = block_on(fx.engine.snapshot(fx.folder))
+        .expect("the granted folder opens")
+        .children
+        .into_iter()
+        .map(|child| child.name)
+        .collect();
+    assert_eq!(listed, vec!["after-the-grant.bin".to_owned()]);
+}
+
+/// The navigation's file leg reads a file of a scope root the owner just
+/// minted under that root's own seed and floors, before any walk proves it.
+#[test]
+fn a_navigation_right_after_a_grant_reads_a_file_of_the_new_scope() {
+    let mut fx = GrantScenario::new();
+    block_on(fx.engine.command(Command::Create {
+        parent: fx.folder,
+        name: "doc.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a metadata create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let doc = block_on(fx.engine.view())
+        .expect("a rendered view")
+        .children(fx.folder)
+        .into_iter()
+        .find(|child| child.name == "doc.bin")
+        .expect("the file is listed")
+        .id;
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    // A second owner device writes the bytes, so only the network carries the
+    // size this device paints.
+    let (mut second, _second_events, mut second_tasks) = fx.second_owner_device();
+    block_on(second.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the second device opens the folder");
+    tick(&fx.world, &second, &mut second_tasks);
+    let handle = block_on(second.begin_write(
+        WriteTarget::Version {
+            node: doc,
+            expected_version: None,
+        },
+        200,
+    ))
+    .expect("a version write opens");
+    block_on(second.push_chunk(handle, &[7u8; 200])).expect("the bytes stage");
+    block_on(second.commit_write(handle)).expect("the version commits");
+    for _ in 0..3 {
+        tick(&fx.world, &second, &mut second_tasks);
+    }
+
+    events_so_far(&mut fx._events);
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the granted folder takes the focus");
+
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+    let size = block_on(fx.engine.snapshot(fx.folder))
+        .expect("the granted folder opens")
+        .children
+        .into_iter()
+        .find(|child| child.id == doc)
+        .and_then(|child| child.size);
+    assert_eq!(size, Some(200), "the navigation read the file's version");
+}
+
+/// A tick whose walk does not answer must not read the record of a scope root
+/// the owner just minted as a child of the vault scope.
+#[test]
+fn a_tick_whose_walk_fails_reads_no_new_scope_root_as_a_child() {
+    let mut fx = GrantScenario::new();
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the folder takes the focus");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    events_so_far(&mut fx._events);
+    // The vault root's write plane does not open, so the walk proves no set.
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_for(&floor_label(&write_epoch_floor_key(&SCOPE)));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.owner_device.floor_store.heal_floors();
+
+    assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+}
+
+/// A revoke runs several gated scope-root reads, so its refusal names the read
+/// that refused.
+#[test]
+fn a_revoke_refused_by_the_gate_names_the_read_that_refused() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // The vault root's own record at the granted scope's name: owner-signed,
+    // and refused by the gate because its commitment names another name.
+    publish_value_at(
+        &fx.world,
+        fx.folder,
+        &published_value(&fx.world, &write_name(ROOT)),
+    );
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        })),
+        Err(EngineError::TrustViolation {
+            message: "descendant record rejected by adoption gate at [scope-root]".to_owned(),
+        })
+    );
 }
 
 /// The share dialog's epoch row reads the scope root's published record, so a

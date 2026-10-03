@@ -986,7 +986,7 @@ mod tests {
         HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body,
+            body: body.into(),
         }
     }
 

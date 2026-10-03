@@ -1501,7 +1501,7 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: root.head.block.clone(),
+            body: root.head.block.clone().into(),
         });
         block_on(read_lagging(
             &offline(),
@@ -1826,7 +1826,7 @@ mod tests {
             http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: root.head.block.clone(),
+                body: root.head.block.clone().into(),
             });
 
             let read = block_on(resolve_child_record(

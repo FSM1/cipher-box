@@ -118,7 +118,7 @@ pub fn serve(blocks: &BTreeMap<String, Vec<u8>>) -> ScriptedHttp {
                 Some(block) => Ok(HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: block.clone(),
+                    body: block.clone().into(),
                 }),
                 None => Err(SeamError::new("no such block")),
             },

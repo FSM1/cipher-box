@@ -129,7 +129,7 @@ fn json(status: u16, body: &str) -> HttpResponse {
     HttpResponse {
         status,
         headers: vec![("content-type".to_owned(), "application/json".to_owned())],
-        body: body.as_bytes().to_vec(),
+        body: body.as_bytes().to_vec().into(),
     }
 }
 
@@ -137,7 +137,7 @@ fn empty(status: u16) -> HttpResponse {
     HttpResponse {
         status,
         headers: Vec::new(),
-        body: Vec::new(),
+        body: Vec::new().into(),
     }
 }
 
@@ -168,7 +168,7 @@ fn route(method: HttpMethod, path: &str, body: &[u8]) -> HttpResponse {
         (HttpMethod::Get, path) if path.starts_with("/ipfs/") => HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: vec![0u8; 64],
+            body: vec![0u8; 64].into(),
         },
         _ => json(404, r#"{"statusCode":404,"message":"stub has no route"}"#),
     }

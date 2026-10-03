@@ -472,7 +472,7 @@ mod tests {
         device.http.enqueue_response(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: br#"{"cid":"bafkreisomeotherblock","size":1}"#.to_vec(),
+            body: br#"{"cid":"bafkreisomeotherblock","size":1}"#.to_vec().into(),
         });
         let signer = Ed25519Signer::from_seed([9u8; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
@@ -534,7 +534,9 @@ mod tests {
         device.http.enqueue_response(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: format!("{{\"Key\":\"{other}\",\"Size\":0}}\n").into_bytes(),
+            body: format!("{{\"Key\":\"{other}\",\"Size\":0}}\n")
+                .into_bytes()
+                .into(),
         });
         let signer = Ed25519Signer::from_seed([9u8; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
