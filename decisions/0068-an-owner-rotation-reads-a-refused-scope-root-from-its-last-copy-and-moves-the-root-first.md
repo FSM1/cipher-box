@@ -66,6 +66,10 @@ starts at the first stop of an owner rotation on that scope and survives a run a
 pass that re-drives the entry counts as a pass: the pass places each owed scope whose root its
 boundary walk refused under a gated parent. The durable `owed-rotation` body does not change.
 
+**D5 — A cut whose command read fell back keeps no grant row (added on 2026-10-03).** The last copy
+cannot prove that its grant set is current. So the cut removes every row, seals the new seed to no
+recipient, and the owner shares again. A re-drive keeps the rows of the cut set that it reads.
+
 ## Alternatives considered
 
 - **Keep the stop (today).** The revokee keeps write access for ever, and the scope lapses at EOL.
@@ -102,9 +106,10 @@ boundary walk refused under a gated parent. The durable `owed-rotation` body doe
 6. Honest lag (amended on 2026-10-03): when another owner device published the root and no source
    holds its head block yet, a command runs on the older copy, and what that device published goes,
    surfaced by the trust event.
-7. The time of the last command run is in memory (amended on 2026-10-03), so after a restart the
-   bound runs from the first stop, and the re-drive can drop an entry early with
-   `rotationWorkAbandoned`.
+7. The last command run time is in memory (amended on 2026-10-03): after a restart the bound runs
+   from the first stop, so the re-drive can drop an entry early with `rotationWorkAbandoned`.
+8. `blueprint/engine.md` "rotateScopeWrite" states D5. An owner-signed grant-set digest at the
+   scope pointer could let a fallback cut keep its rows; that needs a new ADR.
 
 ## Residuals
 

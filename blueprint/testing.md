@@ -148,8 +148,10 @@ scenario fails the meta-test):
   at `u64::MAX` that leaves no room for a re-seal, a downgrade over a plant, and
   a plant after the cut set lands — each end the
   cut with a copy, the moved root gives the revokee no row
-  and no blob, nothing more publishes at the old root name, a read revoke keeps
-  the stop, a read cut that stops at the moved root ends in the next re-drive,
+  and no blob, nothing more publishes at the old root name, a cut from the copy
+  keeps no grant row of any recipient while a cut from a gated root keeps the
+  other rows, a read revoke over a writer's plant cuts the writer too, a read
+  cut that stops at the moved root ends in the next re-drive,
   a root whose head block no block source holds ends the revoke in one pass,
   and so does a root below the sequence floor when every endpoint answered,
   while the same head block with a failed record endpoint, a head block the

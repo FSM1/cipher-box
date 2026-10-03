@@ -1161,7 +1161,10 @@ that moves the write plane runs its wave first; the root republish at the new
 name re-mints the grant section from the cut set, never from the copy, and the
 read cut then runs at the new root. A cut that does not move the write plane
 keeps the stop, so a read revoke over a root that leaves no room for its re-seal
-stops, as over any other refused root.
+stops, as over any other refused root. A cut whose command read fell back keeps
+no grant row: the last copy cannot prove that its grant set is current, so the
+cut seals the new seed to no recipient, and the owner shares again (D5). A
+re-drive keeps the rows of the cut set that it reads.
 
 ### Triggers
 
