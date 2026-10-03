@@ -119,10 +119,9 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
 /// A class, never bytes: the diagnostics that carry it must hold no record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointFailure {
-    /// No HTTP answer, a 5xx, or late: the endpoint said nothing about the
-    /// name (ADR 0071 D2).
+    /// No answer about the name ([`get_failure`]).
     Transport,
-    /// An HTTP answer other than 2xx, 404 or 5xx.
+    /// An HTTP answer about the name other than 2xx or 404.
     Status,
     /// The endpoint served more than the byte cap.
     OverCap,
@@ -455,8 +454,11 @@ fn get_failure(error: &SeamError) -> EndpointFailure {
     if error.is_over_cap() {
         return EndpointFailure::OverCap;
     }
+    // ADR 0071 D2. A 408 or 429 states nothing about the name; a 3xx is a
+    // failure so that both hosts agree (web `fetch` refuses a redirect with no
+    // status).
     match error.status() {
-        None | Some(500..=599) => EndpointFailure::Transport,
+        None | Some(300..=399 | 408 | 429 | 500..=599) => EndpointFailure::Transport,
         Some(_) => EndpointFailure::Status,
     }
 }
@@ -704,7 +706,15 @@ mod tests {
         assert!(fetch.pick.is_some());
         assert!(!fetch.endpoint_failed, "a 404 is an answer");
 
-        for (status, failed) in [(403, false), (429, false), (500, true), (503, true)] {
+        for (status, failed) in [
+            (403, false),
+            (410, false),
+            (302, true),
+            (408, true),
+            (429, true),
+            (500, true),
+            (503, true),
+        ] {
             store.answer_get_at(&eps[1], status);
             let fetch = block_on(fanout_get_tied_classified(&store, &name));
             assert!(fetch.pick.is_some());

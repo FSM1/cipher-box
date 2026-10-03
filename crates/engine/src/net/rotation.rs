@@ -4536,7 +4536,8 @@ where
                 .await
                 .map_err(WaveRefusal::from)
         } else {
-            self.interior_source(node_id, name, &record_bytes).await
+            self.interior_source(node_id, name, &record_bytes, endpoint_failed)
+                .await
         }
         .map_err(|refusal| refused(subtree_verdict(refusal.error), refusal.cause, false))?;
         if let Some(plane) = &source.root {
@@ -4566,6 +4567,7 @@ where
         node_id: [u8; 16],
         name: &IpnsName,
         record_bytes: &[u8],
+        endpoint_failed: bool,
     ) -> Result<WaveSource, WaveRefusal> {
         let adopter = ChildAdopter::new(
             self.gateway,
@@ -4605,6 +4607,13 @@ where
                 // a replay, which a stale endpoint can serve, so it waits for
                 // the bound.
                 RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {}
+                // ADR 0071 D1: as for an endpoint that serves nothing.
+                RejectionReason::SequenceNotNewer { .. } if endpoint_failed => {
+                    return Err(WaveRefusal::dropping(
+                        WritePublishError::NotLanded,
+                        DropCause::EndpointUnavailable,
+                    ));
+                }
                 RejectionReason::SequenceNotNewer { .. } => {
                     return Err(WaveRefusal::dropping(
                         WritePublishError::Rejected,
@@ -10227,7 +10236,7 @@ mod tests {
                 .await
                 .ok_or(WritePublishError::NotLanded)?;
             let source = self
-                .interior_source(node.node_id, &node.current_name, &record_bytes)
+                .interior_source(node.node_id, &node.current_name, &record_bytes, false)
                 .await
                 .map_err(|refusal| refusal.error)?;
             self.gated_reads.park(&node.current_name, source);
@@ -16627,6 +16636,77 @@ mod tests {
                     Err(NodeStop::Stop(ResolveFailure::Rejected))
                 )
             );
+        }
+
+        #[test]
+        fn the_write_cut_gated_root_at() {
+            let harness = Harness::plain();
+            let staged = staged_scope(&harness);
+            raise_past(&harness.floors, &staged.root.name);
+            let owner = owner_identity();
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            assert_eq!(
+                failed_then_healed(&harness, || block_on(net.gated_root_at(&staged.root.name))
+                    .map(|_| ())),
+                (
+                    Err(ResolveFailure::Unavailable),
+                    Err(ResolveFailure::Rejected)
+                )
+            );
+        }
+
+        /// The wave reads an interior node below its floor as unavailable while
+        /// an endpoint fails, and reads the current record once it recovers.
+        #[test]
+        fn the_write_cut_interior_read_fails_recovers_and_retries() {
+            let harness = Harness::plain();
+            let staged = staged_scope(&harness);
+            let endpoints = harness.store.endpoints();
+            let (a, b) = (&endpoints[0], &endpoints[1]);
+            let old = harness
+                .store
+                .record_at(b, staged.mid_name.as_str())
+                .expect("B holds the node's record");
+            let leaf_name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &LEAF);
+            stage_node_at(&harness, MID, &folder(vec![ref_to(LEAF, &leaf_name)]), 2);
+            harness.store.seed_record(b, staged.mid_name.as_str(), old);
+            block_on(
+                harness
+                    .floors
+                    .raise_sequence_floor(staged.mid_name.as_str().as_bytes(), 2),
+            )
+            .expect("the floor raises");
+            let owner = owner_identity();
+            let read = || {
+                let net = wave(
+                    &harness,
+                    &owner,
+                    &staged.root.name,
+                    &staged.root.grant_section.commitment,
+                );
+                block_on(net.resolve_node(&SCOPE, None)).expect("the root resolves");
+                block_on(net.resolve_node(&MID, None)).map(|node| node.child_node_ids)
+            };
+
+            harness.store.fail_endpoint(a);
+            let during = read();
+            assert!(
+                matches!(
+                    during,
+                    Err(NodeStop::Refused {
+                        reason: ResolveFailure::Unavailable,
+                        ..
+                    })
+                ),
+                "{during:?}"
+            );
+            harness.store.heal_endpoint(a);
+            assert_eq!(read(), Ok(vec![LEAF]));
         }
     }
 }

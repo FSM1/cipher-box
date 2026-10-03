@@ -305,8 +305,8 @@ reject at decode in core (FSM1/cipher-box-next#39 D7); the gate surfaces them as
 One exception
 ([ADR 0071](../decisions/0071-a-below-floor-record-while-an-endpoint-fails-is-unavailable-not-a-trust-violation.md)
 D1, D2): a gated fan-out read where an endpoint failed (a transport failure,
-a 5xx or a timeout; a 404, another 4xx, a body over the cap and a served
-record that verifies are answers), and
+a 5xx, a 408, a 429, a 3xx or a timeout; a 404, another 4xx, a body over the
+cap and a served record that verifies are answers), and
 whose freshest record is strictly below the sequence floor, is unavailable. It
 adopts nothing, raises no floor, keeps last-known-good, and sends no trust
 event; a command returns a retryable `Seam`. The exception covers the

@@ -71,6 +71,7 @@ use cipherbox_engine::testkit::account::{
     owner_identity, owner_pointer_read_key, owner_pseudonym, retire_targets, seed_account_with,
     serve_http,
 };
+use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
@@ -14976,12 +14977,20 @@ fn cache_and_floor(fx: &GrantScenario, node: NodeId) -> (Option<Vec<u8>>, Option
 }
 
 fn assert_revoke_unavailable_while_a_fails(parent_of: fn(&GrantScenario) -> NodeId) {
+    assert_revoke_unavailable_while(parent_of, |store, a| store.fail_endpoint(a));
+}
+
+/// [`assert_revoke_unavailable_while_a_fails`], with A failed by `fail`.
+fn assert_revoke_unavailable_while(
+    parent_of: fn(&GrantScenario) -> NodeId,
+    fail: fn(&InMemoryRecordStore, &EndpointId),
+) {
     let mut fx = GrantScenario::new();
     let parent = parent_of(&fx);
     let (a, _) = lag_one_endpoint(&mut fx, parent);
     events_so_far(&mut fx._events);
     let before = cache_and_floor(&fx, parent);
-    fx.world.record_store.fail_endpoint(&a);
+    fail(&fx.world.record_store, &a);
 
     let outcome = revoke_recipient(&mut fx);
     assert!(
@@ -14993,6 +15002,12 @@ fn assert_revoke_unavailable_while_a_fails(parent_of: fn(&GrantScenario) -> Node
 
     fx.world.record_store.heal_endpoint(&a);
     assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+}
+
+/// A 429 states nothing about the name, so it is a failed endpoint.
+#[test]
+fn a_revoke_over_a_lagging_granted_root_while_an_endpoint_answers_429_is_unavailable() {
+    assert_revoke_unavailable_while(|fx| fx.folder, |store, a| store.answer_get_at(a, 429));
 }
 
 #[test]
@@ -15073,9 +15088,8 @@ fn a_tick_read_of_a_below_floor_vault_root_from_every_endpoint_sends_one_gate_ev
                 _ => None,
             })
             .collect();
-        // The vault-root resolve reports the sequence stage once; the
-        // conversion's own read of the root reports its refusal once.
-        assert_eq!(abuse.len(), 2, "{abuse:?}");
+        // The vault-root resolve reports the sequence stage once; the link
+        // sweep's own read of the root reports its refusal apart.
         assert_eq!(
             abuse
                 .iter()

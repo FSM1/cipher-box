@@ -93,6 +93,10 @@ the command returns as its error is the trust event, and the command sends no se
   "unavailable", not a trust event. The withheld-update escalation covers shared scopes alone.
   Does such a hold need a stronger signal on an owned scope, for example after a number of
   unavailable reads in a row?
-- D2 does not classify four answers: a 4xx other than 404, a record over the size cap, bytes
-  that do not decode, and a record that does not verify at the name. The code reads all four as
-  an endpoint failure today. Do they count as a failure under D1, or as an answer?
+- D2 leaves some answers open. The code (`net::fanout`) now reads these as a failed endpoint: no
+  answer, a timeout, a connection or TLS error, a 5xx, a 408, a 429 and a 3xx. It reads these as
+  an answer: a 404, another 4xx, a body over the size cap, bytes that do not decode, and a record
+  that does not verify at the name. The owner can move 408 and 429 back to "answer". Is this
+  split correct?
+- On the web host, a 4xx with no CORS header reaches the engine with no status, so it reads as a
+  failed endpoint there and as an answer on the desktop host.

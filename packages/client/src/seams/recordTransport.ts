@@ -10,7 +10,7 @@
  * a rejection carries the HTTP `status` when the endpoint answered.
  */
 
-import { drainCapped } from './cappedBody.js';
+import { discard, drainCapped } from './cappedBody.js';
 import type { CappedRecordResult, RecordTransportSeam } from './types.js';
 
 const IPNS_RECORD_MEDIA_TYPE = 'application/vnd.ipfs.ipns-record';
@@ -103,17 +103,17 @@ export class FetchRecordTransport implements RecordTransportSeam {
       ...endpointPolicy(),
     });
     if (response.status === 404) {
-      await response.body?.cancel();
+      await discard(response.body);
       return { kind: 'record', record: null };
     }
     if (!response.ok) {
-      await response.body?.cancel();
+      await discard(response.body);
       throw Object.assign(new Error(`RecordTransport GET ${response.status} at ${endpoint}`), {
         status: response.status,
       });
     }
     if (!servesRecordBytes(response)) {
-      await response.body?.cancel();
+      await discard(response.body);
       return { kind: 'record', record: null };
     }
     const drained = await drainCapped(response, maxBytes);
