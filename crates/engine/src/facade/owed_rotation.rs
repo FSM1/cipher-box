@@ -24,9 +24,14 @@ pub(crate) struct OwedStop {
 impl OwedStop {
     fn of(step: &'static str, error: &EngineError) -> Self {
         let class = OwedWorkClass::of(error);
+        // A verdict or a seam message is a classification that names the read
+        // it came from, so it is the label; one step runs several such reads.
         let label = match error {
             EngineError::MalformedInput { check } | EngineError::UnsupportedTarget { check } => {
-                *check
+                check
+            }
+            EngineError::TrustViolation { message } | EngineError::Seam { message } => {
+                message.as_str()
             }
             _ if class == OwedWorkClass::Trust => "trust-violation",
             _ => "unavailable",
@@ -550,7 +555,7 @@ where
             .net(&target, PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
             .await
-            .map_err(|e| stop(EngineError::from_resolve_failure(e)))?;
+            .map_err(|e| stop(EngineError::from_resolve_failure(e, "owed-scope-root")))?;
         Ok(OwedScope {
             indexed,
             target,
@@ -586,7 +591,7 @@ where
             .net(&parent, PointerConsultArm::Permitted)
             .resolve_anchored(&parent.scope)
             .await
-            .map_err(EngineError::from_resolve_failure)?;
+            .map_err(|e| EngineError::from_resolve_failure(e, "owed-enclosing-scope"))?;
         let indexed = enclosing
             .direct_child_scope_index
             .iter()
@@ -619,7 +624,7 @@ where
         let current = net
             .resolve_anchored(&parent.scope)
             .await
-            .map_err(|e| stop(EngineError::from_resolve_failure(e)))?;
+            .map_err(|e| stop(EngineError::from_resolve_failure(e, "owed-move-source")))?;
         let subtree = sites
             .child_scopes_inside(node, &current.direct_child_scope_index)
             .await
@@ -814,5 +819,33 @@ fn cut_stop(error: RotateOnCutError) -> OwedStop {
         detail: error.check().to_owned(),
         terminal: false,
         class: OwedWorkClass::of(&EngineError::from_cut_rotation(error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One owed step runs several gated scope-root reads, so the stop it
+    /// reports names the read that refused.
+    #[test]
+    fn an_owed_stop_names_the_scope_root_read_that_refused() {
+        let refused =
+            EngineError::from_resolve_failure(ResolveFailure::Rejected, "owed-scope-root");
+        let stop = OwedStop::of("owed-cut", &refused);
+        assert_eq!(stop.class, OwedWorkClass::Trust);
+        assert_eq!(
+            stop.detail,
+            "owed-cut: descendant record rejected by adoption gate at [owed-scope-root]"
+        );
+
+        let stalled =
+            EngineError::from_resolve_failure(ResolveFailure::Unavailable, "owed-move-source");
+        let stop = OwedStop::of("owed-interior-move", &stalled);
+        assert_eq!(stop.class, OwedWorkClass::Availability);
+        assert_eq!(
+            stop.detail,
+            "owed-interior-move: descendant record unavailable at [owed-move-source]"
+        );
     }
 }
