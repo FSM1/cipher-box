@@ -11690,13 +11690,22 @@ where {
     /// entries are dropped from the render here; the cold-start path
     /// dead-letters and removes them from the durable queue.
     ///
-    /// Rides the session's queue memo ([`memoized_scan`]).
+    /// Rides the session's queue memo ([`memoized_scan`]). A kept op is not
+    /// pending: its version is live, and the drain alone reads it again
+    /// (ADR 0069 D7).
     async fn scan_queue(&self) -> Result<QueueScan, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let reader = RecordReader::new(session.enc_subkey());
-        memoized_scan(&self.seams.staging_store, &reader, &self.state.queue_scan)
+        let mut scan = memoized_scan(&self.seams.staging_store, &reader, &self.state.queue_scan)
             .await
-            .map_err(EngineError::from_seam)
+            .map_err(EngineError::from_seam)?;
+        if let Some(mark) = published_op_mark(&self.seams.staging_store, session.enc_subkey())
+            .await
+            .map_err(EngineError::from_seam)?
+        {
+            scan.mine.retain(|(op_id, _)| op_id.0 > mark);
+        }
+        Ok(scan)
     }
 
     /// This session's pending ops, FIFO.
@@ -18324,9 +18333,11 @@ mod tests {
                 names
             }
 
+            /// The ops still pending: a kept op has published.
             fn queued(&self) -> usize {
-                block_on(self.device.staging_store.queued_ops())
+                block_on(self.engine.scan_queue())
                     .expect("the queue reads")
+                    .mine
                     .len()
             }
 

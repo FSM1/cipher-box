@@ -25,7 +25,7 @@ use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
 use cipherbox_engine::rotation::published_override_seed;
-use cipherbox_engine::seams::{BoxedTask, FloorStore, OpId, RecordTransport, StagingStore};
+use cipherbox_engine::seams::{BoxedTask, FloorStore, OpId, RecordTransport};
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::testkit::account::{
@@ -406,9 +406,9 @@ fn published_epoch(world: &FakeWorld, blocks: &Blocks, node: NodeId) -> u64 {
     decode_envelope(&head).expect("the head decodes").epoch
 }
 
-/// The ops still sitting in `device`'s durable queue.
+/// The ops still pending in `device`'s durable queue.
 fn queued(device: &FakeDevice) -> usize {
-    block_on(StagingStore::queued_ops(&device.staging_store))
+    block_on(device.pending_ops())
         .expect("the queue reads")
         .len()
 }

@@ -65,7 +65,7 @@ use crate::settings::{
 use crate::sync::BookkeepingSeal;
 use crate::sync::drain::{
     Drain, DrainScope, EngineSeams, GrantedPass, ScopeEnd, SealPlane, TickInputs, TickScopes,
-    hold_captures,
+    hold_captures, published_op_mark,
 };
 use crate::sync::model::Snapshot;
 use crate::sync::op::{Op, OpKind};
@@ -1360,10 +1360,13 @@ async fn queued_second_end<St: StagingStore + QueueGeneration>(
     }
     let reader = RecordReader::new(enc_secret);
     let scan = memoized_scan(staging, &reader, memo).await.ok()?;
+    // A kept op has published, so the first pending op decides.
+    let published = published_op_mark(staging, enc_secret).await.ok()?;
     let base = boundaries.base.borrow();
     let scope = scan
         .mine
         .iter()
+        .filter(|(op_id, _)| published.is_none_or(|mark| op_id.0 > mark))
         .find_map(|(_, op)| second_end_scope(&base, op, listed))?;
     let proved = boundaries.material.get(&scope)?;
     Some(SecondEnd {

@@ -919,7 +919,13 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   command; a relocation between two interior scopes journals as a parking leg
   and an arriving leg, and both legs are journaled or neither is (ADR 0045).
   Replay is FIFO in performed order through the standard rebase, and rebases
-  only onto gate-passing state (FSM1/cipher-box-next#33 D5–D7). A build decodes,
+  only onto gate-passing state (FSM1/cipher-box-next#33 D5–D7). A published op
+  stays queued as a kept op, with a clear note of its write epoch and publish
+  time, until the live root of its write scope shows it (ADR 0069). It waits at
+  its write epoch for at most T = 7 days. At a new write epoch, once the base
+  read its folder at the new name, the standard rebase decides: a landed op
+  drops, a lost op applies again under the new seed, and a device with no new
+  seed dead-letters it. A kept op is not pending. A build decodes,
   opens and drains every queue record that the previous release wrote
   ([ADR 0020](../decisions/0020-the-durable-op-queue-reads-the-previous-release.md)).
   A new field on a queued op takes a decode default equal to the value the older
@@ -1115,7 +1121,8 @@ retires the old name only when the root's write scope seed derives that name
 for the node, so a ref to a name outside the scope retires nothing. The wave
 then moves the other nodes, re-points the root and finishes the cut. Each
 republish re-seals the record that the walk gated for that node, so a record
-written at an old name after the walk does not stop the wave. The wave never
+written at an old name after the walk does not stop the wave. The writer of
+such a record carries it into the moved tree (ADR 0069 D1). The wave never
 adopts or carries a refused record, and a stop at the scope root still stops
 the wave.
 
@@ -1220,6 +1227,10 @@ rebases and signs above.
 - Revoked writers: a revoked writer inserts a record only inside the name wave,
   at a name the wave has not yet rotated. The inserted record keeps its epoch
   label for a sweep-length window, and the label attests nothing.
+- Late writes: a write that a revoked or downgraded writer puts in the old tree
+  after the walk dead-letters on its own device. A kept op whose folder the
+  writer does not read at its new name within T leaves the queue at T, and the
+  write is lost (ADR 0069).
 
 ## Pointer planes
 

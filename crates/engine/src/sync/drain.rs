@@ -101,12 +101,16 @@ use crate::sync::doomed::{
     Quarantined, Reclamation, doomed_journal_key, journalled_keys, open_reclamation,
     record_matches_manifest, seal_reclamation,
 };
+use crate::sync::kept_op::{
+    KEPT_OP_NOTES_PREFIX, KeptNote, KeptNotes, KeptPlace, KeptVerdict, kept_verdict,
+};
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::project::{
     UnlinkedChild, project_child_version, project_folder, project_folder_partial,
 };
+use crate::sync::provision::GENESIS_EPOCH;
 use crate::sync::rebase::{
     AppliedOp, DeadLetterReason, DropReason, ReplayReport, decode_queue, enclosing_scope_root,
     replay,
@@ -255,9 +259,11 @@ fn halt_for_bin_publish(error: &BinIndexPublishError) -> Halt {
 /// What one drain pass did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct DrainReport {
-    /// Ops whose records published and self-adopted.
+    /// Ops whose records published and self-adopted. Each stays queued as a
+    /// kept op until it shows from the live root (ADR 0069 D2).
     pub(crate) published: Vec<OpId>,
-    /// Ops rebase resolved away (already satisfied, or a lost race).
+    /// Ops rebase resolved away (already satisfied, or a lost race), and kept
+    /// ops that waited out their bound.
     pub(crate) dropped: Vec<OpId>,
     /// Terminally unrebasable ops, with the reason to surface.
     pub(crate) dead_letters: Vec<(OpId, NodeId, DeadLetterReason)>,
@@ -270,11 +276,11 @@ pub(crate) struct DrainReport {
 }
 
 impl DrainReport {
-    /// Every op this pass took out of the durable queue, however it left.
+    /// Every op this pass took out of the durable queue, however it left. A
+    /// published op is kept, so it is not one of them.
     fn left_the_queue(&self) -> BTreeSet<OpId> {
-        self.published
+        self.dropped
             .iter()
-            .chain(&self.dropped)
             .chain(&self.restore_residue)
             .copied()
             .chain(self.dead_letters.iter().map(|(op_id, ..)| *op_id))
@@ -698,6 +704,8 @@ const ATTEMPT_ENTRY_LEN: usize = 16;
 /// attempt record must not reclaim.
 struct Queue {
     mine: Vec<(OpId, Op)>,
+    /// The kept ops that wait out of this pass, still queued.
+    kept: Vec<OpId>,
     all_ids: BTreeSet<OpId>,
 }
 
@@ -2164,7 +2172,12 @@ where
         exits: &R,
     ) -> (DrainReport, Option<Vec<NodeId>>) {
         let mut report = DrainReport::default();
-        let Ok(Queue { mine, all_ids }) = self.queued_ops(scope, &mut report).await else {
+        let Ok(Queue {
+            mine,
+            kept,
+            all_ids,
+        }) = self.queued_ops(scope, &mut report).await
+        else {
             return (report, None);
         };
         let queued = mine;
@@ -2173,6 +2186,13 @@ where
             // A debt outlives the op that owed it, so an empty queue is still a
             // pass that drives the cuts this device owes.
             self.cut_exited_scopes(scope, exits).await;
+            // A kept op that left on the scan leaves its count behind otherwise.
+            if !report.left_the_queue().is_empty()
+                && let Ok(mut attempts) = self.load_attempts(&all_ids).await
+            {
+                self.record_departures(scope, &queued, kept, &all_ids, &report, &mut attempts)
+                    .await;
+            }
             return (report, Some(Vec::new()));
         }
         let purges = queued
@@ -2186,15 +2206,33 @@ where
         let _ = self
             .pass(scope, exits, &queued, &mut report, &mut attempts)
             .await;
-        // Pruned against this pass's own retirements, not just the queue it
-        // opened on: a count left behind for an op that has gone would park the
-        // whole record until some later pass happened to read the queue again.
+        self.record_departures(scope, &queued, kept, &all_ids, &report, &mut attempts)
+            .await;
+        (report, Some(purges))
+    }
+
+    /// Prune the counts of the ops that left the queue and raise the drained
+    /// mark over them.
+    ///
+    /// Pruned against this pass's own retirements, not just the queue it opened
+    /// on: a count left behind for an op that has gone would park the whole
+    /// record until some later pass happened to read the queue again.
+    async fn record_departures(
+        &self,
+        scope: &DrainScope<'_>,
+        queued: &[(OpId, Op)],
+        kept: Vec<OpId>,
+        all_ids: &BTreeSet<OpId>,
+        report: &DrainReport,
+        attempts: &mut Attempts,
+    ) {
         let gone = report.left_the_queue();
         let live: BTreeSet<OpId> = all_ids.difference(&gone).copied().collect();
         attempts.retain_live(&live);
-        let _ = self.store_attempts(&attempts).await;
-        let _ = self.mark_drained(scope, &queued, &report).await;
-        (report, Some(purges))
+        let _ = self.store_attempts(attempts).await;
+        let mut order: Vec<OpId> = queued.iter().map(|(op_id, _)| *op_id).chain(kept).collect();
+        order.sort_unstable();
+        let _ = self.mark_drained(scope, &order, report).await;
     }
 
     async fn pass<R: ScopeExitRotator>(
@@ -2278,7 +2316,6 @@ where
                     .await;
                 return Err(halt);
             }
-            self.dequeue_op(applied.op_id).await?;
             self.cells.cancels.borrow_mut().published(applied.op_id);
             report.published.push(applied.op_id);
         }
@@ -2538,6 +2575,7 @@ where
         if scan.mine.is_empty() {
             return Ok(Queue {
                 mine: Vec::new(),
+                kept: Vec::new(),
                 all_ids,
             });
         }
@@ -2548,25 +2586,144 @@ where
         let published = published_op_mark(&self.seams.staging, scope.enc_secret)
             .await
             .map_err(seam)?;
+        let mut notes = self.kept_notes(scope).await?;
+        let now = self.seams.scheduler.now();
         let mut mine = Vec::with_capacity(scan.mine.len());
+        let mut kept = Vec::new();
         for (op_id, op) in scan.mine {
             if drained.is_some_and(|mark| op_id.0 <= mark) {
                 self.dequeue_op(op_id).await?;
                 report.restore_residue.push(op_id);
                 continue;
             }
-            // Its record publish was confirmed before the crash that left it
-            // queued, so its version is already live: republishing it would
-            // re-expose blocks a live record names to the cancel path.
             if published.is_some_and(|mark| op_id.0 <= mark) {
-                self.dequeue_op(op_id).await?;
-                self.release_staged_blocks(&op).await;
-                report.dropped.push(op_id);
-                continue;
+                let place = self.kept_place(scope, &op).await?;
+                match kept_verdict(notes.note_or_first_sight(op_id, now), place, now) {
+                    KeptVerdict::Stay => {
+                        kept.push(op_id);
+                        continue;
+                    }
+                    KeptVerdict::Expired => {
+                        self.dequeue_op(op_id).await?;
+                        self.release_staged_blocks(&op).await;
+                        notes.remove(op_id);
+                        report.dropped.push(op_id);
+                        continue;
+                    }
+                    KeptVerdict::Recheck => {}
+                }
             }
             mine.push((op_id, op));
         }
-        Ok(Queue { mine, all_ids })
+        notes.retain_queued(&all_ids);
+        self.store_kept_notes(scope, &notes).await?;
+        Ok(Queue {
+            mine,
+            kept,
+            all_ids,
+        })
+    }
+
+    /// This identity's kept-op notes ([`KEPT_OP_NOTES_PREFIX`]).
+    async fn kept_notes(&self, scope: &DrainScope<'_>) -> Result<KeptNotes, Halt> {
+        let stored = self
+            .seams
+            .staging
+            .staged_bytes(&owner_scoped_key(KEPT_OP_NOTES_PREFIX, scope.enc_secret))
+            .await
+            .map_err(seam)?;
+        Ok(KeptNotes::decode(stored.as_deref()))
+    }
+
+    async fn store_kept_notes(
+        &self,
+        scope: &DrainScope<'_>,
+        notes: &KeptNotes,
+    ) -> Result<(), Halt> {
+        if !notes.is_dirty() {
+            return Ok(());
+        }
+        let key = owner_scoped_key(KEPT_OP_NOTES_PREFIX, scope.enc_secret);
+        let stored = if notes.is_empty() {
+            self.seams.staging.remove_staged_bytes(&key).await
+        } else {
+            self.seams
+                .staging
+                .put_staged_bytes(&key, &notes.encode())
+                .await
+        };
+        stored.map_err(seam)
+    }
+
+    /// Where the write scope of a kept op stands for this pass: the nearest
+    /// proved scope root above the node the op writes under, as
+    /// [`Self::ensure_folder`] finds it.
+    async fn kept_place(&self, scope: &DrainScope<'_>, op: &Op) -> Result<KeptPlace, Halt> {
+        let anchor = match &op.kind {
+            OpKind::Create { parent, .. } => *parent,
+            OpKind::Restore { into, .. } => *into,
+            _ => op.target,
+        };
+        let (nearest, anchor_name) = {
+            let base = self.cells.base.borrow();
+            let Some(meta) = base.node(anchor) else {
+                return Ok(KeptPlace::Elsewhere);
+            };
+            let nearest = core::iter::once(anchor)
+                .chain(base.ancestors(anchor))
+                .find(|node| scope.scope_roots.contains(node));
+            (nearest, meta.ipns_name.clone())
+        };
+        let Some(root) = nearest else {
+            return Ok(KeptPlace::Elsewhere);
+        };
+        let end = match scope.second_end() {
+            Ok(Some(destination)) if destination.end.root == root => destination.end,
+            _ if scope.source.root == root => scope.source,
+            _ if scope.keyless_roots.contains(&root) => return Ok(KeptPlace::Keyless),
+            _ => return Ok(KeptPlace::Elsewhere),
+        };
+        // A write cut moves every node to a name of the new seed, so a base
+        // entry at another name is a read from before the flip. The pass
+        // repaints its own scope root from the live root before the rebase.
+        let anchor_read_live = anchor == scope.source.root
+            || anchor_name.as_deref() == Some(end.write_name(&anchor.0).as_str().as_bytes());
+        Ok(KeptPlace::Writes {
+            live_write_epoch: self.write_epoch_of(&end).await?,
+            anchor_read_live,
+        })
+    }
+
+    /// The write epoch this device has seen for `end`'s scope. A scope with no
+    /// floor yet is at its first epoch.
+    async fn write_epoch_of(&self, end: &ScopeEnd<'_>) -> Result<u64, Halt> {
+        Ok(
+            floor::write_epoch_floor(&end.floors(&self.seams.floors), &end.root.0)
+                .await
+                .map_err(seam)?
+                .unwrap_or(GENESIS_EPOCH),
+        )
+    }
+
+    /// Note the write epoch of `end` and the time for an op whose last record
+    /// just confirmed, so the op stays queued as a kept op (ADR 0069 D2, D4).
+    /// Written before the published-op mark rises, so an op at or below the
+    /// mark has a note. Best-effort, as [`Self::mark_published`] is: an op with
+    /// no note gets one check.
+    async fn keep_published(&self, scope: &DrainScope<'_>, end: &ScopeEnd<'_>, op_id: OpId) {
+        let (Ok(write_epoch), Ok(mut notes)) =
+            (self.write_epoch_of(end).await, self.kept_notes(scope).await)
+        else {
+            return;
+        };
+        notes.insert(
+            op_id,
+            KeptNote {
+                write_epoch,
+                published_at: self.seams.scheduler.now(),
+            },
+        );
+        let _ = self.store_kept_notes(scope, &notes).await;
     }
 
     // -----------------------------------------------------------------------
@@ -3404,7 +3561,6 @@ where
         self.publish_folder(scope, pass, parent, modified_at, Some(applied.op_id))
             .await
             .map_err(Halt::from)?;
-        self.release_staged_blocks(&applied.op).await;
         // The parent's repaint lifts the child in without what its own record
         // carries; the first edit of this file anchors on the version its
         // create published.
@@ -5825,7 +5981,6 @@ where
             )
             .await
             .map_err(Halt::from)?;
-        self.release_staged_blocks(&applied.op).await;
         self.project_published_file(
             target,
             staged.plaintext_size,
@@ -6749,9 +6904,9 @@ where
             .map_err(|error| classify_upload(error, block.len() as u64))
     }
 
-    /// Drop every staged block of an op's version — on a landed publish, and on
-    /// a failure-valve abandonment, where the only copy of the version's content
-    /// key rode the op record the abandonment deletes
+    /// Drop every staged block of an op's version — on a kept op that waited
+    /// out its bound, and on a failure-valve abandonment, where the only copy of
+    /// the version's content key rode the op record the abandonment deletes
     /// (`crate::sync::staging` owns the release-or-preserve rule).
     async fn release_staged_blocks(&self, op: &Op) {
         let Some(root_cid) = op.content_root_cid() else {
@@ -7080,6 +7235,7 @@ where
             }
         };
         if let Some(op_id) = completes {
+            self.keep_published(scope, &plane.end, op_id).await;
             self.mark_published(scope, op_id).await;
         }
         // The record is live from here: everything below is a local step.
@@ -7546,13 +7702,13 @@ where
     async fn mark_drained(
         &self,
         scope: &DrainScope<'_>,
-        queued: &[(OpId, Op)],
+        queued: &[OpId],
         report: &DrainReport,
     ) -> Result<(), Halt> {
         let retired = report.left_the_queue();
         let Some(mark) = queued
             .iter()
-            .map_while(|(op_id, _)| retired.contains(op_id).then_some(op_id.0))
+            .map_while(|op_id| retired.contains(op_id).then_some(op_id.0))
             .last()
         else {
             return Ok(());

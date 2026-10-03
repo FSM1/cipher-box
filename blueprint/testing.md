@@ -138,7 +138,10 @@ scenario fails the meta-test):
   (ADR 0065, `crates/engine/tests/owner_actions.rs`). The wave retires only a
   name the scope derives, waits for the bound on a wrong head block and on an
   endpoint that does not answer, and re-seals the record its walk gated, so a
-  record written at an old name after the walk does not stop it; a body of many
+  record written at an old name after the walk does not stop it, and the writer
+  of that record applies it again under the new seed, a kept op leaves after
+  the bound of ADR 0069 D5, and a kept op with no note leaves once the live tree
+  shows it (ADR 0069, `crates/engine/tests/owner_actions.rs`); a body of many
   outranking refs re-walks one time and reads nothing again, and a derived ref
   met after two others is kept, a re-walk keeps the first ref of its own
   walk, and a held node is read once across a re-walk

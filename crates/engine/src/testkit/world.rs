@@ -152,6 +152,29 @@ impl FakeDevice {
         }
     }
 
+    /// The queued ops that have not published: every queued op above the
+    /// highest published-op mark this device holds. A published op stays
+    /// queued as a kept op until it shows from the live root (ADR 0069 D2).
+    pub async fn pending_ops(
+        &self,
+    ) -> crate::seams::SeamResult<Vec<(crate::seams::OpId, Vec<u8>)>> {
+        use crate::seams::StagingStore;
+        let mut mark = None;
+        for key in self.staging_store.staged_keys().await? {
+            if !key.starts_with(crate::sync::PUBLISHED_OP_MARK_PREFIX) {
+                continue;
+            }
+            let stored = self.staging_store.staged_bytes(&key).await?;
+            if let Some(value) = stored.and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok())
+            {
+                mark = mark.max(Some(u64::from_be_bytes(value)));
+            }
+        }
+        let mut queued = self.staging_store.queued_ops().await?;
+        queued.retain(|(op_id, _)| mark.is_none_or(|mark| op_id.0 > mark));
+        Ok(queued)
+    }
+
     /// This device's floors as the engine keys them for the session `secret`
     /// starts: [`OwnerScopedFloorStore`] namespaces every key by identity, so a
     /// raw read of the shared store finds none of the engine's own floors.
