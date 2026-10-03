@@ -3366,6 +3366,77 @@ fn a_dropped_version_in_a_write_granted_folder_retires_under_the_files_own_name(
     assert_eq!(fx.engine.pending_reclaim_bytes(), 0, "the debt settles");
 }
 
+/// A version delete journals its debt under the file's own name. The file
+/// then moves to another folder of the same scope before the settle, and keeps
+/// its name. The settle retires the dropped version under that name, and no
+/// CID of the live copy.
+#[test]
+fn a_debt_journaled_before_a_move_retires_none_of_the_live_copy() {
+    let mut fx = GrantScenario::new();
+    let (file, owing) = file_in_a_write_granted_folder(&mut fx);
+    let folder = fx.folder;
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, folder, "inner");
+    let versions = block_on(fx.engine.file_versions(file)).expect("the history reads");
+    let head = block_on(fx.engine.snapshot(folder))
+        .expect("the granted folder opens")
+        .children
+        .into_iter()
+        .find(|child| child.id == file)
+        .and_then(|child| child.content_cid)
+        .expect("the file has a head");
+
+    fx.blocks.refuse_retire(true);
+    block_on(fx.engine.command(Command::DeleteVersion {
+        node: file,
+        content_cid: versions[0].content_cid.clone(),
+    }))
+    .expect("the version delete stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        fx.engine.pending_reclaim_bytes() > 0,
+        "the debt is journaled and unpaid"
+    );
+    block_on(fx.engine.command(Command::Move {
+        node: file,
+        new_parent: inner,
+        new_name: "clip.bin".into(),
+        replacing: None,
+    }))
+    .expect("the move stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.engine.view())
+            .expect("a rendered view")
+            .children(inner)
+            .iter()
+            .any(|child| child.id == file),
+        "the file moved before the settle"
+    );
+
+    let mark = retire_entries(&fx.owner_device).len();
+    fx.blocks.refuse_retire(false);
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    let entries = &retire_entries(&fx.owner_device)[mark..];
+    let head = encode_content_cid_str(&head);
+    assert!(
+        entries.iter().all(|(_, targets)| !targets.contains(&head)),
+        "the live copy's head is never retired"
+    );
+    assert_eq!(
+        namings_since(
+            &fx.owner_device,
+            mark,
+            &encode_content_cid_str(&versions[0].content_cid)
+        ),
+        BTreeSet::from([Some(owing.as_str().to_owned())]),
+        "the dropped version retires under the record that owes it"
+    );
+    assert_eq!(fx.engine.pending_reclaim_bytes(), 0, "the debt settles");
+}
+
 /// A hard delete of a file in a write-granted folder retires its content under
 /// the file's own name, the record the delete retires, and under no name the
 /// vault's seed derives (ADR 0070 D2).
