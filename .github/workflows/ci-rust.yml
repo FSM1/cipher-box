@@ -100,9 +100,11 @@ jobs:
       - name: Engine tests and seam conformance kits
         run: cargo test -p cipherbox-engine
 
-      # A release build compiles `debug_assert!` out, so an encode-side refusal
-      # that leans on one passes above and fails here (AGENTS.md rule 8).
-      - name: Engine encode-side refusals (release build)
+      # The engine unit tests, the encode-side refusals and the renewal walk,
+      # again in a release build. A release build compiles `debug_assert!`
+      # out, so a refusal that leans on one passes above and fails here
+      # (AGENTS.md rule 8).
+      - name: Engine unit tests, encode refusals and renewal walk (release build)
         run: cargo test -p cipherbox-engine --release --lib --test encode_refusals --test renewal_walk
 
   # The `fuse-op-core` suite: every vfs operation driven against a real engine

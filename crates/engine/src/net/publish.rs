@@ -122,8 +122,9 @@ pub enum BarFloor {
     Cut,
 }
 
-/// The record an author built its publish on: the name, and the sequence of
-/// the record it read there. [`publish`] signs strictly above it, so a second
+/// The record an author built its publish on: the name, the sequence of the
+/// record it read there, and, for a gated read, the record `bytes` the gate
+/// admitted. [`publish`] signs strictly above the sequence, so a second
 /// publish in one pass, or a publish over a record the floor has not adopted,
 /// cannot re-mint a sequence already spent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,7 +161,15 @@ impl Observed {
     /// client's record under its own `v` would mint structures whose AAD this
     /// build can never reproduce, and republishing it would downgrade `v` — the
     /// rollback the read-body AAD defends against.
-    pub fn gated(
+    ///
+    /// Only a gated read in this crate makes the token:
+    /// ```compile_fail,E0624
+    /// use cipherbox_engine::net::Observed;
+    /// fn forged(name: &cipherbox_core::ipns::IpnsName) {
+    ///     let _ = Observed::gated(name, u64::MAX, 2, &[]);
+    /// }
+    /// ```
+    pub(crate) fn gated(
         name: &IpnsName,
         sequence: u64,
         version: u64,
@@ -174,6 +183,16 @@ impl Observed {
         })
     }
 
+    /// [`Self::gated`] with no record bytes, for the test crates.
+    #[cfg(feature = "test-kit")]
+    pub fn gated_for_test(
+        name: &IpnsName,
+        sequence: u64,
+        version: u64,
+    ) -> Result<Self, PublishError> {
+        Self::gated(name, sequence, version, &[])
+    }
+
     /// This observation, also clearing `sequence`: a record this device's own
     /// PUT may have left at the name, or one a landed publish already spent.
     #[must_use]
@@ -181,16 +200,6 @@ impl Observed {
         Self {
             sequence: self.sequence.max(sequence),
             ..self
-        }
-    }
-
-    /// Carry a gated source to a fresh name during a name wave. Its sequence
-    /// belongs to the old name; the destination keeps its own durable floor.
-    pub(crate) fn at_fresh_name(&self, name: &IpnsName) -> Self {
-        Self {
-            name: name.clone(),
-            sequence: 0,
-            bytes: Vec::new(),
         }
     }
 
@@ -210,9 +219,9 @@ impl Observed {
     }
 }
 
-/// [`Observed::gated`]'s version rule, for a read whose record carries its
-/// fields to a publish at another name, or to no publish. A read that a publish
-/// at its own name builds on takes the rule through [`Observed::gated`].
+/// [`Observed::gated`]'s version rule, for a read that no publish at its own
+/// name builds on: a name wave's interior source, which publishes at a fresh
+/// name, a moved node, and a read-side label.
 pub(crate) fn refuse_foreign_version(version: u64) -> Result<(), PublishError> {
     if version != ENVELOPE_V {
         return Err(PublishError::ForeignVersion { version });
@@ -224,7 +233,7 @@ pub(crate) fn refuse_foreign_version(version: u64) -> Result<(), PublishError> {
 /// (metadata) CID to point at, and the content CIDs to register for pinning.
 ///
 /// A publish cannot omit its observation:
-/// ```compile_fail
+/// ```compile_fail,E0063
 /// use cipherbox_core::suite::ed25519::Ed25519Signer;
 /// use cipherbox_engine::net::PublishRequest;
 /// fn unobserved(signer: &Ed25519Signer) {
@@ -883,6 +892,31 @@ mod tests {
             gate.sequence_floor(),
             Some(8),
             "renewal skips the observation at 7"
+        );
+    }
+
+    #[test]
+    fn a_publish_error_displays_its_verdict_and_no_finer_detail() {
+        let refused = [
+            PublishError::BelowBar {
+                floor: BarFloor::Write,
+                at: 4,
+                epoch: 3,
+            },
+            PublishError::ForeignVersion {
+                version: ENVELOPE_V + 1,
+            },
+            PublishError::SequenceExhausted,
+        ]
+        .map(|error| error.to_string());
+        assert!(
+            refused.iter().all(|shown| *shown == refused[0]),
+            "one verdict shows one string: {refused:?}"
+        );
+        assert_ne!(
+            refused[0],
+            PublishError::RecordTooLarge { size: 2, limit: 1 }.to_string(),
+            "another verdict shows another string"
         );
     }
 }

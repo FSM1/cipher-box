@@ -831,7 +831,6 @@ where
         let Some(signer) = material.signer_for(&node_id, name) else {
             return;
         };
-        // ADR 0021: an unchanged lagging child renews under its gated root's ratchet.
         let bar = material.admitted.bar;
         if pass.doomed.unreadable.contains(&material_scope) {
             pass.kept_back = true;

@@ -235,12 +235,12 @@ fn a_record_below_any_floor_of_its_bar_is_refused_at_the_signature() {
 fn a_gated_read_at_another_envelope_version_yields_no_token() {
     let name = pointer_name();
     assert_eq!(
-        Observed::gated(&name, 1, ENVELOPE_V + 1, &[]),
+        Observed::gated_for_test(&name, 1, ENVELOPE_V + 1),
         Err(PublishError::ForeignVersion {
             version: ENVELOPE_V + 1
         }),
     );
-    assert!(Observed::gated(&name, 1, ENVELOPE_V, &[]).is_ok());
+    assert!(Observed::gated_for_test(&name, 1, ENVELOPE_V).is_ok());
 }
 
 /// The signature lands strictly above the observed record even where the
@@ -252,7 +252,7 @@ fn the_signature_lands_above_both_the_observed_record_and_the_floor() {
     let device = world.device(b"me");
     let signer = Ed25519Signer::from_seed([0x51; 32]);
     let name = name_of(&signer);
-    let observed = Observed::gated(&name, 7, ENVELOPE_V, &[]).unwrap();
+    let observed = Observed::gated_for_test(&name, 7, ENVELOPE_V).unwrap();
     assert_eq!(
         publish_under(&device, &signer, &observed, None),
         Ok(PublishOutcome::Published { sequence: 8 }),
@@ -266,7 +266,7 @@ fn the_signature_lands_above_both_the_observed_record_and_the_floor() {
             .raise_sequence_floor(name.as_str().as_bytes(), 9),
     )
     .unwrap();
-    let observed = Observed::gated(&name, 2, ENVELOPE_V, &[]).unwrap();
+    let observed = Observed::gated_for_test(&name, 2, ENVELOPE_V).unwrap();
     assert_eq!(
         publish_under(&device, &signer, &observed, None),
         Ok(PublishOutcome::Published { sequence: 10 }),
@@ -280,7 +280,7 @@ fn an_observed_record_at_the_sequence_ceiling_is_refused() {
     let device = world.device(b"me");
     let signer = Ed25519Signer::from_seed([0x53; 32]);
     let name = name_of(&signer);
-    let observed = Observed::gated(&name, u64::MAX, ENVELOPE_V, &[]).unwrap();
+    let observed = Observed::gated_for_test(&name, u64::MAX, ENVELOPE_V).unwrap();
     assert_eq!(
         publish_under(&device, &signer, &observed, None),
         Err(PublishError::SequenceExhausted),
