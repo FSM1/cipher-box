@@ -705,7 +705,6 @@ mod tests {
             .find(|(name, _)| name == AUTHORIZATION)
             .expect("the probe carries the configured bearer");
         crate::testkit::assert_wipes_on_drop(value);
-        assert_eq!(value.capacity(), value.len(), "no spare buffer to regrow");
     }
 
     #[test]

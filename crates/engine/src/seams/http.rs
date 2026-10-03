@@ -39,7 +39,7 @@ pub struct InvalidBearer;
 /// splits or injects a header at the host transport.
 ///
 /// Separate from [`bearer_header`] so a caller that only asks the question —
-/// a config gate — never materializes a second, non-zeroized copy of the
+/// a config gate — never materializes a second copy of the
 /// credential just to throw it away.
 pub fn check_bearer(token: &str) -> Result<(), InvalidBearer> {
     if token.is_empty() || !token.bytes().all(|byte| matches!(byte, 0x21..=0x7e)) {
@@ -135,6 +135,8 @@ pub struct HttpRequest {
     pub url: String,
     /// Header name/value pairs, in send order. A value can carry a credential
     /// (the `Authorization` bearer), so the seam that sends it last wipes it.
+    /// The wipe covers these buffers only: the JS string `http_request_to_js`
+    /// makes, the browser `fetch` and reqwest keep their own copies.
     pub headers: Vec<(String, Zeroizing<String>)>,
     /// Request body bytes, if any. A body can carry a credential (an identity
     /// token, a refresh token), so the seam that sends it last wipes it.
@@ -284,10 +286,15 @@ mod tests {
 
     #[test]
     fn a_usable_bearer_becomes_the_authorization_pair() {
-        let (name, value) = bearer_header("eyJhbGciOi.J9-_~+/=").unwrap();
+        let token = "eyJhbGciOi.J9-_~+/=";
+        let (name, value) = bearer_header(token).unwrap();
         assert_eq!(name, AUTHORIZATION);
         assert_eq!(value.as_str(), "Bearer eyJhbGciOi.J9-_~+/=");
-        assert_eq!(value.capacity(), value.len(), "no spare buffer to regrow");
+        assert_eq!(
+            value.capacity(),
+            "Bearer ".len() + token.len(),
+            "the buffer gets its final size before the write, so it never grows"
+        );
         assert!(bearer_header("!").is_ok(), "0x21, the low edge");
         assert!(bearer_header("~").is_ok(), "0x7e, the high edge");
     }

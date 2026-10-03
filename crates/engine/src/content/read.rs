@@ -1176,16 +1176,20 @@ mod tests {
                 .headers
                 .iter()
                 .find(|(name, _)| name == AUTHORIZATION)
-                .map(|(_, value)| value.as_str().to_owned())
+                .map(|(_, value)| value.clone())
         };
+        let presents = |expected: &str| read().is_some_and(|value| value.as_str() == expected);
 
-        assert_eq!(read(), None, "no session yet: the leg goes out bare");
+        assert!(read().is_none(), "no session yet: the leg goes out bare");
         session.set(Zeroizing::new("jwt-1".to_owned()));
-        assert_eq!(read(), Some("Bearer jwt-1".to_owned()));
+        assert!(
+            presents("Bearer jwt-1"),
+            "the leg presents the session token"
+        );
         session.set(Zeroizing::new("jwt-2".to_owned()));
-        assert_eq!(read(), Some("Bearer jwt-2".to_owned()), "a rotation lands");
+        assert!(presents("Bearer jwt-2"), "a rotation lands");
         session.clear();
-        assert_eq!(read(), None, "logout drops the credential");
+        assert!(read().is_none(), "logout drops the credential");
     }
 
     #[test]
