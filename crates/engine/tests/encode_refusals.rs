@@ -46,8 +46,8 @@ use cipherbox_engine::testkit::{
     OWNER_ROOT_WRITE_SCOPE_SEED, block_on, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
-    ApiBaseUrl, Command, ContentProfile, Engine, EventStream, GatewayConfig, LoginSecret, NodeId,
-    NodeKind, StoragePolicy, SyncTimingProfile,
+    ApiBaseUrl, Command, ContentProfile, DeadLetterReason, Engine, EventStream, GatewayConfig,
+    LoginSecret, NodeId, NodeKind, StoragePolicy, SyncTimingProfile,
 };
 use core::cell::RefCell;
 
@@ -451,8 +451,9 @@ fn a_drain_publish_never_re_authors_a_folder_at_another_envelope_version() {
     assert_eq!(queued, 1, "and the create is still queued");
 }
 
-/// A folder at another envelope version charges no attempt: one pass short
-/// of the unattributed budget, the op is still queued with no dead letter.
+/// A folder at another envelope version charges no attempt: past the attempt
+/// budget and one pass short of the unattributed budget, the op is still
+/// queued with no dead letter.
 #[test]
 fn a_drain_op_under_a_folder_at_another_envelope_version_charges_no_attempt() {
     let (served, after, queued, dead_letters) =
@@ -460,7 +461,7 @@ fn a_drain_op_under_a_folder_at_another_envelope_version_charges_no_attempt() {
 
     assert_eq!(
         (queued, dead_letters),
-        (1, 0),
+        (1, Vec::new()),
         "the op is held, not dead-lettered"
     );
     assert_eq!(
@@ -470,12 +471,26 @@ fn a_drain_op_under_a_folder_at_another_envelope_version_charges_no_attempt() {
     );
 }
 
+/// At the unattributed budget the op dead-letters under the reason that tells
+/// the member to update this app.
+#[test]
+fn a_drain_op_under_a_folder_at_another_envelope_version_dead_letters_as_a_newer_release() {
+    let (served, after, queued, dead_letters) =
+        create_under_a_folder_at_newer_version(UNATTRIBUTED_BUDGET as usize + 1);
+
+    assert_eq!(
+        (queued, dead_letters),
+        (0, vec![DeadLetterReason::NewerRelease])
+    );
+    assert_eq!(after, Some(served), "the folder was never republished");
+}
+
 /// Stage a create under a folder sealed at the next envelope version and run
 /// `passes` drain passes: the folder's record before and after, the ops still
-/// queued, and the dead letters.
+/// queued, and the dead letters' reasons.
 fn create_under_a_folder_at_newer_version(
     passes: usize,
-) -> (Vec<u8>, Option<Vec<u8>>, usize, usize) {
+) -> (Vec<u8>, Option<Vec<u8>>, usize, Vec<DeadLetterReason>) {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let folder = NodeId([0x6f; 16]);
@@ -526,6 +541,9 @@ fn create_under_a_folder_at_newer_version(
     );
     let device = world.device(b"me");
     let (mut engine, _events, mut tasks) = booted(&world, &blocks, &device);
+    // `booted` scripts enough replies for a few dozen passes; each pass reads
+    // the root and the folder again.
+    serve_http(&device, &blocks, passes * 8);
     block_on(engine.command(Command::Create {
         parent: folder,
         name: "inside".into(),
@@ -539,7 +557,12 @@ fn create_under_a_folder_at_newer_version(
         record,
         record_at(&world, &name),
         queued(&device),
-        dead_letters(&engine),
+        block_on(engine.status())
+            .expect("the session status reads")
+            .dead_letters
+            .into_iter()
+            .map(|letter| letter.reason)
+            .collect(),
     )
 }
 
