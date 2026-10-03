@@ -121,6 +121,11 @@ impl PreflightedHead {
     pub fn block(&self) -> &[u8] {
         &self.block
     }
+
+    /// The floors this head was proven against.
+    pub(crate) fn bar(&self) -> Option<PublishBar> {
+        self.bar
+    }
 }
 
 /// Envelope-level dry run: check the head block really is the envelope beside

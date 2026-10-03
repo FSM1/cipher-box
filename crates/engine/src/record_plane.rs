@@ -520,6 +520,7 @@ where
             value: HeldValue::Head(head_cid),
             // An owner record anchors its sealed body and nothing else.
             content_cids: Vec::new(),
+            envelope: None,
         });
     // Only a record that cleared its floor and opened becomes last-known-good,
     // and what is stored is the sealed block, so ciphertext-only-at-rest holds.
