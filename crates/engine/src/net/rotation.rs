@@ -1752,6 +1752,13 @@ where
         // A root this pass opened no write plane for read no index, and the
         // classified verdict for that rides `write`.
         let grandchildren = grandchildren.unwrap_or_default();
+        // A copy recovered after a refusal serves reads only: no write lands
+        // over the refused record (ADR 0068 D3).
+        let write = if recovered_after_rejection {
+            Err(WritePlaneDark::Keyless)
+        } else {
+            write
+        };
         Ok((
             DescendantScopeRoot {
                 scope_id: child.scope_id,
@@ -8578,6 +8585,7 @@ mod tests {
         );
         assert_eq!(restarted.proved.len(), 2);
         assert!(restarted.proved[0].recovered_after_rejection);
+        assert!(restarted.proved[0].write.is_err());
         assert_eq!(restarted.proved[0].adopted.sequence, 1);
         assert_eq!(restarted.proved[1].scope_id, GRANDCHILD_SCOPE);
         // A durable copy does not prove the live record.
