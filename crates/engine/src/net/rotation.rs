@@ -7343,6 +7343,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_child_the_index_names_leaves_unproved_once_its_record_gates() {
+        let promoted = [0xbb; 16];
+        let harness = Harness::plain();
+        let child = interior(promoted, &OWNER_ROOT_SCOPE_SEED, Vec::new());
+        harness.stage(promoted, &child, Some(OWNER_ROOT_EPOCH));
+        serve_plane(&harness.http, &harness.blocks);
+        let root = vault_root(SCOPE, vec![child_ref(promoted, &child)]);
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(walked.failure, None);
+        assert_eq!(walked.proved.len(), 1);
+        assert!(walked.unproved.is_empty());
+    }
+
     /// The other direction: a child at the name this scope's write seed derives
     /// is this scope's own, and only a folder can be promoted into a scope root
     /// at all.

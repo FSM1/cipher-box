@@ -4264,8 +4264,13 @@ fn assert_a_known_root_delete_dead_letters(
     let events = events_so_far(&mut fx._events);
     assert!(dead_lettered_as_scope_root(&events, op_id, fx.folder));
     let status = block_on(fx.engine.status()).unwrap();
-    assert_eq!(status.dead_letters.len(), 1);
-    assert_eq!(status.dead_letters[0].op_id, op_id);
+    let delete: Vec<_> = status
+        .dead_letters
+        .iter()
+        .filter(|dead| dead.op_id == op_id)
+        .collect();
+    assert_eq!(delete.len(), 1);
+    assert_eq!(delete[0].reason, DeadLetterReason::TargetIsScopeRoot);
     assert_eq!(status.queue_hold, None);
     published_child_name(
         &fx.world,
