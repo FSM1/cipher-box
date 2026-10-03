@@ -224,6 +224,7 @@ fn reason_tag(reason: DeadLetterReason) -> u8 {
         DeadLetterReason::TargetLinkedAcrossScopes => 18,
         DeadLetterReason::GraftedScopeVaultSurface => 19,
         DeadLetterReason::NewerRelease => 20,
+        DeadLetterReason::TargetIsScopeRoot => 21,
     }
 }
 
@@ -252,6 +253,7 @@ fn reason_of_tag(tag: u8) -> Option<DeadLetterReason> {
         18 => DeadLetterReason::TargetLinkedAcrossScopes,
         19 => DeadLetterReason::GraftedScopeVaultSurface,
         20 => DeadLetterReason::NewerRelease,
+        21 => DeadLetterReason::TargetIsScopeRoot,
         _ => return None,
     })
 }
@@ -2629,6 +2631,7 @@ mod tests {
             DeadLetterReason::TargetLinkedAcrossScopes,
             DeadLetterReason::GraftedScopeVaultSurface,
             DeadLetterReason::NewerRelease,
+            DeadLetterReason::TargetIsScopeRoot,
         ];
         for reason in reasons {
             assert_eq!(

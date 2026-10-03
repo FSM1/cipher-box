@@ -222,7 +222,7 @@ describe('reporting what the engine says about the op', () => {
     });
     await waitFor(() => expect(result.current.uploads[0].opId).toBe(1n));
 
-    act(() => engine.emit({ kind: 'deadLetter', opId: 1n, reason: 'targetGone' }));
+    act(() => engine.emit({ kind: 'deadLetter', target: null, opId: 1n, reason: 'targetGone' }));
 
     expect(result.current.uploads[0].phase).toBe('failed');
     expect(result.current.uploads[0].error).toContain('targetGone');
@@ -277,7 +277,7 @@ describe('reporting what the engine says about the op', () => {
       })
     );
     // The record still has to publish, so a dead letter can follow the blocks.
-    act(() => engine.emit({ kind: 'deadLetter', opId: 1n, reason: 'targetGone' }));
+    act(() => engine.emit({ kind: 'deadLetter', target: null, opId: 1n, reason: 'targetGone' }));
 
     await act(async () => {
       vi.advanceTimersByTime(2000);

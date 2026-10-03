@@ -119,7 +119,7 @@ describe('LocalTransport', () => {
     const sent: EventDescriptor[] = [
       { kind: 'snapshotUpdated' },
       { kind: 'stalenessChanged', staleness: 'stale' },
-      { kind: 'deadLetter', opId: 7n, reason: 'attemptsExhausted' },
+      { kind: 'deadLetter', target: null, opId: 7n, reason: 'attemptsExhausted' },
       { kind: 'snapshotUpdated' },
     ];
     for (const event of sent) worker.emit({ type: 'event', event });

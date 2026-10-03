@@ -366,7 +366,7 @@ describe('broadcast transport ↔ leader relay', () => {
     engine.emit({ kind: 'snapshotUpdated' });
     engine.emit({ kind: 'stalenessChanged', staleness: 'stale' });
     engine.emit({ kind: 'withheldUpdateEscalation', ipnsName: new Uint8Array([1, 2, 3]) });
-    engine.emit({ kind: 'deadLetter', opId: 9n, reason: 'undecodable' });
+    engine.emit({ kind: 'deadLetter', target: null, opId: 9n, reason: 'undecodable' });
     engine.emit({ kind: 'attributableAbuse', description: 'abuse' });
     await tick();
 
@@ -528,7 +528,7 @@ describe('broadcast transport ↔ leader relay', () => {
 
     const sent: EventDescriptor[] = [
       { kind: 'snapshotUpdated' },
-      { kind: 'deadLetter', opId: 3n, reason: 'payloadRefused' },
+      { kind: 'deadLetter', target: null, opId: 3n, reason: 'payloadRefused' },
       { kind: 'stalenessChanged', staleness: 'stale' },
     ];
     for (const event of sent) engine.emit(event);
@@ -1256,7 +1256,7 @@ describe('broadcast transport ↔ leader relay', () => {
       { kind: 'snapshotUpdated' },
       { kind: 'stalenessChanged', staleness: 'reconciling' },
       { kind: 'withheldUpdateEscalation', ipnsName },
-      { kind: 'deadLetter', opId: 606060n, reason: 'undecodable' },
+      { kind: 'deadLetter', target: null, opId: 606060n, reason: 'undecodable' },
       { kind: 'attributableAbuse', description: 'abuse-707070' },
       { kind: 'renewalFailed', routingKey: 'k51-routing-key', detail: 'no peers' },
       {

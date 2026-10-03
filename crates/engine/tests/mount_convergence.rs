@@ -313,7 +313,7 @@ fn dead_letters(events: &mut EventStream, op: OpId) -> Vec<DeadLetterReason> {
     events_so_far(events)
         .into_iter()
         .filter_map(|event| match event {
-            Event::DeadLetter { op_id, reason } if op_id == op => Some(reason),
+            Event::DeadLetter { op_id, reason, .. } if op_id == op => Some(reason),
             _ => None,
         })
         .collect()

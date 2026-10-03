@@ -75,6 +75,7 @@ export type {
   SettingsHoldDescriptor,
   BinIndexHoldCheck,
   BinIndexHoldDescriptor,
+  DeletePlaneHoldDescriptor,
   QuotaHoldDescriptor,
   QueueHoldDescriptor,
   SnapshotDescriptor,

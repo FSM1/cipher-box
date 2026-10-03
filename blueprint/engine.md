@@ -684,9 +684,25 @@ delete does (ADR 0043).
   documented defaults that fall to the bin. The two errors are not equal: a
   soft delete reclaims nothing and stays reversible, while a hard delete the
   owner did not ask for destroys the node.
-- **A child that is a scope root stays hard.** Such a child publishes under a
-  name this scope's write seed does not derive. Its subtree is sealed under a
-  grantee's own seed, and cutting that grantee is a rotation, not a bin entry.
+- **A known scope root is refused before journaling**, with
+  `UnsupportedTarget` / `delete-target-is-a-scope-root`. The command uses every
+  root this session knows: proved roots, minted roots, and named roots without
+  material. A folder stays a scope root after its last grant is revoked, so
+  the refusal still applies. A scope root is neither binned nor hard-deleted.
+- **An unknown folder can queue offline.** A queued delete whose target is in
+  the same known set dead-letters as `TargetIsScopeRoot`, with its op id,
+  target and reason sent to the host. Before any other queued delete
+  publishes, the drain must prove the target's plane from its current record.
+  A missing index entry does not prove that the target is a plain folder. A
+  target record with a grant section dead-letters the same way. A plain record
+  that arrives while an endpoint failed is not a proof, because that endpoint
+  can withhold the grant. If the plane is unavailable, the delete holds the
+  queue head without a charge, as a reported hold that names the target. The
+  queue stays strict FIFO: the ops before the delete publish, and every op
+  after it waits, also an op that does not depend on it. The hold clears when
+  a pass proves the plane. A dead-lettered delete publishes nothing and raises
+  no trust violation. A record that fails the adoption gate still raises a
+  trust violation.
 - **A node the base links more than once unlinks from every one of them.** The
   delete removes the child ref from every folder the base links the node under
   and republishes each under its own plane, under one bin entry whose
@@ -1015,6 +1031,7 @@ Per-op rebase rules (FSM1/cipher-box-next#33 D5):
 | Race                        | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Delete vs concurrent edit   | **Conditional delete**: the op snapshots the target's own record sequence; if the target advanced by rebase time, the delete is dropped — edit wins in both directions (a rebased edit resurrects a concurrently deleted node)                                                                                                                                                                                                                                                                                                                                                   |
+| Delete vs concurrent grant  | **The grant wins**: once the target is proved to be a scope root, the delete dead-letters as `TargetIsScopeRoot`. The host reports the refusal; the delete publishes nothing.                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Edit vs edit                | **Conditional edit**: the op names the head version it was formed against, taken when the write handle opens; a head that is not that one by rebase or publish time is another writer's, so the edit **dead-letters** with its staged version preserved instead of superseding it. An identity, never a count — a queued predecessor and a concurrent writer advance a count alike. A device holding no head for the target resolves one at `beginWrite` rather than writing unanchored; no read path surfaces a non-head version, so a superseded one is unreachable (ADR 0045) |
 | Rename vs rename            | Serialized by the parent CAS; last writer at higher sequence wins                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Add vs add (name collision) | Always visible; the rebasing loser auto-suffixes (`name (2).ext`). Uniqueness = one strict comparator everywhere — NFC-normalized + case-folded, identical at create and merge on all platforms, names stored as-entered                                                                                                                                                                                                                                                                                                                                                         |

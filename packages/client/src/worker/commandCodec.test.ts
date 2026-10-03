@@ -75,12 +75,22 @@ describe('readEvent', () => {
   });
 
   it('fails closed on an unknown or absent dead letter reason', () => {
-    expect(() => readEvent(skewed({ kind: 'deadLetter', opId: 7n, reason: 'lost' }))).toThrow(
-      'unknown WASM dead letter reason: lost'
-    );
+    expect(() =>
+      readEvent(skewed({ kind: 'deadLetter', opId: 7n, target: null, reason: 'lost' }))
+    ).toThrow('unknown WASM dead letter reason: lost');
     expect(() => readEvent(skewed({ kind: 'deadLetter', opId: 7n }))).toThrow(
       'unknown WASM dead letter reason: undefined'
     );
+  });
+
+  it('preserves the target and reason of a refused scope-root delete', () => {
+    const event: EventDescriptor = {
+      kind: 'deadLetter',
+      opId: 7n,
+      target: new Uint8Array(16).fill(9),
+      reason: 'targetIsScopeRoot',
+    };
+    expect(readEvent(event)).toBe(event);
   });
 
   it('fails closed on an unknown opProgress phase', () => {
@@ -167,6 +177,14 @@ describe('readSnapshot', () => {
       });
       expect(readSnapshot(view).queueHold).toEqual(view.queueHold);
     }
+  });
+
+  it('reads a held delete with its target', () => {
+    const view = skewed<SnapshotView>({
+      ...baseView(),
+      queueHold: { reason: 'delete-plane', opId: 14n, node: new Uint8Array(16).fill(7) },
+    });
+    expect(readSnapshot(view).queueHold).toEqual(view.queueHold);
   });
 
   it('fails closed on a hold reason this build cannot name', () => {

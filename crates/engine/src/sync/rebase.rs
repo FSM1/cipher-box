@@ -121,6 +121,8 @@ pub enum DropReason {
 #[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
 #[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum DeadLetterReason {
+    /// A delete targets a scope root, whose material is not its parent's.
+    TargetIsScopeRoot,
     /// The op's target/parent is absent from gate-passing state and cannot be
     /// recreated — its scope was revoked (or the node hard-deleted) while the
     /// op sat offline.
@@ -427,10 +429,6 @@ pub fn replay(
             dead_letters.push((*op_id, DeadLetterReason::CrossingUnauthorable));
             continue;
         }
-        if delete_names_unpairable_scopes(&working, op, scope_roots) {
-            dead_letters.push((*op_id, DeadLetterReason::TargetLinkedAcrossScopes));
-            continue;
-        }
         match rebase_one(&mut working, local, op, scope_roots) {
             OpResolution::Applied {
                 effective_name,
@@ -505,7 +503,15 @@ pub fn rebase_one(
         }
         OpKind::Delete {
             target_sequence, ..
-        } => rebase_delete(working, op, *target_sequence),
+        } => {
+            if op.target == working.root || scope_roots.contains(&op.target) {
+                OpResolution::DeadLetter(DeadLetterReason::TargetIsScopeRoot)
+            } else if delete_names_unpairable_scopes(working, op, scope_roots) {
+                OpResolution::DeadLetter(DeadLetterReason::TargetLinkedAcrossScopes)
+            } else {
+                rebase_delete(working, op, *target_sequence)
+            }
+        }
         OpKind::Rename { new_name } => rebase_rename(working, op, new_name),
         OpKind::Relink {
             from_parent,
