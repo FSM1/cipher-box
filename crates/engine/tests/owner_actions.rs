@@ -6592,6 +6592,82 @@ fn a_tick_whose_walk_fails_reads_no_new_scope_root_as_a_child() {
     assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
 }
 
+/// The abuse descriptions the stream holds.
+fn abuse_descriptions(events: &mut EventStream) -> Vec<String> {
+    events_so_far(events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A grant whose interior move landed seals the interior under the new scope.
+/// A tick whose walk proves no set must still read that interior there.
+#[test]
+fn a_tick_whose_walk_fails_reads_a_moved_interior_under_the_new_scope() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the interior folder takes the focus");
+    events_so_far(&mut fx._events);
+    // The vault root's write plane does not open, so the walk proves no set.
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_for(&floor_label(&write_epoch_floor_key(&SCOPE)));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.owner_device.floor_store.heal_floors();
+
+    assert_eq!(abuse_descriptions(&mut fx._events), Vec::<String>::new());
+}
+
+/// The control of the test above: a record at the moved interior node that
+/// opens under no seed of the new scope is still one trust violation.
+#[test]
+fn a_tick_whose_walk_fails_still_reports_a_hostile_moved_interior_node() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let (_, epoch) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    reseal_interior_node(
+        &fx.world,
+        &fx.blocks,
+        inner,
+        fx.folder.0,
+        &[0x5a; 32],
+        epoch,
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the interior folder takes the focus");
+    events_so_far(&mut fx._events);
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_for(&floor_label(&write_epoch_floor_key(&SCOPE)));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.owner_device.floor_store.heal_floors();
+
+    let reported = abuse_descriptions(&mut fx._events);
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert!(
+        reported[0].ends_with("[unseal]: [seal-open-failed]"),
+        "{reported:?}"
+    );
+}
+
 /// A revoke runs several gated scope-root reads, so its refusal names the read
 /// that refused.
 #[test]

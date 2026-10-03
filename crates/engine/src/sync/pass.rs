@@ -672,16 +672,28 @@ where
             proved: state.descendant_scope_roots.borrow().clone(),
             unproved: state.unproved_scope_roots.borrow().clone(),
         };
-        let focus_scope_ids = focus_scope_roots(&scopes.proved, &scopes.unproved);
+        let owed_moves = OwedRotation::new(
+            &self.seams.staging,
+            BookkeepingSeal::new(&pass.enc_subkey, &*self.seams.entropy),
+            &pass.enc_subkey,
+            &state.owed_rotation,
+        )
+        .interior_moves()
+        .await
+        .ok();
+        let own = moved_own_scopes(
+            &scopes.proved,
+            &state.minted_scope_roots.borrow(),
+            owed_moves.as_deref(),
+        );
+        let focus_scope_ids = focus_scope_roots(&own, &scopes.unproved);
         let mut by_scope = focus_by_scope(
             &state.snapshot.borrow(),
             &state.focus.borrow(),
             &focus_scope_ids,
         );
         // A root this session minted carries a grant section before any walk
-        // proves it, so its own record is no child of the enclosing scope. Its
-        // interior stays on the walk's grouping: while its interior move is
-        // owed, that interior is still sealed under the enclosing scope.
+        // proves it, so its own record is no child of the enclosing scope.
         {
             let minted = state.minted_scope_roots.borrow();
             for targets in by_scope.values_mut() {
@@ -707,7 +719,7 @@ where
             sharers: grafted,
             contact_label_seed: &pass.contact_label_seed,
             own_root: self.root_id,
-            own: &scopes.proved,
+            own: &own,
             unproved: &scopes.unproved,
             base: &state.snapshot,
             root_name: Some(&pass.root_name),
@@ -1769,6 +1781,24 @@ fn report_forked_scopes(
     }
 }
 
+/// The own scope roots the focus leg groups by: the proved roots, and each
+/// root this session minted whose interior move no owed entry holds. Until the
+/// move lands, an interior node can still be sealed under the enclosing scope,
+/// so an unread owed record holds every minted root back.
+fn moved_own_scopes(
+    proved: &BTreeSet<NodeId>,
+    minted: &BTreeSet<NodeId>,
+    owed_moves: Option<&[(NodeId, NodeId)]>,
+) -> BTreeSet<NodeId> {
+    let Some(owed_moves) = owed_moves else {
+        return proved.clone();
+    };
+    let moved = minted
+        .iter()
+        .filter(|root| !owed_moves.iter().any(|(scope, _)| scope == *root));
+    proved.iter().chain(moved).copied().collect()
+}
+
 /// Record the boundaries one walk named without material, and release every
 /// root the same walk proved: a proved root reads on its own leg from now on,
 /// and a stale entry here would skip it as unreachable for the rest of the
@@ -1794,6 +1824,23 @@ mod tests {
     use crate::facade::NodeKind;
     use crate::seams::SharerScopedFloorStore;
     use crate::sync::model::NodeMeta;
+
+    /// A minted root groups its interior only once no owed entry holds its
+    /// interior move, and an unread owed record holds every minted root back.
+    #[test]
+    fn the_focus_leg_groups_a_minted_root_only_once_its_interior_moved() {
+        let proved = BTreeSet::from([NodeId([1; 16])]);
+        let moved = NodeId([2; 16]);
+        let owed = NodeId([3; 16]);
+        let minted = BTreeSet::from([moved, owed]);
+        let owed_moves = [(owed, NodeId::VAULT_ROOT)];
+
+        assert_eq!(
+            moved_own_scopes(&proved, &minted, Some(&owed_moves)),
+            BTreeSet::from([NodeId([1; 16]), moved])
+        );
+        assert_eq!(moved_own_scopes(&proved, &minted, None), proved);
+    }
 
     /// A boundary a later walk proves reads on its own leg, so it must leave the
     /// unproved set; the focus leg skips every root that set still holds.
