@@ -8057,7 +8057,7 @@ where {
             // The same share over a move the re-drive cannot prove: the mint
             // runs again over the entry, which stands until the mint replaces
             // it, and resumes against a root that landed.
-            (Redriven::StillOwed | Redriven::NotLanded, Some(_)) => {
+            (Redriven::StillOwed, Some(_)) => {
                 let standing = pass
                     .owed()
                     .entry(node)
@@ -8067,10 +8067,11 @@ where {
                     .ok_or_else(EngineError::rotation_work_owed)?;
                 return Box::pin(self.mint_share(node, share, permission, Some(standing))).await;
             }
-            (Redriven::StillOwed | Redriven::NotLanded, None) => {
-                return Err(EngineError::rotation_work_owed());
-            }
-            (Redriven::NoEntry | Redriven::Finished | Redriven::Dropped, _) => {}
+            (Redriven::StillOwed, None) => return Err(EngineError::rotation_work_owed()),
+            (
+                Redriven::NoEntry | Redriven::Finished | Redriven::Dropped | Redriven::NotLanded,
+                _,
+            ) => {}
         }
         Box::pin(self.mint_share(node, share, permission, None)).await
     }
@@ -8829,10 +8830,7 @@ where {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let pass_keys = self.pass_keys(session)?;
         let pass = self.conversion_pass(session, api, &pass_keys);
-        if matches!(
-            pass.redrive_scope(&self.sites(session, api), node).await?,
-            Redriven::StillOwed | Redriven::NotLanded
-        ) {
+        if pass.redrive_scope(&self.sites(session, api), node).await? == Redriven::StillOwed {
             return Err(EngineError::rotation_work_owed());
         }
         let keys = OwnerActionKeys::new(session);

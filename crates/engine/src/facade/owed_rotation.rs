@@ -128,6 +128,10 @@ const OWED_MOVE_SOURCE_MOVED: &str = "owed-interior-move-source-moved";
 const OWED_SCOPE_NOT_INDEXED: &str = "owed-scope-not-indexed";
 /// The published cut epoch is below the entry's, so its cut set never landed.
 const OWED_CUT_NEVER_LANDED: &str = "owed-cut-never-landed";
+
+/// The check a command reports for an entry whose cut never landed, which a
+/// different command replaced.
+const OWED_CUT_REPLACED: &str = "owed-cut-replaced";
 /// The folder answers as no scope root, and nothing owner-signed proves the
 /// promotion never ran.
 const OWED_MOVE_NOT_PROMOTED: &str = "owed-interior-move-not-promoted";
@@ -195,12 +199,29 @@ where
     }
 
     /// Write the entry a command owes at `scope` before its first publish. A
-    /// refused write stops the command there (ADR 0063 D2).
+    /// refused write stops the command there (ADR 0063 D2). An entry whose cut
+    /// never landed gives way, and the host is told that work goes (ADR 0068
+    /// D4).
     pub(crate) async fn owe(&self, scope: NodeId, entry: OwedEntry) -> Result<(), EngineError> {
-        self.owed()
-            .owe(scope, entry)
-            .await
-            .map_err(EngineError::from_owed_record)
+        let owed = self.owed();
+        match owed.owe(scope, entry.clone()).await {
+            Err(OwedRecordError::Standing) if owed.not_landed(scope) => {
+                let standing = owed
+                    .entry(scope)
+                    .await
+                    .map_err(EngineError::from_seam)?
+                    .ok_or_else(EngineError::rotation_work_owed)?;
+                owed.replace(scope, &standing, entry)
+                    .await
+                    .map_err(EngineError::from_owed_record)?;
+                let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
+                    scope_root: scope,
+                    detail: OWED_CUT_REPLACED.to_owned(),
+                });
+                Ok(())
+            }
+            owed => owed.map_err(EngineError::from_owed_record),
+        }
     }
 
     /// Leave `steps` owed at `scope`, and tell the host. A store that refuses
@@ -291,6 +312,7 @@ where
                 first_stop: None,
                 steps: steps.clone(),
             },
+            cut,
             command,
         )
         .await?;
@@ -376,23 +398,27 @@ where
         Ok(Some(report))
     }
 
-    /// Write the entry a cut owes at `scope`. A `command` that runs again over
-    /// its own cut that never landed replaces that entry, and keeps its first
-    /// stop and held passes (ADR 0068 D4).
+    /// Write the entry `cut` owes at `scope`. A `command` that runs the same
+    /// cut again over its own entry that never landed keeps its first stop and
+    /// held passes; any other cut over such an entry replaces it ([`Self::owe`],
+    /// ADR 0068 D4).
     async fn owe_cut(
         &self,
         scope: NodeId,
         entry: OwedEntry,
+        cut: &RevokedCommittedSet,
         command: bool,
     ) -> Result<(), EngineError> {
         if command {
             let owed = self.owed();
-            owed.note_command(scope, self.scheduler.now());
+            let same = owed.note_command(scope, self.scheduler.now(), &cut.commitment);
             let standing = owed
                 .entry(scope)
                 .await
                 .map_err(EngineError::from_seam)?
-                .filter(|standing| standing.is_cut() && standing.cut_epoch >= entry.cut_epoch);
+                .filter(|standing| {
+                    same && standing.is_cut() && standing.cut_epoch >= entry.cut_epoch
+                });
             if let Some(standing) = standing {
                 return owed
                     .rerun(scope, &standing, entry)
@@ -411,6 +437,7 @@ where
         if bound_elapsed(since, self.scheduler.now()) {
             OwedStop::abandoned(OWED_CUT_NEVER_LANDED)
         } else {
+            self.owed().mark_not_landed(scope);
             OwedStop::pending(OWED_CUT_NEVER_LANDED)
         }
     }

@@ -15548,6 +15548,90 @@ fn a_revoke_over_honest_lag_runs_on_the_older_copy() {
     );
 }
 
+/// ADR 0068 D4 as amended: a revoke of another grantee over an entry whose
+/// cut never landed replaces that entry, and the host learns that the first
+/// cut went.
+#[test]
+fn a_different_cut_over_a_cut_that_never_landed_reports_the_replaced_work() {
+    let mut fx = GrantScenario::new();
+    let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    let old_root = fx.granted_scope_repoint().current_root;
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &old_root) + 1);
+    let _ = revoke_the_recipient(&mut fx);
+    let _ = events_so_far(&mut fx._events);
+
+    let folder = fx.folder;
+    let _ = command_across_retries(
+        &mut fx,
+        Command::Revoke {
+            node: folder,
+            recipient_identity_public_key: bystander_identity(),
+        },
+    );
+
+    assert_eq!(
+        abandoned(&mut fx._events),
+        vec![(fx.folder, "owed-cut-replaced".to_owned())]
+    );
+}
+
+/// ADR 0068 D4 as amended: an entry whose cut never landed does not hold a
+/// link expiry. The sweep cuts the expired link over it, and the host learns
+/// that the cut that never landed went.
+#[test]
+fn the_sweep_cuts_an_expired_link_over_a_cut_that_never_landed() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let deadline = fx.an_hour_from_now();
+    fx.mint_link_until(Permission::Read, deadline);
+    let root = fx.granted_scope_repoint().current_root;
+    let mut cut_epoch_floor = fx.folder.0.to_vec();
+    cut_epoch_floor.extend_from_slice(b"/cut-epoch");
+    fx.world.record_store.fail_put_for(root.as_str());
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 1);
+    let folder = fx.folder;
+    assert!(
+        command_across_retries(
+            &mut fx,
+            Command::ChangePermission {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                permission: Permission::Read,
+            }
+        )
+        .is_err(),
+        "the cut set did not publish"
+    );
+    fx.owner_device.floor_store.heal_floors();
+    fx.world.record_store.heal_put_for(root.as_str());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let _ = events_so_far(&mut fx._events);
+
+    fx.world
+        .scheduler
+        .advance_to(swept_at(&fx.engine, deadline));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(fx.link_entries(), 0, "the expired link is cut");
+    assert_eq!(
+        abandoned(&mut fx._events),
+        vec![(fx.folder, "owed-cut-replaced".to_owned())]
+    );
+}
+
 /// ADR 0068 D1 as amended: the read cut lands, the wave stops at its
 /// re-point, and the revokee then publishes a root whose head block no source
 /// holds. The revoke run again re-drives the cut from the last copy at once,

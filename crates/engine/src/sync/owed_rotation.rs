@@ -20,6 +20,8 @@ use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
+use cipherbox_core::seal::GrantSetCommitment;
+
 use crate::facade::NodeId;
 use crate::net::rotation::RootReports;
 use crate::rotation::NodeBound;
@@ -190,8 +192,12 @@ pub struct OwedCell {
     /// The sync pass of this session, which each tick advances. A command's
     /// re-drive counts in the pass it runs in.
     pass: Cell<u64>,
-    /// The time each scope's cut command last ran this session (ADR 0068 D4).
-    commanded: RefCell<BTreeMap<NodeId, UnixMillis>>,
+    /// The time each scope's cut command last ran this session, and the set
+    /// it cut (ADR 0068 D4).
+    commanded: RefCell<BTreeMap<NodeId, (UnixMillis, GrantSetCommitment)>>,
+    /// The scopes whose entry a re-drive this session found with a cut that
+    /// never landed, within the bound. Another command may replace it.
+    not_landed: RefCell<BTreeSet<NodeId>>,
     /// The refused scope root records this session already reported.
     root_reports: RootReports,
     writer: futures_util::lock::Mutex<()>,
@@ -237,6 +243,9 @@ impl OwedCell {
         if let Ok(mut commanded) = self.commanded.try_borrow_mut() {
             commanded.clear();
         }
+        if let Ok(mut not_landed) = self.not_landed.try_borrow_mut() {
+            not_landed.clear();
+        }
         if let Ok(mut reports) = self.root_reports.try_borrow_mut() {
             reports.clear();
         }
@@ -249,6 +258,7 @@ impl OwedCell {
 
     fn reset_held(&self, scope: NodeId) {
         self.held_nodes.borrow_mut().remove(&scope);
+        self.not_landed.borrow_mut().remove(&scope);
     }
 
     #[cfg(test)]
@@ -523,12 +533,19 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
             }
             _ => Err(OwedRecordError::Standing),
         })
-        .await
+        .await?;
+        self.cell.not_landed.borrow_mut().remove(&scope);
+        Ok(())
     }
 
-    /// Note that a cut command ran at `scope` at `now`.
-    pub fn note_command(&self, scope: NodeId, now: UnixMillis) {
-        self.cell.commanded.borrow_mut().insert(scope, now);
+    /// Note that a cut command ran at `scope` at `now` over `cut`. Answers
+    /// whether the last run there this session cut the same set.
+    pub fn note_command(&self, scope: NodeId, now: UnixMillis, cut: &GrantSetCommitment) -> bool {
+        self.cell
+            .commanded
+            .borrow_mut()
+            .insert(scope, (now, cut.clone()))
+            .is_some_and(|(_, last)| last == *cut)
     }
 
     /// The later of `first_stop` and the last run of a cut command at `scope`
@@ -538,8 +555,20 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
             .commanded
             .borrow()
             .get(&scope)
-            .copied()
+            .map(|(at, _)| *at)
             .max(first_stop)
+    }
+
+    /// Mark the entry at `scope` as a cut that never landed, which another
+    /// command may replace.
+    pub fn mark_not_landed(&self, scope: NodeId) {
+        self.cell.not_landed.borrow_mut().insert(scope);
+    }
+
+    /// Whether a re-drive this session found the entry at `scope` with a cut
+    /// that never landed.
+    pub fn not_landed(&self, scope: NodeId) -> bool {
+        self.cell.not_landed.borrow().contains(&scope)
     }
 
     /// Replace the steps of the entry at `scope` with `steps`, if it stands.
