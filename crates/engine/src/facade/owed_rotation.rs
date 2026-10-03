@@ -259,6 +259,7 @@ where
     /// caller holds the scope
     /// ([`OwedCell::hold`](crate::sync::owed_rotation::OwedCell::hold))
     /// across both.
+    #[expect(clippy::too_many_arguments, reason = "one owed cut's full input set")]
     pub(super) async fn rotate_owed_cut(
         &self,
         node: NodeId,
