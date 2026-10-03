@@ -296,7 +296,7 @@ struct Manifest {
     settings_record: SettingsRecordSection,
     content_key: ContentKeySection,
     owner_local: OwnerLocalSection,
-    owner_seed_cache: serde_json::Value,
+    owner_seed_cache: OwnerSeedCacheManifest,
     bin_index: BinIndexSection,
     /// What each frozen byte bound charges, and the at-the-bound artifact that
     /// proves it.
@@ -306,6 +306,33 @@ struct Manifest {
 // --- Bin-index section: the owner-sealed, vault-level recycle-bin index,
 // --- sealed symmetrically under the `bin-index-seal-key` edge with its own
 // --- clear header as the AAD.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OwnerSeedCacheManifest {
+    lookup: OwnerSeedCacheLookup,
+    v: u64,
+    max_bytes: usize,
+    charged_measure: String,
+    fields: BTreeMap<String, OwnerSeedCacheBound>,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OwnerSeedCacheLookup {
+    label_seed: String,
+    scope: String,
+    key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OwnerSeedCacheBound {
+    max_bytes: usize,
+    charged_measure: String,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2461,6 +2488,7 @@ struct ManifestInputs<'a> {
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
+    let (seed_accept, seed_reject) = build_owner_seed_cache_vectors();
     let accept = m.accept;
     let reject = m.reject;
     let unknown = m.unknown;
@@ -2744,18 +2772,52 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                 ),
             },
         },
-        owner_seed_cache: serde_json::json!({
-            "v": 1,
-            "maxBytes": cipherbox_core::seal::MAX_OWNER_SEED_CACHE_BYTES,
-            "chargedMeasure": "whole-encoding",
-            "fields": {
-                "ipnsName": {"maxBytes": cipherbox_core::ipns::MAX_IPNS_NAME_BYTES, "chargedMeasure": "byte-string-payload"},
-                "ipnsRecord": {"maxBytes": cipherbox_core::seal::MAX_OWNER_SEED_RECORD_BYTES, "chargedMeasure": "byte-string-payload"},
-                "headBlock": {"maxBytes": cipherbox_core::seal::MAX_BLOCK_BYTES, "chargedMeasure": "byte-string-payload"}
+        owner_seed_cache: OwnerSeedCacheManifest {
+            lookup: {
+                let seed = [0x24; 32];
+                let scope = [0x35; 16];
+                let label = kdf::name_label(&seed, &[b"cbx/os/".as_slice(), &scope].concat());
+                OwnerSeedCacheLookup {
+                    label_seed: hexstr(&seed),
+                    scope: hexstr(&scope),
+                    key: hexstr(&[b"cbx/os/".as_slice(), &label].concat()),
+                }
             },
-            "accept": {"file": "vectors/owner_local/owner_seed_cache_accept.json", "count": 2},
-            "reject": {"file": "vectors/owner_local/owner_seed_cache_reject.json", "count": 3, "checks": ["unsupported-record-version", "invalid-field-length", "missing-field"]},
-        }),
+            v: 1,
+            max_bytes: cipherbox_core::seal::MAX_OWNER_SEED_CACHE_BYTES,
+            charged_measure: "whole-encoding".into(),
+            fields: [
+                ("ipnsName", cipherbox_core::ipns::MAX_IPNS_NAME_BYTES),
+                (
+                    "ipnsRecord",
+                    cipherbox_core::seal::MAX_OWNER_SEED_RECORD_BYTES,
+                ),
+                ("headBlock", cipherbox_core::seal::MAX_BLOCK_BYTES),
+            ]
+            .into_iter()
+            .map(|(name, max_bytes)| {
+                (
+                    name.into(),
+                    OwnerSeedCacheBound {
+                        max_bytes,
+                        charged_measure: "byte-string-payload".into(),
+                    },
+                )
+            })
+            .collect(),
+            accept: FileCount {
+                file: "vectors/owner_local/owner_seed_cache_accept.json".into(),
+                count: seed_accept.len(),
+            },
+            reject: RejectSection {
+                file: "vectors/owner_local/owner_seed_cache_reject.json".into(),
+                count: seed_reject.len(),
+                checks: seed_reject
+                    .iter()
+                    .map(|v| v["check"].as_str().unwrap().to_owned())
+                    .collect(),
+            },
+        },
         owner_local: OwnerLocalSection {
             struct_tag: STRUCT_TAG_OWNER_LOCAL,
             v: OWNER_LOCAL_V,
@@ -3868,6 +3930,7 @@ fn build_charged_bounds() -> BoundsSection {
     let mut cache_record = seal::OwnerSeedRecord {
         scope_id: [0x21; 16],
         epoch: 0,
+        write_epoch: 1,
         seed: zeroize::Zeroizing::new([0x32; 32]),
         parent_node_seed: None,
         ipns_name: Vec::new(),
@@ -3878,6 +3941,7 @@ fn build_charged_bounds() -> BoundsSection {
         .expect("cache base")
         .to_vec();
     cache_record.epoch = u64::MAX;
+    cache_record.write_epoch = u64::MAX;
     cache_record.parent_node_seed = Some(zeroize::Zeroizing::new([0x43; 32]));
     cache_record.ipns_name = vec![0xab; cipherbox_core::ipns::MAX_IPNS_NAME_BYTES];
     cache_record.record_bytes = vec![0xab; seal::MAX_OWNER_SEED_RECORD_BYTES];
@@ -10315,6 +10379,7 @@ fn build_owner_seed_cache_vectors() -> (Vec<serde_json::Value>, Vec<serde_json::
     let mut record = OwnerSeedRecord {
         scope_id: [0x21; 16],
         epoch: 7,
+        write_epoch: 1,
         seed: zeroize::Zeroizing::new([0x32; 32]),
         parent_node_seed: None,
         ipns_name: b"scope-name".to_vec(),
@@ -10334,6 +10399,13 @@ fn build_owner_seed_cache_vectors() -> (Vec<serde_json::Value>, Vec<serde_json::
         ("unsupported-version", "v", Value::Unsigned(2)),
         ("short-seed", "seed", Value::Bytes(vec![0; 31])),
         ("missing-scope", "scope", Value::Null),
+        ("unknown-field", "extra", Value::Unsigned(1)),
+        ("wrong-type", "epoch", Value::Text("seven".into())),
+        (
+            "short-parent-seed",
+            "parentNodeSeed",
+            Value::Bytes(vec![0; 31]),
+        ),
     ] {
         let mut value_tree = cipherbox_core::codec::decode(&body).expect("decode");
         let Value::Map(map) = &mut value_tree else {

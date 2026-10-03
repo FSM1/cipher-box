@@ -7,6 +7,7 @@ fn a_confirmed_owner_seed_and_its_recovery_copy_round_trip() {
     let record = OwnerSeedRecord {
         scope_id: [0x21; 16],
         epoch: 7,
+        write_epoch: 1,
         seed: Zeroizing::new([0x32; 32]),
         parent_node_seed: Some(Zeroizing::new([0x43; 32])),
         ipns_name: b"scope-name".to_vec(),

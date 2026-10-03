@@ -293,6 +293,7 @@ impl GrantFixture {
 
     fn candidate_with_record(&self, record_bytes: Vec<u8>) -> Candidate {
         Candidate {
+            head_block: Vec::new(),
             name: self.name.clone(),
             record_bytes,
             grant_section: self.grant_section.clone(),
@@ -386,6 +387,7 @@ impl GrantFixture {
         grant_section.grant_blobs = vec![grant_blob_signed];
 
         let candidate = Candidate {
+            head_block: Vec::new(),
             name: self.name.clone(),
             record_bytes: self.record_bytes(2),
             grant_section,

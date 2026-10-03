@@ -16,22 +16,26 @@ merge rule. Its design is too large for this cache repair.
 
 ## Decision
 
-**D1 — Keep a sealed recovery entry per scope and name in the device's
-`StagingStore`.** Use HPKE auth mode to self under owner-local kind `0x0b`,
-`owner-seed-cache`. Use the existing name-label edge for opaque lookup keys.
-The core codec stores the confirmed seed and epoch, signed IPNS record,
-encrypted root block, and parent node seed when required. The block keeps
-recovery independent of gateway retention and the disposable snapshot cache.
-Each completed owner read saves its entry before floors advance. A probe or
-refused read saves nothing. Updates cannot lower the saved epoch or sequence.
-The store's failure-atomic replacement keeps the previous entry on write failure.
+**D1 — Keep one sealed recovery entry per scope in the device's `StagingStore`.**
+Use HPKE auth mode to self under owner-local kind `0x0b`, `owner-seed-cache`.
+Use the existing name-label edge on the prefix and scope id for the lookup key.
+The core codec stores the confirmed seed and epoch, signed IPNS record, fetched
+root block, and parent node seed when required. The block permits recovery when
+neither a gateway nor the snapshot cache holds it.
+Each completed owner read tries to save its entry before floors advance. A
+failed cache write does not stop the read or floor advance. A probe or refused
+read saves nothing. At one name, only a greater sequence replaces the entry.
+A confirmed read at a new name replaces the old name's entry. Updates cannot
+lower the saved read, write, or cut epoch. A new name must have a greater write epoch. A corrupt entry is absent and can be
+replaced; a local failure cannot accuse a writer.
 
-A failed current owner blob remains a trust violation and raises attributable
+**D2 — Use the confirmed copy as the durable source for recovery and ADR 0068.**
+A failed current owner blob stays a trust violation and raises attributable
 abuse. The engine gates the separate confirmed copy at the current floors.
-It can read that copy and cut above the refused record's sequence. It does not
-adopt or renew the refused record. This protects one device that retains its
-store. [#2296](https://github.com/FSM1/cipher-box/issues/2296) extends the store to
-an owner-authored vault record for all devices; it is natively blocked by #2139.
+The owner rotation uses `RootFallback::last_copy`: it moves the root first,
+publishes nothing at the old name, and keeps no grant row (ADR 0068 D3 and D5).
+It does not adopt or renew the refused record. This protects one device that
+retains its store. The vault record for all owner devices is not landed.
 
 ## Alternatives considered
 
@@ -52,13 +56,16 @@ an owner-authored vault record for all devices; it is natively blocked by #2139.
 - The old `cross_check` and its test-only `owner_entry` KAT family add no
   invariant: the root gate checks the ascent link and opens the body with the
   owner blob's seed. A different seed fails with `seal-open-failed`.
-- Entries count toward the staging budget and remain until the device is forgotten.
+- Entries do not count toward the upload budget. Scope deletion removes the
+  entry. Each scope has at most one entry, bounded by the core codec.
+- Sign-out keeps the sealed entries for the next session of that account.
+  Account switch keeps them under separate account labels and sealing keys.
+  Forget-device removes them with the staging store.
 - The sent-index stays unchanged. Its decision moves to the web UI wave in
   [#2297](https://github.com/FSM1/cipher-box/issues/2297).
 - A current floor can bar an old copy. Local-store loss and content sealed only
   under a withheld epoch remain outside recovery. The latter needs a valid-seed
-  holder. Sequence exhaustion and repeated writer races need the root-first
-  name move in ADR 0068. This change supplies no such move.
+  holder. The root-first name move follows ADR 0068, also at sequence exhaustion.
 
 ## Residuals
 

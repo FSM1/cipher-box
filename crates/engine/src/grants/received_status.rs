@@ -1313,6 +1313,7 @@ mod tests {
     fn resolved(sharer: &EcdsaSigner, recipients: &[&X25519Public]) -> Candidate {
         let fixture = published(sharer, recipients);
         Candidate {
+            head_block: Vec::new(),
             name: fixture.name,
             record_bytes: Vec::new(),
             grant_section: fixture.grant_section,

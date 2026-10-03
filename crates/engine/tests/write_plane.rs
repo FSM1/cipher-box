@@ -2448,11 +2448,7 @@ fn the_second_handle_over_the_last_free_place_is_refused_at_its_commit() {
         Box::new(SeededEntropy::new(42)),
         SyncTimingProfile::CI,
         ContentProfile::CI,
-        StoragePolicy {
-            staging_budget_bytes: 4 * 1024 * 1024,
-            staging_cap_bytes: 4 * 1024 * 1024,
-            ..StoragePolicy::CI
-        },
+        StoragePolicy::CI,
         ApiBaseUrl::offline(),
         GatewayConfig {
             accelerator: Some("https://gw.test".into()),
@@ -7020,6 +7016,90 @@ fn a_purge_charges_the_doomed_roots_and_drops_the_entry() {
         bin_entries(&world, &alice, &blocks).is_empty(),
         "and the entry goes with it"
     );
+}
+
+/// A soft-deleted file, then a rotation of its scope, so its binned record is
+/// below the read-epoch floor.
+fn binned_then_rotated(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>, NodeId) {
+    seed_account(world, blocks);
+    let (mut engine, events, mut tasks) = boot_binning(world, blocks, alice);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(world, &engine, &mut tasks);
+    block_on(engine.command(Command::RotateNow { node: ROOT })).expect("the cut lands");
+    tick(world, &engine, &mut tasks);
+    (engine, events, tasks, doomed)
+}
+
+/// Whether `events` holds a dead letter.
+fn dead_lettered(events: &mut EventStream) -> bool {
+    events_so_far(events)
+        .iter()
+        .any(|event| matches!(event, Event::DeadLetter { .. }))
+}
+
+/// The binned record opens under the bin's held key at any epoch, so a restore
+/// after a rotation returns the node.
+#[test]
+fn a_restore_after_a_rotation_returns_the_node() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks, doomed) = binned_then_rotated(&world, &blocks, &alice);
+    block_on(engine.command(Command::Restore {
+        node: doomed,
+        into: None,
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        child_id(&engine, ROOT, "notes.txt"),
+        doomed,
+        "the folder the entry named holds the node again"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "a restored node leaves the bin"
+    );
+    assert!(!dead_lettered(&mut events), "the restore lands");
+}
+
+/// The same for a purge: the node's name leaves the inventory, and the entry
+/// goes with it.
+#[test]
+fn a_purge_after_a_rotation_drops_the_entry() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks, doomed) = binned_then_rotated(&world, &blocks, &alice);
+    let mark = retire_targets(&alice).len();
+    block_on(engine.command(Command::Purge { node: doomed })).expect("the purge stages");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        retired_since(&alice, mark).contains(&write_name(doomed).as_str().to_owned()),
+        "the purged node leaves the inventory the republisher walks"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "and the entry goes with it"
+    );
+    assert!(!dead_lettered(&mut events), "the purge lands");
 }
 
 /// The entry alone never licenses a purge. A soft delete writes the entry, then
@@ -13098,7 +13178,7 @@ fn uploaded_cids(device: &FakeDevice) -> Vec<String> {
                 .headers
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
-                .map(|(_, value)| value.clone())
+                .map(|(_, value)| value.as_str().to_owned())
                 .expect("an upload declares its CID")
         })
         .collect()

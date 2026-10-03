@@ -588,18 +588,17 @@ pair of kinds**, which is what proves the discriminator earns the separation
 that distinct per-store `info` strings used to give for free).
 
 The `owner-seed-cache` body uses the core deterministic-CBOR codec, version 1.
-Its fields are `v`, `scope` (16 bytes), `epoch` (u64), `seed` (32 bytes),
+Its fields are `v`, `scope` (16 bytes), `epoch` (u64), `writeEpoch` (u64), `seed` (32 bytes),
 optional `parentNodeSeed` (32 bytes), `ipnsName`, `ipnsRecord`, and `headBlock`.
 The last three fields are byte strings. Their payload limits are
 `MAX_IPNS_NAME_BYTES`, 10 KiB, and `MAX_BLOCK_BYTES`. The whole body limit is
-`MAX_BLOCK_BYTES + 10 KiB + MAX_IPNS_NAME_BYTES + 170`. Both encode and decode enforce these limits.
+`MAX_BLOCK_BYTES + 10 KiB + MAX_IPNS_NAME_BYTES + 190`. Both encode and decode enforce these limits.
 Decode refuses unknown fields, missing fields, wrong types, wrong fixed lengths,
 and versions other than 1. The KAT families are `owner_seed_cache_accept` and
 `owner_seed_cache_reject`. The engine binds the decoded scope and name to the
 lookup and gates the signed record and head before recovery. The store uses
 HPKE auth mode to self under kind `0x0b`. Seeds and plaintext codec buffers
 zeroize when their terminal owner drops them.
-
 
 ### Bin index
 
@@ -733,7 +732,7 @@ their suite entry in the KAT manifest (ADR 0015 D3).
 | genesis-write-scope-seed | login secret                                                    | the genesis writeScopeSeed                      |
 | contact-label-seed       | login secret                                                    | contactLabelSeed (device-only)                  |
 | contact-label            | contactLabelSeed, contact identityPk                            | a local label for a contact identity            |
-| name-label               | contactLabelSeed, local-store key                               | a local label for a floor or owner cache key           |
+| name-label               | contactLabelSeed, local-store key                               | a local label for a floor or owner cache key    |
 | committed-recipient-mask | pointerReadKey, blinded tag                                     | the commitment's recipient mask                 |
 
 `committed-recipient-mask` is what lets the owner sign a grant's recipient into

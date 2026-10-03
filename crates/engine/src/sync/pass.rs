@@ -65,8 +65,8 @@ use crate::settings::{
 };
 use crate::sync::BookkeepingSeal;
 use crate::sync::drain::{
-    Drain, DrainScope, EngineSeams, GrantedPass, ScopeEnd, SealPlane, TickInputs, TickScopes,
-    hold_captures,
+    Drain, DrainScope, EngineSeams, EpochSeed, GrantedPass, ScopeEnd, SealPlane, TickInputs,
+    TickScopes, hold_captures,
 };
 use crate::sync::model::Snapshot;
 use crate::sync::op::{Op, OpKind};
@@ -240,6 +240,15 @@ where
     St: StagingStore + QueueGeneration,
     Sch: Scheduler + Clone + 'static,
 {
+    fn owner_seed_cache<'a>(&'a self, pass: &'a Pass) -> crate::grants::OwnerSeedCache<'a> {
+        crate::grants::OwnerSeedCache::new(
+            &self.seams.staging,
+            &pass.enc_subkey,
+            &self.seams.entropy,
+            &pass.contact_label_seed,
+        )
+    }
+
     /// Start has just decided, so the first re-decide comes one interval on.
     pub(crate) fn new(
         seams: EngineSeams<T, H, C, F, S, St, Sch>,
@@ -476,12 +485,7 @@ where
             &self.owner_identity,
             self.root_id,
         )
-        .with_owner_seed_cache(Some(crate::grants::owner_entry::OwnerSeedCache::new(
-            &self.seams.staging,
-            &pass.enc_subkey,
-            &self.seams.entropy,
-            &pass.contact_label_seed,
-        )))
+        .with_owner_seed_cache(Some(self.owner_seed_cache(pass)))
         .holding(steady_state_hold(
             &state.held_records,
             self.root_id,
@@ -587,12 +591,7 @@ where
             .borrow()
             .get(&HeldKey::Node(self.root_id))
             .map(|record| (record.routing_key.clone(), record.record_bytes.clone()));
-        let owner_seed_cache = crate::grants::owner_entry::OwnerSeedCache::new(
-            &self.seams.staging,
-            &pass.enc_subkey,
-            &self.seams.entropy,
-            &pass.contact_label_seed,
-        );
+        let owner_seed_cache = self.owner_seed_cache(pass);
         let use_confirmed_root = held_root.is_none();
         if held_root.is_none()
             && recovered_root
@@ -626,6 +625,10 @@ where
             let failure = walked
                 .as_ref()
                 .map_or_else(|met| Some(*met), |walked| walked.failure);
+            *state.walk_refused_roots.borrow_mut() = walked
+                .as_ref()
+                .map(|walked| walked.refused.clone())
+                .unwrap_or_default();
             if let Ok(walked) = walked {
                 let departed = install_descendant_scopes(
                     &state.descendant_scope_roots,
@@ -1040,12 +1043,7 @@ where
             }
             None => None,
         };
-        let owner_seed_cache = crate::grants::owner_entry::OwnerSeedCache::new(
-            &self.seams.staging,
-            enc_subkey,
-            &self.seams.entropy,
-            &pass.contact_label_seed,
-        );
+        let owner_seed_cache = self.owner_seed_cache(pass);
         let exits = RotateOnExit(async |scope_root: NodeId| {
             let Some(boundaries) = &boundaries else {
                 return Err(RotateError::Resolve(ResolveFailure::Unavailable));
@@ -1087,6 +1085,7 @@ where
                     floor_namespace: FloorNamespace::Own,
                 },
                 epoch: end.material.read_epoch,
+                epoch_seed: EpochSeed::Ratchet,
             }),
             scope_roots: &proved_roots,
             keyless_roots: &keyless_roots,
@@ -1238,12 +1237,7 @@ where
         };
         let seams = &self.seams;
         let conversion = ConversionPass {
-            owner_seed_cache: Some(crate::grants::owner_entry::OwnerSeedCache::new(
-                &self.seams.staging,
-                &pass.enc_subkey,
-                &self.seams.entropy,
-                &pass.contact_label_seed,
-            )),
+            owner_seed_cache: Some(self.owner_seed_cache(pass)),
             transport: &seams.transport,
             api: seams.api.as_ref(),
             gateway: &seams.gateway,
@@ -1275,6 +1269,7 @@ where
             boundaries,
             root_name: &root_name,
             walked: state.scope_roots_walked.get(),
+            refused_roots: state.walk_refused_roots.borrow().clone(),
         };
         conversion.redrive_owed(&sites).await;
         state.owed_rotation_driven.set(true);

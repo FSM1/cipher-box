@@ -42,8 +42,9 @@ use crate::gate::{
 };
 use crate::grants::owner_entry::OwnerSeedCache;
 use crate::grants::{recipient_blinded_tag, self_locate_signed};
+use crate::scope_seeds::StampedSeed;
 use crate::seams::{FloorStore, Http, SeamError};
-use cipherbox_core::seal::{OwnerSeedRecord, encode_envelope};
+use cipherbox_core::seal::OwnerSeedRecord;
 
 /// Where a reader's copy of a scope root's read seed lives in the record it is
 /// gating — the one axis the owner arm and the grantee arm differ on. The
@@ -96,7 +97,6 @@ pub struct RootAdopter<'a, H, F> {
     /// from them ([`Self::holding`]).
     held_current: Option<Vec<u8>>,
     owner_seed_cache: Option<OwnerSeedCache<'a>>,
-    confirmed_seed: Option<Zeroizing<[u8; 32]>>,
 }
 
 impl<'a, H, F> RootAdopter<'a, H, F> {
@@ -171,7 +171,6 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
             parent_node_seed: None,
             held_current: None,
             owner_seed_cache: None,
-            confirmed_seed: None,
         }
     }
 
@@ -237,11 +236,9 @@ pub(crate) async fn assemble_candidate<H: Http>(
     record_bytes: &[u8],
     local: Option<&LocalHead>,
 ) -> Result<Candidate, GateError> {
-    // Steps 1-4; the sequence is discarded — the gate re-verifies the record
-    // from scratch. Only the block's length outlives the decode, so the buffer
-    // is released rather than held beside the envelope it decoded into.
-    let (_sequence, envelope, block_len) =
-        assemble_head_envelope(gateway, http, name, record_bytes, local).await?;
+    let (_, head_block) = fetch_head_block(gateway, http, name, record_bytes, local).await?;
+    let envelope = decode_envelope(&head_block).map_err(assembly_reject)?;
+    let block_len = head_block.len();
 
     // Step 5 — decode the grant section.
     let section_bytes = grant_section_bytes(&envelope).ok_or_else(|| {
@@ -266,6 +263,7 @@ pub(crate) async fn assemble_candidate<H: Http>(
     }
 
     Ok(Candidate {
+        head_block,
         name: name.clone(),
         record_bytes: record_bytes.to_vec(),
         grant_section,
@@ -297,7 +295,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         let root = self.recover_own_scope_root(name, record_bytes).await?;
         if let Some(root) = &root {
             self.remember_confirmed(root.owner_seed_record.as_ref())
-                .await?;
+                .await;
         }
         Ok(root.map(OwnScopeMaterial::from))
     }
@@ -444,9 +442,9 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         let write_scope_seed = self
             .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
             .await?;
-        let owner_seed_record = self
-            .prepare_owner_seed(&candidate, &read_scope_seed)
-            .await?;
+        let owner_seed_record =
+            self.prepare_owner_seed(&candidate, &read_scope_seed, write_scope_seed.as_ref());
+        let write_scope_seed = write_scope_seed.map(|seed| seed.seed);
         Ok(Some(RecoveredScopeRoot {
             owner_seed_record,
             envelope: candidate.envelope,
@@ -480,9 +478,9 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
             .await?;
         let node_id = env.id;
-        pending.owner_seed_record = self
-            .prepare_owner_seed(&candidate, &read_scope_seed)
-            .await?;
+        pending.owner_seed_record =
+            self.prepare_owner_seed(&candidate, &read_scope_seed, write_scope_seed.as_ref());
+        let write_scope_seed = write_scope_seed.map(|seed| seed.seed);
         Ok((
             candidate,
             pending,
@@ -497,41 +495,42 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     /// Commit the floor advance that [`Self::gate_and_recover`] deferred.
     pub(crate) async fn commit_root(&self, pending: PendingAdoption) -> Result<Adopted, GateError> {
         self.remember_confirmed(pending.owner_seed_record.as_ref())
-            .await?;
+            .await;
         pending.commit(self.floors).await.map_err(GateError::Seam)
     }
 
-    async fn prepare_owner_seed(
+    fn prepare_owner_seed(
         &self,
         candidate: &Candidate,
         seed: &[u8; 32],
-    ) -> Result<Option<OwnerSeedRecord>, GateError> {
-        let Some(cache) = &self.owner_seed_cache else {
-            return Ok(None);
-        };
+        write_seed: Option<&StampedSeed>,
+    ) -> Option<OwnerSeedRecord> {
+        self.owner_seed_cache.as_ref()?;
         if !matches!(self.seeds, SeedSource::Owner(_)) {
-            return Ok(None);
+            return None;
         }
-        cache.load(&self.root_scope_id, &candidate.name).await?;
-        Ok(Some(OwnerSeedRecord {
+        let write_epoch = write_seed
+            .filter(|seed| {
+                crate::rotation::derive_write_name(&seed.seed, &candidate.envelope.id)
+                    == candidate.name
+            })
+            .map_or(0, |seed| seed.stamp);
+        Some(OwnerSeedRecord {
             scope_id: self.root_scope_id,
             epoch: candidate.envelope.epoch,
+            write_epoch,
             seed: Zeroizing::new(*seed),
             parent_node_seed: self.parent_node_seed.clone(),
             ipns_name: candidate.name.as_str().as_bytes().to_vec(),
             record_bytes: candidate.record_bytes.clone(),
-            head_block: encode_envelope(&candidate.envelope).map_err(assembly_reject)?,
-        }))
+            head_block: candidate.head_block.clone(),
+        })
     }
 
-    pub(crate) async fn remember_confirmed(
-        &self,
-        record: Option<&OwnerSeedRecord>,
-    ) -> Result<(), GateError> {
+    pub(crate) async fn remember_confirmed(&self, record: Option<&OwnerSeedRecord>) {
         if let (Some(cache), Some(record)) = (&self.owner_seed_cache, record) {
-            cache.save(record).await?;
+            let _ = cache.save(record).await;
         }
-        Ok(())
     }
 
     pub(crate) async fn hold_confirmed_head(
@@ -540,7 +539,10 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         bytes: &[u8],
     ) -> Result<(), GateError> {
         if let Some(cache) = &self.owner_seed_cache
-            && let Some(record) = cache.load(&self.root_scope_id, name).await?
+            && let Some(record) = cache
+                .load(&self.root_scope_id, name)
+                .await
+                .map_err(GateError::Seam)?
             && record.record_bytes == bytes
         {
             let verified = IpnsRecord::unmarshal(bytes)
@@ -560,10 +562,24 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         &self,
         name: &IpnsName,
     ) -> Result<Option<RecoveredScopeRoot>, GateError> {
+        match self.gate_cached_owner_root(name).await {
+            Err(GateError::Rejected(_)) => Ok(None),
+            result => result,
+        }
+    }
+
+    async fn gate_cached_owner_root(
+        &self,
+        name: &IpnsName,
+    ) -> Result<Option<RecoveredScopeRoot>, GateError> {
         let (Some(cache), SeedSource::Owner(secret)) = (&self.owner_seed_cache, &self.seeds) else {
             return Ok(None);
         };
-        let Some(record) = cache.load(&self.root_scope_id, name).await? else {
+        let Some(record) = cache
+            .load(&self.root_scope_id, name)
+            .await
+            .map_err(GateError::Seam)?
+        else {
             return Ok(None);
         };
         let verified = IpnsRecord::unmarshal(&record.record_bytes)
@@ -586,8 +602,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             self.owner_identity,
             self.root_scope_id,
         );
-        reader.parent_node_seed = record.parent_node_seed;
-        reader.confirmed_seed = Some(record.seed);
+        reader.parent_node_seed = self.parent_node_seed.clone().or(record.parent_node_seed);
         reader.hold_local_head(LocalHead {
             cid,
             block: record.head_block,
@@ -746,10 +761,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
                 let aad = blob_aad(env, STRUCT_TAG_OWNER_BLOB);
                 let payload = open_owner_blob(enc_secret, &blob.enc, &aad, &blob.ciphertext)?;
                 Ok(OpenedSeeds {
-                    read_scope_seed: self
-                        .confirmed_seed
-                        .clone()
-                        .unwrap_or_else(|| Zeroizing::new(*payload.override_seed())),
+                    read_scope_seed: Zeroizing::new(*payload.override_seed()),
                     grant_write_scope_seed: None,
                     blob: SeedBlob::Owner {
                         enc_secret,
@@ -818,14 +830,15 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         enc_secret: &X25519Secret,
         env: &Envelope,
         owb: &SignedOwnerWriteBlob,
-    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+    ) -> Result<Option<StampedSeed>, GateError> {
         let Some(wf) = floor::write_epoch_floor(self.floors, &self.root_scope_id)
             .await
             .map_err(GateError::Seam)?
         else {
             return Ok(None);
         };
-        Ok(open_write_scope_seed_at(enc_secret, env, owb, wf))
+        Ok(open_write_scope_seed_at(enc_secret, env, owb, wf)
+            .map(|seed| StampedSeed { seed, stamp: wf }))
     }
 
     /// The scope write seed this reader is entitled to: the owner recovers it
@@ -836,14 +849,16 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         env: &Envelope,
         section: &GrantSection,
         grant_write_scope_seed: Option<Zeroizing<[u8; 32]>>,
-    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+    ) -> Result<Option<StampedSeed>, GateError> {
         match (&self.seeds, &section.owner_write_blob) {
             (SeedSource::Owner(enc_secret), Some(owb)) => {
                 self.recover_write_scope_seed(enc_secret, env, owb).await
             }
             // Re-authorable, NOT a trust failure — held keyless.
             (SeedSource::Owner(_), None) => Ok(None),
-            (SeedSource::Grantee { .. }, _) => Ok(grant_write_scope_seed),
+            (SeedSource::Grantee { .. }, _) => {
+                Ok(grant_write_scope_seed.map(|seed| StampedSeed { seed, stamp: 0 }))
+            }
         }
     }
 }
@@ -964,12 +979,20 @@ pub(super) fn reject(stage: GateStage, e: CodecError) -> GateError {
     })
 }
 
+/// The status a head block read carries when every source answered that it
+/// holds no such block (ADR 0068 D1).
+pub(super) const HEAD_BLOCK_NOT_FOUND: u16 = 404;
+
 /// Map a content-read failure: a CID mismatch/tamper is a fail-closed trust
 /// violation surfaced verbatim; no source or an over-cap body is availability (a
 /// retryable seam), never a trust verdict (`content/read.rs`).
 pub(super) fn map_read_error(e: ReadError) -> GateError {
     match e {
         ReadError::TrustViolation(codec) => assembly_reject(codec),
+        ReadError::NotFound => GateError::Seam(SeamError::http_status(
+            "head block not found",
+            HEAD_BLOCK_NOT_FOUND,
+        )),
         ReadError::Unavailable => GateError::Seam(SeamError::new("head block unavailable")),
         ReadError::TooLarge { size, limit } => GateError::Seam(SeamError::new(format!(
             "head block exceeds the content cap ({size} > {limit})"
@@ -977,15 +1000,20 @@ pub(super) fn map_read_error(e: ReadError) -> GateError {
     }
 }
 
-/// Only a failed owner seed open can select owner-seed recovery.
+/// An owner seed can fail at the ascent cross-check or at body unseal.
 pub(crate) fn owner_seed_refused(rejection: &GateRejection) -> bool {
-    rejection.stage == GateStage::Unseal
-        && matches!(
-            rejection.reason,
+    matches!(
+        (&rejection.stage, &rejection.reason),
+        (
+            GateStage::Unseal,
             RejectionReason::Trust(CodecError::Trust(
                 TrustViolation::HpkeOpenFailed | TrustViolation::SealOpenFailed
             ))
+        ) | (
+            GateStage::GrantSection,
+            RejectionReason::Trust(CodecError::Trust(TrustViolation::AscentLinkMismatch))
         )
+    )
 }
 
 #[cfg(test)]
@@ -1584,6 +1612,7 @@ mod tests {
         http.enqueue_response(ok_response(block));
         drop(block_on(adopter.adopt(&fx.name, &fx.record_over(&cid, 1))).unwrap());
         block_on(adopter.commit_adoption(first)).unwrap();
+        block_on(adopter.recover_own_scope_material(&fx.name, &fx.record_over(&cid, 1))).unwrap();
         let saved = block_on(cache.load(&fx.scope_id, &fx.name))
             .unwrap()
             .unwrap();
@@ -1634,14 +1663,48 @@ mod tests {
             .with_owner_seed_cache(Some(cache));
         assert!(matches!(
             block_on(restarted.recover_cached_owner_root(&fx.name)),
-            Err(GateError::Rejected(_))
+            Ok(None)
         ));
         assert!(fresh_floors.sequence_keys().is_empty());
         assert!(fresh_floors.epoch_keys().is_empty());
     }
 
     #[test]
-    fn corrupt_owner_cache_is_a_trust_refusal_and_a_failed_write_spends_no_floor() {
+    fn a_keyless_old_root_does_not_claim_the_current_write_epoch() {
+        use crate::testkit::{SeededEntropy, fakes::InMemoryStagingStore};
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let staging = InMemoryStagingStore::default();
+        let labels = kdf::contact_label_seed(&[0x28; 32]);
+        let entropy = RefCell::new(SeededEntropy::new(91));
+        let floors = InMemoryFloorStore::default();
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let cache = OwnerSeedCache::new(&staging, &fx.owner_enc, &entropy, &labels);
+        let adopter = fx
+            .adopter(&http, &floors, &fx.owner_identity_verifier, &gw)
+            .with_owner_seed_cache(Some(cache.clone()));
+        for epoch in [OWB_WRITE_EPOCH, OWB_WRITE_EPOCH + 1] {
+            seed_write_floor(&floors, &fx.scope_id, epoch);
+            http.enqueue_response(ok_response(fx.head_block.clone()));
+            let GatePass::Deferred(pass) = block_on(adopter.adopt(&fx.name, &fx.record(epoch)))
+                .unwrap()
+                .pass
+            else {
+                panic!("deferred")
+            };
+            block_on(adopter.commit_adoption(pass)).unwrap();
+            assert_eq!(
+                block_on(cache.load(&fx.scope_id, &fx.name))
+                    .unwrap()
+                    .unwrap()
+                    .write_epoch,
+                OWB_WRITE_EPOCH
+            );
+        }
+    }
+
+    #[test]
+    fn corrupt_owner_cache_is_replaced_and_a_failed_write_still_advances_the_floor() {
         use crate::seams::StagingStore;
         use crate::testkit::{SeededEntropy, fakes::InMemoryStagingStore};
         let fx = Fixture::new();
@@ -1668,23 +1731,31 @@ mod tests {
         block_on(adopter.commit_adoption(next(1))).unwrap();
         let (key, mut blob) = staging.contents().1.into_iter().next().unwrap();
         staging.interrupt_staged_write_after(&key, 0);
-        assert!(matches!(
-            block_on(adopter.commit_adoption(next(2))),
-            Err(GateError::Seam(_))
-        ));
-        assert_eq!(sequence_floor(&floors, &fx.name), 1);
-        let pending = next(2);
+        block_on(adopter.commit_adoption(next(2))).unwrap();
+        assert_eq!(sequence_floor(&floors, &fx.name), 2);
         *blob.last_mut().unwrap() ^= 1;
         block_on(staging.put_staged_bytes(&key, &blob)).unwrap();
-        assert!(matches!(
-            block_on(adopter.commit_adoption(pending)),
-            Err(GateError::Rejected(_))
-        ));
+        assert!(
+            block_on(adopter.recover_cached_owner_root(&fx.name))
+                .unwrap()
+                .is_none()
+        );
+        block_on(adopter.commit_adoption(next(3))).unwrap();
+        assert_eq!(sequence_floor(&floors, &fx.name), 3);
+        assert_eq!(
+            block_on(cache.load(&fx.scope_id, &fx.name))
+                .unwrap()
+                .unwrap()
+                .record_bytes,
+            fx.record(3)
+        );
+        staging.fail_staged_reads_under(crate::grants::OWNER_SEED_CACHE_PREFIX);
+        block_on(adopter.commit_adoption(next(4))).unwrap();
+        assert_eq!(sequence_floor(&floors, &fx.name), 4);
         assert!(matches!(
             block_on(adopter.recover_cached_owner_root(&fx.name)),
-            Err(GateError::Rejected(_))
+            Err(GateError::Seam(_))
         ));
-        assert_eq!(sequence_floor(&floors, &fx.name), 1);
     }
 
     #[test]

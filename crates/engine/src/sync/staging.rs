@@ -367,13 +367,14 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
         }
     }
 
-    /// Journal and release the version `op` staged.
-    pub(crate) async fn drop_version(&self, op: &Op) {
+    /// Journal and release the version `op` staged. `name` is the record the
+    /// version would have joined.
+    pub(crate) async fn drop_version(&self, op: &Op, name: Option<&str>) {
         let Some(root) = op.content_root_cid() else {
             return;
         };
         let block = self.store.staged_bytes(root).await.ok().flatten();
-        self.drop_staged(op, root, block.as_deref()).await;
+        self.drop_staged(op, name, root, block.as_deref()).await;
     }
 
     /// [`Self::drop_version`] over a root block the caller already read. The
@@ -381,14 +382,14 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
     /// leak, never a loss, and is reported ([`Event::RegistryDebtUnjournaled`]).
     /// A root that does not give a target set journals its CID alone, priced at
     /// the op record's size, and the settle fetches it (ADR 0059 D1).
-    async fn drop_staged(&self, op: &Op, root: &[u8], block: Option<&[u8]>) {
+    async fn drop_staged(&self, op: &Op, name: Option<&str>, root: &[u8], block: Option<&[u8]>) {
         let manifest = block
             .filter(|block| verify_cid(root, block).is_ok())
             .and_then(|block| decode_root(block).ok());
         let target = encode_content_cid_str(root);
         let expansion =
             block.and_then(|block| expand_staged_root(&target, block, self.profile).ok());
-        let debt = match expansion {
+        let mut debt = match expansion {
             Some(expansion) => OwedRetire {
                 origin: DebtOrigin::DroppedVersion(expansion.targets),
                 ..OwedRetire::whole(op.target.0, target, expansion.pinned_bytes)
@@ -403,6 +404,7 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
                 }
             }
         };
+        debt.name = name.map(str::to_owned);
         let journaled = StagingRetireLedger::new(self.store, self.seal)
             .owe(&self.reader.owner_tag(), &[debt])
             .await
@@ -1089,11 +1091,11 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
     }
     for parked in dropped {
         debts
-            .drop_staged(&parked.op, &parked.root, parked.block.as_deref())
+            .drop_staged(&parked.op, None, &parked.root, parked.block.as_deref())
             .await;
     }
     for (op, root) in gone {
-        debts.drop_staged(&op, &root, None).await;
+        debts.drop_staged(&op, None, &root, None).await;
     }
 }
 

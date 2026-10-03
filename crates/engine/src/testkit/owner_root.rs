@@ -377,8 +377,7 @@ pub fn owner_root_fixture_sealed(
 }
 
 /// Re-sign every structure as one committed writer (ADR 0052).
-#[cfg(test)]
-pub(crate) fn resign_section(
+pub fn resign_section(
     section: &mut GrantSection,
     scope: [u8; 16],
     epoch: u64,

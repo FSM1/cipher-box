@@ -182,6 +182,7 @@ fn an_owner_seed_cache_refuses_oversized_fields_in_both_directions() {
     let mut record = OwnerSeedRecord {
         scope_id: [0x21; 16],
         epoch: 1,
+        write_epoch: 1,
         seed: Zeroizing::new([0x32; 32]),
         parent_node_seed: None,
         ipns_name: b"name".to_vec(),

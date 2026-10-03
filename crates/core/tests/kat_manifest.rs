@@ -389,9 +389,36 @@ struct Manifest {
     settings_record: SettingsRecordManifest,
     content_key: ContentKeyManifest,
     owner_local: OwnerLocalManifest,
-    owner_seed_cache: serde_json::Value,
+    owner_seed_cache: OwnerSeedCacheManifest,
     bin_index: BinIndexManifest,
     bounds: BoundsManifest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnerSeedCacheManifest {
+    lookup: OwnerSeedCacheLookup,
+    v: u64,
+    max_bytes: usize,
+    charged_measure: String,
+    fields: BTreeMap<String, OwnerSeedCacheBound>,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnerSeedCacheLookup {
+    label_seed: String,
+    scope: String,
+    key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnerSeedCacheBound {
+    max_bytes: usize,
+    charged_measure: String,
 }
 
 #[derive(Deserialize)]
@@ -1758,8 +1785,8 @@ fn manifest_header_is_pinned() {
 fn fixture_table_matches_manifest_files() {
     let m = manifest();
     let referenced = [
-        m.owner_seed_cache["accept"]["file"].as_str().unwrap(),
-        m.owner_seed_cache["reject"]["file"].as_str().unwrap(),
+        m.owner_seed_cache.accept.file.as_str(),
+        m.owner_seed_cache.reject.file.as_str(),
         m.codecs.det_cbor.accept.file.as_str(),
         m.codecs.det_cbor.reject.file.as_str(),
         m.codecs.det_cbor.unknown_fields.file.as_str(),
@@ -4503,7 +4530,7 @@ fn the_charged_measure_of_every_byte_bound_is_frozen_in_the_manifest() {
                 assert_eq!(collection, b.collection, "{name}: refusal collection");
                 assert_eq!(limit, b.max_bytes, "{name}: refusal limit");
             }
-            _ => panic!("{name}: one byte past the bound must be refused"),
+            other => panic!("{name}: one byte past the bound: {other:?}"),
         }
 
         // What the label claims, checked against the artifact it labels: the
@@ -7108,13 +7135,38 @@ fn owner_seed_cache_vectors_pin_the_body_and_its_refusals() {
         MAX_OWNER_SEED_CACHE_BYTES, decode_owner_seed_record, encode_owner_seed_record,
     };
     let m = manifest();
-    assert_eq!(m.owner_seed_cache["v"], 1);
-    assert_eq!(m.owner_seed_cache["maxBytes"], MAX_OWNER_SEED_CACHE_BYTES);
-    for family in ["accept", "reject"] {
-        let spec = &m.owner_seed_cache[family];
-        let rows: Vec<serde_json::Value> =
-            serde_json::from_str(fixture(spec["file"].as_str().unwrap())).unwrap();
-        assert_eq!(rows.len(), spec["count"].as_u64().unwrap() as usize);
+    let spec = &m.owner_seed_cache;
+    let seed: [u8; 32] = hex::decode(&spec.lookup.label_seed)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let scope = hex::decode(&spec.lookup.scope).unwrap();
+    let label = cipherbox_core::kdf::name_label(&seed, &[b"cbx/os/".as_slice(), &scope].concat());
+    assert_eq!(
+        hex::encode([b"cbx/os/".as_slice(), &label].concat()),
+        spec.lookup.key
+    );
+    assert_eq!(spec.v, 1);
+    assert_eq!(spec.max_bytes, MAX_OWNER_SEED_CACHE_BYTES);
+    assert_eq!(spec.charged_measure, "whole-encoding");
+    for (field, expected) in [
+        ("headBlock", cipherbox_core::seal::MAX_BLOCK_BYTES),
+        ("ipnsName", cipherbox_core::ipns::MAX_IPNS_NAME_BYTES),
+        (
+            "ipnsRecord",
+            cipherbox_core::seal::MAX_OWNER_SEED_RECORD_BYTES,
+        ),
+    ] {
+        assert_eq!(spec.fields[field].max_bytes, expected);
+        assert_eq!(spec.fields[field].charged_measure, "byte-string-payload");
+    }
+    assert_eq!(spec.fields.len(), 3);
+    for (family, file, count) in [
+        ("accept", &spec.accept.file, spec.accept.count),
+        ("reject", &spec.reject.file, spec.reject.count),
+    ] {
+        let rows: Vec<serde_json::Value> = serde_json::from_str(fixture(file)).unwrap();
+        assert_eq!(rows.len(), count);
         let mut checks = Vec::new();
         for row in rows {
             let bytes = zeroize::Zeroizing::new(hex::decode(row["hex"].as_str().unwrap()).unwrap());
@@ -7133,7 +7185,7 @@ fn owner_seed_cache_vectors_pin_the_body_and_its_refusals() {
             }
         }
         if family == "reject" {
-            assert_eq!(serde_json::json!(checks), spec["checks"]);
+            assert_eq!(checks, spec.reject.checks);
         }
     }
 }

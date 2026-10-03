@@ -333,6 +333,7 @@ fn bench_adoption_gate(c: &mut Criterion) {
     let record_signer =
         kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &ROOT_ID).as_bytes());
     let candidate = Candidate {
+        head_block: Vec::new(),
         name,
         record_bytes: IpnsRecord::create_v2(
             &record_signer,
