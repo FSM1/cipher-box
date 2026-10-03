@@ -3,6 +3,7 @@
 //! under `--release`, where `debug_assert!` is compiled out, so a refusal that
 //! leans on one fails there.
 
+use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -13,6 +14,7 @@ use cipherbox_core::suite::ecdsa::SIGNATURE_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_engine::api::ApiClient;
+use cipherbox_engine::content::DAG_ROOT_CODEC;
 use cipherbox_engine::gate::{floor, record_cut_epoch_floor};
 use cipherbox_engine::grants::conversion::{
     ConversionRecord, MAX_CLAIM_PAYLOAD_BYTES, encode_conversions,
@@ -25,12 +27,14 @@ use cipherbox_engine::net::renewal_walk::cursor::{
     CursorCodecError, DeferredRoot, MAX_CURSOR_PATH, MAX_DEFERRED_ROOTS, RenewalCursor,
     encode_cursor,
 };
+use cipherbox_engine::net::retire::StagingRetireLedger;
 use cipherbox_engine::net::{
     BarFloor, Observed, PublishBar, PublishError, PublishOutcome, PublishRequest, publish,
 };
 use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, HttpResponse, RecordTransport, StagingStore, UnixMillis,
+    BoxedTask, FloorStore, HttpResponse, OwedRetire, RecordTransport, RetireLedger, StagingStore,
+    UnixMillis,
 };
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
@@ -41,6 +45,7 @@ use cipherbox_engine::testkit::account::{
     Blocks, EOL, ROOT, SCOPE as ACCOUNT_SCOPE, SECRET, TTL_NANOS, floor_label, fresh_observed,
     seed_account, seed_account_sealed, seed_account_with, serve_http,
 };
+use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED,
     OWNER_ROOT_WRITE_SCOPE_SEED, block_on, poll_tasks_until_parked,
@@ -50,6 +55,22 @@ use cipherbox_engine::{
     LoginSecret, NodeId, NodeKind, StoragePolicy, SyncTimingProfile,
 };
 use core::cell::RefCell;
+
+/// The decoder reads a retire-ledger entry whose name is not an IPNS name as
+/// unwritten, so `owe` refuses to journal one and stores nothing (ADR 0070 D1).
+#[test]
+fn a_retire_debt_whose_name_is_not_an_ipns_name_is_refused_at_owe() {
+    let store = InMemoryStagingStore::default();
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(3));
+    let ledger = StagingRetireLedger::new(&store, BookkeepingSeal::new(&enc, &entropy));
+    let target = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, b"a doomed root"));
+    for name in ["", "k51qzowningrecord"] {
+        let entry = OwedRetire::whole([7; 16], target.clone(), 64).owed_by(name);
+        assert!(block_on(ledger.owe(b"owner", &[entry])).is_err());
+    }
+    assert!(block_on(store.staged_keys()).expect("keys list").is_empty());
+}
 
 fn pointer_name() -> IpnsName {
     IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5d; 32]).verifying_key())

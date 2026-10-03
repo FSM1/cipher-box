@@ -1,5 +1,5 @@
-//! The committed KAT generator for the engine's content-DAG, rotation and
-//! check-surface fixtures (blueprint/core.md "KAT regime": vectors regenerate only
+//! The committed KAT generator for the engine's content-DAG, retire-ledger
+//! entry, rotation and check-surface fixtures (blueprint/core.md "KAT regime": vectors regenerate only
 //! through committed generators, never hand-edits). Sibling to core's
 //! generator; see `crates/engine/tests/kat_content.rs` for why the engine needs
 //! its own.
@@ -23,20 +23,27 @@ use std::fs;
 use std::path::Path;
 
 use cipherbox_core::codec::{Map, Value, encode};
-use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str, verify_cid};
+use cipherbox_core::content::{
+    CONTENT_CID_CODEC, compute_cid, decode_content_cid_str, encode_content_cid_str, verify_cid,
+};
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::aead::KEY_LEN;
+use cipherbox_core::suite::ed25519::Ed25519Signer;
+use cipherbox_engine::content::RetireTarget;
 use cipherbox_engine::content::{
     ContentKey, ContentProfile, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, assemble,
     decode_root, frame_and_seal,
 };
 use cipherbox_engine::entropy::{Entropy, EntropyError};
+use cipherbox_engine::seams::{DebtOrigin, OwedRetire};
 use cipherbox_engine::testkit::reject::RejectFamily;
-use cipherbox_engine::testkit::{checks, rotation};
+use cipherbox_engine::testkit::{checks, retire_entry, rotation};
 use serde::Serialize;
 
 const PROFILE: &str = "cipherbox/v2 engine content-dag";
 const ROTATION_PROFILE: &str = "cipherbox/v2 engine rotation plane";
 const CHECKS_PROFILE: &str = "cipherbox/v2 engine check surfaces";
+const RETIRE_LEDGER_PROFILE: &str = "cipherbox/v2 engine retire-ledger entry";
 
 /// A pinned entropy stream: KAT vectors must be byte-reproducible, so the
 /// generator injects a fixed nonce sequence instead of sampling one.
@@ -211,6 +218,8 @@ fn main() {
     };
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
+    let (entry_accept, entry_reject) = write_retire_ledger(&kat_dir.join("retire_ledger"));
+
     let rotation = write_family_corpus(
         &kat_dir.join("rotation"),
         ROTATION_PROFILE,
@@ -235,14 +244,214 @@ fn main() {
     println!(
         "kat_gen: wrote {} accept, {} reject, 2 capacity vectors + manifest.json; \
          rotation: {} reject vectors over {} planes; \
-         checks: {} reject vectors over {} planes",
+         checks: {} reject vectors over {} planes; \
+         retire ledger: {} accept, {} reject entries",
         root_accept.len(),
         root_reject.len(),
         rotation.0,
         rotation.1,
         checks.0,
         checks.1,
+        entry_accept,
+        entry_reject,
     );
+}
+
+/// A retire-ledger entry as the ledger seals it, and the entry it decodes to.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetireEntryAcceptVector {
+    name: String,
+    /// The version byte, or 0 for the unversioned shape.
+    version: u8,
+    node: String,
+    target: String,
+    owed_bytes: u64,
+    manifest_bytes: u64,
+    origin: String,
+    targets: Vec<RetireTargetOut>,
+    record_name: Option<String>,
+    stored: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetireTargetOut {
+    cid: String,
+    pinned_bytes: u64,
+}
+
+/// Stored bytes the ledger reads as unwritten.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetireEntryRejectVector {
+    name: String,
+    target: String,
+    stored: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetireLedgerManifest {
+    manifest_version: u64,
+    profile: String,
+    entry_accept: FileCount,
+    entry_reject: FileCount,
+}
+
+/// The retire-ledger entry corpus (ADR 0070 D1): every shape the ledger reads,
+/// and the name damage it reads as unwritten. Answers `(accept, reject)`.
+fn write_retire_ledger(dir: &Path) -> (usize, usize) {
+    let vectors_dir = dir.join("vectors");
+    fs::create_dir_all(&vectors_dir)
+        .unwrap_or_else(|e| panic!("create {}: {e}", vectors_dir.display()));
+    let root = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, b"retire-ledger kat root"));
+    let leaf = |seed: &[u8]| encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, seed));
+    let targets = vec![
+        RetireTarget {
+            cid: leaf(b"retire-ledger kat leaf 1"),
+            pinned_bytes: 1_000,
+        },
+        RetireTarget {
+            cid: leaf(b"retire-ledger kat leaf 2"),
+            pinned_bytes: 2_000,
+        },
+        RetireTarget {
+            cid: root.clone(),
+            pinned_bytes: 96,
+        },
+    ];
+    let record_name =
+        IpnsName::from_public_key(&Ed25519Signer::from_seed([0x70; 32]).verifying_key())
+            .as_str()
+            .to_owned();
+    let entry = |origin: DebtOrigin, name: Option<&str>| OwedRetire {
+        node: [0x3B; 16],
+        target: root.clone(),
+        owed_bytes: 1_500,
+        manifest_bytes: 3_096,
+        origin,
+        name: name.map(str::to_owned),
+    };
+    let dropped = || DebtOrigin::DroppedVersion(targets.clone());
+    let cases = [
+        ("v3-prune", entry(DebtOrigin::Prune, Some(&record_name))),
+        (
+            "v3-dropped-root",
+            entry(DebtOrigin::DroppedRoot, Some(&record_name)),
+        ),
+        ("v3-dropped-version", entry(dropped(), Some(&record_name))),
+        ("v2-prune", entry(DebtOrigin::Prune, None)),
+        ("v2-dropped-version", entry(dropped(), None)),
+    ];
+    let mut accept: Vec<RetireEntryAcceptVector> = cases
+        .into_iter()
+        .map(|(name, entry)| {
+            let stored = retire_entry::encode(&entry).expect("the live encoder writes it");
+            accept_vector(name, stored[0], &entry, stored)
+        })
+        .collect();
+    // The unversioned shape is read only, so it is framed by hand.
+    let unversioned = entry(DebtOrigin::Prune, None);
+    let mut stored = unversioned.node.to_vec();
+    stored.extend_from_slice(&unversioned.owed_bytes.to_be_bytes());
+    stored.extend_from_slice(&unversioned.manifest_bytes.to_be_bytes());
+    stored.extend_from_slice(&decode_content_cid_str(&root).expect("a content CID"));
+    accept.push(accept_vector("unversioned-prune", 0, &unversioned, stored));
+
+    let named = retire_entry::encode(&entry(dropped(), Some(&record_name))).expect("encodes");
+    let at = 2 + 16 + 2 * 8 + decode_content_cid_str(&root).expect("a content CID").len();
+    let edit = |change: &dyn Fn(&mut Vec<u8>)| {
+        let mut bytes = named.clone();
+        change(&mut bytes);
+        bytes
+    };
+    let reject = vec![
+        ("v3-name-not-canonical", edit(&|bytes| bytes[at + 1] = b'z')),
+        (
+            "v3-name-length-past-the-tail",
+            edit(&|bytes| bytes[at] = u8::MAX),
+        ),
+        ("v3-name-length-short", edit(&|bytes| bytes[at] -= 1)),
+        ("v3-empty-name", {
+            let mut bytes = named[..at].to_vec();
+            bytes.push(0);
+            bytes.extend_from_slice(&named[at + 1 + record_name.len()..]);
+            bytes
+        }),
+        ("unknown-version", edit(&|bytes| bytes[0] = 4)),
+    ];
+    let reject: Vec<RetireEntryRejectVector> = reject
+        .into_iter()
+        .map(|(name, stored)| {
+            assert_eq!(
+                retire_entry::decode(&stored, &root),
+                None,
+                "{name} reads as unwritten"
+            );
+            RetireEntryRejectVector {
+                name: name.to_owned(),
+                target: root.clone(),
+                stored: hex::encode(stored),
+            }
+        })
+        .collect();
+
+    write_pretty(&vectors_dir.join("entry_accept.json"), &accept);
+    write_pretty(&vectors_dir.join("entry_reject.json"), &reject);
+    write_pretty(
+        &dir.join("manifest.json"),
+        &RetireLedgerManifest {
+            manifest_version: 1,
+            profile: RETIRE_LEDGER_PROFILE.to_string(),
+            entry_accept: FileCount {
+                file: "vectors/entry_accept.json".to_string(),
+                count: accept.len(),
+            },
+            entry_reject: FileCount {
+                file: "vectors/entry_reject.json".to_string(),
+                count: reject.len(),
+            },
+        },
+    );
+    (accept.len(), reject.len())
+}
+
+/// One accept vector, asserted against the live decoder before it is written.
+fn accept_vector(
+    name: &str,
+    version: u8,
+    entry: &OwedRetire,
+    stored: Vec<u8>,
+) -> RetireEntryAcceptVector {
+    assert_eq!(
+        retire_entry::decode(&stored, &entry.target).as_ref(),
+        Some(entry),
+        "{name} decodes to its entry"
+    );
+    let (origin, targets) = match &entry.origin {
+        DebtOrigin::Prune => ("prune", Vec::new()),
+        DebtOrigin::DroppedRoot => ("dropped-root", Vec::new()),
+        DebtOrigin::DroppedVersion(targets) => ("dropped-version", targets.clone()),
+    };
+    RetireEntryAcceptVector {
+        name: name.to_owned(),
+        version,
+        node: hex::encode(entry.node),
+        target: entry.target.clone(),
+        owed_bytes: entry.owed_bytes,
+        manifest_bytes: entry.manifest_bytes,
+        origin: origin.to_owned(),
+        targets: targets
+            .into_iter()
+            .map(|target| RetireTargetOut {
+                cid: target.cid,
+                pinned_bytes: target.pinned_bytes,
+            })
+            .collect(),
+        record_name: entry.name.clone(),
+        stored: hex::encode(stored),
+    }
 }
 
 /// Write one reject corpus — a vector file per plane plus its manifest — and

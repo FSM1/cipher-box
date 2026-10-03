@@ -10,6 +10,7 @@ use core::cell::RefCell;
 use core::pin::pin;
 use core::task::{Context, Poll, Waker};
 use core::time::Duration;
+use std::collections::BTreeSet;
 
 use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -33,6 +34,8 @@ use cipherbox_core::suite::secret::ct_eq;
 
 use zeroize::Zeroizing;
 
+use cipherbox_core::content::encode_content_cid_str;
+use cipherbox_engine::api::RetireEntry;
 use cipherbox_engine::gate::{floor, record_cut_epoch_floor};
 use cipherbox_engine::grants::conversion::{
     CONVERSION_RECORD_PREFIX, ConversionRecord, MAX_CONVERSION_ENTRIES, POINTER_RETRY_WINDOW,
@@ -2816,6 +2819,161 @@ fn retired(device: &FakeDevice) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// Every retire entry this device sent, as the record it names and its
+/// targets.
+fn retire_entries(device: &FakeDevice) -> Vec<(Option<String>, Vec<String>)> {
+    device
+        .http
+        .requests()
+        .iter()
+        .filter(|request| request.url.ends_with("/registry/retire"))
+        .flat_map(|request| {
+            serde_json::from_slice::<Vec<RetireEntry>>(
+                request
+                    .body
+                    .as_deref()
+                    .expect("a retire call carries a body"),
+            )
+            .expect("a retire body is a JSON array of entries")
+        })
+        .map(|entry| (entry.ipns_name, entry.targets))
+        .collect()
+}
+
+/// One version of `file` written through the facade.
+fn write_version(fx: &mut GrantScenario, target: WriteTarget, body: &[u8]) {
+    let handle =
+        block_on(fx.engine.begin_write(target, body.len() as u64)).expect("a version write opens");
+    block_on(fx.engine.push_chunk(handle, body)).expect("the bytes stage");
+    block_on(fx.engine.commit_write(handle)).expect("the version commits");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+}
+
+/// A file with two versions in a write-granted folder, and the name it
+/// publishes at: one under the grant's own write seed, which the vault's seed
+/// does not derive.
+fn file_in_a_write_granted_folder(fx: &mut GrantScenario) -> (NodeId, IpnsName) {
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let folder = fx.folder;
+    write_version(
+        fx,
+        WriteTarget::NewFile {
+            parent: folder,
+            name: "clip.bin".into(),
+        },
+        &[1u8; 200],
+    );
+    let file = block_on(fx.engine.view())
+        .expect("a rendered view")
+        .children(folder)
+        .into_iter()
+        .find(|child| child.name == "clip.bin")
+        .expect("the file is listed")
+        .id;
+    write_version(
+        fx,
+        WriteTarget::Version {
+            node: file,
+            expected_version: None,
+        },
+        &[2u8; 200],
+    );
+    let moved_name = fx.granted_scope_repoint().current_root;
+    let section = published_grant_section_at(&fx.world, &fx.blocks, &moved_name)
+        .expect("the moved root answers as a scope root");
+    let seed = grantee_write_scope_seed(&section, &moved_name, &folder.0, 1);
+    let owing = derive_write_name(&seed, &file.0);
+    assert_ne!(
+        owing,
+        write_name(file),
+        "the vault's seed does not derive it"
+    );
+    (file, owing)
+}
+
+/// The records each retire entry since `mark` named `target` under.
+fn namings_since(device: &FakeDevice, mark: usize, target: &str) -> BTreeSet<Option<String>> {
+    retire_entries(device)[mark..]
+        .iter()
+        .filter(|(_, targets)| targets.iter().any(|sent| sent == target))
+        .map(|(record, _)| record.clone())
+        .collect()
+}
+
+/// The debt of a version that a file in a write-granted folder drops retires
+/// under the file's own name, the record that owes it, and settles (ADR 0070
+/// D2).
+#[test]
+fn a_dropped_version_in_a_write_granted_folder_retires_under_the_files_own_name() {
+    let mut fx = GrantScenario::new();
+    let (file, owing) = file_in_a_write_granted_folder(&mut fx);
+    let versions = block_on(fx.engine.file_versions(file)).expect("the history reads");
+    assert_eq!(versions.len(), 1, "two writes, one prior version");
+
+    let mark = retire_entries(&fx.owner_device).len();
+    block_on(fx.engine.command(Command::DeleteVersion {
+        node: file,
+        content_cid: versions[0].content_cid.clone(),
+    }))
+    .expect("the version delete stages");
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(
+        namings_since(
+            &fx.owner_device,
+            mark,
+            &encode_content_cid_str(&versions[0].content_cid)
+        ),
+        BTreeSet::from([Some(owing.as_str().to_owned())]),
+        "the dropped version retires under the record that owes it"
+    );
+    assert_eq!(fx.engine.pending_reclaim_bytes(), 0, "the debt settles");
+}
+
+/// A hard delete of a file in a write-granted folder retires its content under
+/// the file's own name, the record the delete retires, and under no name the
+/// vault's seed derives (ADR 0070 D2).
+#[test]
+fn a_hard_delete_in_a_write_granted_folder_retires_under_the_files_own_name() {
+    let mut fx = GrantScenario::new();
+    block_on(fx.engine.command(Command::SaveVaultSettings {
+        settings: VaultSettings {
+            bin_retention_days: 0,
+            ..VaultSettings::default()
+        },
+    }))
+    .expect("the settings publish");
+    let (file, owing) = file_in_a_write_granted_folder(&mut fx);
+    let head = block_on(fx.engine.snapshot(fx.folder))
+        .expect("the granted folder opens")
+        .children
+        .into_iter()
+        .find(|child| child.id == file)
+        .and_then(|child| child.content_cid)
+        .expect("the file has a head");
+
+    let mark = retire_entries(&fx.owner_device).len();
+    block_on(fx.engine.command(Command::Delete { node: file })).expect("the delete stages");
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(
+        namings_since(&fx.owner_device, mark, &encode_content_cid_str(&head)),
+        BTreeSet::from([Some(owing.as_str().to_owned())]),
+        "the head retires under the record that owes it"
+    );
+    assert_eq!(fx.engine.pending_reclaim_bytes(), 0, "the debt settles");
 }
 
 /// A delete below a promoted scope root is journaled under that scope, and only

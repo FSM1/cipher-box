@@ -12121,7 +12121,7 @@ where {
             .map_err(EngineError::from_seam)?;
         let reader = RecordReader::new(session.enc_subkey());
         self.dropped_version_debts(session, &reader)
-            .drop_version(&op)
+            .drop_version(&op, None)
             .await;
         self.state.dead_letters.borrow_mut().remove(&op_id);
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);

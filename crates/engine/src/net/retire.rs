@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use cipherbox_core::content::{
     decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid,
 };
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::OwnerLocalKind;
 use zeroize::Zeroizing;
 
@@ -504,39 +505,58 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     }
 }
 
-/// One entry as the staging store holds it, inside the seal. Two shapes; every
-/// well-formed content CID is one length, so they never share a length:
+/// One entry as the staging store holds it, inside the seal. Three shapes; every
+/// well-formed content CID is one length, so the unversioned one never shares a
+/// length with the others:
 ///
 /// - unversioned, read only: `node(16) | owedBytes | manifestBytes | cid`, a
 ///   [`DebtOrigin::Prune`] debt;
-/// - versioned: `ENTRY_V2 | origin | node(16) | owedBytes | manifestBytes |
-///   cid`; a [`DebtOrigin::DroppedVersion`] entry adds one `cid | pinnedBytes`
-///   per target after it, the root last.
+/// - `ENTRY_V2 | origin | node(16) | owedBytes | manifestBytes | cid`, read
+///   only;
+/// - `ENTRY_V3 | origin | node(16) | owedBytes | manifestBytes | cid |
+///   nameLen(1) | name`, where `name` is the `ipnsName` of the record that
+///   owes the debt (ADR 0070 D1).
 ///
-/// Figures are big-endian `u64`. `cid` is the binary CID the entry is keyed
-/// by, which binds the value to its key.
+/// In both versioned shapes a [`DebtOrigin::DroppedVersion`] entry ends with
+/// one `cid | pinnedBytes` per target, the root last. Figures are big-endian
+/// `u64`. `cid` is the binary CID the entry is keyed by, which binds the value
+/// to its key.
 ///
 /// Zeroizing because the plaintext side of a sealed value is exactly what the
 /// tier exists to keep off the host ([`crate::sync::bookkeeping`]).
 ///
-/// Refuses a target set [`decode_entry`] would read as unwritten (AGENTS.md
-/// rule 8).
-fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> SeamResult<Zeroizing<Vec<u8>>> {
+/// Refuses a name or a target set [`decode_entry`] would read as unwritten
+/// (AGENTS.md rule 8). An entry with no name writes `ENTRY_V2`.
+pub(crate) fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> SeamResult<Zeroizing<Vec<u8>>> {
     let (origin, targets) = match &entry.origin {
         DebtOrigin::Prune => (ORIGIN_PRUNE, None),
         DebtOrigin::DroppedVersion(targets) => (ORIGIN_DROPPED_VERSION, Some(targets.as_slice())),
         DebtOrigin::DroppedRoot => (ORIGIN_DROPPED_ROOT, None),
     };
+    let name = match entry.name.as_deref() {
+        Some(name) if !is_wellformed_name(name.as_bytes()) => {
+            return Err(SeamError::new("retire-ledger name is not an IPNS name"));
+        }
+        name => name,
+    };
     let pairs = targets.map_or(0, <[RetireTarget]>::len);
     let mut stored = Zeroizing::new(Vec::with_capacity(
-        2 + ENTRY_HEAD_LEN + (cid.len() + size_of::<u64>()) * (pairs + 1),
+        3 + ENTRY_HEAD_LEN
+            + name.map_or(0, str::len)
+            + (cid.len() + size_of::<u64>()) * (pairs + 1),
     ));
-    stored.push(ENTRY_V2);
+    stored.push(if name.is_some() { ENTRY_V3 } else { ENTRY_V2 });
     stored.push(origin);
     stored.extend_from_slice(&entry.node);
     stored.extend_from_slice(&entry.owed_bytes.to_be_bytes());
     stored.extend_from_slice(&entry.manifest_bytes.to_be_bytes());
     stored.extend_from_slice(cid);
+    if let Some(name) = name {
+        let len = u8::try_from(name.len())
+            .map_err(|_| SeamError::new("retire-ledger name is over 255 bytes"))?;
+        stored.push(len);
+        stored.extend_from_slice(name.as_bytes());
+    }
     if let Some(targets) = targets {
         if !target_set_holds(targets, &entry.target, entry.manifest_bytes) {
             return Err(SeamError::new(
@@ -555,8 +575,11 @@ fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> SeamResult<Zeroizing<Vec<u8>>
     Ok(stored)
 }
 
-/// The version byte a versioned entry leads with.
+/// The version byte of an entry that records no name.
 const ENTRY_V2: u8 = 2;
+/// The version byte of an entry that records the name of the record that owes
+/// it.
+const ENTRY_V3: u8 = 3;
 const ORIGIN_PRUNE: u8 = 0;
 const ORIGIN_DROPPED_VERSION: u8 = 1;
 const ORIGIN_DROPPED_ROOT: u8 = 2;
@@ -577,16 +600,26 @@ fn target_set_holds(targets: &[RetireTarget], root: &str, manifest_bytes: u64) -
 ///
 /// A stored CID that is not `cid`, the one the entry's own key names, reads as
 /// unwritten too ([`StagingRetireLedger::entry`]).
-fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
-    let (origin_tag, body) = if stored.len() == ENTRY_HEAD_LEN + cid.len() {
-        (ORIGIN_PRUNE, stored)
+pub(crate) fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
+    let (version, origin_tag, body) = if stored.len() == ENTRY_HEAD_LEN + cid.len() {
+        (ENTRY_V2, ORIGIN_PRUNE, stored)
     } else {
         let (&version, rest) = stored.split_first()?;
         let (&origin, body) = rest.split_first()?;
-        (version == ENTRY_V2).then_some((origin, body))?
+        (version, origin, body)
     };
     let (head, rest) = body.split_at_checked(ENTRY_HEAD_LEN)?;
-    let tail = rest.strip_prefix(cid)?;
+    let rest = rest.strip_prefix(cid)?;
+    let (name, tail) = match version {
+        ENTRY_V2 => (None, rest),
+        ENTRY_V3 => {
+            let (&len, rest) = rest.split_first()?;
+            let (name, tail) = rest.split_at_checked(usize::from(len))?;
+            is_wellformed_name(name).then_some(())?;
+            (Some(String::from_utf8(name.to_vec()).ok()?), tail)
+        }
+        _ => return None,
+    };
     let (node, figures) = head.split_first_chunk::<NODE_ID_LEN>()?;
     let (owed, figures) = figures.split_first_chunk::<{ size_of::<u64>() }>()?;
     let (manifest, _) = figures.split_first_chunk::<{ size_of::<u64>() }>()?;
@@ -608,7 +641,13 @@ fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
         owed_bytes: u64::from_be_bytes(*owed),
         manifest_bytes,
         origin,
+        name,
     })
+}
+
+/// Whether `name` is the canonical spelling of an IPNS name.
+fn is_wellformed_name(name: &[u8]) -> bool {
+    core::str::from_utf8(name).is_ok_and(|name| IpnsName::parse(name).is_ok())
 }
 
 /// A dropped version's stored target set, or `None` for a tail that is not a
@@ -671,6 +710,8 @@ pub struct RootSource<'a, H> {
 /// waiting is a leak.
 /// It is also what makes a debt safe to journal ahead of the shortened record: a
 /// target the node's record still names has no landed shortening behind it.
+/// `live` is given the name the entry records, and must answer for the record
+/// at that name (ADR 0070 D2).
 ///
 /// `live` is told the node's [`OwingRecord`] class, because a hard-deleted node
 /// has no record left to read and its debt would otherwise sit unsettleable
@@ -703,7 +744,7 @@ pub async fn drain_owed_retires<L, H, C>(
     source: &RootSource<'_, H>,
     owed_now: &BTreeSet<[u8; 16]>,
     resume: Option<&[u8]>,
-    live: impl AsyncFn([u8; 16], OwingRecord) -> Option<LiveRecord>,
+    live: impl AsyncFn([u8; 16], OwingRecord, Option<&str>) -> Option<LiveRecord>,
 ) -> Option<ReclaimPass>
 where
     L: RetireLedger,
@@ -714,11 +755,13 @@ where
     let mut stalls: Vec<ReclaimStall> = Vec::new();
     let mut still_owed = 0u64;
     let mut registry_up = true;
-    // One record read per owing node and class, not per entry — a prune drops
-    // several versions of one file. A node's set grows only with what actually
+    // One record read per owing node, class and recorded name, not per entry —
+    // a prune drops several versions of one file, and a node that moved owes
+    // debts under two names. A node's set grows only with what actually
     // retired, so a CID a deferred entry named is still reachable by the next
     // one.
-    let mut live_of: BTreeMap<([u8; 16], OwingRecord), Option<LiveRecord>> = BTreeMap::new();
+    let mut live_of: BTreeMap<([u8; 16], OwingRecord, Option<String>), Option<LiveRecord>> =
+        BTreeMap::new();
     // The nodes this pass classified, and those it leaves still owing: a
     // tombstone outlives nothing but the debts it classifies.
     let mut tombstoned: BTreeMap<[u8; 16], bool> = BTreeMap::new();
@@ -740,9 +783,11 @@ where
             }
             (false, DebtOrigin::Prune) => OwingRecord::Published,
         };
-        let node = match live_of.entry((entry.node, owing)) {
+        let node = match live_of.entry((entry.node, owing, entry.name.clone())) {
             Entry::Occupied(held) => held.into_mut(),
-            Entry::Vacant(slot) => slot.insert(live(entry.node, owing).await),
+            Entry::Vacant(slot) => {
+                slot.insert(live(entry.node, owing, entry.name.as_deref()).await)
+            }
         };
         // Bounded like every other batch this module reports: the reasons are
         // there to be acted on, and the figure is what counts the debt.
@@ -1275,7 +1320,8 @@ mod tests {
         http: &ScriptedHttp,
         live: Option<BTreeSet<String>>,
     ) -> (u64, Vec<OwedRetire>) {
-        let remaining = drain_with_live(store, owner, http, async |_, _| live.clone().map(owning));
+        let remaining =
+            drain_with_live(store, owner, http, async |_, _, _| live.clone().map(owning));
         (remaining.still_owed, owed_entries(store, owner))
     }
 
@@ -1284,7 +1330,7 @@ mod tests {
         store: &InMemoryStagingStore,
         owner: &[u8],
         http: &ScriptedHttp,
-        live: impl AsyncFn([u8; 16], OwingRecord) -> Option<LiveRecord>,
+        live: impl AsyncFn([u8; 16], OwingRecord, Option<&str>) -> Option<LiveRecord>,
     ) -> ReclaimPass {
         let session = Session::new();
         let api = ApiClient::new(
@@ -1710,7 +1756,7 @@ mod tests {
         let http = blocks_http(vec![(pruned.target.clone(), pruned_block)], Some(1));
         let asked = RefCell::new(BTreeSet::new());
 
-        drain_with_live(&store, OWNER, &http, async |node, owing| {
+        drain_with_live(&store, OWNER, &http, async |node, owing, _| {
             asked.borrow_mut().insert((node, owing));
             None
         });
@@ -1818,6 +1864,141 @@ mod tests {
         );
     }
 
+    /// A well-formed `ipnsName` for a record that owes a debt.
+    fn record_name(seed: u8) -> String {
+        IpnsName::from_public_key(
+            &cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([seed; 32]).verifying_key(),
+        )
+        .as_str()
+        .to_owned()
+    }
+
+    /// A version 3 entry carries the name of the record that owes it, and
+    /// every origin round-trips with it (ADR 0070 D1).
+    #[test]
+    fn an_entry_with_a_name_round_trips_at_version_3() {
+        let (pruned, ..) = owed_version(&[12u8; 40]);
+        let (dropped, _) = dropped_version(&[13u8; 100]);
+        let rootless = OwedRetire {
+            origin: DebtOrigin::DroppedRoot,
+            ..pruned.clone()
+        };
+        for entry in [pruned, dropped, rootless] {
+            let entry = entry.owed_by(&record_name(1));
+            let (stored, cid) = encoded(&entry);
+            assert_eq!(stored[0], ENTRY_V3);
+            assert_eq!(
+                decode_entry(&stored, &cid),
+                Some(OwedRetire {
+                    target: String::new(),
+                    ..entry.clone()
+                })
+            );
+            let store = InMemoryStagingStore::default();
+            owe(&store, OWNER, &entry);
+            assert_eq!(owed_entries(&store, OWNER), vec![entry]);
+        }
+    }
+
+    /// A version 3 entry whose name does not read as a well-formed IPNS name
+    /// reads as unwritten, and the encode refuses to write one (AGENTS.md
+    /// rule 8).
+    #[test]
+    fn a_name_that_is_not_an_ipns_name_is_unwritten_and_refused_at_owe() {
+        let (entry, _) = dropped_version(&[14u8; 100]);
+        let name = record_name(2);
+        let (stored, cid) = encoded(&entry.clone().owed_by(&name));
+        let at = 2 + ENTRY_HEAD_LEN + cid.len();
+        assert_eq!(usize::from(stored[at]), name.len());
+        let mut bad_name = stored.clone();
+        bad_name[at + 1] = b'z';
+        let mut long_len = stored.clone();
+        long_len[at] = u8::MAX;
+        let mut short_len = stored.clone();
+        short_len[at] -= 1;
+        let mut next_version = stored.clone();
+        next_version[0] = ENTRY_V3 + 1;
+        for bytes in [
+            bad_name,
+            long_len,
+            short_len,
+            next_version,
+            stored[..at + 1].to_vec(),
+        ] {
+            assert_eq!(decode_entry(&bytes, &cid), None);
+        }
+        for bad in [
+            String::new(),
+            "k51qzowningrecord".to_owned(),
+            name.to_uppercase(),
+            "k".repeat(300),
+        ] {
+            let bad = entry.clone().owed_by(&bad);
+            let store = InMemoryStagingStore::default();
+            assert!(
+                block_on(
+                    Session::new()
+                        .ledger(&store)
+                        .owe(OWNER, core::slice::from_ref(&bad))
+                )
+                .is_err()
+            );
+            assert!(owed_entries(&store, OWNER).is_empty());
+        }
+    }
+
+    /// The settle reads and retires each entry under the name it records,
+    /// once per name: a node that moved owes debts under two names (ADR 0070
+    /// D2).
+    #[test]
+    fn the_settle_retires_each_entry_under_the_name_it_records() {
+        let (first, first_block, _) = owed_version(&[15u8; 100]);
+        let (second, second_block, _) = owed_version(&[16u8; 100]);
+        let (third, third_block, _) = owed_version(&[17u8; 100]);
+        let (old, new) = (record_name(3), record_name(4));
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &first.clone().owed_by(&old));
+        owe(&store, OWNER, &second.clone().owed_by(&new));
+        owe(&store, OWNER, &third);
+        let http = blocks_http(
+            vec![
+                (first.target.clone(), first_block),
+                (second.target.clone(), second_block),
+                (third.target.clone(), third_block),
+            ],
+            Some(1),
+        );
+        let asked = RefCell::new(Vec::new());
+
+        let pass = drain_with_live(&store, OWNER, &http, async |_, _, name| {
+            asked.borrow_mut().push(name.map(str::to_owned));
+            Some(LiveRecord {
+                name: name.unwrap_or(OWNER_NAME).to_owned(),
+                cids: BTreeSet::new(),
+            })
+        });
+
+        assert_eq!(pass.still_owed, 0);
+        assert_eq!(
+            asked.into_inner().into_iter().collect::<BTreeSet<_>>(),
+            BTreeSet::from([Some(old.clone()), Some(new.clone()), None]),
+            "one read per recorded name, and one for the entry with none"
+        );
+        let named = |target: &str| -> BTreeSet<Option<String>> {
+            retire_entries(&http)
+                .into_iter()
+                .filter(|(_, targets)| targets.iter().any(|sent| sent == target))
+                .map(|(record, _)| record)
+                .collect()
+        };
+        assert_eq!(named(&first.target), BTreeSet::from([Some(old)]));
+        assert_eq!(named(&second.target), BTreeSet::from([Some(new)]));
+        assert_eq!(
+            named(&third.target),
+            BTreeSet::from([Some(OWNER_NAME.to_owned())])
+        );
+    }
+
     /// The debt a dead letter journals for a version whose staged root did not
     /// read, priced at the op record's size.
     fn dropped_root(plaintext: &[u8]) -> (OwedRetire, Vec<u8>, Vec<String>) {
@@ -1853,7 +2034,7 @@ mod tests {
         let http = ledger_http(&entry, Some(root_block), Some(1));
         let asked = RefCell::new(Vec::new());
 
-        let pass = drain_with_live(&store, OWNER, &http, async |_, owing| {
+        let pass = drain_with_live(&store, OWNER, &http, async |_, owing, _| {
             asked.borrow_mut().push(owing);
             Some(owning(BTreeSet::new()))
         });
@@ -1879,7 +2060,7 @@ mod tests {
         owe(&store, OWNER, &entry);
         let http = ledger_http(&entry, None, Some(1));
 
-        let pass = drain_with_live(&store, OWNER, &http, async |_, _| {
+        let pass = drain_with_live(&store, OWNER, &http, async |_, _, _| {
             Some(owning(BTreeSet::new()))
         });
 
@@ -2013,7 +2194,7 @@ mod tests {
             None,
             // What `live_owing_record` answers for a node the delete unlinked:
             // no live listing reaches it, whatever its lingering record names.
-            async |_, owing| {
+            async |_, owing, _| {
                 asked.borrow_mut().push(owing);
                 Some(owning(BTreeSet::new()))
             },
@@ -2072,7 +2253,7 @@ mod tests {
             },
             &BTreeSet::new(),
             None,
-            async |_, owing| {
+            async |_, owing, _| {
                 asked.borrow_mut().push(owing);
                 Some(owning(BTreeSet::new()))
             },
@@ -2278,7 +2459,7 @@ mod tests {
             },
             &BTreeSet::from([NODE]),
             None,
-            async |_, _| Some(owning(BTreeSet::new())),
+            async |_, _, _| Some(owning(BTreeSet::new())),
         ))
         .expect("the ledger reads");
 
@@ -2404,7 +2585,7 @@ mod tests {
                 },
                 &BTreeSet::new(),
                 cursor.as_deref(),
-                async |_, _| Some(owning(BTreeSet::new())),
+                async |_, _, _| Some(owning(BTreeSet::new())),
             ))
             .expect("the ledger reads");
             assert!(pass.partial, "a window short of the whole set says so");

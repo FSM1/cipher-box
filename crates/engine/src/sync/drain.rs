@@ -1268,6 +1268,16 @@ impl<'a> DrainScope<'a> {
             self.source
         })
     }
+
+    /// The end whose write seed derives `name` for `node`, whatever the base
+    /// says of where the node is now.
+    fn end_writing(&self, node: [u8; 16], name: &str) -> Result<Option<ScopeEnd<'a>>, Halt> {
+        let second = self.second_end()?.map(|destination| destination.end);
+        Ok([Some(self.source), second]
+            .into_iter()
+            .flatten()
+            .find(|end| end.write_name(&node).as_str() == name))
+    }
 }
 
 /// The scope roots a tick owes a cut for.
@@ -2102,8 +2112,9 @@ where
     /// records behind them, so the replay runs once per scope in `scopes` and
     /// leaves every other scope's entries untouched.
     ///
-    /// `vault` supplies the material for the identity-wide half: every name in
-    /// the retire ledger derives from the vault root's own write seed.
+    /// `vault` supplies the material for the identity-wide half: a retire-ledger
+    /// entry with no recorded name derives it from the vault root's own write
+    /// seed.
     async fn settle(
         &self,
         vault: &DrainScope<'_>,
@@ -2156,7 +2167,10 @@ where
             },
             &owed_now,
             resume.as_deref(),
-            async |node, owing| self.live_owing_record(vault, node, owing).await,
+            async |node, owing, name| {
+                self.live_owing_record(vault, scopes, node, owing, name)
+                    .await
+            },
         )
         .await
         {
@@ -4993,8 +5007,23 @@ where
             Settle::Hold => (Vec::new(), reclamation.quarantined.clone()),
             Settle::Decide(budget) => self.prove_quarantine(scope, reclamation, budget).await,
         };
-        let mut owed = reclamation.owed.clone();
-        owed.extend(proven.iter().flat_map(|entry| entry.owed.iter().cloned()));
+        // Each debt is owed by the record the delete retires for its node.
+        let mut owed: Vec<OwedRetire> = reclamation
+            .owed
+            .iter()
+            .map(|entry| {
+                reclamation
+                    .doomed
+                    .iter()
+                    .find(|(node, _)| node.0 == entry.node)
+                    .map_or_else(|| entry.clone(), |(_, name)| entry.clone().owed_by(name))
+            })
+            .collect();
+        owed.extend(proven.iter().flat_map(|held| {
+            held.owed
+                .iter()
+                .map(|entry| entry.clone().owed_by(&held.name))
+        }));
         if !owed.is_empty() && !self.journal_debt(seal, owner, &owed).await {
             // Leaving the bytes pinned is the lawful side of this failure: the
             // unlink is already live, and an unpin the ledger never recorded is
@@ -5846,7 +5875,13 @@ where
         // authored, and leaving history long retires nothing.
         if let RetentionPolicy::KeepLatest(keep_latest) = self.inputs.retention
             && let Err(halt) = self
-                .shorten_history(scope, target, &mut versions, keep_latest)
+                .shorten_history(
+                    scope,
+                    target,
+                    loaded.observed.name(),
+                    &mut versions,
+                    keep_latest,
+                )
                 .await
             && !matches!(halt, Halt::Permanent(_))
         {
@@ -5970,7 +6005,13 @@ where
         let head = versions.first().ok_or(Halt::Unclassified)?;
         let (head_size, head_cid) = (head.size, head.content_cid.clone());
         let survivors = self
-            .shorten_history(scope, target, &mut versions, keep_latest)
+            .shorten_history(
+                scope,
+                target,
+                loaded.observed.name(),
+                &mut versions,
+                keep_latest,
+            )
             .await?;
         let Some(survivors) = survivors else {
             return Ok(());
@@ -6025,6 +6066,7 @@ where
         &self,
         scope: &DrainScope<'_>,
         target: NodeId,
+        name: &IpnsName,
         versions: &mut Vec<Version>,
         keep_latest: NonZeroU64,
     ) -> Result<Option<Vec<ContentVersion>>, Halt> {
@@ -6051,7 +6093,7 @@ where
         {
             return Err(Halt::Permanent(DeadLetterReason::PayloadRefused));
         }
-        self.journal_retire_debt(scope, target, &plan.retire_targets)
+        self.journal_retire_debt(scope, target, name, &plan.retire_targets)
             .await?;
         versions.truncate(survivors.len());
         Ok(Some(survivors))
@@ -6066,10 +6108,11 @@ where
         &self,
         scope: &DrainScope<'_>,
         target: NodeId,
+        name: &IpnsName,
         doomed: &[ContentVersion],
     ) -> Result<(), Halt> {
         scope.refuse_vault_surface()?;
-        let owed = self.prune_debt(target, doomed).await?;
+        let owed = self.prune_debt(target, name, doomed).await?;
         StagingRetireLedger::new(&self.seams.staging, self.bookkeeping_seal(scope))
             .owe(&owner_tag(scope.enc_secret), &owed)
             .await
@@ -6191,8 +6234,13 @@ where
         {
             return Err(Halt::Permanent(DeadLetterReason::PayloadRefused));
         }
-        self.journal_retire_debt(scope, target, core::slice::from_ref(&doomed))
-            .await?;
+        self.journal_retire_debt(
+            scope,
+            target,
+            loaded.observed.name(),
+            core::slice::from_ref(&doomed),
+        )
+        .await?;
         let head = versions.first().ok_or(Halt::Unclassified)?;
         let (head_size, head_cid) = (head.size, head.content_cid.clone());
         versions.remove(at);
@@ -6298,6 +6346,7 @@ where
     async fn prune_debt(
         &self,
         node: NodeId,
+        name: &IpnsName,
         doomed: &[ContentVersion],
     ) -> Result<Vec<OwedRetire>, Halt> {
         let mut owed = Vec::with_capacity(doomed.len());
@@ -6316,6 +6365,7 @@ where
                 owed_bytes: expansion.minus(&charged).pinned_bytes,
                 manifest_bytes: expansion.pinned_bytes,
                 origin: DebtOrigin::Prune,
+                name: Some(name.as_str().to_owned()),
             });
             charged.extend(expansion.cids());
         }
@@ -6346,13 +6396,31 @@ where
     /// published fact. Reading the node instead would settle nothing — a hard
     /// delete leaves the record resolvable at its own name until its EOL lapses,
     /// and it names its content the whole time.
+    ///
+    /// A `recorded` name is the record the debt is owed by (ADR 0070 D2): the
+    /// read and the retire use it, under the end in `scopes` whose write seed
+    /// derives it, and the base does not move them. With no recorded name, the
+    /// name derives from where the base places the node in `scope`.
     async fn live_owing_record(
         &self,
         scope: &DrainScope<'_>,
+        scopes: &[DrainScope<'_>],
         node: [u8; 16],
         owing: OwingRecord,
+        recorded: Option<&str>,
     ) -> Option<LiveRecord> {
-        let end = scope.end_of(&self.cells.base.borrow(), NodeId(node)).ok()?;
+        if let (Some(name), OwingRecord::Retired) = (recorded, owing) {
+            return Some(LiveRecord {
+                name: name.to_owned(),
+                cids: BTreeSet::new(),
+            });
+        }
+        let end = match recorded {
+            Some(name) => scopes
+                .iter()
+                .find_map(|held| held.end_writing(node, name).ok().flatten())?,
+            None => scope.end_of(&self.cells.base.borrow(), NodeId(node)).ok()?,
+        };
         let write_name = end.write_name(&node);
         let reaching = |cids| {
             Some(LiveRecord {
@@ -7376,8 +7444,12 @@ where
     async fn release_unpreserved(&self, scope: &DrainScope<'_>, preserved: Preservation, op: &Op) {
         if preserved != Preservation::Kept {
             let reader = RecordReader::new(scope.enc_secret);
+            let name = scope
+                .end_of(&self.cells.base.borrow(), op.target)
+                .ok()
+                .map(|end| end.write_name(&op.target.0));
             self.dropped_version_debts(scope, &reader)
-                .drop_version(op)
+                .drop_version(op, name.as_ref().map(IpnsName::as_str))
                 .await;
         }
     }
@@ -10596,21 +10668,25 @@ mod tests {
     #[test]
     fn a_grafted_pass_journals_no_retire_debt() {
         const TARGET: NodeId = NodeId([0x42; 16]);
+        let name = derive_write_name(&[0x21; 32], &TARGET.0);
 
         let grafted = grafted_harness();
         assert_eq!(
             block_on(
                 grafted
                     .drain()
-                    .journal_retire_debt(&grafted.scope(), TARGET, &[])
+                    .journal_retire_debt(&grafted.scope(), TARGET, &name, &[])
             )
             .err(),
             Some(Halt::Permanent(DeadLetterReason::GraftedScopeVaultSurface)),
         );
 
         let own = drain_harness(Some(harness_root_envelope()));
-        block_on(own.drain().journal_retire_debt(&own.scope(), TARGET, &[]))
-            .expect("an own-vault pass owes its own ledger");
+        block_on(
+            own.drain()
+                .journal_retire_debt(&own.scope(), TARGET, &name, &[]),
+        )
+        .expect("an own-vault pass owes its own ledger");
     }
 
     /// One unlink a poll leg observed, named under the scope root's own write

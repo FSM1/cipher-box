@@ -76,6 +76,10 @@ pub struct OwedRetire {
     pub manifest_bytes: u64,
     /// Where the debt came from.
     pub origin: DebtOrigin,
+    /// The `ipnsName` of the record that owes the debt, which the settle
+    /// retires under (ADR 0070). `None` for an entry a previous release wrote:
+    /// the settle derives the name from where the base places the node.
+    pub name: Option<String>,
 }
 
 impl OwedRetire {
@@ -88,6 +92,16 @@ impl OwedRetire {
             owed_bytes: pinned_bytes,
             manifest_bytes: pinned_bytes,
             origin: DebtOrigin::Prune,
+            name: None,
+        }
+    }
+
+    /// The same debt, owed by the record at `name`.
+    #[must_use]
+    pub fn owed_by(self, name: &str) -> Self {
+        Self {
+            name: Some(name.to_owned()),
+            ..self
         }
     }
 }

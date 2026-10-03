@@ -366,13 +366,15 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
         }
     }
 
-    /// Journal and release the version `op` staged.
-    pub(crate) async fn drop_version(&self, op: &Op) {
+    /// Journal and release the version `op` staged. `name` is the record the
+    /// version would have joined; `None` journals a debt with no name, which
+    /// the settle derives.
+    pub(crate) async fn drop_version(&self, op: &Op, name: Option<&str>) {
         let Some(root) = op.content_root_cid() else {
             return;
         };
         let block = self.store.staged_bytes(root).await.ok().flatten();
-        self.drop_staged(op, root, block.as_deref()).await;
+        self.drop_staged(op, name, root, block.as_deref()).await;
     }
 
     /// [`Self::drop_version`] over a root block the caller already read. The
@@ -380,7 +382,7 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
     /// leak, never a loss, and is reported ([`Event::RegistryDebtUnjournaled`]).
     /// A root that does not give a target set journals its CID alone, priced at
     /// the op record's size, and the settle fetches it (ADR 0059 D1).
-    async fn drop_staged(&self, op: &Op, root: &[u8], block: Option<&[u8]>) {
+    async fn drop_staged(&self, op: &Op, name: Option<&str>, root: &[u8], block: Option<&[u8]>) {
         let manifest = block
             .filter(|block| verify_cid(root, block).is_ok())
             .and_then(|block| decode_root(block).ok());
@@ -401,6 +403,10 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
                     ..OwedRetire::whole(op.target.0, target, size)
                 }
             }
+        };
+        let debt = OwedRetire {
+            name: name.map(str::to_owned),
+            ..debt
         };
         let journaled = StagingRetireLedger::new(self.store, self.seal)
             .owe(&self.reader.owner_tag(), &[debt])
@@ -1088,11 +1094,11 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
     }
     for parked in dropped {
         debts
-            .drop_staged(&parked.op, &parked.root, parked.block.as_deref())
+            .drop_staged(&parked.op, None, &parked.root, parked.block.as_deref())
             .await;
     }
     for (op, root) in gone {
-        debts.drop_staged(&op, &root, None).await;
+        debts.drop_staged(&op, None, &root, None).await;
     }
 }
 

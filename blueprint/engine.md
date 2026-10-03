@@ -234,12 +234,16 @@ bytes (FSM1/cipher-box-next#28 D2).
   settle retires them once the name holds a record above the sequence its PUT
   was acknowledged at (ADR 0054). A drop whose staged root is gone, fails its
   own CID, or does not decode journals the same debt from the root CID the op
-  record names (ADR 0059). A publish that fails **before the record reaches
-  the transport** — register-first, the floor read, the head-CID echo, or an
-  upload whose ack never came back — is the mirror case: its head block may
-  already be pinned under its own charged row, no record can name it, and the
-  retry re-authors under a fresh seal nonce, so the drain retires that head at
-  the end of the pass that orphaned it, per attempt. A fan-out that
+  record names (ADR 0059). An entry that records the `ipnsName` of the
+  record that owes it is read and retired under that name, wherever the base
+  places the node at settle time; an entry with no name derives it from where
+  the base places the node (ADR 0070). A publish that fails **before the
+  record reaches the transport** — register-first, the floor read, the
+  head-CID echo, or an upload whose ack never came back — is the mirror case:
+  its head block may already be pinned under its own charged row, no record
+  can name it, and the retry re-authors under a fresh seal nonce, so the
+  drain retires that head at the end of the pass that orphaned it, per
+  attempt. A fan-out that
   acknowledged nothing, or that every endpoint refused, does **not** qualify:
   no ack is not proof nothing stored, and an endpoint that states a refusal can
   keep the record (ADR 0047 D4, ADR 0060 Consequence 8).
