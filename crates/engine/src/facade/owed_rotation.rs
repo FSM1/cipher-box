@@ -590,7 +590,6 @@ where
             .root_fallback
             .as_ref()
             .is_some_and(RootFallback::fell_back);
-        drop(net);
         Ok(OwedScope {
             indexed,
             target,

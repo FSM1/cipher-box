@@ -298,7 +298,9 @@ ADR 0052).
 
 A gate failure is never mere staleness: the engine pins last-known-good,
 raises the withheld-update escalation where applicable, and never renders the
-rejected record. Duplicate `id`s and duplicate `ipnsName`s within a scope
+rejected record. One owner rotation read changes what it does after the
+refusal, not the verdict: it runs on the last copy of the scope root that passed
+the gate (ADR 0068 D1, "rotateScopeWrite"). Duplicate `id`s and duplicate `ipnsName`s within a scope
 reject at decode in core (FSM1/cipher-box-next#39 D7); the gate surfaces them as trust violations.
 
 The **floor law** (FSM1/cipher-box-next#39 D4, superseding FSM1/cipher-box-next#26 D4's blob-seeded floors): floors
@@ -1116,8 +1118,23 @@ for the node, so a ref to a name outside the scope retires nothing. The wave
 then moves the other nodes, re-points the root and finishes the cut. Each
 republish re-seals the record that the walk gated for that node, so a record
 written at an old name after the walk does not stop the wave. The wave never
-adopts or carries a refused record, and a stop at the scope root still stops
-the wave.
+adopts or carries a refused record.
+
+The scope root never drops. An owner rotation read of the scope root that the
+gate refuses for a cause in the record bytes runs on the last copy of that root
+that passed the gate on this device: the command read, the cut set publish,
+the read cascade root read, the wave's root read, and the re-drive's check that
+the cut set landed
+([ADR 0068](../decisions/0068-an-owner-rotation-reads-a-refused-scope-root-from-its-last-copy-and-moves-the-root-first.md)
+D1). The copy runs the full gate again. A head block that no endpoint serves,
+or one that does not match its CID, falls back only past the bound below. Each
+fallback sends one trust event with the scope root and the refused sequence. A
+confirmed scope root publish by the owner is a last copy (D2). A rotation whose
+root read fell back publishes nothing more at the old root name (D3). A cut
+that moves the write plane runs its wave first; the root republish at the new
+name re-mints the grant section from the cut set, never from the copy, and the
+read cut then runs at the new root. A cut that does not move the write plane
+keeps the stop.
 
 ### Triggers
 
@@ -1130,6 +1147,10 @@ Per FSM1/cipher-box-next#26 D7:
 | Write revoke / downgrade                                                                                                                                   | `rotateScopeWrite`; plus read rotation on full revoke                                                                                                                    |
 | Expired link                                                                                                                                               | The owner's expired-link sweep (below) cuts it — a read revoke of the link row                                                                                           |
 | Manual hygiene rotate-now                                                                                                                                  | Per scope, same primitives                                                                                                                                               |
+
+A cut that moves both planes runs the read plane first, at the name survivors
+read, then the wave. After a root read fell back, the wave runs first and the
+read cut runs at the moved root (ADR 0068 D3).
 
 Non-triggers: intra-scope rename/move, content writes, adding a grant to an
 existing scope root. Scheduled hygiene is deferred, designed-for — the same
@@ -1155,7 +1176,12 @@ entry stands, with the class of the stop (`availability`, `capability` or
 `trust`), and the same command on that scope re-drives the entry. A re-drive
 that finds the work can never land, because the cut set never published or the
 recipient left the contact book, drops the entry and emits
-`rotationWorkAbandoned` once. A
+`rotationWorkAbandoned` once. The entry does not carry the cut set: a re-drive
+takes it from the owner's own published root, through the last copy when the
+gate refuses that root, and runs the write cut before the read cut when its read
+fell back. When no root carries the cut set, the re-drive finds the cut never
+landed, and the owner runs the command again. After a fallback, the cut-epoch
+floor rises only when the cut set lands (ADR 0068 D4). A
 relocation into another scope, a delete, a purge, or a restore that takes a
 folder with an owed interior move out of the scope it
 left is refused, retryably, until the move lands; a crossing the queue
@@ -1207,8 +1233,10 @@ rebases and signs above.
 - Write-grantee survivors: the forgery window stays wave-bounded. A wave that
   stops stays owed, so the bound is the next sync pass on the device that
   started the cut (ADR 0063). A node stop that a revokee plants ends at once,
-  or at the bound of ADR 0065 D3 for a stop an endpoint can cause; a planted
-  record at the scope root name is not covered.
+  or at the bound of ADR 0065 D3 for a stop an endpoint can cause. A planted
+  record at the scope root name ends at the wave when a copy passes the gate,
+  and what a writer published after that copy goes, surfaced by the trust event
+  (ADR 0068). A device with no such copy keeps the stop, and the scope lapses.
 - Dropped nodes: the subtree under a dropped node leaves the tree and lapses at
   its EOL, and an endpoint set that fails to serve a real node past the bound
   drops it (ADR 0065).
