@@ -656,9 +656,13 @@ delete does (ADR 0043).
   documented defaults that fall to the bin. The two errors are not equal: a
   soft delete reclaims nothing and stays reversible, while a hard delete the
   owner did not ask for destroys the node.
-- **A child that is a scope root stays hard.** Such a child publishes under a
-  name this scope's write seed does not derive. Its subtree is sealed under a
-  grantee's own seed, and cutting that grantee is a rotation, not a bin entry.
+- **Deleting a scope root is refused before journaling**, with
+  `UnsupportedTarget` / `delete-target-is-a-scope-root`. Its record and subtree
+  require that scope's own material, even when its name still derives from the
+  parent's write seed; neither delete branch may read it under the parent plane.
+  A published folder's delete waits for the session's boundary walk. Replay
+  drops an already-queued delete whose target is now a known scope root as
+  `TargetIsScopeRoot`, without publishing or dead-lettering it.
 - **A node the base links more than once unlinks from every one of them.** The
   delete removes the child ref from every folder the base links the node under
   and republishes each under its own plane, under one bin entry whose

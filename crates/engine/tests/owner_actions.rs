@@ -2884,6 +2884,143 @@ fn retired(device: &FakeDevice) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn deleting_a_granted_scope_root_refuses_before_any_publish() {
+    for permission in [Permission::Read, Permission::Write] {
+        for retention in [0, 30] {
+            let mut fx = GrantScenario::new();
+            assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+            block_on(fx.engine.command(Command::SaveVaultSettings {
+                settings: VaultSettings {
+                    bin_retention_days: retention,
+                    ..VaultSettings::default()
+                },
+            }))
+            .expect("the retention choice publishes");
+            events_so_far(&mut fx._events);
+
+            let records = || {
+                let mut records = Vec::new();
+                for endpoint in fx.world.record_store.endpoints() {
+                    for name in fx.world.record_store.routing_keys(&endpoint) {
+                        let record = fx.world.record_store.record_at(&endpoint, &name);
+                        records.push((endpoint.clone(), name, record));
+                    }
+                }
+                records
+            };
+            let before = records();
+            assert_eq!(
+                block_on(fx.engine.command(Command::Delete { node: fx.folder })),
+                Err(EngineError::UnsupportedTarget {
+                    check: "delete-target-is-a-scope-root",
+                }),
+                "{permission:?}, retention {retention}"
+            );
+            assert_eq!(records(), before, "the refusal publishes nothing");
+            assert_eq!(queued_ops(&fx.owner_device), 0, "no delete is queued");
+            for _ in 0..12 {
+                tick(&fx.world, &fx.engine, &mut fx._tasks);
+            }
+            assert_eq!(abuse_events(&mut fx._events), 0);
+            assert!(
+                block_on(fx.engine.status())
+                    .unwrap()
+                    .dead_letters
+                    .is_empty()
+            );
+            assert!(published_bin_entries(&fx).is_empty());
+            assert!(
+                block_on(fx.engine.view())
+                    .unwrap()
+                    .children(ROOT)
+                    .iter()
+                    .any(|child| child.id == fx.folder)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_later_owner_session_refuses_to_delete_a_granted_scope_root() {
+    for permission in [Permission::Read, Permission::Write] {
+        let mut fx = GrantScenario::new();
+        assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        let later = fx.world.device(b"later owner device");
+        let (mut engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &later);
+        assert_eq!(
+            block_on(engine.command(Command::Delete { node: fx.folder })),
+            Err(EngineError::Seam {
+                message: "boundary-walk-pending".to_owned(),
+            }),
+        );
+        assert_eq!(queued_ops(&later), 0);
+        tick(&fx.world, &engine, &mut tasks);
+        assert_eq!(
+            block_on(engine.command(Command::Delete { node: fx.folder })),
+            Err(EngineError::UnsupportedTarget {
+                check: "delete-target-is-a-scope-root",
+            }),
+        );
+        for _ in 0..12 {
+            tick(&fx.world, &engine, &mut tasks);
+        }
+        assert_eq!(queued_ops(&later), 0);
+        assert_eq!(abuse_events(&mut events), 0);
+        assert!(block_on(engine.status()).unwrap().dead_letters.is_empty());
+        assert!(published_bin_entries(&fx).is_empty());
+    }
+}
+
+#[test]
+fn a_queued_delete_loses_to_a_grant_on_another_owner_device() {
+    for permission in [Permission::Read, Permission::Write] {
+        let mut fx = GrantScenario::new();
+        for _ in 0..4 {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+        assert!(matches!(
+            block_on(fx.engine.command(Command::Delete { node: fx.folder })),
+            Ok(CommandOutcome::Queued { .. })
+        ));
+        let peer = fx.world.device(b"peer owner device");
+        let (mut engine, _events, _tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+        import_recipient(&mut engine);
+        assert_eq!(
+            block_on(engine.command(Command::Grant {
+                node: fx.folder,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission,
+                grantee_name: None,
+            })),
+            Ok(CommandOutcome::Done)
+        );
+        events_so_far(&mut fx._events);
+        for _ in 0..12 {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+        assert_eq!(queued_ops(&fx.owner_device), 0);
+        assert_eq!(abuse_events(&mut fx._events), 0);
+        assert!(
+            block_on(fx.engine.status())
+                .unwrap()
+                .dead_letters
+                .is_empty()
+        );
+        assert!(published_bin_entries(&fx).is_empty());
+        assert!(
+            block_on(fx.engine.view())
+                .unwrap()
+                .children(ROOT)
+                .iter()
+                .any(|child| child.id == fx.folder)
+        );
+    }
+}
+
 /// A delete below a promoted scope root is journaled under that scope, and only
 /// that scope's material derives the names it holds or opens the records behind
 /// them. A tick that cannot prove the scope leaves the entry alone rather than

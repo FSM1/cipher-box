@@ -6865,6 +6865,17 @@ where {
                 // A received share holds no scope this vault owes work at.
                 if home == WriteHome::Vault {
                     refuse_an_owed_move_under(&rendered, node, &self.owed_moves().await?)?;
+                    // A scope root's seed and grant section are not its parent's plane.
+                    if node == rendered.root || self.authored_scope_roots().contains(&node) {
+                        return Err(EngineError::UnsupportedTarget {
+                            check: "delete-target-is-a-scope-root",
+                        });
+                    }
+                    if rendered.node(node).is_some_and(|meta| {
+                        meta.kind == NodeKind::Folder && meta.ipns_name.is_some()
+                    }) {
+                        self.refuse_before_the_boundary_walk()?;
+                    }
                 }
                 let to_bin = home == WriteHome::Vault && self.bin_retention_days() > 0;
                 // Both anchors snapshot the target's own sequence for the
@@ -11833,15 +11844,13 @@ where {
         roots
     }
 
-    /// Refuse a restore until this session's boundary walk has landed, since a
-    /// restore must name its destination's scope: before the walk, no scope
-    /// root below the vault is known and every node reads as the vault root's.
+    /// Before the boundary walk, a published folder may be an unknown scope root.
     /// A rejected walk refuses for good, as [`Self::relocation_anchors`] does.
     fn refuse_before_the_boundary_walk(&self) -> Result<(), EngineError> {
         if self.state.boundary_walk_rejected.get() {
             return Err(EngineError::TrustViolation {
                 message: "a scope root below this vault failed the adoption gate, so this \
-                          session cannot name the scope of a restore destination"
+                          session cannot name every scope boundary"
                     .to_owned(),
             });
         }

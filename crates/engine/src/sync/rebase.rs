@@ -103,6 +103,8 @@ impl fmt::Debug for OpResolution {
 /// Why a rebasing op was dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DropReason {
+    /// A queued delete targets a scope root, whose material is not its parent's.
+    TargetIsScopeRoot,
     /// Conditional delete: the target advanced past the op's snapshot by rebase
     /// time — the concurrent edit wins in both directions.
     TargetAdvanced,
@@ -427,10 +429,6 @@ pub fn replay(
             dead_letters.push((*op_id, DeadLetterReason::CrossingUnauthorable));
             continue;
         }
-        if delete_names_unpairable_scopes(&working, op, scope_roots) {
-            dead_letters.push((*op_id, DeadLetterReason::TargetLinkedAcrossScopes));
-            continue;
-        }
         match rebase_one(&mut working, local, op, scope_roots) {
             OpResolution::Applied {
                 effective_name,
@@ -505,7 +503,15 @@ pub fn rebase_one(
         }
         OpKind::Delete {
             target_sequence, ..
-        } => rebase_delete(working, op, *target_sequence),
+        } => {
+            if op.target == working.root || scope_roots.contains(&op.target) {
+                OpResolution::dropped(DropReason::TargetIsScopeRoot)
+            } else if delete_names_unpairable_scopes(working, op, scope_roots) {
+                OpResolution::DeadLetter(DeadLetterReason::TargetLinkedAcrossScopes)
+            } else {
+                rebase_delete(working, op, *target_sequence)
+            }
+        }
         OpKind::Rename { new_name } => rebase_rename(working, op, new_name),
         OpKind::Relink {
             from_parent,
