@@ -991,7 +991,20 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   a test that decodes the previous release's bytes. The retained rule above does
   not change: a record bearing another identity's tag, or a format version or
   intent grammar this build does not implement, stays retained (ADR 0020
-  Consequence 4).
+  Consequence 4). A published create, delete or content edit stays queued as a
+  kept op, with a sealed note of its scope root, write epoch and publish time,
+  until the live root of its write scope shows it (ADR 0069). Every other op
+  kind leaves at its publish. With no flip, a kept op waits at its write epoch
+  for at most T = 7 days. At a flip (a new write epoch or a new nearest scope
+  root), once the base read its node at the live name, the standard rebase
+  decides: a landed op drops, and a lost op applies again under the new seed.
+  A content edit reads its file's live record first, and it landed when the
+  history names its version. A second apply that a rebase or a permanent halt
+  refuses leaves with no notice. A device with no new seed rebases the op on
+  the old tree it last read: where that tree shows the op, the op leaves with
+  no notice; where it does not, the apply finds no write seed, and the op
+  dead-letters with a notice once its attempt budget is spent. A kept op is
+  not pending (ADR 0069 D7).
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
   (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer
@@ -1178,7 +1191,8 @@ retires the old name only when the root's write scope seed derives that name
 for the node, so a ref to a name outside the scope retires nothing. The wave
 then moves the other nodes, re-points the root and finishes the cut. Each
 republish re-seals the record that the walk gated for that node, so a record
-written at an old name after the walk does not stop the wave. The wave never
+written at an old name after the walk does not stop the wave. The writer of
+such a record carries it into the moved tree (ADR 0069 D1). The wave never
 adopts or carries a refused record.
 
 The scope root never drops. An owner rotation read of the scope root that the
@@ -1341,6 +1355,27 @@ rebases and signs above.
 - Revoked writers: a revoked writer inserts a record only inside the name wave,
   at a name the wave has not yet rotated. The inserted record keeps its epoch
   label for a sweep-length window, and the label attests nothing.
+- Late writes: a write that a revoked or downgraded writer puts in the old
+  tree after the walk leaves the queue of its own device with no notice when
+  the old tree it last read shows the write, and the dead letter of ADR 0069
+  D3 is not landed. A rename, a move or a history edit that lands in the old
+  tree after the walk is lost, because only a create, a delete and a content
+  edit stay kept. A kept op whose device sees no flip within T leaves the
+  queue at T, so a flip after T loses the write (ADR 0069).
+- Kept ops over a later writer: the op does not record its result, so the
+  check cannot tell a lost op from a later change. A kept create links again
+  a node that a later writer deleted, with its initial content. A kept edit
+  publishes its version again when a later writer restored the edit's base and
+  deleted the edit's version from the history; a later prune that leaves
+  another head drops the edit with no notice. A kept delete applies again only
+  while the target's live record sequence is at or below the one the delete
+  was formed against: a target that a later writer advanced past it stays,
+  and one at an equal or lower sequence, as a record the wave moved can be, is
+  deleted.
+- Reclaimed bytes after a flip: a version delete or a prune that the flip
+  loses leaves a history that names bytes this writer already retired. A kept
+  hard delete that leaves at T with no read of its folder leaves a child ref
+  whose record is retired.
 
 ## Pointer planes
 

@@ -43,6 +43,7 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX};
+use crate::sync::kept_op::KEPT_OP_NOTES_PREFIX;
 use crate::sync::op::Op;
 use crate::sync::owed_rotation::OWED_ROTATION_PREFIX;
 use crate::sync::rebase::DeadLetterReason;
@@ -60,8 +61,8 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// doomed-name journal entry, a
 /// received-shares list, a contact book, or the
 /// notices of its versionless dead letters, the scope roots that still owe a
-/// scope-exit cut, the conversion record, the renewal walk's cursor, or the
-/// owed rotation record. All
+/// scope-exit cut, the conversion record, the renewal walk's cursor, the
+/// owed rotation record, or the kept-op notes. All
 /// are per-owner, so their whole prefixes are referenced — an entry this
 /// session cannot read belongs to the identity that still needs it.
 ///
@@ -81,6 +82,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(CONVERSION_RECORD_PREFIX)
         || key.starts_with(RENEWAL_CURSOR_PREFIX)
         || key.starts_with(OWED_ROTATION_PREFIX)
+        || key.starts_with(KEPT_OP_NOTES_PREFIX)
         || key.starts_with(crate::grants::owner_entry::OWNER_SEED_CACHE_PREFIX)
 }
 
@@ -1516,6 +1518,7 @@ mod tests {
                 CONVERSION_RECORD_PREFIX,
                 RENEWAL_CURSOR_PREFIX,
                 OWED_ROTATION_PREFIX,
+                KEPT_OP_NOTES_PREFIX,
                 crate::grants::owner_entry::OWNER_SEED_CACHE_PREFIX,
             ] {
                 store

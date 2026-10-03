@@ -17,7 +17,7 @@ merge rule. Its design is too large for this cache repair.
 ## Decision
 
 **D1 — Keep one sealed recovery entry per scope in the device's `StagingStore`.**
-Use HPKE auth mode to self under owner-local kind `0x0b`, `owner-seed-cache`.
+Use HPKE auth mode to self under owner-local kind `0x0c`, `owner-seed-cache`.
 Use the existing name-label edge on the prefix and scope id for the lookup key.
 The core codec stores the confirmed epoch and write epoch, signed IPNS record,
 fetched root block, and parent node seed when required. It stores no scope

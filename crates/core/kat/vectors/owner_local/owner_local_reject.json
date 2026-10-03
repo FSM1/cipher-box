@@ -144,6 +144,14 @@
     "class": "trust"
   },
   {
+    "name": "cross-kind-received-shares-as-kept-ops",
+    "kind": "kept-ops",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820489cebba7a166c619835fe12eedc581dbfc1b36de10c830e4f0bc1c48734864b6a636970686572746578745820cebf53425a59fd8767eb12dc7c1757aef7ac5c72af6af41af6985c0a45430b95",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
     "name": "cross-kind-received-shares-as-owner-seed-cache",
     "kind": "owner-seed-cache",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
@@ -210,6 +218,14 @@
   {
     "name": "cross-kind-contact-book-as-owed-rotation",
     "kind": "owed-rotation",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820b35b171377289075f029289a7d6f11df0a8f5b2442c665d7005b38182d47e5486a636970686572746578745820af65e299193b68dc8e855c0fbc09ee312a826b2f7ffc3a682019e8c0a8c99648",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-contact-book-as-kept-ops",
+    "kind": "kept-ops",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
     "blob": "a361760163656e635820b35b171377289075f029289a7d6f11df0a8f5b2442c665d7005b38182d47e5486a636970686572746578745820af65e299193b68dc8e855c0fbc09ee312a826b2f7ffc3a682019e8c0a8c99648",
     "check": "hpke-open-failed",
@@ -288,6 +304,14 @@
     "class": "trust"
   },
   {
+    "name": "cross-kind-retire-ledger-as-kept-ops",
+    "kind": "kept-ops",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820c368ef4ab487895486ec35b49171fed92fefb21dbbd1146aef59f5ee9a71440f6a63697068657274657874582075621018377af7e9fad3bcb9c0a4d5c14b66719f1f4ba98be58bc9aa6ea625c7",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
     "name": "cross-kind-retire-ledger-as-owner-seed-cache",
     "kind": "owner-seed-cache",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
@@ -354,6 +378,14 @@
   {
     "name": "cross-kind-doomed-journal-as-owed-rotation",
     "kind": "owed-rotation",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e63582007a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c6a6369706865727465787458208c53e3e0222ca3c1cade1581d789ba11f6664d7669e78d7798d7d4223fe6ade7",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-doomed-journal-as-kept-ops",
+    "kind": "kept-ops",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
     "blob": "a361760163656e63582007a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c6a6369706865727465787458208c53e3e0222ca3c1cade1581d789ba11f6664d7669e78d7798d7d4223fe6ade7",
     "check": "hpke-open-failed",
@@ -432,6 +464,14 @@
     "class": "trust"
   },
   {
+    "name": "cross-kind-scope-exit-debt-as-kept-ops",
+    "kind": "kept-ops",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820808be2169ea81b45e407e79ce4e092add24a9fc6ec23843317cac34215f118226a636970686572746578745820584bbee6ffb1e2120ac077580ae511e5d933fe95b6aaae6c609f9a5db0ac96ac",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
     "name": "cross-kind-scope-exit-debt-as-owner-seed-cache",
     "kind": "owner-seed-cache",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
@@ -498,6 +538,14 @@
   {
     "name": "cross-kind-pending-conversions-as-owed-rotation",
     "kind": "owed-rotation",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358204d27bcee3135c4944b28d27dd809b07be10c35160d20131caa7e85575498d07c6a63697068657274657874582006a7205f98fc76d1fb948e2bb378c232217db63a8a6eaf57ed023f9bb0d1cffe",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-pending-conversions-as-kept-ops",
+    "kind": "kept-ops",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
     "blob": "a361760163656e6358204d27bcee3135c4944b28d27dd809b07be10c35160d20131caa7e85575498d07c6a63697068657274657874582006a7205f98fc76d1fb948e2bb378c232217db63a8a6eaf57ed023f9bb0d1cffe",
     "check": "hpke-open-failed",
@@ -576,6 +624,14 @@
     "class": "trust"
   },
   {
+    "name": "cross-kind-grantee-names-as-kept-ops",
+    "kind": "kept-ops",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205b2316dc2b5c71366ef575388c844d3142aca905dbcbfa0399e12bc4925f5e316a6369706865727465787458206a8889c5d435e0735fe12c639579a523d8c637838e9be5deb3215ee2db273973",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
     "name": "cross-kind-grantee-names-as-owner-seed-cache",
     "kind": "owner-seed-cache",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
@@ -642,6 +698,14 @@
   {
     "name": "cross-kind-renewal-cursor-as-owed-rotation",
     "kind": "owed-rotation",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205869aff450549732cbaaed5e5df9b30a6da31cb0e5742bad5ad4a1a768f1a67b6a636970686572746578745820e5d0b08c28fab45e2fdc0f0a82a355842bbef07a32daee5fa3b9b5a628ac247e",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-renewal-cursor-as-kept-ops",
+    "kind": "kept-ops",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
     "blob": "a361760163656e6358205869aff450549732cbaaed5e5df9b30a6da31cb0e5742bad5ad4a1a768f1a67b6a636970686572746578745820e5d0b08c28fab45e2fdc0f0a82a355842bbef07a32daee5fa3b9b5a628ac247e",
     "check": "hpke-open-failed",
@@ -720,6 +784,14 @@
     "class": "trust"
   },
   {
+    "name": "cross-kind-owed-rotation-as-kept-ops",
+    "kind": "kept-ops",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e63582046b1880a0dca97ae1618d3d8c04cc51b10fd08c1cd8839c1bbf4bd7fe014005d6a6369706865727465787458201e0f0295e0f4c52fce48e04706f60b0f85296c7ab1ac606f4315386febf6f11c",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
     "name": "cross-kind-owed-rotation-as-owner-seed-cache",
     "kind": "owner-seed-cache",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
@@ -728,10 +800,90 @@
     "class": "trust"
   },
   {
+    "name": "cross-kind-kept-ops-as-received-shares",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820d87392c8b523bcbbab54d971f387e0c5b751552af8d8555beab54f6d009f0eb5",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-kept-ops-as-contact-book",
+    "kind": "contact-book",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820d87392c8b523bcbbab54d971f387e0c5b751552af8d8555beab54f6d009f0eb5",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-kept-ops-as-retire-ledger",
+    "kind": "retire-ledger",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820d87392c8b523bcbbab54d971f387e0c5b751552af8d8555beab54f6d009f0eb5",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-kept-ops-as-doomed-journal",
+    "kind": "doomed-journal",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820d87392c8b523bcbbab54d971f387e0c5b751552af8d8555beab54f6d009f0eb5",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-kept-ops-as-scope-exit-debt",
+    "kind": "scope-exit-debt",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820d87392c8b523bcbbab54d971f387e0c5b751552af8d8555beab54f6d009f0eb5",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-kept-ops-as-pending-conversions",
+    "kind": "pending-conversions",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820d87392c8b523bcbbab54d971f387e0c5b751552af8d8555beab54f6d009f0eb5",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-kept-ops-as-grantee-names",
+    "kind": "grantee-names",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820d87392c8b523bcbbab54d971f387e0c5b751552af8d8555beab54f6d009f0eb5",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-kept-ops-as-renewal-cursor",
+    "kind": "renewal-cursor",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820d87392c8b523bcbbab54d971f387e0c5b751552af8d8555beab54f6d009f0eb5",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-kept-ops-as-owed-rotation",
+    "kind": "owed-rotation",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820d87392c8b523bcbbab54d971f387e0c5b751552af8d8555beab54f6d009f0eb5",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-kept-ops-as-owner-seed-cache",
+    "kind": "owner-seed-cache",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820d87392c8b523bcbbab54d971f387e0c5b751552af8d8555beab54f6d009f0eb5",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
     "name": "cross-kind-owner-seed-cache-as-received-shares",
     "kind": "received-shares",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
-    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820228baa0cc30894e19b33bf024491d1e20566ab892df9ad25c3fa2bae3dea76f3",
+    "blob": "a361760163656e63582008c88cae8a08de5ed3f5dbe239bf451699ed1f9853cb80c8165953746a75ee036a6369706865727465787458200395388c89c2ae138c4ad3a3a22d163184fa3d8ed8e92d3a5cf333ae42b21b4e",
     "check": "hpke-open-failed",
     "class": "trust"
   },
@@ -739,7 +891,7 @@
     "name": "cross-kind-owner-seed-cache-as-contact-book",
     "kind": "contact-book",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
-    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820228baa0cc30894e19b33bf024491d1e20566ab892df9ad25c3fa2bae3dea76f3",
+    "blob": "a361760163656e63582008c88cae8a08de5ed3f5dbe239bf451699ed1f9853cb80c8165953746a75ee036a6369706865727465787458200395388c89c2ae138c4ad3a3a22d163184fa3d8ed8e92d3a5cf333ae42b21b4e",
     "check": "hpke-open-failed",
     "class": "trust"
   },
@@ -747,7 +899,7 @@
     "name": "cross-kind-owner-seed-cache-as-retire-ledger",
     "kind": "retire-ledger",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
-    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820228baa0cc30894e19b33bf024491d1e20566ab892df9ad25c3fa2bae3dea76f3",
+    "blob": "a361760163656e63582008c88cae8a08de5ed3f5dbe239bf451699ed1f9853cb80c8165953746a75ee036a6369706865727465787458200395388c89c2ae138c4ad3a3a22d163184fa3d8ed8e92d3a5cf333ae42b21b4e",
     "check": "hpke-open-failed",
     "class": "trust"
   },
@@ -755,7 +907,7 @@
     "name": "cross-kind-owner-seed-cache-as-doomed-journal",
     "kind": "doomed-journal",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
-    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820228baa0cc30894e19b33bf024491d1e20566ab892df9ad25c3fa2bae3dea76f3",
+    "blob": "a361760163656e63582008c88cae8a08de5ed3f5dbe239bf451699ed1f9853cb80c8165953746a75ee036a6369706865727465787458200395388c89c2ae138c4ad3a3a22d163184fa3d8ed8e92d3a5cf333ae42b21b4e",
     "check": "hpke-open-failed",
     "class": "trust"
   },
@@ -763,7 +915,7 @@
     "name": "cross-kind-owner-seed-cache-as-scope-exit-debt",
     "kind": "scope-exit-debt",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
-    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820228baa0cc30894e19b33bf024491d1e20566ab892df9ad25c3fa2bae3dea76f3",
+    "blob": "a361760163656e63582008c88cae8a08de5ed3f5dbe239bf451699ed1f9853cb80c8165953746a75ee036a6369706865727465787458200395388c89c2ae138c4ad3a3a22d163184fa3d8ed8e92d3a5cf333ae42b21b4e",
     "check": "hpke-open-failed",
     "class": "trust"
   },
@@ -771,7 +923,7 @@
     "name": "cross-kind-owner-seed-cache-as-pending-conversions",
     "kind": "pending-conversions",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
-    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820228baa0cc30894e19b33bf024491d1e20566ab892df9ad25c3fa2bae3dea76f3",
+    "blob": "a361760163656e63582008c88cae8a08de5ed3f5dbe239bf451699ed1f9853cb80c8165953746a75ee036a6369706865727465787458200395388c89c2ae138c4ad3a3a22d163184fa3d8ed8e92d3a5cf333ae42b21b4e",
     "check": "hpke-open-failed",
     "class": "trust"
   },
@@ -779,7 +931,7 @@
     "name": "cross-kind-owner-seed-cache-as-grantee-names",
     "kind": "grantee-names",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
-    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820228baa0cc30894e19b33bf024491d1e20566ab892df9ad25c3fa2bae3dea76f3",
+    "blob": "a361760163656e63582008c88cae8a08de5ed3f5dbe239bf451699ed1f9853cb80c8165953746a75ee036a6369706865727465787458200395388c89c2ae138c4ad3a3a22d163184fa3d8ed8e92d3a5cf333ae42b21b4e",
     "check": "hpke-open-failed",
     "class": "trust"
   },
@@ -787,7 +939,7 @@
     "name": "cross-kind-owner-seed-cache-as-renewal-cursor",
     "kind": "renewal-cursor",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
-    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820228baa0cc30894e19b33bf024491d1e20566ab892df9ad25c3fa2bae3dea76f3",
+    "blob": "a361760163656e63582008c88cae8a08de5ed3f5dbe239bf451699ed1f9853cb80c8165953746a75ee036a6369706865727465787458200395388c89c2ae138c4ad3a3a22d163184fa3d8ed8e92d3a5cf333ae42b21b4e",
     "check": "hpke-open-failed",
     "class": "trust"
   },
@@ -795,7 +947,15 @@
     "name": "cross-kind-owner-seed-cache-as-owed-rotation",
     "kind": "owed-rotation",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
-    "blob": "a361760163656e6358205f09b7f97a40b50220697064b43b27411b07a4aa1fe05370b27519826983d30d6a636970686572746578745820228baa0cc30894e19b33bf024491d1e20566ab892df9ad25c3fa2bae3dea76f3",
+    "blob": "a361760163656e63582008c88cae8a08de5ed3f5dbe239bf451699ed1f9853cb80c8165953746a75ee036a6369706865727465787458200395388c89c2ae138c4ad3a3a22d163184fa3d8ed8e92d3a5cf333ae42b21b4e",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-owner-seed-cache-as-kept-ops",
+    "kind": "kept-ops",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e63582008c88cae8a08de5ed3f5dbe239bf451699ed1f9853cb80c8165953746a75ee036a6369706865727465787458200395388c89c2ae138c4ad3a3a22d163184fa3d8ed8e92d3a5cf333ae42b21b4e",
     "check": "hpke-open-failed",
     "class": "trust"
   }

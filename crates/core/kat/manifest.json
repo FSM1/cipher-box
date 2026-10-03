@@ -702,8 +702,13 @@
         "hpkeInfo": "cipherbox/v2/owner-local/owed-rotation"
       },
       {
-        "name": "owner-seed-cache",
+        "name": "kept-ops",
         "discriminator": 11,
+        "hpkeInfo": "cipherbox/v2/owner-local/kept-ops"
+      },
+      {
+        "name": "owner-seed-cache",
+        "discriminator": 12,
         "hpkeInfo": "cipherbox/v2/owner-local/owner-seed-cache"
       }
     ],
@@ -715,11 +720,11 @@
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 12
+      "count": 13
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 100,
+      "count": 120,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",
