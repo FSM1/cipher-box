@@ -98,16 +98,24 @@ export interface DialogMark {
   isVisible(): Promise<boolean>;
 }
 
-/** Throws where the share dialog of `folder` shows that no read reached it. */
+/**
+ * Waits for the people table of the share dialog of `folder`. The dialog draws
+ * the unavailable note until its own read lands, so only a table that does not
+ * show in `timeout` is a read that failed.
+ */
 export async function grantsRead(
   people: DialogMark,
   unavailable: DialogMark,
   folder: string,
   timeout: number
 ): Promise<void> {
-  await Promise.any([people.waitFor({ timeout }), unavailable.waitFor({ timeout })]);
-  if (await unavailable.isVisible()) {
-    throw new SoakFailure('cycle-epoch-flat', `the share dialog read no grants of ${folder}/`);
+  try {
+    await people.waitFor({ timeout });
+  } catch {
+    const detail = (await unavailable.isVisible())
+      ? `the share dialog read no grants of ${folder}/`
+      : `the share dialog drew no people table for ${folder}/`;
+    throw new SoakFailure('cycle-epoch-flat', detail);
   }
 }
 
