@@ -2536,21 +2536,22 @@ fn assert_a_node_a_grant_moved_bins_in_the_granted_scope(permission: Permission)
             for node in [inner, doomed] {
                 converge_into_granted_scope(&fx, node);
             }
+            tick(&fx.world, &second, &mut tasks);
             let (seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
             (Zeroizing::new(WRITE_SCOPE_SEED), seed)
         }
         Permission::Write => {
+            // The second device reads the folder as the wave left it, at the
+            // name its scope now derives.
+            block_on(second.command(Command::SetFocus { node: Some(inner) })).unwrap();
+            for _ in 0..2 {
+                tick(&fx.world, &second, &mut tasks);
+            }
             let root = fx.granted_scope_repoint().current_root;
             let seed = grantee_write_scope_seed(&fx.folder_section(), &root, &fx.folder.0, 1);
             (Zeroizing::new(seed), granted_override_seed(&fx, 1))
         }
     };
-    // The second device reads the folder as the grant left it, at the name its
-    // scope now derives.
-    block_on(second.command(Command::SetFocus { node: Some(inner) })).unwrap();
-    for _ in 0..2 {
-        tick(&fx.world, &second, &mut tasks);
-    }
     concurrent_edit_under(
         &fx.world,
         &fx.blocks,
@@ -2561,6 +2562,7 @@ fn assert_a_node_a_grant_moved_bins_in_the_granted_scope(permission: Permission)
         |children| children.retain(|child| child.id != doomed.0),
     );
     events_so_far(&mut events);
+    block_on(second.command(Command::SetFocus { node: Some(inner) })).unwrap();
     for _ in 0..8 {
         tick(&fx.world, &second, &mut tasks);
     }
