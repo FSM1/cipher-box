@@ -1,6 +1,6 @@
 # ADR 0070 — A retire-ledger entry records the name of the record that owes it
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-03
 - **Date:** 2026-10-03
 - **Relates to:** FSM1/cipher-box#2237 (the entry does not record the name),
   FSM1/cipher-box#2191 (a purge can drop references that a live copy needs),

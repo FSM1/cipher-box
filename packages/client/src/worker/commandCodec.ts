@@ -121,6 +121,7 @@ const EVENT_KINDS: Record<EventDescriptor['kind'], true> = {
   conversionRecordUnreadable: true,
   refusedClaimDropped: true,
   attributableAbuse: true,
+  sameSequenceFork: true,
   renewalFailed: true,
   vaultUnprovisioned: true,
   vaultSettingsChanged: true,
@@ -178,6 +179,7 @@ const DEAD_LETTER_REASONS: Record<DeadLetterReason, true> = {
   binIndexStrandedMint: true,
   targetLinkedAcrossScopes: true,
   graftedScopeVaultSurface: true,
+  newerRelease: true,
 };
 
 const NODE_KINDS: Record<NodeKind, true> = { file: true, folder: true };

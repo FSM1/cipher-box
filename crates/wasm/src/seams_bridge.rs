@@ -664,7 +664,7 @@ fn http_response_from_js(value: JsValue) -> SeamResult<HttpResponse> {
     Ok(HttpResponse {
         status,
         headers,
-        body,
+        body: zeroize::Zeroizing::new(body),
     })
 }
 
@@ -813,7 +813,7 @@ mod tests {
             .await
             .expect("a within-cap response crosses as a response");
         assert_eq!(response.status, 200);
-        assert_eq!(response.body, vec![1u8, 2, 3]);
+        assert_eq!(*response.body, vec![1u8, 2, 3]);
         assert_eq!(seen.get(), 4096.0, "the cap crosses as the JS number");
     }
 

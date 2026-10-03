@@ -94,7 +94,7 @@ fn registry_ack() -> HttpResponse {
     HttpResponse {
         status: 200,
         headers: Vec::new(),
-        body: Vec::new(),
+        body: Vec::new().into(),
     }
 }
 
@@ -144,7 +144,7 @@ fn bench_pin(c: &mut Criterion) {
                         vec![HttpResponse {
                             status: 200,
                             headers: Vec::new(),
-                            body: ack.clone(),
+                            body: ack.clone().into(),
                         }],
                     )
                 },

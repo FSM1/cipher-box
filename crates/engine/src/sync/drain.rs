@@ -80,8 +80,8 @@ use crate::net::retire::{
 };
 use crate::net::{
     Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldKey, HeldRecord, HeldRecords, HeldValue,
-    LocalHead, ResolveOutcome, RootAdopter, assemble_head_envelope, fanout_get_classified,
-    fanout_get_verify, observed_at, resolve, resolve_gated,
+    LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter, assemble_head_envelope,
+    fanout_get_classified, fanout_get_verify, observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
@@ -423,6 +423,10 @@ enum Halt {
     /// [`Halt::Unclassified`] and never against the attempt budget, which a
     /// busy sibling device would otherwise spend on a valid op.
     LostRace,
+    /// A record this op builds on is at an envelope version this build does
+    /// not read. Charged like [`Halt::Unclassified`], since an update clears
+    /// it and no retry does, and a spent budget names the newer release.
+    ForeignVersion,
     /// A refusal this pass cannot attribute, raised before the record it was
     /// authoring reached the transport: an upload, a registration, or a
     /// produce-side trust refusal. Charged like [`Halt::Attempt`], and a spent
@@ -1029,6 +1033,10 @@ pub(crate) struct ScopeEnd<'a> {
     pub(crate) root_name: &'a IpnsName,
     /// The scope read seed per-node read keys derive from.
     pub(crate) read_scope_seed: &'a Zeroizing<[u8; 32]>,
+    /// The stamp of `read_scope_seed` (`deposit_seed`), or `None` where no
+    /// stamp is known. Floors only rise, so a root that passes the floor check
+    /// at the stamp is at the seed's own epoch.
+    pub(crate) read_seed_stamp: Option<u64>,
     /// The scope write seed per-node IPNS names and signers derive from.
     pub(crate) write_scope_seed: &'a Zeroizing<[u8; 32]>,
     /// `nodeSeed(enclosingOverrideSeed, scopeId)` — the ascent authority the
@@ -1051,6 +1059,18 @@ impl<'a> ScopeEnd<'a> {
     /// record's seal needs.
     fn at(self, epoch: u64) -> SealPlane<'a> {
         SealPlane { end: self, epoch }
+    }
+
+    /// This end with the bin's held key as its read seed, which has no stamp.
+    fn under_held_key<'b>(self, held: &'b Zeroizing<[u8; 32]>) -> ScopeEnd<'b>
+    where
+        'a: 'b,
+    {
+        ScopeEnd {
+            read_scope_seed: held,
+            read_seed_stamp: None,
+            ..self
+        }
     }
 
     /// The per-node read key (`node-seed` → `read-key`) this scope's records are
@@ -1266,15 +1286,15 @@ pub(crate) fn owed_cuts(pending: &BTreeSet<NodeId>, vault_root: NodeId) -> Vec<N
         .collect()
 }
 
-/// What a scope root whose own record sits at another epoch than the plane
-/// binds costs the op that met it.
+/// What a scope root whose own record sits at another epoch than the end's
+/// plane or seed costs the op that met it.
 ///
 /// The anchor's epoch is this pass's own, and a rotation that moved it heals at
 /// the next pass boundary, so the op waits. A second end's comes from the tick's
 /// boundary walk, and only a fresh walk changes it: charged, or a superseded end
 /// holds the queue head for good.
-fn epoch_skew(scope: &DrainScope<'_>, plane: &SealPlane<'_>) -> Halt {
-    if plane.end.root == scope.source.root {
+fn epoch_skew(scope: &DrainScope<'_>, end: &ScopeEnd<'_>) -> Halt {
+    if end.root == scope.source.root {
         Halt::Unclassified
     } else {
         Halt::UploadAttempt
@@ -2225,7 +2245,14 @@ where
             return Ok(());
         }
 
-        let (mut pass, rebased) = self.open_rebased_pass(scope, queued).await?;
+        let opened = self.open_rebased_pass(scope, queued).await;
+        // A newer release rewrites the anchor on each write, so its halt must
+        // reach the valve to be bounded and named.
+        if let (Err(halt @ Halt::ForeignVersion), Some((op_id, op))) = (&opened, queued.first()) {
+            self.apply_valve(scope, *op_id, op, *halt, attempts, report)
+                .await;
+        }
+        let (mut pass, rebased) = opened?;
         for (op_id, reason) in &rebased.dead_letters {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
@@ -2351,18 +2378,17 @@ where
             // Its own budget, its own count: an outage must not spend the
             // attempt budget, and a spent attempt is what tells
             // [`Self::create_replays_a_publish`] this device already published.
-            Halt::Unclassified | Halt::LostRace | Halt::OtherBinScope => {
+            Halt::Unclassified | Halt::LostRace | Halt::OtherBinScope | Halt::ForeignVersion => {
                 if attempts.charge_unattributed(op_id) < UNATTRIBUTED_BUDGET {
                     return;
                 }
-                self.abandon_keeping_its_name(
-                    scope,
-                    op_id,
-                    op,
-                    DeadLetterReason::AttemptsExhausted,
-                    report,
-                )
-                .await;
+                let reason = if halt == Halt::ForeignVersion {
+                    DeadLetterReason::NewerRelease
+                } else {
+                    DeadLetterReason::AttemptsExhausted
+                };
+                self.abandon_keeping_its_name(scope, op_id, op, reason, report)
+                    .await;
             }
             // The facade undid the op against the blocks it could see when the
             // cancel landed. One more can confirm inside that window — the
@@ -2769,7 +2795,9 @@ where
         scope: &DrainScope<'_>,
         record_bytes: &[u8],
     ) -> Result<(Pass, FolderState), Halt> {
-        let root = self.open_root_record(&scope.source, record_bytes).await?;
+        let root = self
+            .open_root_record(Some(scope), &scope.source, record_bytes)
+            .await?;
         let pass = Pass {
             root: scope.source.root,
             epoch: root.epoch,
@@ -2789,7 +2817,8 @@ where
         source: &ScopeEnd<'_>,
     ) -> Result<LoadedRoot, Halt> {
         let record_bytes = self.resolve_scope_root(scope, source).await?;
-        self.open_root_record(source, &record_bytes).await
+        self.open_root_record(Some(scope), source, &record_bytes)
+            .await
     }
 
     /// The scope root as this device last held it: the cached record, opened.
@@ -2801,14 +2830,18 @@ where
             .await
             .map_err(seam)?
             .ok_or(Halt::Unclassified)?;
-        self.open_root_record(source, &record_bytes).await
+        self.open_root_record(None, source, &record_bytes).await
     }
 
     /// One scope root's record as currently published: its envelope's carried
     /// fields, its unsealed folder body, the scope epoch and the ratchet its
     /// grant section carries.
+    ///
+    /// `scope` is the pass that resolved the bytes, and `None` for the cached
+    /// copy ([`Self::load_scope_root`]).
     async fn open_root_record(
         &self,
+        scope: Option<&DrainScope<'_>>,
         source: &ScopeEnd<'_>,
         record_bytes: &[u8],
     ) -> Result<LoadedRoot, Halt> {
@@ -2839,9 +2872,13 @@ where
         .await
         .map_err(|_| Halt::UploadAttempt)?;
         let observed = Observed::gated(source.root_name, sequence, envelope.v)
-            .map_err(|_| Halt::Unclassified)?;
+            .map_err(classify_publish_error)?;
         let read_key = source.read_key(&source.root.0);
-        let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::UploadAttempt)?;
+        let Ok(body) = open_read_body(&envelope, &read_key) else {
+            return Err(self
+                .unopened_root(scope, source, record_bytes, envelope.epoch)
+                .await);
+        };
         let ReadBody::Folder {
             created_at,
             modified_at,
@@ -2874,6 +2911,38 @@ where
             epoch,
             history_links: section.history_links,
         })
+    }
+
+    /// What a scope root body that the session seed does not open costs.
+    ///
+    /// At another epoch than the seed's stamp the seed lags a rotation
+    /// ([`epoch_skew`]). At the stamp epoch the gate recovers the record's own
+    /// seed again, which re-opens the body: a seed that opens it is a rotation
+    /// that raced ours, so the op waits. Any gate refusal of the record is
+    /// refused and reported (AGENTS.md rule 6). The cached copy has no pass to
+    /// recover through and reports nothing.
+    async fn unopened_root(
+        &self,
+        scope: Option<&DrainScope<'_>>,
+        source: &ScopeEnd<'_>,
+        record_bytes: &[u8],
+        epoch: u64,
+    ) -> Halt {
+        let Some(scope) = scope else {
+            return Halt::UploadAttempt;
+        };
+        if source.read_seed_stamp != Some(epoch) {
+            return epoch_skew(scope, source);
+        }
+        let floors = source.floors(&self.seams.floors);
+        let adopter = self.root_adopter(scope, &floors, source);
+        match recover_at_floor(&adopter, source.root_name, record_bytes).await {
+            Err(GateError::Rejected(rejection)) => {
+                refuse_record(&self.seams.events, source.root_name, &rejection)
+            }
+            Err(GateError::Seam(error)) => seam(error),
+            _ => Halt::Unclassified,
+        }
     }
 
     /// The scope-root adopter for one end: the owner's own seed source, and the
@@ -3025,7 +3094,7 @@ where
             .open_for_reauthor(plane, anchor, adopter, &name, &record_bytes, lagging)
             .await?;
         let observed =
-            Observed::gated(&name, adopted.sequence, envelope.v).map_err(|_| Halt::Unclassified)?;
+            Observed::gated(&name, adopted.sequence, envelope.v).map_err(classify_publish_error)?;
         // Re-sealing a node at an epoch above the scope's would cross the AAD
         // epoch binding.
         if adopted.epoch > anchor.epoch {
@@ -3159,7 +3228,7 @@ where
     ) -> Result<FolderState, Halt> {
         let root = self.resolve_and_open_scope_root(scope, &plane.end).await?;
         if root.epoch != plane.epoch {
-            return Err(epoch_skew(scope, plane));
+            return Err(epoch_skew(scope, &plane.end));
         }
         if plane.end.root != pass.root {
             pass.hold_second_ratchet(plane.end.root, root.epoch, root.history_links);
@@ -3656,10 +3725,7 @@ where
         }
         let held = self.inputs.bin_keys.held_key(&target.0, entry.deleted_at);
         let binned = SealPlane {
-            end: ScopeEnd {
-                read_scope_seed: &held,
-                ..plane.end
-            },
+            end: plane.end.under_held_key(&held),
             ..plane
         };
         self.rekey_subtree(
@@ -3738,10 +3804,7 @@ where
         }
         let held = self.inputs.bin_keys.held_key(&target.0, deleted_at);
         let binned = SealPlane {
-            end: ScopeEnd {
-                read_scope_seed: &held,
-                ..binned_under.end
-            },
+            end: binned_under.end.under_held_key(&held),
             ..binned_under
         };
         // The walk runs under the held key because that is what seals the whole
@@ -4593,7 +4656,10 @@ where
             }
             let record =
                 resolved_bytes(resolved, end.root_name, &self.seams.events).map_err(fault)?;
-            let root = self.open_root_record(end, &record).await.map_err(fault)?;
+            let root = self
+                .open_root_record(Some(scope), end, &record)
+                .await
+                .map_err(fault)?;
             return Ok(WalkRead {
                 mark: RecordMark {
                     sequence: root.state.observed.sequence(),
@@ -4739,10 +4805,7 @@ where
     ) -> Result<(), Halt> {
         let held = self.inputs.bin_keys.held_key(&root.0, deleted_at);
         let binned = SealPlane {
-            end: ScopeEnd {
-                read_scope_seed: &held,
-                ..plane.end
-            },
+            end: plane.end.under_held_key(&held),
             ..*plane
         };
         self.rekey_subtree(scope, plane, &binned, anchor, root)
@@ -5060,10 +5123,7 @@ where
             .map(|(deleted_at, (target, _))| self.inputs.bin_keys.held_key(&target.0, deleted_at));
         let plane = scope.source.at(root.epoch);
         let sealed_under = held.as_ref().map_or(plane, |held| SealPlane {
-            end: ScopeEnd {
-                read_scope_seed: held,
-                ..scope.source
-            },
+            end: scope.source.under_held_key(held),
             ..plane
         });
         let mut proven = Vec::new();
@@ -7722,9 +7782,7 @@ fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
 fn classify_publish_error(error: PublishError) -> Halt {
     match error {
         PublishError::Register(error) => classify_register(error),
-        // Another device runs a newer release: the op waits for this one to
-        // update rather than spend its attempts.
-        PublishError::ForeignVersion { .. } => Halt::Unclassified,
+        PublishError::ForeignVersion { .. } => Halt::ForeignVersion,
         error => match error.verdict() {
             PublishVerdict::Refused
             | PublishVerdict::RefusedUnaddressed
@@ -7885,6 +7943,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         | Halt::Cancelled
         | Halt::OtherBinScope => None,
         Halt::Unclassified => Some("the upload did not complete"),
+        Halt::ForeignVersion => Some("another device runs a newer release; update this app"),
         Halt::EpochLagged => Some("this folder is still being re-keyed after a key change"),
         Halt::OwedMove => Some("a sharing change on this folder is not finished yet"),
         Halt::Attempt | Halt::UploadAttempt | Halt::LostRace => {
@@ -8026,17 +8085,29 @@ fn folder_state(plane: &SealPlane<'_>, loaded: LoadedNode) -> Result<FolderState
 /// Whether the gate admits `record_bytes` at exactly the durable floor, as
 /// [`resolve_gated`] does for an equal-floor `Current`.
 async fn gates_at_floor<A: Adopter>(adopter: &A, name: &IpnsName, record_bytes: &[u8]) -> bool {
+    matches!(
+        recover_at_floor(adopter, name, record_bytes).await,
+        Ok(Some(_))
+    )
+}
+
+/// The owner's own material the gate recovers from `record_bytes` at exactly
+/// the durable floor, which re-opens the body under the record's own seed.
+/// `Ok(None)` when the record is not at the floor or the reader recovers none.
+async fn recover_at_floor<A: Adopter>(
+    adopter: &A,
+    name: &IpnsName,
+    record_bytes: &[u8],
+) -> Result<Option<OwnScopeMaterial>, GateError> {
     match adopter.adopt(name, record_bytes).await {
-        Err(GateError::Rejected(rejection)) => {
-            matches!(
-                rejection.reason,
-                RejectionReason::SequenceNotNewer { floor, sequence } if floor == sequence
-            ) && matches!(
-                adopter.recover_own_scope_material(name, record_bytes).await,
-                Ok(Some(_))
-            )
-        }
-        _ => false,
+        Err(GateError::Rejected(rejection)) => match rejection.reason {
+            RejectionReason::SequenceNotNewer { floor, sequence } if floor == sequence => {
+                adopter.recover_own_scope_material(name, record_bytes).await
+            }
+            _ => Err(GateError::Rejected(rejection)),
+        },
+        Err(error) => Err(error),
+        Ok(_) => Ok(None),
     }
 }
 
@@ -8092,7 +8163,7 @@ fn publish_basis(served: Option<Served>, built_on: &(Observed, Vec<u8>)) -> Resu
     }
     match served.observed {
         Some(gated) if served.sequence == built_on.0.sequence() => {
-            gated.map_err(|_| Halt::Unclassified)
+            gated.map_err(classify_publish_error)
         }
         _ => Ok(built_on.0.clone()),
     }
@@ -8152,6 +8223,7 @@ mod tests {
                 root: self.root,
                 root_name: &self.name,
                 read_scope_seed: &self.read_scope_seed,
+                read_seed_stamp: None,
                 write_scope_seed: &self.write_scope_seed,
                 ascent_node_seed: None,
                 floor_namespace: FloorNamespace::Own,
@@ -8260,6 +8332,7 @@ mod tests {
                     epoch: 0,
                 }),
                 current_at_floor: None,
+                fork: None,
             },
             hold: None,
             held_record: Some((
@@ -8268,6 +8341,7 @@ mod tests {
                     validity: Vec::new(),
                     sequence: 6,
                     ttl: 0,
+                    data: Vec::new(),
                 },
                 gated.clone(),
             )),
@@ -8296,6 +8370,7 @@ mod tests {
                     record_bytes: first.clone(),
                 },
                 current_at_floor: None,
+                fork: None,
             },
             hold: None,
             held_record: None,
@@ -8329,6 +8404,7 @@ mod tests {
                     last_known_good: None,
                     outcome,
                     current_at_floor: None,
+                    fork: None,
                 },
                 hold: None,
                 held_record: None,
@@ -8662,12 +8738,12 @@ mod tests {
         );
 
         assert_eq!(
-            epoch_skew(&scope, &source.end().at(SOURCE_EPOCH)),
+            epoch_skew(&scope, &source.end()),
             Halt::Unclassified,
             "the anchor's epoch is the pass's own, and the next pass reopens on it"
         );
         assert_eq!(
-            epoch_skew(&scope, &destination.end().at(DESTINATION_EPOCH)),
+            epoch_skew(&scope, &destination.end()),
             Halt::UploadAttempt,
             "a second end's is the walk's, and no retry of this pass refreshes it"
         );
@@ -9270,7 +9346,7 @@ mod tests {
 
         assert_eq!(
             publish_basis(forked(ENVELOPE_V + 1), &built_on),
-            Err(Halt::Unclassified)
+            Err(Halt::ForeignVersion)
         );
         assert_eq!(
             publish_basis(forked(ENVELOPE_V), &built_on),
@@ -9286,8 +9362,90 @@ mod tests {
                 RecordPublishError::Publish(PublishError::ForeignVersion { version: 2 }),
                 4096
             ),
-            Halt::Unclassified
+            Halt::ForeignVersion
         );
+    }
+
+    /// A bin restore or purge over a record at another envelope version waits
+    /// for the update like any other op: its read keeps the version class and
+    /// does not dead-letter on the attempt budget.
+    #[test]
+    fn a_bin_read_over_another_envelope_version_is_not_charged() {
+        let refused = RecordPublishError::Publish(PublishError::ForeignVersion { version: 2 });
+        let halted = halted_op(
+            charge_bin_read(classify_publish(refused, 4096)),
+            ATTEMPT_BUDGET,
+        );
+
+        assert!(halted.report.dead_letters.is_empty());
+        assert_eq!(halted.still_queued, vec![halted.op_id]);
+    }
+
+    /// A spent unattributed budget over a record at another envelope version
+    /// tells the member to update, not that the op failed too many times.
+    #[test]
+    fn a_spent_budget_over_another_envelope_version_names_the_newer_release() {
+        let halt = || {
+            classify_publish(
+                RecordPublishError::Publish(PublishError::ForeignVersion { version: 2 }),
+                4096,
+            )
+        };
+        let short = halted_op(halt(), UNATTRIBUTED_BUDGET - 1);
+        assert!(short.report.dead_letters.is_empty());
+        assert_eq!(short.still_queued, vec![short.op_id]);
+
+        let halted = halted_op(halt(), UNATTRIBUTED_BUDGET);
+        assert_eq!(
+            dead_letter_reasons(&halted.report),
+            vec![DeadLetterReason::NewerRelease]
+        );
+    }
+
+    /// A newer release rewrites the scope root on each write, so the anchor
+    /// itself is the record at another envelope version. Its halt reaches the
+    /// valve: the head op is bounded by the unattributed budget and is named
+    /// a newer release, never left at the head with no bound.
+    #[test]
+    fn an_anchor_at_another_envelope_version_dead_letters_the_head_as_a_newer_release() {
+        let mut root = harness_root_envelope();
+        root.v = ENVELOPE_V + 1;
+        let harness = drain_harness(Some(root));
+        let op = Op::rename(NodeId([9; 16]), "renamed.txt", 1, UnixMillis(0));
+        let op_id = harness.queue_an_op(&op);
+        let queued = vec![(op_id, op)];
+        let drain = harness.drain();
+        let scope = harness.scope();
+        let mut attempts = Attempts::default();
+        let mut report = DrainReport::default();
+
+        let pass = |attempts: &mut Attempts, report: &mut DrainReport| {
+            block_on(drain.publish_queue(&scope, &queued, report, attempts))
+        };
+        assert_eq!(pass(&mut attempts, &mut report), Err(Halt::ForeignVersion));
+        assert!(
+            report.dead_letters.is_empty(),
+            "one pass is inside the budget"
+        );
+        // The budget's passes but the last, as earlier ticks spend them.
+        for _ in 1..UNATTRIBUTED_BUDGET - 1 {
+            attempts.charge_unattributed(op_id);
+        }
+        assert_eq!(pass(&mut attempts, &mut report), Err(Halt::ForeignVersion));
+
+        assert_eq!(
+            dead_letter_reasons(&report),
+            vec![DeadLetterReason::NewerRelease]
+        );
+        assert!(harness.queued_op_ids().is_empty());
+    }
+
+    fn dead_letter_reasons(report: &DrainReport) -> Vec<DeadLetterReason> {
+        report
+            .dead_letters
+            .iter()
+            .map(|(_, _, reason)| *reason)
+            .collect()
     }
 
     /// This build's own refusal of the bytes it would sign repeats on every
@@ -9696,6 +9854,7 @@ mod tests {
                     root,
                     root_name: &self.root_name,
                     read_scope_seed: &self.read_scope_seed,
+                    read_seed_stamp: Some(OWNER_ROOT_EPOCH),
                     write_scope_seed: &self.write_scope_seed,
                     ascent_node_seed: None,
                     floor_namespace,
@@ -9913,6 +10072,88 @@ mod tests {
                 Some(Halt::Unclassified),
                 "{case}",
             );
+        }
+    }
+
+    /// Open `root` as the harness's cached scope root under a read seed that
+    /// does not open it, stamped `stamp`, both as a pass anchor and as the
+    /// cached copy: each halt, and how many abuse events it raised.
+    fn open_under_a_foreign_seed(root: Envelope, stamp: Option<u64>) -> [(Option<Halt>, usize); 2] {
+        let foreign = Zeroizing::new([0x77; 32]);
+        let mut harness = drain_harness(Some(root));
+        let record = block_on(
+            harness
+                .seams
+                .snapshot_cache
+                .get(harness.root_name.as_str().as_bytes()),
+        )
+        .expect("the cache reads")
+        .expect("the root is cached");
+        let open = |harness: &DrainHarness, cached: bool| {
+            let drain = harness.drain();
+            let base = harness.scope();
+            let scope = DrainScope {
+                source: ScopeEnd {
+                    read_scope_seed: &foreign,
+                    read_seed_stamp: stamp,
+                    ..base.source
+                },
+                ..base
+            };
+            if cached {
+                block_on(drain.load_scope_root(&scope.source)).err()
+            } else {
+                block_on(drain.open_root_candidate(&scope, &record)).err()
+            }
+        };
+        [false, true].map(|cached| {
+            let answer = open(&harness, cached);
+            let reported = drain_events(&mut harness.events)
+                .into_iter()
+                .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+                .count();
+            (answer, reported)
+        })
+    }
+
+    /// Another owner device rotated to the seed's epoch under its own seed,
+    /// and the record's own owner blob opens its body: a race, not abuse. The
+    /// anchor waits uncharged and nobody is accused.
+    #[test]
+    fn a_root_another_owner_seed_opens_at_the_seed_epoch_is_a_race() {
+        let [anchored, cached] =
+            open_under_a_foreign_seed(harness_root_envelope(), Some(OWNER_ROOT_EPOCH));
+        assert_eq!(anchored, (Some(Halt::Unclassified), 0));
+        assert_eq!(
+            cached,
+            (Some(Halt::UploadAttempt), 0),
+            "the cached copy reports nothing"
+        );
+    }
+
+    /// A root whose own owner blob names a seed that does not open its body is
+    /// refused and reported at the seed's epoch.
+    #[test]
+    fn a_root_its_own_seed_does_not_open_at_the_seed_epoch_is_refused() {
+        let mut broken = harness_root_envelope();
+        let tag = broken.read_sealed.last_mut().expect("a sealed body");
+        *tag ^= 0x01;
+        let [anchored, cached] = open_under_a_foreign_seed(broken, Some(OWNER_ROOT_EPOCH));
+        assert_eq!(anchored, (Some(Halt::RecordRefused), 1));
+        assert_eq!(
+            cached,
+            (Some(Halt::UploadAttempt), 0),
+            "the cached copy reports nothing"
+        );
+    }
+
+    /// At another epoch, or with no stamp, the seed may lag a rotation: the
+    /// anchor waits uncharged and nobody is accused.
+    #[test]
+    fn a_root_the_seed_does_not_open_at_another_epoch_is_a_skew() {
+        for stamp in [Some(OWNER_ROOT_EPOCH - 1), None] {
+            let [anchored, _] = open_under_a_foreign_seed(harness_root_envelope(), stamp);
+            assert_eq!(anchored, (Some(Halt::Unclassified), 0), "stamp {stamp:?}");
         }
     }
 
@@ -10175,7 +10416,7 @@ mod tests {
                 .enqueue_response(crate::seams::HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: block.clone(),
+                    body: block.clone().into(),
                 });
         }
         let drain = harness.drain();
@@ -10570,7 +10811,7 @@ mod tests {
                 Some(block) => Ok(crate::seams::HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: block.clone(),
+                    body: block.clone().into(),
                 }),
                 None => Err(crate::seams::SeamError::new("no such block")),
             })
@@ -11497,7 +11738,7 @@ mod tests {
                 Ok(HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: head_block.clone(),
+                    body: head_block.clone().into(),
                 })
             })
         });

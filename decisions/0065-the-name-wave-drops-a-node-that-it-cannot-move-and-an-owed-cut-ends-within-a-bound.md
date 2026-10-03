@@ -61,6 +61,9 @@ that the scope root's current write seed derives.** The count of passes does not
 Before that time, ADR 0063 D4 stays. Such a renewal signs no
 name under a seed that does not derive it (ADR 0061 D4), and gives the revokee no new access. Thus
 a stop at the scope root also does not lapse the scope.
+Amended by ADR 0068 D1 on 2026-10-02: this is false for a planted root, because the walk cannot
+admit a root that the gate refuses; the rotation now moves the root from the last copy that passed
+the gate, and the scope still lapses on a device with no such copy.
 
 ## Alternatives considered
 
@@ -106,3 +109,5 @@ a stop at the scope root also does not lapse the scope.
 
 - A planted record at the scope root name is not covered. The revokee derives the root name, and
   the wave cannot drop the root (FSM1/cipher-box#2176).
+  Amended by ADR 0068 D1 to D4 on 2026-10-02: an owner rotation reads a refused root from its last
+  copy and moves the root before it publishes at the old name.

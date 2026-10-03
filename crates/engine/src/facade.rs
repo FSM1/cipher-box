@@ -2277,6 +2277,13 @@ pub enum Event {
         /// Human-readable classification (no key material).
         description: String,
     },
+    /// A read met another record at one sequence of a name: a same-sequence
+    /// fork, not a trust violation (ADR 0066). Sent once for each name and
+    /// sequence in a session.
+    SameSequenceFork {
+        /// The record's routing key (`ipnsName`).
+        routing_key: String,
+    },
     /// A held record's sub-EOL renewal did not land — a lost CAS race or a
     /// fail-closed publish failure — or a start could not raise the vault
     /// pointer's `minReadEpoch` to the root epoch it adopted. Surfaced, never
@@ -2454,6 +2461,10 @@ impl fmt::Debug for Event {
             Self::AttributableAbuse { description } => f
                 .debug_struct("AttributableAbuse")
                 .field("description", description)
+                .finish(),
+            Self::SameSequenceFork { routing_key } => f
+                .debug_struct("SameSequenceFork")
+                .field("routing_key", &RedactedText::of(routing_key))
                 .finish(),
             Self::RenewalFailed {
                 routing_key,
@@ -4628,6 +4639,32 @@ pub(crate) fn emit_trust_violation(
     });
 }
 
+/// The (routing key, sequence) pairs this session reported a same-sequence
+/// fork at, so each pair sends [`Event::SameSequenceFork`] once (ADR 0066 D2).
+#[derive(Default)]
+pub(crate) struct ForkSightings(RefCell<BTreeSet<(String, u64)>>);
+
+impl ForkSightings {
+    /// Report a fork at `sequence` of `routing_key`, unless this session
+    /// already did.
+    pub(crate) fn report(
+        &self,
+        events: &mpsc::UnboundedSender<Event>,
+        routing_key: &str,
+        sequence: u64,
+    ) {
+        if self
+            .0
+            .borrow_mut()
+            .insert((routing_key.to_owned(), sequence))
+        {
+            let _ = events.unbounded_send(Event::SameSequenceFork {
+                routing_key: routing_key.to_owned(),
+            });
+        }
+    }
+}
+
 /// Report one grant row whose recipient binding the owner never signed.
 ///
 /// Any committed write grantee authors the write body a ledger rides in, so a
@@ -5551,6 +5588,11 @@ impl<T: SeamTypes> Engine<T> {
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
         *self.state.current_root_name.borrow_mut() = root_name.clone();
+        if let (Some(sequence), Some(name)) = (outcome.forked, &root_name) {
+            self.state
+                .fork_sightings
+                .report(&self.events, name.as_str(), sequence);
+        }
         // The same adopt recovered the scope write seed: the drain derives every
         // new node's `ipnsName` and its narrow per-name signer from it.
         if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
@@ -6466,6 +6508,7 @@ where {
         let bin_keys = self.secrets.tick_bin_keys.clone();
         let publishing = self.state.publishing.clone();
         let orphan_heads = self.state.orphan_heads.clone();
+        let fork_sightings = self.state.fork_sightings.clone();
         let roots_walked = self.state.scope_roots_walked.clone();
         let owed_driven = self.state.owed_rotation_driven.clone();
         let unfinished_write_cuts = self.state.unfinished_write_cuts.clone();
@@ -6623,6 +6666,9 @@ where {
                         let _ = events.unbounded_send(Event::WriteCutUnfinished {
                             scope_root: NodeId(scope),
                         });
+                    }
+                    for (routing_key, sequence) in &report.forked {
+                        fork_sightings.report(&events, routing_key, *sequence);
                     }
                 }
                 LivenessControl::Continue
@@ -9809,6 +9855,7 @@ where {
             gateway: &self.gateway,
             base: &self.state.snapshot,
             events: &self.events,
+            forks: &self.state.fork_sightings,
             scope_id: root.0,
             scope_read_seed: &stamped.seed,
             seed_stamp: Some(stamped.stamp),
@@ -9992,6 +10039,7 @@ where {
                 gateway: &self.gateway,
                 base: &self.state.snapshot,
                 events: &self.events,
+                forks: &self.state.fork_sightings,
                 scope_id: scope.0,
                 scope_read_seed: &material.seed.seed,
                 seed_stamp: Some(material.seed.stamp),
@@ -13537,7 +13585,7 @@ mod tests {
         HttpResponse {
             status,
             headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
-            body: serde_json::to_vec(&body).unwrap(),
+            body: serde_json::to_vec(&body).unwrap().into(),
         }
     }
 
@@ -17614,7 +17662,7 @@ mod tests {
             HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: head_block.to_vec(),
+                body: head_block.to_vec().into(),
             }
         }
 
@@ -19765,6 +19813,62 @@ mod tests {
             device.floor_store.heal_floors();
             assert_eq!(vouched, Err(RotationPublishError::FloorUnrecorded));
             assert_ne!(pointer_records_of(&device), before, "the vouch landed");
+        }
+
+        /// Vouch `read_epoch` over the standing vault pointer of a started session.
+        fn vouch(
+            engine: &Engine<FakeSeamTypes>,
+            root_name: &IpnsName,
+            read_epoch: u64,
+        ) -> Result<(), RotationPublishError> {
+            let api = engine.api.clone().expect("a started session holds the API");
+            let voucher = engine
+                .vault_pointer_voucher(&api)
+                .expect("the session adopted a vault pointer");
+            block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), read_epoch))
+        }
+
+        /// The network serves a pointer below the epoch a pointer already
+        /// vouched to this device: the vouch does not sign its fields again.
+        #[test]
+        fn a_vouch_over_a_pointer_below_the_vouched_floor_publishes_nothing() {
+            let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+            block_on(floor::raise_vouched_floor(
+                &device.floors(&CAP_SECRET),
+                &SCOPE,
+                EPOCH + 1,
+            ))
+            .expect("a later pointer vouched the next epoch");
+
+            let before = pointer_records_of(&device);
+            assert_eq!(
+                vouch(&engine, &root_name, EPOCH + 1),
+                Err(RotationPublishError::Rejected)
+            );
+            assert_eq!(pointer_records_of(&device), before, "nothing was published");
+        }
+
+        /// The network serves a pointer below the sequence this device published
+        /// at the name: the vouch does not sign its fields again.
+        #[test]
+        fn a_vouch_over_a_pointer_below_the_published_sequence_publishes_nothing() {
+            let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+            let pointer = vault_pointer_name(&CAP_SECRET, 0);
+            block_on(
+                device
+                    .floors(&CAP_SECRET)
+                    .raise_sequence_floor(pointer.as_str().as_bytes(), 5),
+            )
+            .expect("this device published the pointer at sequence 5");
+
+            let before = pointer_records_of(&device);
+            assert_eq!(
+                vouch(&engine, &root_name, EPOCH + 1),
+                Err(RotationPublishError::Rejected)
+            );
+            assert_eq!(pointer_records_of(&device), before, "nothing was published");
         }
     }
 

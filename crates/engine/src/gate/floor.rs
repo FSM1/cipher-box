@@ -283,7 +283,9 @@ pub enum Strictness {
     /// [`ChildAdopter::open_interior_under`]. Each must reach records the
     /// **epoch** stage refuses, so they run [`check_sequence`] rather than
     /// [`check`], and their bar is named here, beside the rest of the floor
-    /// law, rather than hand-rolled at each call site.
+    /// law, rather than hand-rolled at each call site. The vault-pointer vouch
+    /// reads its standing pointer at this bar too
+    /// ([`VaultPointerVoucher::standing`](crate::net::VaultPointerVoucher)).
     ///
     /// [`ChildAdopter::open_interior_under`]: crate::net::ChildAdopter
     AtOrAboveFloor,
