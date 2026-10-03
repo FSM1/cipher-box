@@ -5756,7 +5756,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         self.state.boundary_walk_rejected.set(false);
         self.state.scope_roots_walked.set(false);
-        self.state.walk_refused_root.set(None);
+        if let Ok(mut refused) = self.state.walk_refused_roots.try_borrow_mut() {
+            refused.clear();
+        }
         self.state.owed_rotation_driven.set(false);
         self.state.owed_rotation.forget();
         self.state.boundary_walk_landed.set(false);

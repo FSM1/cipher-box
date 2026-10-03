@@ -15548,6 +15548,85 @@ fn a_revoke_over_honest_lag_runs_on_the_older_copy() {
     );
 }
 
+/// Write-grant `node` to the recipient, revoke it with the scope pointer
+/// publish failing so the wave is owed, then plant at the root. Returns the
+/// revokee's write scope seed of `node`.
+fn owe_a_wave_then_plant_the_root(fx: &mut GrantScenario, node: NodeId) -> [u8; 32] {
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Write,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    let root = scope_repoint(&fx.world, &node.0).current_root;
+    let section =
+        published_grant_section_at(&fx.world, &fx.blocks, &root).expect("the granted root");
+    let revokee_seed = grantee_write_scope_seed(&section, &root, &node.0, 1);
+    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &node.0);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+    assert_eq!(
+        command_across_retries(
+            fx,
+            Command::Revoke {
+                node,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+    fx.world.record_store.heal_put_for(pointer.as_str());
+    let planted = author_child_envelope(EnvelopeAuthoring {
+        node_id: node.0,
+        scope_id: node.0,
+        epoch: 1,
+        read_key: &[0x13; 32],
+        nonce: &[0x5f; 24],
+        body: &folder_body(Vec::new()),
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the planted root seals");
+    fx.blocks.put(planted.block.clone());
+    sign_at(
+        fx,
+        &revokee_seed,
+        node,
+        format!("/ipfs/{}", planted.cid).as_bytes(),
+        sequence_at(&fx.world, &root) + 1,
+    );
+    revokee_seed
+}
+
+/// ADR 0068 as amended: two scope roots with an owed wave each, and a root
+/// plant at each. The walk refuses both, and one sync pass re-drives both.
+#[test]
+fn a_sync_pass_redrives_two_owed_cuts_while_both_roots_are_planted() {
+    let mut fx = GrantScenario::new();
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    let folder = fx.folder;
+    let seeds = [
+        (folder, owe_a_wave_then_plant_the_root(&mut fx, folder)),
+        (other, owe_a_wave_then_plant_the_root(&mut fx, other)),
+    ];
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    for (node, revokee_seed) in seeds {
+        let moved = scope_repoint(&fx.world, &node.0);
+        assert_eq!(moved.write_epoch, 3, "the wave of {node:?} landed");
+        assert_ne!(
+            derive_write_name(&revokee_seed, &node.0),
+            moved.current_root
+        );
+    }
+}
+
 /// ADR 0068 D4 as amended: a revoke of another grantee over an entry whose
 /// cut never landed replaces that entry, and the host learns that the first
 /// cut went.

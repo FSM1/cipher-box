@@ -1239,6 +1239,8 @@ pub(crate) struct WalkedBoundaries {
     /// `None` names a complete boundary set — the one state in which a
     /// classifier may treat what is missing from it as inside its parent scope.
     pub(crate) failure: Option<WalkFailure>,
+    /// Every scope root the gate refused that a gated parent's index named.
+    pub(crate) refused: BTreeSet<NodeId>,
 }
 
 /// A boundary walk's reading of a root gate verdict. A superseded name is this
@@ -1868,6 +1870,7 @@ where
         let mut descendants: Vec<DescendantScopeRoot> = Vec::new();
         let mut visited = BTreeSet::from([root_scope_id]);
         let mut failure = None;
+        let mut refused = BTreeSet::new();
         let mut frontier = vec![(gated.read_scope_seed, index)];
         while !frontier.is_empty() {
             let mut next = Vec::new();
@@ -1914,7 +1917,12 @@ where
                             next.push((descendant.read_scope_seed.clone(), grandchildren));
                             descendants.push(descendant);
                         }
-                        Err(met) => WalkFailure::accumulate(&mut failure, met),
+                        Err(met) => {
+                            if matches!(met, WalkFailure::Rejected { .. }) {
+                                refused.insert(NodeId(child.scope_id));
+                            }
+                            WalkFailure::accumulate(&mut failure, met);
+                        }
                     }
                 }
             }
@@ -1924,6 +1932,7 @@ where
             proved: descendants,
             unproved,
             failure,
+            refused,
         })
     }
 }

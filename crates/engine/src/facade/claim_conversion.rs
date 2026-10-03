@@ -1175,10 +1175,10 @@ pub(crate) struct TickSites<'a> {
     /// Whether a walk this session named every scope root. Until one has, an
     /// ancestor scope root may be missing from the boundaries.
     pub(crate) walked: bool,
-    /// The scope root whose refusal by the gate was the last walk's one
-    /// failure. The walk reached it through its ancestors, so an owed cut there
-    /// still finds its enclosing scope (ADR 0068 D4).
-    pub(crate) refused_root: Option<NodeId>,
+    /// The scope roots the last walk's gate refused under a gated parent. The
+    /// walk reached each one through its ancestors, so an owed cut there still
+    /// finds its enclosing scope (ADR 0068 D4).
+    pub(crate) refused_roots: BTreeSet<NodeId>,
 }
 
 impl ConversionSites for TickSites<'_> {
@@ -1204,7 +1204,7 @@ impl ConversionSites for TickSites<'_> {
     }
 
     async fn enclosing(&self, node: NodeId) -> Result<OwnerScope, EngineError> {
-        if !self.walked && self.refused_root != Some(node) {
+        if !self.walked && !self.refused_roots.contains(&node) {
             return Err(EngineError::Seam {
                 message: "the scope roots are not all walked".to_owned(),
             });
