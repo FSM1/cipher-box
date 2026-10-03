@@ -33,7 +33,7 @@ use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
-use super::publish::head_cid_from_value;
+use super::publish::{PublishBar, head_cid_from_value};
 use super::resolve::{AdoptOutcome, Adopter, GatePass, OwnScopeMaterial};
 use crate::content::limits::{resealable_root_rest_bytes, scope_root_rest_bytes};
 use crate::content::{ContentPlane, Gateway, ReadError, is_plane_anchor, read_block};
@@ -199,6 +199,21 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
     }
 }
 
+/// The floors a renewal of a scope root clears, as the gate admitted it.
+pub(super) fn root_bar(
+    scope_id: [u8; 16],
+    envelope: &Envelope,
+    section: &GrantSection,
+    write_epoch: Option<u64>,
+) -> PublishBar {
+    PublishBar {
+        scope_id,
+        read_epoch: envelope.epoch,
+        write_epoch,
+        cut_epoch: Some(section.commitment.cut_epoch),
+    }
+}
+
 impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     /// [`assemble_candidate`] over this adopter's own gateway, HTTP seam, and
     /// held local head.
@@ -268,6 +283,12 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         let (candidate, pending, seeds) = self.gate_and_recover(name, record_bytes).await?;
         Ok(AdoptOutcome {
             pass: GatePass::Deferred(pending),
+            bar: root_bar(
+                self.root_scope_id,
+                &candidate.envelope,
+                &candidate.grant_section,
+                seeds.write_epoch,
+            ),
             write_scope_seed: seeds.write_scope_seed,
             node_id: seeds.node_id,
             read_scope_seed: Some(seeds.read_scope_seed),
@@ -288,6 +309,12 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             .recover_own_scope_root(name, record_bytes)
             .await?
             .map(|root| OwnScopeMaterial {
+                bar: root_bar(
+                    self.root_scope_id,
+                    &root.envelope,
+                    &root.grant_section,
+                    root.write_epoch,
+                ),
                 node_id: root.envelope.id,
                 read_scope_seed: root.read_scope_seed,
                 write_scope_seed: root.write_scope_seed,
@@ -314,6 +341,8 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
 /// floor: what a gate pass surfaces, off the candidate the rejected adopt
 /// authenticated. Terminal owner of the recovered seeds — they zeroize on drop.
 pub(crate) struct RecoveredScopeRoot {
+    /// The write epoch authenticated by the owner-write-blob, if recovered.
+    pub(crate) write_epoch: Option<u64>,
     /// The record's envelope.
     pub(crate) envelope: Envelope,
     /// The sequence the recovery re-verified and re-imposed the floor at.
@@ -401,10 +430,11 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         let node_seed = kdf::node_seed(&read_scope_seed, &env.id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
         let read_body = open_read_body(env, &read_key).map_err(|e| reject(GateStage::Unseal, e))?;
-        let write_scope_seed = self
+        let (write_scope_seed, write_epoch) = self
             .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
             .await?;
         Ok(Some(RecoveredScopeRoot {
+            write_epoch,
             envelope: candidate.envelope,
             sequence,
             grant_section: candidate.grant_section,
@@ -432,7 +462,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         } = self.gate_root(name, record_bytes).await?;
 
         let env = &candidate.envelope;
-        let write_scope_seed = self
+        let (write_scope_seed, write_epoch) = self
             .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
             .await?;
         let node_id = env.id;
@@ -440,6 +470,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             candidate,
             pending,
             RecoveredSeeds {
+                write_epoch,
                 read_scope_seed,
                 write_scope_seed,
                 node_id,
@@ -526,6 +557,8 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
 /// The seeds one root gate pass recovered for this reader, plus the node id the
 /// held set and the drain key on. Terminal owner of both seeds.
 pub(crate) struct RecoveredSeeds {
+    /// The write epoch authenticated by the owner-write-blob, if recovered.
+    pub(crate) write_epoch: Option<u64>,
     /// The scope read seed the child read pipeline derives per-node read keys
     /// from.
     pub(crate) read_scope_seed: Zeroizing<[u8; 32]>,
@@ -644,14 +677,16 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         enc_secret: &X25519Secret,
         env: &Envelope,
         owb: &SignedOwnerWriteBlob,
-    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+    ) -> Result<(Option<Zeroizing<[u8; 32]>>, Option<u64>), GateError> {
         let Some(wf) = floor::write_epoch_floor(self.floors, &self.root_scope_id)
             .await
             .map_err(GateError::Seam)?
         else {
-            return Ok(None);
+            return Ok((None, None));
         };
-        Ok(open_write_scope_seed_at(enc_secret, env, owb, wf))
+        let seed = open_write_scope_seed_at(enc_secret, env, owb, wf);
+        let epoch = seed.as_ref().map(|_| wf);
+        Ok((seed, epoch))
     }
 
     /// The scope write seed this reader is entitled to: the owner recovers it
@@ -662,14 +697,14 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         env: &Envelope,
         section: &GrantSection,
         grant_write_scope_seed: Option<Zeroizing<[u8; 32]>>,
-    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+    ) -> Result<(Option<Zeroizing<[u8; 32]>>, Option<u64>), GateError> {
         match (&self.seeds, &section.owner_write_blob) {
             (SeedSource::Owner(enc_secret), Some(owb)) => {
                 self.recover_write_scope_seed(enc_secret, env, owb).await
             }
             // Re-authorable, NOT a trust failure — held keyless.
-            (SeedSource::Owner(_), None) => Ok(None),
-            (SeedSource::Grantee { .. }, _) => Ok(grant_write_scope_seed),
+            (SeedSource::Owner(_), None) => Ok((None, None)),
+            (SeedSource::Grantee { .. }, _) => Ok((grant_write_scope_seed, None)),
         }
     }
 }
@@ -790,12 +825,20 @@ pub(super) fn reject(stage: GateStage, e: CodecError) -> GateError {
     })
 }
 
+/// The status a head block read carries when every source answered that it
+/// holds no such block (ADR 0068 D1).
+pub(super) const HEAD_BLOCK_NOT_FOUND: u16 = 404;
+
 /// Map a content-read failure: a CID mismatch/tamper is a fail-closed trust
 /// violation surfaced verbatim; no source or an over-cap body is availability (a
 /// retryable seam), never a trust verdict (`content/read.rs`).
 pub(super) fn map_read_error(e: ReadError) -> GateError {
     match e {
         ReadError::TrustViolation(codec) => assembly_reject(codec),
+        ReadError::NotFound => GateError::Seam(SeamError::http_status(
+            "head block not found",
+            HEAD_BLOCK_NOT_FOUND,
+        )),
         ReadError::Unavailable => GateError::Seam(SeamError::new("head block unavailable")),
         ReadError::TooLarge { size, limit } => GateError::Seam(SeamError::new(format!(
             "head block exceeds the content cap ({size} > {limit})"

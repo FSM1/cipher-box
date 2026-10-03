@@ -98,6 +98,12 @@ fake HTTP serves the API's mailbox routes from (ADR 0044), and seeded entropy.
 No network, no docker, no wall clock — CAS races and multi-day EOL timelines
 execute in milliseconds.
 
+The **Engine simulation tests** PR gate also runs the engine unit tests,
+`encode_refusals`, and `renewal_walk` in release mode. Together they exercise
+the shared produce-side gate through root rotation, the name wave, the drain,
+renewal, and revival, including floor changes before signing, foreign envelope
+versions, and sequence exhaustion.
+
 The **simulation harness** is this strategy's center of gravity: N engine
 instances (owner, write-grantee, read-grantee, revokee, adversary) share one
 fake record store and mailbox and are stepped deterministically on virtual
@@ -143,7 +149,37 @@ scenario fails the meta-test):
   outranking refs re-walks one time and reads nothing again, and a derived ref
   met after two others is kept, a re-walk keeps the first ref of its own
   walk, and a held node is read once across a re-walk
-  (`crates/engine/src/net/rotation.rs`);
+  (`crates/engine/src/net/rotation.rs`); the root plants — a record the gate
+  refuses before the command, a pre-cut replay, a plant at `u64::MAX`, a plant
+  at `u64::MAX` that leaves no room for a re-seal, a downgrade over a plant, and
+  a plant after the cut set lands — each end the
+  cut with a copy, the moved root gives the revokee no row
+  and no blob, nothing more publishes at the old root name, a cut from the copy
+  keeps no grant row of any recipient while a cut from a gated root keeps the
+  other rows, a read revoke over a writer's plant cuts the writer too, a
+  re-drive from the copy and a revoke over an owed wave keep no grant row, as
+  does a re-drive after another owner device revoked a grantee and a downgrade
+  with no owed entry, a re-drive that drops a new share tells the host once, a
+  read revoke that stops at an absent root head block leaves nothing owed, a
+  link expiry does not replace an owed wave whose cut landed, a read
+  cut that stops at the moved root ends in the next re-drive,
+  a root whose head block no block source holds ends the revoke in one pass,
+  and so does a root below the sequence floor when every endpoint answered,
+  while the same head block with a failed record endpoint, a head block the
+  gateway times out on, and a cache write fault are unavailable with no
+  fallback, a command over honest lag runs on the older copy, a first wave
+  that stops leaves a cut the pass keeps within the bound and drops past it, a
+  run again keeps the first stop so an unserved interior node drops past the
+  bound, a command rerun over a plant after the cut stands ends in one pass, a
+  different cut over a cut that never landed reports the replaced work, the
+  link sweep cuts an expired link over such a cut, and a sync pass re-drives
+  an owed cut, and two owed cuts, while their root plants stand
+  (ADR 0068, `crates/engine/tests/owner_actions.rs`); in a sync pass re-drive a
+  head block that no source holds, a wrong head block and a record below the
+  sequence floor fall back only past the bound, and the first and the last
+  never after a failed endpoint; a confirmed root publish is
+  the last copy, and the driver runs the wave first after a fallback
+  (`crates/engine/src/net/rotation.rs`, `crates/engine/src/rotation/trigger`);
 - the keyless re-PUT adversary (FSM1/cipher-box-next#38) — forged old-epoch records at old
   names, re-point adoption, the pin-window bound;
 - revocation classification (revocation-signal vs unresolvable vs epoch-lag)
@@ -151,6 +187,15 @@ scenario fails the meta-test):
 - the offline queue — FIFO replay through rebase, dead-letter on
   revoked-while-offline with staged bytes preserved, staging-budget
   fail-fast;
+- the retire ledger (ADR 0070) — the new build decodes a version 2 entry and
+  an unversioned entry (ADR 0020 D5), round-trips a version 3 entry of each
+  origin, and reads a damaged name as unwritten (`net::retire`); `owe` refuses
+  a name that is not an IPNS name (`tests/encode_refusals.rs`); a dropped
+  version and a hard delete in a write-granted folder retire under the file's
+  own name (`tests/owner_actions.rs`); a named debt of a deleted node that the
+  base links again at that name, in the vault scope or below an interior
+  scope, reads its live record and spares what it names, and waits when the
+  record does not pass the gate (`sync::drain`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
   S + 1 with a fresh validity after the passes that ADR 0061 consequence 2
@@ -187,6 +232,11 @@ scenario fails the meta-test):
   vault root back with 45 days left and reports it, renews over it with 25
   days left, and renews over a tie of one value, and the renewal set renews
   over a fork inside 30 days (`tests/renewal_walk.rs`, `net::liveness`).
+  A child or a vault root at a foreign envelope version is not renewed by the
+  walk or the renewal set, and the walk emits `renewalFailed` with a version
+  detail; a scope floor raised during the registration makes the walk refuse
+  (`tests/renewal_walk.rs`); the renewal set refuses a held node at a foreign
+  version or below its scope bar (`net::liveness`).
   A lagging endpoint (ADR 0071): with two endpoints, where one lags one
   sequence and the other fails or answers 429, a revoke gets
   `EngineError::Seam`, a read
@@ -202,6 +252,16 @@ scenario fails the meta-test):
   timeout is a failed endpoint, and a failed body cancellation keeps the known
   answer (`net::fanout`, the desktop record transport, the web
   `recordTransport`). The fix tests fail on the code before ADR 0071.
+  An owed interior move (ADR 0072): after a stop at the reseal, a partial
+  reseal, or a stop at the parent index publish, the navigation leg and then
+  the tick focus leg each adopt a changed interior folder with no abuse event;
+  a restart over a move still owed gives no abuse event at either leg; a
+  record whose epoch tag names a bound scope that does not open it, and a
+  record whose tag names a third scope, each give exactly one trust violation
+  (`tests/owner_actions.rs`); an unread owed record leaves the legs on the
+  proved and minted scope roots, and a leg whose root holds no seed reads a
+  record of the left scope and waits on a record of the root (`sync::pass`,
+  `net::focus`).
   `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
   wave left at its old name, which nothing renews; `tests/write_plane.rs`
   covers a renewal inside the drain's window, and a lost race on a scope root
@@ -212,8 +272,8 @@ re-sign records with any key it holds; every crypto-review finding (FSM1/cipher-
 gets a pinned regression scenario.
 
 The engine also ships **its own KAT vectors**, under core's regime but for the
-formats and predicates core cannot reach: the content-DAG root and the
-rotation and check-surface reject families. The stage-3 **one section, one
+formats and predicates core cannot reach: the content-DAG root, the
+retire-ledger entry, and the rotation and check-surface reject families. The stage-3 **one section, one
 signer** vectors are core's, in the KAT `grant` family (ADR 0052 D4). The
 engine vectors are written only by
 `cargo run -p cipherbox-engine --example kat_gen`, and the **Engine simulation

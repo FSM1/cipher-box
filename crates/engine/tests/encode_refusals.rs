@@ -3,6 +3,7 @@
 //! under `--release`, where `debug_assert!` is compiled out, so a refusal that
 //! leans on one fails there.
 
+use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -13,6 +14,7 @@ use cipherbox_core::suite::ecdsa::SIGNATURE_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_engine::api::ApiClient;
+use cipherbox_engine::content::{DAG_ROOT_CODEC, RetireTarget};
 use cipherbox_engine::gate::{floor, record_cut_epoch_floor};
 use cipherbox_engine::grants::conversion::{
     ConversionRecord, MAX_CLAIM_PAYLOAD_BYTES, encode_conversions,
@@ -25,12 +27,14 @@ use cipherbox_engine::net::renewal_walk::cursor::{
     CursorCodecError, DeferredRoot, MAX_CURSOR_PATH, MAX_DEFERRED_ROOTS, RenewalCursor,
     encode_cursor,
 };
+use cipherbox_engine::net::retire::StagingRetireLedger;
 use cipherbox_engine::net::{
     BarFloor, Observed, PublishBar, PublishError, PublishOutcome, PublishRequest, publish,
 };
 use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, HttpResponse, RecordTransport, StagingStore, UnixMillis,
+    BoxedTask, DebtOrigin, FloorStore, HttpResponse, OwedRetire, RecordTransport, RetireLedger,
+    StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
@@ -41,6 +45,7 @@ use cipherbox_engine::testkit::account::{
     Blocks, EOL, ROOT, SCOPE as ACCOUNT_SCOPE, SECRET, TTL_NANOS, floor_label, fresh_observed,
     seed_account, seed_account_sealed, seed_account_with, serve_http,
 };
+use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED,
     OWNER_ROOT_WRITE_SCOPE_SEED, block_on, poll_tasks_until_parked,
@@ -50,6 +55,52 @@ use cipherbox_engine::{
     LoginSecret, NodeId, NodeKind, StoragePolicy, SyncTimingProfile,
 };
 use core::cell::RefCell;
+
+/// The decoder reads a retire-ledger entry whose name is not an IPNS name, or
+/// whose target set the settle could not send, as unwritten. So `owe` refuses
+/// to journal one and stores nothing (ADR 0070 D1, ADR 0054 D1).
+#[test]
+fn a_retire_debt_the_decoder_reads_as_unwritten_is_refused_at_owe() {
+    let store = InMemoryStagingStore::default();
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(3));
+    let ledger = StagingRetireLedger::new(&store, BookkeepingSeal::new(&enc, &entropy));
+    let root = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, b"a doomed root"));
+    let leaf = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, b"a doomed leaf"));
+    let target = |cid: &str, pinned_bytes| RetireTarget {
+        cid: cid.to_owned(),
+        pinned_bytes,
+    };
+    let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([0x71; 32]).verifying_key());
+    let whole = || OwedRetire::whole([7; 16], root.clone(), 64).owed_by(name.as_str());
+    let dropped = |targets| OwedRetire {
+        origin: DebtOrigin::DroppedVersion(targets),
+        ..whole()
+    };
+    let refused = [
+        whole().owed_by(""),
+        whole().owed_by("k51qzowningrecord"),
+        dropped(Vec::new()),
+        dropped(vec![target(&root, 32), target(&leaf, 32)]),
+        dropped(vec![target(&leaf, 32), target(&root, 31)]),
+        dropped(vec![target("not-a-cid", 32), target(&root, 32)]),
+    ];
+    assert!(
+        block_on(ledger.owe(
+            b"owner",
+            &[dropped(vec![target(&leaf, 32), target(&root, 32)])]
+        ))
+        .is_ok(),
+        "a whole target set journals"
+    );
+    let journaled = block_on(store.staged_keys()).expect("keys list");
+    block_on(ledger.settle(b"owner", core::slice::from_ref(&root))).expect("settles");
+    assert_eq!(journaled.len(), 1);
+    for entry in refused {
+        assert!(block_on(ledger.owe(b"owner", &[entry])).is_err());
+    }
+    assert!(block_on(store.staged_keys()).expect("keys list").is_empty());
+}
 
 fn pointer_name() -> IpnsName {
     IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5d; 32]).verifying_key())
@@ -235,12 +286,12 @@ fn a_record_below_any_floor_of_its_bar_is_refused_at_the_signature() {
 fn a_gated_read_at_another_envelope_version_yields_no_token() {
     let name = pointer_name();
     assert_eq!(
-        Observed::gated(&name, 1, ENVELOPE_V + 1),
+        Observed::gated_for_test(&name, 1, ENVELOPE_V + 1),
         Err(PublishError::ForeignVersion {
             version: ENVELOPE_V + 1
         }),
     );
-    assert!(Observed::gated(&name, 1, ENVELOPE_V).is_ok());
+    assert!(Observed::gated_for_test(&name, 1, ENVELOPE_V).is_ok());
 }
 
 /// The signature lands strictly above the observed record even where the
@@ -252,7 +303,7 @@ fn the_signature_lands_above_both_the_observed_record_and_the_floor() {
     let device = world.device(b"me");
     let signer = Ed25519Signer::from_seed([0x51; 32]);
     let name = name_of(&signer);
-    let observed = Observed::gated(&name, 7, ENVELOPE_V).unwrap();
+    let observed = Observed::gated_for_test(&name, 7, ENVELOPE_V).unwrap();
     assert_eq!(
         publish_under(&device, &signer, &observed, None),
         Ok(PublishOutcome::Published { sequence: 8 }),
@@ -266,7 +317,7 @@ fn the_signature_lands_above_both_the_observed_record_and_the_floor() {
             .raise_sequence_floor(name.as_str().as_bytes(), 9),
     )
     .unwrap();
-    let observed = Observed::gated(&name, 2, ENVELOPE_V).unwrap();
+    let observed = Observed::gated_for_test(&name, 2, ENVELOPE_V).unwrap();
     assert_eq!(
         publish_under(&device, &signer, &observed, None),
         Ok(PublishOutcome::Published { sequence: 10 }),
@@ -280,7 +331,7 @@ fn an_observed_record_at_the_sequence_ceiling_is_refused() {
     let device = world.device(b"me");
     let signer = Ed25519Signer::from_seed([0x53; 32]);
     let name = name_of(&signer);
-    let observed = Observed::gated(&name, u64::MAX, ENVELOPE_V).unwrap();
+    let observed = Observed::gated_for_test(&name, u64::MAX, ENVELOPE_V).unwrap();
     assert_eq!(
         publish_under(&device, &signer, &observed, None),
         Err(PublishError::SequenceExhausted),
@@ -571,4 +622,92 @@ fn dead_letters(engine: &Engine<FakeSeamTypes>) -> usize {
         .expect("the session status reads")
         .dead_letters
         .len()
+}
+
+#[test]
+fn a_root_publish_refuses_a_floor_raised_after_its_head_upload() {
+    use cipherbox_core::seal::decode_envelope;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let name = seed_account(&world, &blocks);
+    let before = record_at(&world, &name);
+    let device = world.device(b"owner");
+    let (mut engine, _events, _tasks) = booted(&world, &blocks, &device);
+    let fired = Arc::new(AtomicBool::new(false));
+    let (floors, raised) = (device.floor_store.clone(), fired.clone());
+    blocks.refuse_upload(Box::new(move |bytes| {
+        if let Ok(envelope) = decode_envelope(bytes)
+            && envelope.id == ROOT.0
+            && !raised.swap(true, Ordering::SeqCst)
+        {
+            block_on(
+                floors.raise_epoch_floor(
+                    &[
+                        cipherbox_engine::sync::owner_tag(&kdf::enc_subkey(&SECRET)).as_slice(),
+                        floor_label(&ACCOUNT_SCOPE).as_slice(),
+                    ]
+                    .concat(),
+                    envelope.epoch + 1,
+                ),
+            )
+            .expect("the concurrent floor raise lands");
+        }
+        None
+    }));
+
+    assert!(block_on(engine.command(Command::RotateNow { node: ROOT })).is_err());
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "the head reached the upload window"
+    );
+    assert_eq!(
+        record_at(&world, &name),
+        before,
+        "the stale root was never PUT"
+    );
+}
+
+#[test]
+fn a_revival_at_the_sequence_ceiling_is_refused_by_the_publish_gate() {
+    use cipherbox_engine::net::{ReviveError, ReviveRequest, revive};
+
+    let world = FakeWorld::new();
+    let device = world.device(b"owner");
+    let signer = Ed25519Signer::from_seed([0x77; 32]);
+    let name = name_of(&signer);
+    let recovered =
+        IpnsRecord::create_v2(&signer, b"/ipfs/bafyhead", u64::MAX, TTL_NANOS, EOL).marshal();
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    for body in [recovered, Vec::new()] {
+        device.http.enqueue_response(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: body.into(),
+        });
+    }
+    assert_eq!(
+        block_on(revive(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &device.scheduler,
+            &SyncTimingProfile::CI,
+            ReviveRequest {
+                name: &name,
+                signer: &signer,
+                content_cids: Vec::new()
+            },
+        )),
+        Err(ReviveError::Publish(PublishError::SequenceExhausted))
+    );
+    assert!(nothing_reached_the_transport(&device, &name));
 }

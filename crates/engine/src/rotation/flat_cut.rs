@@ -119,6 +119,7 @@ where
         gated: GatedRoots::default(),
         swept: SweptScopeState::default(),
         moved_seed: MovedScopeSeed::default(),
+        root_fallback: None,
     };
     // The cut about to run mints a fresh seed at a fresh epoch, so the walked
     // material for this scope is superseded the moment it lands. Standing the

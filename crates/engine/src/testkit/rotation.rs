@@ -46,7 +46,7 @@ use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
 #[must_use]
 pub fn swept_observed(sequence: u64) -> Observed {
     let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5e; 32]).verifying_key());
-    Observed::gated(&name, sequence, ENVELOPE_V).expect("this build's envelope version")
+    Observed::gated(&name, sequence, ENVELOPE_V, &[]).expect("this build's envelope version")
 }
 
 /// Every rotation reject family, in a fixed order. Deterministic: two calls

@@ -1128,6 +1128,7 @@ where
         value: HeldValue::Head(head.cid().to_owned()),
         // The settings record anchors its sealed body and nothing else.
         content_cids: Vec::new(),
+        envelope: None,
     })
 }
 

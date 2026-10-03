@@ -109,7 +109,9 @@ use crate::net::renewal_walk::{
 };
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::rotation::scope_name;
-use crate::net::rotation::{GatedRoots, MovedScopeSeed, RotationAncestry, SweptScopeState};
+use crate::net::rotation::{
+    GatedRoots, MovedScopeSeed, RootFallback, RootWait, RotationAncestry, SweptScopeState,
+};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, FolderRefreshReport,
     GraftedLeg, HeldKey, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
@@ -128,9 +130,9 @@ use crate::rotation::{
     Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
     RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys,
     SweepOutcome, SweepResolveFailure, SweepRun, SweepTaskFactory, WalkedReadEpochs, WriteHistory,
-    WriteRevokeKind, bounded, cut_for_write_scope, derive_write_name, record_grant_floor,
-    reseal_at_current_epoch, reseal_scope_root, revoke_grants, revoke_write_grant, rotate_on_cut,
-    run_sweep, run_sweep_job,
+    WriteRevokeKind, bounded, cut_for_write_scope, cut_from_last_copy, derive_write_name,
+    record_grant_floor, reseal_at_current_epoch, reseal_scope_root, revoke_grants,
+    revoke_write_grant, rotate_on_cut, run_sweep, run_sweep_job,
 };
 use crate::rotation::{FlatCut, ascent_node_seed, flat_root_cut, proved_scope_ref};
 use crate::scope_seeds::{
@@ -161,7 +163,7 @@ use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rende
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::owed_rotation::{OWED_ROTATION_PREFIX, OwedEntry, OwedRotation, OwedStep};
-use crate::sync::pass::{ScopeLegContext, TickPass};
+use crate::sync::pass::{LegScopes, ScopeLegContext, TickPass};
 use crate::sync::pointer::{POINTER_PAYLOAD_VERSION, PointerFetch, vault_pointer_name};
 use crate::sync::project::{map_kind, project_child_version};
 use crate::sync::provision::{
@@ -4615,6 +4617,10 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Ok(Some(PublishOutcome::Unconfirmed { sequence })) => {
                 format!("published sequence {sequence} but it did not resolve back")
             }
+            Err(crate::net::PublishError::ForeignVersion { version }) => format!(
+                "the record is at envelope version {version}, which this build does not \
+                 author, so this build does not renew it"
+            ),
             Err(error) => error.to_string(),
             // A no-renewal (comfortably ahead) or a clean republish is not a
             // failure — nothing to surface.
@@ -5761,6 +5767,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         self.state.boundary_walk_rejected.set(false);
         self.state.scope_roots_walked.set(false);
+        if let Ok(mut refused) = self.state.walk_refused_roots.try_borrow_mut() {
+            refused.clear();
+        }
         self.state.owed_rotation_driven.set(false);
         self.state.owed_rotation.forget();
         self.state.boundary_walk_landed.set(false);
@@ -6382,6 +6391,7 @@ where {
                         gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
                         moved_seed: MovedScopeSeed::default(),
+                        root_fallback: None,
                     };
                     SweepRun::Swept(
                         run_sweep(
@@ -7480,6 +7490,7 @@ where {
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            root_fallback: None,
         }
     }
 
@@ -7777,36 +7788,54 @@ where {
         let target = self
             .owner_scope(node, api, owner_keys(), check, unindexed)
             .await?;
-        let current = self
-            .owner_rotation_net(
+        let net = OwnerRotationNet {
+            root_fallback: Some(RootFallback::new(
+                target.scope.scope_id,
+                RootWait::Command,
+                self.state.owed_rotation.root_reports(),
+            )),
+            ..self.owner_rotation_net(
                 api,
                 owner_keys(),
                 target.ancestry(),
                 PointerConsultArm::Refused,
             )
+        };
+        let current = net
             .resolve_anchored(&target.scope)
             .await
             .map_err(|e| target.resolve_error(check, e))?;
         let tags = select(&target, &current).await?;
-        self.cut_at(node, &target, &current, CutKind::Revoke(&tags))
-            .await?;
+        self.cut_at(
+            node,
+            &target,
+            &current,
+            CutKind::Revoke(&tags),
+            net.fell_back(),
+        )
+        .await?;
         Ok(tags)
     }
 
     /// Cut the rows `kind` names out of the owner-signed set `current`
     /// publishes at `target` in one cut, and drive the cut through the planes
-    /// it demands.
+    /// it demands. A `current` read from its last copy keeps no row.
     async fn cut_at(
         &self,
         node: NodeId,
         target: &OwnerScope,
         current: &CascadeTarget,
         kind: CutKind<'_>,
+        from_last_copy: bool,
     ) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let plan = GrantCutPlan::over(current, &scope_root_name, session.identity());
         let cut = match kind {
+            CutKind::Revoke(tags) if from_last_copy => cut_from_last_copy(&plan, tags),
+            CutKind::Downgrade(tag) if from_last_copy => {
+                cut_from_last_copy(&plan, &BTreeSet::from([*tag]))
+            }
             CutKind::Revoke(tags) => revoke_grants(&plan, tags),
             CutKind::Downgrade(tag) => {
                 revoke_write_grant(&plan, tag, WriteRevokeKind::DowngradeToRead)
@@ -7840,6 +7869,7 @@ where {
                 scope_root_name,
                 cut,
                 vault_pointer_signer.as_ref(),
+                true,
             )
             .await?;
         self.after_write_wave(node, target, &report).await?;
@@ -7872,6 +7902,7 @@ where {
                 cut,
                 vault_pointer_signer.as_ref(),
                 write_epoch,
+                true,
             )
             .await?
         else {
@@ -8070,7 +8101,10 @@ where {
                 return Box::pin(self.mint_share(node, share, permission, Some(standing))).await;
             }
             (Redriven::StillOwed, None) => return Err(EngineError::rotation_work_owed()),
-            (Redriven::NoEntry | Redriven::Finished | Redriven::Dropped, _) => {}
+            (
+                Redriven::NoEntry | Redriven::Finished | Redriven::Dropped | Redriven::NotLanded,
+                _,
+            ) => {}
         }
         Box::pin(self.mint_share(node, share, permission, None)).await
     }
@@ -8722,8 +8756,19 @@ where {
                 Err(EngineError::rotation_work_owed())
             };
         }
+        let target = self
+            .owner_scope(
+                node,
+                api,
+                keys.rotation(),
+                PERMISSION_CHANGE_TARGET,
+                UnindexedScope::Refuse,
+            )
+            .await?;
+        // A downgrade is a cut, whose root read falls back (ADR 0068 D1).
+        let downgrade = permission == Permission::Read;
         let gated = self
-            .settled_owner_scope(&keys, node, PERMISSION_CHANGE_TARGET)
+            .settled_scope_read(&keys, node, target, PERMISSION_CHANGE_TARGET, downgrade)
             .await?;
         let applied = self
             .apply_permission(
@@ -8781,6 +8826,7 @@ where {
                     &gated.target,
                     &gated.current,
                     CutKind::Downgrade(&held.tag),
+                    gated.net.fell_back(),
                 )
                 .await
             }
@@ -8842,13 +8888,34 @@ where {
         target: OwnerScope,
         check: &'static str,
     ) -> Result<GatedScope<'a, T>, EngineError> {
+        self.resolve_owned_scope_read(keys, target, check, false)
+            .await
+    }
+
+    /// [`Self::resolve_owned_scope`], for a cut's read when `cut` holds.
+    async fn resolve_owned_scope_read<'a>(
+        &'a self,
+        keys: &'a OwnerActionKeys<'a>,
+        target: OwnerScope,
+        check: &'static str,
+        cut: bool,
+    ) -> Result<GatedScope<'a, T>, EngineError> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let net = self.owner_rotation_net(
-            api,
-            keys.rotation(),
-            target.ancestry(),
-            PointerConsultArm::Refused,
-        );
+        let net = OwnerRotationNet {
+            root_fallback: cut.then(|| {
+                RootFallback::new(
+                    target.scope.scope_id,
+                    RootWait::Command,
+                    self.state.owed_rotation.root_reports(),
+                )
+            }),
+            ..self.owner_rotation_net(
+                api,
+                keys.rotation(),
+                target.ancestry(),
+                PointerConsultArm::Refused,
+            )
+        };
         let current = net
             .resolve_anchored(&target.scope)
             .await
@@ -8899,11 +8966,29 @@ where {
         target: OwnerScope,
         check: &'static str,
     ) -> Result<GatedScope<'a, T>, EngineError> {
-        let gated = self.resolve_owned_scope(keys, target, check).await?;
-        if derive_write_name(&gated.current.write_scope_seed, &node.0)
-            .as_str()
-            .as_bytes()
-            == gated.target.scope.ipns_name.as_slice()
+        self.settled_scope_read(keys, node, target, check, false)
+            .await
+    }
+
+    /// [`Self::settled_scope`], for a cut's read when `cut` holds.
+    async fn settled_scope_read<'a>(
+        &'a self,
+        keys: &'a OwnerActionKeys<'a>,
+        node: NodeId,
+        target: OwnerScope,
+        check: &'static str,
+        cut: bool,
+    ) -> Result<GatedScope<'a, T>, EngineError> {
+        let gated = self
+            .resolve_owned_scope_read(keys, target, check, cut)
+            .await?;
+        // A cut from the last copy keeps no row, and its own wave moves the
+        // scope (ADR 0068 D5).
+        if gated.net.fell_back()
+            || derive_write_name(&gated.current.write_scope_seed, &node.0)
+                .as_str()
+                .as_bytes()
+                == gated.target.scope.ipns_name.as_slice()
         {
             return Ok(gated);
         }
@@ -9786,23 +9871,23 @@ where {
 
     /// The subset of `nodes` the scope rooted at `root` seals
     /// ([`nodes_in_scope`]).
-    fn scoped_to(&self, root: NodeId, nodes: Vec<NodeId>) -> Vec<NodeId> {
+    fn scoped_to(&self, own: &BTreeSet<NodeId>, root: NodeId, nodes: Vec<NodeId>) -> Vec<NodeId> {
         nodes_in_scope(
             &self.state.snapshot.borrow(),
-            &focus_scope_roots(
-                &self.own_scopes(),
-                &self.state.unproved_scope_roots.borrow(),
-            ),
+            &focus_scope_roots(own, &self.state.unproved_scope_roots.borrow()),
             root,
             nodes,
         )
     }
 
-    /// This session's [`own_descendant_scopes`].
-    fn own_scopes(&self) -> BTreeSet<NodeId> {
-        own_descendant_scopes(
-            &self.state.descendant_scope_roots,
-            &self.state.minted_scope_roots,
+    /// The scopes this session's read legs group by, as the tick's legs do
+    /// ([`LegScopes`]).
+    async fn leg_scopes(&self) -> LegScopes {
+        let owed_moves = self.owed_moves().await.ok();
+        LegScopes::new(
+            &self.state.descendant_scope_roots.borrow(),
+            &self.state.minted_scope_roots.borrow(),
+            owed_moves,
         )
     }
 
@@ -9857,16 +9942,19 @@ where {
         // One root read: the seed the legs run under and the scope they filter
         // to must name the same scope across the await below.
         let root = self.state.snapshot.borrow().root;
-        let due = self.scoped_to(
-            root,
-            focus_folders_due(
-                &self.state.snapshot.borrow(),
-                &self.state.focus.borrow(),
-                &self.state.focus_refreshed.borrow(),
-                now,
-                &self.profile,
-            ),
+        let own = self.leg_scopes().await.own;
+        let all_due = focus_folders_due(
+            &self.state.snapshot.borrow(),
+            &self.state.focus.borrow(),
+            &self.state.focus_refreshed.borrow(),
+            now,
+            &self.profile,
         );
+        let due = self.scoped_to(&own, root, all_due.clone());
+        let below: Vec<NodeId> = all_due
+            .into_iter()
+            .filter(|folder| !due.contains(folder))
+            .collect();
         let scope_read_seed = self.scope_read_seed(&root.0).await;
         let root_name = self.state.current_root_name.borrow().clone();
         let leg = scope_read_seed.as_ref().map(|stamped| FolderRefresh {
@@ -9883,6 +9971,7 @@ where {
             seed_stamp: Some(stamped.stamp),
             scope_root_name: root_name.as_ref(),
             plane: None,
+            owed_move: None,
             mode: ResolveMode::CacheFirst,
             observed_at: now.0,
         });
@@ -9891,6 +9980,9 @@ where {
         {
             settle(&due, leg.run(&due).await);
         }
+        // A folder below a descendant scope root reads on that scope's leg.
+        self.navigation_legs(root, below, NodeKind::Folder, now, &settle)
+            .await;
         if let Some(folder) = folder {
             self.queue_focus_file_children(folder);
         }
@@ -10015,12 +10107,13 @@ where {
         let Some(session) = self.session.as_ref() else {
             return (attempted, true);
         };
-        let own = self.own_scopes();
+        let leg_scopes = self.leg_scopes().await;
+        let own = &leg_scopes.own;
         let unproved = self.state.unproved_scope_roots.borrow().clone();
         let mut by_scope: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
         {
             let base = self.state.snapshot.borrow();
-            let scope_roots = focus_scope_roots(&own, &unproved);
+            let scope_roots = focus_scope_roots(own, &unproved);
             for node in nodes {
                 let scope = scope_root_of(&base, node, &scope_roots);
                 if node != scope {
@@ -10038,7 +10131,7 @@ where {
             sharers: &sharers,
             contact_label_seed: session.contact_label_seed(),
             own_root: root.0,
-            own: &own,
+            own,
             unproved: &unproved,
             base: &self.state.snapshot,
             root_name: root_name.as_ref(),
@@ -10050,7 +10143,11 @@ where {
             if self.scope_floors(&scope.0).is_none() {
                 self.state.scope_read_seeds.borrow_mut().remove(&scope.0);
             }
-            let Ok(material) = legs.material(scope, &self.state.scope_read_seeds).await else {
+            let left = leg_scopes.owed_moves.get(&scope).copied();
+            let Ok(leg_material) = legs
+                .leg_material(scope, left, &self.state.scope_read_seeds)
+                .await
+            else {
                 unread = true;
                 continue;
             };
@@ -10058,19 +10155,20 @@ where {
                 transport: &self.record_transport,
                 snapshot_cache: &self.seams.snapshot_cache,
                 http: &self.seams.http,
-                floors: &material.floors,
+                floors: &leg_material.material.floors,
                 gateway: &self.gateway,
                 base: &self.state.snapshot,
                 events: &self.events,
                 forks: &self.state.fork_sightings,
-                scope_id: scope.0,
-                scope_read_seed: &material.seed.seed,
-                seed_stamp: Some(material.seed.stamp),
-                scope_root_name: material.scope_root_name.as_ref(),
-                plane: (!material.own).then_some(GraftedLeg {
+                scope_id: leg_material.scope.0,
+                scope_read_seed: &leg_material.material.seed.seed,
+                seed_stamp: Some(leg_material.material.seed.stamp),
+                scope_root_name: leg_material.material.scope_root_name.as_ref(),
+                plane: (!leg_material.material.own).then_some(GraftedLeg {
                     scope_roots: &bookmarked,
                     claims: &self.state.grafted_claims,
                 }),
+                owed_move: leg_material.owed_move_leg(),
                 mode: ResolveMode::CacheFirst,
                 observed_at: now.0,
             };
@@ -12126,7 +12224,7 @@ where {
             .map_err(EngineError::from_seam)?;
         let reader = RecordReader::new(session.enc_subkey());
         self.dropped_version_debts(session, &reader)
-            .drop_version(&op)
+            .drop_version(&op, None)
             .await;
         self.state.dead_letters.borrow_mut().remove(&op_id);
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
@@ -13453,6 +13551,7 @@ mod tests {
             signer: kdf::settings_ipns_keypair(&SETTINGS_SECRET),
             value: HeldValue::Head(head.to_owned()),
             content_cids: Vec::new(),
+            envelope: None,
         }
     }
 
@@ -13536,6 +13635,7 @@ mod tests {
             signer,
             value: HeldValue::Inline(ours.to_vec()),
             content_cids: Vec::new(),
+            envelope: None,
         };
         (store, held)
     }
@@ -16159,7 +16259,7 @@ mod tests {
                     .headers
                     .iter()
                     .any(|(name, value)| name.eq_ignore_ascii_case(AUTHORIZATION)
-                        && value == "Bearer jwt-1"),
+                        && value.as_str() == "Bearer jwt-1"),
                 "{revoke:?}"
             );
             assert!(
@@ -17006,6 +17106,7 @@ mod tests {
                     node_id: [0u8; 16],
                     read_scope_seed: None,
                     version: ENVELOPE_V,
+                    bar: crate::testkit::fakes::ADMITTED_BAR,
                 })
             }
 

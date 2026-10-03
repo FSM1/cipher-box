@@ -30,10 +30,11 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use super::eol::{self, EOL_RENEW_THRESHOLD};
 use super::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify, fanout_put};
 use super::publish::{
-    InlineRecordRequest, Observed, PublishError, PublishOutcome, PublishRequest, publish,
-    publish_inline,
+    InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome, PublishRequest,
+    publish, publish_inline,
 };
 use crate::api::ApiClient;
+use crate::grants::grafted::FloorNamespace;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 
@@ -109,6 +110,33 @@ pub struct HeldRecord {
     pub value: HeldValue,
     /// The content CIDs to re-register/pin at renewal.
     pub content_cids: Vec<String>,
+    /// The envelope of a node record, which its renewal is gated on. `None`
+    /// for a plane whose record carries no envelope.
+    pub envelope: Option<HeldEnvelope>,
+}
+
+/// What a held node record's envelope binds: the renewal refuses a version this
+/// build does not author, and signs under the scope bar, as the renewal walk
+/// does (ADR 0061 D3).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct HeldEnvelope {
+    /// The envelope version the record carries.
+    pub version: u64,
+    /// The floors the record's renewal must clear at its signature.
+    pub bar: PublishBar,
+    /// The namespace the bar's epoch floors ratchet in: a granted scope's
+    /// floors sit under its sharer's label.
+    pub(crate) namespace: FloorNamespace,
+}
+
+impl fmt::Debug for HeldEnvelope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The namespace label is a cross-scope correlator, so it is not printed.
+        f.debug_struct("HeldEnvelope")
+            .field("version", &self.version)
+            .field("bar", &self.bar)
+            .finish_non_exhaustive()
+    }
 }
 
 impl HeldRecord {
@@ -134,6 +162,7 @@ impl fmt::Debug for HeldRecord {
             .field("signer", &self.signer)
             .field("value", &self.value)
             .field("content_cids", &self.content_cids)
+            .field("envelope", &self.envelope)
             .finish()
     }
 }
@@ -400,6 +429,59 @@ where
         .map(|receipt| Some(receipt.outcome))
 }
 
+/// [`eol_republish`] for a held node record under its [`HeldEnvelope`]: a
+/// foreign version is refused only once the record is due.
+#[expect(clippy::too_many_arguments, reason = "one held renewal's inputs")]
+async fn eol_renew_sealed<T, H, C, F, Sch>(
+    transport: &T,
+    api: &ApiClient<H, C>,
+    floors: &F,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    name: &IpnsName,
+    held: &HeldRecord,
+    head_cid: &str,
+    envelope: HeldEnvelope,
+) -> Result<Option<PublishOutcome>, PublishError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    let Some(held_record) = super::fork::verified(name, &held.record_bytes) else {
+        return Ok(None);
+    };
+    let Some((verified, _bytes)) = fanout_get_verify(transport, name).await else {
+        return Ok(None);
+    };
+    // A newer write supersedes the held record: re-signing its head would roll
+    // the name back, or tie that write with a later EOL.
+    if verified.sequence != held_record.sequence
+        || !eol::needs_renewal(scheduler.now(), &verified.validity, EOL_RENEW_THRESHOLD)
+    {
+        return Ok(None);
+    }
+    let observed = Observed::gated(
+        name,
+        held_record.sequence,
+        envelope.version,
+        &held.record_bytes,
+    )?;
+    let request = PublishRequest {
+        observed: &observed,
+        signer: &held.signer,
+        head_cid: head_cid.to_owned(),
+        content_cids: held.content_cids.clone(),
+        bar: Some(envelope.bar),
+    };
+    let floors = envelope.namespace.view(floors);
+    publish(transport, api, &floors, scheduler, profile, &request)
+        .await
+        .map(|receipt| Some(receipt.outcome))
+}
+
 /// Republish an inline-value record's own `value` at a fresh 90-day EOL, one
 /// sequence above the freshest record the network serves.
 ///
@@ -501,15 +583,21 @@ where
         // The held signer signs for this name by the insert-time bind
         // (`resolve_and_hold` rejects a signer whose derived name is not the
         // routing key), so no signing key is derived in the loop.
-        let outcome = match &hr.value {
-            HeldValue::Head(head_cid) => {
-                // Belt-and-suspenders (security rule 8): a held record with an
-                // empty head CID would encode `/ipfs/` and clobber the tip. The
-                // insert-time derivation makes this unreachable; the guard keeps
-                // the invariant explicit.
-                if head_cid.is_empty() {
-                    continue;
-                }
+        // Belt-and-suspenders (security rule 8): a held record with an empty
+        // head CID would encode `/ipfs/` and clobber the tip. The insert-time
+        // derivation makes this unreachable; the guard keeps the invariant
+        // explicit.
+        if hr.head_cid() == Some("") {
+            continue;
+        }
+        let outcome = match (&hr.value, hr.envelope) {
+            (HeldValue::Head(head_cid), Some(envelope)) => {
+                eol_renew_sealed(
+                    transport, api, floors, scheduler, profile, &name, hr, head_cid, envelope,
+                )
+                .await
+            }
+            (HeldValue::Head(head_cid), None) => {
                 // Renewal is a normal CAS write: the sequence comes from the
                 // durable floor + 1, never the network's copy, which may carry
                 // another device's newer content.
@@ -519,13 +607,12 @@ where
                     signer: &hr.signer,
                     head_cid: head_cid.clone(),
                     content_cids: hr.content_cids.clone(),
-                    // A renewal re-points the held value unchanged; the epoch it
-                    // binds was barred at the publish that authored it.
+                    // A record with no envelope binds no scope epoch.
                     bar: None,
                 };
                 eol_republish(transport, api, floors, scheduler, profile, &request).await
             }
-            HeldValue::Inline(block) => {
+            (HeldValue::Inline(block), _) => {
                 eol_republish_inline(
                     transport, api, floors, scheduler, profile, &name, &hr.signer, block,
                 )
@@ -543,7 +630,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        EolRenewResult, HeldKey, HeldRecord, HeldRecords, HeldValue, eol_renew_pass, keyless_re_put,
+        EolRenewResult, HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue, eol_renew_pass,
+        keyless_re_put,
     };
 
     use core::time::Duration;
@@ -554,12 +642,14 @@ mod tests {
     use super::super::eol;
     use super::super::fanout::MAX_RECORD_BYTES;
     use super::super::publish::{
-        InlineRecordRequest, Observed, PublishError, PublishOutcome, PublishRequest, publish,
-        publish_inline,
+        BarFloor, InlineRecordRequest, Observed, PublishBar, PublishError, PublishOutcome,
+        PublishRequest, publish, publish_inline,
     };
     use crate::api::ApiClient;
+    use crate::grants::grafted::FloorNamespace;
+    use crate::net::author::ENVELOPE_V;
     use crate::profile::SyncTimingProfile;
-    use crate::seams::{FloorStore, HttpResponse, RecordTransport, UnixMillis};
+    use crate::seams::{ContactLabel, FloorStore, HttpResponse, RecordTransport, UnixMillis};
     use crate::session::SessionIdentity;
     use crate::testkit::{FakeDevice, FakeWorld, block_on};
 
@@ -599,6 +689,7 @@ mod tests {
             signer,
             value: HeldValue::Head(head_cid.to_owned()),
             content_cids: Vec::new(),
+            envelope: None,
         };
         (name, held)
     }
@@ -627,6 +718,7 @@ mod tests {
             signer,
             value: HeldValue::Inline(block.to_vec()),
             content_cids: Vec::new(),
+            envelope: None,
         };
         (name, held)
     }
@@ -1092,6 +1184,166 @@ mod tests {
             seq_at(&device, &pointer),
             1,
             "the network record is untouched"
+        );
+    }
+
+    const SCOPE: [u8; 16] = [0x5c; 16];
+
+    /// A granted scope's floor namespace.
+    fn granted() -> FloorNamespace {
+        let label_seed = cipherbox_core::kdf::contact_label_seed(&[0x4c; 32]);
+        FloorNamespace::GrantedBy(ContactLabel::of(&label_seed, &[0x02; 33]))
+    }
+
+    /// One due node record held under `version` and a read-epoch bar of 1 in
+    /// `namespace`, whose read-epoch floor is `read_floor`, renewed once.
+    fn renew_sealed(version: u64, read_floor: u64) -> (FakeDevice, IpnsName, EolRenewResult) {
+        renew_sealed_in(FloorNamespace::Own, version, read_floor)
+    }
+
+    fn renew_sealed_in(
+        namespace: FloorNamespace,
+        version: u64,
+        read_floor: u64,
+    ) -> (FakeDevice, IpnsName, EolRenewResult) {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let (name, mut held) = seeded_held(&device, [5u8; 32], [6u8; 16], "bafysealed", 0);
+        held.envelope = Some(HeldEnvelope {
+            version,
+            bar: PublishBar {
+                scope_id: SCOPE,
+                read_epoch: 1,
+                write_epoch: None,
+                cut_epoch: None,
+            },
+            namespace,
+        });
+        block_on(
+            namespace
+                .view(&device.floor_store)
+                .raise_epoch_floor(&SCOPE, read_floor),
+        )
+        .unwrap();
+        world.scheduler.advance(Duration::from_secs(65 * DAY));
+        device.http.enqueue_response(ok_200());
+        let mut results = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &[held],
+        ));
+        let result = results.remove(0);
+        (device, name, result)
+    }
+
+    #[test]
+    fn a_held_node_renews_under_its_own_version_and_bar() {
+        let (device, name, result) = renew_sealed(ENVELOPE_V, 1);
+        assert_eq!(
+            result.outcome,
+            Ok(Some(PublishOutcome::Published { sequence: 2 }))
+        );
+        assert_eq!(seq_at(&device, &name), 2);
+    }
+
+    #[test]
+    fn a_held_node_at_a_foreign_envelope_version_is_refused_and_reported() {
+        let (device, name, result) = renew_sealed(ENVELOPE_V + 1, 1);
+        assert_eq!(
+            result.outcome,
+            Err(PublishError::ForeignVersion {
+                version: ENVELOPE_V + 1
+            })
+        );
+        assert_eq!(seq_at(&device, &name), 1, "the record is not re-signed");
+    }
+
+    #[test]
+    fn a_held_node_whose_epoch_floor_rose_above_its_bar_is_refused() {
+        let (device, name, result) = renew_sealed(ENVELOPE_V, 2);
+        assert_eq!(
+            result.outcome,
+            Err(PublishError::BelowBar {
+                floor: BarFloor::Read,
+                at: 2,
+                epoch: 1,
+            })
+        );
+        assert_eq!(seq_at(&device, &name), 1, "the record is not re-signed");
+    }
+
+    #[test]
+    fn a_granted_node_whose_epoch_floor_rose_above_its_bar_is_refused() {
+        let (device, name, result) = renew_sealed_in(granted(), ENVELOPE_V, 2);
+        assert_eq!(
+            result.outcome,
+            Err(PublishError::BelowBar {
+                floor: BarFloor::Read,
+                at: 2,
+                epoch: 1,
+            })
+        );
+        assert_eq!(seq_at(&device, &name), 1, "the record is not re-signed");
+    }
+
+    #[test]
+    fn a_held_node_that_a_newer_write_superseded_is_not_renewed() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let (name, mut held) = seeded_held(&device, [5u8; 32], [6u8; 16], "bafyheld", 0);
+        held.envelope = Some(HeldEnvelope {
+            version: ENVELOPE_V,
+            bar: PublishBar {
+                scope_id: SCOPE,
+                read_epoch: 1,
+                write_epoch: None,
+                cut_epoch: None,
+            },
+            namespace: FloorNamespace::Own,
+        });
+        // Another device wrote at 2; this device's floor and held record stay at 1.
+        let newer = IpnsRecord::create_v2(
+            &held.signer,
+            b"/ipfs/bafynewer",
+            2,
+            TTL_NANOS,
+            &eol::eol_from(UnixMillis(0)),
+        )
+        .marshal();
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), newer.clone());
+        }
+        world.scheduler.advance(Duration::from_secs(65 * DAY));
+        device.http.enqueue_response(ok_200());
+        let results = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &[held],
+        ));
+        assert_eq!(outcome_of(&results, &name).outcome, Ok(None));
+        let endpoint = device.record_store.endpoints()[0].clone();
+        assert_eq!(
+            device.record_store.record_at(&endpoint, name.as_str()),
+            Some(newer),
+            "the newer write stands"
         );
     }
 }

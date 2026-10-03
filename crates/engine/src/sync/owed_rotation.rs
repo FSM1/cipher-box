@@ -20,7 +20,10 @@ use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
+use cipherbox_core::seal::GrantSetCommitment;
+
 use crate::facade::NodeId;
+use crate::net::rotation::RootReports;
 use crate::rotation::NodeBound;
 use crate::seams::{SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
@@ -189,6 +192,14 @@ pub struct OwedCell {
     /// The sync pass of this session, which each tick advances. A command's
     /// re-drive counts in the pass it runs in.
     pass: Cell<u64>,
+    /// The time each scope's cut command last ran this session, and the set
+    /// it cut (ADR 0068 D4).
+    commanded: RefCell<BTreeMap<NodeId, (UnixMillis, GrantSetCommitment)>>,
+    /// The scopes whose entry a re-drive this session found with a cut that
+    /// never landed, within the bound. Another command may replace it.
+    not_landed: RefCell<BTreeSet<NodeId>>,
+    /// This session's [`RootReports`].
+    root_reports: RootReports,
     writer: futures_util::lock::Mutex<()>,
 }
 
@@ -229,10 +240,25 @@ impl OwedCell {
         if let Ok(mut held) = self.held_nodes.try_borrow_mut() {
             held.clear();
         }
+        if let Ok(mut commanded) = self.commanded.try_borrow_mut() {
+            commanded.clear();
+        }
+        if let Ok(mut not_landed) = self.not_landed.try_borrow_mut() {
+            not_landed.clear();
+        }
+        if let Ok(mut reports) = self.root_reports.try_borrow_mut() {
+            reports.clear();
+        }
+    }
+
+    /// This session's [`RootReports`].
+    pub(crate) fn root_reports(&self) -> &RootReports {
+        &self.root_reports
     }
 
     fn reset_held(&self, scope: NodeId) {
         self.held_nodes.borrow_mut().remove(&scope);
+        self.not_landed.borrow_mut().remove(&scope);
     }
 
     #[cfg(test)]
@@ -331,7 +357,7 @@ pub struct OwedRotation<'a, St> {
 
 /// Whether the current step of an entry that first stopped at `first_stop`
 /// has stopped for [`DROP_BOUND`] at `now`.
-fn bound_elapsed(first_stop: Option<UnixMillis>, now: UnixMillis) -> bool {
+pub(crate) fn bound_elapsed(first_stop: Option<UnixMillis>, now: UnixMillis) -> bool {
     now.reached(first_stop.map(|first| first.saturating_add(DROP_BOUND)))
 }
 
@@ -485,6 +511,69 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
         .await?;
         self.cell.reset_held(scope);
         Ok(())
+    }
+
+    /// [`Self::replace`] for a command that runs its cut again over its own
+    /// entry that never landed: the new entry keeps the first stop, and the
+    /// held passes stay (ADR 0068 D4).
+    pub async fn rerun(
+        &self,
+        scope: NodeId,
+        standing: &OwedEntry,
+        entry: OwedEntry,
+    ) -> Result<(), OwedRecordError> {
+        let entry = OwedEntry {
+            first_stop: standing.first_stop,
+            ..entry
+        };
+        self.write(|record| match record.get_mut(&scope) {
+            Some(current) if current == standing => {
+                *current = entry;
+                Ok(true)
+            }
+            _ => Err(OwedRecordError::Standing),
+        })
+        .await?;
+        self.cell.not_landed.borrow_mut().remove(&scope);
+        Ok(())
+    }
+
+    /// Note that a cut command ran at `scope` at `now` over `cut`. Answers
+    /// whether the last run there this session cut the same set.
+    pub fn note_command(&self, scope: NodeId, now: UnixMillis, cut: &GrantSetCommitment) -> bool {
+        self.cell
+            .commanded
+            .borrow_mut()
+            .insert(scope, (now, cut.clone()))
+            .is_some_and(|(_, last)| last == *cut)
+    }
+
+    /// The later of `first_stop` and the last run of a cut command at `scope`
+    /// this session.
+    pub fn last_run(&self, scope: NodeId, first_stop: Option<UnixMillis>) -> Option<UnixMillis> {
+        self.cell
+            .commanded
+            .borrow()
+            .get(&scope)
+            .map(|(at, _)| *at)
+            .max(first_stop)
+    }
+
+    /// Note whether the last re-drive of the entry at `scope` found a cut that
+    /// never landed, which another command may replace.
+    pub fn set_not_landed(&self, scope: NodeId, not_landed: bool) {
+        let mut marked = self.cell.not_landed.borrow_mut();
+        if not_landed {
+            marked.insert(scope);
+        } else {
+            marked.remove(&scope);
+        }
+    }
+
+    /// Whether a re-drive this session found the entry at `scope` with a cut
+    /// that never landed.
+    pub fn not_landed(&self, scope: NodeId) -> bool {
+        self.cell.not_landed.borrow().contains(&scope)
     }
 
     /// Replace the steps of the entry at `scope` with `steps`, if it stands.

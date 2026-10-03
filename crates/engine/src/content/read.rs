@@ -268,6 +268,9 @@ pub enum ReadError {
     /// status level (unreachable, aborted, or non-2xx). Availability, not
     /// integrity — the caller may retry later.
     Unavailable,
+    /// Every source answered 404 or 410 and none failed: availability, but a
+    /// positive absence (ADR 0068 D1).
+    NotFound,
 }
 
 /// Whether the pair names a canonical block address on `plane`: the CID is
@@ -301,6 +304,7 @@ pub fn is_plane_anchor(cid_str: &str, expected_cid: &[u8], plane: ContentPlane) 
 /// each rotate to the next source. All sources exhausted without a verified
 /// block is [`ReadError::TrustViolation`] when a source served a mismatch,
 /// else [`ReadError::TooLarge`] when one served an over-cap body, else
+/// [`ReadError::NotFound`] when every source answered 404 or 410, else
 /// [`ReadError::Unavailable`].
 pub async fn read_block(
     gateway: &Gateway,
@@ -320,11 +324,17 @@ pub async fn read_block(
     // no-source Unavailable.
     let mut over_cap: Option<(usize, usize)> = None;
     let mut mismatch = None;
+    // Whether a source answered that it holds no such block (404 or 410).
+    let mut not_found = false;
+    let mut failed = false;
     for source in gateway.sources() {
         let response = match fetch(source, http, cid_str, gateway.deadlines.block_fetch_ms).await {
             Ok(response) => response,
             // Transport-level failure is availability: rotate to the next source.
-            Err(CappedFetchError::Transport(_)) => continue,
+            Err(CappedFetchError::Transport(_)) => {
+                failed = true;
+                continue;
+            }
             // Rotate: a non-authoritative source's oversized body does not prove
             // the block is over-cap (a malicious source can serve an arbitrary
             // huge body — e.g. a non-2xx error page — for any CID), so a healthy
@@ -336,6 +346,11 @@ pub async fn read_block(
             }
         };
         if !(200..300).contains(&response.status) {
+            if matches!(response.status, 404 | 410) {
+                not_found = true;
+            } else {
+                failed = true;
+            }
             continue; // availability (not found / server error): next source
         }
         // Defense-in-depth backstop behind the transport cap: a seam using the
@@ -355,6 +370,7 @@ pub async fn read_block(
     match (mismatch, over_cap) {
         (Some(violation), _) => Err(ReadError::TrustViolation(violation)),
         (None, Some((size, limit))) => Err(ReadError::TooLarge { size, limit }),
+        (None, None) if not_found && !failed => Err(ReadError::NotFound),
         (None, None) => Err(ReadError::Unavailable),
     }
 }
@@ -436,7 +452,7 @@ async fn fetch(
     timeout_ms: u64,
 ) -> Result<crate::seams::HttpResponse, CappedFetchError> {
     let base = source.base_url.trim_end_matches('/');
-    let mut headers = vec![(ACCEPT.to_owned(), RAW_BLOCK.to_owned())];
+    let mut headers = vec![(ACCEPT.to_owned(), RAW_BLOCK.to_owned().into())];
     if let Some(bearer) = source.bearer.peek() {
         // A source whose token cannot be a header value is skipped, never
         // contacted unauthenticated: rotation drops to the next source.
@@ -602,9 +618,27 @@ mod tests {
             request
                 .headers
                 .iter()
-                .any(|(n, v)| n == AUTHORIZATION && v == "Bearer member-token"),
+                .any(|(n, v)| n == AUTHORIZATION && v.as_str() == "Bearer member-token"),
             "accelerator request carries the member bearer token"
         );
+    }
+
+    #[test]
+    fn the_accelerator_bearer_reaches_the_seam_in_a_wiping_value() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        block_on(read_block(
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+
+        crate::testkit::assert_bearer_wipes_on_drop(&http.requests()[0]);
     }
 
     #[test]
@@ -1154,14 +1188,18 @@ mod tests {
                 .find(|(name, _)| name == AUTHORIZATION)
                 .map(|(_, value)| value.clone())
         };
+        let presents = |expected: &str| read().is_some_and(|value| value.as_str() == expected);
 
-        assert_eq!(read(), None, "no session yet: the leg goes out bare");
+        assert!(read().is_none(), "no session yet: the leg goes out bare");
         session.set(Zeroizing::new("jwt-1".to_owned()));
-        assert_eq!(read(), Some("Bearer jwt-1".to_owned()));
+        assert!(
+            presents("Bearer jwt-1"),
+            "the leg presents the session token"
+        );
         session.set(Zeroizing::new("jwt-2".to_owned()));
-        assert_eq!(read(), Some("Bearer jwt-2".to_owned()), "a rotation lands");
+        assert!(presents("Bearer jwt-2"), "a rotation lands");
         session.clear();
-        assert_eq!(read(), None, "logout drops the credential");
+        assert!(read().is_none(), "logout drops the credential");
     }
 
     #[test]

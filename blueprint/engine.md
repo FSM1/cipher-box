@@ -151,9 +151,13 @@ bytes (FSM1/cipher-box-next#28 D2).
   actively used vaults keep themselves alive; on session start and
   periodically, the engine checks the EOLs of its renewal set (`HeldRecords`)
   and below ~30 days remaining republishes the same CID at seq+1 through the
-  normal CAS path. The same pass then runs a bounded part of the **renewal
-  walk** (ADR 0061 D1 to D4), which reaches every other name of the vault. A
-  session renews only a name whose signer derives from a write seed it holds:
+  normal CAS path. A held node record carries its envelope version and its
+  scope bar (`HeldEnvelope`): the renewal does not sign a version that this
+  build does not author, or a record whose scope floors rose above the bar,
+  and sends `renewalFailed` for it, as the renewal walk does. The same pass
+  then runs a bounded part of the **renewal walk** (ADR 0061 D1 to D4), which
+  reaches every other name of the vault.
+  A session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
   set. The renewal walk holds back the renewal of a name the endpoints serve
   forked while more than 30 days of its EOL are left, because a record at
@@ -169,10 +173,14 @@ bytes (FSM1/cipher-box-next#28 D2).
   The walk is depth-first in node-id order and stops at a scope-root boundary.
   A visit admits the record through the gate (`gate::adopt` for a scope root,
   the gated child resolve otherwise) and renews it when its EOL is inside the
-  walk window. It skips a doomed name, a name the retire ledger owes a retire,
-  a name the parent no longer names, and a name the drain is publishing. It
-  registers in batches, reads the name again after the registration, reads the
-  durable floor with no await before the signature, and signs at `floor + 1`
+  walk window. It does not renew a record at an envelope version that this
+  build does not author, and emits `renewalFailed` with a version detail for
+  it; the signature clears the scope bar of the admitted root (ADR 0061 D3
+  as amended on 2026-10-03). It skips a doomed name, a name the retire ledger
+  owes a retire, a name the parent no longer names, and a name the drain is
+  publishing. It registers in batches, reads the name again after the
+  registration, reads the durable floor with no await before the signature,
+  and signs at `floor + 1`
   with an EOL one day short of `eol_from(now)`. A `LostRace` is not retried in
   that cycle. The numbers: at most 500 visits for each pass, a walk window of
   60 days of EOL left, and a new cycle no sooner than 7 days after the previous
@@ -236,12 +244,23 @@ bytes (FSM1/cipher-box-next#28 D2).
   settle retires them once the name holds a record above the sequence its PUT
   was acknowledged at (ADR 0054). A drop whose staged root is gone, fails its
   own CID, or does not decode journals the same debt from the root CID the op
-  record names (ADR 0059). A publish that fails **before the record reaches
-  the transport** — register-first, the floor read, the head-CID echo, or an
-  upload whose ack never came back — is the mirror case: its head block may
-  already be pinned under its own charged row, no record can name it, and the
-  retry re-authors under a fresh seal nonce, so the drain retires that head at
-  the end of the pass that orphaned it, per attempt. A fan-out that
+  record names (ADR 0059). An entry that records the `ipnsName` of the
+  record that owes it is read and retired under that name, wherever the base
+  places the node at settle time; a retired node that the base links again in
+  a scope whose end derives that name is read as published, so the retire
+  spares what its live record names, and it waits when its links prove no held
+  scope. An entry with no name derives it from where the base places the node
+  (ADR 0070). Two residuals stand: the discard of a preserved dead letter and
+  the preserved-set trim journal with no name, because no write seed of the op
+  scope is in hand there; and two debts for one content id under two record
+  names share one ledger slot, so the second record's references stay charged
+  (a leak, not a loss). A publish that fails **before the
+  record reaches the transport** — register-first, the floor read, the
+  head-CID echo, or an upload whose ack never came back — is the mirror case:
+  its head block may already be pinned under its own charged row, no record
+  can name it, and the retry re-authors under a fresh seal nonce, so the
+  drain retires that head at the end of the pass that orphaned it, per
+  attempt. A fan-out that
   acknowledged nothing, or that every endpoint refused, does **not** qualify:
   no ack is not proof nothing stored, and an endpoint that states a refusal can
   keep the record (ADR 0047 D4, ADR 0060 Consequence 8).
@@ -292,7 +311,14 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    interior record below the floor is opened only by the four readers that the
    "sweep" section names.
 6. **Unseal** — success required; core's trust-violation error class carries
-   through fail-closed.
+   through fail-closed. While an owed entry holds the interior move of a scope
+   root, an interior node of that root opens one time under the seed and the
+   floors of the scope its epoch tag names, which must be the entry's root or
+   the scope the folder left; any other scope is refused here, and a bound scope
+   whose read seed this device does not hold yet is availability for that node
+   ([ADR 0072](../decisions/0072-an-interior-node-of-a-root-with-an-owed-interior-move-opens-under-the-scope-its-tag-names.md)
+   D1). This read runs at the named scope's floors, so it is not a reader below
+   the read-epoch floor.
 
 **One section, one signer** (stage 3, ADR 0032 D8): the rule, its work bound
 and the splice it closes are core's (core.md "One section, one signer",
@@ -300,7 +326,9 @@ ADR 0052).
 
 A gate failure is never mere staleness: the engine pins last-known-good,
 raises the withheld-update escalation where applicable, and never renders the
-rejected record. Duplicate `id`s and duplicate `ipnsName`s within a scope
+rejected record. One owner rotation read changes what it does after the
+refusal, not the verdict: it runs on the last copy of the scope root that passed
+the gate (ADR 0068 D1, "rotateScopeWrite"). Duplicate `id`s and duplicate `ipnsName`s within a scope
 reject at decode in core (FSM1/cipher-box-next#39 D7); the gate surfaces them as trust violations.
 One exception
 ([ADR 0071](../decisions/0071-a-below-floor-record-while-an-endpoint-fails-is-unavailable-not-a-trust-violation.md)
@@ -773,6 +801,22 @@ the grantee that removed it stops reading it.
   slot, so its snapshot ages; the risk is low, because an honest move publishes
   the destination before the source. A capture of a scope root, proved or by
   its name, drops before any read.
+- **The record decides the capture's scope.** A grant can leave a node sealed
+  in a scope other than the one whose folder it left, and no tree rule names
+  the sealing scope on every device. Before the re-key, the drain opens the
+  node's record through the gate under the capture's own scope, then, on a
+  seal-open refusal only, under each other own scope whose write seed derives
+  the captured name. A node a re-key already moved opens under the bin's held
+  key, at any epoch. The scope that opens the record is the one the node
+  re-keys and bins under. Any other refusal under the capture's own scope
+  sends one trust violation and drops the capture. When no own scope opens it,
+  the drain sends one trust violation and drops the capture; a read with no
+  answer keeps the capture for a later pass. One pass spends at most 64 such
+  reads, and one capture at most 16 of them. A capture it does not finish goes
+  first on a later pass, which reads the scopes not yet read, then the scopes
+  with no answer, the longest unread first. A scope that refused the record is
+  not read again for that capture while the record and the scope's read
+  material stay the same.
 - **One entry per node, however many ticks observe it.** The index refuses a
   duplicate node id, and a later pass re-keys under the standing entry's own
   `deletedAt` rather than minting a second key.
@@ -1146,8 +1190,34 @@ for the node, so a ref to a name outside the scope retires nothing. The wave
 then moves the other nodes, re-points the root and finishes the cut. Each
 republish re-seals the record that the walk gated for that node, so a record
 written at an old name after the walk does not stop the wave. The wave never
-adopts or carries a refused record, and a stop at the scope root still stops
-the wave.
+adopts or carries a refused record.
+
+The scope root never drops. An owner rotation read of the scope root that the
+gate refuses for a cause in the record bytes runs on the last copy of that root
+that passed the gate on this device: the command read, the cut set publish,
+the read cascade root read, the wave's root read, and the re-drive's check that
+the cut set landed
+([ADR 0068](../decisions/0068-an-owner-rotation-reads-a-refused-scope-root-from-its-last-copy-and-moves-the-root-first.md)
+D1). The copy runs the full gate again. A root that leaves no room for its
+re-seal falls back at once. A head block that every block source says it does
+not hold, one that does not match its CID, and a record below the sequence floor
+fall back at once on an owner command and in the re-drive that a command runs
+first, and in a sync pass re-drive only past the bound below (ADR 0068 D1,
+amended on 2026-10-03). A record below the floor, or a head block that no source
+holds, met while a record endpoint failed, is unavailable, with no trust event
+and no fallback (ADR 0071 D1). A transport fault, a local seam fault, and a root
+with no record at all never fall back. Each refused record sends one trust event
+in a session, with the scope root and the refused sequence. A
+confirmed scope root publish by the owner is a last copy (D2). A rotation whose
+root read fell back publishes nothing more at the old root name (D3). A cut
+that moves the write plane runs its wave first; the root republish at the new
+name re-mints the grant section from the cut set, never from the copy, and the
+read cut then runs at the new root. A cut whose root read fell back keeps no
+grant row: the last copy cannot prove that its grant set is current, so the cut
+seals the new seed to no recipient, and the owner shares again (D5). A re-drive
+that reads a copy with rows signs this cut again at a new cut epoch before
+either plane runs. So a cut from a copy that holds a write row moves the write
+plane, and only a cut from a copy with read rows alone keeps the stop.
 
 ### Triggers
 
@@ -1160,6 +1230,10 @@ Per FSM1/cipher-box-next#26 D7:
 | Write revoke / downgrade                                                                                                                                   | `rotateScopeWrite`; plus read rotation on full revoke                                                                                                                    |
 | Expired link                                                                                                                                               | The owner's expired-link sweep (below) cuts it — a read revoke of the link row                                                                                           |
 | Manual hygiene rotate-now                                                                                                                                  | Per scope, same primitives                                                                                                                                               |
+
+A cut that moves both planes runs the read plane first, at the name survivors
+read, then the wave. After a root read fell back, the wave runs first and the
+read cut runs at the moved root (ADR 0068 D3).
 
 Non-triggers: intra-scope rename/move, content writes, adding a grant to an
 existing scope root. Scheduled hygiene is deferred, designed-for — the same
@@ -1185,7 +1259,25 @@ entry stands, with the class of the stop (`availability`, `capability` or
 `trust`), and the same command on that scope re-drives the entry. A re-drive
 that finds the work can never land, because the cut set never published or the
 recipient left the contact book, drops the entry and emits
-`rotationWorkAbandoned` once. A
+`rotationWorkAbandoned` once. The entry does not carry the cut set: a re-drive
+takes it from the owner's own published root, through the last copy when the
+gate refuses that root, and runs the write cut before the read cut when its read
+fell back. When no root carries the cut set, the re-drive finds the cut never
+landed and keeps the entry with its first stop. One exception: when the read
+fell back and the copy is one cut epoch below the entry, the re-drive signs the
+cut of every row again at the entry's cut epoch, with zero rows too, on each
+pass while the plant stands (ADR 0068 D5). A re-drive that reads a copy with
+rows signs that cut at a new cut epoch, also for the owed wave of a new write
+share, and sends `rotationWorkAbandoned` once. A run of the same command again
+replaces the steps and the cut epoch of that entry and keeps its first stop, so
+the bound of a node in its wave runs on across the runs. Another command, or a
+link expiry, replaces the entry and tells the host with `rotationWorkAbandoned`.
+The re-drive drops the entry, with `rotationWorkAbandoned`, only when no command
+ran there within the bound; the time of the last command is in memory, so after
+a restart the bound runs from the first stop. A sync pass re-drives each owed
+scope whose root its boundary walk refused under a gated parent. After a
+fallback, the cut-epoch floor rises only
+when the cut set lands (ADR 0068 D4, amended on 2026-10-03). A
 relocation into another scope, a delete, a purge, or a restore that takes a
 folder with an owed interior move out of the scope it
 left is refused, retryably, until the move lands; a crossing the queue
@@ -1237,8 +1329,18 @@ rebases and signs above.
 - Write-grantee survivors: the forgery window stays wave-bounded. A wave that
   stops stays owed, so the bound is the next sync pass on the device that
   started the cut (ADR 0063). A node stop that a revokee plants ends at once,
-  or at the bound of ADR 0065 D3 for a stop an endpoint can cause; a planted
-  record at the scope root name is not covered.
+  or at the bound of ADR 0065 D3 for a stop an endpoint can cause. A planted
+  record at the scope root name ends at the wave when a copy passes the gate,
+  and what a writer published after that copy goes, surfaced by the trust event
+  (ADR 0068). A device with no such copy keeps the stop, and the scope lapses.
+  After a fallback the wave runs first, so the revokee keeps read access, with
+  no write access, until the read cut lands, at the latest in the next sync pass.
+  When another owner device published the root and no block source holds its
+  head block yet, a command runs on the older copy, and what that device
+  published goes, surfaced by the trust event (ADR 0068).
+- Restart: the time of the last command run is in memory, so after a restart
+  the bound of a cut that never landed runs from its first stop, and the
+  re-drive can drop the entry early with `rotationWorkAbandoned` (ADR 0068).
 - Dropped nodes: the subtree under a dropped node leaves the tree and lapses at
   its EOL, and an endpoint set that fails to serve a real node past the bound
   drops it (ADR 0065).
@@ -1337,7 +1439,9 @@ surviving committed grants uniformly in the republish it already does.
   writer gains no capability, because the ascent link and the source name key
   already let it author in the granted scope. A stalled interior move,
   write-scope cut or grant delivery is owed rotation work, which the sync
-  pass re-drives through the resume path (ADR 0063 D1, D3). An **append**, on an existing
+  pass re-drives through the resume path (ADR 0063 D1, D3). While the interior
+  move is owed, the focus and navigation legs read each interior node under the
+  scope its epoch tag names (ADR 0072 D1). An **append**, on an existing
   scope root: one more row and grant blob, the commitment re-signed, and the root published
   once at the current epoch — no new seed, no re-seal of the subtree, no
   converge step; the new grantee reads the whole history of the scope (D6). A
