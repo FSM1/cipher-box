@@ -103,14 +103,12 @@ export interface DialogMark {
 export interface GrantsMarks {
   readonly people: DialogMark;
   readonly unavailable: DialogMark;
-  /** The refusal the dialog shows where its read threw. */
   readonly error: DialogMark;
 }
 
 /**
- * Waits for the people table of the share dialog of `folder`. The dialog draws
- * the unavailable note until its own read lands, so only a table that does not
- * show in `timeout` is a read that failed.
+ * The dialog draws the unavailable note until its own read lands, so only a
+ * missing table past `timeout` is a failed read.
  */
 export async function grantsRead(
   marks: GrantsMarks,
