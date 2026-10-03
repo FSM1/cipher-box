@@ -14,7 +14,8 @@ use super::publish::Observed;
 use super::rotation::{PointerPipeline, publish_pointer_over};
 use crate::api::ApiClient;
 use crate::entropy::Entropy;
-use crate::gate::floor::{self, PointerPlane};
+use crate::gate::GateError;
+use crate::gate::floor::{self, PointerPlane, Strictness};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{ResealedScopeRoot, RotationPublishError, ScopeRootPublisher};
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
@@ -79,12 +80,14 @@ where
     }
 
     /// The standing re-point, refused when it names a root other than
-    /// `root_name`: a vouch over it would prove nothing about that root.
+    /// `root_name`, or sits below the vouched floor or the sequence this device
+    /// published: a vouch signs every other field of it again.
     pub(crate) async fn standing(
         &self,
         root_name: &[u8],
     ) -> Result<StandingVouch, RotationPublishError> {
-        let standing = match fanout_get_classified(self.transport, &self.name()).await {
+        let name = self.name();
+        let standing = match fanout_get_classified(self.transport, &name).await {
             FanoutRecord::Found(record, _) => record,
             FanoutRecord::Absent => return Err(RotationPublishError::Rejected),
             FanoutRecord::Unavailable(_) => return Err(RotationPublishError::NotPublished),
@@ -100,6 +103,23 @@ where
         if vouched.current_root.as_str().as_bytes() != root_name {
             return Err(RotationPublishError::Rejected);
         }
+        let vouched_floor = floor::vouched_floor(self.floors, &self.scope_id)
+            .await
+            .map_err(|_| RotationPublishError::NotPublished)?;
+        if vouched_floor.is_some_and(|floor| vouched.min_read_epoch < floor) {
+            return Err(RotationPublishError::Rejected);
+        }
+        floor::check_sequence(
+            self.floors,
+            name.as_str().as_bytes(),
+            standing.sequence,
+            Strictness::AtOrAboveFloor,
+        )
+        .await
+        .map_err(|error| match error {
+            GateError::Seam(_) => RotationPublishError::NotPublished,
+            GateError::Rejected(_) => RotationPublishError::Rejected,
+        })?;
         Ok(StandingVouch {
             sequence: standing.sequence,
             repoint: vouched,

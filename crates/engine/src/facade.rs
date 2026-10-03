@@ -19814,6 +19814,62 @@ mod tests {
             assert_eq!(vouched, Err(RotationPublishError::FloorUnrecorded));
             assert_ne!(pointer_records_of(&device), before, "the vouch landed");
         }
+
+        /// Vouch `read_epoch` over the standing vault pointer of a started session.
+        fn vouch(
+            engine: &Engine<FakeSeamTypes>,
+            root_name: &IpnsName,
+            read_epoch: u64,
+        ) -> Result<(), RotationPublishError> {
+            let api = engine.api.clone().expect("a started session holds the API");
+            let voucher = engine
+                .vault_pointer_voucher(&api)
+                .expect("the session adopted a vault pointer");
+            block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), read_epoch))
+        }
+
+        /// The network serves a pointer below the epoch a pointer already
+        /// vouched to this device: the vouch does not sign its fields again.
+        #[test]
+        fn a_vouch_over_a_pointer_below_the_vouched_floor_publishes_nothing() {
+            let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+            block_on(floor::raise_vouched_floor(
+                &device.floors(&CAP_SECRET),
+                &SCOPE,
+                EPOCH + 1,
+            ))
+            .expect("a later pointer vouched the next epoch");
+
+            let before = pointer_records_of(&device);
+            assert_eq!(
+                vouch(&engine, &root_name, EPOCH + 1),
+                Err(RotationPublishError::Rejected)
+            );
+            assert_eq!(pointer_records_of(&device), before, "nothing was published");
+        }
+
+        /// The network serves a pointer below the sequence this device published
+        /// at the name: the vouch does not sign its fields again.
+        #[test]
+        fn a_vouch_over_a_pointer_below_the_published_sequence_publishes_nothing() {
+            let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+            let pointer = vault_pointer_name(&CAP_SECRET, 0);
+            block_on(
+                device
+                    .floors(&CAP_SECRET)
+                    .raise_sequence_floor(pointer.as_str().as_bytes(), 5),
+            )
+            .expect("this device published the pointer at sequence 5");
+
+            let before = pointer_records_of(&device);
+            assert_eq!(
+                vouch(&engine, &root_name, EPOCH + 1),
+                Err(RotationPublishError::Rejected)
+            );
+            assert_eq!(pointer_records_of(&device), before, "nothing was published");
+        }
     }
 
     // --- device registry and approval rendezvous (ADR 0009) ---

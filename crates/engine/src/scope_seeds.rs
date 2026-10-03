@@ -32,6 +32,15 @@ pub(crate) struct CachedSeed {
     namespace: FloorNamespace,
 }
 
+impl CachedSeed {
+    fn stamped(&self) -> StampedSeed {
+        StampedSeed {
+            seed: self.seed.clone(),
+            stamp: self.floor,
+        }
+    }
+}
+
 /// One of the engine's in-memory per-scope seed cells: scope id → the recovered
 /// seed (zeroized on removal/drop).
 pub(crate) type ScopeSeeds = BTreeMap<[u8; 16], CachedSeed>;
@@ -244,10 +253,19 @@ pub(crate) fn cached_seed_in(
     scope_id: &[u8; 16],
     namespace: FloorNamespace,
 ) -> Option<Zeroizing<[u8; 32]>> {
+    cached_stamped_seed_in(cell, scope_id, namespace).map(|cached| cached.seed)
+}
+
+/// [`cached_seed_in`] with the seed's stamp.
+pub(crate) fn cached_stamped_seed_in(
+    cell: &RefCell<ScopeSeeds>,
+    scope_id: &[u8; 16],
+    namespace: FloorNamespace,
+) -> Option<StampedSeed> {
     cell.borrow()
         .get(scope_id)
         .filter(|cached| cached.namespace == namespace)
-        .map(|cached| cached.seed.clone())
+        .map(CachedSeed::stamped)
 }
 
 /// The scope's cached seed, without an eviction pass.
@@ -255,9 +273,15 @@ pub(crate) fn cached_seed(
     cell: &RefCell<ScopeSeeds>,
     scope_id: &[u8; 16],
 ) -> Option<Zeroizing<[u8; 32]>> {
-    cell.borrow()
-        .get(scope_id)
-        .map(|cached| cached.seed.clone())
+    cached_stamped_seed(cell, scope_id).map(|cached| cached.seed)
+}
+
+/// The scope's cached seed with its stamp, without an eviction pass.
+pub(crate) fn cached_stamped_seed(
+    cell: &RefCell<ScopeSeeds>,
+    scope_id: &[u8; 16],
+) -> Option<StampedSeed> {
+    cell.borrow().get(scope_id).map(CachedSeed::stamped)
 }
 
 #[cfg(test)]

@@ -362,7 +362,9 @@ the read-epoch floor, so the session refuses a pre-cut root. The produce side
 (`check_repoint_publishable`, `vouch_over`, and the first-run mint
 `provision_vault`) signs no re-point below the
 read-epoch floor, and each raise of the vouched floor raises the read-epoch
-floor to at least the same value.
+floor to at least the same value. A vouch carries every other field of the
+standing pointer, so `standing` refuses a standing pointer below the vouched
+floor or below the sequence that this device published at the name.
 
 **The first-run rule** (ADR 0022 as amended by ADR 0034). The vault-pointer walk
 reads a name as absent only when every routing endpoint answered and every
@@ -973,6 +975,11 @@ no record bytes. A cold start reads both back, so every dead letter is nameable
 and discardable after a restart (ADR 0045). Web reaches full offline parity:
 uploads stage into OPFS/IndexedDB behind the storage-policy staging budget (past
 it, only new uploads fail fast; metadata ops queue unbounded).
+
+An op over a record at an envelope version this build does not read is charged
+no attempt on any path, the bin read included; a spent unattributed budget
+dead-letters it as `newerRelease`, so the member is told to update (owner
+decision of 2026-10-02).
 
 ## Rotation primitives
 
