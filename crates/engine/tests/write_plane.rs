@@ -3526,10 +3526,7 @@ fn a_permanently_refused_upload_reports_the_attempt_and_the_dead_letter() {
         "the stopped transfer reaches the host"
     );
     assert!(
-        emitted.contains(&Event::DeadLetter {
-            op_id,
-            reason: DeadLetterReason::PayloadRefused,
-        }),
+        emitted.iter().any(|event| matches!(event, Event::DeadLetter { op_id: emitted, reason: DeadLetterReason::PayloadRefused, .. } if *emitted == op_id)),
         "and the dead letter says it will never publish"
     );
 }
@@ -9892,10 +9889,7 @@ fn an_over_cap_413_is_permanent_and_its_reason_reaches_the_host() {
         "the reason is on the read surface, not just the event"
     );
     assert!(
-        events_so_far(&mut events).contains(&Event::DeadLetter {
-            op_id,
-            reason: DeadLetterReason::PayloadRefused
-        }),
+        events_so_far(&mut events).iter().any(|event| matches!(event, Event::DeadLetter { op_id: emitted, reason: DeadLetterReason::PayloadRefused, .. } if *emitted == op_id)),
         "the dead letter reaches the host with its reason"
     );
     assert!(
@@ -10349,10 +10343,7 @@ fn a_dead_letter_no_preserved_set_will_hold_still_reaches_the_host() {
     };
     assert_eq!(dead_letters, vec![refused]);
     assert!(
-        events_so_far(&mut events).contains(&Event::DeadLetter {
-            op_id: refused.op_id,
-            reason: refused.reason
-        }),
+        events_so_far(&mut events).iter().any(|event| matches!(event, Event::DeadLetter { op_id, reason, .. } if *op_id == refused.op_id && *reason == refused.reason)),
         "the abandonment the refusal decided reaches the host, not only the read surface"
     );
     assert!(

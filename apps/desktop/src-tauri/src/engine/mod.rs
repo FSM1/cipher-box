@@ -1162,6 +1162,7 @@ mod tests {
                 },
                 Event::DeadLetter {
                     op_id: OpId(1),
+                    target: None,
                     reason: DeadLetterReason::Undecodable,
                 },
                 Event::OpProgress {

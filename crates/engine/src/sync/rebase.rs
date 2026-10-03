@@ -103,8 +103,6 @@ impl fmt::Debug for OpResolution {
 /// Why a rebasing op was dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DropReason {
-    /// A queued delete targets a scope root, whose material is not its parent's.
-    TargetIsScopeRoot,
     /// Conditional delete: the target advanced past the op's snapshot by rebase
     /// time — the concurrent edit wins in both directions.
     TargetAdvanced,
@@ -123,6 +121,8 @@ pub enum DropReason {
 #[cfg_attr(feature = "wasm", derive(serde::Serialize, tsify::Tsify))]
 #[cfg_attr(feature = "wasm", serde(rename_all = "camelCase"))]
 pub enum DeadLetterReason {
+    /// A delete targets a scope root, whose material is not its parent's.
+    TargetIsScopeRoot,
     /// The op's target/parent is absent from gate-passing state and cannot be
     /// recreated — its scope was revoked (or the node hard-deleted) while the
     /// op sat offline.
@@ -505,7 +505,7 @@ pub fn rebase_one(
             target_sequence, ..
         } => {
             if op.target == working.root || scope_roots.contains(&op.target) {
-                OpResolution::dropped(DropReason::TargetIsScopeRoot)
+                OpResolution::DeadLetter(DeadLetterReason::TargetIsScopeRoot)
             } else if delete_names_unpairable_scopes(working, op, scope_roots) {
                 OpResolution::DeadLetter(DeadLetterReason::TargetLinkedAcrossScopes)
             } else {

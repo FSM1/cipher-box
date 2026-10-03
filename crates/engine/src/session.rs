@@ -507,6 +507,26 @@ pub(crate) struct SessionState {
 }
 
 impl SessionState {
+    /// Every boundary named by this session, including roots without material.
+    pub(crate) fn known_scope_roots(&self) -> Vec<NodeId> {
+        self.minted_scope_roots
+            .borrow()
+            .iter()
+            .copied()
+            .chain(self.descendant_scope_roots.borrow().iter().copied())
+            .chain(self.unproved_scope_roots.borrow().iter().copied())
+            .chain(
+                self.bookmarked_scope_roots
+                    .borrow()
+                    .iter()
+                    .copied()
+                    .map(NodeId),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     /// Latches the boundary walk landed and wakes every navigation waiting on it.
     pub(crate) fn land_boundary_walk(&self) {
         self.boundary_walk_landed.set(true);

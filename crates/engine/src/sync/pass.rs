@@ -954,6 +954,7 @@ where
         assembly: Assembly,
     ) -> Option<Boundaries<'a>> {
         let enc_subkey = &pass.enc_subkey;
+        let known_scope_roots = state.known_scope_roots();
         let Assembly {
             write_seed,
             grafted,
@@ -1048,6 +1049,7 @@ where
                 epoch: end.material.read_epoch,
             }),
             scope_roots: &proved_roots,
+            known_scope_roots: &known_scope_roots,
             keyless_roots: &keyless_roots,
             charges_the_identity: false,
             enc_secret: enc_subkey,
@@ -1060,6 +1062,7 @@ where
                 source: interior_source(scope, write),
                 destination: None,
                 scope_roots: &proved_roots,
+                known_scope_roots: &known_scope_roots,
                 keyless_roots: &keyless_roots,
                 charges_the_identity: false,
                 enc_secret: enc_subkey,
@@ -1076,6 +1079,7 @@ where
                 source: pass.source(),
                 destination: None,
                 scope_roots: &proved_roots,
+                known_scope_roots: &known_scope_roots,
                 keyless_roots: &keyless_roots,
                 charges_the_identity: false,
                 enc_secret: enc_subkey,

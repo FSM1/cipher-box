@@ -160,6 +160,7 @@ const OP_PHASES: Record<OpProgressPhase, true> = {
 };
 
 const DEAD_LETTER_REASONS: Record<DeadLetterReason, true> = {
+  targetIsScopeRoot: true,
   targetGone: true,
   destinationGone: true,
   destinationInsideTarget: true,

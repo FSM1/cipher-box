@@ -94,7 +94,7 @@ fn with_child(snap: &mut Snapshot, parent: NodeId, node: NodeId, name: &str, kin
 // ---------------------------------------------------------------------------
 
 #[test]
-fn replay_drops_a_scope_root_delete_even_with_unchanged_sequence_and_cross_scope_links() {
+fn replay_dead_letters_a_scope_root_delete_even_with_unchanged_sequence_and_cross_scope_links() {
     let mut base = Snapshot::new(id(0));
     with_child(&mut base, id(0), id(1), "shared", NodeKind::Folder);
     with_child(&mut base, id(1), id(2), "file", NodeKind::File);
@@ -112,11 +112,11 @@ fn replay_drops_a_scope_root_delete_even_with_unchanged_sequence_and_cross_scope
             &[id(0), id(1), id(3), id(4)],
         );
         assert_eq!(
-            report.dropped,
-            vec![(OpId(7), DropReason::TargetIsScopeRoot)]
+            report.dead_letters,
+            vec![(OpId(7), DeadLetterReason::TargetIsScopeRoot)]
         );
         assert!(report.applied.is_empty());
-        assert!(report.dead_letters.is_empty());
+        assert!(report.dropped.is_empty());
         assert!(report.rebased.contains(id(1)));
         assert!(report.rebased.contains(id(2)));
     }

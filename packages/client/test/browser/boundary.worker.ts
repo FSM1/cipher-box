@@ -60,7 +60,8 @@ async function runEvents(): Promise<void> {
   if (dead?.kind !== 'deadLetter') throw new Error(`kind ${dead?.kind}`);
   if (typeof dead.opId !== 'bigint') throw new Error(`opId type ${typeof dead.opId}`);
   if (dead.opId !== huge) throw new Error(`opId ${dead.opId} !== ${huge}`);
-  if (dead.reason !== 'undecodable') throw new Error(`reason ${dead.reason}`);
+  if (dead.reason !== 'targetIsScopeRoot') throw new Error(`reason ${dead.reason}`);
+  expectBytes(dead.target, Array(16).fill(9), 'dead letter target');
 
   if (upload?.kind !== 'opProgress') throw new Error(`kind ${upload?.kind}`);
   if (upload.opId !== huge) throw new Error(`progress opId ${upload.opId}`);

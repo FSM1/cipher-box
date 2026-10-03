@@ -2248,6 +2248,13 @@ pub enum Event {
     DeadLetter {
         /// The dead-lettered op.
         op_id: OpId,
+        /// The target when the op could be decoded.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(serialize_with = "crate::wire::opt_node_id::serialize"),
+            tsify(type = "Uint8Array | null")
+        )]
+        target: Option<NodeId>,
         /// Why it dead-lettered — the four reasons need four different messages.
         reason: DeadLetterReason,
     },
@@ -2447,7 +2454,7 @@ impl fmt::Debug for Event {
                 .debug_struct("WithheldUpdateEscalation")
                 .field("ipns_name", &RedactedBytes::of(ipns_name))
                 .finish(),
-            Self::DeadLetter { op_id, reason } => f
+            Self::DeadLetter { op_id, reason, .. } => f
                 .debug_struct("DeadLetter")
                 .field("op_id", op_id)
                 .field("reason", reason)
@@ -6058,6 +6065,7 @@ impl<T: SeamTypes> Engine<T> {
                 .events
                 .unbounded_send(Event::DeadLetter {
                     op_id: *op_id,
+                    target: None,
                     reason: *reason,
                 })
                 .is_ok()
@@ -6870,11 +6878,6 @@ where {
                         return Err(EngineError::UnsupportedTarget {
                             check: "delete-target-is-a-scope-root",
                         });
-                    }
-                    if rendered.node(node).is_some_and(|meta| {
-                        meta.kind == NodeKind::Folder && meta.ipns_name.is_some()
-                    }) {
-                        self.refuse_before_the_boundary_walk()?;
                     }
                 }
                 let to_bin = home == WriteHome::Vault && self.bin_retention_days() > 0;
@@ -11832,25 +11835,17 @@ where {
     /// both owe the re-seal reservation the boundary charges
     /// ([`folder_listing_budget`]).
     fn authored_scope_roots(&self) -> Vec<NodeId> {
-        let mut roots = self.relocation_scope_roots();
-        roots.extend(
-            self.state
-                .bookmarked_scope_roots
-                .borrow()
-                .iter()
-                .copied()
-                .map(NodeId),
-        );
-        roots
+        self.state.known_scope_roots()
     }
 
-    /// Before the boundary walk, a published folder may be an unknown scope root.
+    /// A restore must know its destination's scope before it queues the re-key.
+    /// The boundary walk names the scope roots below the vault.
     /// A rejected walk refuses for good, as [`Self::relocation_anchors`] does.
     fn refuse_before_the_boundary_walk(&self) -> Result<(), EngineError> {
         if self.state.boundary_walk_rejected.get() {
             return Err(EngineError::TrustViolation {
                 message: "a scope root below this vault failed the adoption gate, so this \
-                          session cannot name every scope boundary"
+                          session cannot name the scope of a restore destination"
                     .to_owned(),
             });
         }
@@ -17265,6 +17260,7 @@ mod tests {
                 block_on(events.next()),
                 Some(Event::DeadLetter {
                     op_id: OpId(1),
+                    target: None,
                     reason: DeadLetterReason::Undecodable
                 })
             );
@@ -17380,6 +17376,7 @@ mod tests {
                 block_on(events.next()),
                 Some(Event::DeadLetter {
                     op_id: OpId(1),
+                    target: None,
                     reason: DeadLetterReason::Undecodable
                 })
             );
@@ -17435,6 +17432,7 @@ mod tests {
                 block_on(events.next()),
                 Some(Event::DeadLetter {
                     op_id: OpId(1),
+                    target: None,
                     reason: DeadLetterReason::Undecodable
                 })
             );
@@ -17461,6 +17459,7 @@ mod tests {
                 block_on(events.next()),
                 Some(Event::DeadLetter {
                     op_id: OpId(1),
+                    target: None,
                     reason: DeadLetterReason::Undecodable
                 })
             );

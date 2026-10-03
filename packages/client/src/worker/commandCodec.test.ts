@@ -75,12 +75,22 @@ describe('readEvent', () => {
   });
 
   it('fails closed on an unknown or absent dead letter reason', () => {
-    expect(() => readEvent(skewed({ kind: 'deadLetter', opId: 7n, reason: 'lost' }))).toThrow(
-      'unknown WASM dead letter reason: lost'
-    );
+    expect(() =>
+      readEvent(skewed({ kind: 'deadLetter', opId: 7n, target: null, reason: 'lost' }))
+    ).toThrow('unknown WASM dead letter reason: lost');
     expect(() => readEvent(skewed({ kind: 'deadLetter', opId: 7n }))).toThrow(
       'unknown WASM dead letter reason: undefined'
     );
+  });
+
+  it('preserves the target and reason of a refused scope-root delete', () => {
+    const event: EventDescriptor = {
+      kind: 'deadLetter',
+      opId: 7n,
+      target: new Uint8Array(16).fill(9),
+      reason: 'targetIsScopeRoot',
+    };
+    expect(readEvent(event)).toBe(event);
   });
 
   it('fails closed on an unknown opProgress phase', () => {

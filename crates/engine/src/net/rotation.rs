@@ -1095,8 +1095,7 @@ pub(crate) struct WalkedBoundaries {
     /// A level the walk could not gate costs that level's subtree, so this set
     /// is complete only while [`Self::failure`] is `None`.
     pub(crate) proved: Vec<DescendantScopeRoot>,
-    /// Scope roots the walked bodies name but this walk holds no material for
-    /// ([`note_unindexed_scope_roots`]).
+    /// Scope roots named by the index or child refs whose material this walk did not prove.
     pub(crate) unproved: BTreeSet<NodeId>,
     /// The failure this walk met, a rejection outranking an unavailability.
     /// `None` names a complete boundary set — the one state in which a
@@ -1758,6 +1757,7 @@ where
                     if !visited.insert(child.scope_id) {
                         continue;
                     }
+                    unproved.insert(NodeId(child.scope_id));
                     if descendants.len() >= MAX_DESCENDANT_SCOPE_ROOTS {
                         // The set this walk could still admit is incomplete, and
                         // a bound a legitimately wide vault reaches names no
@@ -1767,6 +1767,7 @@ where
                     }
                     match self.descend(&parent_read_scope_seed, &child).await {
                         Ok((descendant, grandchildren)) => {
+                            unproved.remove(&NodeId(child.scope_id));
                             note_unindexed_scope_roots(
                                 &mut unproved,
                                 &descendant.adopted.read_body,
@@ -7039,10 +7040,8 @@ mod tests {
         assert_eq!(walked.failure, None, "an absence is not a failure to walk");
     }
 
-    /// A boundary the index states is not an unproved one, whatever this pass
-    /// made of the record at its name.
     #[test]
-    fn a_child_the_index_names_is_no_unproved_boundary() {
+    fn a_child_the_index_names_stays_unproved_until_its_record_gates() {
         let promoted = [0xba; 16];
         let name = derive_write_name(&[0x5A; 32], &promoted);
         let root = owner_root_fixture(OwnerRootSpec {
@@ -7070,7 +7069,7 @@ mod tests {
             .walk_boundaries(&InMemorySnapshotCache::default(), &root)
             .expect("the vault root gates");
 
-        assert!(walked.unproved.is_empty());
+        assert_eq!(walked.unproved, BTreeSet::from([NodeId(promoted)]));
         assert_eq!(
             walked.failure,
             Some(WalkFailure::Unavailable),

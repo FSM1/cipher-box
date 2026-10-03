@@ -20,6 +20,8 @@ export function refusalText(message: string): string {
 }
 
 const SHARE_REFUSALS: Record<string, string> = {
+  'delete-target-is-a-scope-root':
+    'this folder was shared and cannot be deleted, even after all access is revoked',
   'grant-target-is-the-vault-root': 'your whole vault cannot be shared — share a folder inside it',
   'invite-target-is-the-vault-root': 'your whole vault cannot be linked — link a folder inside it',
   'grant-target-index-lost-a-root':
