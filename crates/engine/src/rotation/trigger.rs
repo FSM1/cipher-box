@@ -550,8 +550,36 @@ pub fn cut_from_last_copy(
     for tag in requested {
         committed_permission(plan, tag)?;
     }
+    drop_every_row(plan, false)
+}
+
+/// [`cut_from_last_copy`] for a re-drive, which names no row: the owed cut
+/// re-runs as a cut of every row. `write` keeps a wave the entry still owes.
+pub fn recut_from_last_copy(
+    plan: &GrantCutPlan<'_>,
+    write: bool,
+) -> Result<RevokedCommittedSet, RevokeError> {
+    authorize_cut(plan)?;
+    drop_every_row(plan, write)
+}
+
+/// Drop every row of `plan` in one cut. A write row needs the wave.
+fn drop_every_row(
+    plan: &GrantCutPlan<'_>,
+    write: bool,
+) -> Result<RevokedCommittedSet, RevokeError> {
     let every_row = plan.commitment.entries.iter().map(|e| e.tag).collect();
-    revoke_grants(plan, &every_row)
+    let write = write
+        || plan
+            .commitment
+            .entries
+            .iter()
+            .any(|e| e.permission == Permission::Write);
+    resign(
+        drop_tags(plan, &every_row)?,
+        RotationPlanes { read: true, write },
+        plan.owner_signer,
+    )
 }
 
 /// How far a write revoke cuts.

@@ -8964,10 +8964,13 @@ where {
         let gated = self
             .resolve_owned_scope_read(keys, target, check, cut)
             .await?;
-        if derive_write_name(&gated.current.write_scope_seed, &node.0)
-            .as_str()
-            .as_bytes()
-            == gated.target.scope.ipns_name.as_slice()
+        // A cut from the last copy keeps no row, and its own wave moves the
+        // scope (ADR 0068 D5).
+        if gated.net.fell_back()
+            || derive_write_name(&gated.current.write_scope_seed, &node.0)
+                .as_str()
+                .as_bytes()
+                == gated.target.scope.ipns_name.as_slice()
         {
             return Ok(gated);
         }

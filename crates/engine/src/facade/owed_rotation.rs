@@ -7,7 +7,9 @@
 use super::claim_conversion::{ConversionSites, Running};
 use super::*;
 use crate::grants::resume_owed_interior_move;
-use crate::rotation::{NoBound, RotateOnCutError, WriteRotateError, owed_read_cut};
+use crate::rotation::{
+    NoBound, RotateOnCutError, WriteRotateError, owed_read_cut, recut_from_last_copy,
+};
 use crate::sync::owed_rotation::bound_elapsed;
 use crate::sync::owed_rotation::{
     EntryBound, OwedEntry, OwedRecordError, OwedRotation, OwedStep, ScopeHold,
@@ -596,7 +598,15 @@ where
             // read that set it.
             self.owed().set_not_landed(scope, false);
             let published = self.owed_scope(sites, scope, "owed-cut", true).await?;
-            if published.current.commitment.cut_epoch < entry.cut_epoch {
+            let copy_epoch = published.current.commitment.cut_epoch;
+            // The cut set of a cut from the last copy is the same every time
+            // (ADR 0068 D5), so the re-drive builds it again.
+            if published.fell_back && copy_epoch.checked_add(1) == Some(entry.cut_epoch) {
+                return self
+                    .redrive_recut(sites, scope, &entry.steps, published)
+                    .await;
+            }
+            if copy_epoch < entry.cut_epoch {
                 return Err(self.never_landed(scope, &entry));
             }
             // The wave moves a root read from its last copy first (ADR 0068 D3).
@@ -607,7 +617,21 @@ where
         }
         let reordered = steps != entry.steps;
         for (at, step) in steps.iter().enumerate() {
-            let read = read.take();
+            let mut read = read.take();
+            let cut_step = match step {
+                OwedStep::ReadCut => Some("owed-read-cut"),
+                OwedStep::WriteCut { .. } => Some("owed-write-cut"),
+                _ => None,
+            };
+            if let Some(name) = cut_step {
+                let published = self.owed_scope_or(sites, scope, name, read, true).await?;
+                if published.fell_back && !published.current.commitment.entries.is_empty() {
+                    return self
+                        .redrive_recut(sites, scope, &steps[at..], published)
+                        .await;
+                }
+                read = Some(published);
+            }
             match step {
                 OwedStep::InteriorMove { left_scope } => {
                     self.redrive_interior_move(sites, scope, *left_scope).await
@@ -641,6 +665,89 @@ where
                 .await
                 .map_err(|e| OwedStop::of("owed-cut-epoch-floor", &EngineError::from_seam(e)))?;
         }
+        let _ = self.owed().clear(scope).await;
+        Ok(())
+    }
+
+    /// Run the cut steps of `remaining` again as one cut of every row of the
+    /// last copy `published` holds (ADR 0068 D5): the copy cannot prove that
+    /// its rows are current. The entry takes the new cut epoch first, so a stop
+    /// re-drives this cut. A grant delivery goes with its row.
+    async fn redrive_recut(
+        &self,
+        sites: &impl ConversionSites,
+        scope: NodeId,
+        remaining: &[OwedStep],
+        published: OwedScope,
+    ) -> Result<(), OwedStop> {
+        let step = "owed-cut";
+        let stop = |e: EngineError| OwedStop::of(step, &e);
+        let OwedScope {
+            indexed,
+            target,
+            current,
+            ..
+        } = published;
+        let scope_root_name = parsed_scope_name(&target.scope.ipns_name).map_err(stop)?;
+        let owes_wave = remaining
+            .iter()
+            .any(|step| matches!(step, OwedStep::WriteCut { .. }));
+        let cut = recut_from_last_copy(
+            &GrantCutPlan::over(&current, &scope_root_name, self.identity),
+            owes_wave,
+        )
+        .map_err(|e| stop(EngineError::from_revoke(e)))?;
+        let write = if cut.planes().write() {
+            Some(owed_write_cut(current.write_epoch).map_err(stop)?)
+        } else {
+            None
+        };
+        let steps = [OwedStep::ReadCut].into_iter().chain(write).collect();
+        let Some(standing) = self
+            .owed()
+            .entry(scope)
+            .await
+            .map_err(|e| stop(EngineError::from_seam(e)))?
+        else {
+            return Ok(());
+        };
+        self.owed()
+            .rerun(
+                scope,
+                &standing,
+                OwedEntry {
+                    cut_epoch: cut.commitment.cut_epoch,
+                    first_stop: None,
+                    steps,
+                },
+            )
+            .await
+            .map_err(|e| stop(EngineError::from_owed_record(e)))?;
+        let report = self
+            .rotate_planes(
+                scope,
+                &target,
+                &scope_root_name,
+                &cut,
+                None,
+                sites.command(),
+            )
+            .await
+            .map_err(cut_stop)?;
+        if let Some(write) = report.write {
+            floor::advance_write_epoch_on_sight(self.floors, &scope.0, write.new_write_epoch)
+                .await
+                .map_err(|e| stop(EngineError::from_seam(e)))?;
+            if indexed.as_deref() != Some(write.new_root_name.as_str().as_bytes()) {
+                let parent = sites.enclosing(scope).await.map_err(stop)?;
+                self.repoint(&parent, scope, &write.new_root_name)
+                    .await
+                    .map_err(stop)?;
+            }
+        }
+        record_cut_epoch_floor(self.floors, &scope.0, cut.commitment.cut_epoch)
+            .await
+            .map_err(|e| OwedStop::of("owed-cut-epoch-floor", &EngineError::from_seam(e)))?;
         let _ = self.owed().clear(scope).await;
         Ok(())
     }

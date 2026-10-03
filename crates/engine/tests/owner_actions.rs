@@ -15282,10 +15282,10 @@ fn a_revoke_over_a_planted_root_keeps_no_other_grant_row() {
         Ok(CommandOutcome::Done),
         "the owner shares again over the root the cut published"
     );
-    assert_eq!(
-        committed_rows(&fx, &fx.granted_scope_repoint().current_root),
-        1
-    );
+    let shared = fx.granted_scope_repoint().current_root;
+    assert_eq!(committed_rows(&fx, &shared), 1);
+    assert_eq!(opened_blobs(&fx, &shared, &BYSTANDER_SECRET), 1);
+    assert_eq!(opened_blobs(&fx, &shared, &RECIPIENT_SECRET), 0);
 }
 
 /// ADR 0068 D5: a revoke over a root the gate admits keeps the other rows.
@@ -15430,12 +15430,12 @@ fn owed_or_abandoned(events: &[Event], scope: NodeId) -> (bool, bool) {
     (owed, abandoned)
 }
 
-/// ADR 0068 D4 as amended: the revokee plants at the root before the revoke,
-/// and the wave that runs first stops. The cut never lands, and the entry
-/// stays with its first stop while the owner runs the revoke again within the
-/// bound. With no command for the length of the bound, the re-drive drops it.
+/// ADR 0068 D4 and D5: the revokee plants at the root before the revoke, and
+/// the wave that runs first stops. Each sync pass builds the cut of every row
+/// again from the last copy, so the entry stays owed within the bound, and
+/// past it the unserved node drops and the cut lands with no command.
 #[test]
-fn a_first_wave_that_stops_leaves_a_cut_the_redrive_keeps_within_the_bound() {
+fn a_first_wave_that_stops_leaves_a_cut_the_redrive_finishes_past_the_bound() {
     let mut fx = GrantScenario::new();
     let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
     plant_an_unserved_head(&fx, &revokee_seed, grandchild);
@@ -15451,13 +15451,25 @@ fn a_first_wave_that_stops_leaves_a_cut_the_redrive_keeps_within_the_bound() {
         "the cut is owed, and the re-drive keeps it"
     );
 
-    fx.world.scheduler.advance(DROP_BOUND);
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert_eq!(
-        abandoned(&mut fx._events),
-        vec![(fx.folder, "owed-cut-never-landed".to_owned())],
-        "with no command for the bound, the re-drive drops it"
+    let mut events = Vec::new();
+    for _ in 0..2 * DROP_BOUND_PASSES + 2 {
+        fx.world.scheduler.advance(DROP_BOUND / 4);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        events.extend(events_so_far(&mut fx._events));
+    }
+    assert!(
+        events
+            .iter()
+            .filter_map(as_drop)
+            .any(|drop| drop == (fx.folder, grandchild, DropCause::NoHeadBlock)),
+        "the node drops past the bound"
     );
+    assert!(
+        !owed_or_abandoned(&events, fx.folder).1,
+        "nothing is dropped"
+    );
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+    assert_no_grant_at(&fx, &fx.granted_scope_repoint().current_root);
 }
 
 /// ADR 0068 D4 as amended, with ADR 0065 D3: a root plant and an interior node
@@ -16108,4 +16120,173 @@ fn a_queued_create_under_a_lagging_root_while_an_endpoint_fails_waits_and_lands(
             .iter()
             .any(|child| child.name == "queued.bin")
     );
+}
+
+/// ADR 0068 D5: the owed wave's cut set keeps the bystander, and the revokee
+/// plants at the root. The last copy cannot prove that the bystander still
+/// holds a grant, so a sync pass that re-drives the wave from it keeps no row
+/// and seals the new seed to nobody.
+#[test]
+fn a_redrive_from_the_last_copy_keeps_no_grant_row() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let folder = fx.folder;
+    owe_the_wave(&mut fx, folder);
+    let old_root = derive_write_name(&revokee_seed, &folder.0);
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &old_root) + 1);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved, old_root, "the wave moved the root");
+    assert_no_grant_at(&fx, &moved);
+}
+
+/// ADR 0068 D5: a revoke while a wave is owed runs the owed cut first. Its
+/// read falls back to the last copy, so the cut it runs keeps no row.
+#[test]
+fn a_revoke_over_an_owed_wave_and_a_planted_root_keeps_no_grant_row() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let folder = fx.folder;
+    owe_the_wave(&mut fx, folder);
+    let old_root = derive_write_name(&revokee_seed, &folder.0);
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &old_root) + 1);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+    assert_no_grant_at(&fx, &fx.granted_scope_repoint().current_root);
+}
+
+/// ADR 0068 D5: a downgrade over a write scope whose wave a stranded share
+/// owes, at a planted root, keeps no grant row.
+#[test]
+fn a_downgrade_over_a_stranded_write_scope_at_a_planted_root_keeps_no_grant_row() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    let stalled = write_name(fx.folder);
+    plant_root_served_at(
+        &fx,
+        &WRITE_SCOPE_SEED,
+        fx.folder,
+        sequence_at(&fx.world, &stalled) + 1,
+        true,
+    );
+
+    let _ = downgrade_the_recipient(&mut fx);
+
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved, stalled, "a wave moved the root");
+    assert_no_grant_at(&fx, &moved);
+}
+
+/// ADR 0068 D1 as amended: a read revoke whose root head block no source
+/// holds runs on the last copy and keeps the stop. The check that the cut set
+/// landed reads the root as the command does, finds the set did not land, and
+/// leaves no work owed.
+#[test]
+fn a_read_revoke_that_stops_at_an_absent_root_head_block_owes_nothing() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let root = write_name(fx.folder);
+    plant_root_served_at(
+        &fx,
+        &WRITE_SCOPE_SEED,
+        fx.folder,
+        sequence_at(&fx.world, &root) + 1,
+        false,
+    );
+    let _ = events_so_far(&mut fx._events);
+
+    assert!(revoke_the_recipient(&mut fx).is_err(), "the read cut stops");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let events = events_so_far(&mut fx._events);
+    assert_eq!(
+        owed_or_abandoned(&events, fx.folder),
+        (false, false),
+        "no entry stays for a pass to re-drive"
+    );
+}
+
+/// Each re-drive decides again whether a cut never landed. One pass reads a
+/// replayed pre-cut root and marks the owed wave as a cut that never landed.
+/// The next pass reads the cut set again, and the wave still stops. A link
+/// expiry after that does not replace the owed wave.
+#[test]
+fn a_link_expiry_does_not_replace_an_owed_wave_whose_cut_landed() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let deadline = fx.an_hour_from_now();
+    fx.mint_link_until(Permission::Read, deadline);
+    let granted = fx.granted_scope_repoint();
+    let section = published_grant_section_at(&fx.world, &fx.blocks, &granted.current_root)
+        .expect("the granted root");
+    let writer_seed = grantee_write_scope_seed(&section, &granted.current_root, &fx.folder.0, 1);
+    let pre_cut = published_value(&fx.world, &granted.current_root);
+    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0);
+    let mut cut_epoch_floor = fx.folder.0.to_vec();
+    cut_epoch_floor.extend_from_slice(b"/cut-epoch");
+    fx.world.record_store.fail_put_for(pointer.as_str());
+    fx.owner_device
+        .floor_store
+        .fail_floor_raises_for(&floor_label(&cut_epoch_floor));
+    assert_eq!(
+        downgrade_the_recipient(&mut fx),
+        Ok(CommandOutcome::Done),
+        "the cut set lands, and the wave stops at its re-point"
+    );
+    fx.owner_device.floor_store.heal_floors();
+    let cut_set = published_value(&fx.world, &granted.current_root);
+    let _ = events_so_far(&mut fx._events);
+    publish_value_under(&fx.world, &writer_seed, fx.folder, &pre_cut);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        owed_reports(&mut fx._events)
+            .into_iter()
+            .map(|(_, detail, ..)| detail)
+            .collect::<Vec<_>>(),
+        vec!["owed-cut-never-landed".to_owned()],
+        "the pass reads the replay as a cut that never landed"
+    );
+    publish_value_under(&fx.world, &writer_seed, fx.folder, &cut_set);
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        fx.owed_scopes().first(),
+        Some(&fx.folder),
+        "the wave stops again"
+    );
+
+    fx.world
+        .scheduler
+        .advance_to(swept_at(&fx.engine, deadline));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        abandoned(&mut fx._events),
+        Vec::new(),
+        "nothing is replaced"
+    );
+    assert_eq!(fx.link_entries(), 1, "the sweep waits for the owed wave");
 }
