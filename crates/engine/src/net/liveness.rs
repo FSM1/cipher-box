@@ -34,6 +34,7 @@ use super::publish::{
     publish, publish_inline,
 };
 use crate::api::ApiClient;
+use crate::grants::grafted::FloorNamespace;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 
@@ -117,12 +118,25 @@ pub struct HeldRecord {
 /// What a held node record's envelope binds: the renewal refuses a version this
 /// build does not author, and signs under the scope bar, as the renewal walk
 /// does (ADR 0061 D3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct HeldEnvelope {
     /// The envelope version the record carries.
     pub version: u64,
     /// The floors the record's renewal must clear at its signature.
     pub bar: PublishBar,
+    /// The namespace the bar's epoch floors ratchet in: a granted scope's
+    /// floors sit under its sharer's label.
+    pub(crate) namespace: FloorNamespace,
+}
+
+impl fmt::Debug for HeldEnvelope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The namespace label is a cross-scope correlator, so it is not printed.
+        f.debug_struct("HeldEnvelope")
+            .field("version", &self.version)
+            .field("bar", &self.bar)
+            .finish_non_exhaustive()
+    }
 }
 
 impl HeldRecord {
@@ -417,7 +431,7 @@ where
 
 /// [`eol_republish`] for a held node record under its [`HeldEnvelope`]: a
 /// foreign version is refused only once the record is due.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "one held renewal's inputs")]
 async fn eol_renew_sealed<T, H, C, F, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,
@@ -458,7 +472,8 @@ where
         content_cids: held.content_cids.clone(),
         bar: Some(envelope.bar),
     };
-    publish(transport, api, floors, scheduler, profile, &request)
+    let floors = envelope.namespace.view(floors);
+    publish(transport, api, &floors, scheduler, profile, &request)
         .await
         .map(|receipt| Some(receipt.outcome))
 }
@@ -627,9 +642,10 @@ mod tests {
         PublishRequest, publish, publish_inline,
     };
     use crate::api::ApiClient;
+    use crate::grants::grafted::FloorNamespace;
     use crate::net::author::ENVELOPE_V;
     use crate::profile::SyncTimingProfile;
-    use crate::seams::{FloorStore, HttpResponse, RecordTransport, UnixMillis};
+    use crate::seams::{ContactLabel, FloorStore, HttpResponse, RecordTransport, UnixMillis};
     use crate::session::SessionIdentity;
     use crate::testkit::{FakeDevice, FakeWorld, block_on};
 
@@ -1169,9 +1185,23 @@ mod tests {
 
     const SCOPE: [u8; 16] = [0x5c; 16];
 
-    /// One due node record held under `version` and a read-epoch bar of 1,
-    /// renewed once.
+    /// A granted scope's floor namespace.
+    fn granted() -> FloorNamespace {
+        let label_seed = cipherbox_core::kdf::contact_label_seed(&[0x4c; 32]);
+        FloorNamespace::GrantedBy(ContactLabel::of(&label_seed, &[0x02; 33]))
+    }
+
+    /// One due node record held under `version` and a read-epoch bar of 1 in
+    /// `namespace`, whose read-epoch floor is `read_floor`, renewed once.
     fn renew_sealed(version: u64, read_floor: u64) -> (FakeDevice, IpnsName, EolRenewResult) {
+        renew_sealed_in(FloorNamespace::Own, version, read_floor)
+    }
+
+    fn renew_sealed_in(
+        namespace: FloorNamespace,
+        version: u64,
+        read_floor: u64,
+    ) -> (FakeDevice, IpnsName, EolRenewResult) {
         let world = FakeWorld::new();
         let device = world.device(b"me");
         let api = ApiClient::new(
@@ -1188,8 +1218,14 @@ mod tests {
                 write_epoch: None,
                 cut_epoch: None,
             },
+            namespace,
         });
-        block_on(device.floor_store.raise_epoch_floor(&SCOPE, read_floor)).unwrap();
+        block_on(
+            namespace
+                .view(&device.floor_store)
+                .raise_epoch_floor(&SCOPE, read_floor),
+        )
+        .unwrap();
         world.scheduler.advance(Duration::from_secs(65 * DAY));
         device.http.enqueue_response(ok_200());
         let mut results = block_on(eol_renew_pass(
@@ -1229,6 +1265,20 @@ mod tests {
     #[test]
     fn a_held_node_whose_epoch_floor_rose_above_its_bar_is_refused() {
         let (device, name, result) = renew_sealed(ENVELOPE_V, 2);
+        assert_eq!(
+            result.outcome,
+            Err(PublishError::BelowBar {
+                floor: BarFloor::Read,
+                at: 2,
+                epoch: 1,
+            })
+        );
+        assert_eq!(seq_at(&device, &name), 1, "the record is not re-signed");
+    }
+
+    #[test]
+    fn a_granted_node_whose_epoch_floor_rose_above_its_bar_is_refused() {
+        let (device, name, result) = renew_sealed_in(granted(), ENVELOPE_V, 2);
         assert_eq!(
             result.outcome,
             Err(PublishError::BelowBar {

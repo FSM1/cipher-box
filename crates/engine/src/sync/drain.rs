@@ -7603,6 +7603,7 @@ where
                 envelope: bar.map(|bar| HeldEnvelope {
                     version: head.envelope.v,
                     bar,
+                    namespace: plane.end.floor_namespace,
                 }),
             },
         })

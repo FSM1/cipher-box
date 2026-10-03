@@ -26,6 +26,7 @@ use super::publish::{Observed, PublishBar, PublishError, head_cid_from_value};
 use crate::facade::NodeId;
 use crate::gate::floor::PendingSequenceRaise;
 use crate::gate::{Adopted, GateError, GateRejection, PendingAdoption, RejectionReason};
+use crate::grants::grafted::FloorNamespace;
 use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::session::SessionIdentity;
 use crate::sync::project::{FolderMerge, merge_root};
@@ -409,7 +410,11 @@ where
                         read_scope_seed,
                         current_at_floor: None,
                         observed,
-                        envelope: Some(HeldEnvelope { version, bar }),
+                        envelope: Some(HeldEnvelope {
+                            version,
+                            bar,
+                            namespace: FloorNamespace::Own,
+                        }),
                         fork,
                     },
                 )
@@ -459,6 +464,7 @@ where
                                 envelope: Some(HeldEnvelope {
                                     version: material.version,
                                     bar: material.bar,
+                                    namespace: FloorNamespace::Own,
                                 }),
                                 current_at_floor: Some(material.at_floor),
                                 fork: None,
