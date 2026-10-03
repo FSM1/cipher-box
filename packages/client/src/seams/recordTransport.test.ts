@@ -23,6 +23,34 @@ afterEach(() => {
 });
 
 describe('FetchRecordTransport.getRecord', () => {
+  /** An answer whose body cancellation rejects, as after a stream error. */
+  function failingCancel(status: number, headers: Record<string, string> = {}): Response {
+    return {
+      status,
+      ok: status >= 200 && status < 300,
+      headers: new Headers(headers),
+      body: { cancel: () => Promise.reject(new Error('stream errored')) },
+    } as unknown as Response;
+  }
+
+  it('keeps the status of an answer whose body cancellation fails', async () => {
+    stubFetch(failingCancel(403));
+
+    await expect(transport().getRecord(ENDPOINT, KEY, 1000)).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+
+  it('keeps the over-cap verdict when the body cancellation fails', async () => {
+    stubFetch(failingCancel(200, { 'content-length': '2000' }));
+
+    expect(await transport().getRecord(ENDPOINT, KEY, 1000)).toEqual({
+      kind: 'tooLarge',
+      observed: 2000,
+      limit: 1000,
+    });
+  });
+
   it('surfaces an over-cap record as tooLarge, never as bytes', async () => {
     stubFetch(new Response(new Uint8Array(2000), { status: 200 }));
 
@@ -93,12 +121,15 @@ describe('FetchRecordTransport.getRecord', () => {
     });
   });
 
-  it('throws on a non-404 failure status', async () => {
-    stubFetch(new Response(null, { status: 503 }));
+  it('rejects a non-404 failure with the status the engine classifies', async () => {
+    for (const status of [403, 429, 503]) {
+      stubFetch(new Response(null, { status }));
 
-    await expect(transport().getRecord(ENDPOINT, KEY, 1000)).rejects.toThrow(
-      'RecordTransport GET 503'
-    );
+      await expect(transport().getRecord(ENDPOINT, KEY, 1000)).rejects.toMatchObject({
+        status,
+        message: `RecordTransport GET ${status} at ${ENDPOINT}`,
+      });
+    }
   });
 
   it('gives an untrusted endpoint no ambient authority, no redirects, no cache, and a deadline', async () => {
