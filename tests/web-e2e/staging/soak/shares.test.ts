@@ -3,7 +3,9 @@ import { emptyLedger, formatLedger, LEDGER_HEADER, parseLedger } from './ledger'
 import { SoakFailure } from './reasons';
 import {
   cycleEpochStepped,
+  grantsRead,
   linkPrefix,
+  type DialogMark,
   markerDates,
   parseEpochs,
   sharedEpochHeld,
@@ -104,5 +106,43 @@ describe('the marker files of a listing', () => {
         'marker-2026-10-01 (1).txt',
       ])
     ).toEqual(['2026-09-30', '2026-10-02']);
+  });
+});
+
+/** A dialog element that shows from `from` ms after the fake opens until `until` ms. */
+function mark(from: number, until = Infinity): DialogMark {
+  const opened = Date.now();
+  const shown = () => {
+    const at = Date.now() - opened;
+    return at >= from && at < until;
+  };
+  return {
+    isVisible: async () => shown(),
+    waitFor: ({ timeout }) =>
+      new Promise((resolve, reject) => {
+        const poll = setInterval(() => {
+          if (shown()) {
+            clearInterval(poll);
+            resolve();
+          } else if (Date.now() - opened > timeout) {
+            clearInterval(poll);
+            reject(new Error('timed out'));
+          }
+        }, 5);
+      }),
+  };
+}
+
+describe('the cycle grants read', () => {
+  it('waits out the unavailable note the dialog draws before its read lands', async () => {
+    await expect(grantsRead(mark(50), mark(0, 50), 'cycle', 1_000)).resolves.toBeUndefined();
+  });
+
+  it('fails cycle-epoch-flat where no read reaches the folder in the budget', async () => {
+    const failure = await grantsRead(mark(Infinity), mark(0), 'cycle', 100).catch(
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(SoakFailure);
+    expect((failure as SoakFailure).reason).toBe('cycle-epoch-flat');
   });
 });

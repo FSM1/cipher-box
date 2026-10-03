@@ -92,6 +92,25 @@ export function cycleEpochStepped(before: bigint, after: bigint): void {
   }
 }
 
+/** A share dialog element, as far as {@link grantsRead} looks at it; a `Locator` is one. */
+export interface DialogMark {
+  waitFor(options: { timeout: number }): Promise<void>;
+  isVisible(): Promise<boolean>;
+}
+
+/** Throws where the share dialog of `folder` shows that no read reached it. */
+export async function grantsRead(
+  people: DialogMark,
+  unavailable: DialogMark,
+  folder: string,
+  timeout: number
+): Promise<void> {
+  await Promise.any([people.waitFor({ timeout }), unavailable.waitFor({ timeout })]);
+  if (await unavailable.isVisible()) {
+    throw new SoakFailure('cycle-epoch-flat', `the share dialog read no grants of ${folder}/`);
+  }
+}
+
 /** The newest markers `soak/shared` keeps, so a holder reads them all inside its budget. */
 export const SHARED_MARKER_CAP = 30;
 
