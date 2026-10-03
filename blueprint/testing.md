@@ -156,7 +156,9 @@ scenario fails the meta-test):
   origin, and reads a damaged name as unwritten (`net::retire`); `owe` refuses
   a name that is not an IPNS name (`tests/encode_refusals.rs`); a dropped
   version and a hard delete in a write-granted folder retire under the file's
-  own name (`tests/owner_actions.rs`);
+  own name (`tests/owner_actions.rs`); a named debt of a deleted node that the
+  base links again at that name reads its live record, and waits when none
+  reads (`sync::drain`);
 - the renewal walk (ADR 0061, `crates/engine/tests/renewal_walk.rs`) — on the
   virtual clock, a file that no session opens or publishes for 65 days is at
   S + 1 with a fresh validity after the passes that ADR 0061 consequence 2

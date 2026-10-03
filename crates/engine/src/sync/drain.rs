@@ -1272,11 +1272,14 @@ impl<'a> DrainScope<'a> {
     /// The end whose write seed derives `name` for `node`, whatever the base
     /// says of where the node is now.
     fn end_writing(&self, node: [u8; 16], name: &str) -> Result<Option<ScopeEnd<'a>>, Halt> {
-        let second = self.second_end()?.map(|destination| destination.end);
-        Ok([Some(self.source), second]
-            .into_iter()
-            .flatten()
-            .find(|end| end.write_name(&node).as_str() == name))
+        let writes = |end: &ScopeEnd<'a>| end.write_name(&node).as_str() == name;
+        if writes(&self.source) {
+            return Ok(Some(self.source));
+        }
+        Ok(self
+            .second_end()?
+            .map(|destination| destination.end)
+            .filter(writes))
     }
 }
 
@@ -6399,9 +6402,10 @@ where
     ///
     /// A `recorded` name is the record the debt is owed by (ADR 0070 D2): the
     /// read and the retire use it, under the end in `scopes` whose write seed
-    /// derives it, and the base does not move them. With no recorded name, the
-    /// name derives from where the base places the node in `scope`, and a
-    /// tombstoned node the base links again is not retired
+    /// derives it. A tombstoned node the base links again at that name is read
+    /// as published, so the retire spares what its live record names. With no
+    /// recorded name, the name derives from where the base places the node in
+    /// `scope`, and a tombstoned node the base links again is not retired
     /// ([`linked_nowhere`]), so its debt waits.
     async fn live_owing_record(
         &self,
@@ -6411,12 +6415,22 @@ where
         owing: OwingRecord,
         recorded: Option<&str>,
     ) -> Option<LiveRecord> {
-        if let (Some(name), OwingRecord::Retired) = (recorded, owing) {
-            return Some(LiveRecord {
-                name: name.to_owned(),
-                cids: BTreeSet::new(),
-            });
-        }
+        // A named debt of a node the base links again at that same name is
+        // owed by a live record, so its live set comes from a gated read.
+        let owing = match (recorded, owing) {
+            (Some(name), OwingRecord::Retired) => {
+                let base = self.cells.base.borrow();
+                let end = scope.end_of(&base, NodeId(node)).ok()?;
+                if linked_nowhere(&base, node) || end.write_name(&node).as_str() != name {
+                    return Some(LiveRecord {
+                        name: name.to_owned(),
+                        cids: BTreeSet::new(),
+                    });
+                }
+                OwingRecord::Published
+            }
+            _ => owing,
+        };
         let end = match recorded {
             Some(name) => scopes
                 .iter()
@@ -10808,8 +10822,40 @@ mod tests {
         assert_eq!(
             settle(Some(recorded.as_str())).map(|live| live.name),
             Some(recorded.as_str().to_owned()),
-            "a debt that records its name settles under it, wherever the base links the node"
+            "a debt whose node the base links at another name settles under its own"
         );
+    }
+
+    /// A node a device deleted while another device moved it inside the same
+    /// scope keeps its name. Once the base links it again, its named debt is
+    /// owed by a live record: the settle reads that record, and with no record
+    /// to read it waits rather than retire with nothing spared.
+    #[test]
+    fn a_named_retired_debt_of_a_node_the_base_links_at_that_name_reads_its_record() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let node = NodeId([0x49; 16]);
+        let name = derive_write_name(&harness.write_scope_seed, &node.0);
+        let settle = || {
+            let scope = harness.scope();
+            block_on(harness.drain().live_owing_record(
+                &scope,
+                core::slice::from_ref(&scope),
+                node.0,
+                OwingRecord::Retired,
+                Some(name.as_str()),
+            ))
+        };
+        assert_eq!(
+            settle().map(|live| (live.name, live.cids)),
+            Some((name.as_str().to_owned(), BTreeSet::new())),
+            "an unlinked node settles under its name"
+        );
+        {
+            let mut base = harness.state.snapshot.borrow_mut();
+            base.upsert_node(NodeMeta::new(node, "moved", crate::facade::NodeKind::File));
+            base.link(HARNESS_ROOT, node, 1);
+        }
+        assert_eq!(settle(), None, "the debt waits on the live record");
     }
 
     /// An interior scope's walk starts at the vault root when the tick holds

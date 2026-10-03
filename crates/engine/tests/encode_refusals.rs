@@ -3,7 +3,7 @@
 //! under `--release`, where `debug_assert!` is compiled out, so a refusal that
 //! leans on one fails there.
 
-use cipherbox_core::content::{compute_cid, encode_content_cid_str};
+use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -14,7 +14,7 @@ use cipherbox_core::suite::ecdsa::SIGNATURE_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_engine::api::ApiClient;
-use cipherbox_engine::content::DAG_ROOT_CODEC;
+use cipherbox_engine::content::{DAG_ROOT_CODEC, RetireTarget};
 use cipherbox_engine::gate::{floor, record_cut_epoch_floor};
 use cipherbox_engine::grants::conversion::{
     ConversionRecord, MAX_CLAIM_PAYLOAD_BYTES, encode_conversions,
@@ -33,8 +33,8 @@ use cipherbox_engine::net::{
 };
 use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, HttpResponse, OwedRetire, RecordTransport, RetireLedger, StagingStore,
-    UnixMillis,
+    BoxedTask, DebtOrigin, FloorStore, HttpResponse, OwedRetire, RecordTransport, RetireLedger,
+    StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::owed_rotation::{
     MAX_OWED_ENTRIES, OwedEntry, OwedRecord, OwedRecordError, OwedStep, seal_owed_record,
@@ -56,17 +56,47 @@ use cipherbox_engine::{
 };
 use core::cell::RefCell;
 
-/// The decoder reads a retire-ledger entry whose name is not an IPNS name as
-/// unwritten, so `owe` refuses to journal one and stores nothing (ADR 0070 D1).
+/// The decoder reads a retire-ledger entry whose name is not an IPNS name, or
+/// whose target set the settle could not send, as unwritten. So `owe` refuses
+/// to journal one and stores nothing (ADR 0070 D1, ADR 0054 D1).
 #[test]
-fn a_retire_debt_whose_name_is_not_an_ipns_name_is_refused_at_owe() {
+fn a_retire_debt_the_decoder_reads_as_unwritten_is_refused_at_owe() {
     let store = InMemoryStagingStore::default();
     let enc = kdf::enc_subkey(&SECRET);
     let entropy = RefCell::new(SeededEntropy::new(3));
     let ledger = StagingRetireLedger::new(&store, BookkeepingSeal::new(&enc, &entropy));
-    let target = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, b"a doomed root"));
-    for name in ["", "k51qzowningrecord"] {
-        let entry = OwedRetire::whole([7; 16], target.clone(), 64).owed_by(name);
+    let root = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, b"a doomed root"));
+    let leaf = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, b"a doomed leaf"));
+    let target = |cid: &str, pinned_bytes| RetireTarget {
+        cid: cid.to_owned(),
+        pinned_bytes,
+    };
+    let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([0x71; 32]).verifying_key());
+    let whole = || OwedRetire::whole([7; 16], root.clone(), 64).owed_by(name.as_str());
+    let dropped = |targets| OwedRetire {
+        origin: DebtOrigin::DroppedVersion(targets),
+        ..whole()
+    };
+    let refused = [
+        OwedRetire::whole([7; 16], root.clone(), 64).owed_by(""),
+        OwedRetire::whole([7; 16], root.clone(), 64).owed_by("k51qzowningrecord"),
+        dropped(Vec::new()),
+        dropped(vec![target(&root, 32), target(&leaf, 32)]),
+        dropped(vec![target(&leaf, 32), target(&root, 31)]),
+        dropped(vec![target("not-a-cid", 32), target(&root, 32)]),
+    ];
+    assert!(
+        block_on(ledger.owe(
+            b"owner",
+            &[dropped(vec![target(&leaf, 32), target(&root, 32)])]
+        ))
+        .is_ok(),
+        "a whole target set journals"
+    );
+    let journaled = block_on(store.staged_keys()).expect("keys list");
+    block_on(ledger.settle(b"owner", core::slice::from_ref(&root))).expect("settles");
+    assert_eq!(journaled.len(), 1);
+    for entry in refused {
         assert!(block_on(ledger.owe(b"owner", &[entry])).is_err());
     }
     assert!(block_on(store.staged_keys()).expect("keys list").is_empty());

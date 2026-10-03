@@ -77,8 +77,9 @@ pub struct OwedRetire {
     /// Where the debt came from.
     pub origin: DebtOrigin,
     /// The `ipnsName` of the record that owes the debt, which the settle
-    /// retires under (ADR 0070). `None` for an entry a previous release wrote:
-    /// the settle derives the name from where the base places the node.
+    /// retires under (ADR 0070). `None` when the journal did not know the name,
+    /// in this release or a previous one: the settle derives the name from
+    /// where the base places the node.
     pub name: Option<String>,
 }
 

@@ -13,7 +13,8 @@
   [ADR 0054](./0054-a-dropped-versions-debt-carries-its-target-set-and-settles-above-the-acknowledged-sequence.md)
   D1 (the versioned entry), and the `blueprint/engine.md` "Resolve/publish pipeline" section
   ("Retirement" bullet)
-- **Implemented by:** —
+- **Implemented by:** `net::retire` (`encode_entry`, `decode_entry`, `drain_owed_retires`),
+  `sync::drain` (`live_owing_record`, the journal sites), `sync::staging` (`DroppedVersionDebts`)
 - **Amends:** ADR 0054 D1
 
 ## Context
@@ -38,7 +39,10 @@ a name that is not a well-formed IPNS name, and the decode reads such bytes as u
 **D2 — The settle retires under the recorded name.** For a version 3 entry, the settle uses the
 recorded name for the retire and for the live-record read, and it does not derive a name from the
 base. An entry at version 2, or with no version, has no name. It keeps the derived name and the
-wait rule of FSM1/cipher-box#2191 for a node that the base links.
+wait rule of FSM1/cipher-box#2191 for a node that the base links. Amended on 2026-10-03: a
+version 3 entry of a retired node that the base links again at the recorded name is read as
+published, so the retire spares the CIDs that the live record names; with no record to read,
+the entry waits.
 
 **D3 — One release carries the change.** The new release reads all three shapes. The previous
 release reads a version 3 entry as unwritten, and the ledger never discards an entry, so such an

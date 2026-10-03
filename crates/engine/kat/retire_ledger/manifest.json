@@ -7,6 +7,6 @@
   },
   "entryReject": {
     "file": "vectors/entry_reject.json",
-    "count": 5
+    "count": 15
   }
 }

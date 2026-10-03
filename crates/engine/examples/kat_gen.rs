@@ -360,38 +360,114 @@ fn write_retire_ledger(dir: &Path) -> (usize, usize) {
     accept.push(accept_vector("unversioned-prune", 0, &unversioned, stored));
 
     let named = retire_entry::encode(&entry(dropped(), Some(&record_name))).expect("encodes");
-    let at = 2 + 16 + 2 * 8 + decode_content_cid_str(&root).expect("a content CID").len();
-    let edit = |change: &dyn Fn(&mut Vec<u8>)| {
-        let mut bytes = named.clone();
+    let pruned =
+        retire_entry::encode(&entry(DebtOrigin::Prune, Some(&record_name))).expect("encodes");
+    let rootless =
+        retire_entry::encode(&entry(DebtOrigin::DroppedRoot, Some(&record_name))).expect("encodes");
+    let cid_len = decode_content_cid_str(&root).expect("a content CID").len();
+    let at = 2 + 16 + 2 * 8 + cid_len;
+    let pairs = at + 1 + record_name.len();
+    let last = named.len() - (cid_len + 8);
+    let edit = |from: &[u8], change: &dyn Fn(&mut Vec<u8>)| {
+        let mut bytes = from.to_vec();
         change(&mut bytes);
         bytes
     };
+    let leaf_cid = decode_content_cid_str(&targets[0].cid).expect("a content CID");
     let reject = vec![
-        ("v3-name-not-canonical", edit(&|bytes| bytes[at + 1] = b'z')),
+        (
+            "v3-name-not-canonical",
+            root.clone(),
+            edit(&named, &|bytes| bytes[at + 1] = b'z'),
+        ),
+        (
+            "v3-name-not-utf8",
+            root.clone(),
+            edit(&named, &|bytes| bytes[at + 1] = 0xFF),
+        ),
         (
             "v3-name-length-past-the-tail",
-            edit(&|bytes| bytes[at] = u8::MAX),
+            root.clone(),
+            edit(&named, &|bytes| bytes[at] = u8::MAX),
         ),
-        ("v3-name-length-short", edit(&|bytes| bytes[at] -= 1)),
-        ("v3-empty-name", {
+        (
+            "v3-name-length-short",
+            root.clone(),
+            edit(&named, &|bytes| bytes[at] -= 1),
+        ),
+        ("v3-empty-name", root.clone(), {
             let mut bytes = named[..at].to_vec();
             bytes.push(0);
-            bytes.extend_from_slice(&named[at + 1 + record_name.len()..]);
+            bytes.extend_from_slice(&named[pairs..]);
             bytes
         }),
-        ("unknown-version", edit(&|bytes| bytes[0] = 4)),
+        (
+            "unknown-version",
+            root.clone(),
+            edit(&named, &|bytes| bytes[0] = 4),
+        ),
+        (
+            "unknown-origin",
+            root.clone(),
+            edit(&named, &|bytes| bytes[1] = 9),
+        ),
+        (
+            "stored-cid-not-the-key-cid",
+            targets[0].cid.clone(),
+            named.clone(),
+        ),
+        (
+            "v3-prune-bytes-after-the-name",
+            root.clone(),
+            edit(&pruned, &|bytes| bytes.push(0)),
+        ),
+        (
+            "v3-dropped-root-bytes-after-the-name",
+            root.clone(),
+            edit(&rootless, &|bytes| bytes.push(0)),
+        ),
+        (
+            "v3-empty-target-set",
+            root.clone(),
+            edit(&pruned, &|bytes| bytes[1] = 1),
+        ),
+        (
+            "v3-target-pair-truncated",
+            root.clone(),
+            named[..named.len() - 1].to_vec(),
+        ),
+        (
+            "v3-target-not-a-content-cid",
+            root.clone(),
+            edit(&named, &|bytes| bytes[pairs] ^= 0xFF),
+        ),
+        (
+            "v3-final-target-not-the-root",
+            root.clone(),
+            edit(&named, &|bytes| {
+                bytes[last..last + cid_len].copy_from_slice(&leaf_cid);
+            }),
+        ),
+        (
+            "v3-targets-not-the-total",
+            root.clone(),
+            edit(&named, &|bytes| {
+                let figure = bytes.len() - 1;
+                bytes[figure] ^= 1;
+            }),
+        ),
     ];
     let reject: Vec<RetireEntryRejectVector> = reject
         .into_iter()
-        .map(|(name, stored)| {
+        .map(|(name, target, stored)| {
             assert_eq!(
-                retire_entry::decode(&stored, &root),
+                retire_entry::decode(&stored, &target),
                 None,
                 "{name} reads as unwritten"
             );
             RetireEntryRejectVector {
                 name: name.to_owned(),
-                target: root.clone(),
+                target,
                 stored: hex::encode(stored),
             }
         })
