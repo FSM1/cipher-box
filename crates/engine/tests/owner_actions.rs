@@ -17004,6 +17004,8 @@ fn a_store_fault_on_the_scope_copy_does_not_stop_the_delete() {
         .fail_staged_removals_under(cipherbox_engine::grants::OWNER_SEED_CACHE_PREFIX);
     block_on(fx.engine.command(Command::Delete { node: fx.folder })).unwrap();
     tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert!(
         block_on(fx.owner_device.staging_store.queued_ops())
             .unwrap()
@@ -17072,6 +17074,8 @@ fn delete_with_previous_scope_copy(concurrent: bool) {
     for _ in 0..3 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert!(
         block_on(fx.owner_device.staging_store.queued_ops())
             .unwrap()
