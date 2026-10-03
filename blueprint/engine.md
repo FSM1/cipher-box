@@ -236,9 +236,10 @@ bytes (FSM1/cipher-box-next#28 D2).
   own CID, or does not decode journals the same debt from the root CID the op
   record names (ADR 0059). An entry that records the `ipnsName` of the
   record that owes it is read and retired under that name, wherever the base
-  places the node at settle time; a retired node that the base links again at
-  that name is read as published, so the retire spares what its live record
-  names. An entry with no name derives it from where the base places the node
+  places the node at settle time; a retired node that the base links again in
+  a scope whose end derives that name is read as published, so the retire
+  spares what its live record names, and it waits when its links prove no held
+  scope. An entry with no name derives it from where the base places the node
   (ADR 0070). A publish that fails **before the
   record reaches the transport** — register-first, the floor read, the
   head-CID echo, or an upload whose ack never came back — is the mirror case:

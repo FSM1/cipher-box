@@ -40,9 +40,10 @@ a name that is not a well-formed IPNS name, and the decode reads such bytes as u
 recorded name for the retire and for the live-record read, and it does not derive a name from the
 base. An entry at version 2, or with no version, has no name. It keeps the derived name and the
 wait rule of FSM1/cipher-box#2191 for a node that the base links. Amended on 2026-10-03: a
-version 3 entry of a retired node that the base links again at the recorded name is read as
-published, so the retire spares the CIDs that the live record names; with no record to read,
-the entry waits.
+version 3 entry of a retired node that the base links again is read as published when the end
+of the scope that its links prove derives the recorded name, so the retire spares the CIDs that
+the live record names; with no record to read, or when its links prove no held scope, the entry
+waits.
 
 **D3 — One release carries the change.** The new release reads all three shapes. The previous
 release reads a version 3 entry as unwritten, and the ledger never discards an entry, so such an

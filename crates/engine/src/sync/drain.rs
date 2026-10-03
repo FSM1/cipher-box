@@ -121,7 +121,7 @@ use crate::sync::staging::{
 };
 use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_mark_key};
 
-use crate::sync::tick::ResolveMode;
+use crate::sync::tick::{ResolveMode, scope_root_of};
 
 /// The staging-key prefix for the drained-op high-water mark: every op id at or
 /// below the stored value has left this device's queue.
@@ -1267,6 +1267,18 @@ impl<'a> DrainScope<'a> {
         } else {
             self.source
         })
+    }
+
+    /// The end rooted at `root`, if this scope holds one.
+    fn end_rooted_at(&self, root: NodeId) -> Option<ScopeEnd<'a>> {
+        if self.source.root == root {
+            return Some(self.source);
+        }
+        self.second_end()
+            .ok()
+            .flatten()
+            .map(|destination| destination.end)
+            .filter(|end| end.root == root)
     }
 
     /// The end whose write seed derives `name` for `node`, whatever the base
@@ -6408,8 +6420,10 @@ where
     ///
     /// A `recorded` name is the record the debt is owed by (ADR 0070 D2): the
     /// read and the retire use it, under the end in `scopes` whose write seed
-    /// derives it. A tombstoned node the base links again at that name is read
-    /// as published, so the retire spares what its live record names. With no
+    /// derives it. A tombstoned node the base links again is read as published
+    /// when the end of the scope its links prove derives the recorded name, so
+    /// the retire spares what its live record names; it waits when its links
+    /// prove no held scope. With no
     /// recorded name, the name derives from where the base places the node in
     /// `scope`, and a tombstoned node the base links again is not retired
     /// ([`linked_nowhere`]), so its debt waits.
@@ -6426,14 +6440,26 @@ where
             Some(name) => {
                 if owing == OwingRecord::Retired {
                     let base = self.cells.base.borrow();
-                    let end = scope.end_of(&base, NodeId(node)).ok()?;
-                    if linked_nowhere(&base, node) || end.write_name(&node).as_str() != name {
+                    if !linked_nowhere(&base, node) {
+                        // The base links the node again. Its links must prove
+                        // the scope that holds it, and that scope's end decides:
+                        // at the recorded name the record is live and is read.
+                        let roots: BTreeSet<NodeId> = scope.scope_roots.iter().copied().collect();
+                        let owner = scope_root_of(&base, NodeId(node), &roots);
+                        let end = roots
+                            .contains(&owner)
+                            .then(|| scopes.iter().find_map(|held| held.end_rooted_at(owner)))
+                            .flatten()?;
+                        if end.write_name(&node).as_str() == name {
+                            owing = OwingRecord::Published;
+                        }
+                    }
+                    if owing == OwingRecord::Retired {
                         return Some(LiveRecord {
                             name: name.to_owned(),
                             cids: BTreeSet::new(),
                         });
                     }
-                    owing = OwingRecord::Published;
                 }
                 scopes
                     .iter()
@@ -10829,36 +10855,167 @@ mod tests {
         );
     }
 
+    /// Publish `file` in the harness scope with one version of `plaintext`,
+    /// sealed under `read_key`, serve its blocks, and answer every CID the
+    /// version reaches.
+    fn publish_harness_file(
+        harness: &mut DrainHarness,
+        blocks: &mut BTreeMap<String, Vec<u8>>,
+        file: NodeId,
+        read_key: &[u8; 32],
+        plaintext: &[u8],
+    ) -> BTreeSet<String> {
+        let (version, root_block, leaf_cids) = crate::testkit::doomed_version(plaintext);
+        let content_cid = decode_content_cid_str(&version.content_cid).expect("a content CID");
+        let body = ReadBody::File {
+            created_at: 1,
+            modified_at: 1,
+            versions: vec![Version::new(
+                content_cid,
+                [9; 32],
+                plaintext.len() as u64,
+                1,
+            )],
+            unknown: PreservedFields::new(),
+        };
+        let head = author_child_envelope(EnvelopeAuthoring {
+            node_id: file.0,
+            scope_id: HARNESS_ROOT.0,
+            epoch: OWNER_ROOT_EPOCH,
+            read_key,
+            nonce: &[8; 24],
+            body: &body,
+            carried_unknown: PreservedFields::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
+        })
+        .expect("a child file record");
+        let record = IpnsRecord::create_v2(
+            &kdf::ipns_keypair(kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &file.0).as_bytes()),
+            format!("/ipfs/{}", head.cid).as_bytes(),
+            1,
+            HARNESS_TTL_NANOS,
+            HARNESS_EOL,
+        )
+        .marshal();
+        let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &file.0);
+        for endpoint in harness.seams.transport.endpoints() {
+            harness
+                .seams
+                .transport
+                .seed_record(&endpoint, name.as_str(), record.clone());
+        }
+        blocks.insert(head.cid.clone(), head.block.clone());
+        blocks.insert(version.content_cid.clone(), root_block);
+        harness.seams.http = serve_walk_blocks(blocks);
+        leaf_cids.into_iter().chain([version.content_cid]).collect()
+    }
+
+    /// Link `node` below `parent` in the harness base.
+    fn link_in_base(
+        harness: &DrainHarness,
+        parent: NodeId,
+        node: NodeId,
+        kind: crate::facade::NodeKind,
+    ) {
+        let mut base = harness.state.snapshot.borrow_mut();
+        base.upsert_node(NodeMeta::new(node, "linked", kind));
+        base.link(parent, node, 1);
+    }
+
+    /// A named retired debt of `node`, settled over `scopes`, the first of
+    /// which is the vault's.
+    fn settle_named(
+        harness: &DrainHarness,
+        scopes: &[DrainScope<'_>],
+        node: NodeId,
+        name: &IpnsName,
+    ) -> Option<LiveRecord> {
+        block_on(harness.drain().live_owing_record(
+            &scopes[0],
+            scopes,
+            node.0,
+            OwingRecord::Retired,
+            Some(name.as_str()),
+        ))
+    }
+
     /// A node a device deleted while another device moved it inside the same
     /// scope keeps its name. Once the base links it again, its named debt is
-    /// owed by a live record: the settle reads that record, and with no record
-    /// to read it waits rather than retire with nothing spared.
+    /// owed by a live record: the settle reads that record and spares what it
+    /// names, and waits when the record does not pass the gate.
     #[test]
     fn a_named_retired_debt_of_a_node_the_base_links_at_that_name_reads_its_record() {
-        let harness = drain_harness(Some(harness_root_envelope()));
+        let (mut harness, mut blocks) = walk_harness();
         let node = NodeId([0x49; 16]);
         let name = derive_write_name(&harness.write_scope_seed, &node.0);
-        let settle = || {
+        let read_key = harness.scope().source.read_key(&node.0);
+        let live = publish_harness_file(&mut harness, &mut blocks, node, &read_key, &[3u8; 100]);
+        let settle = |harness: &DrainHarness| {
             let scope = harness.scope();
-            block_on(harness.drain().live_owing_record(
-                &scope,
-                core::slice::from_ref(&scope),
-                node.0,
-                OwingRecord::Retired,
-                Some(name.as_str()),
-            ))
+            settle_named(harness, core::slice::from_ref(&scope), node, &name)
+                .map(|live| (live.name, live.cids))
         };
         assert_eq!(
-            settle().map(|live| (live.name, live.cids)),
+            settle(&harness),
             Some((name.as_str().to_owned(), BTreeSet::new())),
-            "an unlinked node settles under its name"
+            "an unlinked node settles under its name with nothing spared"
         );
-        {
-            let mut base = harness.state.snapshot.borrow_mut();
-            base.upsert_node(NodeMeta::new(node, "moved", crate::facade::NodeKind::File));
-            base.link(HARNESS_ROOT, node, 1);
-        }
-        assert_eq!(settle(), None, "the debt waits on the live record");
+        link_in_base(&harness, HARNESS_ROOT, node, crate::facade::NodeKind::File);
+        assert_eq!(
+            settle(&harness),
+            Some((name.as_str().to_owned(), live)),
+            "the retire spares every CID the live record names"
+        );
+        publish_harness_file(&mut harness, &mut blocks, node, &[0xEE; 32], &[4u8; 100]);
+        assert_eq!(
+            settle(&harness),
+            None,
+            "a record the gate refuses holds the debt"
+        );
+    }
+
+    /// The same, below an interior scope with its own write seed: the scope the
+    /// base links the node in decides, not the vault end.
+    #[test]
+    fn a_named_retired_debt_below_an_interior_scope_waits_on_its_live_record() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let interior_root = NodeId([0x4A; 16]);
+        let node = NodeId([0x4B; 16]);
+        let interior_seed = Zeroizing::new([0x4C; 32]);
+        let roots = [HARNESS_ROOT, interior_root];
+        let vault = DrainScope {
+            scope_roots: &roots,
+            ..harness.scope()
+        };
+        let mut interior = DrainScope {
+            scope_roots: &roots,
+            ..harness.own_scope_at(interior_root)
+        };
+        interior.source.write_scope_seed = &interior_seed;
+        let name = derive_write_name(&interior_seed, &node.0);
+        let scopes = [vault, interior];
+        assert!(
+            settle_named(&harness, &scopes, node, &name).is_some(),
+            "an unlinked node settles"
+        );
+        link_in_base(
+            &harness,
+            HARNESS_ROOT,
+            interior_root,
+            crate::facade::NodeKind::Folder,
+        );
+        link_in_base(&harness, interior_root, node, crate::facade::NodeKind::File);
+        assert_eq!(
+            settle_named(&harness, &scopes, node, &name),
+            None,
+            "the interior record holds the debt until it reads"
+        );
+        let elsewhere = derive_write_name(&[0x4D; 32], &node.0);
+        assert_eq!(
+            settle_named(&harness, &scopes, node, &elsewhere).map(|live| live.name),
+            Some(elsewhere.as_str().to_owned()),
+            "a debt whose name the linking scope does not derive settles under it"
+        );
     }
 
     /// An interior scope's walk starts at the vault root when the tick holds
