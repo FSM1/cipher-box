@@ -27,13 +27,14 @@ use crate::content::{
     ContentPlane, ContentProfile, Expansion, Gateway, RetireTarget, expand_retire_targets,
     expand_staged_root, read_block,
 };
+use crate::facade::NodeId;
 use crate::net::publish::PublishVerdict;
 use crate::net::record_publish::RecordPublishError;
 use crate::seams::{
     CredentialStore, DebtOrigin, Http, OwedPage, OwedRetire, OwingRecord, RetireLedger, SeamError,
     SeamResult, StagingStore,
 };
-use crate::sync::{BookkeepingSeal, MAX_BOOKKEEPING_OPENS};
+use crate::sync::{BookkeepingSeal, MAX_BOOKKEEPING_OPENS, Snapshot};
 
 /// Registry rows a pass left charged and unreachable, pending retirement: the
 /// head blocks of a failed publish, and the names of a reclaimed subtree whose
@@ -180,6 +181,14 @@ pub const RETIRE_LEDGER_PREFIX: &[u8] = b"cbx/rl/";
 ///
 /// [`orphan_staging_keys`]: crate::sync::orphan_staging_keys
 pub const NODE_TOMBSTONE_PREFIX: &[u8] = b"cbx/rt/";
+
+/// Whether the base links `node` nowhere: a tombstoned node is retired only
+/// then. A tombstoned node the base links again is live elsewhere, and the
+/// name derived for it may be its live record's, so its debt waits and its
+/// record still renews: a leak, never a loss.
+pub(crate) fn linked_nowhere(base: &Snapshot, node: [u8; 16]) -> bool {
+    base.links_to(NodeId(node)).is_empty()
+}
 
 /// The staging-key prefix under which a node's acknowledged sequence is held
 /// ([`StagingRetireLedger::acknowledged`]), one key per node. The key stays
