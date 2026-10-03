@@ -367,8 +367,7 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
     }
 
     /// Journal and release the version `op` staged. `name` is the record the
-    /// version would have joined; `None` journals a debt with no name, which
-    /// the settle derives.
+    /// version would have joined.
     pub(crate) async fn drop_version(&self, op: &Op, name: Option<&str>) {
         let Some(root) = op.content_root_cid() else {
             return;
@@ -389,7 +388,7 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
         let target = encode_content_cid_str(root);
         let expansion =
             block.and_then(|block| expand_staged_root(&target, block, self.profile).ok());
-        let debt = match expansion {
+        let mut debt = match expansion {
             Some(expansion) => OwedRetire {
                 origin: DebtOrigin::DroppedVersion(expansion.targets),
                 ..OwedRetire::whole(op.target.0, target, expansion.pinned_bytes)
@@ -404,10 +403,7 @@ impl<'a, S: StagingStore> DroppedVersionDebts<'a, S> {
                 }
             }
         };
-        let debt = OwedRetire {
-            name: name.map(str::to_owned),
-            ..debt
-        };
+        debt.name = name.map(str::to_owned);
         let journaled = StagingRetireLedger::new(self.store, self.seal)
             .owe(&self.reader.owner_tag(), &[debt])
             .await

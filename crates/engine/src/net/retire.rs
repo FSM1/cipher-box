@@ -543,7 +543,7 @@ pub(crate) fn encode_entry(entry: &OwedRetire, cid: &[u8]) -> SeamResult<Zeroizi
         DebtOrigin::DroppedRoot => (ORIGIN_DROPPED_ROOT, None),
     };
     let name = match entry.name.as_deref() {
-        Some(name) if !is_wellformed_name(name.as_bytes()) => {
+        Some(name) if !is_wellformed_name(name) => {
             return Err(SeamError::new("retire-ledger name is not an IPNS name"));
         }
         name => name,
@@ -624,8 +624,10 @@ pub(crate) fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
         ENTRY_V3 => {
             let (&len, rest) = rest.split_first()?;
             let (name, tail) = rest.split_at_checked(usize::from(len))?;
-            is_wellformed_name(name).then_some(())?;
-            (Some(String::from_utf8(name.to_vec()).ok()?), tail)
+            let name = core::str::from_utf8(name)
+                .ok()
+                .filter(|name| is_wellformed_name(name))?;
+            (Some(name.to_owned()), tail)
         }
         _ => return None,
     };
@@ -655,8 +657,8 @@ pub(crate) fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
 }
 
 /// Whether `name` is the canonical spelling of an IPNS name.
-fn is_wellformed_name(name: &[u8]) -> bool {
-    core::str::from_utf8(name).is_ok_and(|name| IpnsName::parse(name).is_ok())
+fn is_wellformed_name(name: &str) -> bool {
+    IpnsName::parse(name).is_ok()
 }
 
 /// A dropped version's stored target set, or `None` for a tail that is not a

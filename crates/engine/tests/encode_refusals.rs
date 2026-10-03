@@ -78,8 +78,8 @@ fn a_retire_debt_the_decoder_reads_as_unwritten_is_refused_at_owe() {
         ..whole()
     };
     let refused = [
-        OwedRetire::whole([7; 16], root.clone(), 64).owed_by(""),
-        OwedRetire::whole([7; 16], root.clone(), 64).owed_by("k51qzowningrecord"),
+        whole().owed_by(""),
+        whole().owed_by("k51qzowningrecord"),
         dropped(Vec::new()),
         dropped(vec![target(&root, 32), target(&leaf, 32)]),
         dropped(vec![target(&leaf, 32), target(&root, 31)]),

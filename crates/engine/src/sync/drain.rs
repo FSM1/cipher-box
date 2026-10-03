@@ -1271,15 +1271,16 @@ impl<'a> DrainScope<'a> {
 
     /// The end whose write seed derives `name` for `node`, whatever the base
     /// says of where the node is now.
-    fn end_writing(&self, node: [u8; 16], name: &str) -> Result<Option<ScopeEnd<'a>>, Halt> {
+    fn end_writing(&self, node: [u8; 16], name: &str) -> Option<ScopeEnd<'a>> {
         let writes = |end: &ScopeEnd<'a>| end.write_name(&node).as_str() == name;
         if writes(&self.source) {
-            return Ok(Some(self.source));
+            return Some(self.source);
         }
-        Ok(self
-            .second_end()?
+        self.second_end()
+            .ok()
+            .flatten()
             .map(|destination| destination.end)
-            .filter(writes))
+            .filter(writes)
     }
 }
 
@@ -5010,16 +5011,21 @@ where
             Settle::Hold => (Vec::new(), reclamation.quarantined.clone()),
             Settle::Decide(budget) => self.prove_quarantine(scope, reclamation, budget).await,
         };
-        // Each debt is owed by the record the delete retires for its node.
+        // Each debt is owed by the record the delete retires for its node; the
+        // reversed collect keeps a node's first doomed name.
+        let name_of: BTreeMap<[u8; 16], &str> = reclamation
+            .doomed
+            .iter()
+            .rev()
+            .map(|(node, name)| (node.0, name.as_str()))
+            .collect();
         let mut owed: Vec<OwedRetire> = reclamation
             .owed
             .iter()
             .map(|entry| {
-                reclamation
-                    .doomed
-                    .iter()
-                    .find(|(node, _)| node.0 == entry.node)
-                    .map_or_else(|| entry.clone(), |(_, name)| entry.clone().owed_by(name))
+                name_of
+                    .get(&entry.node)
+                    .map_or_else(|| entry.clone(), |name| entry.clone().owed_by(name))
             })
             .collect();
         owed.extend(proven.iter().flat_map(|held| {
@@ -6412,30 +6418,27 @@ where
         scope: &DrainScope<'_>,
         scopes: &[DrainScope<'_>],
         node: [u8; 16],
-        owing: OwingRecord,
+        mut owing: OwingRecord,
         recorded: Option<&str>,
     ) -> Option<LiveRecord> {
-        // A named debt of a node the base links again at that same name is
-        // owed by a live record, so its live set comes from a gated read.
-        let owing = match (recorded, owing) {
-            (Some(name), OwingRecord::Retired) => {
-                let base = self.cells.base.borrow();
-                let end = scope.end_of(&base, NodeId(node)).ok()?;
-                if linked_nowhere(&base, node) || end.write_name(&node).as_str() != name {
-                    return Some(LiveRecord {
-                        name: name.to_owned(),
-                        cids: BTreeSet::new(),
-                    });
-                }
-                OwingRecord::Published
-            }
-            _ => owing,
-        };
         let end = match recorded {
-            Some(name) => scopes
-                .iter()
-                .find_map(|held| held.end_writing(node, name).ok().flatten())?,
             None => scope.end_of(&self.cells.base.borrow(), NodeId(node)).ok()?,
+            Some(name) => {
+                if owing == OwingRecord::Retired {
+                    let base = self.cells.base.borrow();
+                    let end = scope.end_of(&base, NodeId(node)).ok()?;
+                    if linked_nowhere(&base, node) || end.write_name(&node).as_str() != name {
+                        return Some(LiveRecord {
+                            name: name.to_owned(),
+                            cids: BTreeSet::new(),
+                        });
+                    }
+                    owing = OwingRecord::Published;
+                }
+                scopes
+                    .iter()
+                    .find_map(|held| held.end_writing(node, name))?
+            }
         };
         let write_name = end.write_name(&node);
         let reaching = |cids| {

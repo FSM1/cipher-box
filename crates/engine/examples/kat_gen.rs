@@ -1,7 +1,7 @@
 //! The committed KAT generator for the engine's content-DAG, retire-ledger
-//! entry, rotation and check-surface fixtures (blueprint/core.md "KAT regime": vectors regenerate only
-//! through committed generators, never hand-edits). Sibling to core's
-//! generator; see `crates/engine/tests/kat_content.rs` for why the engine needs
+//! entry, rotation and check-surface fixtures (blueprint/core.md "KAT regime":
+//! vectors regenerate only through committed generators, never hand-edits).
+//! Sibling to core's generator; see `crates/engine/tests/kat_content.rs` for why the engine needs
 //! its own.
 //!
 //! Run from any cwd:
@@ -29,10 +29,9 @@ use cipherbox_core::content::{
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::aead::KEY_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_engine::content::RetireTarget;
 use cipherbox_engine::content::{
-    ContentKey, ContentProfile, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, assemble,
-    decode_root, frame_and_seal,
+    ContentKey, ContentProfile, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, RetireTarget,
+    assemble, decode_root, frame_and_seal,
 };
 use cipherbox_engine::entropy::{Entropy, EntropyError};
 use cipherbox_engine::seams::{DebtOrigin, OwedRetire};
@@ -306,6 +305,7 @@ fn write_retire_ledger(dir: &Path) -> (usize, usize) {
     fs::create_dir_all(&vectors_dir)
         .unwrap_or_else(|e| panic!("create {}: {e}", vectors_dir.display()));
     let root = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, b"retire-ledger kat root"));
+    let root_cid = decode_content_cid_str(&root).expect("a content CID");
     let leaf = |seed: &[u8]| encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, seed));
     let targets = vec![
         RetireTarget {
@@ -356,15 +356,14 @@ fn write_retire_ledger(dir: &Path) -> (usize, usize) {
     let mut stored = unversioned.node.to_vec();
     stored.extend_from_slice(&unversioned.owed_bytes.to_be_bytes());
     stored.extend_from_slice(&unversioned.manifest_bytes.to_be_bytes());
-    stored.extend_from_slice(&decode_content_cid_str(&root).expect("a content CID"));
+    stored.extend_from_slice(&root_cid);
     accept.push(accept_vector("unversioned-prune", 0, &unversioned, stored));
 
-    let named = retire_entry::encode(&entry(dropped(), Some(&record_name))).expect("encodes");
-    let pruned =
-        retire_entry::encode(&entry(DebtOrigin::Prune, Some(&record_name))).expect("encodes");
-    let rootless =
-        retire_entry::encode(&entry(DebtOrigin::DroppedRoot, Some(&record_name))).expect("encodes");
-    let cid_len = decode_content_cid_str(&root).expect("a content CID").len();
+    let v3 = |origin| retire_entry::encode(&entry(origin, Some(&record_name))).expect("encodes");
+    let named = v3(dropped());
+    let pruned = v3(DebtOrigin::Prune);
+    let rootless = v3(DebtOrigin::DroppedRoot);
+    let cid_len = root_cid.len();
     let at = 2 + 16 + 2 * 8 + cid_len;
     let pairs = at + 1 + record_name.len();
     let last = named.len() - (cid_len + 8);
@@ -374,83 +373,62 @@ fn write_retire_ledger(dir: &Path) -> (usize, usize) {
         bytes
     };
     let leaf_cid = decode_content_cid_str(&targets[0].cid).expect("a content CID");
+    let at_root = |name, stored| (name, root.clone(), stored);
     let reject = vec![
-        (
+        at_root(
             "v3-name-not-canonical",
-            root.clone(),
             edit(&named, &|bytes| bytes[at + 1] = b'z'),
         ),
-        (
+        at_root(
             "v3-name-not-utf8",
-            root.clone(),
             edit(&named, &|bytes| bytes[at + 1] = 0xFF),
         ),
-        (
+        at_root(
             "v3-name-length-past-the-tail",
-            root.clone(),
             edit(&named, &|bytes| bytes[at] = u8::MAX),
         ),
-        (
+        at_root(
             "v3-name-length-short",
-            root.clone(),
             edit(&named, &|bytes| bytes[at] -= 1),
         ),
-        ("v3-empty-name", root.clone(), {
+        at_root("v3-empty-name", {
             let mut bytes = named[..at].to_vec();
             bytes.push(0);
             bytes.extend_from_slice(&named[pairs..]);
             bytes
         }),
-        (
-            "unknown-version",
-            root.clone(),
-            edit(&named, &|bytes| bytes[0] = 4),
-        ),
-        (
-            "unknown-origin",
-            root.clone(),
-            edit(&named, &|bytes| bytes[1] = 9),
-        ),
+        at_root("unknown-version", edit(&named, &|bytes| bytes[0] = 4)),
+        at_root("unknown-origin", edit(&named, &|bytes| bytes[1] = 9)),
         (
             "stored-cid-not-the-key-cid",
             targets[0].cid.clone(),
             named.clone(),
         ),
-        (
+        at_root(
             "v3-prune-bytes-after-the-name",
-            root.clone(),
             edit(&pruned, &|bytes| bytes.push(0)),
         ),
-        (
+        at_root(
             "v3-dropped-root-bytes-after-the-name",
-            root.clone(),
             edit(&rootless, &|bytes| bytes.push(0)),
         ),
-        (
-            "v3-empty-target-set",
-            root.clone(),
-            edit(&pruned, &|bytes| bytes[1] = 1),
-        ),
-        (
+        at_root("v3-empty-target-set", edit(&pruned, &|bytes| bytes[1] = 1)),
+        at_root(
             "v3-target-pair-truncated",
-            root.clone(),
             named[..named.len() - 1].to_vec(),
         ),
-        (
+        at_root(
             "v3-target-not-a-content-cid",
-            root.clone(),
             edit(&named, &|bytes| bytes[pairs] ^= 0xFF),
         ),
-        (
+        at_root(
             "v3-final-target-not-the-root",
-            root.clone(),
             edit(&named, &|bytes| {
                 bytes[last..last + cid_len].copy_from_slice(&leaf_cid);
             }),
         ),
-        (
+        at_root(
             "v3-targets-not-the-total",
-            root.clone(),
             edit(&named, &|bytes| {
                 let figure = bytes.len() - 1;
                 bytes[figure] ^= 1;
