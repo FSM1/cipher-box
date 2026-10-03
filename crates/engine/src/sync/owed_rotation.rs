@@ -198,7 +198,7 @@ pub struct OwedCell {
     /// The scopes whose entry a re-drive this session found with a cut that
     /// never landed, within the bound. Another command may replace it.
     not_landed: RefCell<BTreeSet<NodeId>>,
-    /// The refused scope root records this session already reported.
+    /// This session's [`RootReports`].
     root_reports: RootReports,
     writer: futures_util::lock::Mutex<()>,
 }
@@ -251,7 +251,7 @@ impl OwedCell {
         }
     }
 
-    /// The refused scope root records this session already reported.
+    /// This session's [`RootReports`].
     pub(crate) fn root_reports(&self) -> &RootReports {
         &self.root_reports
     }

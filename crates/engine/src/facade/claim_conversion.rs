@@ -20,10 +20,8 @@ use crate::grants::{
     link_of_sender, post_share_pointer_at,
 };
 use crate::net::cut::CutRootReads;
-use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys, RootFallback};
-use crate::rotation::{
-    AtOnce, Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope,
-};
+use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys, RootFallback, RootWait};
+use crate::rotation::{Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope};
 use crate::sync::BookkeepingSeal;
 use crate::sync::owed_rotation::OwedCell;
 
@@ -157,8 +155,7 @@ pub(crate) trait ConversionSites {
         index: &[ChildScopeRef],
     ) -> Result<Vec<ChildScopeRef>, EngineError>;
 
-    /// Whether an owner command runs the re-drive, so its root reads fall back
-    /// at once (ADR 0068 D1).
+    /// Whether an owner command runs the re-drive ([`RootWait::Command`]).
     fn command(&self) -> bool {
         false
     }
@@ -344,12 +341,12 @@ where
     pub(super) fn cut_net<'b>(
         &'b self,
         target: &OwnerScope,
-        bound: &'b dyn NodeBound,
+        wait: RootWait<'b>,
     ) -> OwnerRotationNet<'b, T, H, C, F, Sch, Box<dyn Entropy>, S> {
         OwnerRotationNet {
             root_fallback: Some(RootFallback::new(
                 target.scope.scope_id,
-                bound,
+                wait,
                 self.owed.root_reports(),
             )),
             ..self.net(target, PointerConsultArm::Refused)
@@ -431,8 +428,7 @@ where
     }
 
     /// Drive `cut` at `node` through the planes it demands
-    /// ([`rotate_on_cut`] over the production [`OwnerCutNet`]). Under an owner
-    /// `command` the root reads fall back at once (ADR 0068 D1).
+    /// ([`rotate_on_cut`] over the production [`OwnerCutNet`]).
     pub(super) async fn rotate_planes(
         &self,
         node: NodeId,
@@ -471,7 +467,11 @@ where
             session_root_scope_id: self.cut.vault_root.0,
             sweep: &|scope| sweep(scope, target.parent_node_seed.clone()),
             bound,
-            root_bound: if command { &AtOnce } else { bound },
+            root_wait: if command {
+                RootWait::Command
+            } else {
+                RootWait::Bound(bound)
+            },
             root_reports: self.owed.root_reports(),
             root_reads: CutRootReads::default(),
         };

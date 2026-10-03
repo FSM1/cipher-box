@@ -110,7 +110,7 @@ use crate::net::renewal_walk::{
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{
-    GatedRoots, MovedScopeSeed, RootFallback, RotationAncestry, SweptScopeState,
+    GatedRoots, MovedScopeSeed, RootFallback, RootWait, RotationAncestry, SweptScopeState,
 };
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, FolderRefreshReport,
@@ -125,7 +125,7 @@ use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
 use crate::rotation::{
-    AscentAuthority, AtOnce, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
+    AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
     MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure,
     Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
     RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys,
@@ -7773,7 +7773,7 @@ where {
         let current = OwnerRotationNet {
             root_fallback: Some(RootFallback::new(
                 target.scope.scope_id,
-                &AtOnce,
+                RootWait::Command,
                 self.state.owed_rotation.root_reports(),
             )),
             ..self.owner_rotation_net(
@@ -8734,8 +8734,7 @@ where {
                 UnindexedScope::Refuse,
             )
             .await?;
-        // A downgrade is a cut, whose read runs on the last copy of a root the
-        // gate refuses (ADR 0068 D1).
+        // A downgrade is a cut, whose root read falls back (ADR 0068 D1).
         let downgrade = permission == Permission::Read;
         let gated = self
             .settled_scope_read(&keys, node, target, PERMISSION_CHANGE_TARGET, downgrade)
@@ -8874,7 +8873,7 @@ where {
             root_fallback: cut.then(|| {
                 RootFallback::new(
                     target.scope.scope_id,
-                    &AtOnce,
+                    RootWait::Command,
                     self.state.owed_rotation.root_reports(),
                 )
             }),

@@ -600,7 +600,8 @@ impl FakeCutRotator {
         }
     }
 
-    /// The root has not moved, so a step there publishes at the old name.
+    /// The root read fell back and no wave has moved the root, so a step
+    /// publishes at the old name.
     fn at_old_root(&self) -> bool {
         self.fell_back && !self.seen.borrow().contains(&"write")
     }

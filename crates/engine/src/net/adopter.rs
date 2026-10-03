@@ -791,8 +791,7 @@ pub(super) fn reject(stage: GateStage, e: CodecError) -> GateError {
 }
 
 /// The status a head block read carries when every source answered that it
-/// holds no such block, which only an owner cut's root fallback reads (ADR 0068
-/// D1).
+/// holds no such block (ADR 0068 D1).
 pub(super) const HEAD_BLOCK_NOT_FOUND: u16 = 404;
 
 /// Map a content-read failure: a CID mismatch/tamper is a fail-closed trust

@@ -685,8 +685,7 @@ pub trait CutRotator {
     ) -> Result<WriteRotationOutcome, WriteRotateError>;
 
     /// Whether a scope root read of this cut ran on the last copy of a root
-    /// the gate refused (ADR 0068 D1). Such a cut publishes nothing more at the
-    /// old root name (D3).
+    /// the gate refused (ADR 0068 D1).
     fn root_fell_back(&self) -> bool {
         false
     }
@@ -722,12 +721,11 @@ pub enum RotateOnCutError {
     /// already landed, but the revokee still authors at every current write name
     /// until this does.
     Write(WriteRotateError),
-    /// A root read fell back, so the wave ran first, and it did not complete:
-    /// the cut set did not land at a root that survivors read (ADR 0068 D3).
+    /// The wave, run first after a root read fell back, did not complete, so
+    /// the cut set reached no root survivors read (ADR 0068 D3).
     WriteFirst(WriteRotateError),
-    /// A root read fell back, the wave moved the root first and carried the cut
-    /// set there, and the read cascade at the moved root did not complete
-    /// (ADR 0068 D3).
+    /// The wave, run first, carried the cut set to the moved root, and the
+    /// read cascade there did not complete (ADR 0068 D3).
     ReadAfterWrite(CascadeError),
     /// A cut that drives the write plane alone carries recipients to withhold on
     /// the read plane. Only the read cascade records a withheld recipient in the
@@ -740,11 +738,12 @@ impl core::fmt::Display for RotateOnCutError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             RotateOnCutError::PublishCut(e) => write!(f, "cut-set publish failed: {e}"),
-            RotateOnCutError::Read(e) => write!(f, "read-plane cascade failed: {e}"),
+            RotateOnCutError::Read(e) | RotateOnCutError::ReadAfterWrite(e) => {
+                write!(f, "read-plane cascade failed: {e}")
+            }
             RotateOnCutError::Write(e) | RotateOnCutError::WriteFirst(e) => {
                 write!(f, "write-plane wave failed: {e}")
             }
-            RotateOnCutError::ReadAfterWrite(e) => write!(f, "read-plane cascade failed: {e}"),
             RotateOnCutError::WriteOnlyCutWithdrawsRead => {
                 f.write_str("a write-only cut cannot withhold a read grant")
             }

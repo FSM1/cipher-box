@@ -7,9 +7,7 @@
 use super::claim_conversion::{ConversionSites, Running};
 use super::*;
 use crate::grants::resume_owed_interior_move;
-use crate::rotation::{
-    AtOnce, NoBound, NodeBound, RotateOnCutError, WriteRotateError, owed_read_cut,
-};
+use crate::rotation::{NoBound, RotateOnCutError, WriteRotateError, owed_read_cut};
 use crate::sync::owed_rotation::bound_elapsed;
 use crate::sync::owed_rotation::{
     EntryBound, OwedEntry, OwedRecordError, OwedRotation, OwedStep, ScopeHold,
@@ -274,8 +272,7 @@ where
     /// the entry is durable before the first publish, and a step that stops
     /// after it, fail-closed or not, leaves the entry, tells the host, and
     /// answers `Ok(None)`. `write_epoch` is the write epoch of the record the
-    /// cut was authorized against. Under an owner `command` the root reads fall
-    /// back at once (ADR 0068 D1).
+    /// cut was authorized against.
     ///
     /// A read-only cut clears its entry here. A cut that moves the write plane
     /// leaves it for the caller, which clears it after the post-steps. The
@@ -342,9 +339,8 @@ where
                     .await;
                 return Ok(None);
             }
-            // The wave moved the root first (ADR 0068 D3). A failed floor raise
-            // is safe: the entry stays owed, and the re-drive raises the floor
-            // before it clears the entry.
+            // The wave moved the root first (ADR 0068 D3). The entry stays
+            // owed, so the re-drive raises the floor again before it clears it.
             Err(error @ RotateOnCutError::ReadAfterWrite(_)) => {
                 let _ = record_cut_epoch_floor(
                     self.floors,
@@ -451,7 +447,10 @@ where
     ) -> Option<bool> {
         let bound = self.owed_bound(NodeId(target.scope.scope_id)).await;
         let current = self
-            .cut_net(target, bound.as_ref().map_or(&NoBound, |b| b))
+            .cut_net(
+                target,
+                RootWait::Bound(bound.as_ref().map_or(&NoBound, |b| b)),
+            )
             .resolve_anchored(&target.scope)
             .await
             .ok()?;
@@ -594,13 +593,13 @@ where
             if published.current.commitment.cut_epoch < entry.cut_epoch {
                 return Err(self.never_landed(scope, &entry));
             }
-            // No step publishes at a root read from its last copy, so the
-            // wave moves the root first (ADR 0068 D3).
+            // The wave moves a root read from its last copy first (ADR 0068 D3).
             if published.fell_back {
                 steps.sort_by_key(|step| !matches!(step, OwedStep::WriteCut { .. }));
             }
             read = Some(published);
         }
+        let reordered = steps != entry.steps;
         for (at, step) in steps.iter().enumerate() {
             let read = read.take();
             match step {
@@ -624,10 +623,10 @@ where
                 }
             }?;
             if let Some(next) = steps.get(at + 1) {
-                let _ = if steps == entry.steps {
-                    self.owed().advance_to(scope, next).await
-                } else {
+                let _ = if reordered {
                     self.owed().leave(scope, steps[at + 1..].to_vec()).await
+                } else {
+                    self.owed().advance_to(scope, next).await
                 };
             }
         }
@@ -677,12 +676,12 @@ where
         };
         let bound = self.owed_bound(node).await;
         let net = if cut {
-            let root_bound: &dyn NodeBound = if sites.command() {
-                &AtOnce
+            let wait = if sites.command() {
+                RootWait::Command
             } else {
-                bound.as_ref().map_or(&NoBound, |b| b)
+                RootWait::Bound(bound.as_ref().map_or(&NoBound, |b| b))
             };
-            self.cut_net(&target, root_bound)
+            self.cut_net(&target, wait)
         } else {
             self.net(&target, PointerConsultArm::Refused)
         };
@@ -690,16 +689,12 @@ where
             .resolve_anchored(&target.scope)
             .await
             .map_err(|e| stop(EngineError::from_resolve_failure(e, "owed-scope-root")))?;
-        let fell_back = net
-            .root_fallback
-            .as_ref()
-            .is_some_and(RootFallback::fell_back);
         Ok(OwedScope {
             indexed,
             target,
             current,
             pointer_placed: vouched.is_some(),
-            fell_back,
+            fell_back: net.fell_back(),
         })
     }
 

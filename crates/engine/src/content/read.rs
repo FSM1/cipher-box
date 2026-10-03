@@ -268,9 +268,8 @@ pub enum ReadError {
     /// status level (unreachable, aborted, or non-2xx). Availability, not
     /// integrity — the caller may retry later.
     Unavailable,
-    /// Every source answered that it holds no such block (404 or 410), and no
-    /// source failed. Availability as [`Self::Unavailable`] is; only an owner
-    /// cut's root read tells the two apart (ADR 0068 D1).
+    /// Every source answered 404 or 410 and none failed: availability, but a
+    /// positive absence (ADR 0068 D1).
     NotFound,
 }
 
@@ -305,6 +304,7 @@ pub fn is_plane_anchor(cid_str: &str, expected_cid: &[u8], plane: ContentPlane) 
 /// each rotate to the next source. All sources exhausted without a verified
 /// block is [`ReadError::TrustViolation`] when a source served a mismatch,
 /// else [`ReadError::TooLarge`] when one served an over-cap body, else
+/// [`ReadError::NotFound`] when every source answered 404 or 410, else
 /// [`ReadError::Unavailable`].
 pub async fn read_block(
     gateway: &Gateway,
@@ -324,7 +324,7 @@ pub async fn read_block(
     // no-source Unavailable.
     let mut over_cap: Option<(usize, usize)> = None;
     let mut mismatch = None;
-    // Whether every source so far answered that it holds no such block.
+    // Whether a source answered that it holds no such block (404 or 410).
     let mut not_found = false;
     let mut failed = false;
     for source in gateway.sources() {

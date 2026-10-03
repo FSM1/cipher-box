@@ -25,7 +25,7 @@ use crate::gate::floor;
 use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
     GatedRoots, GatedWaveReads, MovedScopeSeed, OnAccessMisses, OwnerRotationKeys,
-    OwnerRotationNet, PointerConsultArm, RootFallback, RootReports, RotationAncestry,
+    OwnerRotationNet, PointerConsultArm, RootFallback, RootReports, RootWait, RotationAncestry,
     SweptScopeState, WaveSubtree, WriteWaveNet,
 };
 use crate::profile::SyncTimingProfile;
@@ -94,9 +94,8 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     pub sweep: &'a dyn Fn(ChildScopeRef) -> BoxedTask,
     /// The cut's bound of ADR 0065 D3 ([`RotateScopeWritePlan::bound`]).
     pub bound: &'a dyn NodeBound,
-    /// The bound the root fallback waits on: [`AtOnce`](crate::rotation::AtOnce)
-    /// under an owner command, the cut's bound under a re-drive (ADR 0068 D1).
-    pub root_bound: &'a dyn NodeBound,
+    /// When the root fallback falls back ([`RootWait`]).
+    pub root_wait: RootWait<'a>,
     /// The refused root records this session already reported.
     pub root_reports: &'a RootReports,
     /// What this cut's own root reads met ([`CutRootReads`]).
@@ -104,9 +103,7 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
 }
 
 /// Whether a root read of one cut fell back to the last copy, and the root a
-/// wave of that cut moved to (ADR 0068 D3). A cut whose root read fell back
-/// publishes nothing more at the old root name, so its read cut runs at the
-/// moved root.
+/// wave of that cut moved to (ADR 0068 D3).
 #[derive(Default)]
 pub(crate) struct CutRootReads {
     fell_back: Cell<bool>,
@@ -135,7 +132,7 @@ where
     }
 
     /// Whether a root read of this cut fell back and the root still sits at
-    /// the old name, where no step of this cut publishes (ADR 0068 D3).
+    /// the old name (ADR 0068 D3).
     fn at_refused_root(&self) -> bool {
         self.root_reads.fell_back.get() && self.root_reads.moved_root.borrow().is_none()
     }
@@ -193,7 +190,7 @@ where
             moved_seed: MovedScopeSeed::default(),
             root_fallback: Some(RootFallback::new(
                 self.scope_id,
-                self.root_bound,
+                self.root_wait,
                 self.root_reports,
             )),
         }
@@ -210,11 +207,7 @@ where
         S: SnapshotCache,
     {
         let current = net.resolve_anchored(scope).await;
-        if net
-            .root_fallback
-            .as_ref()
-            .is_some_and(RootFallback::fell_back)
-        {
+        if net.fell_back() {
             self.root_reads.fell_back.set(true);
         }
         current
@@ -472,7 +465,7 @@ where
                     subtree: WaveSubtree::default(),
                     root_fallback: Some(RootFallback::new(
                         scope_root.0,
-                        self.root_bound,
+                        self.root_wait,
                         self.root_reports,
                     )),
                 };

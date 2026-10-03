@@ -14961,20 +14961,21 @@ fn sign_at(
 /// seed derives, at `sequence`: a folder envelope with no grant section.
 /// Returns the name.
 fn plant_root_at(fx: &GrantScenario, revokee_seed: &[u8; 32], sequence: u64) -> IpnsName {
-    plant_root_served_at(fx, revokee_seed, sequence, true)
+    plant_root_served_at(fx, revokee_seed, fx.folder, sequence, true)
 }
 
-/// [`plant_root_at`], with a head block that no endpoint serves when `served`
-/// is false.
+/// [`plant_root_at`] at the scope root `node`, with a head block that no
+/// endpoint serves when `served` is false.
 fn plant_root_served_at(
     fx: &GrantScenario,
     revokee_seed: &[u8; 32],
+    node: NodeId,
     sequence: u64,
     served: bool,
 ) -> IpnsName {
     let planted = author_child_envelope(EnvelopeAuthoring {
-        node_id: fx.folder.0,
-        scope_id: fx.folder.0,
+        node_id: node.0,
+        scope_id: node.0,
         epoch: 1,
         read_key: &[0x13; 32],
         nonce: &[0x5f; 24],
@@ -14989,7 +14990,7 @@ fn plant_root_served_at(
     sign_at(
         fx,
         revokee_seed,
-        fx.folder,
+        node,
         format!("/ipfs/{}", planted.cid).as_bytes(),
         sequence,
     )
@@ -15031,6 +15032,54 @@ fn revoke_the_recipient(fx: &mut GrantScenario) -> Result<CommandOutcome, Engine
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
         },
     )
+}
+
+/// A revoke of the bystander's read grant, across the retries of its bounded
+/// steps.
+fn revoke_the_bystander(fx: &mut GrantScenario) -> Result<CommandOutcome, EngineError> {
+    let folder = fx.folder;
+    command_across_retries(
+        fx,
+        Command::Revoke {
+            node: folder,
+            recipient_identity_public_key: bystander_identity(),
+        },
+    )
+}
+
+/// A downgrade of the write grantee to read, across the retries of its
+/// bounded steps.
+fn downgrade_the_recipient(fx: &mut GrantScenario) -> Result<CommandOutcome, EngineError> {
+    let folder = fx.folder;
+    command_across_retries(
+        fx,
+        Command::ChangePermission {
+            node: folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        },
+    )
+}
+
+/// Revoke the write grantee of `node` while its scope pointer refuses every
+/// publish, so the wave is owed, then heal the pointer.
+fn owe_the_wave(fx: &mut GrantScenario, node: NodeId) {
+    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &node.0);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+    assert_eq!(
+        command_across_retries(
+            fx,
+            Command::Revoke {
+                node,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+    fx.world.record_store.heal_put_for(pointer.as_str());
 }
 
 /// The abuse events in `events` that report the scope root refused at
@@ -15145,13 +15194,7 @@ fn a_write_revoke_reads_past_a_replayed_pre_cut_root() {
     );
     let folder = fx.folder;
     assert_eq!(
-        command_across_retries(
-            &mut fx,
-            Command::Revoke {
-                node: folder,
-                recipient_identity_public_key: bystander_identity(),
-            }
-        ),
+        revoke_the_bystander(&mut fx),
         Ok(CommandOutcome::Done),
         "a read revoke cuts the set at the same root name"
     );
@@ -15178,20 +15221,7 @@ fn a_downgrade_runs_on_the_last_copy_of_a_planted_root() {
     let planted = published_value(&fx.world, &old_root);
     let folder = fx.folder;
 
-    assert_eq!(
-        command_across_retries(
-            &mut fx,
-            Command::ChangePermission {
-                node: folder,
-                recipient_identity_public_key: recipient_identity()
-                    .verifying_key()
-                    .to_sec1()
-                    .to_vec(),
-                permission: Permission::Read,
-            }
-        ),
-        Ok(CommandOutcome::Done)
-    );
+    assert_eq!(downgrade_the_recipient(&mut fx), Ok(CommandOutcome::Done));
 
     let moved = fx.granted_scope_repoint();
     assert_eq!(moved.write_epoch, 3, "the downgrade moved the root");
@@ -15226,25 +15256,13 @@ fn a_read_revoke_over_a_planted_root_keeps_the_stop() {
     let sequence = sequence_at(&fx.world, &old_root) + 1;
     plant_root_at(&fx, &writer_seed, sequence);
     let planted = published_value(&fx.world, &old_root);
-    let folder = fx.folder;
 
-    let outcome = command_across_retries(
-        &mut fx,
-        Command::Revoke {
-            node: folder,
-            recipient_identity_public_key: bystander_identity(),
-        },
-    );
+    let outcome = revoke_the_bystander(&mut fx);
 
     assert!(outcome.is_err(), "the read revoke stops: {outcome:?}");
     let events = events_so_far(&mut fx._events);
     assert!(root_refusals(&fx, &events, sequence) > 0);
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, Event::RotationWorkOwed { .. })),
-        "no work stays owed"
-    );
+    assert!(!owes_any(&events), "no work stays owed");
     assert_eq!(published_value(&fx.world, &old_root), planted);
 }
 
@@ -15255,11 +15273,9 @@ fn a_read_revoke_over_a_planted_root_keeps_the_stop() {
 fn a_redrive_reads_a_planted_root_from_its_last_copy() {
     let mut fx = GrantScenario::new();
     let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
-    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0);
-    fx.world.record_store.fail_put_for(pointer.as_str());
-    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+    let folder = fx.folder;
+    owe_the_wave(&mut fx, folder);
     assert_eq!(fx.owed_scopes(), vec![fx.folder], "the wave is owed");
-    fx.world.record_store.heal_put_for(pointer.as_str());
     let old_root = derive_write_name(&revokee_seed, &fx.folder.0);
     let sequence = sequence_at(&fx.world, &old_root) + 1;
     plant_root_at(&fx, &revokee_seed, sequence);
@@ -15268,12 +15284,7 @@ fn a_redrive_reads_a_planted_root_from_its_last_copy() {
 
     let events = events_so_far(&mut fx._events);
     assert!(root_refusals(&fx, &events, sequence) > 0);
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, Event::RotationWorkOwed { .. })),
-        "no work stays owed"
-    );
+    assert!(!owes_any(&events), "no work stays owed");
     assert_eq!(fx.granted_scope_repoint().write_epoch, 3);
     assert_the_revokee_is_cut(&fx, &revokee_seed);
 }
@@ -15305,13 +15316,18 @@ fn a_read_cut_that_stops_at_the_moved_root_finishes_in_the_redrive() {
     assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
 
     assert!(
-        !events_so_far(&mut fx._events)
-            .iter()
-            .any(|event| matches!(event, Event::RotationWorkOwed { .. })),
+        !owes_any(&events_so_far(&mut fx._events)),
         "no work stays owed"
     );
     assert_revoke_finished(&mut fx, &revokee_seed, child);
     assert_the_revokee_is_cut(&fx, &revokee_seed);
+}
+
+/// Whether `events` report work owed at any scope.
+fn owes_any(events: &[Event]) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, Event::RotationWorkOwed { .. }))
 }
 
 /// The events that report work owed at `scope`, or abandoned there.
@@ -15406,7 +15422,7 @@ fn a_revoke_over_a_root_whose_head_block_no_endpoint_serves_ends_in_one_pass() {
     let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
     let old_root = fx.granted_scope_repoint().current_root;
     let sequence = sequence_at(&fx.world, &old_root) + 1;
-    plant_root_served_at(&fx, &revokee_seed, sequence, false);
+    plant_root_served_at(&fx, &revokee_seed, fx.folder, sequence, false);
 
     let outcome = block_on(fx.engine.command(Command::Revoke {
         node: fx.folder,
@@ -15472,7 +15488,7 @@ fn a_revoke_over_an_absent_root_head_block_while_an_endpoint_fails_is_unavailabl
     let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
     let root = fx.granted_scope_repoint().current_root;
     let sequence = sequence_at(&fx.world, &root) + 1;
-    plant_root_served_at(&fx, &revokee_seed, sequence, false);
+    plant_root_served_at(&fx, &revokee_seed, fx.folder, sequence, false);
     let failing = fx.world.record_store.endpoints()[1].clone();
     fx.world.record_store.fail_endpoint(&failing);
     let _ = events_so_far(&mut fx._events);
@@ -15585,41 +15601,9 @@ fn owe_a_wave_then_plant_the_root(fx: &mut GrantScenario, node: NodeId) -> [u8; 
     let section =
         published_grant_section_at(&fx.world, &fx.blocks, &root).expect("the granted root");
     let revokee_seed = grantee_write_scope_seed(&section, &root, &node.0, 1);
-    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &node.0);
-    fx.world.record_store.fail_put_for(pointer.as_str());
-    assert_eq!(
-        command_across_retries(
-            fx,
-            Command::Revoke {
-                node,
-                recipient_identity_public_key: recipient_identity()
-                    .verifying_key()
-                    .to_sec1()
-                    .to_vec(),
-            }
-        ),
-        Ok(CommandOutcome::Done)
-    );
-    fx.world.record_store.heal_put_for(pointer.as_str());
-    let planted = author_child_envelope(EnvelopeAuthoring {
-        node_id: node.0,
-        scope_id: node.0,
-        epoch: 1,
-        read_key: &[0x13; 32],
-        nonce: &[0x5f; 24],
-        body: &folder_body(Vec::new()),
-        carried_unknown: PreservedFields::new(),
-        carried_epoch_tag_unknown: PreservedFields::new(),
-    })
-    .expect("the planted root seals");
-    fx.blocks.put(planted.block.clone());
-    sign_at(
-        fx,
-        &revokee_seed,
-        node,
-        format!("/ipfs/{}", planted.cid).as_bytes(),
-        sequence_at(&fx.world, &root) + 1,
-    );
+    owe_the_wave(fx, node);
+    let sequence = sequence_at(&fx.world, &root) + 1;
+    plant_root_served_at(fx, &revokee_seed, node, sequence, true);
     revokee_seed
 }
 
@@ -15664,14 +15648,7 @@ fn a_different_cut_over_a_cut_that_never_landed_reports_the_replaced_work() {
     let _ = revoke_the_recipient(&mut fx);
     let _ = events_so_far(&mut fx._events);
 
-    let folder = fx.folder;
-    let _ = command_across_retries(
-        &mut fx,
-        Command::Revoke {
-            node: folder,
-            recipient_identity_public_key: bystander_identity(),
-        },
-    );
+    let _ = revoke_the_bystander(&mut fx);
 
     assert_eq!(
         abandoned(&mut fx._events),
@@ -15698,20 +15675,8 @@ fn the_sweep_cuts_an_expired_link_over_a_cut_that_never_landed() {
     fx.owner_device
         .floor_store
         .fail_epoch_floor_reads_after(&floor_label(&cut_epoch_floor), 1);
-    let folder = fx.folder;
     assert!(
-        command_across_retries(
-            &mut fx,
-            Command::ChangePermission {
-                node: folder,
-                recipient_identity_public_key: recipient_identity()
-                    .verifying_key()
-                    .to_sec1()
-                    .to_vec(),
-                permission: Permission::Read,
-            }
-        )
-        .is_err(),
+        downgrade_the_recipient(&mut fx).is_err(),
         "the cut set did not publish"
     );
     fx.owner_device.floor_store.heal_floors();
@@ -15739,14 +15704,12 @@ fn the_sweep_cuts_an_expired_link_over_a_cut_that_never_landed() {
 fn a_rerun_over_a_head_block_plant_after_the_cut_stands_ends_in_one_pass() {
     let mut fx = GrantScenario::new();
     let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
-    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0);
-    fx.world.record_store.fail_put_for(pointer.as_str());
-    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+    let folder = fx.folder;
+    owe_the_wave(&mut fx, folder);
     assert_eq!(fx.owed_scopes(), vec![fx.folder], "the wave is owed");
-    fx.world.record_store.heal_put_for(pointer.as_str());
     let old_root = derive_write_name(&revokee_seed, &fx.folder.0);
     let sequence = sequence_at(&fx.world, &old_root) + 1;
-    plant_root_served_at(&fx, &revokee_seed, sequence, false);
+    plant_root_served_at(&fx, &revokee_seed, fx.folder, sequence, false);
 
     assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
 
@@ -15768,11 +15731,9 @@ fn a_rerun_over_a_head_block_plant_after_the_cut_stands_ends_in_one_pass() {
 fn a_sync_pass_redrives_an_owed_cut_while_a_root_plant_stands() {
     let mut fx = GrantScenario::new();
     let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
-    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0);
-    fx.world.record_store.fail_put_for(pointer.as_str());
-    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+    let folder = fx.folder;
+    owe_the_wave(&mut fx, folder);
     assert_eq!(fx.owed_scopes(), vec![fx.folder], "the wave is owed");
-    fx.world.record_store.heal_put_for(pointer.as_str());
     let old_root = derive_write_name(&revokee_seed, &fx.folder.0);
     let sequence = sequence_at(&fx.world, &old_root) + 1;
     plant_root_at(&fx, &revokee_seed, sequence);
