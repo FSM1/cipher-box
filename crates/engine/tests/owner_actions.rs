@@ -2262,14 +2262,15 @@ fn a_captured_node_with_a_malformed_head_is_one_trust_violation() {
     );
 }
 
-/// The re-key of a capture lands and the bin index publish does not. The
-/// next pass opens the node under the bin's held key and bins it, with no
-/// record reported faulty.
-#[test]
-fn a_capture_whose_bin_publish_failed_bins_on_the_next_pass() {
-    let mut fx = GrantScenario::new();
-    let (mut engine, mut events, mut tasks) = fx.second_owner_device();
-    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |_, _| {});
+/// A node another writer unlinked, whose re-key lands on `device` while the
+/// bin index publish does not.
+fn rekeyed_with_no_entry(
+    fx: &mut GrantScenario,
+    device: &FakeDevice,
+) -> (NodeId, Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    let (mut engine, events, mut tasks) = boot_owner(&fx.world, &fx.blocks, device);
+    tick(&fx.world, &engine, &mut tasks);
+    let doomed = unlinked_by_another_writer(fx, &mut engine, &mut tasks, |_, _| {});
     let bin = BinIndexKeys::derive(&SECRET);
     fx.world.record_store.fail_put_for(bin.name().as_str());
     let before = published_head_cid(&fx.world, &write_name(doomed));
@@ -2284,8 +2285,19 @@ fn a_capture_whose_bin_publish_failed_bins_on_the_next_pass() {
         before,
         "the re-key landed"
     );
-    assert!(bin_scopes_of(&fx, doomed).is_empty(), "and no entry did");
+    assert!(bin_scopes_of(fx, doomed).is_empty(), "and no entry did");
     fx.world.record_store.heal_put_for(bin.name().as_str());
+    (doomed, engine, events, tasks)
+}
+
+/// The re-key of a capture lands and the bin index publish does not. The
+/// next pass opens the node under the bin's held key and bins it, with no
+/// record reported faulty.
+#[test]
+fn a_capture_whose_bin_publish_failed_bins_on_the_next_pass() {
+    let mut fx = GrantScenario::new();
+    let device = fx.world.device(b"the owner's second device");
+    let (doomed, engine, mut events, mut tasks) = rekeyed_with_no_entry(&mut fx, &device);
     for _ in 0..8 {
         tick(&fx.world, &engine, &mut tasks);
     }
@@ -2294,6 +2306,39 @@ fn a_capture_whose_bin_publish_failed_bins_on_the_next_pass() {
         bin_scopes_of(&fx, doomed),
         vec![SCOPE],
         "the node bins on a later pass"
+    );
+}
+
+/// The sequence-floor reads of the node's name that answer before the
+/// re-key's held-key read: two for each of the capture pass's two opens and
+/// the re-key's read under the scope key.
+const HELD_KEY_READ_BUDGET: u64 = 6;
+
+/// The same, with the re-key's held-key read failing after the scope key
+/// refused the record: the read did not answer, so no record is reported
+/// faulty, and the node bins once the reads answer again.
+#[test]
+fn a_held_key_read_with_no_answer_is_no_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let device = fx.world.device(b"the owner's second device");
+    let (doomed, engine, mut events, mut tasks) = rekeyed_with_no_entry(&mut fx, &device);
+    device.floor_store.fail_sequence_floor_reads_after(
+        &floor_label(write_name(doomed).as_str().as_bytes()),
+        HELD_KEY_READ_BUDGET,
+    );
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    device.floor_store.heal_floors();
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        bin_scopes_of(&fx, doomed),
+        vec![SCOPE],
+        "the node bins once the reads answer"
     );
 }
 

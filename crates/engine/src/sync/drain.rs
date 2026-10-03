@@ -1824,7 +1824,8 @@ impl ChildFault {
 
 /// Which own end a proved capture's node record opens under.
 enum Sealer<'e> {
-    End(ScopeEnd<'e>),
+    /// The end, with its root when it is not the capture's own scope.
+    End(ScopeEnd<'e>, Option<Rc<LoadedRoot>>),
     /// A read did not land, so a later pass decides.
     Unanswered,
     /// The refusal is reported, and the capture drops.
@@ -4274,7 +4275,7 @@ where
         let mut added = Vec::new();
         let mut unfinished = Vec::new();
         // Each other end's root, read once for the pass; `None` did not read.
-        let mut other_roots: BTreeMap<NodeId, Option<LoadedRoot>> = BTreeMap::new();
+        let mut other_roots: BTreeMap<NodeId, Option<Rc<LoadedRoot>>> = BTreeMap::new();
         for unlinked in taken {
             // A read leg may link the node again while this pass awaits.
             if self.cells.base.borrow().contains(unlinked.node) {
@@ -4293,11 +4294,11 @@ where
                 continue;
             }
             let deleted_at = standing.map_or(unlinked.deleted_at, |entry| entry.deleted_at);
-            let end = match self
+            let (end, other_root) = match self
                 .sealing_end(scope, ends, &root, &mut other_roots, &unlinked, deleted_at)
                 .await
             {
-                Sealer::End(end) => end,
+                Sealer::End(end, other_root) => (end, other_root),
                 Sealer::Unanswered => {
                     unfinished.push(unlinked);
                     continue;
@@ -4308,14 +4309,7 @@ where
                 unfinished.push(unlinked);
                 continue;
             }
-            let Some(sealing_root) = (if end.root == scope.source.root {
-                Some(&root)
-            } else {
-                other_roots.get(&end.root).and_then(Option::as_ref)
-            }) else {
-                unfinished.push(unlinked);
-                continue;
-            };
+            let sealing_root = other_root.as_deref().unwrap_or(&root);
             if self
                 .rekey_into_bin(
                     scope,
@@ -4366,7 +4360,7 @@ where
         scope: &DrainScope<'e>,
         ends: &[ScopeEnd<'e>],
         root: &LoadedRoot,
-        other_roots: &mut BTreeMap<NodeId, Option<LoadedRoot>>,
+        other_roots: &mut BTreeMap<NodeId, Option<Rc<LoadedRoot>>>,
         unlinked: &UnlinkedChild,
         deleted_at: u64,
     ) -> Sealer<'e> {
@@ -4381,7 +4375,7 @@ where
             )
             .await
         {
-            Ok(()) => return Sealer::End(scope.source),
+            Ok(()) => return Sealer::End(scope.source, None),
             Err(fault) if fault.seal_open_failed() => fault,
             Err(ChildFault::Halt(_)) => return Sealer::Unanswered,
             Err(fault) => {
@@ -4396,9 +4390,11 @@ where
         }) {
             let other_root = match other_roots.entry(end.root) {
                 Entry::Occupied(held) => held.into_mut(),
-                Entry::Vacant(slot) => slot.insert(self.load_scope_root(end).await.ok()),
+                Entry::Vacant(slot) => {
+                    slot.insert(self.load_scope_root(end).await.ok().map(Rc::new))
+                }
             };
-            let Some(other_root) = other_root.as_ref() else {
+            let Some(other_root) = other_root.clone() else {
                 unanswered = true;
                 continue;
             };
@@ -4411,7 +4407,7 @@ where
                 )
                 .await
             {
-                Ok(()) => return Sealer::End(*end),
+                Ok(()) => return Sealer::End(*end, Some(other_root)),
                 Err(ChildFault::Halt(_)) => unanswered = true,
                 // This end does not seal the record.
                 Err(ChildFault::Refused(_)) => {}
@@ -4433,14 +4429,6 @@ where
         node: NodeId,
         deleted_at: u64,
     ) -> Result<(), ChildFault> {
-        let fault = match self
-            .load_child_node_unreported(plane, anchor, node, ResolveMode::CacheFirst)
-            .await
-        {
-            Ok(_) => return Ok(()),
-            Err(fault) if fault.seal_open_failed() => fault,
-            Err(fault) => return Err(fault),
-        };
         let held = self.inputs.bin_keys.held_key(&node.0, deleted_at);
         let binned = SealPlane {
             end: ScopeEnd {
@@ -4449,13 +4437,36 @@ where
             },
             ..*plane
         };
-        match self
-            .load_child_node_unreported(&binned, anchor, node, ResolveMode::CacheFirst)
+        self.load_under_either(plane, &binned, anchor, node)
+            .await
+            .map(|_| ())
+    }
+
+    /// `node`'s record read under `from`, else under `to`, with whether `to`
+    /// opened it. A record that opens under `to` is honest, so the fault under
+    /// `from` is given back only when `to` refuses it too; a `to` read with no
+    /// answer gives back its halt.
+    async fn load_under_either(
+        &self,
+        from: &SealPlane<'_>,
+        to: &SealPlane<'_>,
+        anchor: Anchor<'_>,
+        node: NodeId,
+    ) -> Result<(LoadedNode, bool), ChildFault> {
+        let fault = match self
+            .load_child_node_unreported(from, anchor, node, ResolveMode::CacheFirst)
             .await
         {
-            Ok(_) => Ok(()),
+            Ok(loaded) => return Ok((loaded, false)),
+            Err(fault) => fault,
+        };
+        match self
+            .load_child_node_unreported(to, anchor, node, ResolveMode::CacheFirst)
+            .await
+        {
+            Ok(loaded) => Ok((loaded, true)),
+            Err(ChildFault::Halt(halt)) => Err(ChildFault::Halt(halt)),
             Err(ChildFault::Refused(_)) => Err(fault),
-            Err(halt) => Err(halt),
         }
     }
 
@@ -5025,22 +5036,9 @@ where
         anchor: Anchor<'_>,
         node: NodeId,
     ) -> Result<(LoadedNode, bool), Halt> {
-        let fault = match self
-            .load_child_node_unreported(from, anchor, node, ResolveMode::CacheFirst)
+        self.load_under_either(from, to, anchor, node)
             .await
-        {
-            Ok(loaded) => return Ok((loaded, false)),
-            Err(fault) => fault,
-        };
-        // A record that opens under `to` is honest, so the refusal under
-        // `from` is reported only when neither key opens it.
-        match self
-            .load_child_node_unreported(to, anchor, node, ResolveMode::CacheFirst)
-            .await
-        {
-            Ok(loaded) => Ok((loaded, true)),
-            Err(_) => Err(self.report_fault(&from.end.write_name(&node.0), fault)),
-        }
+            .map_err(|fault| self.report_fault(&from.end.write_name(&node.0), fault))
     }
 
     /// The owner-authored doomed manifest this delete just earned: the target's
