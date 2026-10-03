@@ -1589,9 +1589,9 @@ surviving committed grants uniformly in the republish it already does.
   replaces the entry. The gate holds the epoch floors, so a keyless root at the
   floor also replaces it. A confirmed read at a new name replaces the old
   name's entry only with a greater write epoch. A corrupt local entry is absent;
-  the next confirmed read can replace it. A local seam failure means that the
-  source has no copy. It is never abuse, and the network record keeps its trust
-  verdict.
+  the next confirmed read can replace it. A local seam failure is never abuse.
+  On the read and on the rotation fallback it means that the source has no
+  copy, and the network record keeps its trust verdict.
   The adoption gate checks the ascent link and opens the body; a signed owner
   blob with the wrong seed fails at unseal and raises attributable abuse.
   The engine gates the confirmed copy against the current floors. A rotation
