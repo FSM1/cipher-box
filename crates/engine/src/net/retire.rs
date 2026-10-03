@@ -1037,7 +1037,8 @@ mod tests {
                 r#"{{"retired":{},"unpinned":0}}"#,
                 retired.unwrap_or_default()
             )
-            .into_bytes(),
+            .into_bytes()
+            .into(),
         }
     }
 
@@ -1205,7 +1206,7 @@ mod tests {
                     Some((_, block)) => Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body: block.clone(),
+                        body: block.clone().into(),
                     }),
                     None => Err(SeamError::new("no such block")),
                 }
@@ -1405,7 +1406,7 @@ mod tests {
                     return Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body: root_block,
+                        body: root_block.into(),
                     });
                 }
                 Err(SeamError::new("no such block"))
