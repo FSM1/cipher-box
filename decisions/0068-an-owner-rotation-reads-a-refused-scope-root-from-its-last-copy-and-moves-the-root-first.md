@@ -9,8 +9,9 @@
   [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)
   D2, D4 and D5, [ADR 0064](./0064-the-name-wave-reads-a-lagging-interior-node.md),
   [ADR 0065](./0065-the-name-wave-drops-a-node-that-it-cannot-move-and-an-owed-cut-ends-within-a-bound.md)
-  D1, D3 and D4, `blueprint/engine.md` "rotateScopeWrite" and "Adoption gate and floors"
-- **Implemented by:** not yet implemented
+  D1, D3 and D4, [ADR 0071](./0071-a-below-floor-record-while-an-endpoint-fails-is-unavailable-not-a-trust-violation.md)
+  D1, `blueprint/engine.md` "rotateScopeWrite" and "Adoption gate and floors"
+- **Implemented by:** FSM1/cipher-box#2270 (D1 to D4, and the amendment of 2026-10-03)
 - **Amends:** ADR 0065 D4 (a stop at the scope root does not lapse the scope), ADR 0065 Residuals
 
 ## Context
@@ -34,6 +35,15 @@ that no endpoint serves falls back only past the bound of ADR 0065 D3. Each fall
 trust event with the scope root and the refused sequence. Readers that are not an owner rotation
 do not change.
 
+Amended on 2026-10-03: the bound applies to a sync pass re-drive only. The reads of an owner
+command, and of the re-drive that a command runs first, fall back at once also for a cause that an
+endpoint can give: a head block that every block source says it does not hold, a head block that
+does not match its CID, and a record below the sequence floor. A root that leaves no room for its
+re-seal also falls back at once. A record below the floor, or a head block that no source holds,
+met while a record endpoint failed, is unavailable, with no trust event and no fallback (ADR 0071
+D1). A transport fault and a local seam fault never fall back. Each refused record is one trust
+event in a session.
+
 **D2 — A confirmed scope root publish by the owner is a last-known-good copy.** Thus a plant after
 the cut set lands finds the cut-set root in the cache.
 
@@ -47,6 +57,21 @@ the stop: a current writer planted the root, and the trust event names it.
 does not carry the cut set. When no copy carries it, the re-drive finds the cut as never landed,
 drops the entry with `rotationWorkAbandoned`, and the owner runs the command again. After a
 fallback, the cut-epoch floor rises only when the cut set lands.
+
+Amended on 2026-10-03: an entry whose cut never landed stays with its first stop. A run of the
+same command again replaces its steps and its cut epoch, and keeps its first stop. Another command,
+or a link expiry, replaces the entry and tells the host with `rotationWorkAbandoned`. The re-drive
+drops the entry only when the owner runs no command again within the bound. The bound for a scope
+starts at the first stop of an owner rotation on that scope and survives a run again. Each sync
+pass that re-drives the entry counts as a pass: the pass places each owed scope whose root its
+boundary walk refused under a gated parent. The durable `owed-rotation` body does not change.
+
+**D5 — A cut whose root read fell back keeps no grant row (added on 2026-10-03).** The last copy
+cannot prove that its grant set is current, so the cut removes every row and the owner shares
+again. A re-drive that reads a copy with rows, also for the owed wave of a new write share, signs
+this cut at a new cut epoch before either plane runs, and sends `rotationWorkAbandoned` once. A
+copy one cut epoch below the entry is not a cut that never landed (D4): each pass signs the cut
+again at the entry's cut epoch, also with zero rows, while the plant stands.
 
 ## Alternatives considered
 
@@ -72,19 +97,23 @@ fallback, the cut-epoch floor rises only when the cut set lands.
    the scope root name is not covered" with the data loss: what a writer published after the copy
    goes, surfaced by the trust event. "Triggers" states the order of D3: the read plane goes
    first, except after a fallback.
-2. `blueprint/engine.md` "Adoption gate and floors" names the owner rotation fallback of D1 beside
-   the gate's fail-closed rule.
+2. `blueprint/engine.md` "Adoption gate and floors" names the D1 fallback. "rotateScopeWrite" states D5.
 3. `CONTEXT.md` "Forgery window" ends at the wave for a planted root when a copy passes the gate.
    "Owed rotation work" states D4.
-4. `blueprint/testing.md` "crates/engine — seam fakes and the simulation harness": the rotation
-   matrix adds the root plants (a refused record, a pre-cut replay, a head block that no endpoint
-   serves, a plant at `u64::MAX`, a plant before the command). Each ends the revoke in one pass
-   with a copy, and a wave on a pre-cut copy re-mints no grant for the revokee.
+4. `blueprint/testing.md` "crates/engine — seam fakes and the simulation harness" lists the root
+   plants and the D5 cases.
 5. ADR 0065 D4 and ADR 0065 Residuals carry an "Amended by ADR 0068" sentence.
+6. Honest lag (amended on 2026-10-03): a command runs on the older copy while no source holds the
+   head block of another owner device's root; what it published goes, with the trust event.
+7. The last command run time is in memory (amended on 2026-10-03): after a restart the bound runs
+   from the first stop, so the re-drive can drop an entry early with `rotationWorkAbandoned`.
+8. D5 costs: under honest lag a read revoke removes every share and every writer's access. A
+   planting writer, or a party that holds every block source or record endpoint, forces a full
+   re-share on the next owner cut or owed re-drive, which includes the owed wave of a write share.
+   The owner accepts this; an owner-signed grant-set digest at the scope pointer removes it (#2288).
 
 ## Residuals
 
-- A device with no copy that passes the gate keeps the stop, and the scope lapses. Does option 3
-  follow, or does the owner accept this?
+- A device with no copy that passes the gate keeps the stop, and the scope lapses. Option 3?
 - A `directChildScopeIndex` entry that a committed writer put in the root body before the cut
   stops the wave in `record_scope_boundary`, also on the copy. Does it get its own rule?

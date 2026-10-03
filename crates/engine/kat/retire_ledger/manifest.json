@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "profile": "cipherbox/v2 engine retire-ledger entry",
+  "entryAccept": {
+    "file": "vectors/entry_accept.json",
+    "count": 6
+  },
+  "entryReject": {
+    "file": "vectors/entry_reject.json",
+    "count": 15
+  }
+}

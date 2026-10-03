@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
+use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use crate::content::DAG_ROOT_CODEC;
 use crate::seams::{DebtOrigin, OwedRetire, RetireLedger};
@@ -174,6 +176,11 @@ where
         owed_bytes: 11,
         manifest_bytes: 90,
         origin: DebtOrigin::Prune,
+        name: Some(
+            IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5C; 32]).verifying_key())
+                .as_str()
+                .to_owned(),
+        ),
     };
     reopened.owe(alice, &[quoted.clone()]).await.unwrap();
     reopened

@@ -683,6 +683,10 @@ where
             let failure = walked
                 .as_ref()
                 .map_or_else(|met| Some(*met), |walked| walked.failure);
+            *state.walk_refused_roots.borrow_mut() = walked
+                .as_ref()
+                .map(|walked| walked.refused.clone())
+                .unwrap_or_default();
             if let Ok(walked) = walked {
                 let departed = install_descendant_scopes(
                     &state.descendant_scope_roots,
@@ -1335,6 +1339,7 @@ where
             boundaries,
             root_name: &root_name,
             walked: state.scope_roots_walked.get(),
+            refused_roots: state.walk_refused_roots.borrow().clone(),
         };
         conversion.redrive_owed(&sites).await;
         state.owed_rotation_driven.set(true);
