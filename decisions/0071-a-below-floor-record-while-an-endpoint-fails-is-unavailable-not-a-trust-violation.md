@@ -56,7 +56,8 @@ unavailable endpoint.
 **D4 — When every endpoint answered, a below-floor pick stays a trust violation.** Each endpoint
 answered with a record or with "no record", and the freshest record is below the floor. The
 gate refuses it as a trust violation, pins last-known-good and sends the trust event, as AGENTS.md
-rule 6 and the floor law require.
+rule 6 and the floor law require. For a command (for example a revoke), the trust violation that
+the command returns as its error is the trust event, and the command sends no separate abuse event.
 
 ## Alternatives considered
 

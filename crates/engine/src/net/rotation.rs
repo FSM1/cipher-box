@@ -85,10 +85,10 @@ use crate::grants::{
     recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
 use crate::net::fanout::{
-    FanoutRecord, fanout_get_answered, fanout_get_classified, fanout_get_tied_classified,
-    fanout_get_verify,
+    AnsweredFetch, FanoutRecord, fanout_get_answered, fanout_get_classified,
+    fanout_get_tied_classified, fanout_get_verify, fanout_get_verify_failed,
 };
-use crate::net::resolve::Adopter;
+use crate::net::resolve::{Adopter, below_floor};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::eager_set::bind_child_labels;
 use crate::rotation::sweep::body_children;
@@ -759,8 +759,7 @@ enum RootGateVerdict {
     /// step over the record ([`OwnerRotationNet::last_known_good_root`]); every
     /// other reader folds it back into one.
     NotResealable,
-    /// The sequence stage refused a record strictly below the floor. A
-    /// rejection, unless the fan-out that served it met a failed endpoint
+    /// The sequence stage refused a record strictly below the floor
     /// ([`Self::after_fanout`]).
     BelowFloor,
 }
@@ -1952,8 +1951,9 @@ where
     /// read refuses and on which axis.
     async fn head_at(&self, ipns_name: &[u8]) -> Result<RecordHead, ResolveFailure> {
         let name = scope_name(ipns_name)?;
-        let fetch = fanout_get_tied_classified(self.transport, &name).await;
-        let Some((_, record_bytes, _)) = fetch.pick else {
+        let Some((_, record_bytes, endpoint_failed)) =
+            fanout_get_verify_failed(self.transport, &name).await
+        else {
             return Err(ResolveFailure::Unavailable);
         };
         let (sequence, block) =
@@ -1965,7 +1965,7 @@ where
             record_bytes,
             sequence,
             block,
-            endpoint_failed: fetch.endpoint_failed,
+            endpoint_failed,
         })
     }
 
@@ -1994,8 +1994,9 @@ where
         anchor: RootAnchor,
     ) -> Result<ResealableRoot, RootGateVerdict> {
         let adopter = self.root_adopter(scope_id);
-        let fetch = fanout_get_tied_classified(self.transport, name).await;
-        let Some((verified, record_bytes, _)) = fetch.pick else {
+        let Some((verified, record_bytes, endpoint_failed)) =
+            fanout_get_verify_failed(self.transport, name).await
+        else {
             return Err(RootGateVerdict::Unavailable);
         };
         // This arm's own fallback reads the cached copy back
@@ -2033,7 +2034,7 @@ where
                 );
                 stepped_over
             }
-            Err(verdict) => Err(verdict.after_fanout(fetch.endpoint_failed)),
+            Err(verdict) => Err(verdict.after_fanout(endpoint_failed)),
         }
     }
 
@@ -2831,8 +2832,9 @@ where
         granted: &GrantedScopeRoot,
     ) -> Result<GatedScopeRoot, RootGateVerdict> {
         let name = &granted.ipns_name;
-        let fetch = fanout_get_tied_classified(self.transport, name).await;
-        let Some((_, record_bytes, _)) = fetch.pick else {
+        let Some((_, record_bytes, endpoint_failed)) =
+            fanout_get_verify_failed(self.transport, name).await
+        else {
             return Err(RootGateVerdict::Unavailable);
         };
         let floors = self.granted_floors(granted);
@@ -2847,7 +2849,7 @@ where
         );
         gated_root_cached(&adopter, self.snapshot_cache, name, &record_bytes, None)
             .await
-            .map_err(|verdict| verdict.after_fanout(fetch.endpoint_failed))
+            .map_err(|verdict| verdict.after_fanout(endpoint_failed))
     }
 
     /// Gate the scope root and assemble everything its flat cut re-seals, parking
@@ -3143,17 +3145,10 @@ fn resolve_verdict(error: GateError) -> ResolveFailure {
     }
 }
 
-/// [`resolve_verdict`] for a sequence check on a fan-out read: a record below
-/// the floor while an endpoint failed is unavailable (ADR 0071 D1).
+/// [`resolve_verdict`] for a sequence check on a fan-out read ([`below_floor`]).
 fn sequence_verdict(error: GateError, endpoint_failed: bool) -> ResolveFailure {
     match &error {
-        GateError::Rejected(rejection)
-            if endpoint_failed
-                && matches!(
-                    rejection.reason,
-                    RejectionReason::SequenceNotNewer { floor, sequence } if sequence < floor
-                ) =>
-        {
+        GateError::Rejected(rejection) if endpoint_failed && below_floor(&rejection.reason) => {
             ResolveFailure::Unavailable
         }
         _ => resolve_verdict(error),
@@ -3317,9 +3312,10 @@ where
             name,
             record_bytes,
             sequence,
+            endpoint_failed,
             ..
         } = head;
-        let sequence = *sequence;
+        let (sequence, endpoint_failed) = (*sequence, *endpoint_failed);
         floor::check_sequence(
             self.floors,
             name.as_str().as_bytes(),
@@ -3327,9 +3323,7 @@ where
             floor::Strictness::AtOrAboveFloor,
         )
         .await
-        .map_err(|error| {
-            SweepResolveFailure::from(sequence_verdict(error, head.endpoint_failed))
-        })?;
+        .map_err(|error| SweepResolveFailure::from(sequence_verdict(error, endpoint_failed)))?;
         // A seed the ratchet does not reach fails this pass's read, not the
         // record's trust: an epoch above the root is also a label a committed
         // writer can choose freely (the epoch is only AAD).
@@ -4515,17 +4509,21 @@ where
         root: Option<Option<u64>>,
         refused: &impl Fn(ResolveFailure, Option<DropCause>, bool) -> NodeStop,
     ) -> Result<WaveSource, NodeStop> {
-        let (record_bytes, endpoint_failed) = match fanout_get_answered(self.transport, name).await
-        {
-            (FanoutRecord::Found(_, bytes), _, endpoint_failed) => (bytes, endpoint_failed),
-            (FanoutRecord::Absent, _, _) => {
+        let AnsweredFetch {
+            record,
+            answered,
+            endpoint_failed,
+        } = fanout_get_answered(self.transport, name).await;
+        let record_bytes = match record {
+            FanoutRecord::Found(_, bytes) => bytes,
+            FanoutRecord::Absent => {
                 return Err(refused(
                     ResolveFailure::Unavailable,
                     Some(DropCause::NoRecord),
                     true,
                 ));
             }
-            (FanoutRecord::Unavailable(_), answered, _) => {
+            FanoutRecord::Unavailable(_) => {
                 return Err(refused(
                     ResolveFailure::Unavailable,
                     Some(DropCause::EndpointUnavailable),
@@ -4797,8 +4795,9 @@ where
         let identity = self.owner.verifying_key();
         for child in index {
             let name = scope_name(&child.ipns_name)?;
-            let fetch = fanout_get_tied_classified(self.transport, &name).await;
-            let Some((_, record_bytes, _)) = fetch.pick else {
+            let Some((_, record_bytes, endpoint_failed)) =
+                fanout_get_verify_failed(self.transport, &name).await
+            else {
                 return Err(ResolveFailure::Unavailable);
             };
             let parent_node_seed = kdf::node_seed(read_scope_seed, &child.scope_id);
@@ -4819,7 +4818,7 @@ where
                 Some(child.scope_id),
             )
             .await
-            .map_err(|verdict| ResolveFailure::from(verdict.after_fanout(fetch.endpoint_failed)))?;
+            .map_err(|verdict| ResolveFailure::from(verdict.after_fanout(endpoint_failed)))?;
             self.subtree.record_child_scope(child.scope_id);
         }
         Ok(())
@@ -4887,8 +4886,9 @@ where
     /// Fetch and adoption-gate this scope's root at `name`, refusing an envelope
     /// that is not this scope's own at this build's version.
     async fn gated_root_at(&self, name: &IpnsName) -> Result<GatedScopeRoot, ResolveFailure> {
-        let fetch = fanout_get_tied_classified(self.transport, name).await;
-        let Some((_, record_bytes, _)) = fetch.pick else {
+        let Some((_, record_bytes, endpoint_failed)) =
+            fanout_get_verify_failed(self.transport, name).await
+        else {
             return Err(ResolveFailure::Unavailable);
         };
         let identity = self.owner.verifying_key();
@@ -4900,7 +4900,7 @@ where
             None,
         )
         .await
-        .map_err(|verdict| ResolveFailure::from(verdict.after_fanout(fetch.endpoint_failed)))?;
+        .map_err(|verdict| ResolveFailure::from(verdict.after_fanout(endpoint_failed)))?;
         refuse_foreign_version(gated.envelope.v).map_err(|_| ResolveFailure::Rejected)?;
         if gated.envelope.id != self.scope_id {
             return Err(ResolveFailure::Rejected);
@@ -16482,6 +16482,14 @@ mod tests {
             endpoint
         }
 
+        /// `read` while one endpoint fails, then again after it recovers.
+        fn failed_then_healed<T, R>(harness: &Harness<T>, read: impl Fn() -> R) -> (R, R) {
+            let failed = fail_one(harness);
+            let during = read();
+            harness.store.heal_endpoint(&failed);
+            (during, read())
+        }
+
         #[test]
         fn the_root_admit() {
             let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
@@ -16503,10 +16511,9 @@ mod tests {
                 .map(|_| ())
             };
 
-            let failed = fail_one(&harness);
-            assert!(matches!(admit(), Err(ScopeRootAdmission::Unavailable)));
-            harness.store.heal_endpoint(&failed);
-            assert!(matches!(admit(), Err(ScopeRootAdmission::Rejected)));
+            let (during, after) = failed_then_healed(&harness, admit);
+            assert!(matches!(during, Err(ScopeRootAdmission::Unavailable)));
+            assert!(matches!(after, Err(ScopeRootAdmission::Rejected)));
         }
 
         #[test]
@@ -16519,10 +16526,13 @@ mod tests {
             raise_past(&harness.floors, &name);
             let read = || block_on(net.resolve_child(&scope, node)).map(|_| ());
 
-            let failed = fail_one(&harness);
-            assert_eq!(read(), Err(SweepResolveFailure::Unavailable));
-            harness.store.heal_endpoint(&failed);
-            assert_eq!(read(), Err(SweepResolveFailure::Rejected));
+            assert_eq!(
+                failed_then_healed(&harness, read),
+                (
+                    Err(SweepResolveFailure::Unavailable),
+                    Err(SweepResolveFailure::Rejected)
+                )
+            );
         }
 
         #[test]
@@ -16564,10 +16574,13 @@ mod tests {
             raise_past(&floors, &world.root.name);
             let read = || block_on(world.net().gated_root(&world.granted[0])).map(|_| ());
 
-            let failed = fail_one(&world.harness);
-            assert_eq!(read(), Err(RootGateVerdict::Unavailable));
-            world.harness.store.heal_endpoint(&failed);
-            assert_eq!(read(), Err(RootGateVerdict::BelowFloor));
+            assert_eq!(
+                failed_then_healed(&world.harness, read),
+                (
+                    Err(RootGateVerdict::Unavailable),
+                    Err(RootGateVerdict::BelowFloor)
+                )
+            );
         }
 
         #[test]
@@ -16583,15 +16596,13 @@ mod tests {
                 &staged.root.grant_section.commitment,
             );
 
-            let failed = fail_one(&harness);
             assert_eq!(
-                block_on(net.resolve_node(&SCOPE, None)).map(|_| ()),
-                Err(NodeStop::Stop(ResolveFailure::Unavailable))
-            );
-            harness.store.heal_endpoint(&failed);
-            assert_eq!(
-                block_on(net.resolve_node(&SCOPE, None)).map(|_| ()),
-                Err(NodeStop::Stop(ResolveFailure::Rejected))
+                failed_then_healed(&harness, || block_on(net.resolve_node(&SCOPE, None))
+                    .map(|_| ())),
+                (
+                    Err(NodeStop::Stop(ResolveFailure::Unavailable)),
+                    Err(NodeStop::Stop(ResolveFailure::Rejected))
+                )
             );
         }
 
@@ -16608,16 +16619,13 @@ mod tests {
                 &staged.root.grant_section.commitment,
             );
             // The root is at its floor, so only the boundary read is below one.
-            let failed = fail_one(&harness);
-
             assert_eq!(
-                block_on(net.resolve_node(&SCOPE, None)).map(|_| ()),
-                Err(NodeStop::Stop(ResolveFailure::Unavailable))
-            );
-            harness.store.heal_endpoint(&failed);
-            assert_eq!(
-                block_on(net.resolve_node(&SCOPE, None)).map(|_| ()),
-                Err(NodeStop::Stop(ResolveFailure::Rejected))
+                failed_then_healed(&harness, || block_on(net.resolve_node(&SCOPE, None))
+                    .map(|_| ())),
+                (
+                    Err(NodeStop::Stop(ResolveFailure::Unavailable)),
+                    Err(NodeStop::Stop(ResolveFailure::Rejected))
+                )
             );
         }
     }

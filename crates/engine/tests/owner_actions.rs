@@ -14896,10 +14896,7 @@ fn sequence_served_by(world: &FakeWorld, endpoint: &EndpointId, name: &IpnsName)
 }
 
 fn revoke_recipient(fx: &mut GrantScenario) -> Result<CommandOutcome, EngineError> {
-    block_on(fx.engine.command(Command::Revoke {
-        node: fx.folder,
-        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
-    }))
+    fx.revoke_person(&recipient_identity().verifying_key().to_sec1())
 }
 
 /// The cached last-known-good copy and the durable sequence floor of `node`'s

@@ -253,27 +253,29 @@ pub async fn fanout_get_under<T: RecordTransport>(
     scan(transport, name).await.classify(rule)
 }
 
-/// [`fanout_get_classified`], whether an endpoint answered for the name (with
-/// no record, or with bytes that it served; a transport failure or a status
-/// answer is no answer), and [`TiedFetch::endpoint_failed`].
+/// What [`fanout_get_answered`] read at a name.
+pub(crate) struct AnsweredFetch {
+    /// [`fanout_get_classified`]'s answer.
+    pub(crate) record: FanoutRecord,
+    /// [`Scan::answered`].
+    pub(crate) answered: bool,
+    /// [`TiedFetch::endpoint_failed`].
+    pub(crate) endpoint_failed: bool,
+}
+
+/// [`fanout_get_classified`], and what the endpoints said beside it.
 pub(crate) async fn fanout_get_answered<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
-) -> (FanoutRecord, bool, bool) {
+) -> AnsweredFetch {
     let scan = scan(transport, name).await;
-    let answered = scan.vacant > 0
-        || scan.failures.iter().any(|(_, failure)| {
-            !matches!(
-                failure,
-                EndpointFailure::Transport | EndpointFailure::Status
-            )
-        });
+    let answered = scan.answered();
     let endpoint_failed = scan.endpoint_failed();
-    (
-        scan.classify(VacancyRule::Unanimous),
+    AnsweredFetch {
+        record: scan.classify(VacancyRule::Unanimous),
         answered,
         endpoint_failed,
-    )
+    }
 }
 
 /// The freshest verified record, and every other record another endpoint
@@ -299,6 +301,19 @@ pub(crate) struct TiedFetch {
     /// An endpoint gave no answer about the name, so a below-floor pick is
     /// unavailable, not a rollback (ADR 0071 D1, D2).
     pub(crate) endpoint_failed: bool,
+}
+
+/// [`fanout_get_verify`], and [`TiedFetch::endpoint_failed`].
+pub(crate) async fn fanout_get_verify_failed<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> Option<(VerifiedRecord, Vec<u8>, bool)> {
+    let TiedFetch {
+        pick,
+        endpoint_failed,
+        ..
+    } = fanout_get_tied_classified(transport, name).await;
+    pick.map(|(verified, bytes, _)| (verified, bytes, endpoint_failed))
 }
 
 /// [`fanout_get_tied`], and what the endpoints said beside the pick.
@@ -330,11 +345,23 @@ struct Scan {
 }
 
 impl Scan {
-    /// Whether an endpoint gave no answer about the name (ADR 0071 D2).
+    /// Whether a GET failed as [`EndpointFailure::Transport`].
     fn endpoint_failed(&self) -> bool {
         self.failures
             .iter()
             .any(|(_, failure)| *failure == EndpointFailure::Transport)
+    }
+
+    /// Whether an endpoint answered for the name: with no record, or with
+    /// bytes that it served.
+    fn answered(&self) -> bool {
+        self.vacant > 0
+            || self.failures.iter().any(|(_, failure)| {
+                !matches!(
+                    failure,
+                    EndpointFailure::Transport | EndpointFailure::Status
+                )
+            })
     }
 
     /// Whether the endpoints agree the name holds no record, by `rule`.
@@ -423,8 +450,7 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
     scan
 }
 
-/// The class of a failed GET. Only an endpoint that gave no answer about the
-/// name is a [`EndpointFailure::Transport`] failure (ADR 0071 D2).
+/// The class of a failed GET.
 fn get_failure(error: &SeamError) -> EndpointFailure {
     if error.is_over_cap() {
         return EndpointFailure::OverCap;

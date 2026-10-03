@@ -325,6 +325,11 @@ struct GatedParts {
     fork: Option<Fork>,
 }
 
+/// Whether the sequence stage refused a record strictly below the floor.
+pub(crate) fn below_floor(reason: &RejectionReason) -> bool {
+    matches!(reason, RejectionReason::SequenceNotNewer { floor, sequence } if sequence < floor)
+}
+
 /// The gated resolve behind [`resolve`]/[`resolve_and_hold`] and the cold-start
 /// driver.
 pub(crate) async fn resolve_gated<T, S, A>(
@@ -462,9 +467,7 @@ where
                         Err(GateError::Seam(error)) => return Err(error),
                     }
                 }
-                RejectionReason::SequenceNotNewer { floor, sequence }
-                    if sequence < floor && fetch.endpoint_failed =>
-                {
+                reason if fetch.endpoint_failed && below_floor(reason) => {
                     (ResolveOutcome::NoUpdate, GatedParts::default())
                 }
                 _ => (

@@ -108,7 +108,6 @@ export class FetchRecordTransport implements RecordTransportSeam {
     }
     if (!response.ok) {
       await response.body?.cancel();
-      // The engine classifies the status; the seam only reports it.
       throw Object.assign(new Error(`RecordTransport GET ${response.status} at ${endpoint}`), {
         status: response.status,
       });
