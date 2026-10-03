@@ -462,7 +462,7 @@ impl Blocks {
                 .headers
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
-                .map(|(_, value)| value.clone())
+                .map(|(_, value)| value.as_str().to_owned())
                 .expect("upload declares its CID");
             // The API's own refusal: a BYO account's bytes bypass the hosted
             // ingress, record heads included.

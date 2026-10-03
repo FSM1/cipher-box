@@ -50,7 +50,7 @@ impl Http for ReqwestHttp {
         };
         let mut builder = self.client.request(method, &request.url);
         for (name, value) in &request.headers {
-            builder = builder.header(name, value);
+            builder = builder.header(name, value.as_str());
         }
         if let Some(body) = request.body {
             builder = builder.body(bytes::Bytes::from_owner(body));

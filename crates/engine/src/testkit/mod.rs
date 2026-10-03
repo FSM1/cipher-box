@@ -44,6 +44,10 @@ pub fn padding(bytes: usize) -> cipherbox_core::seal::PreservedFields {
     .into_iter()
     .collect()
 }
+/// Compiles only for a value that wipes itself on drop: a test binds a
+/// credential copy with it and never reads the credential.
+pub fn assert_wipes_on_drop<T: zeroize::ZeroizeOnDrop>(_: &T) {}
+
 pub use executor::{block_on, block_on_while_ticking, poll_tasks_once, poll_tasks_until_parked};
 pub use owner_root::{
     CARRIED_WRITE_HISTORY_LINK, OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY,

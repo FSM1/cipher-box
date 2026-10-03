@@ -734,7 +734,7 @@ async fn reqwest_http_round_trips_request_and_response() {
         .send(HttpRequest {
             method: HttpMethod::Post,
             url: format!("{}/echo", server.base_url()),
-            headers: vec![("x-cipherbox".into(), "seam".into())],
+            headers: vec![("x-cipherbox".into(), "seam".to_owned().into())],
             body: Some(b"request-payload".to_vec().into()),
             credentials: HttpCredentials::Omit,
             timeout_ms: None,
@@ -796,7 +796,10 @@ async fn reqwest_http_follows_no_redirect_and_does_not_replay_the_bearer() {
         .send(HttpRequest {
             method: HttpMethod::Get,
             url: format!("{}/redirect", server.base_url()),
-            headers: vec![("Authorization".into(), "Bearer member-token".into())],
+            headers: vec![(
+                "Authorization".into(),
+                "Bearer member-token".to_owned().into(),
+            )],
             body: None,
             credentials: HttpCredentials::Omit,
             timeout_ms: None,

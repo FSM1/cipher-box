@@ -774,7 +774,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         let request = HttpRequest {
             method: HttpMethod::Post,
             url: self.url(path),
-            headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned())],
+            headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned().into())],
             body: Some(to_json(body)),
             credentials: HttpCredentials::Include,
             timeout_ms: Some(self.deadlines.control_ms),
@@ -851,10 +851,10 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     ) -> Result<HttpResponse, ApiError> {
         let mut headers = Vec::new();
         if let Some(content_type) = content_type {
-            headers.push((CONTENT_TYPE.to_owned(), content_type.to_owned()));
+            headers.push((CONTENT_TYPE.to_owned(), content_type.to_owned().into()));
         }
         for (name, value) in extra_headers {
-            headers.push(((*name).to_owned(), (*value).to_owned()));
+            headers.push(((*name).to_owned(), (*value).to_owned().into()));
         }
         let bearer = match self.session.peek().map(|t| bearer_header(t.as_str())) {
             Some(Ok(header)) => Some(header),
@@ -1716,6 +1716,24 @@ mod tests {
     }
 
     #[test]
+    fn an_authed_request_hands_the_seam_a_wiping_bearer_value() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        http.enqueue_response(json_response(200, json!({})));
+
+        block_on(client.register(&[])).expect("register");
+
+        let request = http.requests().pop().unwrap();
+        let (_, value) = request
+            .headers
+            .iter()
+            .find(|(name, _)| name == AUTHORIZATION)
+            .expect("an authed request carries a bearer");
+        crate::testkit::assert_wipes_on_drop(value);
+        assert_eq!(value.capacity(), value.len(), "no spare buffer to regrow");
+    }
+
+    #[test]
     fn name_registered_reads_only_a_200_boolean_and_errs_on_everything_else() {
         let (http, _creds, client) = fakes();
         login(&http, &client);
@@ -2187,7 +2205,7 @@ mod tests {
             request
                 .headers
                 .iter()
-                .any(|(name, value)| name == CONTENT_CID && *value == cid),
+                .any(|(name, value)| name == CONTENT_CID && value.as_str() == cid),
             "the declared address is sent"
         );
         assert_eq!(request.body.as_deref(), Some(&block));

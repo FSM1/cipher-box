@@ -16146,7 +16146,7 @@ mod tests {
                     .headers
                     .iter()
                     .any(|(name, value)| name.eq_ignore_ascii_case(AUTHORIZATION)
-                        && value == "Bearer jwt-1"),
+                        && value.as_str() == "Bearer jwt-1"),
                 "{revoke:?}"
             );
             assert!(
