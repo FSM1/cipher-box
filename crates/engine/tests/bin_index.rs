@@ -1211,6 +1211,7 @@ fn held_bin_record(head: &str, sequence: u64) -> HeldRecord {
         signer: kdf::bin_index_ipns_keypair(&SECRET),
         value: HeldValue::Head(head.to_owned()),
         content_cids: Vec::new(),
+        envelope: None,
     }
 }
 

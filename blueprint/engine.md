@@ -151,9 +151,13 @@ bytes (FSM1/cipher-box-next#28 D2).
   actively used vaults keep themselves alive; on session start and
   periodically, the engine checks the EOLs of its renewal set (`HeldRecords`)
   and below ~30 days remaining republishes the same CID at seq+1 through the
-  normal CAS path. The same pass then runs a bounded part of the **renewal
-  walk** (ADR 0061 D1 to D4), which reaches every other name of the vault. A
-  session renews only a name whose signer derives from a write seed it holds:
+  normal CAS path. A held node record carries its envelope version and its
+  scope bar (`HeldEnvelope`): the renewal does not sign a version that this
+  build does not author, or a record whose scope floors rose above the bar,
+  and sends `renewalFailed` for it, as the renewal walk does. The same pass
+  then runs a bounded part of the **renewal walk** (ADR 0061 D1 to D4), which
+  reaches every other name of the vault.
+  A session renews only a name whose signer derives from a write seed it holds:
   a read grantee signs nothing, and a write grantee renews only its renewal
   set. The renewal walk holds back the renewal of a name the endpoints serve
   forked while more than 30 days of its EOL are left, because a record at
@@ -169,10 +173,14 @@ bytes (FSM1/cipher-box-next#28 D2).
   The walk is depth-first in node-id order and stops at a scope-root boundary.
   A visit admits the record through the gate (`gate::adopt` for a scope root,
   the gated child resolve otherwise) and renews it when its EOL is inside the
-  walk window. It skips a doomed name, a name the retire ledger owes a retire,
-  a name the parent no longer names, and a name the drain is publishing. It
-  registers in batches, reads the name again after the registration, reads the
-  durable floor with no await before the signature, and signs at `floor + 1`
+  walk window. It does not renew a record at an envelope version that this
+  build does not author, and emits `renewalFailed` with a version detail for
+  it; the signature clears the scope bar of the admitted root (ADR 0061 D3
+  as amended on 2026-10-03). It skips a doomed name, a name the retire ledger
+  owes a retire, a name the parent no longer names, and a name the drain is
+  publishing. It registers in batches, reads the name again after the
+  registration, reads the durable floor with no await before the signature,
+  and signs at `floor + 1`
   with an EOL one day short of `eol_from(now)`. A `LostRace` is not retried in
   that cycle. The numbers: at most 500 visits for each pass, a walk window of
   60 days of EOL left, and a new cycle no sooner than 7 days after the previous
@@ -303,7 +311,14 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    interior record below the floor is opened only by the four readers that the
    "sweep" section names.
 6. **Unseal** — success required; core's trust-violation error class carries
-   through fail-closed.
+   through fail-closed. While an owed entry holds the interior move of a scope
+   root, an interior node of that root opens one time under the seed and the
+   floors of the scope its epoch tag names, which must be the entry's root or
+   the scope the folder left; any other scope is refused here, and a bound scope
+   whose read seed this device does not hold yet is availability for that node
+   ([ADR 0072](../decisions/0072-an-interior-node-of-a-root-with-an-owed-interior-move-opens-under-the-scope-its-tag-names.md)
+   D1). This read runs at the named scope's floors, so it is not a reader below
+   the read-epoch floor.
 
 **One section, one signer** (stage 3, ADR 0032 D8): the rule, its work bound
 and the splice it closes are core's (core.md "One section, one signer",
@@ -1448,7 +1463,9 @@ surviving committed grants uniformly in the republish it already does.
   writer gains no capability, because the ascent link and the source name key
   already let it author in the granted scope. A stalled interior move,
   write-scope cut or grant delivery is owed rotation work, which the sync
-  pass re-drives through the resume path (ADR 0063 D1, D3). An **append**, on an existing
+  pass re-drives through the resume path (ADR 0063 D1, D3). While the interior
+  move is owed, the focus and navigation legs read each interior node under the
+  scope its epoch tag names (ADR 0072 D1). An **append**, on an existing
   scope root: one more row and grant blob, the commitment re-signed, and the root published
   once at the current epoch — no new seed, no re-seal of the subtree, no
   converge step; the new grantee reads the whole history of the scope (D6). A

@@ -62,7 +62,7 @@ const LOGIN_CHALLENGE: &str =
 /// A publish basis at `name` with no record read there.
 #[must_use]
 pub fn fresh_observed(name: &IpnsName) -> Observed {
-    Observed::gated(name, 0, ENVELOPE_V).expect("this build's envelope version")
+    Observed::gated(name, 0, ENVELOPE_V, &[]).expect("this build's envelope version")
 }
 
 /// The name label this account keys a durable floor under

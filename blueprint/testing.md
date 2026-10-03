@@ -98,6 +98,12 @@ fake HTTP serves the API's mailbox routes from (ADR 0044), and seeded entropy.
 No network, no docker, no wall clock — CAS races and multi-day EOL timelines
 execute in milliseconds.
 
+The **Engine simulation tests** PR gate also runs the engine unit tests,
+`encode_refusals`, and `renewal_walk` in release mode. Together they exercise
+the shared produce-side gate through root rotation, the name wave, the drain,
+renewal, and revival, including floor changes before signing, foreign envelope
+versions, and sequence exhaustion.
+
 The **simulation harness** is this strategy's center of gravity: N engine
 instances (owner, write-grantee, read-grantee, revokee, adversary) share one
 fake record store and mailbox and are stepped deterministically on virtual
@@ -232,6 +238,11 @@ scenario fails the meta-test):
   vault root back with 45 days left and reports it, renews over it with 25
   days left, and renews over a tie of one value, and the renewal set renews
   over a fork inside 30 days (`tests/renewal_walk.rs`, `net::liveness`).
+  A child or a vault root at a foreign envelope version is not renewed by the
+  walk or the renewal set, and the walk emits `renewalFailed` with a version
+  detail; a scope floor raised during the registration makes the walk refuse
+  (`tests/renewal_walk.rs`); the renewal set refuses a held node at a foreign
+  version or below its scope bar (`net::liveness`).
   A lagging endpoint (ADR 0071): with two endpoints, where one lags one
   sequence and the other fails or answers 429, a revoke gets
   `EngineError::Seam`, a read
@@ -247,6 +258,16 @@ scenario fails the meta-test):
   timeout is a failed endpoint, and a failed body cancellation keeps the known
   answer (`net::fanout`, the desktop record transport, the web
   `recordTransport`). The fix tests fail on the code before ADR 0071.
+  An owed interior move (ADR 0072): after a stop at the reseal, a partial
+  reseal, or a stop at the parent index publish, the navigation leg and then
+  the tick focus leg each adopt a changed interior folder with no abuse event;
+  a restart over a move still owed gives no abuse event at either leg; a
+  record whose epoch tag names a bound scope that does not open it, and a
+  record whose tag names a third scope, each give exactly one trust violation
+  (`tests/owner_actions.rs`); an unread owed record leaves the legs on the
+  proved and minted scope roots, and a leg whose root holds no seed reads a
+  record of the left scope and waits on a record of the root (`sync::pass`,
+  `net::focus`).
   `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
   wave left at its old name, which nothing renews; `tests/write_plane.rs`
   covers a renewal inside the drain's window, and a lost race on a scope root

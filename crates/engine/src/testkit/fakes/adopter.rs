@@ -10,7 +10,15 @@ use zeroize::Zeroizing;
 
 use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
 use crate::net::author::ENVELOPE_V;
-use crate::net::{AdoptOutcome, Adopter, GatePass};
+use crate::net::{AdoptOutcome, Adopter, GatePass, PublishBar};
+
+/// The bar a scripted admission carries: read epoch 1 of the zero scope.
+pub const ADMITTED_BAR: PublishBar = PublishBar {
+    scope_id: [0; 16],
+    read_epoch: 1,
+    write_epoch: None,
+    cut_epoch: None,
+};
 
 /// The verdict a [`ScriptedAdopter`] returns for every record it is handed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,6 +82,7 @@ impl Adopter for ScriptedAdopter {
                 node_id: [0u8; 16],
                 read_scope_seed: None,
                 version: ENVELOPE_V,
+                bar: ADMITTED_BAR,
             }),
             AdoptVerdict::TrustViolation => Err(GateError::Rejected(GateRejection {
                 stage: GateStage::RecordVerify,
