@@ -382,6 +382,7 @@ fn take_owed(rest: &mut &[u8]) -> Option<Vec<OwedRetire>> {
             owed_bytes,
             manifest_bytes,
             origin: DebtOrigin::Prune,
+            name: None,
         });
     }
     Some(owed)
