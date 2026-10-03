@@ -150,14 +150,21 @@ scenario fails the meta-test):
   cut with a copy, the moved root gives the revokee no row
   and no blob, nothing more publishes at the old root name, a read revoke keeps
   the stop, a read cut that stops at the moved root ends in the next re-drive,
-  a root whose head block no endpoint serves ends the revoke in one pass, a
-  command over honest lag runs on the older copy, a first wave that stops
-  leaves a cut the pass keeps within the bound and drops past it, a run again
-  keeps the first stop so an unserved interior node drops past the bound, and a
-  sync pass re-drives an owed cut while a root plant stands
-  (ADR 0068, `crates/engine/tests/owner_actions.rs`); in a re-drive a head
-  block that no endpoint serves and a record below the sequence floor fall back
-  only past the bound; a confirmed root publish is
+  a root whose head block no block source holds ends the revoke in one pass,
+  and so does a root below the sequence floor when every endpoint answered,
+  while the same head block with a failed record endpoint, a head block the
+  gateway times out on, and a cache write fault are unavailable with no
+  fallback, a command over honest lag runs on the older copy, a first wave
+  that stops leaves a cut the pass keeps within the bound and drops past it, a
+  run again keeps the first stop so an unserved interior node drops past the
+  bound, a command rerun over a plant after the cut stands ends in one pass, a
+  different cut over a cut that never landed reports the replaced work, the
+  link sweep cuts an expired link over such a cut, and a sync pass re-drives
+  an owed cut, and two owed cuts, while their root plants stand
+  (ADR 0068, `crates/engine/tests/owner_actions.rs`); in a sync pass re-drive a
+  head block that no source holds, a wrong head block and a record below the
+  sequence floor fall back only past the bound, and the first and the last
+  never after a failed endpoint; a confirmed root publish is
   the last copy, and the driver runs the wave first after a fallback
   (`crates/engine/src/net/rotation.rs`, `crates/engine/src/rotation/trigger`);
 - the keyless re-PUT adversary (FSM1/cipher-box-next#38) — forged old-epoch records at old
