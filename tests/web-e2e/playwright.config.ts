@@ -14,7 +14,7 @@
 // gates).
 //
 // `retries: 0` is policy in every slice, not tuning: a flaky test is a defect.
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices, type ReporterDescription } from '@playwright/test';
 import { previewCommand } from './preview';
 
 const suite = process.env.E2E_SUITE ?? 'smoke';
@@ -27,6 +27,7 @@ const E2E_PORT = 4173;
 const RELEASE_PORT = 4174;
 
 const isCi = Boolean(process.env.CI);
+const reporter: ReporterDescription[] = isCi ? [['list'], ['html', { open: 'never' }]] : [['list']];
 
 const url = (port: number) => `http://localhost:${port}`;
 
@@ -67,6 +68,7 @@ const stagingUse = {
  * behind a rate limit keyed on the caller address, so the run is serial.
  */
 const staging = {
+  reporter: [...reporter, ['./staging/signInReporter.ts']] satisfies ReporterDescription[],
   workers: 1,
   fullyParallel: false,
   timeout: 300_000,
@@ -80,7 +82,9 @@ const staging = {
     {
       name: 'staging',
       testDir: './staging',
-      testIgnore: ['**/*.setup.ts', '**/soak/**'],
+      // The `*.test.ts` files beside the specs are the vitest unit suite.
+      testMatch: '**/*.spec.ts',
+      testIgnore: ['**/soak/**'],
       dependencies: ['staging-media'],
       use: stagingUse,
     },
@@ -129,7 +133,7 @@ export default defineConfig({
   forbidOnly: isCi,
   grepInvert: suite === 'smoke' ? /@full/ : undefined,
   retries: 0,
-  reporter: isCi ? [['list'], ['html', { open: 'never' }]] : 'list',
+  reporter,
   ...(suite === 'soak' ? soak : stagingBaseUrl ? staging : local),
   use: {
     // Chrome's own headless, not Playwright's default `chrome-headless-shell`:
