@@ -1258,6 +1258,20 @@ rebases and signs above.
   delete and a content edit stay kept. A kept op whose device sees no flip
   within T leaves the queue at T, so a flip after T loses the write
   (ADR 0069).
+- Kept ops over a later writer: the op does not record its result, so the
+  check cannot tell a lost op from a later change. A kept create links again
+  a node that a later writer deleted, with its initial content. A kept edit
+  publishes its version again when a later writer restored the edit's base and
+  deleted the edit's version from the history; a later prune that leaves
+  another head drops the edit with no notice. A kept delete applies again only
+  while the target's live record sequence is at or below the one the delete
+  was formed against: a target that a later writer advanced past it stays,
+  and one at an equal or lower sequence, as a record the wave moved can be, is
+  deleted.
+- Reclaimed bytes after a flip: a version delete or a prune that the flip
+  loses leaves a history that names bytes this writer already retired. A kept
+  hard delete that leaves at T with no read of its folder leaves a child ref
+  whose record is retired.
 
 ## Pointer planes
 

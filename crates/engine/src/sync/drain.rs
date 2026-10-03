@@ -1523,6 +1523,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     capture_reads: RefCell<TickShare>,
     /// The mirror of the op this pass publishes now.
     mirror: RefCell<OpMirror>,
+    /// Whether the op this pass publishes now is of a kept kind ([`keeps`]).
+    keeps_op: Cell<bool>,
     /// The nodes one capture walk may hold ([`MAX_CAPTURE_WALK_NODES`]).
     capture_walk_nodes: usize,
 }
@@ -1542,6 +1544,7 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             capture_reads: RefCell::new(TickShare::new(MAX_CAPTURE_WALK_READS, 1)),
             capture_walk_nodes: MAX_CAPTURE_WALK_NODES,
             mirror: RefCell::default(),
+            keeps_op: Cell::new(false),
         }
     }
 
@@ -2362,8 +2365,8 @@ where
                     .await;
                 return Err(halt);
             }
-            // An op of a kind the check cannot judge, or a plan that ends at
-            // the bin index with no mark, completes here, as before ADR 0069.
+            // The live tree cannot show that an op of another kind landed, and
+            // a plan that ends at the bin index raises no mark to keep it by.
             if !self.kept_ids(scope).await?(applied.op_id, &applied.op) {
                 self.dequeue_op(applied.op_id).await?;
                 report.completed.push(applied.op_id);
@@ -2796,12 +2799,15 @@ where
         )
     }
 
-    /// Note the scope root and write epoch of `end` and the time for an op
-    /// whose last record just confirmed, so the op stays queued as a kept op
+    /// Note the scope root and write epoch of `end` and the time for an op of
+    /// a kept kind whose last record just confirmed, so it stays queued as a kept op
     /// (ADR 0069 D2, D4). Written before the published-op mark rises: the note
     /// alone makes the op kept. Best-effort, as [`Self::mark_published`] is: an
     /// op with no note gets one check.
     async fn keep_published(&self, scope: &DrainScope<'_>, end: &ScopeEnd<'_>, op_id: OpId) {
+        if !self.keeps_op.get() {
+            return;
+        }
         let (Ok(write_epoch), Ok(mut notes)) =
             (self.write_epoch_of(end).await, self.kept_notes(scope).await)
         else {
@@ -2901,6 +2907,16 @@ where
         let mut landed = BTreeSet::new();
         for (op_id, op) in queued {
             if !matches!(op.kind, OpKind::UpdateContent { .. }) || !kept(*op_id, op) {
+                continue;
+            }
+            // A keyless edit has no plane to read under; its rebase decides.
+            if !matches!(
+                self.kept_place(scope, op).await?,
+                KeptPlace::Writes {
+                    anchor_read_live: true,
+                    ..
+                }
+            ) {
                 continue;
             }
             let plane = self
@@ -3440,7 +3456,12 @@ where
         adopter
             .open_interior_under(name, record_bytes, &seed)
             .await
-            .map_err(|_| Halt::UploadAttempt)
+            .map_err(|error| match error {
+                GateError::Rejected(rejection) => {
+                    refuse_record(&self.seams.events, name, &rejection)
+                }
+                GateError::Seam(_) => Halt::UploadAttempt,
+            })
     }
 
     /// Make `folder` and every ancestor between it and the root of the plane it
@@ -3588,6 +3609,7 @@ where
         rebased: &Snapshot,
     ) -> Result<(), Halt> {
         self.mirror.take();
+        self.keeps_op.set(keeps(&applied.op.kind));
         self.publish_op(scope, pass, applied, rebased).await?;
         let shortfall = mirror_shortfall(&self.mirror.borrow());
         self.emit_mirror_shortfall(applied, shortfall);

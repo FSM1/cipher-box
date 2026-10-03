@@ -1722,6 +1722,11 @@ fn a_kept_edit_a_later_writer_overtook_leaves_quietly_after_the_flip() {
     tick(&fx.world, &phone, &mut phone_tasks);
     publish_version(&fx.world, &mut phone, &mut phone_tasks, doc, &[2u8; 64]);
     cut_the_write_scope(&fx, &mut phone);
+    assert_eq!(
+        block_on(fx.engine.read_content(doc)).expect("the head reads"),
+        vec![2u8; 64],
+        "this device reads the later version"
+    );
     let retired_before = retired(&fx.owner_device).len();
 
     for _ in 0..6 {
@@ -2223,6 +2228,133 @@ fn a_version_restore_leaves_the_queue_at_publish_and_a_later_restore_stays() {
     let (root, _) = live_scope(&fx);
     let versions = live_versions(&fx, &live_child(&fx, &root, fx.folder, "doc.bin"), doc);
     assert_eq!(versions[0], history[0], "the later restore stays");
+}
+
+/// A lagging record opens under the seed its epoch ratchets to. A record that
+/// does not open there is a gate refusal, so the drain reports it as abuse
+/// and does not retry it as an upload.
+#[test]
+fn a_lagging_record_that_does_not_open_is_refused_as_abuse() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let sub = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "sub");
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done)
+    );
+    // The folder lags at epoch 1, and its record seals under a key that no
+    // seed of the scope derives.
+    plant_node(
+        &fx,
+        &WRITE_SCOPE_SEED,
+        sub,
+        &folder_body(Vec::new()),
+        &[0x77; 32],
+        1,
+        true,
+    );
+    events_so_far(&mut fx._events);
+
+    block_on(fx.engine.command(Command::Create {
+        parent: sub,
+        name: "inside".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a create under the folder stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(
+        abuse_events(&mut fx._events) > 0,
+        "the refused record is reported as abuse"
+    );
+}
+
+/// A kept create whose node a later writer deleted finds no node and a live
+/// parent, so it links the node again. The op does not record its result, so
+/// the check cannot tell a lost create from a later delete. This test pins
+/// that residual.
+#[test]
+fn a_kept_create_brings_back_a_node_a_later_writer_deleted() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let late =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "late");
+    let (mut phone, _phone_events, mut phone_tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the phone opens the folder");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    block_on(phone.command(Command::Delete { node: late })).expect("the later delete stages");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    let (root, _) = live_scope(&fx);
+    assert!(
+        !live_names(&fx, &root, fx.folder).contains(&"late".to_owned()),
+        "the later writer deleted the node"
+    );
+    cut_the_write_scope(&fx, &mut phone);
+
+    passes_after_the_flip(&mut fx);
+
+    let (root, _) = live_scope(&fx);
+    assert!(
+        live_names(&fx, &root, fx.folder).contains(&"late".to_owned()),
+        "the kept create linked the node again"
+    );
+}
+
+/// A kept edit B over A, then a later writer restores A and deletes B from the
+/// history. After the flip the history does not name B and the head is A, the
+/// base of the edit, so the edit publishes B again. This test pins that
+/// residual.
+#[test]
+fn a_kept_edit_whose_version_a_later_writer_removed_publishes_again() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[1u8; 64]);
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[2u8; 64]);
+    let (root, _) = live_scope(&fx);
+    let history = live_versions(&fx, &live_child(&fx, &root, fx.folder, "doc.bin"), doc);
+    let (edited, base) = (history[0].clone(), history[1].clone());
+    let (mut phone, _phone_events, mut phone_tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the phone opens the folder");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    block_on(phone.command(Command::RestoreVersion {
+        node: doc,
+        content_cid: base.clone(),
+    }))
+    .expect("the later restore queues");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    block_on(phone.command(Command::DeleteVersion {
+        node: doc,
+        content_cid: edited.clone(),
+    }))
+    .expect("the later version delete queues");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    let (root, _) = live_scope(&fx);
+    assert_eq!(
+        live_versions(&fx, &live_child(&fx, &root, fx.folder, "doc.bin"), doc),
+        vec![base.clone()],
+        "the later writer left the base alone in the history"
+    );
+    cut_the_write_scope(&fx, &mut phone);
+
+    passes_after_the_flip(&mut fx);
+
+    let (root, _) = live_scope(&fx);
+    let versions = live_versions(&fx, &live_child(&fx, &root, fx.folder, "doc.bin"), doc);
+    assert_eq!(versions.len(), 2, "the kept edit published a version again");
+    assert_eq!(versions[1], base, "over the base");
 }
 
 /// A manual rotation leaves the subtree lagging just as a revoke's read cut
