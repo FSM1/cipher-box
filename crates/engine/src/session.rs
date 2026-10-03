@@ -347,6 +347,9 @@ pub(crate) struct SessionState {
     /// Whether the last boundary walk proved every scope root it named. Until
     /// one has, a scope root can be missing from the known set.
     pub(crate) scope_roots_walked: Rc<Cell<bool>>,
+    /// The scope roots the last walk's gate refused under a gated parent
+    /// ([`TickSites`](crate::facade::claim_conversion::TickSites)).
+    pub(crate) walk_refused_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// Whether a boundary walk has installed its result this session, an empty
     /// boundary set included. Until one has, every folder reads as part of the
     /// vault's own scope, so a navigation runs no read leg and its rows wait
@@ -557,6 +560,7 @@ impl SessionState {
             unproved_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
             boundary_walk_rejected: Rc::new(Cell::new(false)),
             scope_roots_walked: Rc::new(Cell::new(false)),
+            walk_refused_roots: Rc::new(RefCell::new(BTreeSet::new())),
             boundary_walk_landed: Rc::new(Cell::new(false)),
             boundary_walk_waiters: Rc::new(RefCell::new(Vec::new())),
             locate_miss: Rc::new(Cell::new(None)),

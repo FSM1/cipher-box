@@ -8,7 +8,7 @@
 //! a change to any of them lands here rather than in every suite that needs a
 //! vault with real published content.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -241,6 +241,8 @@ pub struct Blocks {
     /// Whether `POST /registry/retire` refuses — the outage a retire ledger's
     /// never-discard contract exists for.
     retire_down: Arc<AtomicBool>,
+    /// The blocks whose fetch fails at the transport, as a gateway timeout does.
+    failing: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl Blocks {
@@ -291,6 +293,11 @@ impl Blocks {
             .lock()
             .expect("lock")
             .insert(cid.to_owned(), block);
+    }
+
+    /// Make each fetch of `cid` fail at the transport, as a gateway timeout does.
+    pub fn fail_block(&self, cid: &str) {
+        self.failing.lock().expect("lock").insert(cid.to_owned());
     }
 
     /// The one block on the plane, for a fixture that uploaded exactly one.
@@ -589,9 +596,17 @@ impl Blocks {
         if url.contains("/registry/") {
             return ok(Vec::new());
         }
-        match self.get(&requested_cid(url)) {
+        let cid = requested_cid(url);
+        if self.failing.lock().expect("lock").contains(&cid) {
+            return Err(SeamError::new("the gateway timed out"));
+        }
+        match self.get(&cid) {
             Some(block) => ok(block),
-            None => Err(SeamError::new("no such block")),
+            None => Ok(HttpResponse {
+                status: 404,
+                headers: Vec::new(),
+                body: Vec::new().into(),
+            }),
         }
     }
 }

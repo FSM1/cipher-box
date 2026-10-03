@@ -163,7 +163,9 @@ fn open_read_error(e: ReadError) -> OpenError {
         ReadError::TrustViolation(e) => {
             OpenError::Trust(format!("content block rejected: [{}]", e.check()))
         }
-        ReadError::Unavailable => OpenError::Unavailable("content block unavailable".to_owned()),
+        ReadError::Unavailable | ReadError::NotFound => {
+            OpenError::Unavailable("content block unavailable".to_owned())
+        }
         ReadError::TooLarge { size, limit } => {
             OpenError::Unavailable(format!("content block exceeds the cap ({size} > {limit})"))
         }

@@ -243,12 +243,15 @@ where
         let Some(_hold) = self.owed.hold(node) else {
             return Ok((Vec::new(), Vec::new()));
         };
+        // An entry whose cut never landed gives way to the cut a link expiry
+        // owes (ADR 0068 D4).
         if self
             .owed()
             .entry(node)
             .await
             .map_err(EngineError::from_seam)?
             .is_some()
+            && !self.owed().not_landed(node)
         {
             return Ok((Vec::new(), Vec::new()));
         }
@@ -275,6 +278,7 @@ where
                 &cut,
                 None,
                 current.write_epoch,
+                false,
             )
             .await?;
         let rekeyed = report

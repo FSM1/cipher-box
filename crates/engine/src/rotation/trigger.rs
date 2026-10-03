@@ -535,6 +535,53 @@ pub fn revoke_grants(
     )
 }
 
+/// The cut of an owner command whose scope root read ran on the last copy of
+/// that root (ADR 0068 D5): the copy cannot prove that its grant set is
+/// current, so the cut removes every row, not only `requested`. Each tag in
+/// `requested` must be committed, as for [`revoke_grants`].
+pub fn cut_from_last_copy(
+    plan: &GrantCutPlan<'_>,
+    requested: &BTreeSet<[u8; 32]>,
+) -> Result<RevokedCommittedSet, RevokeError> {
+    authorize_cut(plan)?;
+    if requested.is_empty() {
+        return Err(RevokeError::NotGranted);
+    }
+    for tag in requested {
+        committed_permission(plan, tag)?;
+    }
+    drop_every_row(plan, false)
+}
+
+/// [`cut_from_last_copy`] for a re-drive, which names no row: the owed cut
+/// re-runs as a cut of every row. `write` keeps a wave the entry still owes.
+pub fn recut_from_last_copy(
+    plan: &GrantCutPlan<'_>,
+    write: bool,
+) -> Result<RevokedCommittedSet, RevokeError> {
+    authorize_cut(plan)?;
+    drop_every_row(plan, write)
+}
+
+/// Drop every row of `plan` in one cut. A write row needs the wave.
+fn drop_every_row(
+    plan: &GrantCutPlan<'_>,
+    write: bool,
+) -> Result<RevokedCommittedSet, RevokeError> {
+    let every_row = plan.commitment.entries.iter().map(|e| e.tag).collect();
+    let write = write
+        || plan
+            .commitment
+            .entries
+            .iter()
+            .any(|e| e.permission == Permission::Write);
+    resign(
+        drop_tags(plan, &every_row)?,
+        RotationPlanes { read: true, write },
+        plan.owner_signer,
+    )
+}
+
 /// How far a write revoke cuts.
 ///
 /// Either way the committed-set edit alone revokes nothing on the write plane:
@@ -683,6 +730,12 @@ pub trait CutRotator {
         scope_root: NodeId,
         cut: &RevokedCommittedSet,
     ) -> Result<WriteRotationOutcome, WriteRotateError>;
+
+    /// Whether a scope root read of this cut ran on the last copy of a root
+    /// the gate refused (ADR 0068 D1).
+    fn root_fell_back(&self) -> bool {
+        false
+    }
 }
 
 /// What [`rotate_on_cut`] rotated. Holding one is proof every plane the cut
@@ -715,6 +768,12 @@ pub enum RotateOnCutError {
     /// already landed, but the revokee still authors at every current write name
     /// until this does.
     Write(WriteRotateError),
+    /// The wave, run first after a root read fell back, did not complete, so
+    /// the cut set reached no root survivors read (ADR 0068 D3).
+    WriteFirst(WriteRotateError),
+    /// The wave, run first, carried the cut set to the moved root, and the
+    /// read cascade there did not complete (ADR 0068 D3).
+    ReadAfterWrite(CascadeError),
     /// A cut that drives the write plane alone carries recipients to withhold on
     /// the read plane. Only the read cascade records a withheld recipient in the
     /// durable revocation floor, so driving this would withhold a blob the
@@ -726,8 +785,12 @@ impl core::fmt::Display for RotateOnCutError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             RotateOnCutError::PublishCut(e) => write!(f, "cut-set publish failed: {e}"),
-            RotateOnCutError::Read(e) => write!(f, "read-plane cascade failed: {e}"),
-            RotateOnCutError::Write(e) => write!(f, "write-plane wave failed: {e}"),
+            RotateOnCutError::Read(e) | RotateOnCutError::ReadAfterWrite(e) => {
+                write!(f, "read-plane cascade failed: {e}")
+            }
+            RotateOnCutError::Write(e) | RotateOnCutError::WriteFirst(e) => {
+                write!(f, "write-plane wave failed: {e}")
+            }
             RotateOnCutError::WriteOnlyCutWithdrawsRead => {
                 f.write_str("a write-only cut cannot withhold a read grant")
             }
@@ -747,8 +810,10 @@ impl RotateOnCutError {
     /// A stable, key-material-free classification name.
     pub fn check(&self) -> &'static str {
         match self {
-            RotateOnCutError::PublishCut(e) | RotateOnCutError::Read(e) => e.check(),
-            RotateOnCutError::Write(e) => e.check(),
+            RotateOnCutError::PublishCut(e)
+            | RotateOnCutError::Read(e)
+            | RotateOnCutError::ReadAfterWrite(e) => e.check(),
+            RotateOnCutError::Write(e) | RotateOnCutError::WriteFirst(e) => e.check(),
             RotateOnCutError::WriteOnlyCutWithdrawsRead => "rot-cut-write-only-cut-withdraws-read",
         }
     }
@@ -757,8 +822,10 @@ impl RotateOnCutError {
     /// state its class rather than inherit `"trust"`.
     pub fn class(&self) -> &'static str {
         match self {
-            RotateOnCutError::PublishCut(e) | RotateOnCutError::Read(e) => e.class(),
-            RotateOnCutError::Write(e) => e.class(),
+            RotateOnCutError::PublishCut(e)
+            | RotateOnCutError::Read(e)
+            | RotateOnCutError::ReadAfterWrite(e) => e.class(),
+            RotateOnCutError::Write(e) | RotateOnCutError::WriteFirst(e) => e.class(),
             RotateOnCutError::WriteOnlyCutWithdrawsRead => "trust",
         }
     }
@@ -767,8 +834,10 @@ impl RotateOnCutError {
     /// stall — versus a trust violation no retry can fix.
     pub fn is_retryable(&self) -> bool {
         match self {
-            RotateOnCutError::PublishCut(e) | RotateOnCutError::Read(e) => e.is_retryable(),
-            RotateOnCutError::Write(e) => e.is_retryable(),
+            RotateOnCutError::PublishCut(e)
+            | RotateOnCutError::Read(e)
+            | RotateOnCutError::ReadAfterWrite(e) => e.is_retryable(),
+            RotateOnCutError::Write(e) | RotateOnCutError::WriteFirst(e) => e.is_retryable(),
             // A malformed cut: re-driving the same one reaches it again.
             RotateOnCutError::WriteOnlyCutWithdrawsRead => false,
         }
@@ -776,7 +845,10 @@ impl RotateOnCutError {
 
     /// [`WriteRotateError::is_unreadable`] on the write plane.
     pub fn is_unreadable(&self) -> bool {
-        matches!(self, RotateOnCutError::Write(e) if e.is_unreadable())
+        matches!(
+            self,
+            RotateOnCutError::Write(e) | RotateOnCutError::WriteFirst(e) if e.is_unreadable()
+        )
     }
 }
 
@@ -794,12 +866,17 @@ impl RotateOnCutError {
 /// wave re-mints only from a root already carrying it
 /// (`net/rotation.rs` `remint_grants`). Such a cut therefore publishes its own
 /// set first, at the scope's unchanged read seed and epoch.
+///
+/// A first step that stops after a root read fell back reverses the order for
+/// a cut that moves the write plane (ADR 0068 D3): the wave runs first and
+/// re-mints the cut set at the new root name, and the read cascade then runs at
+/// that root. A read-only cut keeps the stop.
 pub async fn rotate_on_cut<R: CutRotator>(
     rotator: &R,
     scope_root: NodeId,
     cut: &RevokedCommittedSet,
 ) -> Result<CutRotationReport, RotateOnCutError> {
-    if cut.planes.write && !cut.planes.read {
+    let first = if cut.planes.write && !cut.planes.read {
         // Only the read cascade records a withheld recipient in the durable
         // revocation floor, so a write-only cut that withheld one would forget
         // it. Release-active, because the two cuts that reach here build an
@@ -811,17 +888,23 @@ pub async fn rotate_on_cut<R: CutRotator>(
         rotator
             .publish_cut_set(scope_root, cut)
             .await
-            .map_err(RotateOnCutError::PublishCut)?;
-    }
-    let read = if cut.planes.read {
-        Some(
-            rotator
-                .rotate_read_plane(scope_root, cut)
-                .await
-                .map_err(RotateOnCutError::Read)?,
-        )
+            .map(|()| None)
+            .map_err(RotateOnCutError::PublishCut)
+    } else if cut.planes.read {
+        rotator
+            .rotate_read_plane(scope_root, cut)
+            .await
+            .map(Some)
+            .map_err(RotateOnCutError::Read)
     } else {
-        None
+        Ok(None)
+    };
+    let read = match first {
+        Ok(read) => read,
+        Err(_) if cut.planes.write && rotator.root_fell_back() => {
+            return write_first(rotator, scope_root, cut).await;
+        }
+        Err(error) => return Err(error),
     };
     let write = if cut.planes.write {
         Some(
@@ -834,6 +917,33 @@ pub async fn rotate_on_cut<R: CutRotator>(
         None
     };
     Ok(CutRotationReport { read, write })
+}
+
+/// The order of [`rotate_on_cut`] after a root read fell back: the wave, then
+/// the read cascade at the root it moved to.
+async fn write_first<R: CutRotator>(
+    rotator: &R,
+    scope_root: NodeId,
+    cut: &RevokedCommittedSet,
+) -> Result<CutRotationReport, RotateOnCutError> {
+    let write = rotator
+        .rotate_write_plane(scope_root, cut)
+        .await
+        .map_err(RotateOnCutError::WriteFirst)?;
+    let read = if cut.planes.read {
+        Some(
+            rotator
+                .rotate_read_plane(scope_root, cut)
+                .await
+                .map_err(RotateOnCutError::ReadAfterWrite)?,
+        )
+    } else {
+        None
+    };
+    Ok(CutRotationReport {
+        read,
+        write: Some(write),
+    })
 }
 
 #[cfg(test)]
