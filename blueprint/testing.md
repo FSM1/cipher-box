@@ -202,6 +202,13 @@ scenario fails the meta-test):
   timeout is a failed endpoint, and a failed body cancellation keeps the known
   answer (`net::fanout`, the desktop record transport, the web
   `recordTransport`). The fix tests fail on the code before ADR 0071.
+  An owed interior move (ADR 0072): a stop at the reseal, a partial reseal, a
+  stop at the parent index publish, and a restart over a move still owed each
+  give no abuse event at the tick focus leg and at the navigation leg; a
+  record whose epoch tag names a bound scope that does not open it, and a
+  record whose tag names a third scope, each give exactly one trust violation
+  (`tests/owner_actions.rs`); an unread owed record leaves the legs on the
+  proved scope roots (`sync::pass`).
   `tests/owner_actions.rs` covers a nested owned scope and a node a stopped
   wave left at its old name, which nothing renews; `tests/write_plane.rs`
   covers a renewal inside the drain's window, and a lost race on a scope root

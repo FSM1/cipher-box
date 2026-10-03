@@ -6725,6 +6725,189 @@ fn a_tick_whose_walk_fails_still_reports_a_hostile_moved_interior_node() {
     );
 }
 
+/// Where a grant's handover stops, which leaves its interior move owed.
+#[derive(Clone, Copy, Debug)]
+enum HandoverStop {
+    /// The reseal stops at its first node: the interior stays in the vault scope.
+    Reseal,
+    /// The reseal stops part of the way: the outer interior moved, the inner
+    /// did not.
+    PartialReseal,
+    /// The parent index publish stops: the whole interior moved.
+    ParentIndex,
+}
+
+/// A granted folder whose interior move is owed after `stop`, over an interior
+/// folder `inner` and a folder `deep` inside it, with a file in each.
+struct OwedMove {
+    fx: GrantScenario,
+    inner: NodeId,
+    deep: NodeId,
+    /// The name whose publish stopped the handover.
+    stopped_at: IpnsName,
+}
+
+impl OwedMove {
+    fn after(stop: HandoverStop) -> Self {
+        let owed = Self::stalled(stop);
+        owed.fx
+            .world
+            .record_store
+            .heal_put_for(owed.stopped_at.as_str());
+        owed
+    }
+
+    /// [`Self::after`] with the publish that stopped the handover still
+    /// failing, so a re-drive cannot land the move.
+    fn stalled(stop: HandoverStop) -> Self {
+        let mut fx = GrantScenario::new();
+        let inner = create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            fx.folder,
+            "inner",
+        );
+        let deep =
+            create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "deep");
+        for parent in [inner, deep] {
+            block_on(fx.engine.command(Command::Create {
+                parent,
+                name: "doc.bin".into(),
+                kind: NodeKind::File,
+            }))
+            .expect("a metadata create stages");
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        let failing = match stop {
+            HandoverStop::Reseal => write_name(inner),
+            HandoverStop::PartialReseal => write_name(deep),
+            HandoverStop::ParentIndex => write_name(ROOT),
+        };
+        fx.world.record_store.fail_put_for(failing.as_str());
+        assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+        assert_eq!(
+            fx.owed_scopes(),
+            vec![fx.folder],
+            "{stop:?}: the move is owed"
+        );
+        let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+        let moved = |node| opens_under(&fx, node, &read_key_under(&override_seed, node));
+        let expected = match stop {
+            HandoverStop::Reseal => (false, false),
+            HandoverStop::PartialReseal => (true, false),
+            HandoverStop::ParentIndex => (true, true),
+        };
+        assert_eq!((moved(inner), moved(deep)), expected, "{stop:?}: the seals");
+        Self {
+            fx,
+            inner,
+            deep,
+            stopped_at: failing,
+        }
+    }
+
+    /// The abuse the navigation into `deep` reports, then the abuse one tick
+    /// reports.
+    fn navigate_then_tick(&mut self) -> (Vec<String>, Vec<String>) {
+        let fx = &mut self.fx;
+        events_so_far(&mut fx._events);
+        for node in [fx.folder, self.inner, self.deep] {
+            block_on(fx.engine.command(Command::SetFocus { node: Some(node) }))
+                .expect("the folder takes the focus");
+        }
+        let navigation = abuse_descriptions(&mut fx._events);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        (navigation, abuse_descriptions(&mut fx._events))
+    }
+}
+
+/// While a grant's interior move is owed, each interior node opens under the
+/// scope its epoch tag names, wherever the handover stopped (ADR 0072 D1).
+#[test]
+fn an_owed_interior_move_reads_each_interior_node_under_the_scope_it_names() {
+    for stop in [
+        HandoverStop::Reseal,
+        HandoverStop::PartialReseal,
+        HandoverStop::ParentIndex,
+    ] {
+        let mut owed = OwedMove::after(stop);
+        let reads = |owed: &OwedMove| {
+            owed.fx
+                .world
+                .record_store
+                .get_count(write_name(owed.deep).as_str())
+        };
+        let before = reads(&owed);
+
+        let (navigation, ticked) = owed.navigate_then_tick();
+
+        assert_eq!(navigation, Vec::<String>::new(), "{stop:?}: navigation");
+        assert_eq!(ticked, Vec::<String>::new(), "{stop:?}: tick");
+        assert!(
+            reads(&owed) > before,
+            "{stop:?}: the legs read the interior"
+        );
+    }
+}
+
+/// The owed entry is durable, so a session that starts again over a move that
+/// is still owed holds the entry's root as a scope root and reports no abuse
+/// event (ADR 0072 D1).
+#[test]
+fn an_owed_interior_move_reads_no_abuse_after_a_restart() {
+    for stop in [HandoverStop::Reseal, HandoverStop::ParentIndex] {
+        let owed = OwedMove::stalled(stop);
+        let (engine, events, tasks) =
+            boot_owner(&owed.fx.world, &owed.fx.blocks, &owed.fx.owner_device);
+        let mut restarted = OwedMove {
+            fx: GrantScenario {
+                engine,
+                _events: events,
+                _tasks: tasks,
+                ..owed.fx
+            },
+            ..owed
+        };
+        tick(
+            &restarted.fx.world,
+            &restarted.fx.engine,
+            &mut restarted.fx._tasks,
+        );
+
+        let (navigation, ticked) = restarted.navigate_then_tick();
+
+        assert_eq!(navigation, Vec::<String>::new(), "{stop:?}: navigation");
+        assert_eq!(ticked, Vec::<String>::new(), "{stop:?}: tick");
+    }
+}
+
+/// The control of D1: a record whose epoch tag names a scope the owed move
+/// binds but that does not open under its seed, and a record whose tag names
+/// a third scope, are each exactly one trust violation.
+#[test]
+fn an_owed_interior_move_still_reports_a_hostile_interior_node() {
+    for (case, scope) in [("bound scope", SCOPE), ("third scope", [0x33; 16])] {
+        let mut owed = OwedMove::after(HandoverStop::Reseal);
+        reseal_interior_node(
+            &owed.fx.world,
+            &owed.fx.blocks,
+            owed.deep,
+            scope,
+            &[0x5a; 32],
+            published_read_epoch(&owed.fx.world, &owed.fx.blocks, ROOT),
+        );
+        let (navigation, ticked) = owed.navigate_then_tick();
+
+        let reported: Vec<String> = navigation.into_iter().chain(ticked).collect();
+        assert_eq!(reported.len(), 1, "{case}: {reported:?}");
+        assert!(
+            reported[0].ends_with("[unseal]: [seal-open-failed]"),
+            "{case}: {reported:?}"
+        );
+    }
+}
+
 /// A revoke runs several gated scope-root reads, so its refusal names the read
 /// that refused.
 #[test]

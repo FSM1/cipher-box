@@ -12,7 +12,8 @@
   [ADR 0065](./0065-the-name-wave-drops-a-node-that-it-cannot-move-and-an-owed-cut-ends-within-a-bound.md),
   AGENTS.md rule 6, and the `blueprint/engine.md` "Adoption gate and floors" and "Grants and
   ledger" sections
-- **Implemented by:** —
+- **Implemented by:** `net::child::ChildAdopter::with_owed_move`, `net::focus::FolderRefresh`,
+  `sync::pass::LegScopes` and `ScopeLegContext::leg_material`, and `Engine::navigation_legs`
 - **Amends:** —
 
 ## Context

@@ -15,12 +15,15 @@ use cipherbox_core::seal::{ChildRef, ReadBody};
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
-use super::child::{ChildAdopter, ChildRecord, ChildResolveError, resolve_child_record};
+use super::child::{
+    ChildAdopter, ChildRecord, ChildResolveError, OwedMoveScope, resolve_child_record,
+};
 use crate::content::Gateway;
 use crate::facade::{Event, ForkSightings, NodeId, NodeKind, emit_trust_violation};
 use crate::gate::{Adopted, GateError};
 use crate::grants::TooLong;
 use crate::grants::grafted::{BookmarkedScopeRoots, ClaimRecord, GraftedPlane, PlaneSplit};
+use crate::scope_seeds::StampedSeed;
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::project::{UnlinkedChild, merge_folder, project_child_version};
 use crate::sync::refresh::RefreshVerdict;
@@ -68,6 +71,14 @@ pub(crate) struct GraftedLeg<'a> {
     pub(crate) claims: &'a RefCell<ClaimRecord>,
 }
 
+/// The second scope of one leg, borrowed from the pass ([`OwedMoveScope`]).
+#[derive(Clone, Copy)]
+pub(crate) struct OwedMoveLeg<'a> {
+    pub(crate) scope_id: [u8; 16],
+    pub(crate) read_seed: Option<&'a StampedSeed>,
+    pub(crate) root_name: Option<&'a IpnsName>,
+}
+
 /// The focus-window folder refresh over one owned scope's read material.
 /// Borrows the content/record seams from the live session; the caller's read
 /// seed is borrowed and never zeroized here.
@@ -97,6 +108,9 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     /// The plane this leg runs on, or `None` on this vault's own plane
     /// ([`GraftedLeg`]).
     pub(crate) plane: Option<GraftedLeg<'a>>,
+    /// The second scope an owed interior move binds to this leg's records
+    /// ([`OwedMoveScope`]).
+    pub(crate) owed_move: Option<OwedMoveLeg<'a>>,
     /// How this pass resolves each folder's record: a manual refresh forces
     /// [`ResolveMode::NoCache`], so an unreachable record is reported as
     /// staleness rather than re-projected from cached bytes.
@@ -123,7 +137,7 @@ where
             departed: Vec::new(),
         };
         for folder in folders.iter().rev() {
-            let Some((name, adopted)) = self
+            let Some((name, adopted, scope)) = self
                 .resolve_focused(*folder, NodeKind::Folder, &mut report)
                 .await
             else {
@@ -176,11 +190,9 @@ where
             // A departure below a grafted root is the sharer's to bin: no pass
             // of this vault adopts it, and holding it starves the bounded set.
             if self.plane.is_none() {
-                report.departed.extend(merged.observed_unlinks(
-                    self.scope_id,
-                    *folder,
-                    self.observed_at,
-                ));
+                report
+                    .departed
+                    .extend(merged.observed_unlinks(scope, *folder, self.observed_at));
             }
         }
         report
@@ -226,7 +238,7 @@ where
             departed: Vec::new(),
         };
         for file in files {
-            let Some((name, adopted)) = self
+            let Some((name, adopted, _)) = self
                 .resolve_focused(*file, NodeKind::File, &mut report)
                 .await
             else {
@@ -256,7 +268,8 @@ where
         report
     }
 
-    /// Resolve one focused node's own record through the child gate.
+    /// Resolve one focused node's own record through the child gate, with the
+    /// scope whose seed opened it.
     ///
     /// Every failure is per-node and non-fatal: an unresolvable record is
     /// availability staleness, an attributable gate rejection is fail-closed and
@@ -268,7 +281,7 @@ where
         node: NodeId,
         kind: NodeKind,
         report: &mut FolderRefreshReport,
-    ) -> Option<(IpnsName, Adopted)> {
+    ) -> Option<(IpnsName, Adopted, [u8; 16])> {
         let name = self.child_name(node, kind)?;
         let adopter = ChildAdopter::new(
             self.gateway,
@@ -278,7 +291,15 @@ where
             self.scope_read_seed.clone(),
             node.0,
         )
-        .with_seed_stamp(self.seed_stamp);
+        .with_seed_stamp(self.seed_stamp)
+        .with_owed_move(self.owed_move.map(|owed| OwedMoveScope {
+            scope_id: owed.scope_id,
+            read_seed: owed.read_seed.map(|seed| StampedSeed {
+                seed: seed.seed.clone(),
+                stamp: seed.stamp,
+            }),
+            root_name: owed.root_name.cloned(),
+        }));
         match resolve_child_record(
             self.transport,
             self.snapshot_cache,
@@ -289,11 +310,14 @@ where
         )
         .await
         {
-            Ok(ChildRecord::Admitted(adopted, _, fork)) => {
+            Ok(ChildRecord::Admitted(adopted, record_bytes, fork)) => {
                 if let Some(fork) = fork {
                     self.forks.report(self.events, name.as_str(), fork.sequence);
                 }
-                Some((name, adopted))
+                let scope = adopter
+                    .assembled_scope(&record_bytes)
+                    .unwrap_or(self.scope_id);
+                Some((name, adopted, scope))
             }
             // Availability: the base keeps rendering last-known-good.
             Ok(ChildRecord::Absent)
@@ -531,6 +555,7 @@ mod tests {
                     scope_id,
                     scope_read_seed: &self.read_seed,
                     seed_stamp: None,
+                    owed_move: None,
                     scope_root_name: None,
                     plane: plane_roots.map(|scope_roots| GraftedLeg {
                         scope_roots,
