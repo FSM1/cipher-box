@@ -21,8 +21,8 @@
 //! an earlier blob of the same kind replayed by the host opens as current state.
 //! A kind whose contents are an authorization input carries a monotone
 //! generation in its own body, against a high-water mark held where the host
-//! cannot roll it back. The AAD binds no instance id either, so one kind is one
-//! blob per owner.
+//! cannot roll it back. The AAD binds no instance id. A store with multiple
+//! entries binds its lookup identity inside the authenticated body.
 
 use zeroize::Zeroizing;
 
@@ -70,11 +70,13 @@ pub enum OwnerLocalKind {
     /// The owner rotation steps that stopped after their first publish, per
     /// scope (ADR 0063 D1).
     OwedRotation,
+    /// The owner's confirmed scope seeds and recovery copies.
+    OwnerSeedCache,
 }
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::ReceivedShares,
         Self::ContactBook,
         Self::RetireLedger,
@@ -84,6 +86,7 @@ impl OwnerLocalKind {
         Self::GranteeNames,
         Self::RenewalCursor,
         Self::OwedRotation,
+        Self::OwnerSeedCache,
     ];
 
     /// The kind's stable name — the `info` suffix and the manifest key.
@@ -98,6 +101,7 @@ impl OwnerLocalKind {
             Self::GranteeNames => "grantee-names",
             Self::RenewalCursor => "renewal-cursor",
             Self::OwedRotation => "owed-rotation",
+            Self::OwnerSeedCache => "owner-seed-cache",
         }
     }
 
@@ -113,6 +117,7 @@ impl OwnerLocalKind {
             Self::GranteeNames => 0x08,
             Self::RenewalCursor => 0x09,
             Self::OwedRotation => 0x0a,
+            Self::OwnerSeedCache => 0x0b,
         }
     }
 
@@ -323,6 +328,7 @@ mod tests {
                 OwnerLocalKind::GranteeNames => 6,
                 OwnerLocalKind::RenewalCursor => 7,
                 OwnerLocalKind::OwedRotation => 8,
+                OwnerLocalKind::OwnerSeedCache => 9,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],

@@ -324,6 +324,7 @@ pub struct PendingAdoption {
     scope_id: [u8; 16],
     ipns_name: Vec<u8>,
     cut_epoch: u64,
+    pub(crate) owner_seed_record: Option<cipherbox_core::seal::OwnerSeedRecord>,
 }
 
 /// Suffix that keeps the cut-epoch floor apart from the other floors under one
@@ -687,6 +688,7 @@ pub async fn adopt_deferred<F: FloorStore>(
             scope_id: reader.scope_id,
             ipns_name: name_bytes.to_vec(),
             cut_epoch: section.commitment.cut_epoch,
+            owner_seed_record: None,
         },
         write_scope_seed,
     ))

@@ -170,3 +170,53 @@ fn malformed_content_cids_are_refused_at_body_encode_and_decode() {
         );
     }
 }
+
+#[test]
+fn an_owner_seed_cache_refuses_oversized_fields_in_both_directions() {
+    use cipherbox_core::codec::{decode, encode};
+    use cipherbox_core::seal::{
+        MAX_BLOCK_BYTES, MAX_OWNER_SEED_RECORD_BYTES, OwnerSeedRecord, decode_owner_seed_record,
+        encode_owner_seed_record,
+    };
+    use zeroize::Zeroizing;
+    let mut record = OwnerSeedRecord {
+        scope_id: [0x21; 16],
+        epoch: 1,
+        seed: Zeroizing::new([0x32; 32]),
+        parent_node_seed: None,
+        ipns_name: b"name".to_vec(),
+        record_bytes: vec![1],
+        head_block: vec![2],
+    };
+    for (field, limit) in [
+        ("ipnsName", cipherbox_core::ipns::MAX_IPNS_NAME_BYTES),
+        ("ipnsRecord", MAX_OWNER_SEED_RECORD_BYTES),
+        ("headBlock", MAX_BLOCK_BYTES),
+    ] {
+        let body = encode_owner_seed_record(&record).expect("valid body");
+        let mut value = decode(&body).expect("det-CBOR");
+        let Value::Map(map) = &mut value else {
+            panic!("map");
+        };
+        map.insert(field, Value::Bytes(vec![0; limit + 1]));
+        let rejected = decode_owner_seed_record(&encode(&value).expect("det-CBOR"));
+        assert!(rejected.is_err(), "the decoder enforces the bound");
+        value.zeroize_bytes();
+        let bytes = match field {
+            "ipnsName" => &mut record.ipns_name,
+            "ipnsRecord" => &mut record.record_bytes,
+            _ => &mut record.head_block,
+        };
+        let old = std::mem::replace(bytes, vec![0; limit + 1]);
+        assert!(
+            encode_owner_seed_record(&record).is_err(),
+            "the producer enforces the same bound in release"
+        );
+        let bytes = match field {
+            "ipnsName" => &mut record.ipns_name,
+            "ipnsRecord" => &mut record.record_bytes,
+            _ => &mut record.head_block,
+        };
+        *bytes = old;
+    }
+}

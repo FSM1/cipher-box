@@ -36,6 +36,7 @@ use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 /// vault granted leaves a scope the vault **owns**, so its plan is the owner's —
 /// the same flat root cut `Engine::rotate_now` assembles.
 pub(crate) struct ScopeExitArm<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
+    pub(crate) owner_seed_cache: Option<crate::grants::owner_entry::OwnerSeedCache<'a>>,
     pub(crate) transport: &'a T,
     pub(crate) api: &'a ApiClient<H, C>,
     pub(crate) gateway: &'a Gateway,
@@ -96,6 +97,7 @@ where
         scope_root,
     );
     let net = OwnerRotationNet {
+        owner_seed_cache: arm.owner_seed_cache.clone(),
         transport: arm.transport,
         api: arm.api,
         gateway: arm.gateway,

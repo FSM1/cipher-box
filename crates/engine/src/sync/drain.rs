@@ -1120,6 +1120,7 @@ impl SealPlane<'_> {
 /// none of it.
 #[derive(Clone, Copy)]
 pub(crate) struct DrainScope<'a> {
+    pub(crate) owner_seed_cache: Option<&'a crate::grants::owner_entry::OwnerSeedCache<'a>>,
     /// The scope the pass anchors on, and the one every intra-scope record seals
     /// under.
     pub(crate) source: ScopeEnd<'a>,
@@ -2970,7 +2971,8 @@ where
                 scope.enc_secret,
                 scope.owner_identity,
                 end.root.0,
-            ),
+            )
+            .with_owner_seed_cache(scope.owner_seed_cache.cloned()),
         };
         match end.ascent_node_seed {
             Some(seed) => adopter.under_parent_node_seed(seed.clone()),
@@ -7205,15 +7207,20 @@ where
             adopter.adopt(name, record_bytes).await?
         };
         let version = adopted.version;
-        keep_then_commit(
-            &self.seams.snapshot_cache,
-            name,
-            record_bytes,
-            adopted.pass.commit(&floors),
-        )
+        keep_then_commit(&self.seams.snapshot_cache, name, record_bytes, async {
+            if let crate::net::GatePass::Deferred(ref pending) = adopted.pass
+                && let Some(record) = pending.owner_seed_record.as_ref()
+                && let Some(cache) = scope.owner_seed_cache
+            {
+                if let Err(error) = cache.save(record).await {
+                    return Ok(Err(error));
+                }
+            }
+            Ok(adopted.pass.commit(&floors).await.map_err(GateError::Seam))
+        })
         .await
+        .map_err(GateError::Seam)?
         .map(|adopted| Observed::gated(name, adopted.sequence, version))
-        .map_err(GateError::Seam)
     }
 
     /// Dry-run and publish one head. Only [`HeadPublish::Confirmed`] bytes
@@ -8268,6 +8275,7 @@ mod tests {
         roots: &'a [NodeId],
     ) -> DrainScope<'a> {
         DrainScope {
+            owner_seed_cache: None,
             source: source.end(),
             destination: Some(destination.end().at(DESTINATION_EPOCH)),
             scope_roots: roots,
@@ -8336,6 +8344,7 @@ mod tests {
                     epoch: 0,
                 }),
                 current_at_floor: None,
+                recovered_owner: None,
                 fork: None,
             },
             hold: None,
@@ -8374,6 +8383,7 @@ mod tests {
                     record_bytes: first.clone(),
                 },
                 current_at_floor: None,
+                recovered_owner: None,
                 fork: None,
             },
             hold: None,
@@ -8408,6 +8418,7 @@ mod tests {
                     last_known_good: None,
                     outcome,
                     current_at_floor: None,
+                    recovered_owner: None,
                     fork: None,
                 },
                 hold: None,
@@ -9705,6 +9716,7 @@ mod tests {
         let (source, destination) = ends();
         let roots = [SOURCE_ROOT, DESTINATION_ROOT];
         let uncharged = DrainScope {
+            owner_seed_cache: None,
             charges_the_identity: false,
             ..two_ended(&seams, &source, &destination, &roots)
         };
@@ -9854,6 +9866,7 @@ mod tests {
         /// queue gives the pass nothing to open.
         fn scope_at(&self, root: NodeId, floor_namespace: FloorNamespace) -> DrainScope<'_> {
             DrainScope {
+                owner_seed_cache: None,
                 source: ScopeEnd {
                     root,
                     root_name: &self.root_name,
@@ -10097,6 +10110,7 @@ mod tests {
             let drain = harness.drain();
             let base = harness.scope();
             let scope = DrainScope {
+                owner_seed_cache: None,
                 source: ScopeEnd {
                     read_scope_seed: &foreign,
                     read_seed_stamp: stamp,
@@ -10425,6 +10439,7 @@ mod tests {
         }
         let drain = harness.drain();
         let first = DrainScope {
+            owner_seed_cache: None,
             charges_the_identity: true,
             ..harness.scope()
         };

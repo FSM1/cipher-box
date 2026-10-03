@@ -30,6 +30,8 @@ pub mod invite_mint;
 pub mod ledger;
 pub(crate) mod link_read;
 pub mod name_cache;
+pub(crate) mod owner_entry;
+pub use owner_entry::{OWNER_SEED_CACHE_PREFIX, OwnerSeedCache};
 pub mod received_share_store;
 pub(crate) mod received_status;
 pub mod revocation;
@@ -38,7 +40,7 @@ pub use accept::{
     AcceptError, AcceptOutcome, BookmarkKey, CLAIM_KEY_LEN, CLAIM_REPOST_FIRST_WAIT,
     CLAIM_REPOST_MAX_WAIT, HeldClaim, LinkHold, MAX_RECEIVED_SHARES, ReceivedShare,
     ReceivedShareStore, ReceivedShareStoreError, ReceivedSharesCodecError, ReceivedSharesList,
-    SharePointer, TooLong, accept_share,
+    SentIndex, SentShare, SharePointer, TooLong, accept_share,
 };
 pub use append::{
     EditedSet, GrantEditError, HeldRow, append_row, held_row, name_row, rename_grantee,

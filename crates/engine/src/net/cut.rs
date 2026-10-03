@@ -46,6 +46,7 @@ use crate::seams::{
 /// authorized against, and a cut naming any other scope is refused before a
 /// resolve ([`Self::scope`]).
 pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
+    pub(crate) owner_seed_cache: Option<crate::grants::owner_entry::OwnerSeedCache<'a>>,
     // The seam bundle both planes run on; see the identically-named fields of
     // [`OwnerRotationNet`].
     pub transport: &'a T,
@@ -144,6 +145,7 @@ where
     /// ([`OwnerRotationNet::resolve_anchored`]).
     fn rotation_net(&self) -> OwnerRotationNet<'_, T, H, C, F, Sch, E, S> {
         OwnerRotationNet {
+            owner_seed_cache: self.owner_seed_cache.clone(),
             transport: self.transport,
             api: self.api,
             gateway: self.gateway,
@@ -366,6 +368,7 @@ where
                 let is_vault_anchor = scope_root.0 == self.session_root_scope_id;
                 let vault_pointer_signer = self.vault_pointer_signer.filter(|_| is_vault_anchor);
                 let net = WriteWaveNet {
+                    owner_seed_cache: self.owner_seed_cache.clone(),
                     transport: self.transport,
                     api: self.api,
                     gateway: self.gateway,

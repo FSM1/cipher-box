@@ -69,6 +69,7 @@ pub(crate) type SweepTaskFactory =
 /// ([`SessionSecrets::tick_enc_subkey`](crate::session::SessionSecrets::tick_enc_subkey)
 /// carries the tick loop's on the same terms).
 pub(crate) struct SweepKeys {
+    pub(crate) contact_label_seed: cipherbox_core::suite::secret::SecretBytes,
     pub(crate) enc_secret: X25519Secret,
     pub(crate) owner_identity: EcdsaVerifier,
     pub(crate) scope_keys: OwnerSeedKeys,

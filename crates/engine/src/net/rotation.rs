@@ -291,6 +291,8 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// [`Self::last_known_good_root`], which is the one arm that resolves a
     /// scope root from anything but the record plane.
     pub snapshot_cache: &'a S,
+    /// The confirmed owner copies retained on this device.
+    pub owner_seed_cache: Option<crate::grants::owner_entry::OwnerSeedCache<'a>>,
     /// The one-way stream out, for the trade [`Self::resealable_root`] makes.
     pub events: &'a mpsc::UnboundedSender<Event>,
     /// The scheduler the publish pipeline's background re-PUT rides.
@@ -751,6 +753,7 @@ fn nonce<E: Entropy>(entropy: &RefCell<E>) -> Result<[u8; 24], RotationPublishEr
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RootGateVerdict {
     Rejected,
+    OwnerSeedRefused,
     Unavailable,
     Superseded,
     /// The record's own body fills the re-seal reservation, so no re-seal of it
@@ -780,6 +783,7 @@ impl From<RootGateVerdict> for ResolveFailure {
         match verdict {
             RootGateVerdict::Unavailable => Self::Unavailable,
             RootGateVerdict::Rejected
+            | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::Superseded
             | RootGateVerdict::NotResealable
             | RootGateVerdict::BelowFloor => Self::Rejected,
@@ -792,10 +796,18 @@ impl From<RootGateVerdict> for SweepResolveFailure {
         match verdict {
             RootGateVerdict::Unavailable => Self::Unavailable,
             RootGateVerdict::Rejected
+            | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::NotResealable
             | RootGateVerdict::BelowFloor => Self::Rejected,
             RootGateVerdict::Superseded => Self::Superseded,
         }
+    }
+}
+
+fn cache_gate_verdict(error: GateError) -> RootGateVerdict {
+    match error {
+        GateError::Seam(_) => RootGateVerdict::Unavailable,
+        GateError::Rejected(_) => RootGateVerdict::Rejected,
     }
 }
 
@@ -813,7 +825,13 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
     name: &IpnsName,
     record_bytes: &[u8],
     reason: &RejectionReason,
-) -> Result<GatedScopeRoot, RootGateVerdict> {
+) -> Result<
+    (
+        GatedScopeRoot,
+        Option<cipherbox_core::seal::OwnerSeedRecord>,
+    ),
+    RootGateVerdict,
+> {
     let RejectionReason::SequenceNotNewer { floor, sequence } = reason else {
         return Err(RootGateVerdict::Rejected);
     };
@@ -825,20 +843,26 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
         .await
         .map_err(|e| match e {
             GateError::Seam(_) => RootGateVerdict::Unavailable,
+            GateError::Rejected(ref rejection) if super::adopter::owner_seed_refused(rejection) => {
+                RootGateVerdict::OwnerSeedRefused
+            }
             GateError::Rejected(_) => RootGateVerdict::Rejected,
         })?
         // Nothing to re-check is no recovery; the rotation keeps the gate's
         // own verdict.
         .ok_or(RootGateVerdict::Rejected)?;
-    Ok(GatedScopeRoot {
-        name: name.clone(),
-        envelope: recovered.envelope,
-        section: recovered.grant_section,
-        read_body: recovered.read_body,
-        sequence: *sequence,
-        read_scope_seed: recovered.read_scope_seed,
-        write_scope_seed: recovered.write_scope_seed,
-    })
+    Ok((
+        GatedScopeRoot {
+            name: name.clone(),
+            envelope: recovered.envelope,
+            section: recovered.grant_section,
+            read_body: recovered.read_body,
+            sequence: *sequence,
+            read_scope_seed: recovered.read_scope_seed,
+            write_scope_seed: recovered.write_scope_seed,
+        },
+        recovered.owner_seed_record,
+    ))
 }
 
 /// A rotation root read the gate passed, with any floor advance not yet
@@ -847,7 +871,12 @@ enum RootPass {
     Pending(Box<(IpnsName, Candidate, PendingAdoption, RecoveredSeeds)>),
     /// This reader's own already-adopted record, recovered at the floor
     /// ([`reread_at_floor`]): nothing left to commit.
-    AtFloor(Box<GatedScopeRoot>),
+    AtFloor(
+        Box<(
+            GatedScopeRoot,
+            Option<cipherbox_core::seal::OwnerSeedRecord>,
+        )>,
+    ),
 }
 
 impl RootPass {
@@ -861,7 +890,7 @@ impl RootPass {
                 let adopted = adopter
                     .commit_root(pending)
                     .await
-                    .map_err(|_| RootGateVerdict::Unavailable)?;
+                    .map_err(cache_gate_verdict)?;
                 Ok(GatedScopeRoot {
                     name,
                     envelope: candidate.envelope,
@@ -872,7 +901,14 @@ impl RootPass {
                     write_scope_seed: seeds.write_scope_seed,
                 })
             }
-            Self::AtFloor(root) => Ok(*root),
+            Self::AtFloor(pass) => {
+                let (root, record) = *pass;
+                adopter
+                    .remember_confirmed(record.as_ref())
+                    .await
+                    .map_err(cache_gate_verdict)?;
+                Ok(root)
+            }
         }
     }
 }
@@ -926,12 +962,16 @@ async fn gate_root_pass<H: Http, F: FloorStore>(
         {
             Err(RootGateVerdict::NotResealable)
         }
+        Err(GateError::Rejected(rejection)) if super::adopter::owner_seed_refused(&rejection) => {
+            Err(RootGateVerdict::OwnerSeedRefused)
+        }
         Err(GateError::Rejected(rejection)) => {
-            let root = reread_at_floor(adopter, name, record_bytes, &rejection.reason).await?;
+            let (root, record) =
+                reread_at_floor(adopter, name, record_bytes, &rejection.reason).await?;
             if !bound(&root.envelope, &root.section) {
                 return Err(RootGateVerdict::Rejected);
             }
-            Ok(RootPass::AtFloor(Box::new(root)))
+            Ok(RootPass::AtFloor(Box::new((root, record))))
         }
     }
 }
@@ -1032,6 +1072,7 @@ pub(crate) struct DescendantScopeRoot {
     pub(crate) write_cut_unfinished: bool,
     /// The same-sequence fork the descent read met.
     pub(crate) fork: Option<Fork>,
+    pub(crate) recovered_after_rejection: bool,
 }
 
 /// Why a proved scope root opened no write plane on this pass.
@@ -1110,6 +1151,7 @@ pub(crate) struct WalkedBoundaries {
 fn walk_verdict(verdict: RootGateVerdict, scope_id: [u8; 16]) -> WalkFailure {
     match verdict {
         RootGateVerdict::Rejected
+        | RootGateVerdict::OwnerSeedRefused
         | RootGateVerdict::NotResealable
         | RootGateVerdict::BelowFloor => WalkFailure::Rejected { scope_id },
         RootGateVerdict::Unavailable | RootGateVerdict::Superseded => WalkFailure::Unavailable,
@@ -1441,6 +1483,7 @@ fn hold_scope_pointer(
 pub(crate) struct ScopeWalk<'a, T, S, H, F> {
     pub(crate) transport: &'a T,
     pub(crate) snapshot_cache: &'a S,
+    pub(crate) owner_seed_cache: Option<crate::grants::owner_entry::OwnerSeedCache<'a>>,
     pub(crate) gateway: &'a Gateway,
     pub(crate) http: &'a H,
     pub(crate) floors: &'a F,
@@ -1483,10 +1526,11 @@ where
             self.identity,
             child.scope_id,
         )
+        .with_owner_seed_cache(self.owner_seed_cache.clone())
         .under_parent_node_seed(parent_node_seed.clone());
         let fetch = fanout_get_tied_classified(self.transport, &name).await;
         let (pick, record_bytes, tied) = fetch.pick.ok_or(WalkFailure::Unavailable)?;
-        let (gated, fork) = gated_root_forked(
+        let read = gated_root_forked(
             &adopter,
             self.snapshot_cache,
             &name,
@@ -1495,10 +1539,45 @@ where
             &tied,
             Some(child.scope_id),
         )
-        .await
-        .map_err(|verdict| {
-            walk_verdict(verdict.after_fanout(fetch.endpoint_failed), child.scope_id)
-        })?;
+        .await;
+        let (gated, fork, recovered_after_rejection) = match read {
+            Ok((root, fork)) => (root, fork, false),
+            Err(RootGateVerdict::OwnerSeedRefused) => {
+                let root = adopter
+                    .recover_cached_owner_root(&name)
+                    .await
+                    .map_err(|_| WalkFailure::Rejected {
+                        scope_id: child.scope_id,
+                    })?
+                    .ok_or(WalkFailure::Rejected {
+                        scope_id: child.scope_id,
+                    })?;
+                if root.envelope.id != child.scope_id || root.grant_section.ascent_link.is_none() {
+                    return Err(WalkFailure::Rejected {
+                        scope_id: child.scope_id,
+                    });
+                }
+                (
+                    GatedScopeRoot {
+                        name: name.clone(),
+                        envelope: root.envelope,
+                        section: root.grant_section,
+                        read_body: root.read_body,
+                        sequence: root.sequence,
+                        read_scope_seed: root.read_scope_seed,
+                        write_scope_seed: root.write_scope_seed,
+                    },
+                    None,
+                    true,
+                )
+            }
+            Err(verdict) => {
+                return Err(walk_verdict(
+                    verdict.after_fanout(fetch.endpoint_failed),
+                    child.scope_id,
+                ));
+            }
+        };
         let (write, grandchildren) = self
             .write_plane(&gated, &name, child.scope_id, RootAnchor::Descendant)
             .await;
@@ -1524,6 +1603,7 @@ where
                 write,
                 write_cut_unfinished,
                 fork,
+                recovered_after_rejection,
             },
             grandchildren,
         ))
@@ -1696,6 +1776,7 @@ where
         root_scope_id: [u8; 16],
         root_name: &IpnsName,
         root_record_bytes: &[u8],
+        use_confirmed_root: bool,
     ) -> Result<WalkedBoundaries, WalkFailure> {
         let adopter = RootAdopter::new(
             self.gateway,
@@ -1704,7 +1785,14 @@ where
             self.enc_secret,
             self.identity,
             root_scope_id,
-        );
+        )
+        .with_owner_seed_cache(self.owner_seed_cache.clone());
+        if use_confirmed_root {
+            adopter
+                .hold_confirmed_head(root_name, root_record_bytes)
+                .await
+                .map_err(|error| walk_verdict(cache_gate_verdict(error), root_scope_id))?;
+        }
         let gated = gated_root(&adopter, root_name, root_record_bytes, None)
             .await
             .map_err(|verdict| walk_verdict(verdict, root_scope_id))?;
@@ -1767,6 +1855,14 @@ where
                     }
                     match self.descend(&parent_read_scope_seed, &child).await {
                         Ok((descendant, grandchildren)) => {
+                            if descendant.recovered_after_rejection {
+                                WalkFailure::accumulate(
+                                    &mut failure,
+                                    WalkFailure::Rejected {
+                                        scope_id: descendant.scope_id,
+                                    },
+                                );
+                            }
                             note_unindexed_scope_roots(
                                 &mut unproved,
                                 &descendant.adopted.read_body,
@@ -1881,6 +1977,7 @@ pub(crate) async fn admit_owned_scope_root<T, H, F, S>(
     http: &H,
     floors: &F,
     snapshot_cache: &S,
+    owner_seed_cache: Option<crate::grants::owner_entry::OwnerSeedCache<'_>>,
     enc_secret: &X25519Secret,
     identity: &EcdsaVerifier,
     scope_id: [u8; 16],
@@ -1893,7 +1990,8 @@ where
     F: FloorStore,
     S: SnapshotCache,
 {
-    let adopter = RootAdopter::new(gateway, http, floors, enc_secret, identity, scope_id);
+    let adopter = RootAdopter::new(gateway, http, floors, enc_secret, identity, scope_id)
+        .with_owner_seed_cache(owner_seed_cache);
     let adopter = match ascent {
         Some(seed) => adopter.under_parent_node_seed(seed.clone()),
         None => adopter,
@@ -1922,6 +2020,7 @@ where
                 ScopeRootAdmission::Unavailable
             }
             RootGateVerdict::Rejected
+            | RootGateVerdict::OwnerSeedRefused
             | RootGateVerdict::NotResealable
             | RootGateVerdict::BelowFloor => ScopeRootAdmission::Rejected,
         },
@@ -2014,6 +2113,38 @@ where
                 root,
                 over_sequence: None,
             }),
+            Err(RootGateVerdict::OwnerSeedRefused) => {
+                emit_trust_violation(
+                    self.events,
+                    name.as_str(),
+                    "owner blob refused; recovery uses the last confirmed owner copy",
+                );
+                if verified.sequence == u64::MAX {
+                    return Err(RootGateVerdict::OwnerSeedRefused);
+                }
+                let cached = adopter
+                    .recover_cached_owner_root(name)
+                    .await
+                    .map_err(|_| RootGateVerdict::OwnerSeedRefused)?
+                    .ok_or(RootGateVerdict::OwnerSeedRefused)?;
+                if anchor.expected_child(scope_id).is_some_and(|id| {
+                    cached.envelope.id != id || cached.grant_section.ascent_link.is_none()
+                }) {
+                    return Err(RootGateVerdict::Rejected);
+                }
+                Ok(ResealableRoot {
+                    root: GatedScopeRoot {
+                        name: name.clone(),
+                        envelope: cached.envelope,
+                        section: cached.grant_section,
+                        read_body: cached.read_body,
+                        sequence: cached.sequence,
+                        read_scope_seed: cached.read_scope_seed,
+                        write_scope_seed: cached.write_scope_seed,
+                    },
+                    over_sequence: Some(verified.sequence),
+                })
+            }
             Err(RootGateVerdict::NotResealable) => {
                 let stepped_over = self
                     .last_known_good_root(&adopter, name, scope_id, anchor, verified.sequence)
@@ -2092,7 +2223,8 @@ where
             self.keys.enc_secret,
             self.keys.identity,
             scope_id,
-        );
+        )
+        .with_owner_seed_cache(self.owner_seed_cache.clone());
         match self.ancestry.parent_node_seed(&scope_id) {
             Some(seed) => adopter.under_parent_node_seed(seed),
             None => adopter,
@@ -2117,6 +2249,7 @@ where
             self.keys.identity,
             node_id,
         )
+        .with_owner_seed_cache(self.owner_seed_cache.clone())
         .under_parent_node_seed(Zeroizing::new(*parent_node_seed.as_bytes()))
     }
 
@@ -3908,6 +4041,8 @@ fn moved_versions(body: &ReadBody) -> &[Version] {
 /// read key at the **unchanged** read epoch. The read plane's clock never moves
 /// here (#38 D1).
 pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
+    /// Durable recovery copies for owner scope reads.
+    pub owner_seed_cache: Option<crate::grants::owner_entry::OwnerSeedCache<'a>>,
     /// The record-plane transport: fan-out GET for the re-resolve, CAS PUT for
     /// the republish.
     pub transport: &'a T,
@@ -4818,6 +4953,7 @@ where
                 &identity,
                 child.scope_id,
             )
+            .with_owner_seed_cache(self.owner_seed_cache.clone())
             .under_parent_node_seed(Zeroizing::new(*parent_node_seed.as_bytes()));
             gated_root_cached(
                 &adopter,
@@ -4968,7 +5104,8 @@ where
             self.owner_enc_secret,
             identity,
             self.scope_id,
-        );
+        )
+        .with_owner_seed_cache(self.owner_seed_cache.clone());
         match self.parent_node_seed {
             Some(seed) => adopter.under_parent_node_seed(Zeroizing::new(*seed)),
             None => adopter,
@@ -5734,6 +5871,7 @@ where
 
 /// The seams and owner material one scope-pointer enrolment pass runs on.
 pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F, Sch, E, S> {
+    pub(crate) owner_seed_cache: Option<crate::grants::owner_entry::OwnerSeedCache<'a>>,
     /// The API client the vault-root resolve's head fetch registers against.
     pub api: &'a ApiClient<H, C>,
     /// The record-plane transport every pointer read rides.
@@ -5833,6 +5971,7 @@ where
     };
     let vault_root = ChildScopeRef::new(pass.root_id, root_name);
     let net = OwnerRotationNet {
+        owner_seed_cache: pass.owner_seed_cache.clone(),
         transport: pass.transport,
         api: pass.api,
         gateway: pass.gateway,
@@ -6360,6 +6499,7 @@ mod tests {
             InMemorySnapshotCache,
         > {
             OwnerRotationNet {
+                owner_seed_cache: None,
                 transport: &self.transport,
                 api: &self.api,
                 gateway: &self.gateway,
@@ -6558,6 +6698,7 @@ mod tests {
         ) -> Result<WalkedBoundaries, WalkFailure> {
             block_on(
                 ScopeWalk {
+                    owner_seed_cache: None,
                     transport: &self.transport,
                     snapshot_cache: cache,
                     gateway: &self.gateway,
@@ -6572,6 +6713,7 @@ mod tests {
                     SCOPE,
                     &root.name,
                     &record_for(&SCOPE, &root.head_cid_str, 1),
+                    false,
                 ),
             )
         }
@@ -7940,6 +8082,195 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
         let cut = cut(&root, SCOPE, OWNER_ROOT_EPOCH + 1);
         (harness, root, cut)
+    }
+
+    #[test]
+    fn a_restarted_owner_reads_and_cuts_after_a_writer_breaks_the_owner_blob() {
+        use crate::grants::OwnerSeedCache;
+        use crate::testkit::fakes::InMemoryStagingStore;
+        use cipherbox_core::seal::{encode_grant_section, set_grant_section};
+        for rogue_sequence in [1, 2] {
+            let harness = Harness::plain();
+            let good = granted_root(Vec::new());
+            harness.stage(SCOPE, &good, Some(OWNER_ROOT_EPOCH));
+            let revoked = crate::testkit::with_cut_epoch(
+                vault_root(SCOPE, Vec::new()),
+                &owner_identity(),
+                OWNER_ROOT_EPOCH + 1,
+            );
+            let cut = cut(&revoked, SCOPE, OWNER_ROOT_EPOCH + 1);
+            let staging = InMemoryStagingStore::default();
+            let labels = kdf::contact_label_seed(&[0x72; 32]);
+            {
+                let mut net = harness.net(&[]);
+                net.owner_seed_cache = Some(OwnerSeedCache::new(
+                    &staging,
+                    &harness.enc_secret,
+                    &harness.entropy,
+                    &labels,
+                ));
+                block_on(net.resolve_vault_root(&ChildScopeRef::new(
+                    SCOPE,
+                    good.name.as_str().as_bytes().to_vec(),
+                )))
+                .expect("confirmed owner read");
+            }
+            let mut rogue = granted_root(Vec::new());
+            let (shared, _) = recipient_self_location(
+                &write_grantee(),
+                &owner_enc().public(),
+                rogue.name.as_str().as_bytes(),
+            )
+            .unwrap();
+            let signer =
+                SessionIdentity::grantee_writer_pseudonym_signer(shared.as_bytes(), &SCOPE);
+            let sealed = cipherbox_core::seal::seal_owner_blob(
+                &owner_enc().public(),
+                &[0x99; 32],
+                &AadContext {
+                    v: rogue.envelope.v,
+                    id: SCOPE,
+                    scope: SCOPE,
+                    epoch: rogue.envelope.epoch,
+                    struct_tag: cipherbox_core::seal::STRUCT_TAG_OWNER_BLOB,
+                },
+                &cipherbox_core::seal::OverrideSeedPayload::new([0x98; 32], rogue.envelope.epoch),
+            )
+            .unwrap();
+            rogue.grant_section.owner_blob.enc = sealed.enc;
+            rogue.grant_section.owner_blob.ciphertext = sealed.ciphertext;
+            crate::testkit::resign_section(
+                &mut rogue.grant_section,
+                SCOPE,
+                rogue.envelope.epoch,
+                &signer,
+            );
+            set_grant_section(
+                &mut rogue.envelope,
+                encode_grant_section(&rogue.grant_section).unwrap(),
+            );
+            rogue.head_block = encode_envelope(&rogue.envelope).unwrap();
+            rogue.head_cid_str = root_block_cid(&rogue.head_block);
+            serve_at(&harness, SCOPE, &rogue, rogue_sequence);
+            block_on(harness.cache.clear()).expect("the expendable snapshot cache is gone");
+            harness.blocks.lock().unwrap().remove(&good.head_cid_str);
+            let mut restarted = harness.net(&[]);
+            restarted.owner_seed_cache = Some(OwnerSeedCache::new(
+                &staging,
+                &harness.enc_secret,
+                &harness.entropy,
+                &labels,
+            ));
+            let adopter = restarted.root_adopter(SCOPE);
+            let resolved = block_on(crate::net::resolve::resolve(
+                &harness.transport,
+                &harness.cache,
+                &adopter,
+                &good.name,
+                crate::sync::tick::ResolveMode::CacheFirst,
+            ))
+            .expect("the read finishes with its trust verdict");
+            assert!(matches!(
+                resolved.outcome,
+                crate::net::ResolveOutcome::TrustViolation(_)
+            ));
+            let recovered = resolved
+                .recovered_owner
+                .expect("the confirmed body survives the restart");
+            assert_eq!(recovered.sequence, 1);
+            assert_eq!(body_children(&recovered.read_body).len(), 0);
+            block_on(restarted.publish_scope_root(&cut))
+                .expect("the cut lands over the rogue root");
+            let (verified, envelope) = published_head(&harness, &good.name);
+            assert_eq!(verified.sequence, rogue_sequence + 1);
+            assert_eq!(envelope.epoch, OWNER_ROOT_EPOCH + 1);
+            let seed = kdf::node_seed(&FRESH_SEED, &SCOPE);
+            let key = kdf::read_key(seed.as_bytes());
+            open_read_body(&envelope, key.as_bytes()).expect("the owner opens the cut");
+            assert!(
+                harness
+                    .events()
+                    .iter()
+                    .any(|event| matches!(event, Event::AttributableAbuse { .. }))
+            );
+        }
+    }
+
+    #[test]
+    fn a_restarted_scope_walk_recovers_a_refused_descendant_from_its_durable_copy() {
+        use crate::grants::OwnerSeedCache;
+        use crate::testkit::fakes::InMemoryStagingStore;
+        use cipherbox_core::seal::{
+            STRUCT_TAG_OWNER_BLOB, StructureSigInput, encode_grant_section, set_grant_section,
+            sign_structure,
+        };
+        let (mut child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
+        let staging = InMemoryStagingStore::default();
+        let labels = kdf::contact_label_seed(&[0x72; 32]);
+        let walk = || ScopeWalk {
+            owner_seed_cache: Some(OwnerSeedCache::new(
+                &staging,
+                &harness.enc_secret,
+                &harness.entropy,
+                &labels,
+            )),
+            transport: &harness.transport,
+            snapshot_cache: &harness.cache,
+            gateway: &harness.gateway,
+            http: &harness.http,
+            floors: &harness.floors,
+            enc_secret: &harness.enc_secret,
+            identity: &harness.identity,
+            scope_keys: &OwnerSeeds,
+            payload_version: PAYLOAD_VERSION,
+        };
+        let root_record = record_for(&SCOPE, &root.head_cid_str, 1);
+        let confirmed =
+            block_on(walk().descendant_scope_roots(SCOPE, &root.name, &root_record, false))
+                .unwrap();
+        assert_eq!(confirmed.proved.len(), 2);
+        assert!(confirmed.failure.is_none());
+        drop(confirmed);
+        harness.blocks.lock().unwrap().remove(&child.head_cid_str);
+        harness.blocks.lock().unwrap().remove(&root.head_cid_str);
+        let blob = &mut child.grant_section.owner_blob;
+        blob.ciphertext[0] ^= 1;
+        blob.signature = sign_structure(
+            &owner_root_pseudonym(),
+            &StructureSigInput::over_ciphertext(
+                CHILD_SCOPE,
+                child.envelope.epoch,
+                STRUCT_TAG_OWNER_BLOB,
+                None,
+                &blob.ciphertext,
+            ),
+        )
+        .to_bytes();
+        set_grant_section(
+            &mut child.envelope,
+            encode_grant_section(&child.grant_section).unwrap(),
+        );
+        child.head_block = encode_envelope(&child.envelope).unwrap();
+        child.head_cid_str = root_block_cid(&child.head_block);
+        serve_at(&harness, CHILD_SCOPE, &child, 2);
+        block_on(harness.cache.clear()).unwrap();
+        let restarted =
+            block_on(walk().descendant_scope_roots(SCOPE, &root.name, &root_record, true)).unwrap();
+        assert_eq!(
+            restarted.failure,
+            Some(WalkFailure::Rejected {
+                scope_id: CHILD_SCOPE
+            })
+        );
+        assert_eq!(restarted.proved.len(), 2);
+        assert!(restarted.proved[0].recovered_after_rejection);
+        assert_eq!(restarted.proved[0].adopted.sequence, 1);
+        assert_eq!(restarted.proved[1].scope_id, GRANDCHILD_SCOPE);
     }
 
     #[test]
@@ -10283,6 +10614,7 @@ mod tests {
         entropy: &'a RefCell<E>,
     ) -> Wave<'a, T, F, E> {
         WriteWaveNet {
+            owner_seed_cache: None,
             transport: &harness.transport,
             api: &harness.api,
             gateway: &harness.gateway,
@@ -11696,6 +12028,7 @@ mod tests {
         enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the wave lands");
+        drop(net);
         (root, moved)
     }
 
@@ -15170,6 +15503,7 @@ mod tests {
             &harness.http,
             &harness.floors,
             &harness.cache,
+            None,
             &owner_enc(),
             &owner.verifying_key(),
             SCOPE,
@@ -15988,6 +16322,7 @@ mod tests {
         walked: &Cell<bool>,
     ) -> Vec<[u8; 16]> {
         block_on(enrol_owned_scope_pointers(ScopePointerEnrolment {
+            owner_seed_cache: None,
             api: &harness.api,
             transport: &harness.transport,
             gateway: &harness.gateway,
@@ -16511,6 +16846,7 @@ mod tests {
                     &harness.http,
                     &harness.floors,
                     &harness.cache,
+                    None,
                     &owner_enc(),
                     &owner_identity().verifying_key(),
                     SCOPE,

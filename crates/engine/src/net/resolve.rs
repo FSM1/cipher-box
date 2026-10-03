@@ -53,10 +53,10 @@ pub trait Adopter {
     /// it: discarding the advance instead would cache the record under stale
     /// cut-epoch, read-epoch and sequence floors, and leave a replay of an older
     /// valid record above every bar this pass was to raise.
-    async fn commit_adoption(&self, _pending: PendingAdoption) -> Result<Adopted, SeamError> {
-        Err(SeamError::new(
+    async fn commit_adoption(&self, _pending: PendingAdoption) -> Result<Adopted, GateError> {
+        Err(GateError::Seam(SeamError::new(
             "a deferred gate pass reached an adopter that commits no floor",
-        ))
+        )))
     }
 
     /// Commit the sequence-floor raise a [`GatePass::DeferredSequence`] pass
@@ -105,6 +105,15 @@ pub trait Adopter {
         record_bytes: &[u8],
     ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError>;
 
+    /// Recover a separate confirmed owner copy after a refused owner blob.
+    async fn recover_owner_cache(
+        &self,
+        _name: &IpnsName,
+        _rejection: &GateRejection,
+    ) -> Result<Option<OwnScopeMaterial>, GateError> {
+        Ok(None)
+    }
+
     /// Whether `record_bytes`, tied with a pick this read already gated, passes
     /// the gate at the durable floor the pick left: only such a tie is the
     /// other side of a same-sequence fork (ADR 0066 D1). Moves no floor and
@@ -126,7 +135,7 @@ pub trait Adopter {
 /// The owner's own-scope seeds, recovered from a record already at the durable
 /// sequence floor. Both come from grant-section structures the gate's stages
 /// 1-3 authenticated before the floor stages ran, so an equal-floor `Current`
-/// has proved them committed; neither is ever persisted.
+/// has proved them committed. The owner seed cache keeps a sealed recovery copy.
 pub struct OwnScopeMaterial {
     /// The scope-root node id the seeds belong to.
     pub node_id: [u8; 16],
@@ -193,8 +202,8 @@ pub struct AdoptOutcome {
     pub node_id: [u8; 16],
     /// The scope read seed a gate-passing owner adopt recovered from the owner
     /// blob. Transient like [`write_scope_seed`](Self::write_scope_seed): the
-    /// engine deposits it in its in-memory per-scope seed map (never persisted,
-    /// never on the public [`Resolved`]); the child read pipeline derives
+    /// engine deposits it in its in-memory per-scope seed map. The owner cache
+    /// keeps a sealed recovery copy; the child read pipeline derives
     /// per-node read keys from it. `None` for a non-owner adopter.
     pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
     /// The envelope version the gated record carries.
@@ -239,6 +248,8 @@ pub struct Resolved {
     /// on an absence a poll of this session established, so a root that resolves
     /// `Current` must still paint the base (ADR 0011 D4).
     pub current_at_floor: Option<Adopted>,
+    /// The prior owner copy, re-gated while the network outcome stays a trust violation.
+    pub recovered_owner: Option<Adopted>,
     /// The same-sequence fork the gated record met, which is never a trust
     /// violation (ADR 0066 D1).
     pub fork: Option<Fork>,
@@ -253,6 +264,7 @@ impl Resolved {
             last_known_good: None,
             outcome,
             current_at_floor: None,
+            recovered_owner: None,
             fork: None,
         }
     }
@@ -361,7 +373,7 @@ where
         Some((verified, bytes, tied)) => (Some((verified, bytes)), tied),
         None => (None, Vec::new()),
     };
-    let (outcome, parts) = match fetched {
+    let (outcome, mut parts) = match fetched {
         None => (ResolveOutcome::NoUpdate, GatedParts::default()),
         Some((verified, bytes)) => match adopter.adopt(name, &bytes).await {
             Ok(AdoptOutcome {
@@ -374,15 +386,37 @@ where
                 // Only gate-passing records touch the snapshot; the same verified
                 // bytes ride out to the liveness hold, so no re-fetch/re-get.
                 let adopted = keep_then_commit(snapshot_cache, name, &bytes, async {
-                    match pass {
+                    Ok(match pass {
                         GatePass::Deferred(pending) => adopter.commit_adoption(pending).await,
-                        GatePass::DeferredSequence(pending) => {
-                            adopter.commit_sequence_adoption(pending).await
-                        }
+                        GatePass::DeferredSequence(pending) => adopter
+                            .commit_sequence_adoption(pending)
+                            .await
+                            .map_err(GateError::Seam),
                         GatePass::Advanced(adopted) => Ok(adopted),
-                    }
+                    })
                 })
                 .await?;
+                let adopted = match adopted {
+                    Ok(adopted) => adopted,
+                    Err(GateError::Seam(error)) => return Err(error),
+                    Err(GateError::Rejected(rejection)) => {
+                        return Ok(GatedResolve {
+                            resolved: Resolved {
+                                outcome: ResolveOutcome::TrustViolation(rejection),
+                                last_known_good,
+                                current_at_floor: None,
+                                recovered_owner: None,
+                                fork: None,
+                            },
+                            hold: None,
+                            held_record: None,
+                            read_scope_seed: None,
+                            tied,
+                            absent,
+                            observed: None,
+                        });
+                    }
+                };
                 let observed = Some(Observed::gated(name, adopted.sequence, version));
                 // The adopt left the floor at the pick, so a tie gates there.
                 let fork = fork_of(
@@ -478,6 +512,21 @@ where
             Err(GateError::Seam(error)) => return Err(error),
         },
     };
+    let recovered_owner = if let ResolveOutcome::TrustViolation(rejection) = &outcome {
+        match adopter.recover_owner_cache(name, rejection).await {
+            Ok(Some(material)) => {
+                parts.read_scope_seed = Some(material.read_scope_seed);
+                parts.hold = material
+                    .write_scope_seed
+                    .map(|seed| (material.node_id, seed));
+                Some(material.at_floor)
+            }
+            Ok(None) | Err(GateError::Rejected(_)) => None,
+            Err(GateError::Seam(error)) => return Err(error),
+        }
+    } else {
+        None
+    };
     let GatedParts {
         hold,
         held_record,
@@ -492,6 +541,7 @@ where
             last_known_good,
             outcome,
             current_at_floor,
+            recovered_owner,
             fork,
         },
         hold,
@@ -642,7 +692,10 @@ pub(crate) fn refresh_base_from_resolved(
     let adopted = match (&resolved.outcome, &resolved.current_at_floor) {
         (ResolveOutcome::Adopted(adopted), _) => adopted,
         (ResolveOutcome::Current { .. }, Some(at_floor)) => at_floor,
-        _ => return FolderMerge::unchanged(),
+        _ => match &resolved.recovered_owner {
+            Some(recovered) => recovered,
+            None => return FolderMerge::unchanged(),
+        },
     };
     merge_root(&mut base.borrow_mut(), root, adopted)
 }
@@ -2154,6 +2207,7 @@ mod tests {
                             record_bytes: vec![9, 9, 9],
                         },
                         current_at_floor: Some(adopted_with_one_child(child_id)),
+                        recovered_owner: None,
                         fork: None,
                     },
                 )

@@ -309,7 +309,7 @@ async fn raise_floors(floors: &InMemoryFloorStore, name: &[u8], scope_id: &[u8; 
         .expect("an in-memory floor store raises");
 }
 
-// --- ledger and owner entry -------------------------------------------------
+// --- ledger -------------------------------------------------
 
 const POINTER_READ_KEY: [u8; SECRET_LEN] = [0x66; SECRET_LEN];
 

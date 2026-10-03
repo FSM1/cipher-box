@@ -473,3 +473,20 @@ percentage never did.
 - **Runner provisioning, staging deploy gates, release-tag e2e gating,
   nightly scheduling** →
   [deployment blueprint (FSM1/cipher-box-next#48)](https://github.com/FSM1/cipher-box-next/issues/48).
+
+
+### Durable owner seed cache
+
+The **Core KATs (native + WASM)** gate runs the owner seed record codec tests,
+`owner_seed_cache_accept` and `owner_seed_cache_reject`, and the release
+`encode_refusals` tests. They cover both parent-seed shapes, corrupt fields,
+and encode/decode size symmetry (ADR 0073).
+
+The **Engine simulation tests** PR gate runs the production `RootAdopter` and rotation
+unit tests. They cover confirmed-read persistence, refusal without refresh,
+interleaved reads, failed writes, corrupt cache refusal, and recovery after a
+restart with no snapshot or gateway copy. The recovery test retains the network
+trust violation, opens the confirmed body, and publishes a cut above the rogue
+record. The scope-walk test covers a refused descendant with a healthy root.
+The signed different-seed owner blob test pins the existing `Unseal` /
+`seal-open-failed` behavior through `RootAdopter`.

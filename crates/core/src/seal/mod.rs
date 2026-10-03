@@ -18,6 +18,11 @@ pub mod envelope;
 pub mod grant;
 pub mod op_record;
 pub mod owner_local;
+mod owner_seed_cache;
+pub use owner_seed_cache::{
+    MAX_OWNER_SEED_CACHE_BYTES, MAX_OWNER_SEED_RECORD_BYTES, OwnerSeedRecord,
+    decode_owner_seed_record, encode_owner_seed_record,
+};
 pub mod section;
 pub mod section_auth;
 pub mod settings_record;

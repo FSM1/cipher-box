@@ -1344,11 +1344,9 @@ surviving committed grants uniformly in the republish it already does.
   contact-anchored owner identity) → self-locate the blob by blinded tag →
   unseal seeds → append `{name, sharerPub, displayName, permission}` to the
   sealed received-shares list, device-local over the host `StagingStore`
-  (ADR 0006), persisting the `pointerReadKey`. The received-shares list is a
-  self-healing bookmark — the metadata is the authority (FSM1/cipher-box-next#25 D3).
-  The owner reads each scope's grants from its gate-adopted write-body ledger,
-  checked against the owner-signed commitment and row signatures by the
-  sharing view; there is no separate sent-share store or vault-wide sent list.
+  (ADR 0006), persisting the `pointerReadKey`; the owner keeps a denormalized
+  sent-index in their own vault. Both
+  lists are self-healing bookmarks — the metadata is the authority (FSM1/cipher-box-next#25 D3).
 - **Link-held arm**
   ([ADR 0024](../decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)
   D1, D2, D5): a link holder reads at once. At join the engine posts the
@@ -1477,19 +1475,29 @@ surviving committed grants uniformly in the republish it already does.
 - **Files are first-class grant targets** (FSM1/cipher-box-next#25 D5): envelope blobs +
   write-body ledger like any node; ancestor rotations re-seal
   independently-shared descendants' grants as part of republishing them.
-- **Owner entry**: `RootAdopter` opens the scope root's owner blob with the
-  owner's encryption subkey and derives the read key from its seed. The
-  adoption gate verifies the commitment and structure signatures, checks
-  the seed against that read key, enforces the floors, and opens the read-body.
-  At an interior scope root the caller supplies the parent node seed: the gate
-  derives the expected ascent keypair and checks the opened ascent-link seed
-  against the same read key and envelope epoch. A mismatched plaintext ascent
-  public half is unavailable; an opened seed disagreement is a trust violation.
-  Confirmed scope seeds live in session memory, not in an owner-authored vault
-  share list. After restart the owner recovers from published records; there
-  is no durable last-visit seed recovery guarantee. A rogue writer can withhold
-  usable seed material in a newer record; recovering content then requires a
-  valid-seed holder or a still-readable older record.
+- **Owner entry** (FSM1/cipher-box-next#39 D6, ADR 0073): the **owner seed cache**
+  keeps the last confirmed `{seed, epoch}`, signed IPNS record, encrypted root
+  block, and parent node seed when needed. Each confirmed owner read refreshes
+  the sealed `StagingStore` entry for its scope and name before floors advance.
+  A probe or a refused read does not refresh it. The owner blob accelerates entry
+  into the current epoch. The adoption gate checks the ascent link and opens
+  the body; a signed owner blob with the wrong seed fails at unseal.
+  If the current owner blob fails to open, the engine reports a trust violation
+  and an attributable abuse event. It separately gates the confirmed cache copy
+  against the current floors. This copy can supply the read and a cut above the
+  refused record's sequence. It never makes the refused record an adopted record
+  and never enrolls that record for renewal.
+  The cache protects content this device confirmed while its durable store
+  remains available. It covers a restart and loss of the snapshot cache or of
+  the old root block at the gateway. It does not cover a new owner device,
+  deletion of local state, or content sealed only under a rogue-withheld epoch.
+  That content needs a valid-seed holder; a write-grantee can already destroy
+  content. The vault record for all owner devices is follow-up
+  [#2296](https://github.com/FSM1/cipher-box/issues/2296), blocked by the local store.
+  Entries count toward the staging budget and remain until the device is forgotten.
+  A cached copy below a current floor stays refused. A cut at an exhausted IPNS
+  sequence or against a writer that keeps racing needs ADR 0068's root-first name
+  move; this cache does not add that move.
 - **Owner write-seed cold start**: a per-scope `writeScopeSeed` is random
   KDF-non-edge material an owner cannot re-derive from the login secret, so a
   fresh device that has lost its cache cannot renew its own records. Every

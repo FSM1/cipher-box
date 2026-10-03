@@ -32,8 +32,8 @@ use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::gate::Candidate;
 use cipherbox_engine::grants::revocation::{ResolutionClass, ResolutionFacts, classify};
 use cipherbox_engine::grants::{
-    AcceptError, PublishedGrantBlob, ReceivedShareStore, ReceivedSharesList, SharePointer,
-    StagingReceivedShareStore, accept_share, import_contact, self_locate,
+    AcceptError, PublishedGrantBlob, ReceivedShareStore, ReceivedSharesList, SentIndex, SentShare,
+    SharePointer, StagingReceivedShareStore, accept_share, import_contact, self_locate,
 };
 use cipherbox_engine::mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 use cipherbox_engine::net::MAX_RECORD_BYTES;
@@ -429,6 +429,15 @@ fn two_instance_share_accept_end_to_end() {
         "share-1",
     ))
     .expect("post");
+
+    let mut sent = SentIndex::new();
+    let recipient_identity = EcdsaSigner::from_scalar(&[0xAA; 32]).unwrap();
+    sent.record(SentShare {
+        scope_root_name: fx.name.as_str().as_bytes().to_vec(),
+        recipient_identity_pk: recipient_identity.verifying_key().to_sec1(),
+        permission: Permission::Read,
+    });
+    assert_eq!(sent.len(), 1);
 
     let endpoint = world.record_store.endpoints()[0].clone();
     world

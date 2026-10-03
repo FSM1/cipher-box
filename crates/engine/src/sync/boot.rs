@@ -96,6 +96,8 @@ impl std::error::Error for ColdStartError {}
 /// The gate verdict on the current root record, once a vault pointer was adopted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RootResolve {
+    /// The network root was refused; a separate confirmed owner copy was recovered.
+    Recovered,
     /// A gate-passing record was adopted (its bytes are the new last-known-good).
     Adopted,
     /// No newer record than the cached last-known-good (availability staleness).
@@ -126,7 +128,7 @@ pub struct ColdStartOutcome {
     pub rendered: Snapshot,
     /// The root-scope read seed a gate-passing adopt recovered from the owner
     /// blob; `None` when nothing adopted. The engine deposits it in its
-    /// in-memory per-scope seed cell (never persisted).
+    /// in-memory per-scope seed cell. The owner cache keeps a sealed recovery copy.
     pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
     /// The epoch of the record [`read_scope_seed`](Self::read_scope_seed) came
     /// from, which may be above the epoch the pointer vouches.
@@ -165,8 +167,9 @@ impl core::fmt::Debug for ColdStartOutcome {
 
 /// Run the cold-start live-session data path off the injected seams, emitting
 /// the first [`Event::SnapshotUpdated`]. Fail-closed at every trust boundary
-/// (see [`ColdStartError`]): a trust violation returns `Err`, never silent
-/// staleness. Reads no clock and no RNG — the sequence is a pure function of the
+/// (see [`ColdStartError`]). A refused owner blob reports abuse and can recover
+/// a separately gated owner copy; other trust failures return `Err`.
+/// Reads no clock and no RNG — the sequence is a pure function of the
 /// injected seams and [`ColdStartParams`], so two engines on independent clocks
 /// produce the identical outcome.
 pub async fn cold_start<Pf, Ad, Fl, T, Sc>(
@@ -273,7 +276,15 @@ where
             (RootResolve::NoUpdate, base, at_floor_epoch)
         }
         ResolveOutcome::TrustViolation(rejection) => {
-            return Err(ColdStartError::RootAdoption(rejection));
+            let Some(recovered) = resolved.recovered_owner else {
+                return Err(ColdStartError::RootAdoption(rejection));
+            };
+            emit(Event::AttributableAbuse {
+                description: format!("owner root refused: {rejection}"),
+            });
+            let mut base = base;
+            project_root(&mut base, params.root, &recovered);
+            (RootResolve::Recovered, base, Some(recovered.epoch))
         }
     };
     let read_seed_epoch = painted_epoch.filter(|_| read_scope_seed.is_some());

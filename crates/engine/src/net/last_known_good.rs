@@ -103,10 +103,10 @@ std::thread_local! {
 }
 
 /// An async per-name mutex over [`WRITING`], released on drop.
-struct NameLock(Vec<u8>);
+pub(crate) struct NameLock(Vec<u8>);
 
 impl NameLock {
-    async fn acquire(key: &[u8]) -> Self {
+    pub(crate) async fn acquire(key: &[u8]) -> Self {
         poll_fn(|cx| {
             WRITING.with_borrow_mut(|writing| match writing.get_mut(key) {
                 None => {

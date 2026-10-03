@@ -109,9 +109,9 @@ pub use gate::{
 pub use grants::{
     AcceptError, AcceptOutcome, AuthorityViolation, BookmarkKey, Contact, MintedInviteLink,
     PublishedGrantBlob, ReceivedShare, ReceivedShareStore, ReceivedShareStoreError,
-    ReceivedSharesCodecError, ReceivedSharesList, ResolutionClass, ResolutionFacts, SharePointer,
-    StagingReceivedShareStore, accept_share, enforce_committed_ledger, fingerprint_identity_key,
-    import_contact, recipient_blinded_tag, self_locate,
+    ReceivedSharesCodecError, ReceivedSharesList, ResolutionClass, ResolutionFacts, SentIndex,
+    SentShare, SharePointer, StagingReceivedShareStore, accept_share, enforce_committed_ledger,
+    fingerprint_identity_key, import_contact, recipient_blinded_tag, self_locate,
 };
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 pub use name::{NameError, is_emittable, validate_name};

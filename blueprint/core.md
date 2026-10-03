@@ -566,7 +566,7 @@ the owner tag bound into the AAD and never serialized. What is new is the
 `received-shares` (`0x01`), `contact-book` (`0x02`), `retire-ledger` (`0x04`),
 `doomed-journal` (`0x05`), `scope-exit-debt` (`0x06`), `pending-conversions`
 (`0x07`), `grantee-names` (`0x08`), `renewal-cursor` (`0x09`, ADR 0061 D2),
-`owed-rotation` (`0x0a`, ADR 0063 D1) —
+`owed-rotation` (`0x0a`, ADR 0063 D1), `owner-seed-cache` (`0x0b`, ADR 0073 D1) —
 whose discriminator rides the AAD and whose
 name completes the HPKE `info` string `cipherbox/v2/owner-local/<name>`. Kind
 `0x03`, the retired `invite-records` store, stays reserved for ever (ADR 0023
@@ -586,6 +586,20 @@ missing `enc` and a missing `ciphertext`, a forward `v`, an unknown clear-header
 field, and a base-mode forgery — plus a **cross-kind negative for every ordered
 pair of kinds**, which is what proves the discriminator earns the separation
 that distinct per-store `info` strings used to give for free).
+
+The `owner-seed-cache` body uses the core deterministic-CBOR codec, version 1.
+Its fields are `v`, `scope` (16 bytes), `epoch` (u64), `seed` (32 bytes),
+optional `parentNodeSeed` (32 bytes), `ipnsName`, `ipnsRecord`, and `headBlock`.
+The last three fields are byte strings. Their payload limits are
+`MAX_IPNS_NAME_BYTES`, 10 KiB, and `MAX_BLOCK_BYTES`. The whole body limit is
+`MAX_BLOCK_BYTES + 10 KiB + MAX_IPNS_NAME_BYTES + 170`. Both encode and decode enforce these limits.
+Decode refuses unknown fields, missing fields, wrong types, wrong fixed lengths,
+and versions other than 1. The KAT families are `owner_seed_cache_accept` and
+`owner_seed_cache_reject`. The engine binds the decoded scope and name to the
+lookup and gates the signed record and head before recovery. The store uses
+HPKE auth mode to self under kind `0x0b`. Seeds and plaintext codec buffers
+zeroize when their terminal owner drops them.
+
 
 ### Bin index
 
@@ -719,7 +733,7 @@ their suite entry in the KAT manifest (ADR 0015 D3).
 | genesis-write-scope-seed | login secret                                                    | the genesis writeScopeSeed                      |
 | contact-label-seed       | login secret                                                    | contactLabelSeed (device-only)                  |
 | contact-label            | contactLabelSeed, contact identityPk                            | a local label for a contact identity            |
-| name-label               | contactLabelSeed, floor-store key                               | a local label for a durable floor key           |
+| name-label               | contactLabelSeed, local-store key                               | a local label for a floor or owner cache key           |
 | committed-recipient-mask | pointerReadKey, blinded tag                                     | the commitment's recipient mask                 |
 
 `committed-recipient-mask` is what lets the owner sign a grant's recipient into
@@ -733,9 +747,9 @@ The contact-label pair is the one edge whose output never reaches the wire
 label keys durable device-local state that would otherwise name a contact in the
 clear, and the seed is the account's alone, so no observer who holds the identity
 key can recompute it. `name-label` is the seed's second consumer, on the same
-terms: it labels every durable floor key, which would otherwise name in the
+terms: it labels every durable floor key and owner seed cache key. These would name in the
 clear every record this device bars replay on and every recipient the owner cut
-or granted at a scope (ADR 0016 D3). Its message is the
+or granted at a scope (ADR 0016 D3, ADR 0073 D1). Its message is the
 whole store key rather than a fixed-width id — the catalog's one variable-length
 `keyed_hash` message, sound because the context stays fixed and `keyed_hash` is
 a pseudorandom function over a message of any length.
