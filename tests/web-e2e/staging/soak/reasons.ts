@@ -75,6 +75,10 @@ export const SOAK_REASONS = {
     meaning: 'a claim did not convert to a granted standing within the invite budget',
   },
   'shared-epoch-stepped': { kind: 'failure', meaning: 'the long-running link epoch moved' },
+  'grants-unread': {
+    kind: 'failure',
+    meaning: 'the share dialog did not read the grants of a share folder in the page budget',
+  },
   'cycle-epoch-flat': {
     kind: 'failure',
     meaning: 'the revoke left a grant, or did not step the read epoch by one',
