@@ -109,8 +109,8 @@ describe('the marker files of a listing', () => {
   });
 });
 
-/** A dialog element that shows from `from` ms after the fake opens until `until` ms. */
-function mark(from: number, until = Infinity): DialogMark {
+/** A dialog element that shows `text` from `from` ms after the fake opens until `until` ms. */
+function mark(from: number, until = Infinity, text = ''): DialogMark {
   const opened = Date.now();
   const shown = () => {
     const at = Date.now() - opened;
@@ -118,6 +118,7 @@ function mark(from: number, until = Infinity): DialogMark {
   };
   return {
     isVisible: async () => shown(),
+    textContent: async () => text,
     waitFor: ({ timeout }) =>
       new Promise((resolve, reject) => {
         const poll = setInterval(() => {
@@ -126,23 +127,62 @@ function mark(from: number, until = Infinity): DialogMark {
             resolve();
           } else if (Date.now() - opened > timeout) {
             clearInterval(poll);
-            reject(new Error('timed out'));
+            reject(Object.assign(new Error('timed out'), { name: 'TimeoutError' }));
           }
         }, 5);
       }),
   };
 }
 
+const NEVER = Infinity;
+
+async function failureOf(read: Promise<void>): Promise<SoakFailure> {
+  const failure = await read.catch((error: unknown) => error);
+  if (failure instanceof SoakFailure) return failure;
+  throw new Error('expected a SoakFailure');
+}
+
 describe('the cycle grants read', () => {
   it('waits out the unavailable note the dialog draws before its read lands', async () => {
-    await expect(grantsRead(mark(50), mark(0, 50), 'cycle', 1_000)).resolves.toBeUndefined();
+    const marks = { people: mark(50), unavailable: mark(0, 50), error: mark(NEVER) };
+    await expect(grantsRead(marks, 'cycle', 1_000)).resolves.toBeUndefined();
   });
 
-  it('fails cycle-epoch-flat where no read reaches the folder in the budget', async () => {
-    const failure = await grantsRead(mark(Infinity), mark(0), 'cycle', 100).catch(
-      (error: unknown) => error
+  it('fails grants-unread with the budget where the unavailable note stays', async () => {
+    const marks = { people: mark(NEVER), unavailable: mark(0), error: mark(NEVER) };
+    const failure = await failureOf(grantsRead(marks, 'cycle', 100));
+    expect(failure.reason).toBe('grants-unread');
+    expect(failure.detail).toBe(
+      'the share dialog of cycle/ showed the unavailable note after 0.1 s'
     );
-    expect(failure).toBeInstanceOf(SoakFailure);
-    expect((failure as SoakFailure).reason).toBe('cycle-epoch-flat');
+  });
+
+  it('tells a dialog that drew neither the table nor the note', async () => {
+    const marks = { people: mark(NEVER), unavailable: mark(NEVER), error: mark(NEVER) };
+    const failure = await failureOf(grantsRead(marks, 'cycle', 100));
+    expect(failure.reason).toBe('grants-unread');
+    expect(failure.detail).toBe('the share dialog of cycle/ showed no people table after 0.1 s');
+  });
+
+  it('adds the refusal the dialog shows where its read threw', async () => {
+    const marks = {
+      people: mark(NEVER),
+      unavailable: mark(0),
+      error: mark(0, NEVER, ' resolve failed: unavailable '),
+    };
+    const failure = await failureOf(grantsRead(marks, 'cycle', 100));
+    expect(failure.detail).toBe(
+      'the share dialog of cycle/ showed the unavailable note after 0.1 s, refused: resolve failed: unavailable'
+    );
+  });
+
+  it('passes on an error that is not a timeout', async () => {
+    const closed = new Error('Target page, context or browser has been closed');
+    const marks = {
+      people: { ...mark(NEVER), waitFor: () => Promise.reject(closed) },
+      unavailable: mark(0),
+      error: mark(NEVER),
+    };
+    await expect(grantsRead(marks, 'cycle', 100)).rejects.toBe(closed);
   });
 });

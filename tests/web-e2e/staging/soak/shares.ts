@@ -96,6 +96,15 @@ export function cycleEpochStepped(before: bigint, after: bigint): void {
 export interface DialogMark {
   waitFor(options: { timeout: number }): Promise<void>;
   isVisible(): Promise<boolean>;
+  textContent(): Promise<string | null>;
+}
+
+/** The parts of the share dialog that tell if its own read of the folder landed. */
+export interface GrantsMarks {
+  readonly people: DialogMark;
+  readonly unavailable: DialogMark;
+  /** The refusal the dialog shows where its read threw. */
+  readonly error: DialogMark;
 }
 
 /**
@@ -104,18 +113,24 @@ export interface DialogMark {
  * show in `timeout` is a read that failed.
  */
 export async function grantsRead(
-  people: DialogMark,
-  unavailable: DialogMark,
+  marks: GrantsMarks,
   folder: string,
   timeout: number
 ): Promise<void> {
   try {
-    await people.waitFor({ timeout });
-  } catch {
-    const detail = (await unavailable.isVisible())
-      ? `the share dialog read no grants of ${folder}/`
-      : `the share dialog drew no people table for ${folder}/`;
-    throw new SoakFailure('cycle-epoch-flat', detail);
+    await marks.people.waitFor({ timeout });
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
+    const shown = (await marks.unavailable.isVisible())
+      ? 'the unavailable note'
+      : 'no people table';
+    const refusal = (await marks.error.isVisible())
+      ? `, refused: ${(await marks.error.textContent())?.trim()}`
+      : '';
+    throw new SoakFailure(
+      'grants-unread',
+      `the share dialog of ${folder}/ showed ${shown} after ${timeout / 1000} s${refusal}`
+    );
   }
 }
 
