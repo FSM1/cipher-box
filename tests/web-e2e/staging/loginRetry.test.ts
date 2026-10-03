@@ -7,6 +7,7 @@ import {
   devnetFault,
   markRunExhausted,
   nextStep,
+  SIGN_IN_RETRY_BUDGET_MS,
   runExhausted,
   summarize,
 } from './loginRetry';
@@ -77,7 +78,7 @@ describe('summarize', () => {
 
 describe('nextStep', () => {
   it('fails at once on a refusal that is not a devnet fault', () => {
-    expect(nextStep(0, 'the wallet signature was rejected', false)).toEqual({
+    expect(nextStep(0, 'the wallet signature was rejected', false, 0)).toEqual({
       action: 'fail',
       fault: null,
       result: 'refused',
@@ -86,12 +87,16 @@ describe('nextStep', () => {
 
   it('retries a devnet fault with the backoff of its attempt', () => {
     DEVNET_BACKOFF_MS.forEach((waitMs, attempt) => {
-      expect(nextStep(attempt, NONCE, false)).toEqual({ action: 'retry', fault: 'nonce', waitMs });
+      expect(nextStep(attempt, NONCE, false, 0)).toEqual({
+        action: 'retry',
+        fault: 'nonce',
+        waitMs,
+      });
     });
   });
 
   it('stops after the last wait, on the fifth attempt', () => {
-    expect(nextStep(DEVNET_BACKOFF_MS.length, NONCE, false)).toEqual({
+    expect(nextStep(DEVNET_BACKOFF_MS.length, NONCE, false, 0)).toEqual({
       action: 'fail',
       fault: 'nonce',
       result: 'exhausted',
@@ -99,7 +104,27 @@ describe('nextStep', () => {
   });
 
   it('does not wait in a run that has already exhausted the backoff', () => {
-    expect(nextStep(0, NONCE, true)).toEqual({
+    expect(nextStep(0, NONCE, true, 0)).toEqual({
+      action: 'fail',
+      fault: 'nonce',
+      result: 'exhausted',
+    });
+  });
+});
+
+describe('nextStep budget', () => {
+  it('retries while the wait still fits in the budget of one sign-in', () => {
+    const waitMs = DEVNET_BACKOFF_MS[1]!;
+    expect(nextStep(1, NONCE, false, SIGN_IN_RETRY_BUDGET_MS - waitMs)).toEqual({
+      action: 'retry',
+      fault: 'nonce',
+      waitMs,
+    });
+  });
+
+  it('stops as exhausted when the wait would pass the budget', () => {
+    const waitMs = DEVNET_BACKOFF_MS[1]!;
+    expect(nextStep(1, NONCE, false, SIGN_IN_RETRY_BUDGET_MS - waitMs + 1)).toEqual({
       action: 'fail',
       fault: 'nonce',
       result: 'exhausted',

@@ -23,21 +23,35 @@ export function devnetFault(refusal: string): DevnetFault | null {
 /** The wait before each retry of a devnet fault. */
 export const DEVNET_BACKOFF_MS: readonly number[] = [15_000, 30_000, 60_000, 105_000];
 
+/**
+ * The time one sign-in may spend on its retries. An attempt can wait minutes
+ * for a refusal, so the backoff alone does not bound a sign-in.
+ */
+export const SIGN_IN_RETRY_BUDGET_MS = 480_000;
+
 /** What a sign-in does after a refused attempt. */
 export type NextStep =
   | { action: 'retry'; fault: DevnetFault; waitMs: number }
   | { action: 'fail'; fault: DevnetFault | null; result: 'refused' | 'exhausted' };
 
 /**
- * Decides the step after refused `attempt` (0-based). Once a sign-in in this
- * run has exhausted the backoff, the devnet is down for the run, and a later
- * sign-in that waits again only pushes the run past its step timeout.
+ * Decides the step after refused `attempt` (0-based), `elapsedMs` into the
+ * sign-in. Once a sign-in in this run has exhausted the backoff or its budget,
+ * the devnet is down for the run, and a later sign-in that waits again only
+ * pushes the run past its step timeout.
  */
-export function nextStep(attempt: number, refusal: string, runExhausted: boolean): NextStep {
+export function nextStep(
+  attempt: number,
+  refusal: string,
+  runExhausted: boolean,
+  elapsedMs: number
+): NextStep {
   const fault = devnetFault(refusal);
   if (fault === null) return { action: 'fail', fault, result: 'refused' };
   const waitMs = DEVNET_BACKOFF_MS[attempt];
-  if (runExhausted || waitMs === undefined) return { action: 'fail', fault, result: 'exhausted' };
+  if (runExhausted || waitMs === undefined || elapsedMs + waitMs > SIGN_IN_RETRY_BUDGET_MS) {
+    return { action: 'fail', fault, result: 'exhausted' };
+  }
   return { action: 'retry', fault, waitMs };
 }
 
@@ -62,7 +76,8 @@ export interface AbsorbedFault {
 
 /**
  * One sign-in, as the stats see it: the faults it absorbed, by attempt, and how
- * it ended. `exhausted` failed on a devnet fault after the last wait; `refused`
+ * it ended. `exhausted` failed on a devnet fault after the last wait or past
+ * the budget; `refused`
  * failed at once on any other refusal. It holds no identity, path or token.
  */
 export interface SignInRecord {

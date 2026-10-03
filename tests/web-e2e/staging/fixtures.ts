@@ -185,6 +185,7 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
     });
   };
 
+  const signInStarted = Date.now();
   for (let attempt = 0; ; attempt += 1) {
     const attemptStarted = Date.now();
     if (attempt > 0) await page.reload();
@@ -212,7 +213,7 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
       return Date.now() - started;
     }
 
-    const step = nextStep(attempt, refusal, runExhausted(outputDir));
+    const step = nextStep(attempt, refusal, runExhausted(outputDir), Date.now() - signInStarted);
     if (step.fault !== null) faults.push({ fault: step.fault, attempt: attempt + 1 });
     if (step.action === 'fail') {
       if (step.result === 'exhausted') markRunExhausted(outputDir);
