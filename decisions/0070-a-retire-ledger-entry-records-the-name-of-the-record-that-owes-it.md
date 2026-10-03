@@ -34,7 +34,9 @@ record's references then stay charged for as long as the node lives.
 set of a dropped version follows the name, as in ADR 0054 D1. The journal writes version 3 for
 each new debt, with the name of the record whose history dropped the target. The encode refuses
 a name that is not a well-formed IPNS name, and the decode reads such bytes as unwritten
-(AGENTS.md rule 8).
+(AGENTS.md rule 8). Amended on 2026-10-03: the discard of a preserved dead letter and the
+preserved-set trim write a version 2 entry with no name, because no write seed of the op scope
+is in hand there; such a debt keeps the derived name and the wait rule.
 
 **D2 — The settle retires under the recorded name.** For a version 3 entry, the settle uses the
 recorded name for the retire and for the live-record read, and it does not derive a name from the
@@ -45,9 +47,10 @@ of the scope that its links prove derives the recorded name, so the retire spare
 the live record names; with no record to read, or when its links prove no held scope, the entry
 waits.
 
-**D3 — One release carries the change.** The new release reads all three shapes. The previous
-release reads a version 3 entry as unwritten, and the ledger never discards an entry, so such an
-entry waits for the new release, as a version 2 entry did under ADR 0054 D1.
+**D3 — One release carries the change.** The new release reads all three shapes. A
+previous-release build reads a version 3 entry as unwritten, and its `owe` can overwrite the entry
+with a version 2 entry for the same content id; the debt then settles under the derived name with
+the wait rule.
 
 ## Alternatives considered
 
@@ -66,3 +69,10 @@ entry waits for the new release, as a version 2 entry did under ADR 0054 D1.
 - `blueprint/engine.md` "Retirement" says that a retire uses the name that the entry records.
 - `blueprint/testing.md` names the test that decodes a version 2 entry with the new build
   (ADR 0020 D5), and the round-trip and refusal tests of the version 3 entry.
+- The ledger key holds the content id and not the name, so two debts for one content id under two
+  record names share one ledger slot, and the references of the second record stay charged (a
+  leak, not a loss).
+
+## Residuals
+
+None.

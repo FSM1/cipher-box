@@ -242,7 +242,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   a scope whose end derives that name is read as published, so the retire
   spares what its live record names, and it waits when its links prove no held
   scope. An entry with no name derives it from where the base places the node
-  (ADR 0070). A publish that fails **before the
+  (ADR 0070). Two residuals stand: the discard of a preserved dead letter and
+  the preserved-set trim journal with no name, because no write seed of the op
+  scope is in hand there; and two debts for one content id under two record
+  names share one ledger slot, so the second record's references stay charged
+  (a leak, not a loss). A publish that fails **before the
   record reaches the transport** — register-first, the floor read, the
   head-CID echo, or an upload whose ack never came back — is the mirror case:
   its head block may already be pinned under its own charged row, no record
