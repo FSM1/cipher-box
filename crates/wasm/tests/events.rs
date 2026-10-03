@@ -40,15 +40,30 @@ fn bytes(value: JsValue) -> Vec<u8> {
 fn a_dead_letter_crosses_its_op_id_as_a_bigint_and_its_reason_as_a_name() {
     let dead = crossed(Event::DeadLetter {
         op_id: OpId(u64::MAX),
+        target: Some(NodeId([4; 16])),
         reason: DeadLetterReason::GraftedScopeVaultSurface,
     });
 
     assert_eq!(field(&dead, "kind"), JsValue::from_str("deadLetter"));
     assert_eq!(field(&dead, "opId"), JsValue::from(BigInt::from(u64::MAX)));
+    assert_eq!(bytes(field(&dead, "target")), vec![4; 16]);
     assert_eq!(
         field(&dead, "reason"),
         JsValue::from_str("graftedScopeVaultSurface")
     );
+}
+
+/// An op that did not decode names no target, and the key still crosses.
+#[wasm_bindgen_test]
+fn a_dead_letter_with_no_target_crosses_it_as_null() {
+    let dead = crossed(Event::DeadLetter {
+        op_id: OpId(1),
+        target: None,
+        reason: DeadLetterReason::Undecodable,
+    });
+
+    assert!(keys(&dead).contains(&"target".to_owned()));
+    assert!(field(&dead, "target").is_null());
 }
 
 #[wasm_bindgen_test]
@@ -155,10 +170,11 @@ fn each_event_kind_crosses_as_its_stable_name() {
         (
             Event::DeadLetter {
                 op_id: OpId(1),
+                target: None,
                 reason: DeadLetterReason::TargetGone,
             },
             "deadLetter",
-            3,
+            4,
         ),
         (Event::ParkedWritesUnreadable, "parkedWritesUnreadable", 1),
         (Event::RegistryDebtUnjournaled, "registryDebtUnjournaled", 1),
