@@ -37,7 +37,8 @@ do not change.
 Amended on 2026-10-03: the bound applies to the re-drive only. The reads of an owner command fall
 back at once also for a cause that an endpoint can give: a head block that no endpoint serves or
 that does not match its CID, and a record below the sequence floor. A root that leaves no room for
-its re-seal also falls back at once.
+its re-seal also falls back at once. Such a cause met while an endpoint failed is unavailable, with
+no trust event and no fallback (ADR 0071 D1).
 
 **D2 — A confirmed scope root publish by the owner is a last-known-good copy.** Thus a plant after
 the cut set lands finds the cut-set root in the cache.

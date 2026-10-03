@@ -1137,7 +1137,9 @@ D1). The copy runs the full gate again. A root that leaves no room for its
 re-seal falls back at once. A head block that no endpoint serves, one that does
 not match its CID, and a record below the sequence floor fall back at once on an
 owner command, and in a re-drive only past the bound below (ADR 0068 D1, amended
-on 2026-10-03). A root with no record at all does not fall back. Each fallback
+on 2026-10-03). Such a cause met while an endpoint failed is unavailable, with no
+trust event and no fallback (ADR 0071 D1). A root with no record at all does not
+fall back. Each fallback
 sends one trust event with the scope root and the refused sequence. A
 confirmed scope root publish by the owner is a last copy (D2). A rotation whose
 root read fell back publishes nothing more at the old root name (D3). A cut

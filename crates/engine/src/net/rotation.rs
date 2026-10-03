@@ -462,8 +462,10 @@ impl<'a> RootFallback<'a> {
         self.fell_back.get()
     }
 
-    /// Whether a read of `scope_id`'s root that met `verdict` falls back.
-    fn admits(&self, scope_id: &[u8; 16], verdict: RootGateVerdict) -> bool {
+    /// Whether a read of `scope_id`'s root that met `verdict` falls back. A
+    /// cause that an endpoint can give falls back only when every endpoint
+    /// `answered` (ADR 0071 D1).
+    fn admits(&self, scope_id: &[u8; 16], verdict: RootGateVerdict, answered: bool) -> bool {
         if *scope_id != self.scope_id {
             return false;
         }
@@ -476,8 +478,10 @@ impl<'a> RootFallback<'a> {
             RootGateVerdict::Unavailable
             | RootGateVerdict::HeadBlockRefused
             | RootGateVerdict::BelowFloor => {
-                self.bound.held(scope_id);
-                self.bound.past(scope_id, true)
+                answered && {
+                    self.bound.held(scope_id);
+                    self.bound.past(scope_id, true)
+                }
             }
         }
     }
@@ -521,6 +525,21 @@ impl<'a> RootFallback<'a> {
             self.fell_back.set(true);
         }
         copy
+    }
+}
+
+/// The fan-out reads of this module do not report a failed endpoint yet, so
+/// each one counts as answered.
+const FANOUT_ANSWERED: bool = true;
+
+/// `verdict` after a fan-out: a cause that an endpoint can give, met while an
+/// endpoint failed, is unavailable, with no trust event (ADR 0071 D1).
+fn after_endpoints(verdict: RootGateVerdict, answered: bool) -> RootGateVerdict {
+    match verdict {
+        RootGateVerdict::HeadBlockRefused | RootGateVerdict::BelowFloor if !answered => {
+            RootGateVerdict::Unavailable
+        }
+        verdict => verdict,
     }
 }
 
@@ -2121,8 +2140,16 @@ where
                 stepped_over
             }
             Err(verdict) => {
-                self.fall_back(&adopter, name, scope_id, anchor, verified.sequence, verdict)
-                    .await
+                self.fall_back(
+                    &adopter,
+                    name,
+                    scope_id,
+                    anchor,
+                    verified.sequence,
+                    verdict,
+                    FANOUT_ANSWERED,
+                )
+                .await
             }
         }
     }
@@ -2137,6 +2164,7 @@ where
     /// `verdict` on the record at `refused_sequence`, or the last copy under
     /// this net's [`RootFallback`] when it admits the verdict, with no sequence
     /// to land above (ADR 0068 D3).
+    #[expect(clippy::too_many_arguments, reason = "one root read's full seam set")]
     async fn fall_back(
         &self,
         adopter: &RootAdopter<'_, H, F>,
@@ -2145,11 +2173,13 @@ where
         anchor: RootAnchor,
         refused_sequence: u64,
         verdict: RootGateVerdict,
+        answered: bool,
     ) -> Result<ResealableRoot, RootGateVerdict> {
+        let verdict = after_endpoints(verdict, answered);
         let Some(fallback) = self
             .root_fallback
             .as_ref()
-            .filter(|fallback| fallback.admits(&scope_id, verdict))
+            .filter(|fallback| fallback.admits(&scope_id, verdict, answered))
         else {
             return Err(verdict);
         };
@@ -4880,7 +4910,7 @@ where
         resumed_write_epoch: Option<u64>,
     ) -> Result<WaveSource, WritePublishError> {
         let (gated, fell_back) = self
-            .gated_scope_root(name, sequence, record_bytes)
+            .gated_scope_root(name, sequence, record_bytes, FANOUT_ANSWERED)
             .await
             .map_err(|verdict| wave_read_verdict(verdict.into()))?;
         refuse_foreign_version(gated.envelope.v).map_err(|_| WritePublishError::Rejected)?;
@@ -5044,7 +5074,7 @@ where
             return Err(ResolveFailure::Unavailable);
         };
         let (gated, _) = self
-            .gated_scope_root(name, verified.sequence, &record_bytes)
+            .gated_scope_root(name, verified.sequence, &record_bytes, FANOUT_ANSWERED)
             .await
             .map_err(ResolveFailure::from)?;
         refuse_foreign_version(gated.envelope.v).map_err(|_| ResolveFailure::Rejected)?;
@@ -5055,22 +5085,22 @@ where
     }
 
     /// Gate this scope's root at `name`, or read its last copy under the
-    /// cut's [`RootFallback`]. Answers whether the read fell back.
+    /// cut's [`RootFallback`]. Answers whether the read fell back. `answered`
+    /// is whether every endpoint of the fan-out answered (ADR 0071 D1).
     async fn gated_scope_root(
         &self,
         name: &IpnsName,
         sequence: u64,
         record_bytes: &[u8],
+        answered: bool,
     ) -> Result<(GatedScopeRoot, bool), RootGateVerdict> {
         let identity = self.owner.verifying_key();
         let adopter = self.root_adopter(&identity);
         match gated_root_cached(&adopter, self.snapshot_cache, name, record_bytes, None).await {
             Ok(gated) => Ok((gated, false)),
-            Err(verdict) => match self
-                .root_fallback
-                .as_ref()
-                .filter(|fallback| fallback.admits(&self.scope_id, verdict))
-            {
+            Err(verdict) => match self.root_fallback.as_ref().filter(|fallback| {
+                fallback.admits(&self.scope_id, after_endpoints(verdict, answered), answered)
+            }) {
                 Some(fallback) => fallback
                     .last_copy(
                         &adopter,
@@ -5083,7 +5113,7 @@ where
                     )
                     .await
                     .map(|gated| (gated, true)),
-                None => Err(verdict),
+                None => Err(after_endpoints(verdict, answered)),
             },
         }
     }
@@ -8198,24 +8228,34 @@ mod tests {
         ];
 
         for verdict in endpoint_causes {
-            assert!(!fallback.admits(&SCOPE, verdict), "{verdict:?} waits");
+            assert!(!fallback.admits(&SCOPE, verdict, true), "{verdict:?} waits");
         }
         assert_eq!(bound.held.get(), 3, "each wait holds a pass");
         bound.past.set(true);
         for verdict in endpoint_causes {
             assert!(
-                fallback.admits(&SCOPE, verdict),
+                fallback.admits(&SCOPE, verdict, true),
                 "{verdict:?} past the bound"
             );
+            assert!(
+                !fallback.admits(&SCOPE, verdict, false),
+                "{verdict:?} with a failed endpoint never falls back"
+            );
+            assert_eq!(
+                after_endpoints(verdict, false),
+                RootGateVerdict::Unavailable,
+                "{verdict:?} with a failed endpoint is unavailable"
+            );
         }
+        assert_eq!(bound.held.get(), 6, "a failed endpoint holds no pass");
         for verdict in [
             RootGateVerdict::Rejected,
             RootGateVerdict::Superseded,
             RootGateVerdict::NotResealable,
         ] {
-            assert!(fallback.admits(&SCOPE, verdict), "{verdict:?}");
+            assert!(fallback.admits(&SCOPE, verdict, true), "{verdict:?}");
             assert!(
-                !fallback.admits(&CHILD_SCOPE, verdict),
+                !fallback.admits(&CHILD_SCOPE, verdict, true),
                 "another scope's root keeps {verdict:?}"
             );
         }
