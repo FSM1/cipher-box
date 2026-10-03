@@ -1639,6 +1639,218 @@ fn a_write_the_name_wave_did_not_carry_applies_again_after_the_flip() {
     );
 }
 
+/// The targets of every op on this device's durable queue, kept ops included.
+fn queued_targets(device: &FakeDevice) -> Vec<NodeId> {
+    let raw = block_on(device.staging_store.queued_ops()).expect("the queue reads");
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    decode_queue(&RecordReader::new(&enc_subkey), &raw)
+        .mine
+        .into_iter()
+        .map(|(_, op)| op.target)
+        .collect()
+}
+
+/// Write `bytes` as the next version of `node` on `engine`, and publish it.
+fn publish_version(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    node: NodeId,
+    bytes: &[u8],
+) {
+    let handle = block_on(engine.begin_write(
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        bytes.len() as u64,
+    ))
+    .expect("a version write opens");
+    block_on(engine.push_chunk(handle, bytes)).expect("the bytes stage");
+    block_on(engine.commit_write(handle)).expect("the version commits");
+    tick(world, engine, tasks);
+}
+
+/// A file in the granted folder, created and published on this device.
+fn published_file_in_folder(fx: &mut GrantScenario, name: &str) -> NodeId {
+    block_on(fx.engine.command(Command::Create {
+        parent: fx.folder,
+        name: name.into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a metadata create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    block_on(fx.engine.view())
+        .expect("a rendered view")
+        .children(fx.folder)
+        .into_iter()
+        .find(|child| child.name == name)
+        .expect("the file is listed")
+        .id
+}
+
+/// Demote the recipient to read on another owner device, which cuts the write
+/// scope and runs the name wave.
+fn cut_the_write_scope(fx: &GrantScenario, device: &mut Engine<FakeSeamTypes>) {
+    assert_eq!(
+        block_on(device.command(Command::ChangePermission {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+}
+
+/// A kept edit whose node a later writer edited again cannot apply after the
+/// flip. Its version landed, so it leaves with no notice and retires nothing.
+#[test]
+fn a_kept_edit_a_later_writer_overtook_leaves_quietly_after_the_flip() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[1u8; 64]);
+    let (mut phone, _phone_events, mut phone_tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the phone opens the folder");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    publish_version(&fx.world, &mut phone, &mut phone_tasks, doc, &[2u8; 64]);
+    cut_the_write_scope(&fx, &mut phone);
+    assert_eq!(
+        block_on(fx.engine.read_content(doc)).expect("the head reads"),
+        vec![2u8; 64],
+        "this device reads the later version"
+    );
+    let retired_before = retired(&fx.owner_device).len();
+
+    for _ in 0..6 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    let status = block_on(fx.engine.status()).expect("the session status reads");
+    assert!(
+        status.dead_letters.is_empty(),
+        "no notice for a landed write"
+    );
+    assert_eq!(
+        retired(&fx.owner_device).len(),
+        retired_before,
+        "and nothing retires"
+    );
+    assert!(
+        !queued_targets(&fx.owner_device).contains(&doc),
+        "the edit left the queue"
+    );
+    assert_eq!(
+        block_on(fx.engine.read_content(doc)).expect("the head reads"),
+        vec![2u8; 64],
+        "and the later writer's version stays the head"
+    );
+}
+
+/// A grant on a folder inside a write scope moves the nearest scope root of
+/// the ops under it. That move is a flip: a kept op there gets its check
+/// soon, not at the bound (ADR 0069 D5).
+#[test]
+fn a_kept_op_under_a_new_scope_root_gets_its_check_after_the_grant() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    let late = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "late");
+    assert!(
+        queued_targets(&fx.owner_device).contains(&late),
+        "the create is kept"
+    );
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..6 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert!(
+        !queued_targets(&fx.owner_device).contains(&late),
+        "the new scope root shows the create, so it left"
+    );
+    let status = block_on(fx.engine.status()).expect("the session status reads");
+    assert!(status.dead_letters.is_empty(), "as landed");
+}
+
+/// A kept version delete that the name wave carried finds its version gone
+/// after the flip. That absence is the delete already done, not a failure.
+#[test]
+fn a_kept_version_delete_the_wave_carried_leaves_quietly_after_the_flip() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[1u8; 64]);
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[2u8; 64]);
+    let prior = block_on(fx.engine.file_versions(doc))
+        .expect("the list reads")
+        .first()
+        .expect("a prior version")
+        .content_cid
+        .clone();
+    block_on(fx.engine.command(Command::DeleteVersion {
+        node: doc,
+        content_cid: prior,
+    }))
+    .expect("the delete queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.engine.file_versions(doc))
+            .expect("the list reads")
+            .is_empty(),
+        "the delete landed"
+    );
+    let (mut phone, _phone_events, _phone_tasks) = fx.second_owner_device();
+    cut_the_write_scope(&fx, &mut phone);
+    let retired_before = retired(&fx.owner_device).len();
+
+    for _ in 0..6 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    let status = block_on(fx.engine.status()).expect("the session status reads");
+    assert!(
+        status.dead_letters.is_empty(),
+        "no notice for a landed delete"
+    );
+    assert_eq!(
+        retired(&fx.owner_device).len(),
+        retired_before,
+        "and nothing retires again"
+    );
+    assert!(
+        !queued_targets(&fx.owner_device).contains(&doc),
+        "the delete left the queue"
+    );
+}
+
 /// A manual rotation leaves the subtree lagging just as a revoke's read cut
 /// does, so a downgrade right after it still moves every node.
 #[test]

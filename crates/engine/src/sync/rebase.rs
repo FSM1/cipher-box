@@ -287,7 +287,8 @@ pub struct ReplayReport {
     /// the two planes its publish resolves, which is the stronger evidence and
     /// the only one that proves the op reached the network
     /// ([`crate::sync::drain::Drain::commit_crossing`]).
-    pub dropped_scope_exits: Vec<crate::facade::NodeId>,
+    /// Each root is paired with the first op that owed it.
+    pub dropped_scope_exits: Vec<(OpId, crate::facade::NodeId)>,
 }
 
 /// Decoded op-queue entries, in FIFO order.
@@ -412,7 +413,7 @@ pub fn replay(
     let mut dropped = Vec::new();
     let mut dead_letters = Vec::new();
     let mut scope_exit_triggers: Vec<crate::facade::NodeId> = Vec::new();
-    let mut dropped_scope_exits: Vec<crate::facade::NodeId> = Vec::new();
+    let mut dropped_scope_exits: Vec<(OpId, crate::facade::NodeId)> = Vec::new();
 
     for (op_id, op) in ops {
         // Only this op mutates `working` across the call, so a node the move
@@ -451,7 +452,11 @@ pub fn replay(
                 scope_exit_trigger,
             } => {
                 queue_trigger(&mut scope_exit_triggers, scope_exit_trigger);
-                queue_trigger(&mut dropped_scope_exits, scope_exit_trigger);
+                if let Some(root) = scope_exit_trigger
+                    && !dropped_scope_exits.iter().any(|(_, owed)| *owed == root)
+                {
+                    dropped_scope_exits.push((*op_id, root));
+                }
                 dropped.push((*op_id, reason));
             }
             OpResolution::DeadLetter(reason) => dead_letters.push((*op_id, reason)),
@@ -1976,7 +1981,7 @@ mod tests {
         assert_eq!(report.dropped.len(), 1, "the move already landed");
         assert_eq!(
             report.dropped_scope_exits,
-            [id(5)],
+            [(OpId(1), id(5))],
             "and the granted scope it left is still owed its cut"
         );
     }

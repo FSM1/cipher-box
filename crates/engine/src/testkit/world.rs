@@ -152,24 +152,30 @@ impl FakeDevice {
         }
     }
 
-    /// The queued ops that have not published: every queued op above the
-    /// highest published-op mark this device holds. A published op stays
-    /// queued as a kept op until it shows from the live root (ADR 0069 D2).
+    /// The queued ops whose last record has not confirmed: every queued op
+    /// above the one published-op mark this device holds. It reads the mark
+    /// alone, not the engine's kept-op notes, so it does not share the rule a
+    /// test checks. More than one identity's mark on the device is a test
+    /// error, not a merge.
     pub async fn pending_ops(
         &self,
     ) -> crate::seams::SeamResult<Vec<(crate::seams::OpId, Vec<u8>)>> {
         use crate::seams::StagingStore;
-        let mut mark = None;
+        let mut marks = Vec::new();
         for key in self.staging_store.staged_keys().await? {
-            if !key.starts_with(crate::sync::PUBLISHED_OP_MARK_PREFIX) {
-                continue;
-            }
-            let stored = self.staging_store.staged_bytes(&key).await?;
-            if let Some(value) = stored.and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok())
+            if key.starts_with(crate::sync::PUBLISHED_OP_MARK_PREFIX)
+                && let Some(bytes) = self.staging_store.staged_bytes(&key).await?
             {
-                mark = mark.max(Some(u64::from_be_bytes(value)));
+                marks.push(u64::from_be_bytes(
+                    bytes.as_slice().try_into().expect("an 8-byte mark"),
+                ));
             }
         }
+        assert!(
+            marks.len() <= 1,
+            "one identity's published-op mark per device"
+        );
+        let mark = marks.first().copied();
         let mut queued = self.staging_store.queued_ops().await?;
         queued.retain(|(op_id, _)| mark.is_none_or(|mark| op_id.0 > mark));
         Ok(queued)

@@ -922,12 +922,15 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   and an arriving leg, and both legs are journaled or neither is (ADR 0045).
   Replay is FIFO in performed order through the standard rebase, and rebases
   only onto gate-passing state (FSM1/cipher-box-next#33 D5–D7). A published op
-  stays queued as a kept op, with a clear note of its write epoch and publish
-  time, until the live root of its write scope shows it (ADR 0069). It waits at
-  its write epoch for at most T = 7 days. At a new write epoch, once the base
-  read its folder at the new name, the standard rebase decides: a landed op
-  drops, a lost op applies again under the new seed, and a device with no new
-  seed dead-letters it. A kept op is not pending. A build decodes,
+  stays queued as a kept op, with a sealed note of its scope root, write epoch
+  and publish time, until the live root of its write scope shows it (ADR 0069).
+  With no flip, it waits at its write epoch for at most T = 7 days. At a flip
+  (a new write epoch or a new nearest scope root), once the base read its
+  folder at the live name, the standard rebase decides: a landed op drops, and
+  a lost op applies again under the new seed. A second apply that cannot land
+  leaves with no notice. A device with no new seed reads the old tree, where
+  the op is satisfied, so the op leaves with no notice. A kept op is not
+  pending (ADR 0069 D7). A build decodes,
   opens and drains every queue record that the previous release wrote
   ([ADR 0020](../decisions/0020-the-durable-op-queue-reads-the-previous-release.md)).
   A new field on a queued op takes a decode default equal to the value the older
@@ -1235,9 +1238,10 @@ rebases and signs above.
   at a name the wave has not yet rotated. The inserted record keeps its epoch
   label for a sweep-length window, and the label attests nothing.
 - Late writes: a write that a revoked or downgraded writer puts in the old tree
-  after the walk dead-letters on its own device. A kept op whose folder the
-  writer does not read at its new name within T leaves the queue at T, and the
-  write is lost (ADR 0069).
+  after the walk leaves the queue of its own device with no notice, and the
+  dead letter of ADR 0069 D3 is not landed. A kept op whose device sees no flip
+  within T leaves the queue at T, so a flip after T loses the write
+  (ADR 0069).
 
 ## Pointer planes
 

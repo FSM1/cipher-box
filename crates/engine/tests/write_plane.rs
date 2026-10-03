@@ -1465,14 +1465,21 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
         &plaintext,
     )
     .expect("the write commits");
+    let (root_cid, leaves) = staged_version(&alice);
     tick(&world, &engine_a, &mut tasks);
     assert!(
         block_on(alice.pending_ops()).unwrap().is_empty(),
-        "the op left the queue"
+        "the op published"
+    );
+    // Each leaf leaves with its upload; the kept op holds only its root.
+    assert_no_blocks_staged(&alice, &leaves);
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&root_cid),
+        "the kept op holds its root until it leaves"
     );
 
-    // Every staged block left with its upload once the kept op left the queue,
-    // leaving only the queue bookkeeping.
     let_kept_ops_leave(&world, &engine_a, &mut tasks);
     assert_eq!(
         staged_keys_but_the_cursor(&alice),
@@ -2843,12 +2850,13 @@ fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_block
         file_sequence,
         "nothing published"
     );
-    let_kept_ops_leave(&world, &engine, &mut tasks);
-    assert_eq!(
-        staged_keys_but_the_cursor(&alice),
-        vec![mark_key()],
-        "blocks no key opens are released, never held against the budget"
-    );
+    let version: Vec<Vec<u8>> = leaves
+        .iter()
+        .map(|leaf| leaf.cid.clone())
+        .chain(core::iter::once(root_cid))
+        .collect();
+    // At the dead letter, not when the kept create ahead of it leaves.
+    assert_no_blocks_staged(&alice, &version);
 }
 
 /// A leaf missing from *before* anything uploaded is indistinguishable from one
@@ -3192,11 +3200,17 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
             "a marked, still-staged leaf is re-uploaded, never read as loss"
         );
         assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
+        assert!(
+            !block_on(alice.staging_store.staged_keys())
+                .unwrap()
+                .contains(&leaves[interrupted]),
+            "the retry re-removes it on the next pass, so the residue holds no staging budget"
+        );
         let_kept_ops_leave(&world, &engine, &mut tasks);
         assert_eq!(
             staged_keys_but_the_cursor(&alice),
             vec![mark_key()],
-            "the retry re-removes it, so the residue holds no staging budget"
+            "and nothing stays once the kept op leaves"
         );
     }
 }
@@ -10934,6 +10948,134 @@ fn an_op_whose_record_already_published_is_dropped_rather_than_replayed() {
     let (restarted, mut events, mut tasks) = boot(&world, &blocks, &alice, 43);
     tick(&world, &restarted, &mut tasks);
     assert_dropped_without_replay(&alice, &mut events, op_id, version);
+}
+
+/// The note is written before the mark rises, so a crash between the two
+/// leaves a note and no mark. The note alone is the evidence of the publish:
+/// the op stays kept, and a cancel cannot unpin the version it published.
+#[test]
+fn an_op_with_a_note_and_no_mark_stays_kept_across_a_restart() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let op_id = {
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        let op_id = write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &(0..200u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+        tick(&world, &engine, &mut tasks);
+        assert_eq!(published_op_mark(&alice), Some(op_id.0));
+        block_on(alice.staging_store.remove_staged_bytes(&mark_key())).unwrap();
+        op_id
+    };
+
+    let (mut restarted, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    assert_eq!(
+        block_on(restarted.command(Command::CancelUpload { op_id })),
+        Err(EngineError::TooLateToCancel { op_id })
+    );
+    tick(&world, &restarted, &mut tasks);
+    assert!(raw_queue_holds(&alice, op_id), "the op stays kept");
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "and nothing it published is unpinned"
+    );
+}
+
+/// A restore ends at the bin index, not at a record publish, so it raises no
+/// mark. It completes when it lands and does not run again.
+#[test]
+fn a_restore_leaves_the_queue_once_it_lands() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    block_on(engine.command(Command::Restore {
+        node: doomed,
+        into: None,
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        block_on(alice.pending_ops()).unwrap().is_empty(),
+        "the restore completed"
+    );
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        block_on(alice.pending_ops()).unwrap().is_empty(),
+        "and it does not come back"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["notes.txt".to_owned()],
+        "the node is back once"
+    );
+}
+
+/// A purge ends at the bin index too: it completes when it lands and does not
+/// retire again.
+#[test]
+fn a_purge_leaves_the_queue_once_it_lands() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    block_on(engine.command(Command::Purge { node: doomed })).expect("the purge stages");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        block_on(alice.pending_ops()).unwrap().is_empty(),
+        "the purge completed"
+    );
+    let retires = retire_targets(&alice).len();
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        retire_targets(&alice).len(),
+        retires,
+        "and it does not retire again"
+    );
 }
 
 /// The mark's line is the **ack**, not the self-adopt. A record whose PUT

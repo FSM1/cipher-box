@@ -33,40 +33,52 @@ epoch. The confirm of the last record of the op's plan (`Drain::mark_published`)
 the op. The op leaves the queue (`Drain::drain_queue`) only when a pass shows its effect from the
 live root. Until then its staged blocks stay pinned, and the pending-op overlay shows the op as the
 state law of "Sync core" states. Thus the write of an honest writer is not lost, at any time before
-or after the flip. Amended on 2026-10-03: D7 replaces the overlay clause.
+or after the flip. Proposed on 2026-10-03, not accepted: D7 replaces the overlay clause.
 
 **D3 — When a pass sees a new write epoch on the op's write scope, the writer reads the new tree
 and, if it holds the new write seed, applies the op again under that seed.** An owner device gets
 the seed from the owner write blob, and a surviving write grantee gets it from its grant blob. The
 op applies again through the standard rebase of "Sync core", in FIFO order before the later queued
 ops, and the per-op rebase rules apply unchanged. A revoked or downgraded party holds no new write
-seed, so its op does not apply again and takes the dead-letter path of "Sync core".
+seed, so its op does not apply again and takes the dead-letter path of "Sync core". That dead
+letter is not landed: see Consequence 2.
 
-Amended on 2026-10-03: the owner ruled the three Residuals. D4 to D6 record the rulings, and D7
-follows from them.
+Amended on 2026-10-03: the owner ruled the three Residuals: the kept op, T = 7 days, and an
+amendment of this ADR in place. D4 to D6 record the rulings. Each sentence that starts with
+"Proposed" is not a ruling and waits for the owner.
 
-**D4 — A kept op is an op at or below the published-op mark that stays queued, and its note is a
-separate clear record.** The drain writes one note for each kept op in one bookkeeping record of
-the identity (`sync::kept_op`): the write epoch of the op's scope and the time of the publish.
-The note holds an op id, an epoch and a time, so it stays clear, as the op-id marks do. The
-previous release removes a queued op at or below the published-op mark as published, and its
-orphan sweep deletes the note record. Thus a downgrade drops a kept op as that release did, and
-no migration step is necessary (ADR 0020 D3).
+**D4 — A kept op stays queued after its publish, and a note records it.** The drain writes the
+note before the published-op mark rises (`Drain::keep_published`), into one bookkeeping record of
+the identity (`sync::kept_op`). The note holds the write epoch of the op's write scope and the time
+of the publish. Proposed: the note also holds the scope root, so the record seals as the owner-local
+`kept-ops` kind, and an op with a note and no mark is a kept op, so a crash between the two writes
+keeps the op. The previous
+release removes a queued op at or below the mark as published, and its orphan sweep deletes the
+note record. Thus a downgrade drops a kept op as that release did, and no migration step is
+necessary (ADR 0020 D3).
 
 **D5 — A kept op waits at its write epoch for T = 7 days, the bound of ADR 0065 D3.** The live
 write epoch is the write-epoch floor of the op's scope on this device. While the floor equals the
 epoch of the note, the op stays, and after T it leaves the queue and its staged blocks release. A
-higher floor sends the op to D3 at any time. Time enters through the clock seam.
+higher floor sends the op to D3 at any time. Time enters through the clock seam. Proposed: a
+note time later than the clock reads as the clock. A nearest scope root other than the note's is
+also a flip, and a flip waits for its check with no limit, as a flip at T would lose the write.
 
 **D6 — The test "visible from the live root" is the standard rebase onto the live tree.** An op
 that the rebase reads as already satisfied leaves the queue, and an edit whose own version is the
-head of its file is already satisfied. The check runs only when the base read the folder that the
-op writes under at its name of the new write seed. A kept op with no note gets a note at write
-epoch 0 when the drain first sees it, so it gets one check, and T runs from that sight.
+head of its file is already satisfied. A kept op with no note gets a note at write epoch 0 when
+the drain first sees it, so it gets one check, and T runs from that sight. A consequence of this
+test, not a ruling: the check runs only when the base read the folder that the op writes under at
+its name of the live write seed, because a stale base shows the old tree and the op as satisfied.
+Proposed: a kept op that this device edits again leaves with no check, because the later op sets
+what the node shows. A second apply that cannot land leaves with no retire and no notice, because
+its version landed once, and a version delete that finds its version gone is satisfied.
 
-**D7 — A kept op is not pending.** The pending-op overlay, the pending flags, the staged-content
-read and the second-end choice of a pass skip an op at or below the published-op mark, because its
-version is live. Only the drain reads a kept op again, and the cancel command refuses it.
+**D7 — Proposed on 2026-10-03, not accepted: a kept op is not pending.** The pending-op overlay,
+the pending flags, the staged-content read, the cold-start data path and the second-end choice of
+a pass skip a kept op, because its version is live. A kept op that crosses a scope and waits for
+its check still holds the second end. Only the drain reads a kept op again, and the cancel command
+refuses it.
 
 ## Alternatives considered
 
@@ -84,16 +96,21 @@ version is live. Only the drain reads a kept op again, and the cancel command re
 
 ## Consequences
 
-1. `blueprint/engine.md` "Sync core", the "Ops" bullet, states D2 to D7: the kept op, the
-   check at a new write epoch, and the second apply through the rebase.
+1. `blueprint/engine.md` "Sync core", the "Ops" bullet, states D2 to D6, and D7 as proposed:
+   the kept op, the check at a new write epoch, and the second apply through the rebase.
 2. `blueprint/engine.md` "rotateScopeWrite" adds one sentence after the gated-read sentence:
    the writer carries such a write (D1). "Residuals" states that the late write of a revoked
-   writer dead-letters on its own device, and that a kept op whose folder the writer does not
-   read at its new name within T leaves at T.
+   writer dead-letters on its own device. Proposed on 2026-10-03, not accepted: until that dead
+   letter lands, "Residuals" states that the kept op of a revoked writer reads its old tree,
+   finds the op satisfied there and leaves its queue with no notice.
 3. `CONTEXT.md` "Op queue" states that a published op stays until it is visible from the live
    root, and "Name wave" states that the writer carries a write that lands after the walk.
+   Proposed on 2026-10-03, not accepted: "Pending-op overlay" states that a kept op is not
+   pending (D7).
 4. `blueprint/testing.md` "crates/engine — seam fakes and the simulation harness" adds the
-   probe: the wave reads the old record, and after the writer's next passes the new tree names
-   the new child at its new name and the child opens there. Amended on 2026-10-03: the probe
-   serves the walk the record from before the write, and the bound of D5 and the check of D6
-   each have a test.
+   probe of `InMemoryRecordStore::seed_record_after_put`: after the writer's next pass, the new
+   tree names the new child at its new name and the child opens there, and the op of a revoked
+   writer dead-letters. Proposed on 2026-10-03, not accepted: the probe serves the walk the
+   record from before the write, the revoked-writer half waits for that dead letter, and D5 and
+   D6 each have a test.
+5. `blueprint/core.md` "Owner-local seals" adds the `kept-ops` kind (D4).

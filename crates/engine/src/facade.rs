@@ -157,6 +157,7 @@ use crate::sync::BookkeepingSeal;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{EngineSeams, owner_scoped_key, published_op_mark};
+use crate::sync::kept_op::retain_pending;
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
@@ -5986,7 +5987,15 @@ impl<T: SeamTypes> Engine<T> {
             .queued_ops()
             .await
             .map_err(ColdStartError::Seam)?;
-        let scan = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
+        let mut scan = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
+        retain_pending(
+            &self.seams.staging_store,
+            BookkeepingSeal::new(session.enc_subkey(), &*self.entropy),
+            session.enc_subkey(),
+            &mut scan.mine,
+        )
+        .await
+        .map_err(ColdStartError::Seam)?;
         let pending: Vec<_> = scan.mine.into_iter().map(|(_id, op)| op).collect();
 
         // The preserved set outlives the process and the notice map does not, so
@@ -11707,12 +11716,14 @@ where {
         let mut scan = memoized_scan(&self.seams.staging_store, &reader, &self.state.queue_scan)
             .await
             .map_err(EngineError::from_seam)?;
-        if let Some(mark) = published_op_mark(&self.seams.staging_store, session.enc_subkey())
-            .await
-            .map_err(EngineError::from_seam)?
-        {
-            scan.mine.retain(|(op_id, _)| op_id.0 > mark);
-        }
+        retain_pending(
+            &self.seams.staging_store,
+            BookkeepingSeal::new(session.enc_subkey(), &*self.entropy),
+            session.enc_subkey(),
+            &mut scan.mine,
+        )
+        .await
+        .map_err(EngineError::from_seam)?;
         Ok(scan)
     }
 

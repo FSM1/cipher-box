@@ -73,7 +73,7 @@ use crate::sync::op::{Op, OpKind};
 use crate::sync::owed_rotation::OwedRotation;
 use crate::sync::pointer::POINTER_PAYLOAD_VERSION;
 use crate::sync::project::{UnlinkedChild, merge_root};
-use crate::sync::rebase::{QueueScanMemo, enclosing_scope_root};
+use crate::sync::rebase::{DropReason, QueueScanMemo, enclosing_scope_root, replay};
 use crate::sync::record::RecordReader;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::render::BaseSnapshot;
@@ -1346,13 +1346,20 @@ async fn queued_second_end<St: StagingStore + QueueGeneration>(
     }
     let reader = RecordReader::new(enc_secret);
     let scan = memoized_scan(staging, &reader, memo).await.ok()?;
-    // A kept op has published, so the first pending op decides.
     let published = published_op_mark(staging, enc_secret).await.ok()?;
     let base = boundaries.base.borrow();
+    // A kept op that the base shows as landed is not one the drain applies,
+    // so it does not decide (ADR 0069 D6).
     let scope = scan
         .mine
         .iter()
-        .filter(|(op_id, _)| published.is_none_or(|mark| op_id.0 > mark))
+        .filter(|(op_id, op)| {
+            published.is_none_or(|mark| op_id.0 > mark)
+                || !replay(&base, &base, &[(*op_id, op.clone())], listed)
+                    .dropped
+                    .iter()
+                    .any(|(_, reason)| *reason == DropReason::AlreadySatisfied)
+        })
         .find_map(|(_, op)| second_end_scope(&base, op, listed))?;
     let proved = boundaries.material.get(&scope)?;
     Some(SecondEnd {
