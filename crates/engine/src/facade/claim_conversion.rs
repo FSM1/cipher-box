@@ -341,7 +341,11 @@ where
         bound: &'b dyn NodeBound,
     ) -> OwnerRotationNet<'b, T, H, C, F, Sch, Box<dyn Entropy>, S> {
         OwnerRotationNet {
-            root_fallback: Some(RootFallback::new(target.scope.scope_id, bound)),
+            root_fallback: Some(RootFallback::new(
+                target.scope.scope_id,
+                bound,
+                self.owed.root_reports(),
+            )),
             ..self.net(target, PointerConsultArm::Refused)
         }
     }
@@ -462,6 +466,7 @@ where
             sweep: &|scope| sweep(scope, target.parent_node_seed.clone()),
             bound,
             root_bound: if command { &AtOnce } else { bound },
+            root_reports: self.owed.root_reports(),
             root_reads: CutRootReads::default(),
         };
         rotate_on_cut(&rotator, node, cut).await

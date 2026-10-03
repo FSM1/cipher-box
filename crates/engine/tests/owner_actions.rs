@@ -15396,8 +15396,9 @@ fn a_rerun_keeps_the_first_stop_so_an_unserved_node_drops_past_the_bound() {
 }
 
 /// ADR 0068 D1 as amended: the revokee publishes a root record whose head
-/// block no endpoint serves, before the first revoke. The command read runs
-/// on the last copy at once, and the revoke ends in one pass.
+/// block every block source answers it does not hold, before the first
+/// revoke. The command read runs on the last copy at once, and the revoke ends
+/// in one pass.
 #[test]
 fn a_revoke_over_a_root_whose_head_block_no_endpoint_serves_ends_in_one_pass() {
     let mut fx = GrantScenario::new();
@@ -15418,6 +15419,92 @@ fn a_revoke_over_a_root_whose_head_block_no_endpoint_serves_ends_in_one_pass() {
         "the drop is reported"
     );
     assert_eq!(owed_or_abandoned(&events, fx.folder), (false, false));
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+}
+
+/// Assert that a revoke stopped as unavailable at the honest root at
+/// `sequence`, with no fallback, no trust event, and nothing owed.
+fn assert_unavailable_with_no_fallback(
+    fx: &mut GrantScenario,
+    outcome: Result<CommandOutcome, EngineError>,
+    root: &IpnsName,
+    sequence: u64,
+) {
+    assert!(
+        matches!(outcome, Err(EngineError::Seam { .. })),
+        "the revoke is unavailable: {outcome:?}"
+    );
+    let events = events_so_far(&mut fx._events);
+    assert_eq!(root_refusals(fx, &events, sequence), 0, "no trust event");
+    assert_eq!(owed_or_abandoned(&events, fx.folder), (false, false));
+    assert_eq!(
+        &fx.granted_scope_repoint().current_root,
+        root,
+        "the root did not move"
+    );
+}
+
+/// ADR 0068 D1: a gateway timeout on the root head block is a transport
+/// fault, so the command does not fall back.
+#[test]
+fn a_revoke_over_a_root_head_block_the_gateway_times_out_on_does_not_fall_back() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    let root = fx.granted_scope_repoint().current_root;
+    let sequence = sequence_at(&fx.world, &root);
+    let cid = published_head_cid(&fx.world, &root).expect("the root is published");
+    fx.blocks.fail_block(&cid);
+    let _ = events_so_far(&mut fx._events);
+
+    let outcome = revoke_the_recipient(&mut fx);
+
+    assert_unavailable_with_no_fallback(&mut fx, outcome, &root, sequence);
+}
+
+/// ADR 0068 D1: another owner device moved the root on, and the snapshot
+/// cache write of the new record fails. A local fault, so the command does
+/// not fall back.
+#[test]
+fn a_revoke_whose_cache_write_fails_does_not_fall_back() {
+    let mut fx = GrantScenario::new();
+    write_granted_nested_subtree(&mut fx);
+    let (mut second, _second_events, mut second_tasks) = fx.second_owner_device();
+    create_published_folder(
+        &fx.world,
+        &mut second,
+        &mut second_tasks,
+        fx.folder,
+        "newer",
+    );
+    let root = fx.granted_scope_repoint().current_root;
+    let sequence = sequence_at(&fx.world, &root);
+    fx.owner_device.snapshot_cache.fail_puts();
+    let _ = events_so_far(&mut fx._events);
+
+    let outcome = revoke_the_recipient(&mut fx);
+
+    assert_unavailable_with_no_fallback(&mut fx, outcome, &root, sequence);
+}
+
+/// ADR 0068 D1 as amended: every endpoint answers with the root below the
+/// sequence floor. The command runs on the last copy at once.
+#[test]
+fn a_revoke_over_a_root_below_the_sequence_floor_falls_back_at_once() {
+    let mut fx = GrantScenario::new();
+    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let root = fx.granted_scope_repoint().current_root;
+    let sequence = sequence_at(&fx.world, &root) - 1;
+    let value = published_value(&fx.world, &root);
+    sign_at(&fx, &revokee_seed, fx.folder, &value, sequence);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    let events = events_so_far(&mut fx._events);
+    assert!(
+        root_refusals(&fx, &events, sequence) > 0,
+        "the drop is reported"
+    );
     assert_revoke_finished(&mut fx, &revokee_seed, child);
     assert_the_revokee_is_cut(&fx, &revokee_seed);
 }

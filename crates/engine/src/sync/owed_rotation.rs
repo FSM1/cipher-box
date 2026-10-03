@@ -21,6 +21,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use crate::facade::NodeId;
+use crate::net::rotation::RootReports;
 use crate::rotation::NodeBound;
 use crate::seams::{SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
@@ -191,6 +192,8 @@ pub struct OwedCell {
     pass: Cell<u64>,
     /// The time each scope's cut command last ran this session (ADR 0068 D4).
     commanded: RefCell<BTreeMap<NodeId, UnixMillis>>,
+    /// The refused scope root records this session already reported.
+    root_reports: RootReports,
     writer: futures_util::lock::Mutex<()>,
 }
 
@@ -234,6 +237,14 @@ impl OwedCell {
         if let Ok(mut commanded) = self.commanded.try_borrow_mut() {
             commanded.clear();
         }
+        if let Ok(mut reports) = self.root_reports.try_borrow_mut() {
+            reports.clear();
+        }
+    }
+
+    /// The refused scope root records this session already reported.
+    pub(crate) fn root_reports(&self) -> &RootReports {
+        &self.root_reports
     }
 
     fn reset_held(&self, scope: NodeId) {

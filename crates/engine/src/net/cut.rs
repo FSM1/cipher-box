@@ -25,8 +25,8 @@ use crate::gate::floor;
 use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
     GatedRoots, GatedWaveReads, MovedScopeSeed, OnAccessMisses, OwnerRotationKeys,
-    OwnerRotationNet, PointerConsultArm, RootFallback, RotationAncestry, SweptScopeState,
-    WaveSubtree, WriteWaveNet,
+    OwnerRotationNet, PointerConsultArm, RootFallback, RootReports, RotationAncestry,
+    SweptScopeState, WaveSubtree, WriteWaveNet,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
@@ -97,6 +97,8 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     /// The bound the root fallback waits on: [`AtOnce`](crate::rotation::AtOnce)
     /// under an owner command, the cut's bound under a re-drive (ADR 0068 D1).
     pub root_bound: &'a dyn NodeBound,
+    /// The refused root records this session already reported.
+    pub root_reports: &'a RootReports,
     /// What this cut's own root reads met ([`CutRootReads`]).
     pub root_reads: CutRootReads,
 }
@@ -189,7 +191,11 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
-            root_fallback: Some(RootFallback::new(self.scope_id, self.root_bound)),
+            root_fallback: Some(RootFallback::new(
+                self.scope_id,
+                self.root_bound,
+                self.root_reports,
+            )),
         }
     }
 
@@ -464,7 +470,11 @@ where
                     session_root_scope_id: self.session_root_scope_id,
                     gated_reads: GatedWaveReads::default(),
                     subtree: WaveSubtree::default(),
-                    root_fallback: Some(RootFallback::new(scope_root.0, self.root_bound)),
+                    root_fallback: Some(RootFallback::new(
+                        scope_root.0,
+                        self.root_bound,
+                        self.root_reports,
+                    )),
                 };
                 rotate_scope_write(
                     &mut SharedEntropy(self.entropy),

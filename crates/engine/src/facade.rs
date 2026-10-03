@@ -7769,7 +7769,11 @@ where {
             .owner_scope(node, api, owner_keys(), check, unindexed)
             .await?;
         let current = OwnerRotationNet {
-            root_fallback: Some(RootFallback::new(target.scope.scope_id, &AtOnce)),
+            root_fallback: Some(RootFallback::new(
+                target.scope.scope_id,
+                &AtOnce,
+                self.state.owed_rotation.root_reports(),
+            )),
             ..self.owner_rotation_net(
                 api,
                 owner_keys(),
@@ -8867,7 +8871,13 @@ where {
     ) -> Result<GatedScope<'a, T>, EngineError> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let net = OwnerRotationNet {
-            root_fallback: cut.then(|| RootFallback::new(target.scope.scope_id, &AtOnce)),
+            root_fallback: cut.then(|| {
+                RootFallback::new(
+                    target.scope.scope_id,
+                    &AtOnce,
+                    self.state.owed_rotation.root_reports(),
+                )
+            }),
             ..self.owner_rotation_net(
                 api,
                 keys.rotation(),

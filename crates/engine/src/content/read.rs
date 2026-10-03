@@ -268,6 +268,10 @@ pub enum ReadError {
     /// status level (unreachable, aborted, or non-2xx). Availability, not
     /// integrity — the caller may retry later.
     Unavailable,
+    /// Every source answered that it holds no such block (404 or 410), and no
+    /// source failed. Availability as [`Self::Unavailable`] is; only an owner
+    /// cut's root read tells the two apart (ADR 0068 D1).
+    NotFound,
 }
 
 /// Whether the pair names a canonical block address on `plane`: the CID is
@@ -320,11 +324,17 @@ pub async fn read_block(
     // no-source Unavailable.
     let mut over_cap: Option<(usize, usize)> = None;
     let mut mismatch = None;
+    // Whether every source so far answered that it holds no such block.
+    let mut not_found = false;
+    let mut failed = false;
     for source in gateway.sources() {
         let response = match fetch(source, http, cid_str, gateway.deadlines.block_fetch_ms).await {
             Ok(response) => response,
             // Transport-level failure is availability: rotate to the next source.
-            Err(CappedFetchError::Transport(_)) => continue,
+            Err(CappedFetchError::Transport(_)) => {
+                failed = true;
+                continue;
+            }
             // Rotate: a non-authoritative source's oversized body does not prove
             // the block is over-cap (a malicious source can serve an arbitrary
             // huge body — e.g. a non-2xx error page — for any CID), so a healthy
@@ -336,6 +346,11 @@ pub async fn read_block(
             }
         };
         if !(200..300).contains(&response.status) {
+            if matches!(response.status, 404 | 410) {
+                not_found = true;
+            } else {
+                failed = true;
+            }
             continue; // availability (not found / server error): next source
         }
         // Defense-in-depth backstop behind the transport cap: a seam using the
@@ -355,6 +370,7 @@ pub async fn read_block(
     match (mismatch, over_cap) {
         (Some(violation), _) => Err(ReadError::TrustViolation(violation)),
         (None, Some((size, limit))) => Err(ReadError::TooLarge { size, limit }),
+        (None, None) if not_found && !failed => Err(ReadError::NotFound),
         (None, None) => Err(ReadError::Unavailable),
     }
 }
