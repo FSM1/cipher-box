@@ -25,7 +25,7 @@ that derivation, not a derived value.
 A **grantee** recovers a scope's `write_scope_seed` from the write grant blob
 (`GrantBlobPayload`, HPKE-sealed to the grantee's X25519 enc-subkey; write grants carry
 both the read and write scope seeds). The **owner** has no such source. The owner blob
-and owner seed cache carry only the **read-plane** override seed — the owner recovers the
+carries only the **read-plane** override seed — the owner recovers the
 read plane and can decrypt everything, but on a fresh device has **no network source for
 their own scopes' `write_scope_seed`**. Consequently a cold-started owner cannot rebuild
 the per-name IPNS signer, and cannot renew (sub-EOL, sequence+1) the records of scopes

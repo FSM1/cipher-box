@@ -22,9 +22,7 @@ use cipherbox_engine::gate::{GateRejection, GateStage, RejectionReason};
 use cipherbox_engine::grants::InviteFragment;
 use cipherbox_engine::grants::accept::TooLong;
 use cipherbox_engine::grants::conversion::ConversionRefusal;
-use cipherbox_engine::grants::{
-    AbuseEvent, AuthorityViolation, CreateGrantError, GrantEditError, InviteError,
-};
+use cipherbox_engine::grants::{AuthorityViolation, CreateGrantError, GrantEditError, InviteError};
 use cipherbox_engine::net::author::AuthorError;
 use cipherbox_engine::record_plane::{DefaultsReason, LapsedHead, Unopened};
 use cipherbox_engine::rotation::{
@@ -67,10 +65,6 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "vectors/ledger_reject.json",
         include_str!("../kat/checks/vectors/ledger_reject.json"),
-    ),
-    (
-        "vectors/owner_entry_reject.json",
-        include_str!("../kat/checks/vectors/owner_entry_reject.json"),
     ),
     (
         "vectors/placement_reject.json",
@@ -132,7 +126,7 @@ fn every_class_is_an_axis_or_a_delegated_label() {
 /// leaves a reject vector unable to say where it came from — which is why a
 /// variant that means another surface's check delegates to it rather than
 /// repeating the string.
-fn surfaces() -> [(&'static str, &'static [&'static str]); 25] {
+fn surfaces() -> [(&'static str, &'static [&'static str]); 24] {
     [
         ("core-trust", TrustViolation::CHECKS),
         ("core-malformed", Malformed::CHECKS),
@@ -152,7 +146,6 @@ fn surfaces() -> [(&'static str, &'static [&'static str]); 25] {
         ("grant_edit", GrantEditError::CHECKS),
         ("invite", InviteError::CHECKS),
         ("ledger", AuthorityViolation::CHECKS),
-        ("owner_entry", AbuseEvent::CHECKS),
         ("placement", PlacementRefusal::CHECKS),
         ("provider", ProviderError::CHECKS),
         ("node_name", NameError::CHECKS),
@@ -329,18 +322,12 @@ fn the_devices_check_surface_matches_the_variants_in_order() {
 }
 
 #[test]
-fn the_ledger_and_owner_entry_surfaces_carry_one_check_each() {
+fn the_ledger_surface_carries_one_check() {
     let violation = AuthorityViolation {
         description: "a ledger row the owner never committed".to_owned(),
     };
     assert_eq!(vec![violation.check()], AuthorityViolation::CHECKS);
     assert_eq!(violation.class(), "trust");
-
-    let event = AbuseEvent {
-        description: "a seed that did not unseal the body".to_owned(),
-    };
-    assert_eq!(vec![event.check()], AbuseEvent::CHECKS);
-    assert_eq!(event.class(), "trust");
 }
 
 #[test]

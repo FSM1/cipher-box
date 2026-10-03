@@ -7,7 +7,7 @@
 //! ECDH peer is the verified contact's encryption subkey, not the pointer's
 //! claimed `sharerPub`.
 //!
-//! Both share lists are self-healing bookmarks: the published metadata is
+//! Received shares are self-healing bookmarks: the published metadata is
 //! authority, so a re-accept heals a drifted permission, a rotated pointer read
 //! key or a re-pointed scope-root name in place; only a byte-identical
 //! re-accept is a true no-op. Persist durably before ack (the flow order lives
@@ -982,72 +982,6 @@ impl std::error::Error for ReceivedShareStoreError {}
 impl From<SeamError> for ReceivedShareStoreError {
     fn from(e: SeamError) -> Self {
         ReceivedShareStoreError::Seam(e)
-    }
-}
-
-/// One owner-side sent-share record — the denormalized index the owner keeps.
-#[derive(Clone, PartialEq, Eq)]
-pub struct SentShare {
-    /// The scope root shared.
-    pub scope_root_name: Vec<u8>,
-    /// The recipient's identity key.
-    pub recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
-    /// The permission granted.
-    pub permission: Permission,
-}
-
-impl fmt::Debug for SentShare {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SentShare")
-            .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
-            .field(
-                "recipient_identity_pk",
-                &RedactedBytes::of(&self.recipient_identity_pk),
-            )
-            .field("permission", &self.permission)
-            .finish()
-    }
-}
-
-/// The owner's denormalized sent-index — a self-healing bookmark keyed by
-/// `(scope-root name, recipient)`.
-#[derive(Default)]
-pub struct SentIndex {
-    entries: Vec<SentShare>,
-}
-
-impl SentIndex {
-    /// An empty index.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Record a sent share, idempotent by `(scope-root name, recipient)`.
-    /// Returns `true` if newly recorded.
-    pub fn record(&mut self, share: SentShare) -> bool {
-        if self.entries.iter().any(|e| {
-            e.scope_root_name == share.scope_root_name
-                && e.recipient_identity_pk == share.recipient_identity_pk
-        }) {
-            return false;
-        }
-        self.entries.push(share);
-        true
-    }
-
-    /// The recorded sent shares.
-    pub fn iter(&self) -> impl Iterator<Item = &SentShare> {
-        self.entries.iter()
-    }
-
-    /// The number of recorded sent shares.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether the index is empty.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 }
 
@@ -2058,19 +1992,6 @@ mod tests {
                 ..
             }))
         ));
-    }
-
-    #[test]
-    fn sent_index_is_idempotent_by_name_and_recipient() {
-        let mut idx = SentIndex::new();
-        let s = SentShare {
-            scope_root_name: b"n".to_vec(),
-            recipient_identity_pk: [0x03; IDENTITY_PUBLIC_LEN],
-            permission: Permission::Write,
-        };
-        assert!(idx.record(s.clone()));
-        assert!(!idx.record(s));
-        assert_eq!(idx.len(), 1);
     }
 
     #[test]

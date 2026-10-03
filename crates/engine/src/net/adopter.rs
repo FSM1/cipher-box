@@ -13,9 +13,8 @@
 //!
 //! Cold-start scope: read-plane assembly plus owner cold-start write-plane
 //! recovery (E8) — the owner-write-blob hands the owner the write-scope seed it
-//! cannot re-derive. The owner-seed-cache tri-way abuse cross-check is a later
-//! slice; a tampered owner blob still fails closed here at the grant-section
-//! structure signature and the read-body unseal.
+//! cannot re-derive. Owner entry uses the owner blob; the gate checks its seed
+//! and any ascent-link seed against the read key before opening the read-body.
 
 use core::cell::RefCell;
 

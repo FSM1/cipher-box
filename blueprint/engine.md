@@ -1344,9 +1344,11 @@ surviving committed grants uniformly in the republish it already does.
   contact-anchored owner identity) → self-locate the blob by blinded tag →
   unseal seeds → append `{name, sharerPub, displayName, permission}` to the
   sealed received-shares list, device-local over the host `StagingStore`
-  (ADR 0006), persisting the `pointerReadKey`; the owner keeps a denormalized
-  sent-index in their own vault. Both
-  lists are self-healing bookmarks — the metadata is the authority (FSM1/cipher-box-next#25 D3).
+  (ADR 0006), persisting the `pointerReadKey`. The received-shares list is a
+  self-healing bookmark — the metadata is the authority (FSM1/cipher-box-next#25 D3).
+  The owner reads each scope's grants from its gate-adopted write-body ledger,
+  checked against the owner-signed commitment and row signatures by the
+  sharing view; there is no separate sent-share store or vault-wide sent list.
 - **Link-held arm**
   ([ADR 0024](../decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)
   D1, D2, D5): a link holder reads at once. At join the engine posts the
@@ -1475,18 +1477,19 @@ surviving committed grants uniformly in the republish it already does.
 - **Files are first-class grant targets** (FSM1/cipher-box-next#25 D5): envelope blobs +
   write-body ledger like any node; ancestor rotations re-seal
   independently-shared descendants' grants as part of republishing them.
-- **Owner entry** (FSM1/cipher-box-next#39 D6): the own-vault **owner seed cache** — the
-  last-confirmed `{seed, epoch}` per granted scope, refreshed on every
-  confirmed owner read — is canonical; the grantee-maintained owner blob is an
-  accelerator. Ancestor readers derive the expected ascent keypair from the
-  parent node seed and reject a mismatched plaintext half. Cross-check
-  discipline: owner-blob seed vs ascent-link seed vs actual unseal — any
-  disagreement is an attributable abuse event surfaced to the host, never a
-  silent failure. Residual, documented: content sealed only under a
-  rogue-withheld epoch is recoverable only from a valid-seed holder —
-  equivalent to the destructive power a write-grantee already holds; the
-  guarantee is that a write-grantee can never lock the owner out of content
-  the owner could already reach, and can never act deniably.
+- **Owner entry**: `RootAdopter` opens the scope root's owner blob with the
+  owner's encryption subkey and derives the read key from its seed. The
+  adoption gate verifies the commitment and structure signatures, checks
+  the seed against that read key, enforces the floors, and opens the read-body.
+  At an interior scope root the caller supplies the parent node seed: the gate
+  derives the expected ascent keypair and checks the opened ascent-link seed
+  against the same read key and envelope epoch. A mismatched plaintext ascent
+  public half is unavailable; an opened seed disagreement is a trust violation.
+  Confirmed scope seeds live in session memory, not in an owner-authored vault
+  share list. After restart the owner recovers from published records; there
+  is no durable last-visit seed recovery guarantee. A rogue writer can withhold
+  usable seed material in a newer record; recovering content then requires a
+  valid-seed holder or a still-readable older record.
 - **Owner write-seed cold start**: a per-scope `writeScopeSeed` is random
   KDF-non-edge material an owner cannot re-derive from the login secret, so a
   fresh device that has lost its cache cannot renew its own records. Every
