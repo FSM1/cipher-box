@@ -1638,6 +1638,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     mirror: RefCell<OpMirror>,
     /// Whether the op this pass publishes now is of a kept kind ([`keeps`]).
     keeps_op: Cell<bool>,
+    /// Whether that op's note or the published-op mark landed, so the op stays
+    /// queued as a kept op.
+    kept_now: Cell<bool>,
     /// The nodes one capture walk may hold ([`MAX_CAPTURE_WALK_NODES`]).
     capture_walk_nodes: usize,
     /// The reads one pass spends to find sealing scopes ([`MAX_SEALER_READS`]).
@@ -1665,6 +1668,7 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             sealer_reads_per_capture: MAX_SEALER_READS_PER_CAPTURE,
             mirror: RefCell::default(),
             keeps_op: Cell::new(false),
+            kept_now: Cell::new(false),
         }
     }
 
@@ -2559,7 +2563,7 @@ where
                 return Err(halt);
             }
             // An op that is not kept leaves at its publish ([`keeps`]).
-            if !self.kept_ids(scope).await?(applied.op_id, &applied.op) {
+            if !self.kept_now.get() {
                 self.dequeue_op(applied.op_id).await?;
                 report.completed.push(applied.op_id);
             }
@@ -3003,7 +3007,9 @@ where
                 published_at: self.seams.scheduler.now(),
             },
         );
-        let _ = self.store_kept_notes(scope, &notes).await;
+        if self.store_kept_notes(scope, &notes).await.is_ok() {
+            self.kept_now.set(true);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -3822,6 +3828,7 @@ where
     ) -> Result<(), Halt> {
         self.mirror.take();
         self.keeps_op.set(keeps(&applied.op.kind));
+        self.kept_now.set(false);
         self.publish_op(scope, pass, applied, rebased).await?;
         let shortfall = mirror_shortfall(&self.mirror.borrow());
         self.emit_mirror_shortfall(applied, shortfall);
@@ -8486,12 +8493,15 @@ where
     /// *cause* the replay the mark exists to prevent. The dequeue that follows
     /// is the primary guard; the mark is what survives losing it.
     async fn mark_published(&self, scope: &DrainScope<'_>, op_id: OpId) {
-        let _ = self
+        let raised = self
             .raise_op_mark(
                 &owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, scope.enc_secret),
                 op_id.0,
             )
             .await;
+        if raised.is_ok() && self.keeps_op.get() {
+            self.kept_now.set(true);
+        }
     }
 
     /// Raise the op-id high-water at `key` to `max(stored, mark)`.
