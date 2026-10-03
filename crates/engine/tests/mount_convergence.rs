@@ -2060,12 +2060,20 @@ fn a_write_share_leaves_every_record_it_touches_cached_at_its_sequence_floor() {
             .snapshot_cache
             .peek(name.as_str().as_bytes())
             .expect("every record the share touched is cached");
-        // The owner's own confirmed root publish is cached before a read
-        // adopts it (ADR 0068 D2), so a cached record may sit above the floor.
-        assert!(
-            record_sequence(&name, &cached) >= floor,
-            "the floor the share raised does not pass the cached record of {node:?}"
-        );
+        let sequence = record_sequence(&name, &cached);
+        if node == file {
+            assert_eq!(
+                sequence, floor,
+                "the cached record of {node:?} sits at the floor the share raised"
+            );
+        } else {
+            // The owner's own confirmed scope root publish is cached before a
+            // read adopts it (ADR 0068 D2), so it may sit above the floor.
+            assert!(
+                sequence >= floor,
+                "the floor the share raised does not pass the cached record of {node:?}"
+            );
+        }
     }
 }
 

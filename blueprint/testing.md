@@ -143,13 +143,17 @@ scenario fails the meta-test):
   met after two others is kept, a re-walk keeps the first ref of its own
   walk, and a held node is read once across a re-walk
   (`crates/engine/src/net/rotation.rs`); the root plants — a record the gate
-  refuses before the command, a pre-cut replay, a plant at `u64::MAX`, a
-  downgrade over a plant, and a plant after the cut set lands — each end the
+  refuses before the command, a pre-cut replay, a plant at `u64::MAX`, a plant
+  at `u64::MAX` that leaves no room for a re-seal, a downgrade over a plant, and
+  a plant after the cut set lands — each end the
   cut with a copy, the moved root gives the revokee no row
   and no blob, nothing more publishes at the old root name, a read revoke keeps
-  the stop, and a first wave that stops leaves a cut the next re-drive drops
+  the stop, a read cut that stops at the moved root ends in the next re-drive,
+  and a first wave that stops leaves a cut the next re-drive drops
   (ADR 0068, `crates/engine/tests/owner_actions.rs`); a head block that no
-  endpoint serves falls back only past the bound, a confirmed root publish is
+  endpoint serves and a record below the sequence floor fall back only past the
+  bound, a unit case only, because the command read has no bound and an
+  end-to-end case of ADR 0068 Consequence 4 waits on it; a confirmed root publish is
   the last copy, and the driver runs the wave first after a fallback
   (`crates/engine/src/net/rotation.rs`, `crates/engine/src/rotation/trigger`);
 - the keyless re-PUT adversary (FSM1/cipher-box-next#38) — forged old-epoch records at old

@@ -468,14 +468,17 @@ impl<'a> RootFallback<'a> {
             return false;
         }
         match verdict {
-            RootGateVerdict::Rejected | RootGateVerdict::Superseded => true,
-            // A record that verified, and a head block that did not assemble.
-            RootGateVerdict::Unavailable | RootGateVerdict::HeadBlockRefused => {
+            RootGateVerdict::Rejected
+            | RootGateVerdict::Superseded
+            | RootGateVerdict::NotResealable => true,
+            // Causes that a lagging or bad endpoint, not the record bytes, can
+            // give.
+            RootGateVerdict::Unavailable
+            | RootGateVerdict::HeadBlockRefused
+            | RootGateVerdict::BelowFloor => {
                 self.bound.held(scope_id);
                 self.bound.past(scope_id, true)
             }
-            // The reservation's own step-over ([`OwnerRotationNet::last_known_good_root`]).
-            RootGateVerdict::NotResealable => false,
         }
     }
 
@@ -851,6 +854,10 @@ enum RootGateVerdict {
     /// fallback tells this apart, and only to hold it to the bound (ADR 0068
     /// D1); every other reader folds it back into a rejection.
     HeadBlockRefused,
+    /// The sequence stage refused a record strictly below the floor, which a
+    /// lagging endpoint serves. Only an owner cut's fallback tells this apart,
+    /// to hold it to the bound (ADR 0068 D1).
+    BelowFloor,
 }
 
 impl From<RootGateVerdict> for ResolveFailure {
@@ -860,7 +867,8 @@ impl From<RootGateVerdict> for ResolveFailure {
             RootGateVerdict::Rejected
             | RootGateVerdict::Superseded
             | RootGateVerdict::NotResealable
-            | RootGateVerdict::HeadBlockRefused => Self::Rejected,
+            | RootGateVerdict::HeadBlockRefused
+            | RootGateVerdict::BelowFloor => Self::Rejected,
         }
     }
 }
@@ -871,7 +879,8 @@ impl From<RootGateVerdict> for SweepResolveFailure {
             RootGateVerdict::Unavailable => Self::Unavailable,
             RootGateVerdict::Rejected
             | RootGateVerdict::NotResealable
-            | RootGateVerdict::HeadBlockRefused => Self::Rejected,
+            | RootGateVerdict::HeadBlockRefused
+            | RootGateVerdict::BelowFloor => Self::Rejected,
             RootGateVerdict::Superseded => Self::Superseded,
         }
     }
@@ -884,8 +893,8 @@ impl From<RootGateVerdict> for SweepResolveFailure {
 /// **unchanged** record rejects as not-newer — and a rotation reads in order to
 /// re-key, so a pass that aborts before publishing must be able to read again or
 /// the revoke can never complete. Only the exact floor recovers; a strictly
-/// lower sequence is a replay, and every other rejection stays a fail-closed
-/// trust violation (rule 6).
+/// lower sequence is [`RootGateVerdict::BelowFloor`], and every other rejection
+/// stays a fail-closed trust violation (rule 6).
 async fn reread_at_floor<H: Http, F: FloorStore>(
     adopter: &RootAdopter<'_, H, F>,
     name: &IpnsName,
@@ -895,8 +904,8 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
     let RejectionReason::SequenceNotNewer { floor, sequence } = reason else {
         return Err(RootGateVerdict::Rejected);
     };
-    if sequence != floor {
-        return Err(RootGateVerdict::Rejected);
+    if sequence < floor {
+        return Err(RootGateVerdict::BelowFloor);
     }
     let recovered = adopter
         .recover_own_scope_root(name, record_bytes)
@@ -1195,7 +1204,8 @@ fn walk_verdict(verdict: RootGateVerdict, scope_id: [u8; 16]) -> WalkFailure {
     match verdict {
         RootGateVerdict::Rejected
         | RootGateVerdict::NotResealable
-        | RootGateVerdict::HeadBlockRefused => WalkFailure::Rejected { scope_id },
+        | RootGateVerdict::HeadBlockRefused
+        | RootGateVerdict::BelowFloor => WalkFailure::Rejected { scope_id },
         RootGateVerdict::Unavailable | RootGateVerdict::Superseded => WalkFailure::Unavailable,
     }
 }
@@ -2004,7 +2014,8 @@ where
         }
         RootGateVerdict::Rejected
         | RootGateVerdict::NotResealable
-        | RootGateVerdict::HeadBlockRefused => ScopeRootAdmission::Rejected,
+        | RootGateVerdict::HeadBlockRefused
+        | RootGateVerdict::BelowFloor => ScopeRootAdmission::Rejected,
     })?;
     Ok(AdmittedScopeRoot {
         record_bytes,
@@ -2089,7 +2100,7 @@ where
                 root,
                 over_sequence: None,
             }),
-            Err(RootGateVerdict::NotResealable) => {
+            Err(RootGateVerdict::NotResealable) if !self.falls_back(&scope_id) => {
                 let stepped_over = self
                     .last_known_good_root(&adopter, name, scope_id, anchor, verified.sequence)
                     .await;
@@ -2116,10 +2127,16 @@ where
         }
     }
 
+    /// Whether this net's [`RootFallback`] covers `scope_id`'s root.
+    fn falls_back(&self, scope_id: &[u8; 16]) -> bool {
+        self.root_fallback
+            .as_ref()
+            .is_some_and(|fallback| fallback.scope_id == *scope_id)
+    }
+
     /// `verdict` on the record at `refused_sequence`, or the last copy under
-    /// this net's [`RootFallback`] when it admits the verdict. Nothing that
-    /// reads a copy publishes over the refused record, so the base carries no
-    /// sequence to land above.
+    /// this net's [`RootFallback`] when it admits the verdict, with no sequence
+    /// to land above (ADR 0068 D3).
     async fn fall_back(
         &self,
         adopter: &RootAdopter<'_, H, F>,
@@ -8167,38 +8184,41 @@ mod tests {
         fn resolved(&self, _node_id: &[u8; 16]) {}
     }
 
-    /// ADR 0068 D1: a refusal in the record bytes falls back at once; a head
-    /// block that no endpoint serves holds the pass until the bound is past;
-    /// the reservation's own step-over and another scope's root never fall
-    /// back.
+    /// ADR 0068 D1: a refusal in the record bytes falls back at once; a cause
+    /// that an endpoint can give holds the pass until the bound is past;
+    /// another scope's root never falls back.
     #[test]
-    fn a_root_falls_back_for_its_record_bytes_and_for_its_head_block_past_the_bound() {
+    fn a_root_falls_back_for_its_record_bytes_and_for_an_endpoint_cause_past_the_bound() {
         let bound = ToldBound::default();
         let fallback = RootFallback::new(SCOPE, &bound);
-        let head_block = [
+        let endpoint_causes = [
             RootGateVerdict::Unavailable,
             RootGateVerdict::HeadBlockRefused,
+            RootGateVerdict::BelowFloor,
         ];
 
-        for verdict in head_block {
+        for verdict in endpoint_causes {
             assert!(!fallback.admits(&SCOPE, verdict), "{verdict:?} waits");
         }
-        assert_eq!(bound.held.get(), 2, "each wait holds a pass");
+        assert_eq!(bound.held.get(), 3, "each wait holds a pass");
         bound.past.set(true);
-        for verdict in head_block {
+        for verdict in endpoint_causes {
             assert!(
                 fallback.admits(&SCOPE, verdict),
                 "{verdict:?} past the bound"
             );
         }
-        for verdict in [RootGateVerdict::Rejected, RootGateVerdict::Superseded] {
+        for verdict in [
+            RootGateVerdict::Rejected,
+            RootGateVerdict::Superseded,
+            RootGateVerdict::NotResealable,
+        ] {
             assert!(fallback.admits(&SCOPE, verdict), "{verdict:?}");
             assert!(
                 !fallback.admits(&CHILD_SCOPE, verdict),
                 "another scope's root keeps {verdict:?}"
             );
         }
-        assert!(!fallback.admits(&SCOPE, RootGateVerdict::NotResealable));
     }
 
     /// Rule 8 at the whole-record scale: a cut is published only if this build's
@@ -8406,6 +8426,59 @@ mod tests {
         assert_eq!(
             block_on(harness.net(&[]).publish_scope_root(&cut)),
             Err(RotationPublishError::Rejected),
+        );
+    }
+
+    /// ADR 0068 D1: an owner cut reads a root that fills the reservation at
+    /// the sequence ceiling from its last copy, and marks the fallback, so the
+    /// cut moves the root before it publishes at that name.
+    #[test]
+    fn a_cut_reads_a_root_at_the_ceiling_that_fills_the_reservation_from_its_last_copy() {
+        let (harness, good) = wedged_scope(SCOPE, None);
+        let wedge = root_past_the_reseal_reservation(SCOPE, None);
+        serve_at(&harness, SCOPE, &wedge, u64::MAX);
+        let mut net = harness.net(&[]);
+        net.root_fallback = Some(RootFallback::new(SCOPE, &NoBound));
+
+        let read = block_on(net.gated_root(SCOPE, &good.name)).expect("the last copy");
+
+        assert_eq!(read.over_sequence, None, "nothing lands above the ceiling");
+        assert!(
+            net.root_fallback
+                .as_ref()
+                .is_some_and(RootFallback::fell_back)
+        );
+        assert_eq!(harness.events().len(), 1, "one trust event");
+        assert_eq!(sequence_at(&harness, &good.name), Some(u64::MAX));
+    }
+
+    /// ADR 0068 D1: a record below the sequence floor is what a lagging
+    /// endpoint serves, so an owner cut holds it to the bound and does not
+    /// fall back at once.
+    #[test]
+    fn a_cut_holds_a_root_below_the_sequence_floor_to_the_bound() {
+        let (harness, good) = wedged_scope(SCOPE, None);
+        serve_at(&harness, SCOPE, &good, 1);
+        block_on(
+            harness
+                .floors
+                .raise_sequence_floor(good.name.as_str().as_bytes(), 5),
+        )
+        .expect("a floor above the served record");
+        let mut net = harness.net(&[]);
+        net.root_fallback = Some(RootFallback::new(SCOPE, &NoBound));
+
+        let read = block_on(net.gated_root(SCOPE, &good.name)).map(|_| ());
+
+        assert_eq!(read, Err(RootGateVerdict::BelowFloor));
+        assert!(
+            !net.root_fallback
+                .as_ref()
+                .is_some_and(RootFallback::fell_back)
+        );
+        assert!(
+            harness.events().is_empty(),
+            "no fallback, so no trust event"
         );
     }
 

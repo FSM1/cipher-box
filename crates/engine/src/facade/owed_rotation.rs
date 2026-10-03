@@ -288,8 +288,9 @@ where
                     .await;
                 return Ok(None);
             }
-            // The wave ran first and carried the cut set to the moved root, where
-            // the re-drive runs each step (ADR 0068 D4).
+            // The wave moved the root first (ADR 0068 D3). A failed floor raise
+            // is safe: the entry stays owed, and the re-drive raises the floor
+            // before it clears the entry.
             Err(error @ RotateOnCutError::ReadAfterWrite(_)) => {
                 let _ = record_cut_epoch_floor(
                     self.floors,
@@ -300,9 +301,7 @@ where
                 self.stop_owed(node, steps, cut_stop(error)).await;
                 return Ok(None);
             }
-            // No root read here tells whether the first wave carried the cut set
-            // to a root: the entry stands, and the re-drive drops it when no
-            // root carries the set (ADR 0068 D4).
+            // The re-drive finishes or drops the entry (ADR 0068 D4).
             Err(error @ RotateOnCutError::WriteFirst(_)) => {
                 return Err(EngineError::from_cut_rotation(error));
             }

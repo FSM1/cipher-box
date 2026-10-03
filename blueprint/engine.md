@@ -1126,9 +1126,12 @@ that passed the gate on this device: the command read, the cut set publish,
 the read cascade root read, the wave's root read, and the re-drive's check that
 the cut set landed
 ([ADR 0068](../decisions/0068-an-owner-rotation-reads-a-refused-scope-root-from-its-last-copy-and-moves-the-root-first.md)
-D1). The copy runs the full gate again. A head block that no endpoint serves,
-or one that does not match its CID, falls back only past the bound below. Each
-fallback sends one trust event with the scope root and the refused sequence. A
+D1). The copy runs the full gate again. A root that leaves no room for its
+re-seal falls back at once. A head block that no endpoint serves, one that does
+not match its CID, and a record below the sequence floor fall back only past the
+bound below. That bound accrues only in a re-drive, so such a cause stops the
+command read. Each fallback sends one trust event with the scope root and the
+refused sequence. A
 confirmed scope root publish by the owner is a last copy (D2). A rotation whose
 root read fell back publishes nothing more at the old root name (D3). A cut
 that moves the write plane runs its wave first; the root republish at the new
@@ -1237,6 +1240,8 @@ rebases and signs above.
   record at the scope root name ends at the wave when a copy passes the gate,
   and what a writer published after that copy goes, surfaced by the trust event
   (ADR 0068). A device with no such copy keeps the stop, and the scope lapses.
+  After a fallback the wave runs first, so the revokee keeps read access, with
+  no write access, until the read cut lands, at the latest in the next sync pass.
 - Dropped nodes: the subtree under a dropped node leaves the tree and lapses at
   its EOL, and an endpoint set that fails to serve a real node past the bound
   drops it (ADR 0065).

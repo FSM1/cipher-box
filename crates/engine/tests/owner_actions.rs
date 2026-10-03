@@ -74,7 +74,7 @@ use cipherbox_engine::testkit::account::{
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-    SeededEntropy, block_on, block_on_while_ticking, poll_tasks_until_parked,
+    SeededEntropy, block_on, block_on_while_ticking, padding, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, ContentProfile,
@@ -14773,6 +14773,32 @@ fn plant_root_at(fx: &GrantScenario, revokee_seed: &[u8; 32], sequence: u64) -> 
     )
 }
 
+/// The revokee plants the honest root, with its grant section, under a body
+/// that leaves no room for a re-seal, at `sequence`.
+fn plant_unresealable_root_at(fx: &GrantScenario, revokee_seed: &[u8; 32], sequence: u64) {
+    let name = derive_write_name(revokee_seed, &fx.folder.0);
+    let head = published_head(&fx.world, &fx.blocks, &name).expect("the honest root");
+    let mut envelope = decode_envelope(&head).expect("the head decodes");
+    let pad = cipherbox_core::seal::MAX_BLOCK_BYTES - head.len() - 64;
+    envelope.unknown = envelope
+        .unknown
+        .entries()
+        .iter()
+        .cloned()
+        .chain(padding(pad).entries().iter().cloned())
+        .collect();
+    let block = encode_envelope(&envelope).expect("the plant encodes");
+    assert!(block.len() <= cipherbox_core::seal::MAX_BLOCK_BYTES);
+    let cid = fx.blocks.put(block);
+    sign_at(
+        fx,
+        revokee_seed,
+        fx.folder,
+        format!("/ipfs/{cid}").as_bytes(),
+        sequence,
+    );
+}
+
 /// A revoke of the write grantee, across the retries of its bounded steps.
 fn revoke_the_recipient(fx: &mut GrantScenario) -> Result<CommandOutcome, EngineError> {
     let folder = fx.folder;
@@ -14862,6 +14888,22 @@ fn a_write_revoke_moves_a_root_planted_at_the_sequence_ceiling() {
 
     assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
 
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+}
+
+/// ADR 0068 D1 and D3: a plant that leaves no room for a re-seal, at the
+/// sequence ceiling, also runs on the last copy and moves the root first.
+#[test]
+fn a_write_revoke_moves_an_unresealable_root_planted_at_the_sequence_ceiling() {
+    let mut fx = GrantScenario::new();
+    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_unresealable_root_at(&fx, &revokee_seed, u64::MAX);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    let events = events_so_far(&mut fx._events);
+    assert!(root_refusals(&fx, &events, u64::MAX) > 0);
     assert_revoke_finished(&mut fx, &revokee_seed, child);
     assert_the_revokee_is_cut(&fx, &revokee_seed);
 }
@@ -15011,6 +15053,42 @@ fn a_redrive_reads_a_planted_root_from_its_last_copy() {
         "no work stays owed"
     );
     assert_eq!(fx.granted_scope_repoint().write_epoch, 3);
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+}
+
+/// ADR 0068 D3 and D4: after a fallback the wave moves the root first, and
+/// the read cut at the moved root stops. The entry stays owed, and the next
+/// re-drive finishes the cut.
+#[test]
+fn a_read_cut_that_stops_at_the_moved_root_finishes_in_the_redrive() {
+    let mut fx = GrantScenario::new();
+    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let old_root = fx.granted_scope_repoint().current_root;
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &old_root) + 1);
+    let read_epoch_floor = floor_label(&fx.folder.0);
+    fx.owner_device
+        .floor_store
+        .fail_floor_raises_for(&read_epoch_floor);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the read cut is owed");
+    assert_ne!(
+        fx.granted_scope_repoint().current_root,
+        old_root,
+        "the wave moved the root first"
+    );
+    fx.owner_device.floor_store.heal_floors();
+    let _ = events_so_far(&mut fx._events);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    assert!(
+        !events_so_far(&mut fx._events)
+            .iter()
+            .any(|event| matches!(event, Event::RotationWorkOwed { .. })),
+        "no work stays owed"
+    );
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
     assert_the_revokee_is_cut(&fx, &revokee_seed);
 }
 
