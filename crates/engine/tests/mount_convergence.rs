@@ -40,8 +40,8 @@ use cipherbox_engine::testkit::{
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, DeadLetterReason, Engine,
     EngineError, Event, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Permission,
-    ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget,
-    reseal_scope_root,
+    RecordReader, ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory,
+    WriteTarget, decode_queue, reseal_scope_root,
 };
 
 /// The contact the owner grants to — a second account, so the cut the grant
@@ -406,9 +406,9 @@ fn published_epoch(world: &FakeWorld, blocks: &Blocks, node: NodeId) -> u64 {
     decode_envelope(&head).expect("the head decodes").epoch
 }
 
-/// The ops still sitting in `device`'s durable queue.
+/// The ops still pending in `device`'s durable queue.
 fn queued(device: &FakeDevice) -> usize {
-    block_on(StagingStore::queued_ops(&device.staging_store))
+    block_on(device.pending_ops())
         .expect("the queue reads")
         .len()
 }
@@ -1632,8 +1632,17 @@ fn recipient_with_the_share(
     blocks: &Blocks,
 ) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
     let device = world.device(&recipient_identity().verifying_key().to_sec1());
-    serve_http(&device, blocks, 2_000);
-    let (mut engine, events) = engine_on_api(&device, 21);
+    recipient_on_with_the_share(world, blocks, &device)
+}
+
+/// [`recipient_with_the_share`] on `device`.
+fn recipient_on_with_the_share(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    serve_http(device, blocks, 2_000);
+    let (mut engine, events) = engine_on_api(device, 21);
     block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec()), None))
         .expect("the recipient's own session starts");
     let mut tasks = world.scheduler.take_spawned_tasks();
@@ -2189,4 +2198,78 @@ fn a_file_under_a_write_share_reads_with_every_record_endpoint_down() {
         world.record_store.fail_endpoint(&endpoint);
     }
     assert_reads_both_versions(&engine, file, &bodies, "offline");
+}
+
+/// A write grantee's edit stays kept after its publish. A downgrade takes the
+/// write seed, so the kept edit has no plane to read under: its rebase
+/// decides, and the edit leaves the queue rather than halt each pass.
+#[test]
+fn a_downgraded_grantees_kept_edit_does_not_stop_its_queue() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    let file = file_with_two_versions(
+        &world,
+        &mut engine_t,
+        &mut tasks_t,
+        shared,
+        "doc.bin",
+        &two_bodies(9),
+    );
+    import_recipient(&mut engine_t);
+    grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
+
+    let recipient = world.device(&recipient_identity().verifying_key().to_sec1());
+    let (mut engine_r, _events_r, mut tasks_r) =
+        recipient_on_with_the_share(&world, &blocks, &recipient);
+    write_file(
+        &mut engine_r,
+        WriteTarget::Version {
+            node: file,
+            expected_version: None,
+        },
+        &[3u8; 70],
+    )
+    .expect("the grantee's version commits");
+    tick_n(&world, &engine_r, &mut tasks_r, 4);
+    let holds_the_edit = || {
+        let raw =
+            block_on(StagingStore::queued_ops(&recipient.staging_store)).expect("the queue reads");
+        decode_queue(
+            &RecordReader::new(&kdf::enc_subkey(&RECIPIENT_SECRET)),
+            &raw,
+        )
+        .mine
+        .iter()
+        .any(|(_, op)| op.target == file)
+    };
+    assert_eq!(queued(&recipient), 0, "the edit published");
+    assert!(holds_the_edit(), "and the queue keeps it");
+
+    assert_eq!(
+        block_on(engine_t.command(Command::ChangePermission {
+            node: shared,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    tick_n(&world, &engine_t, &mut tasks_t, 2);
+    // The grantee's passes see the downgrade, so the kept edit's scope is a
+    // proved root with no write seed.
+    tick_n(&world, &engine_r, &mut tasks_r, 2);
+    assert!(!holds_the_edit(), "the kept edit left the queue");
+    let own_root = block_on(engine_r.view()).expect("a rendered view").root();
+    block_on(engine_r.command(Command::Create {
+        parent: own_root,
+        name: "later".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a create in the grantee's own vault stages");
+    tick_n(&world, &engine_r, &mut tasks_r, 4);
+
+    assert_eq!(queued(&recipient), 0, "the later op published");
 }

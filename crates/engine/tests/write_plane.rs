@@ -62,6 +62,7 @@ use cipherbox_engine::settings::{
     Destinations, SettingsOrigin, SettingsPublishError, SettingsRefusal, VaultSettings,
     publish_settings, settings_name,
 };
+use cipherbox_engine::sync::kept_op::{KEPT_OP_BOUND, KEPT_OP_NOTES_PREFIX};
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     BookkeepingSeal, DRAINED_OP_MARK_PREFIX, MAX_BOOKKEEPING_OPENS, MAX_JOURNAL_REPLAYS,
@@ -281,6 +282,13 @@ fn sequence_at(world: &FakeWorld, name: &IpnsName) -> u64 {
 fn tick(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTask]) {
     world.scheduler.advance(engine.profile().poll_cadence);
     poll_tasks_until_parked(tasks);
+}
+
+/// Wait out the kept-op bound and run one pass, so every kept op leaves the
+/// queue and releases the staged blocks it pinned (ADR 0069 D2).
+fn let_kept_ops_leave(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTask]) {
+    world.scheduler.advance(KEPT_OP_BOUND);
+    tick(world, engine, tasks);
 }
 
 /// Tick past a new session's first renewal walk, which waits a poll cadence at
@@ -586,9 +594,9 @@ fn a_first_run_account_provisions_its_vault_and_publishes_a_write() {
         "the child's own head block was uploaded"
     );
     assert_eq!(
-        block_on(drained_mark(&alice)),
+        published_op_mark(&alice),
         op_id.map(|id| id.0),
-        "the drained op raised the durable completion mark"
+        "the published op raised the durable completion mark"
     );
 
     // The other end of the chain: a second device of the same account, with its
@@ -735,9 +743,9 @@ fn a_refreshed_retry_of_a_failed_mint_publishes_a_write_in_the_same_session() {
         "the root advanced past the genesis the retry minted"
     );
     assert_eq!(
-        block_on(drained_mark(&alice)),
+        published_op_mark(&alice),
         op_id.map(|id| id.0),
-        "the op the dark session queued is the one that drained"
+        "the op the dark session queued is the one that published"
     );
 }
 
@@ -797,9 +805,9 @@ fn a_retry_adopts_the_vault_another_device_published_rather_than_minting_a_secon
     assert_eq!(view.children.len(), 1);
     assert_eq!(view.children[0].name, "photos");
     assert_eq!(
-        block_on(drained_mark(&alice)),
+        published_op_mark(&alice),
         op_id.map(|id| id.0),
-        "the queued op drained onto the adopted vault",
+        "the queued op published onto the adopted vault",
     );
 }
 
@@ -1149,18 +1157,16 @@ fn a_folder_create_publishes_and_resolves_back() {
         .sequence;
     assert_eq!(sequence, 2, "the root advanced past the seeded sequence 1");
 
-    // The completion record marks the op as drained, so a restored copy of this
-    // queue cannot replay it.
+    // The completion record marks the op as published, so a restored copy of
+    // this queue cannot replay it.
     assert_eq!(
-        block_on(drained_mark(&alice)),
+        published_op_mark(&alice),
         op_id.map(|id| id.0),
-        "the drained op raised the durable completion mark"
+        "the published op raised the durable completion mark"
     );
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
-        "and left the durable queue"
+        block_on(alice.pending_ops()).unwrap().is_empty(),
+        "and left the pending queue"
     );
 }
 
@@ -1310,9 +1316,7 @@ fn an_empty_file_create_publishes_under_the_same_metadata_path() {
     );
     assert_eq!(view.children[0].pending, PendingClass::None);
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "the queue drained rather than wedging on an unsupported kind"
     );
 }
@@ -1461,20 +1465,26 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
         &plaintext,
     )
     .expect("the write commits");
+    let (root_cid, leaves) = staged_version(&alice);
     tick(&world, &engine_a, &mut tasks);
+    assert!(
+        block_on(alice.pending_ops()).unwrap().is_empty(),
+        "the op published"
+    );
+    // Each leaf leaves with its upload; the kept op holds only its root.
+    assert_no_blocks_staged(&alice, &leaves);
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&root_cid),
+        "the kept op holds its root until it leaves"
+    );
 
-    // Every staged block left with its upload: the drain releases the version's
-    // blocks once its record has published, leaving only the queue bookkeeping.
+    let_kept_ops_leave(&world, &engine_a, &mut tasks);
     assert_eq!(
         staged_keys_but_the_cursor(&alice),
-        vec![drained_key(), mark_key()],
+        vec![mark_key()],
         "no staged block survives a published version, only queue bookkeeping"
-    );
-    assert!(
-        block_on(alice.staging_store.queued_ops())
-            .unwrap()
-            .is_empty(),
-        "the op left the queue"
     );
 
     let bob = world.device(b"alice-second-device");
@@ -1576,7 +1586,7 @@ fn a_staged_second_version(
     tick(world, engine, tasks);
     let node = block_on(engine.view()).unwrap().children(ROOT)[0].id;
     write_file(engine, version(node), &vec![0xBB; 323]).expect("the second version commits");
-    let op_id = block_on(alice.staging_store.queued_ops()).unwrap()[0].0;
+    let op_id = block_on(alice.pending_ops()).unwrap()[0].0;
     (node, op_id)
 }
 
@@ -2293,9 +2303,7 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact(
         }]
     );
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "the head no retry could publish leaves the queue"
     );
     assert_eq!(
@@ -2417,9 +2425,7 @@ fn a_peer_overfilled_folder_refuses_a_further_child_and_stages_nothing() {
         "a write handle creates a child too, and it reserves staging bytes first"
     );
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "a refusal at the boundary queues nothing for the drain to end"
     );
 
@@ -2619,9 +2625,7 @@ fn a_cut_floor_rise_behind_an_unserved_re_resolve_refuses_the_root_sign() {
         "the refusal is reported as a trust verdict"
     );
     assert_eq!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .len(),
+        block_on(alice.pending_ops()).unwrap().len(),
         1,
         "the op stays queued for the pass that rebases on the post-cut root"
     );
@@ -2654,9 +2658,7 @@ fn a_seam_that_draws_a_silent_nonce_publishes_no_record() {
         "no record is sealed under a nonce the seam never wrote"
     );
     assert_eq!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .len(),
+        block_on(alice.pending_ops()).unwrap().len(),
         1,
         "the op keeps its place for a later draw"
     );
@@ -2686,9 +2688,7 @@ fn a_seam_that_draws_a_silent_record_ephemeral_queues_no_op() {
         "a rename seals no record under an ephemeral the seam never wrote: {refused:?}"
     );
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "nothing reaches the durable queue"
     );
 }
@@ -2846,15 +2846,17 @@ fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_block
         "the host learns the version is unrecoverable"
     );
     assert_eq!(
-        staged_keys_but_the_cursor(&alice),
-        vec![drained_key(), mark_key()],
-        "blocks no key opens are released, never held against the budget"
-    );
-    assert_eq!(
         published(&world.record_store, file).0,
         file_sequence,
         "nothing published"
     );
+    let version: Vec<Vec<u8>> = leaves
+        .iter()
+        .map(|leaf| leaf.cid.clone())
+        .chain(core::iter::once(root_cid))
+        .collect();
+    // At the dead letter, not when the kept create ahead of it leaves.
+    assert_no_blocks_staged(&alice, &version);
 }
 
 /// A leaf missing from *before* anything uploaded is indistinguishable from one
@@ -3004,7 +3006,7 @@ fn a_corrupt_upload_mark_is_no_progress_rather_than_blanket_coverage() {
 /// file order — the order the drain uploads and releases them in.
 fn staged_version(device: &FakeDevice) -> (Vec<u8>, Vec<Vec<u8>>) {
     block_on(async {
-        let queued = device.staging_store.queued_ops().await.unwrap();
+        let queued = device.pending_ops().await.unwrap();
         let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
         let root_block = device
             .staging_store
@@ -3128,9 +3130,7 @@ fn an_interrupted_leaf_mark_never_costs_the_version_its_uploaded_bytes() {
             "an interrupted durable sequence is an outage, never an abandonment"
         );
         assert!(
-            !block_on(alice.staging_store.queued_ops())
-                .unwrap()
-                .is_empty(),
+            !block_on(alice.pending_ops()).unwrap().is_empty(),
             "the op keeps its place at the head of the queue for the next pass"
         );
 
@@ -3199,12 +3199,19 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
                 .any(|event| matches!(event, Event::DeadLetter { .. })),
             "a marked, still-staged leaf is re-uploaded, never read as loss"
         );
+        assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
+        assert!(
+            !block_on(alice.staging_store.staged_keys())
+                .unwrap()
+                .contains(&leaves[interrupted]),
+            "the retry re-removes it on the next pass, so the residue holds no staging budget"
+        );
+        let_kept_ops_leave(&world, &engine, &mut tasks);
         assert_eq!(
             staged_keys_but_the_cursor(&alice),
-            vec![drained_key(), mark_key()],
-            "the retry re-removes it, so the residue holds no staging budget"
+            vec![mark_key()],
+            "and nothing stays once the kept op leaves"
         );
-        assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
     }
 }
 
@@ -3483,7 +3490,7 @@ fn a_halted_upload_attempt_is_reported_and_leaves_the_op_queued() {
             "one stopped attempt is availability, never a terminal failure"
         );
         assert_eq!(
-            block_on(alice.staging_store.queued_ops()).unwrap().len(),
+            block_on(alice.pending_ops()).unwrap().len(),
             1,
             "the op keeps its place and its staged bytes"
         );
@@ -3558,9 +3565,7 @@ fn a_standing_server_refusal_dead_letters_instead_of_cycling_forever() {
         }]
     );
     assert!(
-        block_on(alice.staging_store.queued_ops())
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "and it has left the queue rather than parking its head"
     );
 }
@@ -3660,9 +3665,7 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
     tick(&world, &engine, &mut tasks);
 
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "the residue op leaves the queue"
     );
     assert_eq!(
@@ -3676,15 +3679,6 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
         block_on(engine.view()).unwrap().children(ROOT).is_empty(),
         "so the folder it would have created never appears"
     );
-}
-
-/// The device's durable drained-op completion mark. It lives beside the op
-/// queue it names, so a store that loses one loses the other.
-async fn drained_mark(device: &FakeDevice) -> Option<u64> {
-    StagingStore::staged_bytes(&device.staging_store, &drained_key())
-        .await
-        .expect("the staging store answers")
-        .map(|bytes| u64::from_be_bytes(bytes.try_into().expect("an 8-byte mark")))
 }
 
 // ---------------------------------------------------------------------------
@@ -3729,9 +3723,7 @@ fn a_rename_republishes_only_the_parent_and_a_second_device_resolves_it() {
         "the renamed node's own record never republished"
     );
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "the rename drained"
     );
 
@@ -3875,9 +3867,7 @@ fn root_sequence(world: &FakeWorld, endpoint: usize) -> u64 {
 }
 
 fn queued(device: &FakeDevice) -> usize {
-    block_on(StagingStore::queued_ops(&device.staging_store))
-        .unwrap()
-        .len()
+    block_on(device.pending_ops()).unwrap().len()
 }
 
 /// The sibling's root lands after this pass read the base and before it signs.
@@ -4521,7 +4511,7 @@ fn seed_hard_delete(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks) {
 /// journal under the owner's own `enc-subkey` — the way a replay reads it.
 fn journaled_delete_to_bin(device: &FakeDevice) -> bool {
     let enc_secret = kdf::enc_subkey(&SECRET);
-    let raw = block_on(device.staging_store.queued_ops()).expect("the journal reads");
+    let raw = block_on(device.pending_ops()).expect("the journal reads");
     decode_queue(&RecordReader::new(&enc_secret), &raw)
         .mine
         .iter()
@@ -5360,11 +5350,7 @@ fn interrupted_delete_then_unlink(recovery: BinRecovery) {
             snapshot.dead_letters[0].reason,
             DeadLetterReason::AttemptsExhausted
         );
-        assert!(
-            block_on(alice.staging_store.queued_ops())
-                .unwrap()
-                .is_empty()
-        );
+        assert!(block_on(alice.pending_ops()).unwrap().is_empty());
         assert!(published_names(&world.record_store, &blocks, ROOT).contains(&"later".to_owned()));
         assert!(bin_entries(&world, &alice, &blocks).contains(&doomed.0));
         return;
@@ -5372,9 +5358,7 @@ fn interrupted_delete_then_unlink(recovery: BinRecovery) {
     if fail_descendant {
         tick(&world, &engine, &mut tasks);
         assert!(
-            !block_on(alice.staging_store.queued_ops())
-                .unwrap()
-                .is_empty(),
+            !block_on(alice.pending_ops()).unwrap().is_empty(),
             "an unfinished re-key keeps the authored delete durable"
         );
         drop(engine);
@@ -8327,9 +8311,7 @@ fn a_replacing_rename_lands_the_vacated_and_moved_refs_in_one_record() {
         "one record carries the whole replace"
     );
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "the move drained"
     );
 
@@ -8531,9 +8513,7 @@ fn a_create_below_the_scope_root_publishes_and_projects() {
     tick(&world, &engine, &mut tasks);
 
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "a deeper create no longer halts the drain"
     );
     assert_eq!(
@@ -9323,9 +9303,7 @@ fn a_source_remove_that_cannot_publish_undoes_its_own_dest_add() {
         "the source kept the child it could not release"
     );
     assert_eq!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .len(),
+        block_on(alice.pending_ops()).unwrap().len(),
         1,
         "the halted op stays queued for the next tick"
     );
@@ -9344,9 +9322,7 @@ fn a_relocation_the_engine_refuses_spends_no_journal_entry() {
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     let (_photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
-    let before = block_on(StagingStore::queued_ops(&alice.staging_store))
-        .unwrap()
-        .len();
+    let before = block_on(alice.pending_ops()).unwrap().len();
 
     let refusal = block_on(engine.command(Command::Relink {
         node: moved,
@@ -9359,9 +9335,7 @@ fn a_relocation_the_engine_refuses_spends_no_journal_entry() {
         "expected the same verdict every other read gives a missing node, got {refusal:?}"
     );
     assert_eq!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .len(),
+        block_on(alice.pending_ops()).unwrap().len(),
         before,
         "a refused relocation spends no journal entry"
     );
@@ -9517,9 +9491,7 @@ fn a_compensated_move_restores_the_ref_its_dest_add_replaced() {
         "the source kept the child it could not release"
     );
     assert_eq!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .len(),
+        block_on(alice.pending_ops()).unwrap().len(),
         1,
         "the halted op stays queued for the next tick"
     );
@@ -9718,9 +9690,7 @@ fn a_dest_that_already_names_the_target_gains_no_second_ref() {
         "the source released the child"
     );
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "the op drained rather than wedging the queue"
     );
 }
@@ -9771,9 +9741,7 @@ fn a_relink_into_its_own_descendant_or_itself_is_refused() {
             "no folder ever names its own ancestor"
         );
         assert!(
-            block_on(StagingStore::queued_ops(&alice.staging_store))
-                .unwrap()
-                .is_empty(),
+            block_on(alice.pending_ops()).unwrap().is_empty(),
             "the op dead-letters rather than wedging the queue"
         );
     }
@@ -9830,11 +9798,7 @@ fn a_remote_root_advance_leaves_a_queued_deep_op_publishable() {
         ["photos", "winner.txt"],
         "and the remote writer's own entry survived"
     );
-    assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty()
-    );
+    assert!(block_on(alice.pending_ops()).unwrap().is_empty());
 }
 
 /// A pass now seals many records. Each must draw its own nonce: a reused nonce
@@ -9917,7 +9881,7 @@ fn an_over_quota_413_holds_the_head_and_a_quota_probe_with_room_resumes_it() {
         "nothing behind the held head published either"
     );
     assert_eq!(
-        block_on(alice.staging_store.queued_ops()).unwrap().len(),
+        block_on(alice.pending_ops()).unwrap().len(),
         2,
         "both ops keep their place and their staging reservation"
     );
@@ -9981,9 +9945,7 @@ fn an_over_cap_413_is_permanent_and_its_reason_reaches_the_host() {
         "the dead letter reaches the host with its reason"
     );
     assert!(
-        block_on(alice.staging_store.queued_ops())
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "a permanently refused op does not wedge the queue"
     );
 }
@@ -10014,7 +9976,7 @@ fn a_413_the_api_did_not_stamp_neither_blocks_nor_abandons_the_op() {
             "one unattributable response must not destroy queued work"
         );
         assert_eq!(
-            block_on(alice.staging_store.queued_ops()).unwrap().len(),
+            block_on(alice.pending_ops()).unwrap().len(),
             1,
             "the op keeps its place and is retried"
         );
@@ -10279,7 +10241,7 @@ fn refused_new_file(world: &FakeWorld, blocks: &Blocks, refuse_parking: bool) ->
     )
     .unwrap();
     let (root_cid, leaves) = staged_version(&alice);
-    let raw = block_on(alice.staging_store.queued_ops()).expect("the journal reads");
+    let raw = block_on(alice.pending_ops()).expect("the journal reads");
     let (_, op) = decode_queue(&RecordReader::new(&kdf::enc_subkey(&SECRET)), &raw)
         .mine
         .remove(0);
@@ -10435,9 +10397,7 @@ fn a_dead_letter_no_preserved_set_will_hold_still_reaches_the_host() {
         "the abandonment the refusal decided reaches the host, not only the read surface"
     );
     assert!(
-        block_on(alice.staging_store.queued_ops())
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "and the FIFO head it was holding is free"
     );
     assert_eq!(
@@ -10618,7 +10578,7 @@ fn a_publish_that_reached_the_transport_never_retires_its_head() {
 /// The version an op has staged: its root first, then every leaf in file order.
 fn queued_version(device: &FakeDevice, op_id: OpId) -> Vec<Vec<u8>> {
     block_on(async {
-        let queued = device.staging_store.queued_ops().await.unwrap();
+        let queued = device.pending_ops().await.unwrap();
         let record = &queued
             .iter()
             .find(|(id, _)| *id == op_id)
@@ -10761,9 +10721,7 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
         "the staging budget holds nothing but queue bookkeeping"
     );
     assert!(
-        block_on(alice.staging_store.queued_ops())
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "the cancelled op left the durable queue"
     );
     assert!(
@@ -10986,6 +10944,7 @@ fn every_content_publish_raises_the_published_op_mark() {
 fn assert_dropped_without_replay(
     device: &FakeDevice,
     events: &mut EventStream,
+    op_id: OpId,
     version: (Vec<u8>, Vec<Vec<u8>>),
 ) {
     assert!(
@@ -10998,12 +10957,7 @@ fn assert_dropped_without_replay(
         )),
         "nothing re-uploads behind a record that already landed"
     );
-    assert!(
-        block_on(StagingStore::queued_ops(&device.staging_store))
-            .unwrap()
-            .is_empty(),
-        "the op leaves the queue"
-    );
+    assert!(!raw_queue_holds(device, op_id), "the op leaves the queue");
     let leftover = version
         .1
         .into_iter()
@@ -11016,6 +10970,14 @@ fn assert_dropped_without_replay(
     );
 }
 
+/// Whether the durable op queue still holds `op_id`, kept or pending.
+fn raw_queue_holds(device: &FakeDevice, op_id: OpId) -> bool {
+    block_on(StagingStore::queued_ops(&device.staging_store))
+        .unwrap()
+        .iter()
+        .any(|(id, _)| *id == op_id)
+}
+
 /// The durable published-op high-water this device stored.
 fn published_op_mark(device: &FakeDevice) -> Option<u64> {
     let stored = block_on(device.staging_store.staged_bytes(&mark_key())).unwrap()?;
@@ -11023,9 +10985,9 @@ fn published_op_mark(device: &FakeDevice) -> Option<u64> {
 }
 
 /// An op whose record PUT was acknowledged is already live at its name. A crash
-/// before its removal from the queue leaves it replayable, and a replay would
-/// re-upload every leaf into a set a cancel can retire — unpinning content a
-/// published record names. It drops as already satisfied instead.
+/// before its kept-op note leaves it replayable, and a replay would re-upload
+/// every leaf into a set a cancel can retire — unpinning content a published
+/// record names. It drops as already satisfied instead.
 #[test]
 fn an_op_whose_record_already_published_is_dropped_rather_than_replayed() {
     let world = FakeWorld::new();
@@ -11044,10 +11006,146 @@ fn an_op_whose_record_already_published_is_dropped_rather_than_replayed() {
     )
     .unwrap();
     let version = staged_version(&alice);
-    plant_published_mark(&alice, op_id);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(published_op_mark(&alice), Some(op_id.0));
+    block_on(alice.staging_store.remove_staged_bytes(&owner_scoped_key(
+        KEPT_OP_NOTES_PREFIX,
+        &kdf::enc_subkey(&SECRET),
+    )))
+    .unwrap();
+
+    let _ = events_so_far(&mut events);
+    let (restarted, mut events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    tick(&world, &restarted, &mut tasks);
+    assert_dropped_without_replay(&alice, &mut events, op_id, version);
+}
+
+/// The note is written before the mark rises, so a crash between the two
+/// leaves a note and no mark. The note alone is the evidence of the publish:
+/// the op stays kept, and a cancel cannot unpin the version it published.
+#[test]
+fn an_op_with_a_note_and_no_mark_stays_kept_across_a_restart() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let op_id = {
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        let op_id = write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &(0..200u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+        tick(&world, &engine, &mut tasks);
+        assert_eq!(published_op_mark(&alice), Some(op_id.0));
+        block_on(alice.staging_store.remove_staged_bytes(&mark_key())).unwrap();
+        op_id
+    };
+
+    let (mut restarted, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    assert_eq!(
+        block_on(restarted.command(Command::CancelUpload { op_id })),
+        Err(EngineError::TooLateToCancel { op_id })
+    );
+    tick(&world, &restarted, &mut tasks);
+    assert!(raw_queue_holds(&alice, op_id), "the op stays kept");
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "and nothing it published is unpinned"
+    );
+}
+
+/// A restore ends at the bin index, not at a record publish, so it raises no
+/// mark. It completes when it lands and does not run again.
+#[test]
+fn a_restore_leaves_the_queue_once_it_lands() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
     tick(&world, &engine, &mut tasks);
 
-    assert_dropped_without_replay(&alice, &mut events, version);
+    block_on(engine.command(Command::Restore {
+        node: doomed,
+        into: None,
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        block_on(alice.pending_ops()).unwrap().is_empty(),
+        "the restore completed"
+    );
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        block_on(alice.pending_ops()).unwrap().is_empty(),
+        "and it does not come back"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["notes.txt".to_owned()],
+        "the node is back once"
+    );
+}
+
+/// A purge ends at the bin index too: it completes when it lands and does not
+/// retire again.
+#[test]
+fn a_purge_leaves_the_queue_once_it_lands() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    block_on(engine.command(Command::Purge { node: doomed })).expect("the purge stages");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        block_on(alice.pending_ops()).unwrap().is_empty(),
+        "the purge completed"
+    );
+    let retires = retire_targets(&alice).len();
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        retire_targets(&alice).len(),
+        retires,
+        "and it does not retire again"
+    );
 }
 
 /// The mark's line is the **ack**, not the self-adopt. A record whose PUT
@@ -11081,7 +11179,12 @@ fn a_publish_whose_self_adopt_failed_still_marks_the_op_published() {
     let _ = events_so_far(&mut events);
     let (restarted, mut events, mut tasks) = boot(&world, &blocks, &alice, 43);
     tick(&world, &restarted, &mut tasks);
-    assert_dropped_without_replay(&alice, &mut events, version);
+    assert!(
+        block_on(alice.pending_ops()).unwrap().is_empty(),
+        "the op is kept, not pending"
+    );
+    let_kept_ops_leave(&world, &restarted, &mut tasks);
+    assert_dropped_without_replay(&alice, &mut events, op_id, version);
 }
 
 /// The other half of the rule: only the **last** record of a plan may raise the
@@ -11118,9 +11221,7 @@ fn a_create_whose_parent_publish_never_ran_leaves_the_mark_down() {
         "an unreferenced child is not a published op"
     );
     assert!(
-        !block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        !block_on(alice.pending_ops()).unwrap().is_empty(),
         "the create stays queued for the retry that completes it"
     );
 }
@@ -11154,31 +11255,24 @@ fn assert_a_failed_root_adopt_still_marks(
         "the ack raised the mark, not the adopt"
     );
     assert!(
-        !block_on(StagingStore::queued_ops(&device.staging_store))
-            .unwrap()
-            .is_empty(),
+        raw_queue_holds(device, op_id),
         "the failed adopt left the op queued — that is the window"
     );
 }
 
-/// The restart the mark exists for: the op leaves the queue without re-authoring
-/// the record it already landed, and unpins nothing while doing it.
+/// The restart the mark exists for: the op is never replayed, re-authors no
+/// record it already landed, unpins nothing, and leaves the queue once kept.
 fn assert_restart_drops_without_republishing(
     world: &FakeWorld,
     blocks: &Blocks,
     device: &FakeDevice,
+    op_id: OpId,
 ) {
     device.floor_store.heal_floors();
     let before = published(&world.record_store, ROOT).0;
     let (restarted, _events, mut tasks) = boot(world, blocks, device, 43);
     tick(world, &restarted, &mut tasks);
 
-    assert!(
-        block_on(StagingStore::queued_ops(&device.staging_store))
-            .unwrap()
-            .is_empty(),
-        "the op leaves the queue"
-    );
     assert_eq!(
         published(&world.record_store, ROOT).0,
         before,
@@ -11188,6 +11282,8 @@ fn assert_restart_drops_without_republishing(
         retire_targets(device).is_empty(),
         "a drop is not an abandonment: nothing published is unpinned"
     );
+    let_kept_ops_leave(world, &restarted, &mut tasks);
+    assert!(!raw_queue_holds(device, op_id), "the op leaves the queue");
 }
 
 /// A delete authors exactly one record, so that record is its last and marks.
@@ -11208,7 +11304,7 @@ fn a_delete_whose_self_adopt_failed_still_marks_the_op_published() {
         .op_id()
         .expect("the delete queues");
     assert_a_failed_root_adopt_still_marks(&world, &alice, &engine, &mut tasks, &root_name, op_id);
-    assert_restart_drops_without_republishing(&world, &blocks, &alice);
+    assert_restart_drops_without_republishing(&world, &blocks, &alice, op_id);
 }
 
 /// Source and destination being one folder collapses a reference move into a
@@ -11232,7 +11328,7 @@ fn a_rename_whose_self_adopt_failed_still_marks_the_op_published() {
     .op_id()
     .expect("the rename queues");
     assert_a_failed_root_adopt_still_marks(&world, &alice, &engine, &mut tasks, &root_name, op_id);
-    assert_restart_drops_without_republishing(&world, &blocks, &alice);
+    assert_restart_drops_without_republishing(&world, &blocks, &alice, op_id);
 }
 
 /// Across folders the plan is dest-add then source-remove, so the **source**
@@ -11264,7 +11360,7 @@ fn a_cross_folder_moves_source_remove_is_the_record_that_marks() {
         ["a.txt"],
         "a confirmed source-remove is the move complete, never compensated"
     );
-    assert_restart_drops_without_republishing(&world, &blocks, &alice);
+    assert_restart_drops_without_republishing(&world, &blocks, &alice, op_id);
 }
 
 /// A dest-add that lands while the source-remove never does is not a published
@@ -11316,7 +11412,7 @@ fn a_cross_folder_moves_dest_add_never_marks_on_its_own() {
         "the destination keeps nothing the source still names"
     );
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
+        block_on(alice.pending_ops())
             .unwrap()
             .iter()
             .any(|(id, _)| *id == op_id),
@@ -11368,11 +11464,11 @@ fn a_retried_cross_folder_move_marks_when_its_source_remove_lands() {
         "the landed source-remove marks the move published"
     );
     assert!(
-        !block_on(StagingStore::queued_ops(&alice.staging_store))
+        !block_on(alice.pending_ops())
             .unwrap()
             .iter()
             .any(|(id, _)| *id == op_id),
-        "the completed move leaves the queue"
+        "the completed move is no longer pending"
     );
 }
 
@@ -11534,7 +11630,7 @@ fn a_cancel_of_a_metadata_op_is_refused() {
         Err(EngineError::NotAnUpload { op_id })
     );
     assert_eq!(
-        block_on(alice.staging_store.queued_ops()).unwrap().len(),
+        block_on(alice.pending_ops()).unwrap().len(),
         1,
         "the refused cancel left the op queued"
     );
@@ -11583,7 +11679,7 @@ fn a_cancelled_create_cascades_onto_its_node_and_a_cancelled_version_does_not() 
     let version = write_file(&mut engine, version(kept), b"a new version").unwrap();
 
     block_on(engine.command(Command::CancelUpload { op_id: create })).expect("the create cancels");
-    let queued: Vec<OpId> = block_on(alice.staging_store.queued_ops())
+    let queued: Vec<OpId> = block_on(alice.pending_ops())
         .unwrap()
         .into_iter()
         .map(|(op_id, _)| op_id)
@@ -11596,11 +11692,7 @@ fn a_cancelled_create_cascades_onto_its_node_and_a_cancelled_version_does_not() 
 
     block_on(engine.command(Command::CancelUpload { op_id: version }))
         .expect("the version cancels");
-    assert!(
-        block_on(alice.staging_store.queued_ops())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(block_on(alice.pending_ops()).unwrap().is_empty());
     tick(&world, &engine, &mut tasks);
     assert_eq!(
         published_names(&world.record_store, &blocks, ROOT),
@@ -11736,9 +11828,7 @@ fn an_undecodable_record_never_authorizes_deleting_the_blocks_its_header_names()
 
     // The forgery: the real op's record with its sealed body corrupted, so the
     // header — our owner tag, and the real op's content root — still reads.
-    let mut forged = block_on(alice.staging_store.queued_ops()).unwrap()[0]
-        .1
-        .clone();
+    let mut forged = block_on(alice.pending_ops()).unwrap()[0].1.clone();
     let last = forged.len() - 1;
     forged[last] ^= 1;
     block_on(alice.staging_store.enqueue_op(&forged)).unwrap();
@@ -12576,7 +12666,7 @@ fn a_parked_entry_whose_op_is_still_queued_is_neither_listed_nor_discardable() {
     // preserved set names it too, beside the write that really is parked.
     let (_, live_bytes, _) = contested_bodies();
     let queued_op = write_file(&mut engine_b, version(node), &live_bytes).expect("it queues");
-    let queued = block_on(bob.staging_store.queued_ops()).unwrap();
+    let queued = block_on(bob.pending_ops()).unwrap();
     let (_, live_record) = queued
         .iter()
         .find(|(id, _)| *id == queued_op)
@@ -12680,7 +12770,7 @@ fn stage_a_second_version(
     let next: Vec<u8> = (0..200u8).rev().collect();
     write_file(&mut engine, version(file), &next).unwrap();
     let version = block_on(async {
-        let queued = device.staging_store.queued_ops().await.unwrap();
+        let queued = device.pending_ops().await.unwrap();
         let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
         let root_block = device
             .staging_store
@@ -12756,9 +12846,7 @@ fn a_cross_scope_relocation_the_drain_cannot_author_dead_letters_rather_than_wed
         "a classified halt spends a budget, never one pass"
     );
     assert!(
-        block_on(alice.staging_store.queued_ops())
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "and the head leaves the queue, so nothing behind it is starved"
     );
 }
@@ -14311,7 +14399,7 @@ fn a_hosted_write_over_quota_is_refused_at_command_time() {
         "the refusal names the account quota and the room left: {refused:?}"
     );
     assert!(
-        block_on(alice.staging_store.queued_ops())
+        block_on(alice.pending_ops())
             .expect("the queue reads")
             .is_empty(),
         "nothing was staged or journaled"
@@ -14706,9 +14794,7 @@ fn a_deterministic_placement_refusal_holds_the_queued_write_rather_than_charging
         "a held head is not a failing one"
     );
     assert_eq!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .len(),
+        block_on(alice.pending_ops()).unwrap().len(),
         1,
         "it keeps its place in the queue"
     );
@@ -14764,9 +14850,7 @@ fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
         "no settings change is what this head is waiting for"
     );
     assert_eq!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .len(),
+        block_on(alice.pending_ops()).unwrap().len(),
         1,
         "the head stays queued for a pass that can place it"
     );
@@ -14841,9 +14925,7 @@ fn restart_into_a_stranded_mint_hold(
         view.dead_letters,
     );
     assert_eq!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .len(),
+        block_on(alice.pending_ops()).unwrap().len(),
         1,
         "it keeps its place in the queue"
     );
@@ -14876,9 +14958,7 @@ fn assert_the_held_write_published(
     assert_eq!(view.queue_hold, None, "the hold let go");
     assert!(view.dead_letters.is_empty(), "{:?}", view.dead_letters);
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
+        block_on(alice.pending_ops()).unwrap().is_empty(),
         "the held write left the queue"
     );
     assert!(

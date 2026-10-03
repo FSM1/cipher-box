@@ -977,6 +977,15 @@ fn rebase_update_content(
     let projected = working
         .node(op.target)
         .filter(|node| node.content_version.is_some());
+    let authored = op
+        .staged_content()
+        .map(|content| content.root_cid.as_slice());
+    // The head is this edit's own version: a kept edit that the tree shows.
+    if authored.is_some()
+        && projected.is_some_and(|node| node.head_content_cid.as_deref() == authored)
+    {
+        return OpResolution::dropped(DropReason::AlreadySatisfied);
+    }
     if projected.is_some_and(|node| node.head_content_cid.as_deref() != base_version_cid) {
         return OpResolution::DeadLetter(DeadLetterReason::BaseSuperseded);
     }
@@ -1379,6 +1388,21 @@ mod tests {
         node.content_version = Some(1);
         node.head_content_cid = Some(head.to_vec());
         base
+    }
+
+    #[test]
+    fn an_edit_whose_own_version_is_the_head_reads_as_landed() {
+        let mut working = edited_file(&staged_k().root_cid);
+        let local = working.clone();
+
+        let res = rebase_one(
+            &mut working,
+            &local,
+            &Op::update_content(id(1), staged_k(), Some(b"ours".to_vec()), 1, AT),
+            SCOPE_ROOTS,
+        );
+
+        assert_eq!(res, OpResolution::dropped(DropReason::AlreadySatisfied));
     }
 
     #[test]

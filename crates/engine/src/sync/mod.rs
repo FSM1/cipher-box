@@ -22,6 +22,7 @@ pub mod boot;
 pub(crate) mod cancel;
 pub(crate) mod doomed;
 pub(crate) mod drain;
+pub mod kept_op;
 pub mod model;
 pub mod op;
 pub mod overlay;
