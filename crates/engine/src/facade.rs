@@ -6631,6 +6631,7 @@ where {
                             publishing: &publishing,
                             orphan_heads: &orphan_heads,
                             held: &held,
+                            base: &base,
                         },
                         unfinished_write_cuts: &unfinished,
                         owed: &owed_rotation,
