@@ -20,6 +20,7 @@ use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
+use cipherbox_engine::gate::floor;
 use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
@@ -85,9 +86,9 @@ fn owner_pointer_read_key() -> [u8; 32] {
     *kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes()
 }
 
-/// Publish the account's initial state: an empty owner root at sequence 1 whose
-/// committed set is the owner's own, and the vault pointer naming it.
-fn seed_vault(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
+/// The owner root at the seeded epoch, with no children, signed at
+/// `sequence`.
+fn initial_root_record(blocks: &Blocks, sequence: u64) -> Vec<u8> {
     let owner_identity = owner_identity();
     let pseudonym = owner_pseudonym();
     let owner_enc = kdf::enc_subkey(&SECRET);
@@ -161,14 +162,23 @@ fn seed_vault(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
     blocks.put(head.block.clone());
 
     let root_signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
-    let root_record = IpnsRecord::create_v2(
+    IpnsRecord::create_v2(
         &root_signer,
         format!("/ipfs/{}", head.cid).as_bytes(),
-        1,
+        sequence,
         TTL_NANOS,
         EOL,
     )
-    .marshal();
+    .marshal()
+}
+
+/// Publish the account's initial state: an empty owner root at sequence 1 whose
+/// committed set is the owner's own, and the vault pointer naming it.
+fn seed_vault(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
+    let owner_identity = owner_identity();
+    let name = write_name(ROOT);
+    let pointer_read_key = owner_pointer_read_key();
+    let root_record = initial_root_record(blocks, 1);
 
     let pointer_block = seal_repoint(
         SessionRole::Owner,
@@ -861,6 +871,245 @@ fn a_start_whose_floor_read_fails_surfaces_it_and_a_later_cut_vouches() {
 
     let (second, _events, _tasks) = boot(&world, &blocks, &mount, 8);
     assert_eq!(listed_names(&second, ROOT), ["reports"]);
+}
+
+/// The owner's only device: a session that ticks after a cut of the vault root
+/// that did not vouch its epoch, then starts again.
+fn the_owner_starts_again_after_its_session_adopts_the_cut_root(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    owner: &FakeDevice,
+    engine: Engine<FakeSeamTypes>,
+    mut tasks: Vec<BoxedTask>,
+) {
+    tick(world, &engine, &mut tasks);
+    assert!(
+        block_on(floor::read_epoch_floor(&owner.floors(&SECRET), &SCOPE)).expect("the floor reads")
+            > Some(vouched_min_read_epoch(world)),
+        "the session adopted the cut root above the epoch the anchor vouches"
+    );
+    drop((engine, tasks));
+
+    serve_http(owner, blocks, 600);
+    let (mut engine, _events) = engine_on_api(owner, 45);
+    let started = block_on(engine.start(secret(), None));
+    assert!(
+        started.is_ok(),
+        "the device that cut the vault root starts again: {started:?}"
+    );
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+}
+
+/// The anchor PUT fails past the retry bound while every read works, and the
+/// session adopts the cut root before it ends. No other device exists.
+#[test]
+fn a_one_device_owner_starts_after_a_vouch_that_ran_out_and_a_tick() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+
+    the_owner_starts_again_after_its_session_adopts_the_cut_root(
+        &world, &blocks, &owner, engine, tasks,
+    );
+}
+
+/// GETs of the vault root a cut reads before the confirm of its root publish.
+const ROOT_GETS_BEFORE_CONFIRM: usize = 2;
+
+/// The root PUT lands, but every confirm and every retry reads no record
+/// there, so the cut reports the root unconfirmed and never vouches. The
+/// session then adopts the root that did land. No other device exists.
+#[test]
+fn a_one_device_owner_starts_after_an_unconfirmed_root_that_landed_and_a_tick() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    world.record_store.serve_gets_for_after(
+        root_name.as_str(),
+        ROOT_GETS_BEFORE_CONFIRM,
+        usize::MAX,
+        None,
+    );
+    let cut = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
+    world
+        .record_store
+        .serve_gets_for_after(root_name.as_str(), 0, 0, None);
+    assert!(cut.is_err(), "the root publish is unconfirmed: {cut:?}");
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(
+        published_epoch(&world, &blocks, ROOT),
+        EPOCH + 1,
+        "the root landed"
+    );
+    assert_eq!(vouched_min_read_epoch(&world), EPOCH, "nothing was vouched");
+
+    the_owner_starts_again_after_its_session_adopts_the_cut_root(
+        &world, &blocks, &owner, engine, tasks,
+    );
+}
+
+/// A start whose pointer lags the root it adopts holds the root read seed at
+/// the adopted epoch, so a child read before any tick opens.
+#[test]
+fn a_child_read_right_after_a_lag_start_has_the_root_seed() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("a write at the vault root commits");
+    tick_n(&world, &engine, &mut tasks, 4);
+    let (_, file) = listed(&engine, ROOT)
+        .into_iter()
+        .find(|(name, _)| name == "notes.bin")
+        .expect("the file lists");
+    cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+    tick(&world, &engine, &mut tasks);
+    drop((engine, tasks));
+
+    serve_http(&owner, &blocks, 600);
+    let (mut engine, _events) = engine_on_api(&owner, 45);
+    block_on(engine.start(secret(), None)).expect("the lag start passes");
+    let versions = block_on(engine.file_versions(file));
+    assert!(
+        versions.is_ok(),
+        "the root read seed opens the file record: {versions:?}"
+    );
+}
+
+/// The sequence of the vault-root record the network serves.
+fn published_root_sequence(world: &FakeWorld, root_name: &IpnsName) -> u64 {
+    let bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], root_name.as_str())
+        .expect("the vault root is published");
+    record_sequence(root_name, &bytes)
+}
+
+/// After its session adopts the cut root, and before any vouch of the cut
+/// epoch lands, the session refuses an owner-signed root at the pre-cut epoch
+/// whose sequence is above the cut root's.
+#[test]
+fn a_session_refuses_a_pre_cut_root_above_the_cut_roots_sequence() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+
+    let above = published_root_sequence(&world, &root_name) + 1;
+    let stale = initial_root_record(&blocks, above);
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, root_name.as_str(), stale.clone());
+    }
+    tick_n(&world, &engine, &mut tasks, 2);
+
+    assert_eq!(
+        listed_names(&engine, ROOT),
+        ["reports"],
+        "the session keeps the cut root and does not adopt the pre-cut epoch"
+    );
+}
+
+/// Serve the seeded re-point again, which vouches the pre-cut epoch, above
+/// every sequence the vault pointer has reached.
+fn replay_pre_cut_vault_pointer(world: &FakeWorld, root_name: &IpnsName) {
+    let pre_cut = RepointObject {
+        scope_id: SCOPE,
+        current_root: root_name.clone(),
+        write_epoch: EPOCH,
+        min_read_epoch: EPOCH,
+        prev_root: None,
+    };
+    republish_vault_pointer(world, &pre_cut, 100);
+}
+
+/// A cold start of `device` that must refuse the vault pointer as rolled back.
+fn assert_start_refuses_a_rolled_back_pointer(
+    blocks: &Blocks,
+    device: &FakeDevice,
+    entropy_seed: u64,
+) {
+    serve_http(device, blocks, 600);
+    let (mut engine, _events) = engine_on_api(device, entropy_seed);
+    let started = block_on(engine.start(secret(), None));
+    assert!(
+        matches!(
+            &started,
+            Err(EngineError::ColdStart { message }) if message.contains("read-epoch floor regression")
+        ),
+        "a pointer below the epoch it vouched to this device is a rollback: {started:?}"
+    );
+}
+
+/// The cut's vouch lands, so this device holds the cut epoch as vouched: a
+/// replay of the pre-cut pointer is refused at the next start.
+#[test]
+fn a_replayed_pre_cut_pointer_is_refused_after_a_landed_vouch() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    cut_vault_root(&world, &mut engine);
+    drop((engine, tasks));
+
+    replay_pre_cut_vault_pointer(&world, &root_name);
+    assert_start_refuses_a_rolled_back_pointer(&blocks, &owner, 43);
+}
+
+/// The start after a cut whose vouch ran out lands the vouch at its catch-up,
+/// so a later replay of the pre-cut pointer is refused.
+#[test]
+fn a_replayed_pre_cut_pointer_is_refused_after_the_catch_up_vouch() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    let cut_epoch = cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+    tick(&world, &engine, &mut tasks);
+    drop((engine, tasks));
+
+    let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 43);
+    assert_eq!(
+        vouched_min_read_epoch(&world),
+        cut_epoch,
+        "the start vouches the epoch its session adopted"
+    );
+    drop(engine);
+
+    replay_pre_cut_vault_pointer(&world, &root_name);
+    assert_start_refuses_a_rolled_back_pointer(&blocks, &owner, 44);
 }
 
 /// Every other owner action that could reach the vault root is refused there or

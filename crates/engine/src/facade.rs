@@ -1591,7 +1591,9 @@ pub enum Command {
         node: NodeId,
         /// Where to put it back, or `None` for the folder its bin entry names.
         /// A destination the vault no longer holds is
-        /// [`EngineError::RestoreTargetGone`], so a host can offer another.
+        /// [`EngineError::RestoreTargetGone`], and one in another scope than
+        /// the entry's is [`EngineError::RestoreCrossesScope`], so a host can
+        /// offer another.
         #[cfg_attr(
             feature = "wasm",
             serde(with = "crate::wire::opt_node_id"),
@@ -2275,6 +2277,13 @@ pub enum Event {
         /// Human-readable classification (no key material).
         description: String,
     },
+    /// A read met another record at one sequence of a name: a same-sequence
+    /// fork, not a trust violation (ADR 0066). Sent once for each name and
+    /// sequence in a session.
+    SameSequenceFork {
+        /// The record's routing key (`ipnsName`).
+        routing_key: String,
+    },
     /// A held record's sub-EOL renewal did not land — a lost CAS race or a
     /// fail-closed publish failure — or a start could not raise the vault
     /// pointer's `minReadEpoch` to the root epoch it adopted. Surfaced, never
@@ -2452,6 +2461,10 @@ impl fmt::Debug for Event {
             Self::AttributableAbuse { description } => f
                 .debug_struct("AttributableAbuse")
                 .field("description", description)
+                .finish(),
+            Self::SameSequenceFork { routing_key } => f
+                .debug_struct("SameSequenceFork")
+                .field("routing_key", &RedactedText::of(routing_key))
                 .finish(),
             Self::RenewalFailed {
                 routing_key,
@@ -2759,6 +2772,12 @@ pub enum EngineError {
     /// apart from every other refusal so a host can offer another folder rather
     /// than say the restore failed.
     RestoreTargetGone,
+    /// [`Command::Restore`] named a destination in another scope than the one
+    /// its bin entry was filed under, which includes a default restore whose
+    /// origin folder became a scope root after the delete. A restore re-keys in
+    /// place under the entry's scope (blueprint/engine.md "Restore, purge, and
+    /// expiry"), so a host offers a folder of that scope instead.
+    RestoreCrossesScope,
     /// [`Command::Restore`] or [`Command::Purge`] named a node the owner's bin
     /// index holds no entry for. Neither node nor bin is at fault: the entry
     /// left, most often because another device already acted on it.
@@ -2911,6 +2930,14 @@ impl EngineError {
                         .to_owned(),
                 }
             }
+            // The member's own provider is the member's to fix, so the host
+            // shows which check it failed.
+            SettingsPublishError::Publish(RecordPublishError::Placement(e)) => EngineError::Seam {
+                message: format!(
+                    "your own IPFS provider did not take the settings record: {}",
+                    e.check()
+                ),
+            },
             SettingsPublishError::Publish(_) => EngineError::Seam {
                 message: "the settings record did not reach the record plane".to_owned(),
             },
@@ -3180,6 +3207,10 @@ impl fmt::Display for EngineError {
             EngineError::RestoreTargetGone => {
                 f.write_str("the folder this item came from is gone; choose another")
             }
+            EngineError::RestoreCrossesScope => f.write_str(
+                "this item can only go back into a folder shared the same way as the one it came \
+                 from; choose another",
+            ),
             EngineError::NotBinned => f.write_str("this item is not in the bin"),
             EngineError::NotAFolder => f.write_str("not a folder"),
             EngineError::NotAFile => f.write_str("not a file"),
@@ -4608,6 +4639,32 @@ pub(crate) fn emit_trust_violation(
     });
 }
 
+/// The (routing key, sequence) pairs this session reported a same-sequence
+/// fork at, so each pair sends [`Event::SameSequenceFork`] once (ADR 0066 D2).
+#[derive(Default)]
+pub(crate) struct ForkSightings(RefCell<BTreeSet<(String, u64)>>);
+
+impl ForkSightings {
+    /// Report a fork at `sequence` of `routing_key`, unless this session
+    /// already did.
+    pub(crate) fn report(
+        &self,
+        events: &mpsc::UnboundedSender<Event>,
+        routing_key: &str,
+        sequence: u64,
+    ) {
+        if self
+            .0
+            .borrow_mut()
+            .insert((routing_key.to_owned(), sequence))
+        {
+            let _ = events.unbounded_send(Event::SameSequenceFork {
+                routing_key: routing_key.to_owned(),
+            });
+        }
+    }
+}
+
 /// Report one grant row whose recipient binding the owner never signed.
 ///
 /// Any committed write grantee authors the write body a ledger rides in, so a
@@ -5345,7 +5402,8 @@ impl<T: SeamTypes> Engine<T> {
                 base_url.unwrap_or_default().to_owned(),
             )
             .with_session_bearers(self.session_bearer.clone(), self.accelerator_bearer.clone())
-            .with_deadlines(self.deadlines),
+            .with_deadlines(self.deadlines)
+            .with_placement(self.state.placement.clone()),
         );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
@@ -5514,11 +5572,14 @@ impl<T: SeamTypes> Engine<T> {
         // A gate-passing root adopt surfaced the scope read seed: deposit it in
         // the in-memory per-scope cell the child read pipeline derives from.
         if let Some(seed) = outcome.read_scope_seed.take() {
+            let stamp = outcome
+                .read_seed_epoch
+                .or(vouched.map(|repoint| repoint.min_read_epoch));
             deposit_seed(
                 &self.state.scope_read_seeds,
                 root_scope_id,
                 seed,
-                vouched.map(|repoint| repoint.min_read_epoch),
+                stamp,
                 FloorNamespace::Own,
             );
         }
@@ -5527,6 +5588,11 @@ impl<T: SeamTypes> Engine<T> {
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
         *self.state.current_root_name.borrow_mut() = root_name.clone();
+        if let (Some(sequence), Some(name)) = (outcome.forked, &root_name) {
+            self.state
+                .fork_sightings
+                .report(&self.events, name.as_str(), sequence);
+        }
         // The same adopt recovered the scope write seed: the drain derives every
         // new node's `ipnsName` and its narrow per-name signer from it.
         if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
@@ -5543,19 +5609,19 @@ impl<T: SeamTypes> Engine<T> {
         root_name.is_some()
     }
 
-    /// Vouch at the vault pointer the root epoch this start adopted above
+    /// Vouch at the vault pointer the root epoch this device adopted above
     /// `vouched`: a cut that landed its root and not its vouch. Inline, before
     /// the loops spawn, so a tick never races the re-point. A failure is
-    /// surfaced: a cut of the vault root in this session finishes the vouch,
-    /// and until one lands this device's next cold seed refuses.
+    /// surfaced, and a cut of the vault root in this session or the next start
+    /// finishes the vouch.
     async fn catch_up_vault_pointer(
         &self,
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         vouched: u64,
     ) {
         let root = self.state.snapshot.borrow().root.0;
-        // Above `vouched` only through this start's own gated adopt: the cold
-        // seed refused any higher floor that stood before it.
+        // Above `vouched` only through a gated adopt of the vault root, in this
+        // start or in an earlier session (ADR 0067 D3).
         let floor = match floor::read_epoch_floor(&self.seams.floor_store, &root).await {
             Ok(Some(floor)) if floor > vouched => Ok(floor),
             Ok(_) => return,
@@ -6442,6 +6508,7 @@ where {
         let bin_keys = self.secrets.tick_bin_keys.clone();
         let publishing = self.state.publishing.clone();
         let orphan_heads = self.state.orphan_heads.clone();
+        let fork_sightings = self.state.fork_sightings.clone();
         let roots_walked = self.state.scope_roots_walked.clone();
         let owed_driven = self.state.owed_rotation_driven.clone();
         let unfinished_write_cuts = self.state.unfinished_write_cuts.clone();
@@ -6599,6 +6666,9 @@ where {
                         let _ = events.unbounded_send(Event::WriteCutUnfinished {
                             scope_root: NodeId(scope),
                         });
+                    }
+                    for (routing_key, sequence) in &report.forked {
+                        fork_sightings.report(&events, routing_key, *sequence);
                     }
                 }
                 LivenessControl::Continue
@@ -6812,7 +6882,11 @@ where {
                     return Err(EngineError::RestoreTargetGone);
                 }
                 refuse_outside_vault(&rendered, into)?;
+                self.refuse_before_the_boundary_walk()?;
                 let lands_in = scope_of(&rendered, into, &self.relocation_scope_roots());
+                if lands_in != NodeId(entry.scope_id) {
+                    return Err(EngineError::RestoreCrossesScope);
+                }
                 let leaving: Vec<_> = self
                     .owed_moves()
                     .await?
@@ -9458,6 +9532,15 @@ where {
             .map_err(|e| EngineError::from_settings_publish(SettingsPublishError::Byo(e)))?;
         let observed = sign_above(self.state.placement.borrow().as_ref())
             .map_err(|refusal| EngineError::NoPlacement { refusal })?;
+        // A save with a hosted leg clears the account flag before its head goes
+        // to the hosted store, which refuses a BYO account (ADR 0029 D11).
+        if placement_of(settings).is_ok_and(|placement| placement.has_hosted_leg())
+            && api.quota().await.is_ok_and(|quota| quota.advisory)
+            && api.set_byo(false).await.is_ok()
+        {
+            // The next pre-flight sets the flag again if the save does not land.
+            self.state.byo_reconciled.set(false);
+        }
         let held = match publish_settings_above(
             &self.record_transport,
             api,
@@ -9772,6 +9855,7 @@ where {
             gateway: &self.gateway,
             base: &self.state.snapshot,
             events: &self.events,
+            forks: &self.state.fork_sightings,
             scope_id: root.0,
             scope_read_seed: &stamped.seed,
             seed_stamp: Some(stamped.stamp),
@@ -9955,6 +10039,7 @@ where {
                 gateway: &self.gateway,
                 base: &self.state.snapshot,
                 events: &self.events,
+                forks: &self.state.fork_sightings,
                 scope_id: scope.0,
                 scope_read_seed: &material.seed.seed,
                 seed_stamp: Some(material.seed.stamp),
@@ -11737,6 +11822,26 @@ where {
                 .map(NodeId),
         );
         roots
+    }
+
+    /// Refuse a restore until this session's boundary walk has landed, since a
+    /// restore must name its destination's scope: before the walk, no scope
+    /// root below the vault is known and every node reads as the vault root's.
+    /// A rejected walk refuses for good, as [`Self::relocation_anchors`] does.
+    fn refuse_before_the_boundary_walk(&self) -> Result<(), EngineError> {
+        if self.state.boundary_walk_rejected.get() {
+            return Err(EngineError::TrustViolation {
+                message: "a scope root below this vault failed the adoption gate, so this \
+                          session cannot name the scope of a restore destination"
+                    .to_owned(),
+            });
+        }
+        if !self.state.boundary_walk_landed.get() {
+            return Err(EngineError::Seam {
+                message: "boundary-walk-pending".to_owned(),
+            });
+        }
+        Ok(())
     }
 
     /// What a relocation op anchors on: the source parent, the target's base
@@ -17490,6 +17595,17 @@ mod tests {
         /// Seal + publish the owner vault pointer at index 0, its re-point naming
         /// `root_name` and vouching the read/write floors the cold-seed adopts.
         fn seed_vault_pointer(device: &FakeDevice, root_name: &IpnsName) {
+            seed_vault_pointer_at(device, root_name, EPOCH, 1);
+        }
+
+        /// The owner re-point at index 0, vouching `min_read_epoch`, signed at
+        /// `sequence`.
+        fn seed_vault_pointer_at(
+            device: &FakeDevice,
+            root_name: &IpnsName,
+            min_read_epoch: u64,
+            sequence: u64,
+        ) {
             let read_key =
                 kdf::pointer_read_key(kdf::owner_pointer_seed(&CAP_SECRET).as_bytes(), &SCOPE);
             let mut entropy = SeededEntropy::new(0);
@@ -17503,7 +17619,7 @@ mod tests {
                     scope_id: SCOPE,
                     current_root: root_name.clone(),
                     write_epoch: EPOCH,
-                    min_read_epoch: EPOCH,
+                    min_read_epoch,
                     prev_root: None,
                 },
             )
@@ -17511,7 +17627,7 @@ mod tests {
             let record = IpnsRecord::create_v2(
                 &kdf::vault_pointer_index(&CAP_SECRET, 0),
                 &block,
-                1,
+                sequence,
                 TTL_NANOS,
                 EOL,
             )
@@ -19592,11 +19708,41 @@ mod tests {
             }
         }
 
-        /// Rule 8 at the encode side: a vouch below the durable floor is a
-        /// re-point the cold start refuses, so it is never signed.
+        /// Rule 8 at the encode side: a vouch below the read-epoch floor is never
+        /// signed, and it raises no vouched floor.
         #[test]
         fn a_vouch_below_the_durable_floor_publishes_nothing() {
             let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+            block_on(
+                device
+                    .floors(&CAP_SECRET)
+                    .raise_epoch_floor(&SCOPE, EPOCH + 5),
+            )
+            .expect("the floor rises");
+
+            let api = engine.api.clone().expect("a started session holds the API");
+            let voucher = engine
+                .vault_pointer_voucher(&api)
+                .expect("the session adopted a vault pointer");
+            let before = pointer_records_of(&device);
+            let refused =
+                block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), EPOCH + 1));
+            assert!(
+                matches!(refused, Err(RotationPublishError::Rejected)),
+                "{refused:?}"
+            );
+            assert_eq!(pointer_records_of(&device), before, "nothing was published");
+            assert_eq!(
+                block_on(floor::vouched_floor(&device.floors(&CAP_SECRET), &SCOPE)).unwrap(),
+                Some(EPOCH),
+                "a vouch that did not land raises no vouched floor"
+            );
+        }
+
+        /// A started owner session, its device and the vault-root name, with
+        /// the spawned loops dropped.
+        fn started_owner(world: &FakeWorld) -> (Engine<FakeSeamTypes>, FakeDevice, IpnsName) {
             let device = world.device(&owner_identity().verifying_key().to_sec1());
             let (head_block, head_cid, root_name) = owner_root();
             seed_vault_pointer(&device, &root_name);
@@ -19613,34 +19759,60 @@ mod tests {
             block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()), None))
                 .expect("cold start adopts the owner root");
             drop(world.scheduler.take_spawned_tasks());
-            block_on(
-                device
-                    .floors(&CAP_SECRET)
-                    .raise_epoch_floor(&SCOPE, EPOCH + 5),
-            )
-            .expect("the floor rises");
+            (engine, device, root_name)
+        }
+
+        fn pointer_records_of(device: &FakeDevice) -> Vec<Option<Vec<u8>>> {
+            let pointer = vault_pointer_name(&CAP_SECRET, 0);
+            device
+                .record_store
+                .endpoints()
+                .iter()
+                .map(|endpoint| device.record_store.record_at(endpoint, pointer.as_str()))
+                .collect()
+        }
+
+        /// A standing pointer that already vouches the epoch is not signed
+        /// again, and the vouched floor records what it vouches.
+        #[test]
+        fn a_standing_vouch_at_the_epoch_raises_the_vouched_floor_and_publishes_nothing() {
+            let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+            seed_vault_pointer_at(&device, &root_name, EPOCH + 1, 2);
 
             let api = engine.api.clone().expect("a started session holds the API");
             let voucher = engine
                 .vault_pointer_voucher(&api)
                 .expect("the session adopted a vault pointer");
-            let pointer = vault_pointer_name(&CAP_SECRET, 0);
-            let pointer_records = |device: &FakeDevice| {
-                device
-                    .record_store
-                    .endpoints()
-                    .iter()
-                    .map(|endpoint| device.record_store.record_at(endpoint, pointer.as_str()))
-                    .collect::<Vec<_>>()
-            };
-            let before = pointer_records(&device);
-            let refused =
+            let before = pointer_records_of(&device);
+            let vouched =
                 block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), EPOCH + 1));
-            assert!(
-                matches!(refused, Err(RotationPublishError::Rejected)),
-                "{refused:?}"
+            assert_eq!(vouched, Ok(()));
+            assert_eq!(pointer_records_of(&device), before, "nothing was published");
+            assert_eq!(
+                block_on(floor::vouched_floor(&device.floors(&CAP_SECRET), &SCOPE)).unwrap(),
+                Some(EPOCH + 1)
             );
-            assert_eq!(pointer_records(&device), before, "nothing was published");
+        }
+
+        /// The vouch lands and the vouched floor does not rise: the error says
+        /// the floor failed, not that nothing was published.
+        #[test]
+        fn a_landed_vouch_whose_floor_does_not_rise_reports_the_floor() {
+            let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+
+            let api = engine.api.clone().expect("a started session holds the API");
+            let voucher = engine
+                .vault_pointer_voucher(&api)
+                .expect("the session adopted a vault pointer");
+            let before = pointer_records_of(&device);
+            device.floor_store.fail_floor_commits();
+            let vouched =
+                block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), EPOCH + 1));
+            device.floor_store.heal_floors();
+            assert_eq!(vouched, Err(RotationPublishError::FloorUnrecorded));
+            assert_ne!(pointer_records_of(&device), before, "the vouch landed");
         }
     }
 

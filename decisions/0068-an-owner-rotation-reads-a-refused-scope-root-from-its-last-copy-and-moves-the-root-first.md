@@ -1,6 +1,6 @@
 # ADR 0068 — An owner rotation reads a refused scope root from its last copy, and moves the root first
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-03
 - **Date:** 2026-10-02
 - **Relates to:** FSM1/cipher-box#2176 (a planted record at the scope root name blocks the name
   wave), [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md) D2,
