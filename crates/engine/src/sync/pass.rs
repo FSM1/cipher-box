@@ -672,15 +672,7 @@ where
             proved: state.descendant_scope_roots.borrow().clone(),
             unproved: state.unproved_scope_roots.borrow().clone(),
         };
-        let owed_moves = OwedRotation::new(
-            &self.seams.staging,
-            BookkeepingSeal::new(&pass.enc_subkey, &*self.seams.entropy),
-            &pass.enc_subkey,
-            &state.owed_rotation,
-        )
-        .interior_moves()
-        .await
-        .ok();
+        let owed_moves = self.owed_move_scopes(state, pass).await;
         let own = moved_own_scopes(
             &scopes.proved,
             &state.minted_scope_roots.borrow(),
@@ -955,6 +947,21 @@ where
         }
     }
 
+    /// The scope root of each owed interior move, or `None` when the owed
+    /// record does not read.
+    async fn owed_move_scopes(&self, state: &SessionState, pass: &Pass) -> Option<Vec<NodeId>> {
+        let moves = OwedRotation::new(
+            &self.seams.staging,
+            BookkeepingSeal::new(&pass.enc_subkey, &*self.seams.entropy),
+            &pass.enc_subkey,
+            &state.owed_rotation,
+        )
+        .interior_moves()
+        .await
+        .ok()?;
+        Some(moves.into_iter().map(|(scope, _)| scope).collect())
+    }
+
     /// The per-scope drain, and the boundaries the later stages read.
     async fn drain<'a>(
         &'a self,
@@ -1102,16 +1109,7 @@ where
                 }),
             })
             .collect();
-        let owed_moves: Option<Vec<NodeId>> = OwedRotation::new(
-            &self.seams.staging,
-            BookkeepingSeal::new(enc_subkey, &*self.seams.entropy),
-            enc_subkey,
-            &state.owed_rotation,
-        )
-        .interior_moves()
-        .await
-        .ok()
-        .map(|moves| moves.into_iter().map(|(scope, _)| scope).collect());
+        let owed_moves = self.owed_move_scopes(state, pass).await;
         let drain = Drain::new(
             &self.seams,
             state.drain_cells(),
@@ -1788,14 +1786,12 @@ fn report_forked_scopes(
 fn moved_own_scopes(
     proved: &BTreeSet<NodeId>,
     minted: &BTreeSet<NodeId>,
-    owed_moves: Option<&[(NodeId, NodeId)]>,
+    owed_moves: Option<&[NodeId]>,
 ) -> BTreeSet<NodeId> {
     let Some(owed_moves) = owed_moves else {
         return proved.clone();
     };
-    let moved = minted
-        .iter()
-        .filter(|root| !owed_moves.iter().any(|(scope, _)| scope == *root));
+    let moved = minted.iter().filter(|root| !owed_moves.contains(root));
     proved.iter().chain(moved).copied().collect()
 }
 
@@ -1829,15 +1825,15 @@ mod tests {
     /// interior move, and an unread owed record holds every minted root back.
     #[test]
     fn the_focus_leg_groups_a_minted_root_only_once_its_interior_moved() {
-        let proved = BTreeSet::from([NodeId([1; 16])]);
+        let walked = NodeId([1; 16]);
+        let proved = BTreeSet::from([walked]);
         let moved = NodeId([2; 16]);
         let owed = NodeId([3; 16]);
         let minted = BTreeSet::from([moved, owed]);
-        let owed_moves = [(owed, NodeId::VAULT_ROOT)];
 
         assert_eq!(
-            moved_own_scopes(&proved, &minted, Some(&owed_moves)),
-            BTreeSet::from([NodeId([1; 16]), moved])
+            moved_own_scopes(&proved, &minted, Some(&[owed])),
+            BTreeSet::from([walked, moved])
         );
         assert_eq!(moved_own_scopes(&proved, &minted, None), proved);
     }

@@ -3151,12 +3151,20 @@ fn owed_reports(events: &mut EventStream) -> Vec<(NodeId, String, bool, OwedWork
         .collect()
 }
 
-/// How many abuse events the stream holds.
-fn abuse_events(events: &mut EventStream) -> usize {
+/// The abuse descriptions the stream holds.
+fn abuse_descriptions(events: &mut EventStream) -> Vec<String> {
     events_so_far(events)
         .into_iter()
-        .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
-        .count()
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect()
+}
+
+/// How many abuse events the stream holds.
+fn abuse_events(events: &mut EventStream) -> usize {
+    abuse_descriptions(events).len()
 }
 
 /// The value the record published at `name` carries.
@@ -5776,13 +5784,7 @@ fn the_sharing_read_names_a_rewritten_row_from_the_owners_own_commitment() {
         !named.contains(&vec![0x11; IDENTITY_PUBLIC_LEN]),
         "and never the label the writer chose"
     );
-    let reported: Vec<String> = events_so_far(&mut events)
-        .into_iter()
-        .filter_map(|event| match event {
-            Event::AttributableAbuse { description } => Some(description),
-            _ => None,
-        })
-        .collect();
+    let reported = abuse_descriptions(&mut events);
     let signer = hex_lower(&owner_pseudonym().verifying_key().to_bytes());
     assert!(
         reported.iter().any(
@@ -6312,13 +6314,7 @@ fn a_name_wave_reports_the_row_it_re_mints_without_an_owner_binding() {
         "the write cut drives the wave that re-mints the set"
     );
 
-    let reported: Vec<String> = events_so_far(&mut events)
-        .into_iter()
-        .filter_map(|event| match event {
-            Event::AttributableAbuse { description } => Some(description),
-            _ => None,
-        })
-        .collect();
+    let reported = abuse_descriptions(&mut events);
     let signer = hex_lower(&owner_pseudonym().verifying_key().to_bytes());
     assert!(
         reported.iter().any(
@@ -6657,17 +6653,6 @@ fn a_tick_whose_walk_fails_reads_no_new_scope_root_as_a_child() {
     assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
 }
 
-/// The abuse descriptions the stream holds.
-fn abuse_descriptions(events: &mut EventStream) -> Vec<String> {
-    events_so_far(events)
-        .into_iter()
-        .filter_map(|event| match event {
-            Event::AttributableAbuse { description } => Some(description),
-            _ => None,
-        })
-        .collect()
-}
-
 /// A grant whose interior move landed seals the interior under the new scope.
 /// A tick whose walk proves no set must still read that interior there.
 #[test]
@@ -6684,6 +6669,7 @@ fn a_tick_whose_walk_fails_reads_a_moved_interior_under_the_new_scope() {
     block_on(fx.engine.command(Command::SetFocus { node: Some(inner) }))
         .expect("the interior folder takes the focus");
     events_so_far(&mut fx._events);
+    let reads = fx.world.record_store.get_count(write_name(inner).as_str());
     // The vault root's write plane does not open, so the walk proves no set.
     fx.owner_device
         .floor_store
@@ -6691,11 +6677,16 @@ fn a_tick_whose_walk_fails_reads_a_moved_interior_under_the_new_scope() {
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     fx.owner_device.floor_store.heal_floors();
 
+    assert!(
+        fx.world.record_store.get_count(write_name(inner).as_str()) > reads,
+        "the focus leg reads the moved interior"
+    );
     assert_eq!(abuse_descriptions(&mut fx._events), Vec::<String>::new());
 }
 
-/// The control of the test above: a record at the moved interior node that
-/// opens under no seed of the new scope is still one trust violation.
+/// The control of `a_tick_whose_walk_fails_reads_a_moved_interior_under_the_new_scope`:
+/// a record at the moved interior node that opens under no seed of the new
+/// scope is still one trust violation.
 #[test]
 fn a_tick_whose_walk_fails_still_reports_a_hostile_moved_interior_node() {
     let mut fx = GrantScenario::new();
