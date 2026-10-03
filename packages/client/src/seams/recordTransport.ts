@@ -7,7 +7,7 @@
  * owns IPNS end-to-end — signing, verification, CAS, fan-out, and every trust
  * decision — so this seam never inspects, caches, or reorders records; it only
  * addresses `routingKey` and moves bytes. Absence is `null`, never an error;
- * a rejected promise is reserved for transport-level failure.
+ * a rejection carries the HTTP `status` when the endpoint answered.
  */
 
 import { drainCapped } from './cappedBody.js';
@@ -108,7 +108,10 @@ export class FetchRecordTransport implements RecordTransportSeam {
     }
     if (!response.ok) {
       await response.body?.cancel();
-      throw new Error(`RecordTransport GET ${response.status} at ${endpoint}`);
+      // The engine classifies the status; the seam only reports it.
+      throw Object.assign(new Error(`RecordTransport GET ${response.status} at ${endpoint}`), {
+        status: response.status,
+      });
     }
     if (!servesRecordBytes(response)) {
       await response.body?.cancel();

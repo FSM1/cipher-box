@@ -404,9 +404,8 @@ where
             // record re-fetched, or one side of a same-sequence fork (ADR 0066)
             // — no update, never a violation; its verified bytes ride out so
             // the liveness loop holds them without a re-fetch.
-            // A strictly older sequence is a replay/rollback and stays a
-            // fail-closed trust violation, as does every other gate rejection —
-            // including one the equal-floor recovery reaches.
+            // A strictly older sequence is a rollback unless an endpoint failed
+            // (ADR 0071); every other gate rejection stays a trust violation.
             Err(GateError::Rejected(rejection)) => match &rejection.reason {
                 RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
                     // Our own current root at exactly the floor: recover the
@@ -463,8 +462,6 @@ where
                         Err(GateError::Seam(error)) => return Err(error),
                     }
                 }
-                // ADR 0071 D1: a failed endpoint can hide the record the
-                // floor came from, so this is staleness, not a rollback.
                 RejectionReason::SequenceNotNewer { floor, sequence }
                     if sequence < floor && fetch.endpoint_failed =>
                 {

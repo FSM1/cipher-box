@@ -13,7 +13,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 
 use super::eol::ranks_above;
 use super::fork::verified;
-use crate::seams::{EndpointId, RecordTransport};
+use crate::seams::{EndpointId, RecordTransport, SeamError};
 
 /// Hard ceiling on one signed IPNS record fetched from a `/routing/v1`
 /// endpoint. The IPNS spec caps a record at 10 KiB, and the endpoint set
@@ -35,7 +35,7 @@ pub enum PutOutcome {
 }
 
 impl PutOutcome {
-    fn of(result: &Result<(), crate::seams::SeamError>) -> Self {
+    fn of(result: &Result<(), SeamError>) -> Self {
         match result {
             Ok(()) => Self::Accepted,
             Err(error) => match error.status() {
@@ -119,9 +119,12 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
 /// A class, never bytes: the diagnostics that carry it must hold no record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointFailure {
-    /// Unreachable, refused, non-2xx, or late.
+    /// No HTTP answer, a 5xx, or late: the endpoint said nothing about the
+    /// name (ADR 0071 D2).
     Transport,
-    /// The endpoint served more than [`MAX_RECORD_BYTES`].
+    /// An HTTP answer other than 2xx, 404 or 5xx.
+    Status,
+    /// The endpoint served more than the byte cap.
     OverCap,
     /// The bytes did not decode as an IPNS record.
     Malformed,
@@ -133,6 +136,7 @@ impl core::fmt::Display for EndpointFailure {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::Transport => "transport",
+            Self::Status => "status",
             Self::OverCap => "over-cap",
             Self::Malformed => "malformed",
             Self::Unverified => "unverified",
@@ -249,20 +253,27 @@ pub async fn fanout_get_under<T: RecordTransport>(
     scan(transport, name).await.classify(rule)
 }
 
-/// [`fanout_get_classified`], and whether an endpoint answered for the name:
-/// with no record, or with bytes that it served. A transport failure is no
-/// answer.
+/// [`fanout_get_classified`], whether an endpoint answered for the name (with
+/// no record, or with bytes that it served; a transport failure or a status
+/// answer is no answer), and [`TiedFetch::endpoint_failed`].
 pub(crate) async fn fanout_get_answered<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
-) -> (FanoutRecord, bool) {
+) -> (FanoutRecord, bool, bool) {
     let scan = scan(transport, name).await;
     let answered = scan.vacant > 0
-        || scan
-            .failures
-            .iter()
-            .any(|(_, failure)| *failure != EndpointFailure::Transport);
-    (scan.classify(VacancyRule::Unanimous), answered)
+        || scan.failures.iter().any(|(_, failure)| {
+            !matches!(
+                failure,
+                EndpointFailure::Transport | EndpointFailure::Status
+            )
+        });
+    let endpoint_failed = scan.endpoint_failed();
+    (
+        scan.classify(VacancyRule::Unanimous),
+        answered,
+        endpoint_failed,
+    )
 }
 
 /// The freshest verified record, and every other record another endpoint
@@ -297,10 +308,7 @@ pub(crate) async fn fanout_get_tied_classified<T: RecordTransport>(
 ) -> TiedFetch {
     let scan = scan(transport, name).await;
     let absent = scan.absent(VacancyRule::Unanimous);
-    let endpoint_failed = scan
-        .failures
-        .iter()
-        .any(|(_, failure)| *failure == EndpointFailure::Transport);
+    let endpoint_failed = scan.endpoint_failed();
     let Scan { best, tied, .. } = scan;
     TiedFetch {
         pick: best.map(|(verified, bytes)| (verified, bytes, tied)),
@@ -322,6 +330,13 @@ struct Scan {
 }
 
 impl Scan {
+    /// Whether an endpoint gave no answer about the name (ADR 0071 D2).
+    fn endpoint_failed(&self) -> bool {
+        self.failures
+            .iter()
+            .any(|(_, failure)| *failure == EndpointFailure::Transport)
+    }
+
     /// Whether the endpoints agree the name holds no record, by `rule`.
     fn absent(&self, rule: VacancyRule) -> bool {
         self.best.is_none()
@@ -361,8 +376,8 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
                 scan.vacant += 1;
                 continue;
             }
-            Err(_) => {
-                scan.failures.push((endpoint, EndpointFailure::Transport));
+            Err(error) => {
+                scan.failures.push((endpoint, get_failure(&error)));
                 continue;
             }
         };
@@ -406,6 +421,18 @@ async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
         }
     }
     scan
+}
+
+/// The class of a failed GET. Only an endpoint that gave no answer about the
+/// name is a [`EndpointFailure::Transport`] failure (ADR 0071 D2).
+fn get_failure(error: &SeamError) -> EndpointFailure {
+    if error.is_over_cap() {
+        return EndpointFailure::OverCap;
+    }
+    match error.status() {
+        None | Some(500..=599) => EndpointFailure::Transport,
+        Some(_) => EndpointFailure::Status,
+    }
 }
 
 /// The signed `data` of `record_bytes`, when it verifies under `name`.
@@ -651,10 +678,30 @@ mod tests {
         assert!(fetch.pick.is_some());
         assert!(!fetch.endpoint_failed, "a 404 is an answer");
 
+        for (status, failed) in [(403, false), (429, false), (500, true), (503, true)] {
+            store.answer_get_at(&eps[1], status);
+            let fetch = block_on(fanout_get_tied_classified(&store, &name));
+            assert!(fetch.pick.is_some());
+            assert_eq!(fetch.endpoint_failed, failed, "status {status}");
+        }
+
+        store.heal_endpoint(&eps[1]);
         store.fail_endpoint(&eps[1]);
         let fetch = block_on(fanout_get_tied_classified(&store, &name));
         assert!(fetch.pick.is_some());
-        assert!(fetch.endpoint_failed);
+        assert!(fetch.endpoint_failed, "no answer at all");
+    }
+
+    #[test]
+    fn a_seam_over_cap_body_is_an_answer() {
+        assert_eq!(
+            get_failure(&SeamError::over_cap("too large")),
+            EndpointFailure::OverCap
+        );
+        assert_eq!(
+            get_failure(&SeamError::new("offline")),
+            EndpointFailure::Transport
+        );
     }
 
     /// One endpoint's "no record" against a set of failures is not evidence

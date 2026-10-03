@@ -93,12 +93,15 @@ describe('FetchRecordTransport.getRecord', () => {
     });
   });
 
-  it('throws on a non-404 failure status', async () => {
-    stubFetch(new Response(null, { status: 503 }));
+  it('rejects a non-404 failure with the status the engine classifies', async () => {
+    for (const status of [403, 429, 503]) {
+      stubFetch(new Response(null, { status }));
 
-    await expect(transport().getRecord(ENDPOINT, KEY, 1000)).rejects.toThrow(
-      'RecordTransport GET 503'
-    );
+      await expect(transport().getRecord(ENDPOINT, KEY, 1000)).rejects.toMatchObject({
+        status,
+        message: `RecordTransport GET ${status} at ${ENDPOINT}`,
+      });
+    }
   });
 
   it('gives an untrusted endpoint no ambient authority, no redirects, no cache, and a deadline', async () => {

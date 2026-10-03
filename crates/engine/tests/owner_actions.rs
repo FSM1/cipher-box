@@ -14764,11 +14764,23 @@ fn revoke_recipient(fx: &mut GrantScenario) -> Result<CommandOutcome, EngineErro
     }))
 }
 
+/// The cached last-known-good copy and the durable sequence floor of `node`'s
+/// record name on the owner device.
+fn cache_and_floor(fx: &GrantScenario, node: NodeId) -> (Option<Vec<u8>>, Option<u64>) {
+    let key = write_name(node);
+    let key = key.as_str().as_bytes();
+    (
+        block_on(fx.owner_device.snapshot_cache.get(key)).expect("the cache reads"),
+        block_on(floor::sequence_floor(&fx.owner_device.floor_store, key)).expect("floor read"),
+    )
+}
+
 fn assert_revoke_unavailable_while_a_fails(parent_of: fn(&GrantScenario) -> NodeId) {
     let mut fx = GrantScenario::new();
     let parent = parent_of(&fx);
     let (a, _) = lag_one_endpoint(&mut fx, parent);
     events_so_far(&mut fx._events);
+    let before = cache_and_floor(&fx, parent);
     fx.world.record_store.fail_endpoint(&a);
 
     let outcome = revoke_recipient(&mut fx);
@@ -14777,6 +14789,7 @@ fn assert_revoke_unavailable_while_a_fails(parent_of: fn(&GrantScenario) -> Node
         "a below-floor pick while an endpoint fails is unavailable: {outcome:?}"
     );
     assert_eq!(abuse_events(&mut fx._events), 0, "no trust event");
+    assert_eq!(cache_and_floor(&fx, parent), before, "nothing is adopted");
 
     fx.world.record_store.heal_endpoint(&a);
     assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
@@ -14800,44 +14813,87 @@ fn a_revoke_over_a_lagging_endpoint_with_every_endpoint_up_finishes() {
     assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
 }
 
-/// [`lag_one_endpoint`], then A serves B's old record too: every endpoint
-/// answers, and the freshest record is below the floor.
-fn every_endpoint_serves_below_floor(parent_of: fn(&GrantScenario) -> NodeId) -> GrantScenario {
+/// What endpoint A answers while B serves the old record.
+#[derive(Clone, Copy)]
+enum AAnswers {
+    /// A serves B's old record too.
+    TheOldRecord,
+    /// A answers 403: an answer, not a failed endpoint (ADR 0071 D2).
+    Forbidden,
+}
+
+/// [`lag_one_endpoint`], then A answers as `answer`: every endpoint answers,
+/// and the freshest record is below the floor.
+fn every_endpoint_answers_below_floor(
+    parent_of: fn(&GrantScenario) -> NodeId,
+    answer: AAnswers,
+) -> GrantScenario {
     let mut fx = GrantScenario::new();
     let parent = parent_of(&fx);
     let (a, b) = lag_one_endpoint(&mut fx, parent);
-    let name = write_name(parent);
-    let old = fx
-        .world
-        .record_store
-        .record_at(&b, name.as_str())
-        .expect("B holds the old record");
-    fx.world.record_store.seed_record(&a, name.as_str(), old);
+    match answer {
+        AAnswers::TheOldRecord => {
+            let name = write_name(parent);
+            let old = fx
+                .world
+                .record_store
+                .record_at(&b, name.as_str())
+                .expect("B holds the old record");
+            fx.world.record_store.seed_record(&a, name.as_str(), old);
+        }
+        AAnswers::Forbidden => fx.world.record_store.answer_get_at(&a, 403),
+    }
     events_so_far(&mut fx._events);
     fx
 }
 
 #[test]
 fn a_revoke_over_a_below_floor_record_from_every_endpoint_stays_a_trust_violation() {
-    let mut fx = every_endpoint_serves_below_floor(|fx| fx.folder);
-    let outcome = revoke_recipient(&mut fx);
-    assert!(
-        matches!(outcome, Err(EngineError::TrustViolation { .. })),
-        "every endpoint answered, so the below-floor pick is a rollback: {outcome:?}"
-    );
+    for answer in [AAnswers::TheOldRecord, AAnswers::Forbidden] {
+        let mut fx = every_endpoint_answers_below_floor(|fx| fx.folder, answer);
+        let outcome = revoke_recipient(&mut fx);
+        assert!(
+            matches!(outcome, Err(EngineError::TrustViolation { .. })),
+            "every endpoint answered, so the below-floor pick is a rollback: {outcome:?}"
+        );
+        // A command reports the violation as its error, not as an event.
+        assert_eq!(abuse_events(&mut fx._events), 0);
+    }
 }
 
 #[test]
-fn a_read_of_a_below_floor_record_from_every_endpoint_stays_abuse() {
-    let granted_root: fn(&GrantScenario) -> NodeId = |fx| fx.folder;
-    for parent_of in [granted_root, |_| ROOT] {
-        let mut fx = every_endpoint_serves_below_floor(parent_of);
-        let parent = parent_of(&fx);
-        block_on(fx.engine.command(Command::SetFocus { node: Some(parent) }))
-            .expect("the focus moves");
+fn a_tick_read_of_a_below_floor_vault_root_from_every_endpoint_sends_one_gate_event() {
+    for answer in [AAnswers::TheOldRecord, AAnswers::Forbidden] {
+        let mut fx = every_endpoint_answers_below_floor(|_| ROOT, answer);
         tick(&fx.world, &fx.engine, &mut fx._tasks);
-        assert!(abuse_events(&mut fx._events) > 0, "a trust event");
+        let abuse: Vec<String> = events_so_far(&mut fx._events)
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::AttributableAbuse { description } => Some(description),
+                _ => None,
+            })
+            .collect();
+        // The vault-root resolve reports the sequence stage once; the
+        // conversion's own read of the root reports its refusal once.
+        assert_eq!(abuse.len(), 2, "{abuse:?}");
+        assert_eq!(
+            abuse
+                .iter()
+                .filter(|description| description.contains("stage [sequence]"))
+                .count(),
+            1,
+            "{abuse:?}"
+        );
     }
+}
+
+#[test]
+fn a_focus_read_of_a_below_floor_granted_root_from_every_endpoint_stays_abuse() {
+    let mut fx = every_endpoint_answers_below_floor(|fx| fx.folder, AAnswers::TheOldRecord);
+    let folder = fx.folder;
+    block_on(fx.engine.command(Command::SetFocus { node: Some(folder) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(abuse_events(&mut fx._events) > 0, "a trust event");
 }
 
 fn assert_read_stale_while_a_fails(parent_of: fn(&GrantScenario) -> NodeId) {
@@ -14850,14 +14906,18 @@ fn assert_read_stale_while_a_fails(parent_of: fn(&GrantScenario) -> NodeId) {
             .children(parent)
             .len()
     };
-    let before = children(&fx);
+    let before = (children(&fx), cache_and_floor(&fx, parent));
     events_so_far(&mut fx._events);
     fx.world.record_store.fail_endpoint(&a);
 
     block_on(fx.engine.command(Command::SetFocus { node: Some(parent) })).expect("the focus moves");
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert_eq!(abuse_events(&mut fx._events), 0, "no trust event");
-    assert_eq!(children(&fx), before, "last-known-good stays");
+    assert_eq!(
+        (children(&fx), cache_and_floor(&fx, parent)),
+        before,
+        "last-known-good stays, and no floor moves"
+    );
 }
 
 #[test]
@@ -14868,4 +14928,50 @@ fn a_focus_read_of_a_lagging_granted_root_while_an_endpoint_fails_is_stale_not_a
 #[test]
 fn a_tick_read_of_a_lagging_vault_root_while_an_endpoint_fails_is_stale_not_abuse() {
     assert_read_stale_while_a_fails(|_| ROOT);
+}
+
+/// ADR 0071 D3: a queued op does not dead-letter on the lag. It stays queued,
+/// and lands when the failed endpoint recovers.
+#[test]
+fn a_queued_create_under_a_lagging_root_while_an_endpoint_fails_waits_and_lands() {
+    let mut fx = GrantScenario::new();
+    let folder = fx.folder;
+    let (a, b) = lag_one_endpoint(&mut fx, folder);
+    let name = write_name(folder);
+    let served = |fx: &GrantScenario| {
+        (
+            sequence_served_by(&fx.world, &a, &name),
+            sequence_served_by(&fx.world, &b, &name),
+        )
+    };
+    let before = (served(&fx), cache_and_floor(&fx, folder));
+    events_so_far(&mut fx._events);
+    fx.world.record_store.fail_endpoint(&a);
+
+    block_on(fx.engine.command(Command::Create {
+        parent: folder,
+        name: "queued.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a create stages");
+    let queued = queued_ops(&fx.owner_device);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(queued_ops(&fx.owner_device), queued, "the op stays queued");
+    assert_eq!(
+        (served(&fx), cache_and_floor(&fx, folder)),
+        before,
+        "the drain writes nothing"
+    );
+    assert_eq!(abuse_events(&mut fx._events), 0, "no trust event");
+
+    fx.world.record_store.heal_endpoint(&a);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(queued_ops(&fx.owner_device), 0, "the op lands");
+    assert!(
+        block_on(fx.engine.view())
+            .expect("a rendered view")
+            .children(folder)
+            .iter()
+            .any(|child| child.name == "queued.bin")
+    );
 }
