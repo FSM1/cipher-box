@@ -2534,8 +2534,7 @@ where
                     .await;
                 return Err(halt);
             }
-            // The live tree cannot show that an op of another kind landed, and
-            // a plan that ends at the bin index raises no mark to keep it by.
+            // An op that is not kept leaves at its publish ([`keeps`]).
             if !self.kept_ids(scope).await?(applied.op_id, &applied.op) {
                 self.dequeue_op(applied.op_id).await?;
                 report.completed.push(applied.op_id);
@@ -2606,9 +2605,9 @@ where
         if bin_index_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
             self.release_hold();
         }
-        // A kept op's version landed once: a second apply that cannot land
-        // leaves with no retire and no notice, as its rebase dead letter does.
+        // As a kept op's rebase dead letter leaves.
         if matches!(halt, Halt::Permanent(_))
+            && keeps(&op.kind)
             && self.kept_ids(scope).await.is_ok_and(|kept| kept(op_id, op))
         {
             if self.dequeue_op(op_id).await.is_ok() {
@@ -2823,17 +2822,12 @@ where
         let now = self.seams.scheduler.now();
         let mut mine = Vec::with_capacity(scan.mine.len());
         let mut kept = Vec::new();
-        let mut later_targets: BTreeMap<NodeId, usize> = BTreeMap::new();
-        for (_, op) in &scan.mine {
-            *later_targets.entry(op.target).or_default() += 1;
-        }
+        let last_on: BTreeMap<NodeId, OpId> = scan
+            .mine
+            .iter()
+            .map(|(op_id, op)| (op.target, *op_id))
+            .collect();
         for (op_id, op) in scan.mine {
-            if let Some(count) = later_targets.get_mut(&op.target) {
-                *count -= 1;
-                if *count == 0 {
-                    later_targets.remove(&op.target);
-                }
-            }
             if drained.is_some_and(|mark| op_id.0 <= mark) {
                 self.dequeue_op(op_id).await?;
                 report.restore_residue.push(op_id);
@@ -2841,20 +2835,17 @@ where
             }
             if is_kept(op_id, published, &notes) {
                 // Its record publish was confirmed, so its version is live.
-                if !keeps(&op.kind) {
-                    self.dequeue_op(op_id).await?;
-                    self.release_staged_blocks(&op).await;
-                    notes.remove(op_id);
-                    report.dropped.push(op_id);
-                    continue;
-                }
-                let place = self.kept_place(scope, &op).await?;
-                // A later op of this device on the same node decides what that
-                // node shows, so a check of this one would undo it.
-                let verdict = if later_targets.contains_key(&op.target) {
-                    KeptVerdict::Expired
+                let verdict = if keeps(&op.kind) {
+                    let place = self.kept_place(scope, &op).await?;
+                    // A later op of this device on the same node decides what
+                    // that node shows, so a check of this one would undo it.
+                    if last_on.get(&op.target) != Some(&op_id) {
+                        KeptVerdict::Expired
+                    } else {
+                        kept_verdict(notes.note_at(op_id, now), place, now)
+                    }
                 } else {
-                    kept_verdict(notes.note_at(op_id, now), place, now)
+                    KeptVerdict::Expired
                 };
                 match verdict {
                     KeptVerdict::Stay => {
@@ -2931,9 +2922,7 @@ where
             let Some(meta) = base.node(anchor) else {
                 return Ok(KeptPlace::Elsewhere);
             };
-            let nearest = core::iter::once(anchor)
-                .chain(base.ancestors(anchor))
-                .find(|node| scope.scope_roots.contains(node));
+            let nearest = enclosing_scope_root(&base, anchor, scope.scope_roots);
             (nearest, meta.ipns_name.clone())
         };
         let Some(root) = nearest else {
@@ -3078,7 +3067,8 @@ where
             if !matches!(op.kind, OpKind::UpdateContent { .. }) || !kept(*op_id, op) {
                 continue;
             }
-            // A keyless edit has no plane to read under; its rebase decides.
+            // Only a folder the base read at its live name shows the history;
+            // any other edit is left to its rebase.
             if !matches!(
                 self.kept_place(scope, op).await?,
                 KeptPlace::Writes {

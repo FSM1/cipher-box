@@ -949,18 +949,7 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   command; a relocation between two interior scopes journals as a parking leg
   and an arriving leg, and both legs are journaled or neither is (ADR 0045).
   Replay is FIFO in performed order through the standard rebase, and rebases
-  only onto gate-passing state (FSM1/cipher-box-next#33 D5–D7). A published
-  create, delete or content edit stays queued as a kept op, with a sealed note
-  of its scope root, write epoch and publish time, until the live root of its
-  write scope shows it (ADR 0069). Every other op kind leaves at its publish.
-  With no flip, a kept op waits at its write epoch for at most T = 7 days. At a
-  flip (a new write epoch or a new nearest scope root), once the base read its
-  node at the live name, the standard rebase decides: a landed op drops, and a
-  lost op applies again under the new seed. A content edit reads its file's
-  live record first, and it landed when the history names its version. A
-  second apply that cannot land leaves with no notice. A device with no new
-  seed reads the old tree, where the op is satisfied, so the op leaves with no
-  notice. A kept op is not pending (ADR 0069 D7). A build decodes,
+  only onto gate-passing state (FSM1/cipher-box-next#33 D5–D7). A build decodes,
   opens and drains every queue record that the previous release wrote
   ([ADR 0020](../decisions/0020-the-durable-op-queue-reads-the-previous-release.md)).
   A new field on a queued op takes a decode default equal to the value the older
@@ -974,7 +963,18 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   a test that decodes the previous release's bytes. The retained rule above does
   not change: a record bearing another identity's tag, or a format version or
   intent grammar this build does not implement, stays retained (ADR 0020
-  Consequence 4).
+  Consequence 4). A published create, delete or content edit stays queued as a
+  kept op, with a sealed note
+  of its scope root, write epoch and publish time, until the live root of its
+  write scope shows it (ADR 0069). Every other op kind leaves at its publish.
+  With no flip, a kept op waits at its write epoch for at most T = 7 days. At a
+  flip (a new write epoch or a new nearest scope root), once the base read its
+  node at the live name, the standard rebase decides: a landed op drops, and a
+  lost op applies again under the new seed. A content edit reads its file's
+  live record first, and it landed when the history names its version. A
+  second apply that cannot land leaves with no notice. A device with no new
+  seed reads the old tree, where the op is satisfied, so the op leaves with no
+  notice. A kept op is not pending (ADR 0069 D7).
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
   (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer

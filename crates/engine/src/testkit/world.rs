@@ -155,8 +155,7 @@ impl FakeDevice {
     /// The queued ops whose last record has not confirmed: every queued op
     /// above the one published-op mark this device holds. It reads the mark
     /// alone, not the engine's kept-op notes, so it does not share the rule a
-    /// test checks. More than one identity's mark on the device is a test
-    /// error, not a merge.
+    /// test checks.
     pub async fn pending_ops(
         &self,
     ) -> crate::seams::SeamResult<Vec<(crate::seams::OpId, Vec<u8>)>> {

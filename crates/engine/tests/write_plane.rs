@@ -594,7 +594,7 @@ fn a_first_run_account_provisions_its_vault_and_publishes_a_write() {
         "the child's own head block was uploaded"
     );
     assert_eq!(
-        block_on(published_mark(&alice)),
+        published_op_mark(&alice),
         op_id.map(|id| id.0),
         "the published op raised the durable completion mark"
     );
@@ -743,7 +743,7 @@ fn a_refreshed_retry_of_a_failed_mint_publishes_a_write_in_the_same_session() {
         "the root advanced past the genesis the retry minted"
     );
     assert_eq!(
-        block_on(published_mark(&alice)),
+        published_op_mark(&alice),
         op_id.map(|id| id.0),
         "the op the dark session queued is the one that published"
     );
@@ -805,7 +805,7 @@ fn a_retry_adopts_the_vault_another_device_published_rather_than_minting_a_secon
     assert_eq!(view.children.len(), 1);
     assert_eq!(view.children[0].name, "photos");
     assert_eq!(
-        block_on(published_mark(&alice)),
+        published_op_mark(&alice),
         op_id.map(|id| id.0),
         "the queued op published onto the adopted vault",
     );
@@ -1160,7 +1160,7 @@ fn a_folder_create_publishes_and_resolves_back() {
     // The completion record marks the op as published, so a restored copy of
     // this queue cannot replay it.
     assert_eq!(
-        block_on(published_mark(&alice)),
+        published_op_mark(&alice),
         op_id.map(|id| id.0),
         "the published op raised the durable completion mark"
     );
@@ -3682,15 +3682,6 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
         block_on(engine.view()).unwrap().children(ROOT).is_empty(),
         "so the folder it would have created never appears"
     );
-}
-
-/// The device's durable published-op mark. It lives beside the op queue it
-/// names, so a store that loses one loses the other.
-async fn published_mark(device: &FakeDevice) -> Option<u64> {
-    StagingStore::staged_bytes(&device.staging_store, &mark_key())
-        .await
-        .expect("the staging store answers")
-        .map(|bytes| u64::from_be_bytes(bytes.try_into().expect("an 8-byte mark")))
 }
 
 // ---------------------------------------------------------------------------

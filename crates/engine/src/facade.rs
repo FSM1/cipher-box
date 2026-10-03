@@ -5988,14 +5988,9 @@ impl<T: SeamTypes> Engine<T> {
             .await
             .map_err(ColdStartError::Seam)?;
         let mut scan = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
-        retain_pending(
-            &self.seams.staging_store,
-            BookkeepingSeal::new(session.enc_subkey(), &*self.entropy),
-            session.enc_subkey(),
-            &mut scan.mine,
-        )
-        .await
-        .map_err(ColdStartError::Seam)?;
+        self.retain_pending_ops(session, &mut scan.mine)
+            .await
+            .map_err(ColdStartError::Seam)?;
         let pending: Vec<_> = scan.mine.into_iter().map(|(_id, op)| op).collect();
 
         // The preserved set outlives the process and the notice map does not, so
@@ -11717,15 +11712,25 @@ where {
         let mut scan = memoized_scan(&self.seams.staging_store, &reader, &self.state.queue_scan)
             .await
             .map_err(EngineError::from_seam)?;
+        self.retain_pending_ops(session, &mut scan.mine)
+            .await
+            .map_err(EngineError::from_seam)?;
+        Ok(scan)
+    }
+
+    /// Drop this session's kept ops from `ops` ([`retain_pending`]).
+    async fn retain_pending_ops<O>(
+        &self,
+        session: &SessionIdentity,
+        ops: &mut Vec<(OpId, O)>,
+    ) -> SeamResult<()> {
         retain_pending(
             &self.seams.staging_store,
             BookkeepingSeal::new(session.enc_subkey(), &*self.entropy),
             session.enc_subkey(),
-            &mut scan.mine,
+            ops,
         )
         .await
-        .map_err(EngineError::from_seam)?;
-        Ok(scan)
     }
 
     /// This session's pending ops, FIFO.

@@ -141,8 +141,8 @@ scenario fails the meta-test):
   endpoint that does not answer, and re-seals the record its walk gated, so a
   record written at an old name after the walk does not stop it, and the writer
   of that record applies it again under the new seed for a create, a delete
-  and a content edit, a rename, a move and a version restore leave at publish
-  so a later writer's change stays, a kept op leaves after the bound of
+  and a content edit. A rename, a move and a version restore leave at publish,
+  so a later writer's change stays. A kept op leaves after the bound of
   ADR 0069 D5, a kept op with no note leaves once the live tree shows it, and a
   second apply that cannot land leaves with no notice (ADR 0069,
   `crates/engine/tests/owner_actions.rs`); a body of many

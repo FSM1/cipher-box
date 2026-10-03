@@ -25,8 +25,7 @@ use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
 use cipherbox_engine::rotation::published_override_seed;
-use cipherbox_engine::seams::StagingStore;
-use cipherbox_engine::seams::{BoxedTask, FloorStore, OpId, RecordTransport};
+use cipherbox_engine::seams::{BoxedTask, FloorStore, OpId, RecordTransport, StagingStore};
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::testkit::account::{
