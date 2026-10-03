@@ -44,7 +44,7 @@ use zeroize::Zeroizing;
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 use crate::bin_index::{
     BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinnedNode, cached_bin_index, load_bin_index,
-    publish_bin_index,
+    publish_bin_index_placed,
 };
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::{
@@ -71,7 +71,8 @@ use crate::net::author::{
 use crate::net::last_known_good::keep_then_commit;
 use crate::net::publish::{Observed, PublishError, PublishOutcome, PublishReceipt, PublishVerdict};
 use crate::net::record_publish::{
-    HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
+    HeadBinding, MirrorLeg, RecordPublishError, RecordPublishRequest, preflight,
+    publish_record_placed,
 };
 use crate::net::retire::{
     Acknowledged, LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger,
@@ -236,6 +237,10 @@ fn halt_for_bin_publish(error: &BinIndexPublishError) -> Halt {
         // frees one, and no retry of this op shrinks the body. Its own reason,
         // so the host reads a full bin rather than a spent attempt budget.
         BinIndexPublishError::Full => Halt::Permanent(DeadLetterReason::BinIndexFull),
+        // The member's own provider fails the bin head as it fails a record head.
+        BinIndexPublishError::Publish(RecordPublishError::Placement(error)) => {
+            classify_placement(*error)
+        }
         // A lost CAS race is the ordinary outcome of two devices soft-deleting
         // at once, and a confirm the plane could not answer is availability
         // ([`PublishOutcome`](crate::net::publish::PublishOutcome)). Charging
@@ -1483,6 +1488,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// What this tick may still read for capture walks, shared out across its
     /// scope passes ([`MAX_CAPTURE_WALK_READS`]).
     capture_reads: RefCell<TickShare>,
+    /// The mirror of the op this pass publishes now.
+    mirror: RefCell<OpMirror>,
     /// The nodes one capture walk may hold ([`MAX_CAPTURE_WALK_NODES`]).
     capture_walk_nodes: usize,
 }
@@ -1501,6 +1508,7 @@ impl<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> Drain<'a, T, H, C, F, S,
             bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),
             capture_reads: RefCell::new(TickShare::new(MAX_CAPTURE_WALK_READS, 1)),
             capture_walk_nodes: MAX_CAPTURE_WALK_NODES,
+            mirror: RefCell::default(),
         }
     }
 
@@ -1797,56 +1805,23 @@ struct UploadedVersion {
     /// Every content CID the registration names: the root first, then the
     /// leaves in file order.
     content_cids: Vec<String>,
-    /// A dual write's external leg that did not take the bytes, reported rather
-    /// than swallowed ([`OpPhase::ExternalPinFailed`]).
-    external_failure: Option<ProviderError>,
-    /// The mirror is short of blocks a previous pass released to a provider
-    /// this session's settings no longer name ([`Resume::mirror_gap`]).
-    mirror_gap: bool,
 }
 
-/// Attempts one op may spend on the member's own provider before its mirror is
-/// abandoned for that version. A dual write completes when hosted succeeds and
-/// external has either succeeded or exhausted its attempts (#34 D1), so the leg
-/// needs attempts to spend — one refusal is a blip, not a verdict.
-const MIRROR_ATTEMPTS: u32 = 3;
-
-/// A dual write's best-effort mirror leg, carried across one op's blocks.
-///
-/// The budget is per op rather than per block because a provider that is down
-/// refuses every block alike: spending a fresh budget on each would stall the
-/// whole pass behind one dead endpoint, and a version the mirror has already
-/// missed a block of is not one it can serve whatever the rest do.
-struct MirrorLeg {
-    /// Attempts left to spend. Reaching zero is what abandons the mirror: the
-    /// block that spent the last one never landed on it.
-    attempts: u32,
-    /// The first refusal, reported once the leg is abandoned.
-    refusal: Option<ProviderError>,
+/// One op's mirror leg, and whether a previous pass left it short
+/// ([`Resume::mirror_gap`]).
+#[derive(Default)]
+struct OpMirror {
+    leg: MirrorLeg,
+    gap: bool,
 }
 
-impl MirrorLeg {
-    fn new() -> Self {
+impl OpMirror {
+    /// The mirror of heads a pass publishes outside any op, which no op reports.
+    fn outside_op() -> Self {
         Self {
-            attempts: MIRROR_ATTEMPTS,
-            refusal: None,
+            leg: MirrorLeg::once(),
+            gap: false,
         }
-    }
-
-    /// Whether the mirror is short of this version. Refusals a later attempt
-    /// recovered from are not: the block reached the provider.
-    fn missed(&self) -> bool {
-        self.attempts == 0
-    }
-
-    fn refused(&mut self, error: ProviderError) {
-        self.attempts = self.attempts.saturating_sub(1);
-        self.refusal.get_or_insert(error);
-    }
-
-    /// The refusal to report, which is one only where the mirror stayed short.
-    fn failure(self) -> Option<ProviderError> {
-        self.missed().then_some(self.refusal).flatten()
     }
 }
 
@@ -2090,6 +2065,7 @@ where
         exits: &R,
     ) -> DrainReport {
         let (report, queued_purges) = self.drain_queue(scope, exits).await;
+        self.mirror.replace(OpMirror::outside_op());
         self.adopt_observed_unlinks(scope, ends).await;
         // A queue this pass could not read cannot say which purges are already
         // queued, and the sweep stages ops: it waits rather than duplicating.
@@ -2275,6 +2251,7 @@ where
                 && let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id)
                 && matches!(op.kind, OpKind::Delete { to_bin: true, .. })
             {
+                self.mirror.replace(OpMirror::outside_op());
                 if let Err(halt) = self.finish_binned_delete(scope, &pass, op.target).await {
                     self.apply_valve(scope, *op_id, op, halt, attempts, report)
                         .await;
@@ -3232,8 +3209,23 @@ where
     // The per-op publish plans.
     // -----------------------------------------------------------------------
 
-    /// Publish one applied op's records, referent before reference.
+    /// Publish one applied op's records, referent before reference, and report
+    /// once what its mirror is short of.
     async fn publish_applied(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        applied: &AppliedOp,
+        rebased: &Snapshot,
+    ) -> Result<(), Halt> {
+        self.mirror.take();
+        self.publish_op(scope, pass, applied, rebased).await?;
+        let shortfall = mirror_shortfall(&self.mirror.borrow());
+        self.emit_mirror_shortfall(applied, shortfall);
+        Ok(())
+    }
+
+    async fn publish_op(
         &self,
         scope: &DrainScope<'_>,
         pass: &mut Pass,
@@ -3357,7 +3349,6 @@ where
             return Err(Halt::Permanent(DeadLetterReason::AlreadyPublished));
         }
 
-        let mut shortfall = None;
         let (body, content_cids) = match node {
             NewNode::Folder => (NewNodeBody::Folder, Vec::new()),
             NewNode::File { content: None } => (
@@ -3370,7 +3361,6 @@ where
                 content: Some(staged),
             } => {
                 let uploaded = self.upload_version(scope, applied, staged).await?;
-                shortfall = mirror_shortfall(&uploaded);
                 (
                     NewNodeBody::File {
                         versions: vec![uploaded.version],
@@ -3415,7 +3405,6 @@ where
             .await
             .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
-        self.emit_mirror_shortfall(applied, shortfall);
         // The parent's repaint lifts the child in without what its own record
         // carries; the first edit of this file anchors on the version its
         // create published.
@@ -4713,7 +4702,8 @@ where
         // A publish that does not confirm leaves the standing index unknown, so
         // the next rewrite resolves rather than building on this attempt.
         *self.established_bin_index.borrow_mut() = None;
-        let held = publish_bin_index(
+        let mut mirror = core::mem::take(&mut self.mirror.borrow_mut().leg);
+        let held = publish_bin_index_placed(
             &self.seams.transport,
             &self.seams.api,
             &self.seams.floors,
@@ -4724,9 +4714,12 @@ where
             self.cells.orphan_heads,
             self.inputs.bin_keys,
             &index,
+            self.head_placement(),
+            &mut mirror,
         )
-        .await
-        .map_err(|error| halt_for_bin_publish(&error))?;
+        .await;
+        self.mirror.borrow_mut().leg = mirror;
+        let held = held.map_err(|error| halt_for_bin_publish(&error))?;
         self.cells.held.borrow_mut().insert(HeldKey::BinIndex, held);
         // The confirm re-resolved this session's own bytes at its own sequence,
         // so the published entries are the standing index.
@@ -5782,7 +5775,6 @@ where
         if versions.first().map(|head| head.content_cid.as_slice()) != base_version_cid {
             return Err(Halt::Permanent(DeadLetterReason::BaseSuperseded));
         }
-        let shortfall = mirror_shortfall(&uploaded);
         // Newest first, head is current (`crates/core/src/seal/body.rs`).
         versions.insert(0, uploaded.version);
         // The retention rule applies where history grows (blueprint/engine.md
@@ -5834,7 +5826,6 @@ where
             .await
             .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
-        self.emit_mirror_shortfall(applied, shortfall);
         self.project_published_file(
             target,
             staged.plaintext_size,
@@ -6488,7 +6479,7 @@ where
         // What the mark may claim, narrowed as the mirror misses blocks the mark
         // covers ([`Destinations::mirror_missed`]).
         let mut reached = placement.destinations();
-        let mut mirror = MirrorLeg::new();
+        let mut mirror = core::mem::take(&mut self.mirror.borrow_mut().leg);
         let root_block = self
             .staged_block(&staged.root_cid)
             .await?
@@ -6594,11 +6585,12 @@ where
             content.leaf_cids().iter().map(|cid| cid.as_slice()),
             RootPlacement::First,
         );
+        let mut op = self.mirror.borrow_mut();
+        op.leg = mirror;
+        op.gap |= mirror_gap;
         Ok(UploadedVersion {
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
-            external_failure: mirror.failure(),
-            mirror_gap,
         })
     }
 
@@ -6731,6 +6723,12 @@ where
             }
         }
         Ok(())
+    }
+
+    /// Where this tick puts a record head. A refused decision keeps the hosted
+    /// leg, as a publish with no decided placement does.
+    fn head_placement(&self) -> &Placement {
+        self.inputs.placement.as_ref().unwrap_or(&Placement::Hosted)
     }
 
     /// Record one block as on the network for `op_id`, which is the only
@@ -7170,11 +7168,8 @@ where
             .map_err(|_| Halt::UploadAttempt)?;
         let signer = SessionIdentity::write_name_signer(plane.end.write_scope_seed, node_id);
         let _publishing = PublishingName::hold(self.cells.publishing, observed.name());
-        let PublishReceipt {
-            outcome,
-            record_bytes,
-            winner,
-        } = publish_record(
+        let mut mirror = core::mem::take(&mut self.mirror.borrow_mut().leg);
+        let published = publish_record_placed(
             &self.seams.transport,
             &self.seams.api,
             &plane.end.floors(&self.seams.floors),
@@ -7186,9 +7181,17 @@ where
                 head: &preflighted,
                 content_cids,
             },
+            self.head_placement(),
+            &mut mirror,
+            None,
         )
-        .await
-        .map_err(|error| {
+        .await;
+        self.mirror.borrow_mut().leg = mirror;
+        let PublishReceipt {
+            outcome,
+            record_bytes,
+            winner,
+        } = published.map_err(|error| {
             if orphaned_head(&error) {
                 self.record_orphan_head(preflighted.cid());
             }
@@ -7709,8 +7712,9 @@ async fn yield_now() {
 fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     match error {
         RecordPublishError::Upload(error) => classify_upload(error, refused_bytes),
-        RecordPublishError::Publish(error) => classify_publish_error(error),
         RecordPublishError::HeadCidMismatch { .. } => Halt::Unclassified,
+        RecordPublishError::Placement(error) => classify_placement(error),
+        RecordPublishError::Publish(error) => classify_publish_error(error),
     }
 }
 
@@ -7909,12 +7913,13 @@ const MIRROR_GAP: &str = "your own IPFS provider changed while this upload was i
 
 /// What this version's mirror is short by. A live refusal outranks the standing
 /// gap: it is the condition the member can still act on.
-fn mirror_shortfall(uploaded: &UploadedVersion) -> Option<&'static str> {
-    uploaded
-        .external_failure
+fn mirror_shortfall(mirror: &OpMirror) -> Option<&'static str> {
+    mirror
+        .leg
+        .failure()
         .as_ref()
         .map(provider_failure)
-        .or_else(|| uploaded.mirror_gap.then_some(MIRROR_GAP))
+        .or_else(|| mirror.gap.then_some(MIRROR_GAP))
 }
 
 /// The key-free classification an [`OpPhase::ExternalPinFailed`] carries. It
@@ -8255,6 +8260,7 @@ mod tests {
                     epoch: 0,
                 }),
                 current_at_floor: None,
+                fork: None,
             },
             hold: None,
             held_record: Some((
@@ -8263,6 +8269,7 @@ mod tests {
                     validity: Vec::new(),
                     sequence: 6,
                     ttl: 0,
+                    data: Vec::new(),
                 },
                 gated.clone(),
             )),
@@ -8291,6 +8298,7 @@ mod tests {
                     record_bytes: first.clone(),
                 },
                 current_at_floor: None,
+                fork: None,
             },
             hold: None,
             held_record: None,
@@ -8324,6 +8332,7 @@ mod tests {
                     last_known_good: None,
                     outcome,
                     current_at_floor: None,
+                    fork: None,
                 },
                 hold: None,
                 held_record: None,
@@ -8880,6 +8889,16 @@ mod tests {
             halt_for_bin_publish(&BinIndexPublishError::Floor(SeamError::new("offline"))),
             Halt::Unclassified
         );
+        assert_eq!(
+            halt_for_bin_publish(&BinIndexPublishError::Publish(
+                RecordPublishError::Placement(ProviderError::AddressMismatch)
+            )),
+            classify_publish(
+                RecordPublishError::Placement(ProviderError::AddressMismatch),
+                0
+            ),
+            "the member's node fails a bin head as it fails a record head",
+        );
     }
 
     /// The publish leg admits exactly what the read path admits. A block past
@@ -9222,6 +9241,14 @@ mod tests {
         ] {
             assert_eq!(classify_publish(error, 4096), Halt::Unclassified);
         }
+        assert_eq!(
+            classify_publish(
+                RecordPublishError::Placement(ProviderError::AddressMismatch),
+                4096
+            ),
+            Halt::UploadAttempt,
+            "a member node that stores under another address is a provider fault, as for a content block",
+        );
     }
 
     /// A fork at the sequence a pass built on, where the record the gate passed
@@ -10152,7 +10179,7 @@ mod tests {
                 .enqueue_response(crate::seams::HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: block.clone(),
+                    body: block.clone().into(),
                 });
         }
         let drain = harness.drain();
@@ -10547,7 +10574,7 @@ mod tests {
                 Some(block) => Ok(crate::seams::HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: block.clone(),
+                    body: block.clone().into(),
                 }),
                 None => Err(crate::seams::SeamError::new("no such block")),
             })
@@ -11474,7 +11501,7 @@ mod tests {
                 Ok(HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: head_block.clone(),
+                    body: head_block.clone().into(),
                 })
             })
         });

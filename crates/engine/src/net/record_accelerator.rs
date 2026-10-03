@@ -186,7 +186,7 @@ mod tests {
 
     fn armed(inner: RefusesTheGatedLeg) -> RecordAccelerator<RefusesTheGatedLeg> {
         let bearer = SessionBearer::default();
-        bearer.set(PSEUDONYM);
+        bearer.set(Zeroizing::new(PSEUDONYM.to_owned()));
         armed_with(inner, bearer)
     }
 
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn a_token_that_cannot_be_a_header_value_is_withheld() {
         let bearer = SessionBearer::default();
-        bearer.set("token with\na newline");
+        bearer.set(Zeroizing::new("token with\na newline".to_owned()));
         let transport = armed_with(RefusesTheGatedLeg::new(Some(ACCELERATOR)), bearer);
 
         block_on(fanout_get_classified(&transport, &name()));
@@ -256,14 +256,14 @@ mod tests {
     #[test]
     fn a_sealed_cell_disarms_the_leg() {
         let bearer = SessionBearer::default();
-        bearer.set(PSEUDONYM);
+        bearer.set(Zeroizing::new(PSEUDONYM.to_owned()));
         let transport = armed_with(RefusesTheGatedLeg::new(Some(ACCELERATOR)), bearer.clone());
 
         bearer.clear();
         block_on(fanout_get_classified(&transport, &name()));
         assert_eq!(transport.inner.shown_to(ACCELERATOR), None);
 
-        bearer.set(PSEUDONYM);
+        bearer.set(Zeroizing::new(PSEUDONYM.to_owned()));
         block_on(fanout_get_classified(&transport, &name()));
         assert_eq!(
             transport.inner.shown_to(ACCELERATOR).as_deref(),
@@ -272,7 +272,7 @@ mod tests {
         );
 
         bearer.seal();
-        bearer.set(PSEUDONYM);
+        bearer.set(Zeroizing::new(PSEUDONYM.to_owned()));
         let sealed = armed_with(RefusesTheGatedLeg::new(Some(ACCELERATOR)), bearer);
         block_on(fanout_get_classified(&sealed, &name()));
         assert_eq!(sealed.inner.shown_to(ACCELERATOR), None);

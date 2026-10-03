@@ -139,7 +139,7 @@ fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
         return Ok(HttpResponse {
             status: 413,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
     }
     let entries: Vec<serde_json::Value> =
@@ -154,9 +154,9 @@ fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
         status: if over_cap { 400 } else { 200 },
         headers: Vec::new(),
         body: if over_cap {
-            registry_batch_refused()
+            registry_batch_refused().into()
         } else {
-            Vec::new()
+            Vec::new().into()
         },
     })
 }
@@ -272,9 +272,16 @@ impl Blocks {
             .insert(declared.to_owned(), block);
     }
 
-    /// The block stored under `cid`, if the plane holds one.
+    /// The block stored under `cid`, if the plane holds one. A network fetch
+    /// reaches the member's own node too.
     pub fn get(&self, cid: &str) -> Option<Vec<u8>> {
-        self.store.lock().expect("lock").get(cid).cloned()
+        let hosted = self.store.lock().expect("lock").get(cid).cloned();
+        hosted.or_else(|| {
+            if self.member_node_down.load(Ordering::Relaxed) {
+                return None;
+            }
+            self.member_node.lock().expect("lock").get(cid).cloned()
+        })
     }
 
     /// Serve `block` under `cid` whatever it hashes to: a plane that answers
@@ -303,7 +310,8 @@ impl Blocks {
         *self.on_upload.lock().expect("lock") = None;
     }
 
-    /// Answer the upload with an address other than the one the bytes hash to.
+    /// Answer an upload, on the hosted ingress and on the member's node, with an
+    /// address other than the one the bytes hash to.
     pub fn echo_other_address(&self) {
         self.echo_other_address.store(true, Ordering::Relaxed);
     }
@@ -423,10 +431,16 @@ impl Blocks {
             .lock()
             .expect("lock")
             .insert(cid.clone(), block);
+        let cid = match self.echo_other_address.load(Ordering::Relaxed) {
+            true => encode_content_cid_str(&compute_cid(codec, b"another block")),
+            false => cid,
+        };
         Ok(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: format!("{{\"Key\":\"{cid}\",\"Size\":0}}\n").into_bytes(),
+            body: format!("{{\"Key\":\"{cid}\",\"Size\":0}}\n")
+                .into_bytes()
+                .into(),
         })
     }
 
@@ -439,7 +453,7 @@ impl Blocks {
             Ok(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body,
+                body: body.into(),
             })
         };
         let url = &request.url;
@@ -450,6 +464,17 @@ impl Blocks {
                 .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
                 .map(|(_, value)| value.clone())
                 .expect("upload declares its CID");
+            // The API's own refusal: a BYO account's bytes bypass the hosted
+            // ingress, record heads included.
+            if self.advisory() {
+                return Ok(HttpResponse {
+                    status: 409,
+                    headers: Vec::new(),
+                    body: br#"{"statusCode":409,"message":"Hosted ingress is unavailable for BYO accounts"}"#
+                        .to_vec()
+                        .into(),
+                });
+            }
             let block = request.body.as_deref().cloned().unwrap_or_default();
             if let Some(hook) = self.on_upload.lock().expect("lock").as_mut()
                 && let Some(reply) = hook(&block)
@@ -475,7 +500,9 @@ impl Blocks {
             return Ok(HttpResponse {
                 status: 404,
                 headers: Vec::new(),
-                body: br#"{"statusCode":404,"message":"No cached record for this name"}"#.to_vec(),
+                body: br#"{"statusCode":404,"message":"No cached record for this name"}"#
+                    .to_vec()
+                    .into(),
             });
         }
         // The auth handshake, for a scenario that runs against a configured API
@@ -532,7 +559,7 @@ impl Blocks {
                 return Ok(HttpResponse {
                     status: 400,
                     headers: Vec::new(),
-                    body,
+                    body: body.into(),
                 });
             }
             return register_reply(request.body.as_deref().map(Vec::as_slice));
@@ -542,7 +569,7 @@ impl Blocks {
                 return Ok(HttpResponse {
                     status: 503,
                     headers: Vec::new(),
-                    body: Vec::new(),
+                    body: Vec::new().into(),
                 });
             }
             // The registry answers a retire with what it deleted; the count is

@@ -5,15 +5,16 @@ use core::time::Duration;
 use cipherbox_engine::seams::{
     CappedFetchError, Http, HttpMethod, HttpRequest, HttpResponse, SeamError, SeamResult,
 };
+use zeroize::Zeroizing;
 
 /// Plain HTTP for the hand-written API client, the trustless gateway read
 /// path, and BYO providers (blueprint/engine.md "Http", desktop column).
 ///
 /// A pure byte mover over `reqwest` with rustls: it sends exactly the
 /// request the engine describes — no headers the engine did not ask for —
-/// and returns the response verbatim. Non-2xx statuses are responses, not
-/// errors; a seam `Err` is reserved for transport-level failure (unreachable,
-/// aborted). The rotating refresh token is injected by the engine as an
+/// and returns the response verbatim, less any `Set-Cookie`. Non-2xx statuses
+/// are responses, not errors; a seam `Err` is reserved for transport-level
+/// failure (unreachable, aborted). The rotating refresh token is injected by the engine as an
 /// `Authorization`/cookie header here; this seam never persists it. The client
 /// [`new`](Self::new) builds keeps no cookie jar, so desktop has no ambient
 /// credentials for [`cipherbox_engine::seams::HttpCredentials`] to scope;
@@ -74,9 +75,12 @@ impl ReqwestHttp {
             .map_err(|err| SeamError::new(format!("http send: {err}")))?;
 
         let status = response.status().as_u16();
+        // `Set-Cookie` carries the refresh token, and only the host cookie
+        // jar needs it: the engine reads no cookie.
         let headers = response
             .headers()
             .iter()
+            .filter(|(name, _)| **name != reqwest::header::SET_COOKIE)
             .map(|(name, value)| {
                 (
                     name.as_str().to_owned(),
@@ -96,12 +100,12 @@ impl Http for ReqwestHttp {
         let body = response
             .bytes()
             .await
-            .map_err(|err| SeamError::new(format!("http body: {err}")))?
-            .to_vec();
+            .map_err(|err| SeamError::new(format!("http body: {err}")))?;
+        // `Vec::from` reuses the reqwest buffer when it owns it alone.
         Ok(HttpResponse {
             status,
             headers,
-            body,
+            body: Zeroizing::new(Vec::from(body)),
         })
     }
 
@@ -118,16 +122,15 @@ impl Http for ReqwestHttp {
         // Reject a body that declares itself over the cap before reading a byte;
         // a missing or lying Content-Length is still bounded by the streaming
         // drain below.
-        if let Some(declared) = response.content_length() {
-            if declared > max_bytes as u64 {
-                return Err(CappedFetchError::BodyTooLarge {
-                    observed: usize::try_from(declared).unwrap_or(usize::MAX),
-                    limit: max_bytes,
-                });
-            }
+        let declared = response.content_length().unwrap_or(0);
+        if declared > max_bytes as u64 {
+            return Err(CappedFetchError::BodyTooLarge {
+                observed: usize::try_from(declared).unwrap_or(usize::MAX),
+                limit: max_bytes,
+            });
         }
 
-        let mut body = Vec::new();
+        let mut body = Zeroizing::new(Vec::with_capacity(declared as usize));
         while let Some(chunk) = response.chunk().await.map_err(|err| {
             CappedFetchError::Transport(SeamError::new(format!("http body: {err}")))
         })? {
@@ -137,7 +140,7 @@ impl Http for ReqwestHttp {
                     limit: max_bytes,
                 });
             }
-            body.extend_from_slice(&chunk);
+            append_wiping(&mut body, &chunk, max_bytes);
         }
 
         Ok(HttpResponse {
@@ -146,6 +149,20 @@ impl Http for ReqwestHttp {
             body,
         })
     }
+}
+
+/// Append `chunk` to `body`. A `Vec` that grows frees its old buffer unwiped,
+/// so a growth moves the bytes into a new wiping buffer and drops the old one
+/// through its wipe. The caller holds `needed` at or below `limit`.
+fn append_wiping(body: &mut Zeroizing<Vec<u8>>, chunk: &[u8], limit: usize) {
+    let needed = body.len() + chunk.len();
+    if needed > body.capacity() {
+        let grown_to = needed.max(body.capacity().saturating_mul(2).min(limit));
+        let mut grown = Zeroizing::new(Vec::with_capacity(grown_to));
+        grown.extend_from_slice(body);
+        *body = grown;
+    }
+    body.extend_from_slice(chunk);
 }
 
 fn map_method(method: HttpMethod) -> reqwest::Method {

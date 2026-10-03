@@ -1591,7 +1591,9 @@ pub enum Command {
         node: NodeId,
         /// Where to put it back, or `None` for the folder its bin entry names.
         /// A destination the vault no longer holds is
-        /// [`EngineError::RestoreTargetGone`], so a host can offer another.
+        /// [`EngineError::RestoreTargetGone`], and one in another scope than
+        /// the entry's is [`EngineError::RestoreCrossesScope`], so a host can
+        /// offer another.
         #[cfg_attr(
             feature = "wasm",
             serde(with = "crate::wire::opt_node_id"),
@@ -2275,6 +2277,13 @@ pub enum Event {
         /// Human-readable classification (no key material).
         description: String,
     },
+    /// A read met another record at one sequence of a name: a same-sequence
+    /// fork, not a trust violation (ADR 0066). Sent once for each name and
+    /// sequence in a session.
+    SameSequenceFork {
+        /// The record's routing key (`ipnsName`).
+        routing_key: String,
+    },
     /// A held record's sub-EOL renewal did not land — a lost CAS race or a
     /// fail-closed publish failure — or a start could not raise the vault
     /// pointer's `minReadEpoch` to the root epoch it adopted. Surfaced, never
@@ -2452,6 +2461,10 @@ impl fmt::Debug for Event {
             Self::AttributableAbuse { description } => f
                 .debug_struct("AttributableAbuse")
                 .field("description", description)
+                .finish(),
+            Self::SameSequenceFork { routing_key } => f
+                .debug_struct("SameSequenceFork")
+                .field("routing_key", &RedactedText::of(routing_key))
                 .finish(),
             Self::RenewalFailed {
                 routing_key,
@@ -2759,6 +2772,12 @@ pub enum EngineError {
     /// apart from every other refusal so a host can offer another folder rather
     /// than say the restore failed.
     RestoreTargetGone,
+    /// [`Command::Restore`] named a destination in another scope than the one
+    /// its bin entry was filed under, which includes a default restore whose
+    /// origin folder became a scope root after the delete. A restore re-keys in
+    /// place under the entry's scope (blueprint/engine.md "Restore, purge, and
+    /// expiry"), so a host offers a folder of that scope instead.
+    RestoreCrossesScope,
     /// [`Command::Restore`] or [`Command::Purge`] named a node the owner's bin
     /// index holds no entry for. Neither node nor bin is at fault: the entry
     /// left, most often because another device already acted on it.
@@ -2910,6 +2929,14 @@ impl EngineError {
                         .to_owned(),
                 }
             }
+            // The member's own provider is the member's to fix, so the host
+            // shows which check it failed.
+            SettingsPublishError::Publish(RecordPublishError::Placement(e)) => EngineError::Seam {
+                message: format!(
+                    "your own IPFS provider did not take the settings record: {}",
+                    e.check()
+                ),
+            },
             SettingsPublishError::Publish(_) => EngineError::Seam {
                 message: "the settings record did not reach the record plane".to_owned(),
             },
@@ -3179,6 +3206,10 @@ impl fmt::Display for EngineError {
             EngineError::RestoreTargetGone => {
                 f.write_str("the folder this item came from is gone; choose another")
             }
+            EngineError::RestoreCrossesScope => f.write_str(
+                "this item can only go back into a folder shared the same way as the one it came \
+                 from; choose another",
+            ),
             EngineError::NotBinned => f.write_str("this item is not in the bin"),
             EngineError::NotAFolder => f.write_str("not a folder"),
             EngineError::NotAFile => f.write_str("not a file"),
@@ -4607,6 +4638,32 @@ pub(crate) fn emit_trust_violation(
     });
 }
 
+/// The (routing key, sequence) pairs this session reported a same-sequence
+/// fork at, so each pair sends [`Event::SameSequenceFork`] once (ADR 0066 D2).
+#[derive(Default)]
+pub(crate) struct ForkSightings(RefCell<BTreeSet<(String, u64)>>);
+
+impl ForkSightings {
+    /// Report a fork at `sequence` of `routing_key`, unless this session
+    /// already did.
+    pub(crate) fn report(
+        &self,
+        events: &mpsc::UnboundedSender<Event>,
+        routing_key: &str,
+        sequence: u64,
+    ) {
+        if self
+            .0
+            .borrow_mut()
+            .insert((routing_key.to_owned(), sequence))
+        {
+            let _ = events.unbounded_send(Event::SameSequenceFork {
+                routing_key: routing_key.to_owned(),
+            });
+        }
+    }
+}
+
 /// Report one grant row whose recipient binding the owner never signed.
 ///
 /// Any committed write grantee authors the write body a ledger rides in, so a
@@ -5344,7 +5401,8 @@ impl<T: SeamTypes> Engine<T> {
                 base_url.unwrap_or_default().to_owned(),
             )
             .with_session_bearers(self.session_bearer.clone(), self.accelerator_bearer.clone())
-            .with_deadlines(self.deadlines),
+            .with_deadlines(self.deadlines)
+            .with_placement(self.state.placement.clone()),
         );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
@@ -5529,6 +5587,11 @@ impl<T: SeamTypes> Engine<T> {
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
         *self.state.current_root_name.borrow_mut() = root_name.clone();
+        if let (Some(sequence), Some(name)) = (outcome.forked, &root_name) {
+            self.state
+                .fork_sightings
+                .report(&self.events, name.as_str(), sequence);
+        }
         // The same adopt recovered the scope write seed: the drain derives every
         // new node's `ipnsName` and its narrow per-name signer from it.
         if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
@@ -6444,6 +6507,7 @@ where {
         let bin_keys = self.secrets.tick_bin_keys.clone();
         let publishing = self.state.publishing.clone();
         let orphan_heads = self.state.orphan_heads.clone();
+        let fork_sightings = self.state.fork_sightings.clone();
         let roots_walked = self.state.scope_roots_walked.clone();
         let owed_driven = self.state.owed_rotation_driven.clone();
         let unfinished_write_cuts = self.state.unfinished_write_cuts.clone();
@@ -6601,6 +6665,9 @@ where {
                         let _ = events.unbounded_send(Event::WriteCutUnfinished {
                             scope_root: NodeId(scope),
                         });
+                    }
+                    for (routing_key, sequence) in &report.forked {
+                        fork_sightings.report(&events, routing_key, *sequence);
                     }
                 }
                 LivenessControl::Continue
@@ -6814,7 +6881,11 @@ where {
                     return Err(EngineError::RestoreTargetGone);
                 }
                 refuse_outside_vault(&rendered, into)?;
+                self.refuse_before_the_boundary_walk()?;
                 let lands_in = scope_of(&rendered, into, &self.relocation_scope_roots());
+                if lands_in != NodeId(entry.scope_id) {
+                    return Err(EngineError::RestoreCrossesScope);
+                }
                 let leaving: Vec<_> = self
                     .owed_moves()
                     .await?
@@ -9460,6 +9531,15 @@ where {
             .map_err(|e| EngineError::from_settings_publish(SettingsPublishError::Byo(e)))?;
         let observed = sign_above(self.state.placement.borrow().as_ref())
             .map_err(|refusal| EngineError::NoPlacement { refusal })?;
+        // A save with a hosted leg clears the account flag before its head goes
+        // to the hosted store, which refuses a BYO account (ADR 0029 D11).
+        if placement_of(settings).is_ok_and(|placement| placement.has_hosted_leg())
+            && api.quota().await.is_ok_and(|quota| quota.advisory)
+            && api.set_byo(false).await.is_ok()
+        {
+            // The next pre-flight sets the flag again if the save does not land.
+            self.state.byo_reconciled.set(false);
+        }
         let held = match publish_settings_above(
             &self.record_transport,
             api,
@@ -9782,6 +9862,7 @@ where {
             gateway: &self.gateway,
             base: &self.state.snapshot,
             events: &self.events,
+            forks: &self.state.fork_sightings,
             scope_id: root.0,
             scope_read_seed: &stamped.seed,
             seed_stamp: Some(stamped.stamp),
@@ -9966,6 +10047,7 @@ where {
                 gateway: &self.gateway,
                 base: &self.state.snapshot,
                 events: &self.events,
+                forks: &self.state.fork_sightings,
                 scope_id: scope.0,
                 scope_read_seed: &material.seed.seed,
                 seed_stamp: Some(material.seed.stamp),
@@ -11750,6 +11832,26 @@ where {
         roots
     }
 
+    /// Refuse a restore until this session's boundary walk has landed, since a
+    /// restore must name its destination's scope: before the walk, no scope
+    /// root below the vault is known and every node reads as the vault root's.
+    /// A rejected walk refuses for good, as [`Self::relocation_anchors`] does.
+    fn refuse_before_the_boundary_walk(&self) -> Result<(), EngineError> {
+        if self.state.boundary_walk_rejected.get() {
+            return Err(EngineError::TrustViolation {
+                message: "a scope root below this vault failed the adoption gate, so this \
+                          session cannot name the scope of a restore destination"
+                    .to_owned(),
+            });
+        }
+        if !self.state.boundary_walk_landed.get() {
+            return Err(EngineError::Seam {
+                message: "boundary-walk-pending".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
     /// What a relocation op anchors on: the source parent, the target's base
     /// sequence, and the plan it publishes under ([`classify_crossing`]).
     ///
@@ -13491,7 +13593,7 @@ mod tests {
         HttpResponse {
             status,
             headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
-            body: serde_json::to_vec(&body).unwrap(),
+            body: serde_json::to_vec(&body).unwrap().into(),
         }
     }
 
@@ -17568,7 +17670,7 @@ mod tests {
             HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: head_block.to_vec(),
+                body: head_block.to_vec().into(),
             }
         }
 

@@ -743,7 +743,7 @@ async fn reqwest_http_round_trips_request_and_response() {
         .expect("transport-level success");
 
     assert_eq!(response.status, 200);
-    assert_eq!(response.body, b"request-payload");
+    assert_eq!(*response.body, b"request-payload");
     assert!(
         response
             .headers
@@ -848,7 +848,63 @@ async fn reqwest_http_capped_fetch_admits_a_chunked_body_at_the_cap() {
         .expect("the cap is inclusive");
 
     assert_eq!(response.status, 200);
-    assert_eq!(response.body, vec![b'x'; 64]);
+    assert_eq!(response.body, vec![b'x'; 64].into());
+}
+
+/// A response body can carry a credential (the refresh token a rotation
+/// returns), so both reads hand it over in a buffer that wipes on drop. The
+/// chunked body has no `Content-Length`, so the capped read grows its buffer
+/// across the chunks.
+#[tokio::test]
+async fn reqwest_http_hands_the_response_body_over_in_a_wiping_buffer() {
+    const LEN: usize = 300 * 1024;
+    let server = MockServer::start();
+    let http = ReqwestHttp::new().expect("client builds");
+
+    let buffered = http
+        .send(stream_request(&server, LEN))
+        .await
+        .expect("transport-level success");
+    let capped = http
+        .send_capped(stream_request(&server, LEN), LEN)
+        .await
+        .expect("the cap is inclusive");
+
+    for response in [&buffered, &capped] {
+        let body: &Zeroizing<Vec<u8>> = &response.body;
+        assert_eq!(**body, vec![b'x'; LEN]);
+    }
+}
+
+/// The engine reads no cookie, so the seam hands over no `Set-Cookie` value.
+#[tokio::test]
+async fn reqwest_http_hands_over_no_set_cookie_header() {
+    let server = MockServer::start();
+    let http = ReqwestHttp::new().expect("client builds");
+    let request = || HttpRequest {
+        method: HttpMethod::Get,
+        url: format!("{}/cookie", server.base_url()),
+        headers: Vec::new(),
+        body: None,
+        credentials: HttpCredentials::Omit,
+        timeout_ms: None,
+    };
+
+    let buffered = http.send(request()).await.expect("transport-level success");
+    let capped = http
+        .send_capped(request(), 1024)
+        .await
+        .expect("transport-level success");
+
+    for response in [&buffered, &capped] {
+        let names: Vec<&str> = response.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"x-kept"), "other headers stay");
+        assert!(
+            !names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("set-cookie"))
+        );
+    }
 }
 
 fn stream_request(server: &MockServer, bytes: usize) -> HttpRequest {
