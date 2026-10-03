@@ -122,12 +122,12 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: b"first".to_vec(),
+            body: b"first".to_vec().into(),
         });
 
         let response = block_on(http.send(request("https://api.test/a"))).unwrap();
         assert_eq!(response.status, 200);
-        assert_eq!(response.body, b"first");
+        assert_eq!(*response.body, b"first");
 
         let requests = http.requests();
         assert_eq!(requests.len(), 1);
@@ -147,7 +147,7 @@ mod tests {
         let body = |len: usize| HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: vec![0u8; len],
+            body: vec![0u8; len].into(),
         };
         let http = ScriptedHttp::default();
         http.enqueue_response(body(9)); // over the cap

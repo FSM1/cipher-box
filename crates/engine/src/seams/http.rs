@@ -159,10 +159,21 @@ impl fmt::Debug for HttpRequest {
 pub struct HttpResponse {
     /// Status code.
     pub status: u16,
-    /// Header name/value pairs as received.
+    /// Header name/value pairs as received, less any `Set-Cookie`.
     pub headers: Vec<(String, String)>,
-    /// Response body bytes.
-    pub body: Vec<u8>,
+    /// Response body bytes. A body can carry a credential (the refresh
+    /// token a rotation returns), so the engine reader that owns it last
+    /// wipes it.
+    pub body: Zeroizing<Vec<u8>>,
+}
+
+impl HttpResponse {
+    /// The body out of its wiping buffer, moved and not copied, for a body that
+    /// carries no credential (a record, a block).
+    #[must_use]
+    pub fn into_body(mut self) -> Vec<u8> {
+        core::mem::take(&mut *self.body)
+    }
 }
 
 impl fmt::Debug for HttpResponse {
@@ -297,11 +308,28 @@ mod tests {
         let response = HttpResponse {
             status: 200,
             headers: vec![("Set-Cookie".into(), "refresh=secret-cookie".into())],
-            body: b"account-payload".to_vec(),
+            body: b"account-payload".to_vec().into(),
         };
         let debug = format!("{response:?}");
         assert!(!debug.contains("secret-cookie"), "cookie must not leak");
         assert!(!debug.contains("account-payload"), "body must not leak");
         assert!(debug.contains("Set-Cookie") && debug.contains("200"));
+    }
+
+    /// A body that leaves its wiping buffer moves out whole: no copy of it is
+    /// left behind unwiped.
+    #[test]
+    fn into_body_moves_the_buffer_and_copies_nothing() {
+        let response = HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: vec![7u8; 4096].into(),
+        };
+        let held = response.body.as_ptr();
+
+        let body = response.into_body();
+
+        assert_eq!(body.as_ptr(), held);
+        assert_eq!(body, vec![7u8; 4096]);
     }
 }

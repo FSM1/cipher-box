@@ -1538,7 +1538,7 @@ mod tests {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: self.fixture.head_block.clone(),
+                body: self.fixture.head_block.clone().into(),
             });
             let (events, mut rx) = mpsc::unbounded();
             let class = block_on(
@@ -2317,7 +2317,7 @@ mod tests {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: self.fixture.head_block.clone(),
+                body: self.fixture.head_block.clone().into(),
             });
             async move {
                 ReceivedShareStatus {
@@ -3068,7 +3068,7 @@ mod tests {
                     Some(Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body,
+                        body: body.into(),
                     }))
                 }),
                 gateway: Gateway {

@@ -33,7 +33,8 @@ serde_json.workspace = true
 tsify = { workspace = true, optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 unicode-normalization.workspace = true
-zeroize.workspace = true
+# `serde` decodes a token straight into a wiping string.
+zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 # Self dev-dependency: enables `test-kit` for this crate's own tests (unit,

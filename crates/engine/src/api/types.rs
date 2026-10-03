@@ -113,10 +113,10 @@ pub(crate) struct UnlinkMethodRequest<'a> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TokenResponse {
-    pub access_token: String,
-    pub refresh_token: String,
+    pub access_token: Zeroizing<String>,
+    pub refresh_token: Zeroizing<String>,
     /// The read accelerator's opaque pseudonym (CONTEXT.md, Accelerator token).
-    pub accelerator_token: String,
+    pub accelerator_token: Zeroizing<String>,
     #[serde(default)]
     pub is_new_user: Option<bool>,
 }
@@ -137,13 +137,13 @@ pub(crate) struct SiweChallengeResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TestLoginResponse {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub accelerator_token: String,
+    pub access_token: Zeroizing<String>,
+    pub refresh_token: Zeroizing<String>,
+    pub accelerator_token: Zeroizing<String>,
     #[serde(default)]
     pub is_new_user: Option<bool>,
     pub public_key: String,
-    pub private_key: String,
+    pub private_key: Zeroizing<String>,
 }
 
 /// The login/refresh response body the auth tests enqueue — one home for its

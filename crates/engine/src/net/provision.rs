@@ -236,7 +236,7 @@ mod tests {
         device.http.enqueue_response(HttpResponse {
             status,
             headers: Vec::new(),
-            body: br#"{"statusCode":404}"#.to_vec(),
+            body: br#"{"statusCode":404}"#.to_vec().into(),
         });
     }
 
@@ -539,7 +539,7 @@ mod tests {
         device.http.enqueue_response(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
 
         assert_eq!(

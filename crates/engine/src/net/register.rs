@@ -89,7 +89,7 @@ mod tests {
             http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: Vec::new(),
+                body: Vec::new().into(),
             });
         }
     }

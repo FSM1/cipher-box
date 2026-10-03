@@ -478,7 +478,7 @@ mod tests {
                 self.http.enqueue_response(HttpResponse {
                     status: 200,
                     headers: Vec::new(),
-                    body: self.fixture.head_block.clone(),
+                    body: self.fixture.head_block.clone().into(),
                 });
             }
             self.pass().0
