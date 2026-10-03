@@ -405,6 +405,7 @@ where
         scope_root_name: &IpnsName,
         cut: &RevokedCommittedSet,
         vault_pointer_signer: Option<&Ed25519Signer>,
+        command: bool,
     ) -> Result<CutRotationReport, EngineError> {
         let report = self
             .rotate_planes(
@@ -413,7 +414,7 @@ where
                 scope_root_name,
                 cut,
                 vault_pointer_signer,
-                false,
+                command,
             )
             .await
             .map_err(EngineError::from_cut_rotation)?;
@@ -917,7 +918,7 @@ where
         .map_err(EngineError::from_revoke)?;
         // The vault root takes no link, so no conversion cuts it.
         let report = self
-            .rotate_cut(node, target, &scope_root_name, &cut, None)
+            .rotate_cut(node, target, &scope_root_name, &cut, None, sites.command())
             .await?;
         let write = report.write.ok_or_else(|| EngineError::Seam {
             message: "the write-scope cut ran no write wave".to_owned(),

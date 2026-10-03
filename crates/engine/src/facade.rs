@@ -7851,6 +7851,7 @@ where {
                 scope_root_name,
                 cut,
                 vault_pointer_signer.as_ref(),
+                true,
             )
             .await?;
         self.after_write_wave(node, target, &report).await?;

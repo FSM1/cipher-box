@@ -358,7 +358,7 @@ where
                 return Ok(None);
             }
             Err(error) => {
-                return match self.cut_set_published(target, cut).await {
+                return match self.cut_set_published(target, cut, command).await {
                     Some(true) => {
                         self.stop_owed(node, steps, cut_stop(error)).await;
                         Ok(None)
@@ -433,7 +433,7 @@ where
         if bound_elapsed(since, self.scheduler.now()) {
             OwedStop::abandoned(OWED_CUT_NEVER_LANDED)
         } else {
-            self.owed().mark_not_landed(scope);
+            self.owed().set_not_landed(scope, true);
             OwedStop::pending(OWED_CUT_NEVER_LANDED)
         }
     }
@@ -444,13 +444,16 @@ where
         &self,
         target: &OwnerScope,
         cut: &RevokedCommittedSet,
+        command: bool,
     ) -> Option<bool> {
         let bound = self.owed_bound(NodeId(target.scope.scope_id)).await;
+        let wait = if command {
+            RootWait::Command
+        } else {
+            RootWait::Bound(bound.as_ref().map_or(&NoBound, |b| b))
+        };
         let current = self
-            .cut_net(
-                target,
-                RootWait::Bound(bound.as_ref().map_or(&NoBound, |b| b)),
-            )
+            .cut_net(target, wait)
             .resolve_anchored(&target.scope)
             .await
             .ok()?;
@@ -589,6 +592,9 @@ where
         let mut read = None;
         let mut steps = entry.steps.clone();
         if entry.cut_epoch > 0 {
+            // Each re-drive decides the mark again, so it never outlives the
+            // read that set it.
+            self.owed().set_not_landed(scope, false);
             let published = self.owed_scope(sites, scope, "owed-cut", true).await?;
             if published.current.commitment.cut_epoch < entry.cut_epoch {
                 return Err(self.never_landed(scope, &entry));

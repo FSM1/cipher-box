@@ -559,10 +559,15 @@ impl<'a, St: StagingStore> OwedRotation<'a, St> {
             .max(first_stop)
     }
 
-    /// Mark the entry at `scope` as a cut that never landed, which another
-    /// command may replace.
-    pub fn mark_not_landed(&self, scope: NodeId) {
-        self.cell.not_landed.borrow_mut().insert(scope);
+    /// Note whether the last re-drive of the entry at `scope` found a cut that
+    /// never landed, which another command may replace.
+    pub fn set_not_landed(&self, scope: NodeId, not_landed: bool) {
+        let mut marked = self.cell.not_landed.borrow_mut();
+        if not_landed {
+            marked.insert(scope);
+        } else {
+            marked.remove(&scope);
+        }
     }
 
     /// Whether a re-drive this session found the entry at `scope` with a cut
