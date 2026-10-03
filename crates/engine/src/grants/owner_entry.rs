@@ -2,7 +2,6 @@
 
 use core::cell::RefCell;
 use futures_util::future::LocalBoxFuture;
-use std::rc::Rc;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
@@ -46,15 +45,22 @@ impl<St: StagingStore> CacheBytes for St {
     }
 }
 
+trait Ephemeral {
+    fn draw(&self) -> Result<zeroize::Zeroizing<[u8; 32]>, SeamError>;
+}
+impl<E: Entropy> Ephemeral for RefCell<E> {
+    fn draw(&self) -> Result<zeroize::Zeroizing<[u8; 32]>, SeamError> {
+        fresh_ephemeral(&mut *self.borrow_mut()).map_err(local_error)
+    }
+}
+
 /// One device's confirmed owner reads, with one sealed entry per scope.
 #[derive(Clone)]
-pub struct OwnerSeedCache<'a>(Rc<CacheSeams<'a>>);
-
-struct CacheSeams<'a> {
+pub struct OwnerSeedCache<'a> {
     owner: &'a X25519Secret,
-    labels: SecretBytes,
+    labels: &'a SecretBytes,
     staging: &'a dyn CacheBytes,
-    ephemeral: Box<dyn Fn() -> Result<zeroize::Zeroizing<[u8; 32]>, SeamError> + 'a>,
+    entropy: &'a dyn Ephemeral,
 }
 
 fn local_error(_: impl core::fmt::Display) -> SeamError {
@@ -66,31 +72,33 @@ impl<'a> OwnerSeedCache<'a> {
         staging: &'a St,
         owner: &'a X25519Secret,
         entropy: &'a RefCell<E>,
-        labels: &SecretBytes,
+        labels: &'a SecretBytes,
     ) -> Self {
-        Self(Rc::new(CacheSeams {
+        Self {
             owner,
-            labels: labels.clone(),
+            labels,
             staging,
-            ephemeral: Box::new(move || {
-                fresh_ephemeral(&mut *entropy.borrow_mut()).map_err(local_error)
-            }),
-        }))
+            entropy,
+        }
     }
 
     fn key(&self, scope: &[u8; 16]) -> Vec<u8> {
         let label = kdf::name_label(
-            self.0.labels.as_bytes(),
+            self.labels.as_bytes(),
             &[OWNER_SEED_CACHE_PREFIX, scope.as_slice()].concat(),
         );
         [OWNER_SEED_CACHE_PREFIX, label.as_slice()].concat()
     }
 
-    async fn read_scope(&self, scope: &[u8; 16]) -> Result<Option<OwnerSeedRecord>, SeamError> {
-        let Some(blob) = self.0.staging.read(&self.key(scope)).await? else {
+    async fn read_scope(
+        &self,
+        key: &[u8],
+        scope: &[u8; 16],
+    ) -> Result<Option<OwnerSeedRecord>, SeamError> {
+        let Some(blob) = self.staging.read(key).await? else {
             return Ok(None);
         };
-        let record = open_owner_local(self.0.owner, OwnerLocalKind::OwnerSeedCache, &blob)
+        let record = open_owner_local(self.owner, OwnerLocalKind::OwnerSeedCache, &blob)
             .and_then(|body| decode_owner_seed_record(&body));
         Ok(record.ok().filter(|record| record.scope_id == *scope))
     }
@@ -101,7 +109,7 @@ impl<'a> OwnerSeedCache<'a> {
         name: &IpnsName,
     ) -> Result<Option<OwnerSeedRecord>, SeamError> {
         Ok(self
-            .read_scope(scope)
+            .read_scope(&self.key(scope), scope)
             .await?
             .filter(|record| record.ipns_name == name.as_str().as_bytes()))
     }
@@ -109,7 +117,7 @@ impl<'a> OwnerSeedCache<'a> {
     pub(crate) async fn remove(&self, scope: &[u8; 16]) -> Result<(), SeamError> {
         let key = self.key(scope);
         let _writing = NameLock::acquire(&key).await;
-        self.0.staging.remove(&key).await
+        self.staging.remove(&key).await
     }
 
     pub(crate) async fn save(&self, record: &OwnerSeedRecord) -> Result<(), SeamError> {
@@ -123,7 +131,7 @@ impl<'a> OwnerSeedCache<'a> {
             .sequence;
         // At one name the gate already holds every epoch floor, and a keyless
         // root must still move the entry up to the sequence floor.
-        if let Some(held) = self.read_scope(&record.scope_id).await? {
+        if let Some(held) = self.read_scope(&key, &record.scope_id).await? {
             let stale = if held.ipns_name == record.ipns_name {
                 IpnsRecord::unmarshal(&held.record_bytes)
                     .and_then(|r| r.verify(&name))
@@ -136,15 +144,15 @@ impl<'a> OwnerSeedCache<'a> {
             }
         }
         let body = encode_owner_seed_record(record).map_err(local_error)?;
-        let ephemeral = (self.0.ephemeral)()?;
+        let ephemeral = self.entropy.draw()?;
         let blob = seal_owner_local(
-            self.0.owner,
+            self.owner,
             OwnerLocalKind::OwnerSeedCache,
             &ephemeral,
             &body,
         )
         .map_err(local_error)?;
-        self.0.staging.write(&key, &blob).await
+        self.staging.write(&key, &blob).await
     }
 }
 
@@ -175,22 +183,7 @@ mod tests {
         let store = OwnerSeedCache::new(&staging, &owner, &entropy, &labels);
         let signer = Ed25519Signer::from_seed([0x33; 32]);
         let name = IpnsName::from_public_key(&signer.verifying_key());
-        let record = OwnerSeedRecord {
-            scope_id: [0x44; 16],
-            epoch: 1,
-            write_epoch: 1,
-            parent_node_seed: None,
-            ipns_name: name.as_str().as_bytes().to_vec(),
-            record_bytes: IpnsRecord::create_v2(
-                &signer,
-                b"/ipfs/test",
-                1,
-                2_000_000_000,
-                "2099-01-01T00:00:00Z",
-            )
-            .marshal(),
-            head_block: Vec::new(),
-        };
+        let record = record(&signer, 1, b"/ipfs/test");
         block_on(store.save(&record)).unwrap();
         let body = block_on(store.load(&record.scope_id, &name))
             .unwrap()
@@ -211,6 +204,7 @@ mod tests {
             Ok(None)
         ));
     }
+
     fn record(signer: &Ed25519Signer, sequence: u64, value: &[u8]) -> OwnerSeedRecord {
         OwnerSeedRecord {
             scope_id: [0x44; 16],

@@ -1638,6 +1638,8 @@ fn main() {
         settings_record_reject: &settings_record_reject,
         content_key_accept: &content_key_accept,
         content_key_reject: &content_key_reject,
+        owner_seed_cache_accept: &seed_accept,
+        owner_seed_cache_reject: &seed_reject,
         owner_local_accept: &owner_local_accept,
         owner_local_reject: &owner_local_reject,
         bin_index_accept: &bin_index_accept,
@@ -2481,6 +2483,8 @@ struct ManifestInputs<'a> {
     settings_record_reject: &'a [SettingsRecordRejectVector],
     content_key_accept: &'a [ContentKeyAcceptVector],
     content_key_reject: &'a [ContentKeyRejectVector],
+    owner_seed_cache_accept: &'a [serde_json::Value],
+    owner_seed_cache_reject: &'a [serde_json::Value],
     owner_local_accept: &'a [OwnerLocalAcceptVector],
     owner_local_reject: &'a [OwnerLocalRejectVector],
     bin_index_accept: &'a [BinIndexAcceptVector],
@@ -2488,7 +2492,8 @@ struct ManifestInputs<'a> {
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
-    let (seed_accept, seed_reject) = build_owner_seed_cache_vectors();
+    let seed_accept = m.owner_seed_cache_accept;
+    let seed_reject = m.owner_seed_cache_reject;
     let accept = m.accept;
     let reject = m.reject;
     let unknown = m.unknown;
@@ -10409,14 +10414,9 @@ fn build_owner_seed_cache_vectors() -> (Vec<serde_json::Value>, Vec<serde_json::
             panic!("map");
         };
         if name == "missing-scope" {
-            let mut replacement = Map::new();
-            for (k, v) in map.entries() {
-                if k != key {
-                    replacement.insert(k, v.clone());
-                }
+            if let Some(mut gone) = map.remove(key) {
+                gone.zeroize_bytes();
             }
-            map.zeroize_bytes();
-            *map = replacement;
         } else {
             map.insert(key, value);
         }

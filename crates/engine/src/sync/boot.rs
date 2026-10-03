@@ -128,7 +128,7 @@ pub struct ColdStartOutcome {
     pub rendered: Snapshot,
     /// The root-scope read seed a gate-passing adopt recovered from the owner
     /// blob; `None` when nothing adopted. The engine deposits it in its
-    /// in-memory per-scope seed cell. The owner cache keeps a sealed recovery copy.
+    /// in-memory per-scope seed cell.
     pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
     /// The epoch of the record [`read_scope_seed`](Self::read_scope_seed) came
     /// from, which may be above the epoch the pointer vouches.

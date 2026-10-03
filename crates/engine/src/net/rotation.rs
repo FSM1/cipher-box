@@ -27,8 +27,8 @@ use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
     AadContext, ChildScopeRef, Envelope, GrantBlobPayload, GrantLedgerEntry, GrantSection,
-    GrantSetCommitment, GrantSetEntry, MAX_READ_SEALED_BYTES, NodeKind, Permission,
-    PreservedFields, ReadBody, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY,
+    GrantSetCommitment, GrantSetEntry, MAX_READ_SEALED_BYTES, NodeKind, OwnerSeedRecord,
+    Permission, PreservedFields, ReadBody, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY,
     STRUCT_TAG_WRITE_HISTORY_LINK, SignedOwnerWriteBlob, SignedSealed, Version, WriteBody,
     decode_envelope, decode_write_body, has_grant_section, open_grant_blob,
     open_owner_history_link, open_read_body, sign_grant_set, sign_recipient_binding, unseal,
@@ -578,11 +578,7 @@ impl<'a> RootFallback<'a> {
                 .ok()
                 .flatten()
                 .map(|root| GatedScopeRoot::recovered(name, root))
-                .filter(|root| {
-                    expected_child.is_none_or(|id| {
-                        root.envelope.id == id && root.section.ascent_link.is_some()
-                    })
-                }),
+                .filter(|root| root.names_child(expected_child)),
             _ => None,
         };
         if let Ok(Some(cached)) = snapshot_cache.get(name.as_str().as_bytes()).await {
@@ -773,6 +769,11 @@ struct GatedScopeRoot {
 }
 
 impl GatedScopeRoot {
+    /// A copy bound to `expected_child`, when the caller expects one.
+    fn names_child(&self, expected_child: Option<[u8; 16]>) -> bool {
+        expected_child.is_none_or(|id| self.envelope.id == id && self.section.ascent_link.is_some())
+    }
+
     fn recovered(name: &IpnsName, root: RecoveredScopeRoot) -> Self {
         Self {
             write_epoch: root.write_epoch,
@@ -1010,13 +1011,7 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
     name: &IpnsName,
     record_bytes: &[u8],
     reason: &RejectionReason,
-) -> Result<
-    (
-        GatedScopeRoot,
-        Option<cipherbox_core::seal::OwnerSeedRecord>,
-    ),
-    RootGateVerdict,
-> {
+) -> Result<(GatedScopeRoot, Option<OwnerSeedRecord>), RootGateVerdict> {
     let RejectionReason::SequenceNotNewer { floor, sequence } = reason else {
         return Err(RootGateVerdict::Rejected);
     };
@@ -1027,11 +1022,10 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
         .recover_own_scope_root(name, record_bytes)
         .await
         .map_err(|e| match e {
-            GateError::Seam(_) => RootGateVerdict::Unavailable,
             GateError::Rejected(ref rejection) if super::adopter::owner_seed_refused(rejection) => {
                 RootGateVerdict::OwnerSeedRefused
             }
-            GateError::Rejected(_) => RootGateVerdict::Rejected,
+            e => cache_gate_verdict(e),
         })?
         // Nothing to re-check is no recovery; the rotation keeps the gate's
         // own verdict.
@@ -1046,12 +1040,7 @@ enum RootPass {
     Pending(Box<(IpnsName, Candidate, PendingAdoption, RecoveredSeeds)>),
     /// This reader's own already-adopted record, recovered at the floor
     /// ([`reread_at_floor`]): nothing left to commit.
-    AtFloor(
-        Box<(
-            GatedScopeRoot,
-            Option<cipherbox_core::seal::OwnerSeedRecord>,
-        )>,
-    ),
+    AtFloor(Box<(GatedScopeRoot, Option<OwnerSeedRecord>)>),
 }
 
 impl RootPass {
@@ -1738,21 +1727,13 @@ where
                 let root = adopter
                     .recover_cached_owner_root(&name)
                     .await
-                    .map_err(|error| match error {
-                        GateError::Seam(_) => WalkFailure::Unavailable,
-                        GateError::Rejected(_) => WalkFailure::Rejected {
-                            scope_id: child.scope_id,
-                        },
-                    })?
+                    .map_err(|error| walk_verdict(cache_gate_verdict(error), child.scope_id))?
+                    .map(|root| GatedScopeRoot::recovered(&name, root))
+                    .filter(|root| root.names_child(Some(child.scope_id)))
                     .ok_or(WalkFailure::Rejected {
                         scope_id: child.scope_id,
                     })?;
-                if root.envelope.id != child.scope_id || root.grant_section.ascent_link.is_none() {
-                    return Err(WalkFailure::Rejected {
-                        scope_id: child.scope_id,
-                    });
-                }
-                (GatedScopeRoot::recovered(&name, root), None, true)
+                (root, None, true)
             }
             Err(verdict) => {
                 return Err(walk_verdict(

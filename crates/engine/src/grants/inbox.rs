@@ -203,23 +203,16 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
                 continue;
             };
-            let candidate = match assemble_candidate(
-                self.gateway,
-                self.http,
-                &name,
-                &record_bytes,
-                None,
-                false,
-            )
-            .await
-            {
-                Ok(candidate) => candidate,
-                Err(e @ GateError::Rejected(_)) => {
-                    report(events, name.as_str(), &AcceptError::Gate(e));
-                    continue;
-                }
-                Err(GateError::Seam(_)) => continue,
-            };
+            let candidate =
+                match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await
+                {
+                    Ok(candidate) => candidate,
+                    Err(e @ GateError::Rejected(_)) => {
+                        report(events, name.as_str(), &AcceptError::Gate(e));
+                        continue;
+                    }
+                    Err(GateError::Seam(_)) => continue,
+                };
             let blobs = published_grant_blobs(&candidate.grant_section);
             match accept_share(
                 self.floors,

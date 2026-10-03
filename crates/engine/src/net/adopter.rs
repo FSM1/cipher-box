@@ -232,7 +232,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     ) -> Result<Candidate, GateError> {
         let local = self.local_head.borrow().clone();
         let keep_block = self.owner_seed_cache.is_some();
-        assemble_candidate(
+        assemble(
             self.gateway,
             self.http,
             name,
@@ -253,6 +253,16 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
 /// Free-standing because the accept flow assembles a candidate for a **sharer's**
 /// scope root, which no reader context of this device's own anchors.
 pub(crate) async fn assemble_candidate<H: Http>(
+    gateway: &Gateway,
+    http: &H,
+    name: &IpnsName,
+    record_bytes: &[u8],
+    local: Option<&LocalHead>,
+) -> Result<Candidate, GateError> {
+    assemble(gateway, http, name, record_bytes, local, false).await
+}
+
+async fn assemble<H: Http>(
     gateway: &Gateway,
     http: &H,
     name: &IpnsName,
@@ -545,8 +555,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         write_seed: Option<&Zeroizing<[u8; 32]>>,
         write_epoch: Option<u64>,
     ) -> Option<OwnerSeedRecord> {
-        self.owner_seed_cache.as_ref()?;
-        if !matches!(self.seeds, SeedSource::Owner(_)) {
+        if self.owner_seed_cache.is_none() || !matches!(self.seeds, SeedSource::Owner(_)) {
             return None;
         }
         let write_epoch = write_seed
@@ -1579,7 +1588,6 @@ mod tests {
         drop(discarded);
         assert_eq!(staging.contents(), prior);
         drop(adopter);
-        drop(cache);
         fx.envelope.read_sealed[0] ^= 1;
         fx.head_block = encode_envelope(&fx.envelope).unwrap();
         fx.head_cid_str = root_block_cid(&fx.head_block);

@@ -682,9 +682,8 @@ where
             .get(&HeldKey::Node(self.root_id))
             .map(|record| (record.routing_key.clone(), record.record_bytes.clone()));
         let owner_seed_cache = self.owner_seed_cache(pass);
-        let use_confirmed_root = held_root.is_none();
-        if held_root.is_none()
-            && recovered_root
+        let use_confirmed_root = held_root.is_none() && recovered_root;
+        if use_confirmed_root
             && let Ok(Some(record)) = owner_seed_cache.load(&self.root_id, &pass.root_name).await
         {
             held_root = Some((pass.root_name.as_str().to_owned(), record.record_bytes));

@@ -205,9 +205,9 @@ pub struct AdoptOutcome {
     pub node_id: [u8; 16],
     /// The scope read seed a gate-passing owner adopt recovered from the owner
     /// blob. Transient like [`write_scope_seed`](Self::write_scope_seed): the
-    /// engine deposits it in its in-memory per-scope seed map. The owner cache
-    /// keeps a sealed recovery copy; the child read pipeline derives
-    /// per-node read keys from it. `None` for a non-owner adopter.
+    /// engine deposits it in its in-memory per-scope seed map, and the child
+    /// read pipeline derives per-node read keys from it. `None` for a non-owner
+    /// adopter.
     pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
     /// The envelope version the gated record carries.
     pub version: u64,

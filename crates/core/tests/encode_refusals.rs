@@ -178,7 +178,7 @@ fn an_owner_seed_cache_refuses_oversized_fields_in_both_directions() {
         MAX_BLOCK_BYTES, MAX_OWNER_SEED_RECORD_BYTES, OwnerSeedRecord, decode_owner_seed_record,
         encode_owner_seed_record,
     };
-    let mut record = OwnerSeedRecord {
+    let base = || OwnerSeedRecord {
         scope_id: [0x21; 16],
         epoch: 1,
         write_epoch: 1,
@@ -192,7 +192,7 @@ fn an_owner_seed_cache_refuses_oversized_fields_in_both_directions() {
         ("ipnsRecord", MAX_OWNER_SEED_RECORD_BYTES),
         ("headBlock", MAX_BLOCK_BYTES),
     ] {
-        let body = encode_owner_seed_record(&record).expect("valid body");
+        let body = encode_owner_seed_record(&base()).expect("valid body");
         let mut value = decode(&body).expect("det-CBOR");
         let Value::Map(map) = &mut value else {
             panic!("map");
@@ -201,21 +201,16 @@ fn an_owner_seed_cache_refuses_oversized_fields_in_both_directions() {
         let rejected = decode_owner_seed_record(&encode(&value).expect("det-CBOR"));
         assert!(rejected.is_err(), "the decoder enforces the bound");
         value.zeroize_bytes();
+        let mut oversized = base();
         let bytes = match field {
-            "ipnsName" => &mut record.ipns_name,
-            "ipnsRecord" => &mut record.record_bytes,
-            _ => &mut record.head_block,
+            "ipnsName" => &mut oversized.ipns_name,
+            "ipnsRecord" => &mut oversized.record_bytes,
+            _ => &mut oversized.head_block,
         };
-        let old = std::mem::replace(bytes, vec![0; limit + 1]);
+        *bytes = vec![0; limit + 1];
         assert!(
-            encode_owner_seed_record(&record).is_err(),
+            encode_owner_seed_record(&oversized).is_err(),
             "the producer enforces the same bound in release"
         );
-        let bytes = match field {
-            "ipnsName" => &mut record.ipns_name,
-            "ipnsRecord" => &mut record.record_bytes,
-            _ => &mut record.head_block,
-        };
-        *bytes = old;
     }
 }

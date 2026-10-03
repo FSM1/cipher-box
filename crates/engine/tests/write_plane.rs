@@ -2442,22 +2442,7 @@ fn the_second_handle_over_the_last_free_place_is_refused_at_its_commit() {
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    serve_http(&alice, &blocks, 400);
-    let (mut engine, _events) = Engine::new(
-        alice.seam_set(),
-        Box::new(SeededEntropy::new(42)),
-        SyncTimingProfile::CI,
-        ContentProfile::CI,
-        StoragePolicy::CI,
-        ApiBaseUrl::offline(),
-        GatewayConfig {
-            accelerator: Some("https://gw.test".into()),
-            public_fallbacks: Vec::new(),
-        },
-    );
-    block_on(engine.start(secret(), None)).unwrap();
-    let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_tasks_until_parked(&mut tasks);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
     let planted: Vec<ChildRef> = (0..MAX_FOLDER_CHILDREN - 1)
         .map(|i| {
@@ -10771,12 +10756,9 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
 
     assert_no_blocks_staged(&alice, &version);
     assert!(
-        block_on(alice.staging_store.staged_keys())
-            .unwrap()
+        staged_keys_without_read_state(&alice)
             .iter()
-            .all(|key| *key == drained_key()
-                || *key == cursor_key()
-                || key.starts_with(OWNER_SEED_CACHE_PREFIX)),
+            .all(|key| *key == drained_key()),
         "the staging budget holds nothing but queue bookkeeping"
     );
     assert!(

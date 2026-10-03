@@ -915,9 +915,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             Err(GateError::Seam(_)) => return None,
         }
         let candidate =
-            match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None, false)
-                .await
-            {
+            match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await {
                 Ok(candidate) => candidate,
                 Err(GateError::Rejected(rejection)) => {
                     report_refusal(events, share, &rejection);

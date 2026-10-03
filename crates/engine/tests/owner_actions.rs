@@ -16120,10 +16120,7 @@ fn a_restarted_owner_cuts_a_disagreeing_seed_from_its_durable_copy() {
         let planted = published_value(&fx.world, &name);
         fx.blocks.fail_block(honest_cid);
         block_on(fx.owner_device.snapshot_cache.clear()).unwrap();
-        drop(fx.engine);
-        drop(fx._tasks);
-        drop(fx.world.scheduler.take_spawned_tasks());
-        (fx.engine, fx._events, fx._tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+        fx = restart_owner(fx);
         assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
         let events = events_so_far(&mut fx._events);
         assert!(root_refusals(&fx, &events, sequence) > 0);
@@ -16164,18 +16161,30 @@ fn scope_copy(fx: &GrantScenario) -> Option<(Vec<u8>, Vec<u8>)> {
         })
 }
 
+/// Drop the owner engine and its loops, then cold-start it on the same device.
+fn restart_owner(mut fx: GrantScenario) -> GrantScenario {
+    drop(fx.engine);
+    drop(fx._tasks);
+    drop(fx.world.scheduler.take_spawned_tasks());
+    (fx.engine, fx._events, fx._tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    fx
+}
+
+/// A granted folder, read twice, with the durable copy its confirmed scope saved.
+fn granted_with_scope_copy() -> (GrantScenario, Vec<u8>, Vec<u8>) {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let (key, blob) = scope_copy(&fx).expect("the confirmed scope has a durable copy");
+    (fx, key, blob)
+}
+
 /// A plain folder whose id holds the durable copy that a granted run of the
 /// same scenario saved.
 fn folder_with_scope_copy() -> (GrantScenario, Vec<u8>, Vec<u8>) {
-    let mut previous = GrantScenario::new();
-    assert_eq!(
-        previous.grant_folder_to_recipient(),
-        Ok(CommandOutcome::Done)
-    );
-    for _ in 0..2 {
-        tick(&previous.world, &previous.engine, &mut previous._tasks);
-    }
-    let (key, blob) = scope_copy(&previous).expect("the confirmed scope has a durable copy");
+    let (previous, key, blob) = granted_with_scope_copy();
     let fx = GrantScenario::new();
     assert_eq!(previous.folder, fx.folder);
     drop(previous);
@@ -16224,17 +16233,9 @@ fn a_restart_between_the_copy_removal_and_the_publish_keeps_the_scope_readable()
     );
     assert_eq!(published_value(&fx.world, &root), linked);
 
-    let mut fx = GrantScenario::new();
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-    for _ in 0..2 {
-        tick(&fx.world, &fx.engine, &mut fx._tasks);
-    }
-    let (key, _) = scope_copy(&fx).expect("the confirmed scope has a durable copy");
+    let (mut fx, key, _) = granted_with_scope_copy();
     block_on(fx.owner_device.staging_store.remove_staged_bytes(&key)).unwrap();
-    drop(fx.engine);
-    drop(fx._tasks);
-    drop(fx.world.scheduler.take_spawned_tasks());
-    (fx.engine, fx._events, fx._tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    fx = restart_owner(fx);
     for _ in 0..2 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
