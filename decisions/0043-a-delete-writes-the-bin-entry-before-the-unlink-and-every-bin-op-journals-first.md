@@ -70,6 +70,10 @@ delete. This replaces the ADR 0010 item 3 rule that an unshared scope skips the 
 decision records the change. This ADR records it, and the owner accepted the amendment on
 2026-09-26.
 
+Added on 2026-10-03 (owner choice B' on FSM1/cipher-box#2180): an owner capture re-keys and bins
+under the own scope whose key opens the node's record, so a bin entry's `scope_id` names the scope
+that seals the node, which can differ from the scope of the folder the node left.
+
 **D9 — Every op that takes a node out of the bin is a journaled intent op, and a restore re-keys in
 reverse, relinks, then drops the entry.** Restore, purge and expiry each stage an op on the
 durable queue (#33 D5, D6), so a replay of the queue reproduces the same bin and the same
