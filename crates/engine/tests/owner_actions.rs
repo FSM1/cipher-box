@@ -3741,12 +3741,20 @@ fn owed_reports(events: &mut EventStream) -> Vec<(NodeId, String, bool, OwedWork
         .collect()
 }
 
-/// How many abuse events the stream holds.
-fn abuse_events(events: &mut EventStream) -> usize {
+/// The abuse descriptions the stream holds.
+fn abuse_descriptions(events: &mut EventStream) -> Vec<String> {
     events_so_far(events)
         .into_iter()
-        .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
-        .count()
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect()
+}
+
+/// How many abuse events the stream holds.
+fn abuse_events(events: &mut EventStream) -> usize {
+    abuse_descriptions(events).len()
 }
 
 /// The value the record published at `name` carries.
@@ -6387,13 +6395,7 @@ fn the_sharing_read_names_a_rewritten_row_from_the_owners_own_commitment() {
         !named.contains(&vec![0x11; IDENTITY_PUBLIC_LEN]),
         "and never the label the writer chose"
     );
-    let reported: Vec<String> = events_so_far(&mut events)
-        .into_iter()
-        .filter_map(|event| match event {
-            Event::AttributableAbuse { description } => Some(description),
-            _ => None,
-        })
-        .collect();
+    let reported = abuse_descriptions(&mut events);
     let signer = hex_lower(&owner_pseudonym().verifying_key().to_bytes());
     assert!(
         reported.iter().any(
@@ -6923,13 +6925,7 @@ fn a_name_wave_reports_the_row_it_re_mints_without_an_owner_binding() {
         "the write cut drives the wave that re-mints the set"
     );
 
-    let reported: Vec<String> = events_so_far(&mut events)
-        .into_iter()
-        .filter_map(|event| match event {
-            Event::AttributableAbuse { description } => Some(description),
-            _ => None,
-        })
-        .collect();
+    let reported = abuse_descriptions(&mut events);
     let signer = hex_lower(&owner_pseudonym().verifying_key().to_bytes());
     assert!(
         reported.iter().any(
@@ -7266,6 +7262,306 @@ fn a_tick_whose_walk_fails_reads_no_new_scope_root_as_a_child() {
     fx.owner_device.floor_store.heal_floors();
 
     assert_eq!(abuse_events(&mut fx._events), 0, "no record is faulty");
+}
+
+/// A grant whose interior move landed seals the interior under the new scope.
+/// A tick whose walk proves no set must still read that interior there.
+#[test]
+fn a_tick_whose_walk_fails_reads_a_moved_interior_under_the_new_scope() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the interior folder takes the focus");
+    events_so_far(&mut fx._events);
+    let reads = fx.world.record_store.get_count(write_name(inner).as_str());
+    // The vault root's write plane does not open, so the walk proves no set.
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_for(&floor_label(&write_epoch_floor_key(&SCOPE)));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.owner_device.floor_store.heal_floors();
+
+    assert!(
+        fx.world.record_store.get_count(write_name(inner).as_str()) > reads,
+        "the focus leg reads the moved interior"
+    );
+    assert_eq!(abuse_descriptions(&mut fx._events), Vec::<String>::new());
+}
+
+/// The control of `a_tick_whose_walk_fails_reads_a_moved_interior_under_the_new_scope`:
+/// a record at the moved interior node that opens under no seed of the new
+/// scope is still one trust violation.
+#[test]
+fn a_tick_whose_walk_fails_still_reports_a_hostile_moved_interior_node() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let (_, epoch) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    reseal_interior_node(
+        &fx.world,
+        &fx.blocks,
+        inner,
+        fx.folder.0,
+        &[0x5a; 32],
+        epoch,
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) }))
+        .expect("the interior folder takes the focus");
+    events_so_far(&mut fx._events);
+    fx.owner_device
+        .floor_store
+        .fail_epoch_floor_reads_for(&floor_label(&write_epoch_floor_key(&SCOPE)));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.owner_device.floor_store.heal_floors();
+
+    let reported = abuse_descriptions(&mut fx._events);
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert!(
+        reported[0].ends_with("[unseal]: [seal-open-failed]"),
+        "{reported:?}"
+    );
+}
+
+/// Where a grant's handover stops, which leaves its interior move owed.
+#[derive(Clone, Copy, Debug)]
+enum HandoverStop {
+    /// The reseal stops at its first node: the interior stays in the vault scope.
+    Reseal,
+    /// The reseal stops part of the way: the outer interior moved, the inner
+    /// did not.
+    PartialReseal,
+    /// The parent index publish stops: the whole interior moved.
+    ParentIndex,
+}
+
+/// A granted folder whose interior move is owed after `stop`, over an interior
+/// folder `inner` and a folder `deep` inside it, with a file in each.
+struct OwedMove {
+    fx: GrantScenario,
+    inner: NodeId,
+    deep: NodeId,
+    /// The name whose publish stopped the handover.
+    stopped_at: IpnsName,
+    /// Whether the handover resealed `deep` under the new scope.
+    deep_moved: bool,
+}
+
+impl OwedMove {
+    fn after(stop: HandoverStop) -> Self {
+        let owed = Self::stalled(stop);
+        owed.fx
+            .world
+            .record_store
+            .heal_put_for(owed.stopped_at.as_str());
+        owed
+    }
+
+    /// [`Self::after`] with the publish that stopped the handover still
+    /// failing, so a re-drive cannot land the move.
+    fn stalled(stop: HandoverStop) -> Self {
+        let mut fx = GrantScenario::new();
+        let inner = create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            fx.folder,
+            "inner",
+        );
+        let deep =
+            create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "deep");
+        for parent in [inner, deep] {
+            block_on(fx.engine.command(Command::Create {
+                parent,
+                name: "doc.bin".into(),
+                kind: NodeKind::File,
+            }))
+            .expect("a metadata create stages");
+        }
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        let failing = match stop {
+            HandoverStop::Reseal => write_name(inner),
+            HandoverStop::PartialReseal => write_name(deep),
+            HandoverStop::ParentIndex => write_name(ROOT),
+        };
+        fx.world.record_store.fail_put_for(failing.as_str());
+        assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+        assert_eq!(
+            fx.owed_scopes(),
+            vec![fx.folder],
+            "{stop:?}: the move is owed"
+        );
+        let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+        let moved = |node| opens_under(&fx, node, &read_key_under(&override_seed, node));
+        let expected = match stop {
+            HandoverStop::Reseal => (false, false),
+            HandoverStop::PartialReseal => (true, false),
+            HandoverStop::ParentIndex => (true, true),
+        };
+        assert_eq!((moved(inner), moved(deep)), expected, "{stop:?}: the seals");
+        Self {
+            fx,
+            inner,
+            deep,
+            stopped_at: failing,
+            deep_moved: expected.1,
+        }
+    }
+
+    /// A second session of the same device over this state.
+    fn restarted(self) -> Self {
+        let (engine, events, tasks) =
+            boot_owner(&self.fx.world, &self.fx.blocks, &self.fx.owner_device);
+        Self {
+            fx: GrantScenario {
+                engine,
+                _events: events,
+                _tasks: tasks,
+                ..self.fx
+            },
+            ..self
+        }
+    }
+
+    /// Another device adds a folder `added` named `name` to `deep`, sealed
+    /// where `deep` is sealed now.
+    fn add_to_deep(&self, added: NodeId, name: &str) {
+        let (read_key, scope) = if self.deep_moved {
+            let (seed, _) = scope_material_of(&self.fx.world, &self.fx.blocks, self.fx.folder);
+            (read_key_under(&seed, self.deep), self.fx.folder.0)
+        } else {
+            (read_key_of(self.deep), SCOPE)
+        };
+        concurrent_add(
+            &self.fx.world,
+            &self.fx.blocks,
+            self.deep,
+            &read_key,
+            scope,
+            named_child(added, name, &write_name(added)),
+        );
+    }
+
+    /// Whether the rendered view lists `name` in `deep`.
+    fn deep_lists(&self, name: &str) -> bool {
+        block_on(self.fx.engine.view())
+            .expect("a rendered view")
+            .children(self.deep)
+            .iter()
+            .any(|child| child.name == name)
+    }
+
+    /// The abuse the navigation into `deep` reports.
+    fn navigate(&mut self) -> Vec<String> {
+        let fx = &mut self.fx;
+        events_so_far(&mut fx._events);
+        for node in [fx.folder, self.inner, self.deep] {
+            block_on(fx.engine.command(Command::SetFocus { node: Some(node) }))
+                .expect("the folder takes the focus");
+        }
+        abuse_descriptions(&mut fx._events)
+    }
+
+    /// The abuse one tick reports.
+    fn tick(&mut self) -> Vec<String> {
+        let fx = &mut self.fx;
+        events_so_far(&mut fx._events);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        abuse_descriptions(&mut fx._events)
+    }
+
+    /// Each leg on its own: the navigation adopts a changed `deep`, then the
+    /// tick adopts the next change, and neither reports abuse.
+    fn assert_each_leg_reads_deep(&mut self, case: &str) {
+        self.add_to_deep(NodeId([0xa1; 16]), "seen at navigation");
+        assert_eq!(self.navigate(), Vec::<String>::new(), "{case}: navigation");
+        assert!(
+            self.deep_lists("seen at navigation"),
+            "{case}: the navigation adopts the folder"
+        );
+        self.add_to_deep(NodeId([0xa2; 16]), "seen at the tick");
+        assert_eq!(self.tick(), Vec::<String>::new(), "{case}: tick");
+        assert!(
+            self.deep_lists("seen at the tick"),
+            "{case}: the tick adopts the folder"
+        );
+    }
+}
+
+/// While a grant's interior move is owed, each interior node opens under the
+/// scope its epoch tag names, wherever the handover stopped (ADR 0072 D1).
+#[test]
+fn an_owed_interior_move_reads_each_interior_node_under_the_scope_it_names() {
+    for stop in [
+        HandoverStop::Reseal,
+        HandoverStop::PartialReseal,
+        HandoverStop::ParentIndex,
+    ] {
+        OwedMove::after(stop).assert_each_leg_reads_deep(&format!("{stop:?}"));
+    }
+}
+
+/// The owed entry is durable, so a session that starts again over a move that
+/// is still owed holds the entry's root as a scope root at each leg, and reads
+/// no record of it as a child (ADR 0072 D1).
+#[test]
+fn an_owed_interior_move_holds_its_root_after_a_restart() {
+    for stop in [HandoverStop::Reseal, HandoverStop::ParentIndex] {
+        let mut restarted = OwedMove::stalled(stop).restarted();
+        assert_eq!(
+            restarted.tick(),
+            Vec::<String>::new(),
+            "{stop:?}: first tick"
+        );
+        assert_eq!(
+            restarted.navigate(),
+            Vec::<String>::new(),
+            "{stop:?}: navigation"
+        );
+        assert_eq!(restarted.tick(), Vec::<String>::new(), "{stop:?}: tick");
+    }
+}
+
+/// The control of D1: a record whose epoch tag names a scope the owed move
+/// binds but that does not open under its seed, and a record whose tag names
+/// a third scope, are each exactly one trust violation.
+#[test]
+fn an_owed_interior_move_still_reports_a_hostile_interior_node() {
+    for (case, scope) in [("bound scope", SCOPE), ("third scope", [0x33; 16])] {
+        let mut owed = OwedMove::after(HandoverStop::Reseal);
+        reseal_interior_node(
+            &owed.fx.world,
+            &owed.fx.blocks,
+            owed.deep,
+            scope,
+            &[0x5a; 32],
+            published_read_epoch(&owed.fx.world, &owed.fx.blocks, ROOT),
+        );
+        let navigation = owed.navigate();
+        assert_eq!(navigation.len(), 1, "{case}: navigation {navigation:?}");
+        assert!(
+            navigation[0].ends_with("[unseal]: [seal-open-failed]"),
+            "{case}: {navigation:?}"
+        );
+        let ticked = owed.tick();
+        assert_eq!(ticked.len(), 1, "{case}: tick {ticked:?}");
+        assert!(
+            ticked[0].ends_with("[unseal]: [seal-open-failed]"),
+            "{case}: {ticked:?}"
+        );
+    }
 }
 
 /// A revoke runs several gated scope-root reads, so its refusal names the read

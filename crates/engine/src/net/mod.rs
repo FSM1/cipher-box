@@ -53,7 +53,7 @@ pub use child::ChildAdopter;
 pub(crate) use child::{ChildResolveError, resolve_child};
 pub use fanout::{EndpointFailure, EndpointFailures, FanoutRecord, MAX_RECORD_BYTES, VacancyRule};
 pub(crate) use fanout::{fanout_get_classified, fanout_get_verify};
-pub(crate) use focus::{FolderRefresh, FolderRefreshReport, GraftedLeg};
+pub(crate) use focus::{FolderRefresh, FolderRefreshReport, GraftedLeg, OwedMoveLeg};
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
     EolRenewResult, HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl,

@@ -163,7 +163,7 @@ use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rende
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::owed_rotation::{OWED_ROTATION_PREFIX, OwedEntry, OwedRotation, OwedStep};
-use crate::sync::pass::{ScopeLegContext, TickPass};
+use crate::sync::pass::{LegScopes, ScopeLegContext, TickPass};
 use crate::sync::pointer::{POINTER_PAYLOAD_VERSION, PointerFetch, vault_pointer_name};
 use crate::sync::project::{map_kind, project_child_version};
 use crate::sync::provision::{
@@ -9857,23 +9857,23 @@ where {
 
     /// The subset of `nodes` the scope rooted at `root` seals
     /// ([`nodes_in_scope`]).
-    fn scoped_to(&self, root: NodeId, nodes: Vec<NodeId>) -> Vec<NodeId> {
+    fn scoped_to(&self, own: &BTreeSet<NodeId>, root: NodeId, nodes: Vec<NodeId>) -> Vec<NodeId> {
         nodes_in_scope(
             &self.state.snapshot.borrow(),
-            &focus_scope_roots(
-                &self.own_scopes(),
-                &self.state.unproved_scope_roots.borrow(),
-            ),
+            &focus_scope_roots(own, &self.state.unproved_scope_roots.borrow()),
             root,
             nodes,
         )
     }
 
-    /// This session's [`own_descendant_scopes`].
-    fn own_scopes(&self) -> BTreeSet<NodeId> {
-        own_descendant_scopes(
-            &self.state.descendant_scope_roots,
-            &self.state.minted_scope_roots,
+    /// The scopes this session's read legs group by, as the tick's legs do
+    /// ([`LegScopes`]).
+    async fn leg_scopes(&self) -> LegScopes {
+        let owed_moves = self.owed_moves().await.ok();
+        LegScopes::new(
+            &self.state.descendant_scope_roots.borrow(),
+            &self.state.minted_scope_roots.borrow(),
+            owed_moves,
         )
     }
 
@@ -9928,16 +9928,19 @@ where {
         // One root read: the seed the legs run under and the scope they filter
         // to must name the same scope across the await below.
         let root = self.state.snapshot.borrow().root;
-        let due = self.scoped_to(
-            root,
-            focus_folders_due(
-                &self.state.snapshot.borrow(),
-                &self.state.focus.borrow(),
-                &self.state.focus_refreshed.borrow(),
-                now,
-                &self.profile,
-            ),
+        let own = self.leg_scopes().await.own;
+        let all_due = focus_folders_due(
+            &self.state.snapshot.borrow(),
+            &self.state.focus.borrow(),
+            &self.state.focus_refreshed.borrow(),
+            now,
+            &self.profile,
         );
+        let due = self.scoped_to(&own, root, all_due.clone());
+        let below: Vec<NodeId> = all_due
+            .into_iter()
+            .filter(|folder| !due.contains(folder))
+            .collect();
         let scope_read_seed = self.scope_read_seed(&root.0).await;
         let root_name = self.state.current_root_name.borrow().clone();
         let leg = scope_read_seed.as_ref().map(|stamped| FolderRefresh {
@@ -9954,6 +9957,7 @@ where {
             seed_stamp: Some(stamped.stamp),
             scope_root_name: root_name.as_ref(),
             plane: None,
+            owed_move: None,
             mode: ResolveMode::CacheFirst,
             observed_at: now.0,
         });
@@ -9962,6 +9966,9 @@ where {
         {
             settle(&due, leg.run(&due).await);
         }
+        // A folder below a descendant scope root reads on that scope's leg.
+        self.navigation_legs(root, below, NodeKind::Folder, now, &settle)
+            .await;
         if let Some(folder) = folder {
             self.queue_focus_file_children(folder);
         }
@@ -10086,12 +10093,13 @@ where {
         let Some(session) = self.session.as_ref() else {
             return (attempted, true);
         };
-        let own = self.own_scopes();
+        let leg_scopes = self.leg_scopes().await;
+        let own = &leg_scopes.own;
         let unproved = self.state.unproved_scope_roots.borrow().clone();
         let mut by_scope: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
         {
             let base = self.state.snapshot.borrow();
-            let scope_roots = focus_scope_roots(&own, &unproved);
+            let scope_roots = focus_scope_roots(own, &unproved);
             for node in nodes {
                 let scope = scope_root_of(&base, node, &scope_roots);
                 if node != scope {
@@ -10109,7 +10117,7 @@ where {
             sharers: &sharers,
             contact_label_seed: session.contact_label_seed(),
             own_root: root.0,
-            own: &own,
+            own,
             unproved: &unproved,
             base: &self.state.snapshot,
             root_name: root_name.as_ref(),
@@ -10121,7 +10129,11 @@ where {
             if self.scope_floors(&scope.0).is_none() {
                 self.state.scope_read_seeds.borrow_mut().remove(&scope.0);
             }
-            let Ok(material) = legs.material(scope, &self.state.scope_read_seeds).await else {
+            let left = leg_scopes.owed_moves.get(&scope).copied();
+            let Ok(leg_material) = legs
+                .leg_material(scope, left, &self.state.scope_read_seeds)
+                .await
+            else {
                 unread = true;
                 continue;
             };
@@ -10129,19 +10141,20 @@ where {
                 transport: &self.record_transport,
                 snapshot_cache: &self.seams.snapshot_cache,
                 http: &self.seams.http,
-                floors: &material.floors,
+                floors: &leg_material.material.floors,
                 gateway: &self.gateway,
                 base: &self.state.snapshot,
                 events: &self.events,
                 forks: &self.state.fork_sightings,
-                scope_id: scope.0,
-                scope_read_seed: &material.seed.seed,
-                seed_stamp: Some(material.seed.stamp),
-                scope_root_name: material.scope_root_name.as_ref(),
-                plane: (!material.own).then_some(GraftedLeg {
+                scope_id: leg_material.scope.0,
+                scope_read_seed: &leg_material.material.seed.seed,
+                seed_stamp: Some(leg_material.material.seed.stamp),
+                scope_root_name: leg_material.material.scope_root_name.as_ref(),
+                plane: (!leg_material.material.own).then_some(GraftedLeg {
                     scope_roots: &bookmarked,
                     claims: &self.state.grafted_claims,
                 }),
+                owed_move: leg_material.owed_move_leg(),
                 mode: ResolveMode::CacheFirst,
                 observed_at: now.0,
             };

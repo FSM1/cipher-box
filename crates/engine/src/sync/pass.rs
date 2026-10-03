@@ -40,8 +40,9 @@ use crate::net::author::ENVELOPE_V;
 use crate::net::rotation::ScopeWritePlane;
 use crate::net::{
     DescendantScopeRoot, FolderRefresh, GraftedLeg, HeldKey, HeldMaterial, HeldRecords,
-    PointerConsult, PointerConsultError, ResolveOutcome, Resolved, RootAdopter, ScopeWalk,
-    WalkFailure, WritePlaneDark, observed_at, refresh_base_from_resolved, resolve_and_hold,
+    OwedMoveLeg, PointerConsult, PointerConsultError, ResolveOutcome, Resolved, RootAdopter,
+    ScopeWalk, WalkFailure, WritePlaneDark, observed_at, refresh_base_from_resolved,
+    resolve_and_hold,
 };
 use crate::rotation::scope_material::ScopeMaterial;
 use crate::rotation::{
@@ -150,6 +151,59 @@ struct ScopeSets {
     unproved: BTreeSet<NodeId>,
 }
 
+/// The own scope roots a read leg groups interior nodes by, and the scope that
+/// each owed interior move left (ADR 0072 D1).
+pub(crate) struct LegScopes {
+    pub(crate) own: BTreeSet<NodeId>,
+    pub(crate) owed_moves: BTreeMap<NodeId, NodeId>,
+}
+
+impl LegScopes {
+    /// The proved roots, each minted root, and each root an owed interior move
+    /// names. `owed_moves` is `None` when the owed record does not read, and
+    /// then binds no second scope (ADR 0072 consequence 5).
+    pub(crate) fn new(
+        proved: &BTreeSet<NodeId>,
+        minted: &BTreeSet<NodeId>,
+        owed_moves: Option<Vec<(NodeId, NodeId)>>,
+    ) -> Self {
+        let owed_moves: BTreeMap<NodeId, NodeId> =
+            owed_moves.unwrap_or_default().into_iter().collect();
+        let own = proved
+            .iter()
+            .chain(minted)
+            .chain(owed_moves.keys())
+            .copied()
+            .collect();
+        Self { own, owed_moves }
+    }
+}
+
+/// One scope leg's material, with the second scope that an owed interior move
+/// binds to it.
+pub(crate) struct LegMaterial<'a, F> {
+    /// The scope whose seed the leg holds first.
+    pub(crate) scope: NodeId,
+    pub(crate) material: ScopeLegMaterial<'a, F>,
+    /// The other scope the move binds, and its material when this device holds
+    /// it.
+    pub(crate) owed_move: Option<(NodeId, Option<ScopeLegMaterial<'a, F>>)>,
+}
+
+impl<F> LegMaterial<'_, F> {
+    /// The leg's second scope, as [`FolderRefresh`] borrows it.
+    pub(crate) fn owed_move_leg(&self) -> Option<OwedMoveLeg<'_>> {
+        let (scope, material) = self.owed_move.as_ref()?;
+        Some(OwedMoveLeg {
+            scope_id: scope.0,
+            read_seed: material.as_ref().map(|material| &material.seed),
+            root_name: material
+                .as_ref()
+                .and_then(|material| material.scope_root_name.as_ref()),
+        })
+    }
+}
+
 /// What every scope leg of one tick or one navigation reads alike.
 pub(crate) struct ScopeLegContext<'a, F> {
     pub(crate) floors: &'a F,
@@ -220,6 +274,42 @@ impl<'a, F: FloorStore> ScopeLegContext<'a, F> {
             scope_root_name,
             own,
         })
+    }
+}
+
+impl<'a, F: FloorStore> ScopeLegContext<'a, F> {
+    /// The material of `scope`'s leg, and of `left`, the scope its owed
+    /// interior move left. Both scopes are this vault's own, so one floor
+    /// namespace serves them. A leg whose root holds no seed yet runs under
+    /// `left`'s, and a record that names the root is then availability.
+    pub(crate) async fn leg_material(
+        &self,
+        scope: NodeId,
+        left: Option<NodeId>,
+        read_seeds: &RefCell<ScopeSeeds>,
+    ) -> Result<LegMaterial<'a, F>, NoScopeLeg> {
+        let material = self.material(scope, read_seeds).await;
+        let Some(left) = left else {
+            return material.map(|material| LegMaterial {
+                scope,
+                material,
+                owed_move: None,
+            });
+        };
+        let left_material = self.material(left, read_seeds).await.ok();
+        match (material, left_material) {
+            (Ok(material), left_material) => Ok(LegMaterial {
+                scope,
+                material,
+                owed_move: Some((left, left_material)),
+            }),
+            (Err(_), Some(material)) => Ok(LegMaterial {
+                scope: left,
+                material,
+                owed_move: Some((scope, None)),
+            }),
+            (Err(no_leg), None) => Err(no_leg),
+        }
     }
 }
 
@@ -676,16 +766,21 @@ where
             proved: state.descendant_scope_roots.borrow().clone(),
             unproved: state.unproved_scope_roots.borrow().clone(),
         };
-        let focus_scope_ids = focus_scope_roots(&scopes.proved, &scopes.unproved);
+        let owed_moves = self.owed_moves(state, pass).await;
+        let leg_scopes = LegScopes::new(
+            &scopes.proved,
+            &state.minted_scope_roots.borrow(),
+            owed_moves,
+        );
+        let own = &leg_scopes.own;
+        let focus_scope_ids = focus_scope_roots(own, &scopes.unproved);
         let mut by_scope = focus_by_scope(
             &state.snapshot.borrow(),
             &state.focus.borrow(),
             &focus_scope_ids,
         );
         // A root this session minted carries a grant section before any walk
-        // proves it, so its own record is no child of the enclosing scope. Its
-        // interior stays on the walk's grouping: while its interior move is
-        // owed, that interior is still sealed under the enclosing scope.
+        // proves it, so its own record is no child of the enclosing scope.
         {
             let minted = state.minted_scope_roots.borrow();
             for targets in by_scope.values_mut() {
@@ -711,14 +806,18 @@ where
             sharers: grafted,
             contact_label_seed: &pass.contact_label_seed,
             own_root: self.root_id,
-            own: &scopes.proved,
+            own,
             unproved: &scopes.unproved,
             base: &state.snapshot,
             root_name: Some(&pass.root_name),
         };
         for (scope_root, targets) in by_scope {
-            let material = match legs.material(scope_root, &state.scope_read_seeds).await {
-                Ok(material) => material,
+            let left = leg_scopes.owed_moves.get(&scope_root).copied();
+            let leg = match legs
+                .leg_material(scope_root, left, &state.scope_read_seeds)
+                .await
+            {
+                Ok(leg) => leg,
                 Err(NoScopeLeg::Outage) => {
                     folder_verdict = folder_verdict.worst(RefreshVerdict::Unreachable);
                     continue;
@@ -729,19 +828,20 @@ where
                 transport: &self.seams.transport,
                 snapshot_cache: &self.seams.snapshot_cache,
                 http: &self.seams.http,
-                floors: &material.floors,
+                floors: &leg.material.floors,
                 gateway: &self.seams.gateway,
                 base: &state.snapshot,
                 events: &self.seams.events,
                 forks: &state.fork_sightings,
-                scope_id: scope_root.0,
-                scope_read_seed: &material.seed.seed,
-                seed_stamp: Some(material.seed.stamp),
-                scope_root_name: material.scope_root_name.as_ref(),
-                plane: (!material.own).then_some(GraftedLeg {
+                scope_id: leg.scope.0,
+                scope_read_seed: &leg.material.seed.seed,
+                seed_stamp: Some(leg.material.seed.stamp),
+                scope_root_name: leg.material.scope_root_name.as_ref(),
+                plane: (!leg.material.own).then_some(GraftedLeg {
                     scope_roots: &scope_roots,
                     claims: &state.grafted_claims,
                 }),
+                owed_move: leg.owed_move_leg(),
                 mode: pass.mode,
                 observed_at: pass.now.0,
             };
@@ -947,6 +1047,20 @@ where
         }
     }
 
+    /// Each owed interior move's scope root, with the scope its folder left,
+    /// or `None` when the owed record does not read.
+    async fn owed_moves(&self, state: &SessionState, pass: &Pass) -> Option<Vec<(NodeId, NodeId)>> {
+        OwedRotation::new(
+            &self.seams.staging,
+            BookkeepingSeal::new(&pass.enc_subkey, &*self.seams.entropy),
+            &pass.enc_subkey,
+            &state.owed_rotation,
+        )
+        .interior_moves()
+        .await
+        .ok()
+    }
+
     /// The per-scope drain, and the boundaries the later stages read.
     async fn drain<'a>(
         &'a self,
@@ -1095,16 +1209,10 @@ where
                 }),
             })
             .collect();
-        let owed_moves: Option<Vec<NodeId>> = OwedRotation::new(
-            &self.seams.staging,
-            BookkeepingSeal::new(enc_subkey, &*self.seams.entropy),
-            enc_subkey,
-            &state.owed_rotation,
-        )
-        .interior_moves()
-        .await
-        .ok()
-        .map(|moves| moves.into_iter().map(|(scope, _)| scope).collect());
+        let owed_moves: Option<Vec<NodeId>> = self
+            .owed_moves(state, pass)
+            .await
+            .map(|moves| moves.into_iter().map(|(scope, _)| scope).collect());
         let drain = Drain::new(
             &self.seams,
             state.drain_cells(),
@@ -1800,6 +1908,84 @@ mod tests {
     use crate::facade::NodeKind;
     use crate::seams::SharerScopedFloorStore;
     use crate::sync::model::NodeMeta;
+
+    /// A leg over an owed move's root runs under the root's material with the
+    /// left scope second, and under the left scope's alone while the root holds
+    /// no seed (ADR 0072 D1).
+    #[test]
+    fn a_leg_over_an_owed_move_runs_under_whichever_scope_holds_a_seed() {
+        let root = NodeId([0x9a; 16]);
+        let left = NodeId::VAULT_ROOT;
+        let floors = crate::testkit::fakes::InMemoryFloorStore::default();
+        let sharers = GraftedSharers::new();
+        let label = cipherbox_core::kdf::contact_label_seed(&[0x4c; 32]);
+        let own = BTreeSet::from([root]);
+        let unproved = BTreeSet::new();
+        let base = BaseSnapshot::new(Snapshot::new(left));
+        let legs = ScopeLegContext {
+            floors: &floors,
+            sharers: &sharers,
+            contact_label_seed: &label,
+            own_root: left.0,
+            own: &own,
+            unproved: &unproved,
+            base: &base,
+            root_name: None,
+        };
+        let seeds = RefCell::new(ScopeSeeds::new());
+        let deposit = |scope: NodeId, seed| {
+            deposit_seed(
+                &seeds,
+                scope.0,
+                Zeroizing::new(seed),
+                Some(0),
+                FloorNamespace::Own,
+            );
+        };
+        let leg_of = || {
+            let leg = crate::testkit::block_on(legs.leg_material(root, Some(left), &seeds))
+                .unwrap_or_else(|_| panic!("a leg runs"));
+            let second = leg
+                .owed_move
+                .as_ref()
+                .map(|(scope, material)| (*scope, material.is_some()));
+            (leg.scope, *leg.material.seed.seed, second)
+        };
+
+        deposit(left, [0x11; 32]);
+        assert_eq!(leg_of(), (left, [0x11; 32], Some((root, false))));
+
+        deposit(root, [0x22; 32]);
+        assert_eq!(leg_of(), (root, [0x22; 32], Some((left, true))));
+    }
+
+    /// A leg groups by each minted root and each root an owed interior move
+    /// names, and an unread owed record binds no second scope.
+    #[test]
+    fn a_leg_groups_by_every_owned_root_and_binds_no_second_scope_when_the_record_does_not_read() {
+        let walked = NodeId([1; 16]);
+        let proved = BTreeSet::from([walked]);
+        let moved = NodeId([2; 16]);
+        let owed = NodeId([3; 16]);
+        let restarted = NodeId([4; 16]);
+        let minted = BTreeSet::from([moved, owed]);
+        let left = NodeId::VAULT_ROOT;
+
+        let scopes = LegScopes::new(
+            &proved,
+            &minted,
+            Some(vec![(owed, left), (restarted, left)]),
+        );
+        assert_eq!(scopes.own, BTreeSet::from([walked, moved, owed, restarted]));
+        assert_eq!(
+            scopes.owed_moves,
+            BTreeMap::from([(owed, left), (restarted, left)])
+        );
+
+        let unread = LegScopes::new(&proved, &minted, None);
+        assert_eq!(unread.own, BTreeSet::from([walked, moved, owed]));
+        assert!(unread.owed_moves.is_empty());
+    }
 
     /// A boundary a later walk proves reads on its own leg, so it must leave the
     /// unproved set; the focus leg skips every root that set still holds.
