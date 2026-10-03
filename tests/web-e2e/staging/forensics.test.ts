@@ -30,6 +30,17 @@ describe('redact', () => {
     );
   });
 
+  it('removes unpadded base64 that holds a slash', () => {
+    const key = 'q83vASNFZ4mrze/wEjRWeJq83vASNFZ4mrze/wEjRWc';
+    expect(redact(`key ${key} end`)).toBe('key [redacted] end');
+    expect(redact(`seed="${key}"`)).toBe('seed="[redacted]"');
+  });
+
+  it('keeps a hash or a question mark in plain text', () => {
+    const line = 'refused on attempt #3; why? nonce';
+    expect(redact(line)).toBe(line);
+  });
+
   it('removes an email', () => {
     expect(redact('code sent to some.one+e2e@mail.example.co.uk today')).toBe(
       'code sent to [redacted] today'
