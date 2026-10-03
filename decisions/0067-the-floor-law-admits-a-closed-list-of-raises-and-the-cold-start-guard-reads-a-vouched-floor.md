@@ -46,7 +46,8 @@ the epoch namespace, the root scope id with its own suffix, the same shape as th
 index mark. It rises in `cold_seed`, when the vouch of a vault-root cut lands, when
 `catch_up_vault_pointer` lands its vouch, and when `vouch_over` reads a standing pointer that
 already vouches the epoch. The read-epoch stage of `cold_seed_checked` compares
-the vouched `minReadEpoch` with this key. A device without the key compares with the read-epoch
+the vouched `minReadEpoch` with this key, and `VaultPointerVoucher::standing` refuses to vouch
+over a pointer below it. A device without the key compares with the read-epoch
 floor, as on main. The gated adopt still raises the read-epoch floor, so the gate still refuses
 a pre-cut vault root in the session.
 
