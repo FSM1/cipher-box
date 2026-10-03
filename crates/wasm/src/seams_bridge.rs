@@ -46,10 +46,10 @@ pub(crate) fn seam_error(value: JsValue) -> SeamError {
     SeamError::new(message.unwrap_or_else(|| "browser seam rejected".to_string()))
 }
 
-/// [`seam_error`], keeping the HTTP status a PUT rejection carries. A status
-/// that is not an integer in the HTTP range is dropped, so the engine reads an
-/// unknown outcome.
-fn put_seam_error(value: JsValue) -> SeamError {
+/// [`seam_error`], keeping the HTTP status a GET or PUT rejection carries. A
+/// status that is not an integer in the HTTP range is dropped, so the engine
+/// reads an unknown outcome.
+fn status_seam_error(value: JsValue) -> SeamError {
     let status = Reflect::get(&value, &JsValue::from_str("status"))
         .ok()
         .and_then(|status| required_u64(status).ok())
@@ -522,7 +522,7 @@ impl RecordTransport for RecordTransportAdapter {
             .js
             .get_record(&endpoint.0, routing_key, max_bytes as f64, bearer)
             .await
-            .map_err(seam_error)?;
+            .map_err(status_seam_error)?;
         match Reflect::get(&result, &JsValue::from_str("kind"))
             .ok()
             .and_then(|kind| kind.as_string())
@@ -533,7 +533,7 @@ impl RecordTransport for RecordTransportAdapter {
             Some("record") => Ok(optional_bytes(
                 Reflect::get(&result, &JsValue::from_str("record")).unwrap_or(JsValue::UNDEFINED),
             )),
-            Some("tooLarge") => Err(SeamError::new(format!(
+            Some("tooLarge") => Err(SeamError::over_cap(format!(
                 "getRecord: {} bytes exceeds the {}-byte cap",
                 capped_count(&result, "observed"),
                 capped_count(&result, "limit"),
@@ -553,7 +553,7 @@ impl RecordTransport for RecordTransportAdapter {
         self.js
             .put_record(&endpoint.0, routing_key, record)
             .await
-            .map_err(put_seam_error)?;
+            .map_err(status_seam_error)?;
         Ok(())
     }
 }
@@ -1000,7 +1000,7 @@ mod tests {
     fn a_put_rejection_keeps_an_http_status_and_nothing_else() {
         for status in [400.0, 429.0, 503.0] {
             assert_eq!(
-                put_seam_error(put_rejection(JsValue::from_f64(status))).status(),
+                status_seam_error(put_rejection(JsValue::from_f64(status))).status(),
                 Some(status as u16),
             );
         }
@@ -1011,10 +1011,10 @@ mod tests {
             JsValue::from_str("400"),
             JsValue::UNDEFINED,
         ] {
-            assert_eq!(put_seam_error(put_rejection(status)).status(), None);
+            assert_eq!(status_seam_error(put_rejection(status)).status(), None);
         }
         assert_eq!(
-            put_seam_error(js_sys::Error::new("offline").into()).status(),
+            status_seam_error(js_sys::Error::new("offline").into()).status(),
             None
         );
     }

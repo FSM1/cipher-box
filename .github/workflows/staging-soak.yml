@@ -122,6 +122,8 @@ jobs:
     env:
       E2E_SUITE: soak
       E2E_BASE_URL: ${{ needs.guard.outputs.base_url }}
+      # No page snapshot in the public `error-context.md` (staging-e2e.yml).
+      PLAYWRIGHT_NO_COPY_PROMPT: '1'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -179,6 +181,8 @@ jobs:
     env:
       E2E_SUITE: soak
       E2E_BASE_URL: ${{ needs.guard.outputs.base_url }}
+      # No page snapshot in the public `error-context.md` (staging-e2e.yml).
+      PLAYWRIGHT_NO_COPY_PROMPT: '1'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -4,11 +4,28 @@
  * account a spec mints is removed when the spec ends.
  */
 
-import { test as base, expect, type Browser, type Locator, type Page } from '@playwright/test';
+import {
+  test as base,
+  expect,
+  type Browser,
+  type Locator,
+  type Page,
+  type Response,
+  type TestInfo,
+} from '@playwright/test';
 import type { Hex } from 'viem';
 import { FilesPage } from '../page-objects/files.page';
 import { LoginPage } from '../page-objects/login.page';
 import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
+import { recordForensics, redact, requestTarget, type Forensics } from './forensics';
+import {
+  markRunExhausted,
+  nextStep,
+  runExhausted,
+  SIGN_IN_ANNOTATION,
+  type AbsorbedFault,
+  type SignInRecord,
+} from './loginRetry';
 import { installTestWallet, TEST_WALLET_NAME, type TestWallet } from './wallet';
 
 export { expect } from '@playwright/test';
@@ -49,28 +66,38 @@ export const test = base.extend<StagingFixtures>({
   // Automatic: staging keeps whatever a run leaves behind, and nothing else
   // reclaims it. The removal is reported, never asserted — a spec fails on its
   // own subject, and `account-removal.spec.ts` is what holds the path itself
-  // to a verdict.
+  // to a verdict. A failed spec also gets its forensics log, read before the
+  // removal moves the page on.
   apiOrigin: [
     async ({ page, wallet }, use, testInfo) => {
       const origin = watchApiOrigin(page);
+      const forensics = recordForensics(page);
       await use(origin);
+      await attachOnFailure(testInfo, 'forensics', forensics);
       await report(testInfo, 'account-removal', await removeOnce(page, origin(), wallet.address));
     },
     { auto: true },
   ],
 
   secondContext: async ({ browser }: { browser: Browser }, use, testInfo) => {
-    const opened: Array<{ page: Page; apiOrigin: () => string | null; address: string }> = [];
+    const opened: Array<{
+      page: Page;
+      apiOrigin: () => string | null;
+      forensics: Forensics;
+      address: string;
+    }> = [];
 
     await use(async (privateKey?: Hex) => {
       const page = await (await browser.newContext()).newPage();
       const apiOrigin = watchApiOrigin(page);
+      const forensics = recordForensics(page);
       const wallet = await installTestWallet(page, privateKey);
-      opened.push({ page, apiOrigin, address: wallet.address });
+      opened.push({ page, apiOrigin, forensics, address: wallet.address });
       return { page, wallet };
     });
 
     for (const [index, context] of opened.entries()) {
+      await attachOnFailure(testInfo, `forensics-${index + 1}`, context.forensics);
       await report(
         testInfo,
         `account-removal-${index + 1}`,
@@ -118,8 +145,14 @@ function report(
   });
 }
 
-/** How many wallet logins one sign-in spends before it gives up. */
-const SIGN_IN_ATTEMPTS = 3;
+async function attachOnFailure(
+  testInfo: TestInfo,
+  label: string,
+  forensics: Forensics
+): Promise<void> {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  await testInfo.attach(label, { body: await forensics.report(), contentType: 'text/plain' });
+}
 
 /**
  * Signs in at the front door and waits for the vault browser. Returns the
@@ -136,31 +169,65 @@ export async function signIn(page: Page): Promise<number> {
  * waits for `signedIn`. Returns the milliseconds the successful attempt took.
  *
  * The auth network refuses a login under its own load, which the panel draws as
- * a banner and not as a navigation, so a refused attempt reloads the same
- * address, fragment included, and is retried.
+ * a banner and not as a navigation. {@link nextStep} decides whether a refusal
+ * reloads the same address, fragment included, and tries again. The thrown
+ * error is redacted, since it lands in a public log.
  */
 export async function signInWithWallet(page: Page, signedIn: Locator): Promise<number> {
   const login = new LoginPage(page);
-  let refusal = '';
+  const info = test.info();
+  const outputDir = info.project.outputDir;
+  const faults: AbsorbedFault[] = [];
+  const annotate = (result: SignInRecord['result']): void => {
+    info.annotations.push({
+      type: SIGN_IN_ANNOTATION,
+      description: JSON.stringify({ faults, result } satisfies SignInRecord),
+    });
+  };
 
-  for (let attempt = 0; attempt < SIGN_IN_ATTEMPTS; attempt += 1) {
+  const signInStarted = Date.now();
+  for (let attempt = 0; ; attempt += 1) {
+    const attemptStarted = Date.now();
     if (attempt > 0) await page.reload();
     await expect(login.walletButton).toBeEnabled({ timeout: 60_000 });
 
+    const failed: string[] = [];
+    const noteRefused = (response: Response): void => {
+      if (response.status() < 400) return;
+      failed.push(`${requestTarget(response.url())} ${response.status()}`);
+    };
+    page.on('response', noteRefused);
     const started = Date.now();
-    await login.walletButton.click();
-    await page
-      .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
-      .click();
+    let refusal: string | null;
+    try {
+      await login.walletButton.click();
+      await page
+        .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
+        .click();
+      refusal = await login.refusal(signedIn, 300_000);
+    } finally {
+      page.off('response', noteRefused);
+    }
+    if (refusal === null) {
+      annotate(faults.length === 0 ? 'signed-in' : 'recovered');
+      return Date.now() - started;
+    }
 
-    const refused = await login.refusal(signedIn, 300_000);
-    if (refused === null) return Date.now() - started;
-    refusal = refused;
+    const step = nextStep(attempt, refusal, runExhausted(outputDir), Date.now() - signInStarted);
+    if (step.fault !== null) faults.push({ fault: step.fault, attempt: attempt + 1 });
+    if (step.action === 'fail') {
+      if (step.result === 'exhausted') markRunExhausted(outputDir);
+      annotate(step.result);
+      throw new Error(
+        redact(
+          `the wallet login was refused on attempt ${attempt + 1}; the refusal read: ` +
+            `${refusal}; the refused requests: ${failed.join(', ') || 'none'}`
+        )
+      );
+    }
+    info.setTimeout(info.timeout + (Date.now() - attemptStarted) + step.waitMs);
+    await page.waitForTimeout(step.waitMs);
   }
-
-  throw new Error(
-    `the wallet login was refused ${SIGN_IN_ATTEMPTS} times; the last refusal read: ${refusal}`
-  );
 }
 
 /**

@@ -54,6 +54,9 @@ pub struct InMemoryRecordStore {
     /// Routing keys whose PUT an endpoint answers with an HTTP status and does
     /// not store, keyed by routing key and endpoint.
     put_answers: Arc<Mutex<HashMap<(String, EndpointId), u16>>>,
+    /// Endpoints that answer every GET with an HTTP status
+    /// ([`answer_get_at`](InMemoryRecordStore::answer_get_at)).
+    get_answers: Arc<Mutex<HashMap<EndpointId, u16>>>,
     /// Routing keys whose GET is refused at every endpoint, so one node of a
     /// tree can be unresolvable while the rest of it reads normally.
     get_failing_keys: Arc<Mutex<HashSet<String>>>,
@@ -95,6 +98,7 @@ impl InMemoryRecordStore {
             put_failing: Arc::new(Mutex::new(HashSet::new())),
             put_failing_keys: Arc::new(Mutex::new(HashSet::new())),
             put_answers: Arc::default(),
+            get_answers: Arc::default(),
             get_failing_keys: Arc::new(Mutex::new(HashSet::new())),
             gets: Arc::new(Mutex::new(HashMap::new())),
             deferred: Arc::new(Mutex::new(HashMap::new())),
@@ -207,6 +211,16 @@ impl InMemoryRecordStore {
     /// Restore `endpoint` to normal operation.
     pub fn heal_endpoint(&self, endpoint: &EndpointId) {
         self.failing.lock().expect("lock").remove(endpoint);
+        self.get_answers.lock().expect("lock").remove(endpoint);
+    }
+
+    /// Answer every GET at `endpoint` with `status` until
+    /// [`heal_endpoint`](Self::heal_endpoint) clears it.
+    pub fn answer_get_at(&self, endpoint: &EndpointId, status: u16) {
+        self.get_answers
+            .lock()
+            .expect("lock")
+            .insert(endpoint.clone(), status);
     }
 
     /// Make `endpoint` reject PUTs while still serving GETs, driving a lost CAS
@@ -428,6 +442,12 @@ impl RecordTransport for InMemoryRecordStore {
                 endpoint.0
             )));
         }
+        if let Some(status) = self.get_answers.lock().expect("lock").get(endpoint) {
+            return Err(SeamError::http_status(
+                format!("get answered {status}"),
+                *status,
+            ));
+        }
         if self.get_failing_key(routing_key) {
             return Err(SeamError::new(format!("get refused for {routing_key}")));
         }
@@ -442,7 +462,7 @@ impl RecordTransport for InMemoryRecordStore {
                 .ok_or_else(|| SeamError::new(format!("unknown endpoint: {}", endpoint.0)))?,
         };
         match record {
-            Some(bytes) if bytes.len() > max_bytes => Err(SeamError::new(format!(
+            Some(bytes) if bytes.len() > max_bytes => Err(SeamError::over_cap(format!(
                 "record over cap: {} > {max_bytes}",
                 bytes.len()
             ))),
