@@ -710,7 +710,7 @@ where
                 current = net
                     .resolve_anchored(&target.scope)
                     .await
-                    .map_err(EngineError::from_resolve_failure)?;
+                    .map_err(|e| EngineError::from_resolve_failure(e, "write-cut-scope-root"))?;
                 commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
             }
         }
@@ -981,7 +981,7 @@ where
         let parent_record = parent_net
             .resolve_anchored(&parent.scope)
             .await
-            .map_err(EngineError::from_resolve_failure)?;
+            .map_err(|e| EngineError::from_resolve_failure(e, "repoint-parent"))?;
         let resealed = reseal_with_moved_child(
             self.entropy,
             self.enc_secret,
