@@ -623,6 +623,14 @@ where
             state
                 .scope_roots_walked
                 .set(failure.is_none() && state.unproved_scope_roots.borrow().is_empty());
+            state.walk_refused_root.set(match failure {
+                Some(WalkFailure::Rejected { scope_id })
+                    if state.unproved_scope_roots.borrow().is_empty() =>
+                {
+                    Some(NodeId(scope_id))
+                }
+                _ => None,
+            });
             // The boundary set a rejection leaves is incomplete, and
             // what is missing from it reads as its parent's scope,
             // so the session refuses to classify a move at all until
@@ -1226,6 +1234,7 @@ where
             boundaries,
             root_name: &root_name,
             walked: state.scope_roots_walked.get(),
+            refused_root: state.walk_refused_root.get(),
         };
         conversion.redrive_owed(&sites).await;
         state.owed_rotation_driven.set(true);

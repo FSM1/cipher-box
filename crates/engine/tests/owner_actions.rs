@@ -10883,10 +10883,11 @@ fn a_share_to_another_recipient_while_a_mint_is_owed_is_refused() {
 }
 
 /// A downgrade whose cut-set publish failed, with a read-back that did not
-/// answer, leaves an entry whose cut never landed. The pass drops it: it runs
-/// no wave over the uncut set, raises no cut-epoch floor, and says so once.
+/// answer, leaves an entry whose cut never landed. Within the bound the pass
+/// keeps it and runs no wave over the uncut set, and the downgrade runs again
+/// over it (ADR 0068 D4).
 #[test]
-fn a_downgrade_whose_cut_set_never_landed_is_dropped_with_no_wave_and_no_floor() {
+fn a_downgrade_whose_cut_set_never_landed_runs_again_with_no_wave_before_it() {
     let mut fx = GrantScenario::new();
     assert_eq!(
         fx.grant_folder_at(Permission::Write),
@@ -10916,7 +10917,8 @@ fn a_downgrade_whose_cut_set_never_landed_is_dropped_with_no_wave_and_no_floor()
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert_eq!(
         abandoned(&mut fx._events),
-        vec![(fx.folder, "owed-cut-never-landed".to_owned())]
+        vec![],
+        "the pass keeps the entry"
     );
     assert_eq!(
         fx.granted_scope_repoint().write_epoch,
@@ -11566,8 +11568,8 @@ fn an_owed_cut_whose_parent_index_omits_the_scope_is_finished_from_its_pointer()
 
 /// A downgrade whose wave stops before it reads the cut set still holds the
 /// gate at the cut it published, so the downgraded writer's replay of the root
-/// before the cut does not read as a cut that never landed, and the owed wave
-/// is not dropped.
+/// before the cut does not read as a cut that never landed. The pass runs the
+/// owed wave from the last copy (ADR 0068 D1).
 #[test]
 fn a_replayed_pre_cut_root_does_not_drop_an_owed_downgrade() {
     let mut fx = GrantScenario::new();
@@ -11625,12 +11627,10 @@ fn a_replayed_pre_cut_root_does_not_drop_an_owed_downgrade() {
             .any(|event| matches!(event, Event::RotationWorkAbandoned { .. })),
         "the replay does not drop the owed wave"
     );
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            Event::RotationWorkOwed { scope_root, .. } if *scope_root == fx.folder
-        )),
-        "the wave stays owed"
+    assert_eq!(
+        fx.granted_scope_repoint().write_epoch,
+        3,
+        "the pass runs the owed wave"
     );
 }
 
@@ -14960,6 +14960,17 @@ fn sign_at(
 /// seed derives, at `sequence`: a folder envelope with no grant section.
 /// Returns the name.
 fn plant_root_at(fx: &GrantScenario, revokee_seed: &[u8; 32], sequence: u64) -> IpnsName {
+    plant_root_served_at(fx, revokee_seed, sequence, true)
+}
+
+/// [`plant_root_at`], with a head block that no endpoint serves when `served`
+/// is false.
+fn plant_root_served_at(
+    fx: &GrantScenario,
+    revokee_seed: &[u8; 32],
+    sequence: u64,
+    served: bool,
+) -> IpnsName {
     let planted = author_child_envelope(EnvelopeAuthoring {
         node_id: fx.folder.0,
         scope_id: fx.folder.0,
@@ -14971,7 +14982,9 @@ fn plant_root_at(fx: &GrantScenario, revokee_seed: &[u8; 32], sequence: u64) -> 
         carried_epoch_tag_unknown: PreservedFields::new(),
     })
     .expect("the planted root seals");
-    fx.blocks.put(planted.block.clone());
+    if served {
+        fx.blocks.put(planted.block.clone());
+    }
     sign_at(
         fx,
         revokee_seed,
@@ -15300,29 +15313,177 @@ fn a_read_cut_that_stops_at_the_moved_root_finishes_in_the_redrive() {
     assert_the_revokee_is_cut(&fx, &revokee_seed);
 }
 
-/// ADR 0068 D4: the revokee plants at the root before the revoke, and the
-/// wave that runs first stops. No root carries the cut set, so the re-drive
-/// drops the entry, and the owner runs the revoke again.
+/// The events that report work owed at `scope`, or abandoned there.
+fn owed_or_abandoned(events: &[Event], scope: NodeId) -> (bool, bool) {
+    let owed = events.iter().any(
+        |event| matches!(event, Event::RotationWorkOwed { scope_root, .. } if *scope_root == scope),
+    );
+    let abandoned = events.iter().any(|event| {
+        matches!(event, Event::RotationWorkAbandoned { scope_root, .. } if *scope_root == scope)
+    });
+    (owed, abandoned)
+}
+
+/// ADR 0068 D4 as amended: the revokee plants at the root before the revoke,
+/// and the wave that runs first stops. The cut never lands, and the entry
+/// stays with its first stop while the owner runs the revoke again within the
+/// bound. With no command for the length of the bound, the re-drive drops it.
 #[test]
-fn a_first_wave_that_stops_leaves_a_cut_the_redrive_abandons() {
+fn a_first_wave_that_stops_leaves_a_cut_the_redrive_keeps_within_the_bound() {
     let mut fx = GrantScenario::new();
     let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
     plant_an_unserved_head(&fx, &revokee_seed, grandchild);
     let old_root = fx.granted_scope_repoint().current_root;
     plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &old_root) + 1);
 
-    assert!(
-        revoke_the_recipient(&mut fx).is_err(),
-        "the first wave stops"
+    let _ = revoke_the_recipient(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let events = events_so_far(&mut fx._events);
+    assert_eq!(
+        owed_or_abandoned(&events, fx.folder),
+        (true, false),
+        "the cut is owed, and the re-drive keeps it"
     );
 
-    assert!(
-        revoke_the_recipient(&mut fx).is_err(),
-        "the run again stops at the same node"
-    );
+    fx.world.scheduler.advance(DROP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert_eq!(
         abandoned(&mut fx._events),
         vec![(fx.folder, "owed-cut-never-landed".to_owned())],
-        "and its re-drive dropped the first cut"
+        "with no command for the bound, the re-drive drops it"
     );
+}
+
+/// ADR 0068 D4 as amended, with ADR 0065 D3: a root plant and an interior node
+/// whose head block no endpoint serves. Each run of the revoke again keeps the
+/// first stop of the entry and the passes the node held, so the node drops
+/// past the bound and the revoke ends.
+#[test]
+fn a_rerun_keeps_the_first_stop_so_an_unserved_node_drops_past_the_bound() {
+    let mut fx = GrantScenario::new();
+    let (child, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    let old_root = fx.granted_scope_repoint().current_root;
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &old_root) + 1);
+
+    let _ = revoke_the_recipient(&mut fx);
+    let mut events = Vec::new();
+    for _ in 0..2 * DROP_BOUND_PASSES + 2 {
+        fx.world.scheduler.advance(DROP_BOUND / 4);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        let _ = revoke_the_recipient(&mut fx);
+        events.extend(events_so_far(&mut fx._events));
+    }
+
+    assert!(
+        events
+            .iter()
+            .filter_map(as_drop)
+            .any(|drop| drop == (fx.folder, grandchild, DropCause::NoHeadBlock)),
+        "the node drops past the bound"
+    );
+    assert!(
+        !owed_or_abandoned(&events, fx.folder).1,
+        "no entry is abandoned"
+    );
+    assert_eq!(fx.granted_scope_repoint().write_epoch, 3);
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+    assert_ne!(
+        derive_write_name(&revokee_seed, &child.0),
+        moved_child_name(&fx, "child"),
+        "the moved root names the child at a new name"
+    );
+}
+
+/// ADR 0068 D1 as amended: the revokee publishes a root record whose head
+/// block no endpoint serves, before the first revoke. The command read runs
+/// on the last copy at once, and the revoke ends in one pass.
+#[test]
+fn a_revoke_over_a_root_whose_head_block_no_endpoint_serves_ends_in_one_pass() {
+    let mut fx = GrantScenario::new();
+    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let old_root = fx.granted_scope_repoint().current_root;
+    let sequence = sequence_at(&fx.world, &old_root) + 1;
+    plant_root_served_at(&fx, &revokee_seed, sequence, false);
+
+    let outcome = block_on(fx.engine.command(Command::Revoke {
+        node: fx.folder,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+    }));
+
+    assert_eq!(outcome, Ok(CommandOutcome::Done));
+    let events = events_so_far(&mut fx._events);
+    assert!(
+        root_refusals(&fx, &events, sequence) > 0,
+        "the drop is reported"
+    );
+    assert_eq!(owed_or_abandoned(&events, fx.folder), (false, false));
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+}
+
+/// The cost of ADR 0068 D1 as amended: another owner device publishes the
+/// scope root, and no endpoint serves its head block yet. A revoke on this
+/// device runs on its older copy, so the moved root drops the child that the
+/// other device added, and the trust event reports it.
+#[test]
+fn a_revoke_over_honest_lag_runs_on_the_older_copy() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let (mut second, _second_events, mut second_tasks) = fx.second_owner_device();
+    create_published_folder(
+        &fx.world,
+        &mut second,
+        &mut second_tasks,
+        fx.folder,
+        "newer",
+    );
+    let root = fx.granted_scope_repoint().current_root;
+    let sequence = sequence_at(&fx.world, &root);
+    let cid = published_head_cid(&fx.world, &root).expect("the newer root is published");
+    fx.blocks
+        .replace(&cid, b"not the block the record names".to_vec());
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    let events = events_so_far(&mut fx._events);
+    assert!(
+        root_refusals(&fx, &events, sequence) > 0,
+        "the drop is reported"
+    );
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+    let moved = fx.granted_scope_repoint().current_root;
+    assert!(
+        moved_children(&fx, &moved, fx.folder)
+            .iter()
+            .all(|child| child.name != "newer"),
+        "the moved root does not carry the child of the newer root"
+    );
+}
+
+/// ADR 0068 as amended: the read cut lands, the wave stops at its re-point,
+/// and the revokee then plants at the root. The boundary walk refuses the
+/// planted root, and the sync pass still re-drives the owed wave from the last
+/// copy, with no command.
+#[test]
+fn a_sync_pass_redrives_an_owed_cut_while_a_root_plant_stands() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the wave is owed");
+    fx.world.record_store.heal_put_for(pointer.as_str());
+    let old_root = derive_write_name(&revokee_seed, &fx.folder.0);
+    let sequence = sequence_at(&fx.world, &old_root) + 1;
+    plant_root_at(&fx, &revokee_seed, sequence);
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let events = events_so_far(&mut fx._events);
+    assert!(root_refusals(&fx, &events, sequence) > 0);
+    assert_eq!(fx.granted_scope_repoint().write_epoch, 3, "the wave landed");
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(fx.owed_scopes().is_empty(), "no work stays owed");
 }

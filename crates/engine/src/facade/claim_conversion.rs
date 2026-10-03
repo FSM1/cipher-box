@@ -21,7 +21,9 @@ use crate::grants::{
 };
 use crate::net::cut::CutRootReads;
 use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys, RootFallback};
-use crate::rotation::{Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope};
+use crate::rotation::{
+    AtOnce, Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope,
+};
 use crate::sync::BookkeepingSeal;
 use crate::sync::owed_rotation::OwedCell;
 
@@ -398,7 +400,14 @@ where
         vault_pointer_signer: Option<&Ed25519Signer>,
     ) -> Result<CutRotationReport, EngineError> {
         let report = self
-            .rotate_planes(node, target, scope_root_name, cut, vault_pointer_signer)
+            .rotate_planes(
+                node,
+                target,
+                scope_root_name,
+                cut,
+                vault_pointer_signer,
+                false,
+            )
             .await
             .map_err(EngineError::from_cut_rotation)?;
         record_cut_epoch_floor(
@@ -412,7 +421,8 @@ where
     }
 
     /// Drive `cut` at `node` through the planes it demands
-    /// ([`rotate_on_cut`] over the production [`OwnerCutNet`]).
+    /// ([`rotate_on_cut`] over the production [`OwnerCutNet`]). Under an owner
+    /// `command` the root reads fall back at once (ADR 0068 D1).
     pub(super) async fn rotate_planes(
         &self,
         node: NodeId,
@@ -420,9 +430,13 @@ where
         scope_root_name: &IpnsName,
         cut: &RevokedCommittedSet,
         vault_pointer_signer: Option<&Ed25519Signer>,
+        command: bool,
     ) -> Result<CutRotationReport, RotateOnCutError> {
         let sweep = self.cut.sweep;
         let owed_bound = self.owed_bound(node).await;
+        let bound = owed_bound
+            .as_ref()
+            .map_or(&NoBound as &dyn NodeBound, |bound| bound);
         let rotator = OwnerCutNet {
             transport: self.transport,
             api: self.api,
@@ -446,9 +460,8 @@ where
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.cut.vault_root.0,
             sweep: &|scope| sweep(scope, target.parent_node_seed.clone()),
-            bound: owed_bound
-                .as_ref()
-                .map_or(&NoBound as &dyn NodeBound, |bound| bound),
+            bound,
+            root_bound: if command { &AtOnce } else { bound },
             root_reads: CutRootReads::default(),
         };
         rotate_on_cut(&rotator, node, cut).await
@@ -1147,6 +1160,10 @@ pub(crate) struct TickSites<'a> {
     /// Whether a walk this session named every scope root. Until one has, an
     /// ancestor scope root may be missing from the boundaries.
     pub(crate) walked: bool,
+    /// The scope root whose refusal by the gate was the last walk's one
+    /// failure. The walk reached it through its ancestors, so an owed cut there
+    /// still finds its enclosing scope (ADR 0068 D4).
+    pub(crate) refused_root: Option<NodeId>,
 }
 
 impl ConversionSites for TickSites<'_> {
@@ -1172,7 +1189,7 @@ impl ConversionSites for TickSites<'_> {
     }
 
     async fn enclosing(&self, node: NodeId) -> Result<OwnerScope, EngineError> {
-        if !self.walked {
+        if !self.walked && self.refused_root != Some(node) {
             return Err(EngineError::Seam {
                 message: "the scope roots are not all walked".to_owned(),
             });

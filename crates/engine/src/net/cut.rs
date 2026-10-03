@@ -94,6 +94,9 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     pub sweep: &'a dyn Fn(ChildScopeRef) -> BoxedTask,
     /// The cut's bound of ADR 0065 D3 ([`RotateScopeWritePlan::bound`]).
     pub bound: &'a dyn NodeBound,
+    /// The bound the root fallback waits on: [`AtOnce`](crate::rotation::AtOnce)
+    /// under an owner command, the cut's bound under a re-drive (ADR 0068 D1).
+    pub root_bound: &'a dyn NodeBound,
     /// What this cut's own root reads met ([`CutRootReads`]).
     pub root_reads: CutRootReads,
 }
@@ -186,7 +189,7 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
-            root_fallback: Some(RootFallback::new(self.scope_id, self.bound)),
+            root_fallback: Some(RootFallback::new(self.scope_id, self.root_bound)),
         }
     }
 
@@ -461,7 +464,7 @@ where
                     session_root_scope_id: self.session_root_scope_id,
                     gated_reads: GatedWaveReads::default(),
                     subtree: WaveSubtree::default(),
-                    root_fallback: Some(RootFallback::new(scope_root.0, self.bound)),
+                    root_fallback: Some(RootFallback::new(scope_root.0, self.root_bound)),
                 };
                 rotate_scope_write(
                     &mut SharedEntropy(self.entropy),

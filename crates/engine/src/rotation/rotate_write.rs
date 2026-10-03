@@ -200,6 +200,20 @@ pub trait NodeBound {
 /// A bound that no node is ever past.
 pub struct NoBound;
 
+/// A bound that every node is past at once: the root read of an owner
+/// command, which the owner starts (ADR 0068 D1).
+pub struct AtOnce;
+
+impl NodeBound for AtOnce {
+    fn past(&self, _node_id: &[u8; 16], _plant: bool) -> bool {
+        true
+    }
+
+    fn held(&self, _node_id: &[u8; 16]) {}
+
+    fn resolved(&self, _node_id: &[u8; 16]) {}
+}
+
 impl NodeBound for NoBound {
     fn past(&self, _node_id: &[u8; 16], _plant: bool) -> bool {
         false

@@ -275,6 +275,7 @@ where
                 &cut,
                 None,
                 current.write_epoch,
+                false,
             )
             .await?;
         let rekeyed = report

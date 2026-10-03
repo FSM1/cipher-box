@@ -125,9 +125,9 @@ use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
 use crate::rotation::{
-    AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
-    MAX_ROTATION_ATTEMPTS, NoBound, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot,
-    ResolveFailure, Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
+    AscentAuthority, AtOnce, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
+    MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure,
+    Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
     RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys,
     SweepOutcome, SweepResolveFailure, SweepRun, SweepTaskFactory, WalkedReadEpochs, WriteHistory,
     WriteRevokeKind, bounded, cut_for_write_scope, derive_write_name, record_grant_floor,
@@ -5756,6 +5756,7 @@ impl<T: SeamTypes> Engine<T> {
         }
         self.state.boundary_walk_rejected.set(false);
         self.state.scope_roots_walked.set(false);
+        self.state.walk_refused_root.set(None);
         self.state.owed_rotation_driven.set(false);
         self.state.owed_rotation.forget();
         self.state.boundary_walk_landed.set(false);
@@ -7768,7 +7769,7 @@ where {
             .owner_scope(node, api, owner_keys(), check, unindexed)
             .await?;
         let current = OwnerRotationNet {
-            root_fallback: Some(RootFallback::new(target.scope.scope_id, &NoBound)),
+            root_fallback: Some(RootFallback::new(target.scope.scope_id, &AtOnce)),
             ..self.owner_rotation_net(
                 api,
                 owner_keys(),
@@ -7864,6 +7865,7 @@ where {
                 cut,
                 vault_pointer_signer.as_ref(),
                 write_epoch,
+                true,
             )
             .await?
         else {
@@ -8051,7 +8053,7 @@ where {
             // The same share over a move the re-drive cannot prove: the mint
             // runs again over the entry, which stands until the mint replaces
             // it, and resumes against a root that landed.
-            (Redriven::StillOwed, Some(_)) => {
+            (Redriven::StillOwed | Redriven::NotLanded, Some(_)) => {
                 let standing = pass
                     .owed()
                     .entry(node)
@@ -8061,7 +8063,9 @@ where {
                     .ok_or_else(EngineError::rotation_work_owed)?;
                 return Box::pin(self.mint_share(node, share, permission, Some(standing))).await;
             }
-            (Redriven::StillOwed, None) => return Err(EngineError::rotation_work_owed()),
+            (Redriven::StillOwed | Redriven::NotLanded, None) => {
+                return Err(EngineError::rotation_work_owed());
+            }
             (Redriven::NoEntry | Redriven::Finished | Redriven::Dropped, _) => {}
         }
         Box::pin(self.mint_share(node, share, permission, None)).await
@@ -8821,7 +8825,10 @@ where {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let pass_keys = self.pass_keys(session)?;
         let pass = self.conversion_pass(session, api, &pass_keys);
-        if pass.redrive_scope(&self.sites(session, api), node).await? == Redriven::StillOwed {
+        if matches!(
+            pass.redrive_scope(&self.sites(session, api), node).await?,
+            Redriven::StillOwed | Redriven::NotLanded
+        ) {
             return Err(EngineError::rotation_work_owed());
         }
         let keys = OwnerActionKeys::new(session);
@@ -8860,7 +8867,7 @@ where {
     ) -> Result<GatedScope<'a, T>, EngineError> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let net = OwnerRotationNet {
-            root_fallback: cut.then(|| RootFallback::new(target.scope.scope_id, &NoBound)),
+            root_fallback: cut.then(|| RootFallback::new(target.scope.scope_id, &AtOnce)),
             ..self.owner_rotation_net(
                 api,
                 keys.rotation(),
