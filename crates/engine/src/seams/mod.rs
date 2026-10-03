@@ -63,6 +63,7 @@ use core::fmt;
 pub struct SeamError {
     message: String,
     status: Option<u16>,
+    over_cap: bool,
 }
 
 impl SeamError {
@@ -71,6 +72,7 @@ impl SeamError {
         Self {
             message: message.into(),
             status: None,
+            over_cap: false,
         }
     }
 
@@ -81,12 +83,28 @@ impl SeamError {
         Self {
             message: message.into(),
             status: Some(status),
+            over_cap: false,
+        }
+    }
+
+    /// A seam error for a record body over the caller's byte cap: the endpoint
+    /// answered, with more bytes than a record may carry.
+    pub fn over_cap(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            status: None,
+            over_cap: true,
         }
     }
 
     /// The HTTP status the answer carried, when the seam got an answer.
     pub fn status(&self) -> Option<u16> {
         self.status
+    }
+
+    /// Whether the endpoint served a body over the byte cap.
+    pub fn is_over_cap(&self) -> bool {
+        self.over_cap
     }
 
     /// The diagnostic message.

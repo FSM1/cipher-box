@@ -30,6 +30,7 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::ct_eq;
+use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
 
 use zeroize::Zeroizing;
 
@@ -53,7 +54,7 @@ use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
 use cipherbox_engine::seams::{
-    BoxedTask, ContactLabel, FloorStore, Mailbox, RecordTransport, Scheduler,
+    BoxedTask, ContactLabel, EndpointId, FloorStore, Mailbox, RecordTransport, Scheduler,
     SharerScopedFloorStore, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::VaultSettings;
@@ -15462,6 +15463,25 @@ fn a_revoke_over_a_root_head_block_the_gateway_times_out_on_does_not_fall_back()
     assert_unavailable_with_no_fallback(&mut fx, outcome, &root, sequence);
 }
 
+/// ADR 0068 D1 with ADR 0071 D1: the revokee publishes a root whose head
+/// block no block source holds, and one record endpoint fails. The revoke is
+/// unavailable, with no fallback and no trust event.
+#[test]
+fn a_revoke_over_an_absent_root_head_block_while_an_endpoint_fails_is_unavailable() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let root = fx.granted_scope_repoint().current_root;
+    let sequence = sequence_at(&fx.world, &root) + 1;
+    plant_root_served_at(&fx, &revokee_seed, sequence, false);
+    let failing = fx.world.record_store.endpoints()[1].clone();
+    fx.world.record_store.fail_endpoint(&failing);
+    let _ = events_so_far(&mut fx._events);
+
+    let outcome = revoke_the_recipient(&mut fx);
+
+    assert_unavailable_with_no_fallback(&mut fx, outcome, &root, sequence);
+}
+
 /// ADR 0068 D1: another owner device moved the root on, and the snapshot
 /// cache write of the new record fails. A local fault, so the command does
 /// not fall back.
@@ -15765,4 +15785,273 @@ fn a_sync_pass_redrives_an_owed_cut_while_a_root_plant_stands() {
     assert_the_revokee_is_cut(&fx, &revokee_seed);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert!(fx.owed_scopes().is_empty(), "no work stays owed");
+}
+
+// ---------------------------------------------------------------------------
+// A lagging endpoint while another endpoint fails (ADR 0071)
+// ---------------------------------------------------------------------------
+
+/// A grant, then a file created under `parent` while endpoint B refuses PUTs:
+/// B serves the record at `parent` one sequence below A. Returns (A, B).
+fn lag_one_endpoint(fx: &mut GrantScenario, parent: NodeId) -> (EndpointId, EndpointId) {
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let endpoints = fx.world.record_store.endpoints();
+    let (a, b) = (endpoints[0].clone(), endpoints[1].clone());
+    fx.world.record_store.fail_put_endpoint(&b);
+    block_on(fx.engine.command(Command::Create {
+        parent,
+        name: "upload.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.world.record_store.heal_put_endpoint(&b);
+    let name = write_name(parent);
+    assert_eq!(
+        sequence_served_by(&fx.world, &b, &name) + 1,
+        sequence_served_by(&fx.world, &a, &name),
+        "B lags A by one sequence"
+    );
+    (a, b)
+}
+
+fn sequence_served_by(world: &FakeWorld, endpoint: &EndpointId, name: &IpnsName) -> u64 {
+    let bytes = world
+        .record_store
+        .record_at(endpoint, name.as_str())
+        .expect("the endpoint holds a record");
+    IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(name))
+        .expect("the record verifies")
+        .sequence
+}
+
+fn revoke_recipient(fx: &mut GrantScenario) -> Result<CommandOutcome, EngineError> {
+    fx.revoke_person(&recipient_identity().verifying_key().to_sec1())
+}
+
+/// The cached last-known-good copy and the durable sequence floor of `node`'s
+/// record name on the owner device.
+fn cache_and_floor(fx: &GrantScenario, node: NodeId) -> (Option<Vec<u8>>, Option<u64>) {
+    let key = write_name(node);
+    let key = key.as_str().as_bytes();
+    (
+        block_on(fx.owner_device.snapshot_cache.get(key)).expect("the cache reads"),
+        block_on(floor::sequence_floor(&fx.owner_device.floor_store, key)).expect("floor read"),
+    )
+}
+
+fn assert_revoke_unavailable_while_a_fails(parent_of: fn(&GrantScenario) -> NodeId) {
+    assert_revoke_unavailable_while(parent_of, |store, a| store.fail_endpoint(a));
+}
+
+/// [`assert_revoke_unavailable_while_a_fails`], with A failed by `fail`.
+fn assert_revoke_unavailable_while(
+    parent_of: fn(&GrantScenario) -> NodeId,
+    fail: fn(&InMemoryRecordStore, &EndpointId),
+) {
+    let mut fx = GrantScenario::new();
+    let parent = parent_of(&fx);
+    let (a, _) = lag_one_endpoint(&mut fx, parent);
+    events_so_far(&mut fx._events);
+    let before = cache_and_floor(&fx, parent);
+    fail(&fx.world.record_store, &a);
+
+    let outcome = revoke_recipient(&mut fx);
+    assert!(
+        matches!(outcome, Err(EngineError::Seam { .. })),
+        "a below-floor pick while an endpoint fails is unavailable: {outcome:?}"
+    );
+    assert_eq!(abuse_events(&mut fx._events), 0, "no trust event");
+    assert_eq!(cache_and_floor(&fx, parent), before, "nothing is adopted");
+
+    fx.world.record_store.heal_endpoint(&a);
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+}
+
+/// A 429 states nothing about the name, so it is a failed endpoint.
+#[test]
+fn a_revoke_over_a_lagging_granted_root_while_an_endpoint_answers_429_is_unavailable() {
+    assert_revoke_unavailable_while(|fx| fx.folder, |store, a| store.answer_get_at(a, 429));
+}
+
+#[test]
+fn a_revoke_over_a_lagging_granted_root_while_an_endpoint_fails_is_unavailable() {
+    assert_revoke_unavailable_while_a_fails(|fx| fx.folder);
+}
+
+#[test]
+fn a_revoke_over_a_lagging_vault_root_while_an_endpoint_fails_is_unavailable() {
+    assert_revoke_unavailable_while_a_fails(|_| ROOT);
+}
+
+#[test]
+fn a_revoke_over_a_lagging_endpoint_with_every_endpoint_up_finishes() {
+    let mut fx = GrantScenario::new();
+    let folder = fx.folder;
+    lag_one_endpoint(&mut fx, folder);
+    assert_eq!(revoke_recipient(&mut fx), Ok(CommandOutcome::Done));
+}
+
+/// What endpoint A answers while B serves the old record.
+#[derive(Clone, Copy)]
+enum AAnswers {
+    /// A serves B's old record too.
+    TheOldRecord,
+    /// A answers 403: an answer, not a failed endpoint (ADR 0071 D2).
+    Forbidden,
+}
+
+/// [`lag_one_endpoint`], then A answers as `answer`: every endpoint answers,
+/// and the freshest record is below the floor.
+fn every_endpoint_answers_below_floor(
+    parent_of: fn(&GrantScenario) -> NodeId,
+    answer: AAnswers,
+) -> GrantScenario {
+    let mut fx = GrantScenario::new();
+    let parent = parent_of(&fx);
+    let (a, b) = lag_one_endpoint(&mut fx, parent);
+    match answer {
+        AAnswers::TheOldRecord => {
+            let name = write_name(parent);
+            let old = fx
+                .world
+                .record_store
+                .record_at(&b, name.as_str())
+                .expect("B holds the old record");
+            fx.world.record_store.seed_record(&a, name.as_str(), old);
+        }
+        AAnswers::Forbidden => fx.world.record_store.answer_get_at(&a, 403),
+    }
+    events_so_far(&mut fx._events);
+    fx
+}
+
+#[test]
+fn a_revoke_over_a_below_floor_record_from_every_endpoint_stays_a_trust_violation() {
+    for answer in [AAnswers::TheOldRecord, AAnswers::Forbidden] {
+        let mut fx = every_endpoint_answers_below_floor(|fx| fx.folder, answer);
+        let outcome = revoke_recipient(&mut fx);
+        assert!(
+            matches!(outcome, Err(EngineError::TrustViolation { .. })),
+            "every endpoint answered, so the below-floor pick is a rollback: {outcome:?}"
+        );
+        // The owner cut reads the root from its last copy, which sends one
+        // trust event, and a read revoke keeps the stop (ADR 0068 D1, D3).
+        assert_eq!(abuse_events(&mut fx._events), 1);
+    }
+}
+
+#[test]
+fn a_tick_read_of_a_below_floor_vault_root_from_every_endpoint_sends_one_gate_event() {
+    for answer in [AAnswers::TheOldRecord, AAnswers::Forbidden] {
+        let mut fx = every_endpoint_answers_below_floor(|_| ROOT, answer);
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+        let abuse: Vec<String> = events_so_far(&mut fx._events)
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::AttributableAbuse { description } => Some(description),
+                _ => None,
+            })
+            .collect();
+        // The vault-root resolve reports the sequence stage once; the link
+        // sweep's own read of the root reports its refusal apart.
+        assert_eq!(
+            abuse
+                .iter()
+                .filter(|description| description.contains("stage [sequence]"))
+                .count(),
+            1,
+            "{abuse:?}"
+        );
+    }
+}
+
+#[test]
+fn a_focus_read_of_a_below_floor_granted_root_from_every_endpoint_stays_abuse() {
+    let mut fx = every_endpoint_answers_below_floor(|fx| fx.folder, AAnswers::TheOldRecord);
+    let folder = fx.folder;
+    block_on(fx.engine.command(Command::SetFocus { node: Some(folder) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(abuse_events(&mut fx._events) > 0, "a trust event");
+}
+
+fn assert_read_stale_while_a_fails(parent_of: fn(&GrantScenario) -> NodeId) {
+    let mut fx = GrantScenario::new();
+    let parent = parent_of(&fx);
+    let (a, _) = lag_one_endpoint(&mut fx, parent);
+    let children = |fx: &GrantScenario| {
+        block_on(fx.engine.view())
+            .expect("a rendered view")
+            .children(parent)
+            .len()
+    };
+    let before = (children(&fx), cache_and_floor(&fx, parent));
+    events_so_far(&mut fx._events);
+    fx.world.record_store.fail_endpoint(&a);
+
+    block_on(fx.engine.command(Command::SetFocus { node: Some(parent) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(abuse_events(&mut fx._events), 0, "no trust event");
+    assert_eq!(
+        (children(&fx), cache_and_floor(&fx, parent)),
+        before,
+        "last-known-good stays, and no floor moves"
+    );
+}
+
+#[test]
+fn a_focus_read_of_a_lagging_granted_root_while_an_endpoint_fails_is_stale_not_abuse() {
+    assert_read_stale_while_a_fails(|fx| fx.folder);
+}
+
+#[test]
+fn a_tick_read_of_a_lagging_vault_root_while_an_endpoint_fails_is_stale_not_abuse() {
+    assert_read_stale_while_a_fails(|_| ROOT);
+}
+
+/// ADR 0071 D3: a queued op does not dead-letter on the lag. It stays queued,
+/// and lands when the failed endpoint recovers.
+#[test]
+fn a_queued_create_under_a_lagging_root_while_an_endpoint_fails_waits_and_lands() {
+    let mut fx = GrantScenario::new();
+    let folder = fx.folder;
+    let (a, b) = lag_one_endpoint(&mut fx, folder);
+    let name = write_name(folder);
+    let served = |fx: &GrantScenario| {
+        (
+            sequence_served_by(&fx.world, &a, &name),
+            sequence_served_by(&fx.world, &b, &name),
+        )
+    };
+    let before = (served(&fx), cache_and_floor(&fx, folder));
+    events_so_far(&mut fx._events);
+    fx.world.record_store.fail_endpoint(&a);
+
+    block_on(fx.engine.command(Command::Create {
+        parent: folder,
+        name: "queued.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a create stages");
+    let queued = queued_ops(&fx.owner_device);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(queued_ops(&fx.owner_device), queued, "the op stays queued");
+    assert_eq!(
+        (served(&fx), cache_and_floor(&fx, folder)),
+        before,
+        "the drain writes nothing"
+    );
+    assert_eq!(abuse_events(&mut fx._events), 0, "no trust event");
+
+    fx.world.record_store.heal_endpoint(&a);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(queued_ops(&fx.owner_device), 0, "the op lands");
+    assert!(
+        block_on(fx.engine.view())
+            .expect("a rendered view")
+            .children(folder)
+            .iter()
+            .any(|child| child.name == "queued.bin")
+    );
 }

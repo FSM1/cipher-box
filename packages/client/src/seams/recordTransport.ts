@@ -7,10 +7,10 @@
  * owns IPNS end-to-end — signing, verification, CAS, fan-out, and every trust
  * decision — so this seam never inspects, caches, or reorders records; it only
  * addresses `routingKey` and moves bytes. Absence is `null`, never an error;
- * a rejected promise is reserved for transport-level failure.
+ * a rejection carries the HTTP `status` when the endpoint answered.
  */
 
-import { drainCapped } from './cappedBody.js';
+import { discard, drainCapped } from './cappedBody.js';
 import type { CappedRecordResult, RecordTransportSeam } from './types.js';
 
 const IPNS_RECORD_MEDIA_TYPE = 'application/vnd.ipfs.ipns-record';
@@ -103,15 +103,17 @@ export class FetchRecordTransport implements RecordTransportSeam {
       ...endpointPolicy(),
     });
     if (response.status === 404) {
-      await response.body?.cancel();
+      await discard(response.body);
       return { kind: 'record', record: null };
     }
     if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(`RecordTransport GET ${response.status} at ${endpoint}`);
+      await discard(response.body);
+      throw Object.assign(new Error(`RecordTransport GET ${response.status} at ${endpoint}`), {
+        status: response.status,
+      });
     }
     if (!servesRecordBytes(response)) {
-      await response.body?.cancel();
+      await discard(response.body);
       return { kind: 'record', record: null };
     }
     const drained = await drainCapped(response, maxBytes);
