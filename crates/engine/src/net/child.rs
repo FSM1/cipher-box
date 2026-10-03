@@ -12,7 +12,7 @@
 //! epoch floor never moves from a child. No new crypto: pure composition of
 //! core verify/unseal plus the frozen KDF catalog.
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 
 use cipherbox_core::error::{Malformed, TrustViolation};
 use cipherbox_core::ipns::IpnsName;
@@ -67,6 +67,8 @@ pub struct ChildAdopter<'a, H, F> {
     local_head: RefCell<Option<LocalHead>>,
     /// The second scope an owed interior move binds ([`Self::with_owed_move`]).
     owed_move: Option<OwedMoveScope>,
+    /// The scope whose seed opened the last record ([`Self::opened_scope`]).
+    opened_scope: Cell<Option<[u8; 16]>>,
 }
 
 /// The other scope that an owed interior move binds to a read of an interior
@@ -110,6 +112,7 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
             assembled: RefCell::new(None),
             local_head: RefCell::new(None),
             owed_move: None,
+            opened_scope: Cell::new(None),
         }
     }
 
@@ -141,14 +144,9 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
         Some((&seed.seed, Some(seed.stamp)))
     }
 
-    /// The scope that the epoch tag of `record_bytes` names, when an assembly
-    /// of those bytes is held.
-    pub(crate) fn assembled_scope(&self, record_bytes: &[u8]) -> Option<[u8; 16]> {
-        self.assembled
-            .borrow()
-            .as_ref()
-            .filter(|head| head.record_bytes == record_bytes)
-            .map(|head| head.envelope.scope)
+    /// The scope whose seed opened the last record this adopter admitted.
+    pub(crate) fn opened_scope(&self) -> Option<[u8; 16]> {
+        self.opened_scope.get()
     }
 
     /// The epoch tag of the head an adopt assembled, `None` before the head
@@ -237,7 +235,10 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         let node_seed = kdf::node_seed(scope_read_seed, &envelope.id);
         let read_key = kdf::read_key(node_seed.as_bytes());
         match open_read_body(envelope, read_key.as_bytes()) {
-            Ok(read_body) => Ok(read_body),
+            Ok(read_body) => {
+                self.opened_scope.set(Some(envelope.scope));
+                Ok(read_body)
+            }
             Err(_)
                 if epoch_floor.is_some_and(|floor| {
                     envelope.epoch > seed_stamp.map_or(floor, |stamp| stamp.min(floor))
@@ -357,6 +358,7 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         let read_key = kdf::read_key(node_seed.as_bytes());
         let read_body = open_read_body(&envelope, read_key.as_bytes())
             .map_err(|e| reject(GateStage::Unseal, e))?;
+        self.opened_scope.set(Some(envelope.scope));
         Ok((
             Adopted {
                 read_body,
@@ -605,9 +607,13 @@ where
     H: Http,
     F: FloorStore,
 {
-    let scope = adopter
-        .assembled_scope(record_bytes)
-        .unwrap_or(adopter.scope_id);
+    let scope = match adopter.assembled_head(name, record_bytes).await {
+        Ok((_, envelope)) => envelope.scope,
+        Err(GateError::Seam(e)) => {
+            return Err(ChildResolveError::Unavailable(e.message().to_owned()));
+        }
+        Err(rejected) => return Err(ChildResolveError::Gate(rejected)),
+    };
     let root_name = match &adopter.owed_move {
         Some(owed) if owed.scope_id == scope => owed.root_name.as_ref(),
         _ => scope_root,
@@ -621,10 +627,11 @@ where
         None => None,
     }
     .ok_or_else(|| lagging_unreachable(record_epoch, "no gated scope root is held"))?;
-    let read = open_under_anchor(
+    let read = open_under_anchor_in(
         snapshot_cache,
         adopter,
         name,
+        &scope,
         &anchor,
         record_bytes,
         record_epoch,
@@ -663,6 +670,34 @@ where
     H: Http,
     F: FloorStore,
 {
+    let (_, envelope) = adopter.assembled_head(name, record_bytes).await?;
+    open_under_anchor_in(
+        snapshot_cache,
+        adopter,
+        name,
+        &envelope.scope,
+        anchor,
+        record_bytes,
+        record_epoch,
+    )
+    .await
+}
+
+/// [`open_under_anchor`] for a record whose epoch tag names `scope`.
+async fn open_under_anchor_in<S, H, F>(
+    snapshot_cache: &S,
+    adopter: &ChildAdopter<'_, H, F>,
+    name: &IpnsName,
+    scope: &[u8; 16],
+    anchor: &LaggingAnchor,
+    record_bytes: &[u8],
+    record_epoch: u64,
+) -> Result<LaggingRead, GateError>
+where
+    S: SnapshotCache,
+    H: Http,
+    F: FloorStore,
+{
     // Only a walk that opens a link binds the held seed to the anchor's epoch,
     // so an anchor that is not strictly newer than the record proves nothing.
     if record_epoch >= anchor.epoch {
@@ -670,14 +705,13 @@ where
             "the gated scope root is not newer than the record",
         ));
     }
-    let (_, envelope) = adopter.assembled_head(name, record_bytes).await?;
-    let Some((scope_read_seed, _)) = adopter.read_seed_of(&envelope.scope) else {
+    let Some((scope_read_seed, _)) = adopter.read_seed_of(scope) else {
         return Ok(LaggingRead::Unreachable(
             "no read seed is held for the scope the record names",
         ));
     };
     let Ok(epoch_seed) = lagging_read_seed(
-        envelope.scope,
+        *scope,
         scope_read_seed,
         anchor.epoch,
         &anchor.history_links,

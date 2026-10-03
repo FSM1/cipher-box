@@ -6745,6 +6745,8 @@ struct OwedMove {
     deep: NodeId,
     /// The name whose publish stopped the handover.
     stopped_at: IpnsName,
+    /// Whether the handover resealed `deep` under the new scope.
+    deep_moved: bool,
 }
 
 impl OwedMove {
@@ -6804,21 +6806,87 @@ impl OwedMove {
             inner,
             deep,
             stopped_at: failing,
+            deep_moved: expected.1,
         }
     }
 
-    /// The abuse the navigation into `deep` reports, then the abuse one tick
-    /// reports.
-    fn navigate_then_tick(&mut self) -> (Vec<String>, Vec<String>) {
+    /// A second session of the same device over this state.
+    fn restarted(self) -> Self {
+        let (engine, events, tasks) =
+            boot_owner(&self.fx.world, &self.fx.blocks, &self.fx.owner_device);
+        Self {
+            fx: GrantScenario {
+                engine,
+                _events: events,
+                _tasks: tasks,
+                ..self.fx
+            },
+            ..self
+        }
+    }
+
+    /// Another device adds a folder `added` named `name` to `deep`, sealed
+    /// where `deep` is sealed now.
+    fn add_to_deep(&self, added: NodeId, name: &str) {
+        let (read_key, scope) = if self.deep_moved {
+            let (seed, _) = scope_material_of(&self.fx.world, &self.fx.blocks, self.fx.folder);
+            (read_key_under(&seed, self.deep), self.fx.folder.0)
+        } else {
+            (read_key_of(self.deep), SCOPE)
+        };
+        concurrent_add(
+            &self.fx.world,
+            &self.fx.blocks,
+            self.deep,
+            &read_key,
+            scope,
+            named_child(added, name, &write_name(added)),
+        );
+    }
+
+    /// Whether the rendered view lists `name` in `deep`.
+    fn deep_lists(&self, name: &str) -> bool {
+        block_on(self.fx.engine.view())
+            .expect("a rendered view")
+            .children(self.deep)
+            .iter()
+            .any(|child| child.name == name)
+    }
+
+    /// The abuse the navigation into `deep` reports.
+    fn navigate(&mut self) -> Vec<String> {
         let fx = &mut self.fx;
         events_so_far(&mut fx._events);
         for node in [fx.folder, self.inner, self.deep] {
             block_on(fx.engine.command(Command::SetFocus { node: Some(node) }))
                 .expect("the folder takes the focus");
         }
-        let navigation = abuse_descriptions(&mut fx._events);
+        abuse_descriptions(&mut fx._events)
+    }
+
+    /// The abuse one tick reports.
+    fn tick(&mut self) -> Vec<String> {
+        let fx = &mut self.fx;
+        events_so_far(&mut fx._events);
         tick(&fx.world, &fx.engine, &mut fx._tasks);
-        (navigation, abuse_descriptions(&mut fx._events))
+        abuse_descriptions(&mut fx._events)
+    }
+
+    /// Each leg on its own: the navigation adopts a changed `deep`, then the
+    /// tick adopts the next change, and neither reports abuse.
+    fn assert_each_leg_reads_deep(&mut self, case: &str) {
+        self.add_to_deep(NodeId([0xa1; 16]), "seen at navigation");
+        assert_eq!(self.navigate(), Vec::<String>::new(), "{case}: navigation");
+        assert!(
+            self.deep_lists("seen at navigation"),
+            "{case}: the navigation adopts the folder"
+        );
+        self.add_to_deep(NodeId([0xa2; 16]), "seen at the tick");
+        assert_eq!(self.tick(), Vec::<String>::new(), "{case}: tick");
+        assert!(
+            self.deep_lists("seen at the tick"),
+            "{case}: the tick adopts the folder"
+        );
     }
 }
 
@@ -6831,54 +6899,28 @@ fn an_owed_interior_move_reads_each_interior_node_under_the_scope_it_names() {
         HandoverStop::PartialReseal,
         HandoverStop::ParentIndex,
     ] {
-        let mut owed = OwedMove::after(stop);
-        let reads = |owed: &OwedMove| {
-            owed.fx
-                .world
-                .record_store
-                .get_count(write_name(owed.deep).as_str())
-        };
-        let before = reads(&owed);
-
-        let (navigation, ticked) = owed.navigate_then_tick();
-
-        assert_eq!(navigation, Vec::<String>::new(), "{stop:?}: navigation");
-        assert_eq!(ticked, Vec::<String>::new(), "{stop:?}: tick");
-        assert!(
-            reads(&owed) > before,
-            "{stop:?}: the legs read the interior"
-        );
+        OwedMove::after(stop).assert_each_leg_reads_deep(&format!("{stop:?}"));
     }
 }
 
 /// The owed entry is durable, so a session that starts again over a move that
-/// is still owed holds the entry's root as a scope root and reports no abuse
-/// event (ADR 0072 D1).
+/// is still owed holds the entry's root as a scope root at each leg, and reads
+/// no record of it as a child (ADR 0072 D1).
 #[test]
-fn an_owed_interior_move_reads_no_abuse_after_a_restart() {
+fn an_owed_interior_move_holds_its_root_after_a_restart() {
     for stop in [HandoverStop::Reseal, HandoverStop::ParentIndex] {
-        let owed = OwedMove::stalled(stop);
-        let (engine, events, tasks) =
-            boot_owner(&owed.fx.world, &owed.fx.blocks, &owed.fx.owner_device);
-        let mut restarted = OwedMove {
-            fx: GrantScenario {
-                engine,
-                _events: events,
-                _tasks: tasks,
-                ..owed.fx
-            },
-            ..owed
-        };
-        tick(
-            &restarted.fx.world,
-            &restarted.fx.engine,
-            &mut restarted.fx._tasks,
+        let mut restarted = OwedMove::stalled(stop).restarted();
+        assert_eq!(
+            restarted.tick(),
+            Vec::<String>::new(),
+            "{stop:?}: first tick"
         );
-
-        let (navigation, ticked) = restarted.navigate_then_tick();
-
-        assert_eq!(navigation, Vec::<String>::new(), "{stop:?}: navigation");
-        assert_eq!(ticked, Vec::<String>::new(), "{stop:?}: tick");
+        assert_eq!(
+            restarted.navigate(),
+            Vec::<String>::new(),
+            "{stop:?}: navigation"
+        );
+        assert_eq!(restarted.tick(), Vec::<String>::new(), "{stop:?}: tick");
     }
 }
 
@@ -6897,13 +6939,17 @@ fn an_owed_interior_move_still_reports_a_hostile_interior_node() {
             &[0x5a; 32],
             published_read_epoch(&owed.fx.world, &owed.fx.blocks, ROOT),
         );
-        let (navigation, ticked) = owed.navigate_then_tick();
-
-        let reported: Vec<String> = navigation.into_iter().chain(ticked).collect();
-        assert_eq!(reported.len(), 1, "{case}: {reported:?}");
+        let navigation = owed.navigate();
+        assert_eq!(navigation.len(), 1, "{case}: navigation {navigation:?}");
         assert!(
-            reported[0].ends_with("[unseal]: [seal-open-failed]"),
-            "{case}: {reported:?}"
+            navigation[0].ends_with("[unseal]: [seal-open-failed]"),
+            "{case}: {navigation:?}"
+        );
+        let ticked = owed.tick();
+        assert_eq!(ticked.len(), 1, "{case}: tick {ticked:?}");
+        assert!(
+            ticked[0].ends_with("[unseal]: [seal-open-failed]"),
+            "{case}: {ticked:?}"
         );
     }
 }

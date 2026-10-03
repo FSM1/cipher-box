@@ -64,7 +64,8 @@ shape changes.
 
 1. `blueprint/engine.md` "Adoption gate and floors" states D1 at the child unseal stage. The read
    runs at the floors of the named scope, so the count of sanctioned readers below the read-epoch
-   floor stays four.
+   floor stays four. A record whose tag names a bound scope for which this device holds no read
+   seed yet is availability for that node, not a trust violation.
 2. `blueprint/engine.md` "Grants and ledger" states that a read of the interior of a root with an
    owed interior move follows D1.
 3. `CONTEXT.md` "Owed rotation work" adds one sentence: while the interior move is owed, a read
@@ -75,8 +76,8 @@ shape changes.
    navigation leg; a record whose tag names a bound scope that does not open it, and a record
    whose tag names a third scope, each give exactly one trust violation.
 5. When the owed record does not read, the leg cannot tell that an interior move is owed. The
-   leg then groups by the proved scope roots, as before this ADR, and a false abuse event is
-   accepted in that state. The leg does not report the interior as unavailable, because that
+   leg then groups by the proved and the minted scope roots and binds no second scope, and a
+   false abuse event is accepted in that state. The leg does not report the interior as unavailable, because that
    hides a hostile record (AGENTS.md rule 6).
 6. Only the device that holds the entry applies D1 (ADR 0063 consequence 6). A second owner
    device or a grantee that reads the interior during the owed window can still report a false

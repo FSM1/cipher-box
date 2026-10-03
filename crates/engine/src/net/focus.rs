@@ -310,13 +310,11 @@ where
         )
         .await
         {
-            Ok(ChildRecord::Admitted(adopted, record_bytes, fork)) => {
+            Ok(ChildRecord::Admitted(adopted, _, fork)) => {
                 if let Some(fork) = fork {
                     self.forks.report(self.events, name.as_str(), fork.sequence);
                 }
-                let scope = adopter
-                    .assembled_scope(&record_bytes)
-                    .unwrap_or(self.scope_id);
+                let scope = adopter.opened_scope().unwrap_or(self.scope_id);
                 Some((name, adopted, scope))
             }
             // Availability: the base keeps rendering last-known-good.
@@ -536,6 +534,27 @@ mod tests {
             plane_roots: Option<&BookmarkedScopeRoots>,
             claims: &RefCell<ClaimRecord>,
         ) -> bool {
+            self.run_leg(scope_id, plane_roots, claims, None)
+        }
+
+        /// One own-plane pass whose records an owed interior move also binds
+        /// to `owed_move`'s scope.
+        fn run_owed(&self, scope_id: [u8; 16], owed_move: OwedMoveLeg<'_>) -> bool {
+            self.run_leg(
+                scope_id,
+                None,
+                &RefCell::new(ClaimRecord::default()),
+                Some(owed_move),
+            )
+        }
+
+        fn run_leg(
+            &self,
+            scope_id: [u8; 16],
+            plane_roots: Option<&BookmarkedScopeRoots>,
+            claims: &RefCell<ClaimRecord>,
+            owed_move: Option<OwedMoveLeg<'_>>,
+        ) -> bool {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
@@ -555,7 +574,7 @@ mod tests {
                     scope_id,
                     scope_read_seed: &self.read_seed,
                     seed_stamp: None,
-                    owed_move: None,
+                    owed_move,
                     scope_root_name: None,
                     plane: plane_roots.map(|scope_roots| GraftedLeg {
                         scope_roots,
@@ -840,6 +859,32 @@ mod tests {
             Some(MAX_FOLDER_CHILDREN),
         );
         assert!(leg.holds(HONEST));
+    }
+
+    /// A leg that runs under the scope an owed interior move left, because this
+    /// device holds no seed for the moved root yet, reads a record its tag
+    /// names under the left scope. A record whose tag names the moved root is
+    /// availability for that node alone (ADR 0072 D1).
+    #[test]
+    fn a_leg_with_no_seed_for_the_moved_root_reads_the_left_scope_and_waits_on_the_root() {
+        const MOVED_ROOT: [u8; 16] = [0x9a; 16];
+        let owed_move = OwedMoveLeg {
+            scope_id: MOVED_ROOT,
+            read_seed: None,
+            root_name: None,
+        };
+
+        let left = FolderLeg::new(OWN_ROOT, vec![child_ref(OWN_CHILD, "my-note", 2)]);
+        left.place(OWN_CHILD, "my-note", Some(OWN_ROOT));
+        left.place(FOLDER, "a-folder", Some(OWN_ROOT));
+        assert!(!left.run_owed(OWN_ROOT, owed_move), "no record is faulty");
+        assert_eq!(left.listing(FOLDER), vec!["my-note".to_owned()]);
+
+        let moved = FolderLeg::new(MOVED_ROOT, vec![child_ref(OWN_CHILD, "my-note", 2)]);
+        moved.place(FOLDER, "a-folder", Some(OWN_ROOT));
+        assert!(!moved.run_owed(OWN_ROOT, owed_move), "no record is faulty");
+        assert_eq!(moved.verdict.get(), RefreshVerdict::Unreachable);
+        assert_eq!(moved.listing(FOLDER), Vec::<String>::new());
     }
 
     /// The rule is the grafted plane's alone. On this vault's own plane every

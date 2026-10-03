@@ -9844,17 +9844,18 @@ where {
         // to must name the same scope across the await below.
         let root = self.state.snapshot.borrow().root;
         let own = self.leg_scopes().await.own;
-        let due = self.scoped_to(
-            &own,
-            root,
-            focus_folders_due(
-                &self.state.snapshot.borrow(),
-                &self.state.focus.borrow(),
-                &self.state.focus_refreshed.borrow(),
-                now,
-                &self.profile,
-            ),
+        let all_due = focus_folders_due(
+            &self.state.snapshot.borrow(),
+            &self.state.focus.borrow(),
+            &self.state.focus_refreshed.borrow(),
+            now,
+            &self.profile,
         );
+        let due = self.scoped_to(&own, root, all_due.clone());
+        let below: Vec<NodeId> = all_due
+            .into_iter()
+            .filter(|folder| !due.contains(folder))
+            .collect();
         let scope_read_seed = self.scope_read_seed(&root.0).await;
         let root_name = self.state.current_root_name.borrow().clone();
         let leg = scope_read_seed.as_ref().map(|stamped| FolderRefresh {
@@ -9880,6 +9881,9 @@ where {
         {
             settle(&due, leg.run(&due).await);
         }
+        // A folder below a descendant scope root reads on that scope's leg.
+        self.navigation_legs(root, below, NodeKind::Folder, now, &settle)
+            .await;
         if let Some(folder) = folder {
             self.queue_focus_file_children(folder);
         }

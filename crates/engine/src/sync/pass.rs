@@ -160,20 +160,15 @@ pub(crate) struct LegScopes {
 
 impl LegScopes {
     /// The proved roots, each minted root, and each root an owed interior move
-    /// names. `owed_moves` is `None` when the owed record does not read: the
-    /// legs then group by the proved roots alone (ADR 0072 consequence 5).
+    /// names. `owed_moves` is `None` when the owed record does not read, and
+    /// then binds no second scope (ADR 0072 consequence 5).
     pub(crate) fn new(
         proved: &BTreeSet<NodeId>,
         minted: &BTreeSet<NodeId>,
         owed_moves: Option<Vec<(NodeId, NodeId)>>,
     ) -> Self {
-        let Some(owed_moves) = owed_moves else {
-            return Self {
-                own: proved.clone(),
-                owed_moves: BTreeMap::new(),
-            };
-        };
-        let owed_moves: BTreeMap<NodeId, NodeId> = owed_moves.into_iter().collect();
+        let owed_moves: BTreeMap<NodeId, NodeId> =
+            owed_moves.unwrap_or_default().into_iter().collect();
         let own = proved
             .iter()
             .chain(minted)
@@ -1908,11 +1903,60 @@ mod tests {
     use crate::seams::SharerScopedFloorStore;
     use crate::sync::model::NodeMeta;
 
-    /// A leg groups by each minted root and each root an owed interior move
-    /// names, and an unread owed record leaves the proved roots alone.
+    /// A leg over an owed move's root runs under the root's material with the
+    /// left scope second, and under the left scope's alone while the root holds
+    /// no seed (ADR 0072 D1).
     #[test]
-    fn a_leg_groups_by_every_owed_move_root_and_by_the_proved_roots_alone_when_the_record_does_not_read()
-     {
+    fn a_leg_over_an_owed_move_runs_under_whichever_scope_holds_a_seed() {
+        let root = NodeId([0x9a; 16]);
+        let left = NodeId::VAULT_ROOT;
+        let floors = crate::testkit::fakes::InMemoryFloorStore::default();
+        let sharers = GraftedSharers::new();
+        let label = cipherbox_core::kdf::contact_label_seed(&[0x4c; 32]);
+        let own = BTreeSet::from([root]);
+        let unproved = BTreeSet::new();
+        let base = BaseSnapshot::new(Snapshot::new(left));
+        let legs = ScopeLegContext {
+            floors: &floors,
+            sharers: &sharers,
+            contact_label_seed: &label,
+            own_root: left.0,
+            own: &own,
+            unproved: &unproved,
+            base: &base,
+            root_name: None,
+        };
+        let seeds = RefCell::new(ScopeSeeds::new());
+        let deposit = |scope: NodeId, seed| {
+            deposit_seed(
+                &seeds,
+                scope.0,
+                Zeroizing::new(seed),
+                Some(0),
+                FloorNamespace::Own,
+            );
+        };
+        let leg_of = || {
+            let leg = crate::testkit::block_on(legs.leg_material(root, Some(left), &seeds))
+                .unwrap_or_else(|_| panic!("a leg runs"));
+            let second = leg
+                .owed_move
+                .as_ref()
+                .map(|(scope, material)| (*scope, material.is_some()));
+            (leg.scope, *leg.material.seed.seed, second)
+        };
+
+        deposit(left, [0x11; 32]);
+        assert_eq!(leg_of(), (left, [0x11; 32], Some((root, false))));
+
+        deposit(root, [0x22; 32]);
+        assert_eq!(leg_of(), (root, [0x22; 32], Some((left, true))));
+    }
+
+    /// A leg groups by each minted root and each root an owed interior move
+    /// names, and an unread owed record binds no second scope.
+    #[test]
+    fn a_leg_groups_by_every_owned_root_and_binds_no_second_scope_when_the_record_does_not_read() {
         let walked = NodeId([1; 16]);
         let proved = BTreeSet::from([walked]);
         let moved = NodeId([2; 16]);
@@ -1933,7 +1977,7 @@ mod tests {
         );
 
         let unread = LegScopes::new(&proved, &minted, None);
-        assert_eq!(unread.own, proved);
+        assert_eq!(unread.own, BTreeSet::from([walked, moved, owed]));
         assert!(unread.owed_moves.is_empty());
     }
 

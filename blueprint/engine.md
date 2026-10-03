@@ -295,7 +295,8 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    through fail-closed. While an owed entry holds the interior move of a scope
    root, an interior node of that root opens one time under the seed and the
    floors of the scope its epoch tag names, which must be the entry's root or
-   the scope the folder left; any other scope is refused here
+   the scope the folder left; any other scope is refused here, and a bound scope
+   whose read seed this device does not hold yet is availability for that node
    ([ADR 0072](../decisions/0072-an-interior-node-of-a-root-with-an-owed-interior-move-opens-under-the-scope-its-tag-names.md)
    D1). This read runs at the named scope's floors, so it is not a reader below
    the read-epoch floor.
