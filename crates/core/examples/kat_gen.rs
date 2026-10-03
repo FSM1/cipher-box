@@ -3931,7 +3931,6 @@ fn build_charged_bounds() -> BoundsSection {
         scope_id: [0x21; 16],
         epoch: 0,
         write_epoch: 1,
-        seed: zeroize::Zeroizing::new([0x32; 32]),
         parent_node_seed: None,
         ipns_name: Vec::new(),
         record_bytes: Vec::new(),
@@ -10380,7 +10379,6 @@ fn build_owner_seed_cache_vectors() -> (Vec<serde_json::Value>, Vec<serde_json::
         scope_id: [0x21; 16],
         epoch: 7,
         write_epoch: 1,
-        seed: zeroize::Zeroizing::new([0x32; 32]),
         parent_node_seed: None,
         ipns_name: b"scope-name".to_vec(),
         record_bytes: vec![1, 2, 3],
@@ -10397,7 +10395,6 @@ fn build_owner_seed_cache_vectors() -> (Vec<serde_json::Value>, Vec<serde_json::
     let mut reject = Vec::new();
     for (name, key, value) in [
         ("unsupported-version", "v", Value::Unsigned(2)),
-        ("short-seed", "seed", Value::Bytes(vec![0; 31])),
         ("missing-scope", "scope", Value::Null),
         ("unknown-field", "extra", Value::Unsigned(1)),
         ("wrong-type", "epoch", Value::Text("seven".into())),

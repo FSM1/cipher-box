@@ -19,6 +19,7 @@ pub struct InMemorySnapshotCache {
     /// Whether every `get` parks for ever
     /// ([`stall_gets`](InMemorySnapshotCache::stall_gets)).
     stalling_gets: Arc<AtomicBool>,
+    failing_gets: Arc<AtomicBool>,
 }
 
 impl InMemorySnapshotCache {
@@ -50,6 +51,11 @@ impl InMemorySnapshotCache {
     /// than spinning.
     pub fn stall_gets(&self) {
         self.stalling_gets.store(true, Ordering::SeqCst);
+    }
+
+    /// Make every `get` fail, the shape of a host store read fault.
+    pub fn fail_gets(&self) {
+        self.failing_gets.store(true, Ordering::SeqCst);
     }
 
     /// Every ciphertext this cache holds, in cache-key order — what a test
@@ -86,6 +92,9 @@ impl SnapshotCache for InMemorySnapshotCache {
         self.reads.lock().expect("lock").push(cache_key.to_vec());
         if self.stalling_gets.load(Ordering::SeqCst) {
             return core::future::poll_fn(|_| core::task::Poll::Pending).await;
+        }
+        if self.failing_gets.load(Ordering::SeqCst) {
+            return Err(SeamError::new("snapshot get injected to fail"));
         }
         if let Some(fixed) = self.fixed.lock().expect("lock").clone() {
             return Ok(Some(fixed));

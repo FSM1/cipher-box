@@ -1580,14 +1580,18 @@ surviving committed grants uniformly in the republish it already does.
   write-body ledger like any node; ancestor rotations re-seal
   independently-shared descendants' grants as part of republishing them.
 - **Owner entry** (FSM1/cipher-box-next#39 D6, ADR 0073): the **owner seed cache**
-  keeps the last confirmed `{seed, epoch}`, signed IPNS record, encrypted root
-  block, and parent node seed when needed. Each confirmed owner read refreshes
-  the sealed `StagingStore` entry for its scope before floors advance. A failed
-  cache write does not stop the read or floor advance. A probe or refused read
-  does not refresh it. At one name, only a greater sequence replaces the entry.
-  A confirmed read at a new name replaces the old name's entry. The read, write,
-  and cut epochs cannot decrease. A new name needs a greater write epoch. A corrupt local entry is absent; the next
-  confirmed read can replace it. A local seam failure is unavailable, never abuse.
+  keeps the last confirmed epoch and write epoch, signed IPNS record, encrypted
+  root block, and parent node seed when needed. It keeps no scope seed: recovery
+  opens the owner blob in the root block again. Each confirmed owner read
+  refreshes the sealed `StagingStore` entry for its scope before floors advance.
+  A failed cache write does not stop the read or floor advance. A probe or
+  refused read does not refresh it. At one name, only a greater sequence
+  replaces the entry. The gate holds the epoch floors, so a keyless root at the
+  floor also replaces it. A confirmed read at a new name replaces the old
+  name's entry only with a greater write epoch. A corrupt local entry is absent;
+  the next confirmed read can replace it. A local seam failure means that the
+  source has no copy. It is never abuse, and the network record keeps its trust
+  verdict.
   The adoption gate checks the ascent link and opens the body; a signed owner
   blob with the wrong seed fails at unseal and raises attributable abuse.
   The engine gates the confirmed copy against the current floors. A rotation
@@ -1598,10 +1602,12 @@ surviving committed grants uniformly in the republish it already does.
   same device. It does not cover a new owner device, deletion of local state,
   or content sealed only under a withheld epoch. That content needs a valid-seed
   holder. The vault record for all owner devices is not landed.
-  Entries do not count toward the upload budget. Scope deletion removes its
-  entry. Sign-out and account switch keep sealed entries under their account's
-  labels and keys; forget-device removes them. A copy below a current floor
-  stays refused.
+  Entries do not count toward the upload budget. A scope delete removes its
+  entries before the publish that completes the op, as a best effort. A live
+  scope with no entry gets a new entry at its next confirmed read. Sign-out
+  and account switch keep sealed entries under their account's labels and
+  keys; forget-device removes them. A copy below a current floor stays
+  refused.
 - **Owner write-seed cold start**: a per-scope `writeScopeSeed` is random
   KDF-non-edge material an owner cannot re-derive from the login secret, so a
   fresh device that has lost its cache cannot renew its own records. Every

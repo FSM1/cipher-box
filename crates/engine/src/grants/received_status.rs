@@ -915,7 +915,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             Err(GateError::Seam(_)) => return None,
         }
         let candidate =
-            match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await {
+            match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None, false)
+                .await
+            {
                 Ok(candidate) => candidate,
                 Err(GateError::Rejected(rejection)) => {
                     report_refusal(events, share, &rejection);
@@ -1313,7 +1315,7 @@ mod tests {
     fn resolved(sharer: &EcdsaSigner, recipients: &[&X25519Public]) -> Candidate {
         let fixture = published(sharer, recipients);
         Candidate {
-            head_block: Vec::new(),
+            head_block: None,
             name: fixture.name,
             record_bytes: Vec::new(),
             grant_section: fixture.grant_section,

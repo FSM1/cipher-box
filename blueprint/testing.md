@@ -433,6 +433,29 @@ the same client code. someguy itself runs in staging, not CI (the real DHT
 has no place in a hermetic gate). The v1 redis/tee-worker services leave the
 stack; the local/CI redis port split (6380/6379) dies with them.
 
+### Durable owner seed cache
+
+The **Core KATs (native + WASM)** gate runs the owner seed record codec tests,
+`owner_seed_cache_accept` and `owner_seed_cache_reject`, and the release
+`encode_refusals` tests. They cover both parent-seed shapes, corrupt fields,
+and encode/decode size symmetry (ADR 0073).
+
+The **Engine simulation tests** PR gate runs the production `RootAdopter` and
+rotation unit tests. They cover confirmed-read persistence, refusal without
+refresh, interleaved reads, best-effort writes, corrupt entry replacement, and
+recovery after a restart with no snapshot or gateway copy. The recovery test
+retains the network trust violation and opens the confirmed body. The owner
+command test moves the root, leaves the old name unchanged, and removes every
+grant row, also at the sequence ceiling. It asserts the abuse event for a signed
+owner blob with a different seed. The scope-walk test covers a refused
+descendant with a healthy root. Cache tests cover name replacement,
+equal-sequence forks, scope deletion, account isolation, and upload budget
+exclusion. A keyless root at one name replaces the entry, so a later broken
+owner blob still recovers after a restart. A local store fault keeps the trust
+verdict of the network record, and a fault in one fallback source leaves the
+other source. A store fault on the entry does not stop a scope delete, and the
+delete removes the entry before its completing publish.
+
 ## The DX hook — the environment-scoped timing profile
 
 The sync timing profile (FSM1/cipher-box-next#33 D3) is the single lever that makes v2's
@@ -533,22 +556,3 @@ percentage never did.
 - **Runner provisioning, staging deploy gates, release-tag e2e gating,
   nightly scheduling** →
   [deployment blueprint (FSM1/cipher-box-next#48)](https://github.com/FSM1/cipher-box-next/issues/48).
-
-
-### Durable owner seed cache
-
-The **Core KATs (native + WASM)** gate runs the owner seed record codec tests,
-`owner_seed_cache_accept` and `owner_seed_cache_reject`, and the release
-`encode_refusals` tests. They cover both parent-seed shapes, corrupt fields,
-and encode/decode size symmetry (ADR 0073).
-
-The **Engine simulation tests** PR gate runs the production `RootAdopter` and rotation
-unit tests. They cover confirmed-read persistence, refusal without refresh,
-interleaved reads, best-effort writes, corrupt entry replacement, and recovery after a
-restart with no snapshot or gateway copy. The recovery test retains the network
-trust violation and opens the confirmed body. The owner command test moves the
-root, leaves the old name unchanged, and removes every grant row, also at the
-sequence ceiling. It asserts the abuse event for a signed owner blob with a
-different seed. The scope-walk test covers a refused descendant with a healthy
-root. Cache tests cover name replacement, equal-sequence forks, scope deletion,
-account isolation, and upload budget exclusion.

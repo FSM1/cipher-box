@@ -13,6 +13,7 @@ struct Inner {
     fail_queued_ops: bool,
     fail_staged_keys: bool,
     fail_staged_reads_under: Option<Vec<u8>>,
+    fail_staged_removals_under: Option<Vec<u8>>,
     fail_remove_op: bool,
     enqueue_budget: Option<u64>,
     staged_write_budget: Option<Arm>,
@@ -33,6 +34,7 @@ impl Default for Inner {
             fail_queued_ops: false,
             fail_staged_keys: false,
             fail_staged_reads_under: None,
+            fail_staged_removals_under: None,
             fail_remove_op: false,
             enqueue_budget: None,
             staged_write_budget: None,
@@ -92,6 +94,12 @@ impl InMemoryStagingStore {
     /// [`fail_staged_reads_under`](Self::fail_staged_reads_under).
     pub fn heal_staged_reads(&self) {
         self.inner.lock().expect("lock").fail_staged_reads_under = None;
+    }
+
+    /// Makes `remove_staged_bytes` return a seam error for every key under
+    /// `prefix`, and keep the bytes.
+    pub fn fail_staged_removals_under(&self, prefix: &[u8]) {
+        self.inner.lock().expect("lock").fail_staged_removals_under = Some(prefix.to_vec());
     }
 
     /// Makes `remove_op` return a seam error without dropping the record, so
@@ -310,7 +318,11 @@ impl StagingStore for InMemoryStagingStore {
 
     async fn remove_staged_bytes(&self, staging_key: &[u8]) -> SeamResult<()> {
         let mut inner = self.inner.lock().expect("lock");
-        if interrupts(&mut inner.staged_removal_budget, staging_key) {
+        let failing = inner
+            .fail_staged_removals_under
+            .as_ref()
+            .is_some_and(|prefix| staging_key.starts_with(prefix));
+        if failing || interrupts(&mut inner.staged_removal_budget, staging_key) {
             return Err(SeamError::new("remove_staged_bytes unavailable"));
         }
         if interrupts(&mut inner.dropped_removal_budget, staging_key) {

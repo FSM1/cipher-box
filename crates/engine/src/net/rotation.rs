@@ -43,8 +43,8 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
 use super::adopter::{
-    HEAD_BLOCK_NOT_FOUND, LocalHead, RecoveredSeeds, RootAdopter, fetch_head_block,
-    open_write_scope_seed_at, root_bar,
+    HEAD_BLOCK_NOT_FOUND, LocalHead, RecoveredScopeRoot, RecoveredSeeds, RootAdopter,
+    fetch_head_block, open_write_scope_seed_at, root_bar,
 };
 use super::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
@@ -570,54 +570,28 @@ impl<'a> RootFallback<'a> {
         expected_child: Option<[u8; 16]>,
         verdict: RootGateVerdict,
     ) -> Result<GatedScopeRoot, RootGateVerdict> {
-        let durable = if verdict == RootGateVerdict::OwnerSeedRefused {
-            adopter
+        // A fault in one source means that source has no copy.
+        let durable = match verdict {
+            RootGateVerdict::OwnerSeedRefused => adopter
                 .recover_cached_owner_root(name)
                 .await
-                .map_err(|error| match error {
-                    GateError::Seam(_) => RootGateVerdict::Unavailable,
-                    GateError::Rejected(_) => verdict,
-                })?
-                .map(|root| GatedScopeRoot {
-                    write_epoch: root.write_epoch,
-                    observed: Observed::gated(
-                        name,
-                        root.sequence,
-                        root.envelope.v,
-                        &root.record_bytes,
-                    ),
-                    envelope: root.envelope,
-                    section: root.grant_section,
-                    read_body: root.read_body,
-                    sequence: root.sequence,
-                    read_scope_seed: root.read_scope_seed,
-                    write_scope_seed: root.write_scope_seed,
-                })
+                .ok()
+                .flatten()
+                .map(|root| GatedScopeRoot::recovered(name, root))
                 .filter(|root| {
                     expected_child.is_none_or(|id| {
                         root.envelope.id == id && root.section.ascent_link.is_some()
                     })
-                })
-        } else {
-            None
+                }),
+            _ => None,
         };
-        if let Some(cached) = snapshot_cache
-            .get(name.as_str().as_bytes())
-            .await
-            .map_err(|_| RootGateVerdict::Unavailable)?
-        {
+        if let Ok(Some(cached)) = snapshot_cache.get(name.as_str().as_bytes()).await {
             let newer = durable.as_ref().is_none_or(|root| {
                 super::fork::verified(name, &cached)
                     .is_some_and(|record| record.sequence > root.sequence)
             });
-            if newer {
-                match gated_root(adopter, name, &cached, expected_child).await {
-                    Ok(root) => return Ok(root),
-                    Err(RootGateVerdict::Unavailable) if durable.is_none() => {
-                        return Err(RootGateVerdict::Unavailable);
-                    }
-                    Err(_) => {}
-                }
+            if newer && let Ok(root) = gated_root(adopter, name, &cached, expected_child).await {
+                return Ok(root);
             }
         }
         durable.ok_or(verdict)
@@ -796,6 +770,21 @@ struct GatedScopeRoot {
     /// `None` when the root is held keyless — no owner-write-blob, or no
     /// durable write-epoch floor to open it under.
     write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
+}
+
+impl GatedScopeRoot {
+    fn recovered(name: &IpnsName, root: RecoveredScopeRoot) -> Self {
+        Self {
+            write_epoch: root.write_epoch,
+            observed: Observed::gated(name, root.sequence, root.envelope.v, &root.record_bytes),
+            envelope: root.envelope,
+            section: root.grant_section,
+            read_body: root.read_body,
+            sequence: root.sequence,
+            read_scope_seed: root.read_scope_seed,
+            write_scope_seed: root.write_scope_seed,
+        }
+    }
 }
 
 /// One scope root as this pass gated it, plus the write plane read out of it:
@@ -1034,7 +1023,7 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
     if sequence < floor {
         return Err(RootGateVerdict::BelowFloor);
     }
-    let recovered = adopter
+    let mut recovered = adopter
         .recover_own_scope_root(name, record_bytes)
         .await
         .map_err(|e| match e {
@@ -1047,19 +1036,8 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
         // Nothing to re-check is no recovery; the rotation keeps the gate's
         // own verdict.
         .ok_or(RootGateVerdict::Rejected)?;
-    Ok((
-        GatedScopeRoot {
-            write_epoch: recovered.write_epoch,
-            observed: Observed::gated(name, *sequence, recovered.envelope.v, record_bytes),
-            envelope: recovered.envelope,
-            section: recovered.grant_section,
-            read_body: recovered.read_body,
-            sequence: *sequence,
-            read_scope_seed: recovered.read_scope_seed,
-            write_scope_seed: recovered.write_scope_seed,
-        },
-        recovered.owner_seed_record,
-    ))
+    let record = recovered.owner_seed_record.take();
+    Ok((GatedScopeRoot::recovered(name, recovered), record))
 }
 
 /// A rotation root read the gate passed, with any floor advance not yet
@@ -1087,7 +1065,7 @@ impl RootPass {
                 let adopted = adopter
                     .commit_root(pending)
                     .await
-                    .map_err(cache_gate_verdict)?;
+                    .map_err(|_| RootGateVerdict::Unavailable)?;
                 Ok(GatedScopeRoot {
                     write_epoch: seeds.write_epoch,
                     observed: Observed::gated(
@@ -1774,25 +1752,7 @@ where
                         scope_id: child.scope_id,
                     });
                 }
-                (
-                    GatedScopeRoot {
-                        write_epoch: root.write_epoch,
-                        observed: Observed::gated(
-                            &name,
-                            root.sequence,
-                            root.envelope.v,
-                            &root.record_bytes,
-                        ),
-                        envelope: root.envelope,
-                        section: root.grant_section,
-                        read_body: root.read_body,
-                        sequence: root.sequence,
-                        read_scope_seed: root.read_scope_seed,
-                        write_scope_seed: root.write_scope_seed,
-                    },
-                    None,
-                    true,
-                )
+                (GatedScopeRoot::recovered(&name, root), None, true)
             }
             Err(verdict) => {
                 return Err(walk_verdict(
@@ -8393,7 +8353,7 @@ mod tests {
         use crate::grants::OwnerSeedCache;
         use crate::testkit::fakes::InMemoryStagingStore;
         use cipherbox_core::seal::{encode_grant_section, set_grant_section};
-        for rogue_sequence in [1, 2] {
+        for (rogue_sequence, store_fault) in [(1, false), (2, false), (1, true)] {
             let harness = Harness::plain();
             let child_id = [0x87; 16];
             let child_name = IpnsName::from_public_key(
@@ -8469,6 +8429,9 @@ mod tests {
                 &harness.entropy,
                 &labels,
             ));
+            if store_fault {
+                staging.fail_staged_reads_under(crate::grants::OWNER_SEED_CACHE_PREFIX);
+            }
             let adopter = restarted.root_adopter(SCOPE);
             let resolved = block_on(crate::net::resolve::resolve(
                 &harness.transport,
@@ -8482,6 +8445,17 @@ mod tests {
                 resolved.outcome,
                 crate::net::ResolveOutcome::TrustViolation(_)
             ));
+            if store_fault {
+                // A local fault removes the copy, never the verdict on the record.
+                assert!(resolved.recovered_owner.is_none());
+                let failure = block_on(restarted.resolve_vault_root(&ChildScopeRef::new(
+                    SCOPE,
+                    good.name.as_str().as_bytes().to_vec(),
+                )));
+                assert!(matches!(failure, Err(ResolveFailure::Rejected)));
+                assert!(!restarted.fell_back());
+                continue;
+            }
             let recovered = resolved
                 .recovered_owner
                 .expect("the confirmed body survives the restart");
@@ -8494,6 +8468,10 @@ mod tests {
                 panic!("confirmed folder");
             };
             assert_eq!(recovered_children, &children);
+            if rogue_sequence == 2 {
+                // A snapshot fault leaves the durable copy as the source.
+                harness.cache.fail_gets();
+            }
             block_on(restarted.resolve_vault_root(&ChildScopeRef::new(
                 SCOPE,
                 good.name.as_str().as_bytes().to_vec(),

@@ -2494,7 +2494,7 @@ where
                 && matches!(op.kind, OpKind::Delete { .. })
                 && let Some(cache) = scope.owner_seed_cache
             {
-                cache.remove(&op.target.0).await.map_err(seam)?;
+                let _ = cache.remove(&op.target.0).await;
             }
             self.dequeue_op(*op_id).await?;
             report.dropped.push(*op_id);
@@ -3808,7 +3808,7 @@ where
                 self.finish_binned_delete(scope, pass, target).await?;
             }
             if let Some(cache) = scope.owner_seed_cache {
-                cache.remove(&target.0).await.map_err(seam)?;
+                let _ = cache.remove(&target.0).await;
             }
             return Ok(());
         };
@@ -3855,6 +3855,14 @@ where
                 .await?,
             )
         };
+        // Before the publish that completes the op: a crash in between leaves a
+        // live scope with no entry, which its next confirmed read saves again.
+        if let Some(cache) = scope.owner_seed_cache {
+            let _ = cache.remove(&target.0).await;
+            for node in doomed.iter().flatten() {
+                let _ = cache.remove(&node.node.0).await;
+            }
+        }
         // Only the last unlink completes the op. A pass that stops part-way
         // leaves the node binned and still linked, which is the residue the
         // entry-before-unlink order already settles on the retry.
@@ -3874,14 +3882,6 @@ where
             )
             .await
             .map_err(Halt::from)?;
-        }
-        if let Some(cache) = scope.owner_seed_cache {
-            cache.remove(&target.0).await.map_err(seam)?;
-            if let Some(doomed) = &doomed {
-                for node in doomed {
-                    cache.remove(&node.node.0).await.map_err(seam)?;
-                }
-            }
         }
         let Some(doomed) = doomed else {
             return Ok(());
@@ -7778,11 +7778,11 @@ where
             {
                 let _ = cache.save(record).await;
             }
-            Ok(adopted.pass.commit(&floors).await.map_err(GateError::Seam))
+            adopted.pass.commit(&floors).await
         })
         .await
-        .map_err(GateError::Seam)?
         .map(|adopted| Observed::gated(name, adopted.sequence, version, record_bytes))
+        .map_err(GateError::Seam)
     }
 
     /// Dry-run and publish one head. Only [`HeadPublish::Confirmed`] bytes

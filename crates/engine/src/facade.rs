@@ -6362,12 +6362,7 @@ where {
                         return SweepRun::SessionEnded;
                     };
                     let net = OwnerRotationNet {
-                        owner_seed_cache: Some(crate::grants::owner_entry::OwnerSeedCache::new(
-                            &staging,
-                            &keys.enc_secret,
-                            &entropy,
-                            &keys.contact_label_seed,
-                        )),
+                        owner_seed_cache: Some(keys.owner_seed_cache(&staging, &entropy)),
                         transport: &transport,
                         api: api.as_ref(),
                         gateway: &gateway,
@@ -6555,14 +6550,7 @@ where {
                     let session_keys = pointer_keys.borrow().clone();
                     if let Some(keys) = session_keys {
                         let consulted = enrol_owned_scope_pointers(ScopePointerEnrolment {
-                            owner_seed_cache: Some(
-                                crate::grants::owner_entry::OwnerSeedCache::new(
-                                    &staging,
-                                    &keys.enc_secret,
-                                    &entropy,
-                                    &keys.contact_label_seed,
-                                ),
-                            ),
+                            owner_seed_cache: Some(keys.owner_seed_cache(&staging, &entropy)),
                             api: &api,
                             transport: &transport,
                             gateway: &gateway,
@@ -6643,12 +6631,7 @@ where {
                     };
                     let unfinished = unfinished_write_cuts.borrow().clone();
                     let walk = RenewalWalk {
-                        owner_seed_cache: Some(crate::grants::owner_entry::OwnerSeedCache::new(
-                            &staging,
-                            &keys.enc_secret,
-                            &entropy,
-                            &keys.contact_label_seed,
-                        )),
+                        owner_seed_cache: Some(keys.owner_seed_cache(&staging, &entropy)),
                         transport: &transport,
                         api: &api,
                         floors: &floors,

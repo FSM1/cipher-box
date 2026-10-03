@@ -75,6 +75,25 @@ pub(crate) struct SweepKeys {
     pub(crate) scope_keys: OwnerSeedKeys,
 }
 
+impl SweepKeys {
+    pub(crate) fn owner_seed_cache<'a, St, E>(
+        &'a self,
+        staging: &'a St,
+        entropy: &'a core::cell::RefCell<E>,
+    ) -> crate::grants::OwnerSeedCache<'a>
+    where
+        St: crate::seams::StagingStore,
+        E: crate::entropy::Entropy,
+    {
+        crate::grants::OwnerSeedCache::new(
+            staging,
+            &self.enc_secret,
+            entropy,
+            &self.contact_label_seed,
+        )
+    }
+}
+
 /// One node inside a scope, as the gated parent body named it. A node id locates
 /// nothing on its own — only a gated parent's read body binds it to a name.
 #[derive(Clone, PartialEq, Eq)]

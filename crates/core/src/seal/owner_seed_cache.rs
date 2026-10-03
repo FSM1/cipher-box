@@ -1,4 +1,4 @@
-//! The owner's confirmed scope seed and the encrypted root copy it can recover.
+//! The owner's confirmed root copy. Recovery opens the seed from its owner blob.
 
 use zeroize::Zeroizing;
 
@@ -12,14 +12,13 @@ use crate::ipns::MAX_IPNS_NAME_BYTES;
 pub const MAX_OWNER_SEED_RECORD_BYTES: usize = 10 * 1024;
 /// Maximum encoded cache body, including the encrypted head and CBOR framing.
 pub const MAX_OWNER_SEED_CACHE_BYTES: usize =
-    MAX_BLOCK_BYTES + MAX_OWNER_SEED_RECORD_BYTES + MAX_IPNS_NAME_BYTES + 190;
+    MAX_BLOCK_BYTES + MAX_OWNER_SEED_RECORD_BYTES + MAX_IPNS_NAME_BYTES + 151;
 
-/// A confirmed read and its recovery inputs. Seeds zeroize at this owner.
+/// A confirmed read and its recovery inputs. The parent seed zeroizes here.
 pub struct OwnerSeedRecord {
     pub scope_id: [u8; 16],
     pub epoch: u64,
     pub write_epoch: u64,
-    pub seed: Zeroizing<[u8; 32]>,
     pub parent_node_seed: Option<Zeroizing<[u8; 32]>>,
     pub ipns_name: Vec<u8>,
     pub record_bytes: Vec<u8>,
@@ -60,7 +59,6 @@ pub fn encode_owner_seed_record(
     map.insert("scope", Value::Bytes(record.scope_id.to_vec()));
     map.insert("epoch", Value::Unsigned(record.epoch));
     map.insert("writeEpoch", Value::Unsigned(record.write_epoch));
-    map.insert("seed", Value::Bytes(record.seed.to_vec()));
     if let Some(seed) = &record.parent_node_seed {
         map.insert("parentNodeSeed", Value::Bytes(seed.to_vec()));
     }
@@ -104,7 +102,6 @@ pub fn decode_owner_seed_record(bytes: &[u8]) -> Result<OwnerSeedRecord, CodecEr
         "scope",
         "epoch",
         "writeEpoch",
-        "seed",
         "parentNodeSeed",
         "ipnsName",
         "ipnsRecord",
@@ -121,7 +118,6 @@ pub fn decode_owner_seed_record(bytes: &[u8]) -> Result<OwnerSeedRecord, CodecEr
         scope_id: fixed(req(map, "scope")?, "scope")?,
         epoch: req(map, "epoch")?.as_unsigned()?,
         write_epoch: req(map, "writeEpoch")?.as_unsigned()?,
-        seed: Zeroizing::new(fixed(req(map, "seed")?, "seed")?),
         parent_node_seed: map
             .get("parentNodeSeed")
             .map(|v| fixed(v, "parentNodeSeed").map(Zeroizing::new))

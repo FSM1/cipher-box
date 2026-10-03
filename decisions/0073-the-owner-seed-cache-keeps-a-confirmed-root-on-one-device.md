@@ -19,16 +19,17 @@ merge rule. Its design is too large for this cache repair.
 **D1 — Keep one sealed recovery entry per scope in the device's `StagingStore`.**
 Use HPKE auth mode to self under owner-local kind `0x0b`, `owner-seed-cache`.
 Use the existing name-label edge on the prefix and scope id for the lookup key.
-The core codec stores the confirmed seed and epoch, signed IPNS record, fetched
-root block, and parent node seed when required. The block permits recovery when
-neither a gateway nor the snapshot cache holds it.
+The core codec stores the confirmed epoch and write epoch, signed IPNS record,
+fetched root block, and parent node seed when required. It stores no scope
+seed: recovery opens the owner blob in the block again. The block permits
+recovery when neither a gateway nor the snapshot cache holds it.
 Each completed owner read tries to save its entry before floors advance. A
 failed cache write does not stop the read or floor advance. A probe or refused
-read saves nothing. At one name, only a greater sequence replaces the entry.
-A confirmed read at a new name replaces the old name's entry. Updates cannot
-lower the saved read, write, or cut epoch. A new name must have a greater write
-epoch. A corrupt entry is absent and can be replaced; a local failure cannot
-accuse a writer.
+read saves nothing. At one name, only a greater sequence replaces the entry;
+the gate holds the epoch floors, so a keyless root also replaces it. A
+confirmed read at a new name replaces the old name's entry only with a greater
+write epoch. A corrupt entry is absent and can be replaced; a local failure
+cannot accuse a writer, and the network record keeps its trust verdict.
 
 **D2 — Use the confirmed copy as the durable source for recovery and ADR 0068.**
 A failed current owner blob stays a trust violation and raises attributable
@@ -58,8 +59,9 @@ retains its store. The vault record for all owner devices is not landed.
   invariant: the root gate checks the ascent link and opens the body with the
   owner blob's seed. A different seed fails with `ascent-link-mismatch` or
   `seal-open-failed`.
-- Entries do not count toward the upload budget. Scope deletion removes the
-  entry. Each scope has at most one entry, bounded by the core codec.
+- Entries do not count toward the upload budget. A scope delete removes the
+  entries before the publish that completes it, as a best effort. Each scope
+  has at most one entry, bounded by the core codec.
 - Sign-out keeps the sealed entries for the next session of that account.
   Account switch keeps them under separate account labels and sealing keys.
   Forget-device removes them with the staging store.

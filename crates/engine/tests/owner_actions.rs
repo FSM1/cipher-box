@@ -16145,8 +16145,28 @@ fn a_stale_delete_keeps_the_live_folders_scope_copy() {
     delete_with_previous_scope_copy(true);
 }
 
-fn delete_with_previous_scope_copy(concurrent: bool) {
+/// The staged key and sealed bytes of `fx.folder`'s durable scope copy.
+fn scope_copy(fx: &GrantScenario) -> Option<(Vec<u8>, Vec<u8>)> {
     use cipherbox_core::seal::{OwnerLocalKind, decode_owner_seed_record, open_owner_local};
+    block_on(fx.owner_device.staging_store.staged_keys())
+        .unwrap()
+        .into_iter()
+        .find_map(|key| {
+            let blob = block_on(fx.owner_device.staging_store.staged_bytes(&key)).unwrap()?;
+            let record = open_owner_local(
+                &kdf::enc_subkey(&SECRET),
+                OwnerLocalKind::OwnerSeedCache,
+                &blob,
+            )
+            .and_then(|body| decode_owner_seed_record(&body))
+            .ok()?;
+            (record.scope_id == fx.folder.0).then_some((key, blob))
+        })
+}
+
+/// A plain folder whose id holds the durable copy that a granted run of the
+/// same scenario saved.
+fn folder_with_scope_copy() -> (GrantScenario, Vec<u8>, Vec<u8>) {
     let mut previous = GrantScenario::new();
     assert_eq!(
         previous.grant_folder_to_recipient(),
@@ -16155,25 +16175,74 @@ fn delete_with_previous_scope_copy(concurrent: bool) {
     for _ in 0..2 {
         tick(&previous.world, &previous.engine, &mut previous._tasks);
     }
-    let (key, blob) = block_on(previous.owner_device.staging_store.staged_keys())
-        .unwrap()
-        .into_iter()
-        .find_map(|key| {
-            let blob = block_on(previous.owner_device.staging_store.staged_bytes(&key)).unwrap()?;
-            let record = open_owner_local(
-                &kdf::enc_subkey(&SECRET),
-                OwnerLocalKind::OwnerSeedCache,
-                &blob,
-            )
-            .and_then(|body| decode_owner_seed_record(&body))
-            .ok()?;
-            (record.scope_id == previous.folder.0).then_some((key, blob))
-        })
-        .expect("the confirmed scope has a durable copy");
-    let mut fx = GrantScenario::new();
+    let (key, blob) = scope_copy(&previous).expect("the confirmed scope has a durable copy");
+    let fx = GrantScenario::new();
     assert_eq!(previous.folder, fx.folder);
     drop(previous);
     block_on(fx.owner_device.staging_store.put_staged_bytes(&key, &blob)).unwrap();
+    (fx, key, blob)
+}
+
+#[test]
+fn a_store_fault_on_the_scope_copy_does_not_stop_the_delete() {
+    let (mut fx, _, _) = folder_with_scope_copy();
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_removals_under(cipherbox_engine::grants::OWNER_SEED_CACHE_PREFIX);
+    block_on(fx.engine.command(Command::Delete { node: fx.folder })).unwrap();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.owner_device.staging_store.queued_ops())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !block_on(fx.engine.view())
+            .unwrap()
+            .children(ROOT)
+            .iter()
+            .any(|child| child.id == fx.folder)
+    );
+}
+
+/// The copy goes before the publish that completes the delete. A restart in
+/// that window leaves a live scope with no copy, and its next confirmed read
+/// saves the copy again.
+#[test]
+fn a_restart_between_the_copy_removal_and_the_publish_keeps_the_scope_readable() {
+    let (mut fx, key, _) = folder_with_scope_copy();
+    let root = write_name(ROOT);
+    let linked = published_value(&fx.world, &root);
+    fx.world.record_store.fail_put_for(root.as_str());
+    block_on(fx.engine.command(Command::Delete { node: fx.folder })).unwrap();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.owner_device.staging_store.staged_bytes(&key))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(published_value(&fx.world, &root), linked);
+
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let (key, _) = scope_copy(&fx).expect("the confirmed scope has a durable copy");
+    block_on(fx.owner_device.staging_store.remove_staged_bytes(&key)).unwrap();
+    drop(fx.engine);
+    drop(fx._tasks);
+    drop(fx.world.scheduler.take_spawned_tasks());
+    (fx.engine, fx._events, fx._tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(scope_copy(&fx).is_some());
+}
+
+fn delete_with_previous_scope_copy(concurrent: bool) {
+    let (mut fx, key, blob) = folder_with_scope_copy();
     if concurrent {
         use cipherbox_engine::sync::{Op, RecordSeal, stage_op};
         let current = sequence_at(&fx.world, &write_name(fx.folder));

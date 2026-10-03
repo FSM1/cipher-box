@@ -208,12 +208,12 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
     let Some((_, record)) = fanout_get_verify(seams.transport, &root).await else {
         return Ok(LinkEntryRead::Unavailable);
     };
-    let candidate = match assemble_candidate(seams.gateway, seams.http, &root, &record, None).await
-    {
-        Ok(candidate) => candidate,
-        Err(GateError::Rejected(rejection)) => return Err(LinkReadRefusal::Gate(rejection)),
-        Err(GateError::Seam(_)) => return Ok(LinkEntryRead::Unavailable),
-    };
+    let candidate =
+        match assemble_candidate(seams.gateway, seams.http, &root, &record, None, false).await {
+            Ok(candidate) => candidate,
+            Err(GateError::Rejected(rejection)) => return Err(LinkReadRefusal::Gate(rejection)),
+            Err(GateError::Seam(_)) => return Ok(LinkEntryRead::Unavailable),
+        };
     let Ok(cut_epoch_floor) = read_cut_epoch_floor(&seams.floors, &share.scope_id).await else {
         return Ok(LinkEntryRead::Unavailable);
     };

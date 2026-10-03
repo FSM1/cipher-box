@@ -7,9 +7,8 @@ use std::rc::Rc;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    OwnerLocalKind, OwnerSeedRecord, decode_envelope, decode_grant_section,
-    decode_owner_seed_record, encode_owner_seed_record, grant_section_bytes, open_owner_local,
-    seal_owner_local,
+    OwnerLocalKind, OwnerSeedRecord, decode_owner_seed_record, encode_owner_seed_record,
+    open_owner_local, seal_owner_local,
 };
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -122,23 +121,17 @@ impl<'a> OwnerSeedCache<'a> {
             .and_then(|r| r.verify(&name))
             .map_err(local_error)?
             .sequence;
+        // At one name the gate already holds every epoch floor, and a keyless
+        // root must still move the entry up to the sequence floor.
         if let Some(held) = self.read_scope(&record.scope_id).await? {
-            if held.epoch > record.epoch || held.write_epoch > record.write_epoch {
-                return Ok(());
-            }
-            if let (Some(old), Some(new)) = (cut_epoch(&held), cut_epoch(record))
-                && old > new
-            {
-                return Ok(());
-            }
-            if held.ipns_name == record.ipns_name {
-                if let Ok(previous) =
-                    IpnsRecord::unmarshal(&held.record_bytes).and_then(|r| r.verify(&name))
-                    && previous.sequence >= next_sequence
-                {
-                    return Ok(());
-                }
-            } else if record.write_epoch <= held.write_epoch {
+            let stale = if held.ipns_name == record.ipns_name {
+                IpnsRecord::unmarshal(&held.record_bytes)
+                    .and_then(|r| r.verify(&name))
+                    .is_ok_and(|previous| previous.sequence >= next_sequence)
+            } else {
+                record.write_epoch <= held.write_epoch
+            };
+            if stale {
                 return Ok(());
             }
         }
@@ -155,23 +148,13 @@ impl<'a> OwnerSeedCache<'a> {
     }
 }
 
-fn cut_epoch(record: &OwnerSeedRecord) -> Option<u64> {
-    let envelope = decode_envelope(&record.head_block).ok()?;
-    let section = decode_grant_section(grant_section_bytes(&envelope)?).ok()?;
-    Some(section.commitment.cut_epoch)
-}
-
 /// Recovery records do not reserve upload space.
 pub(crate) async fn upload_staged_bytes<St: StagingStore>(staging: &St) -> Result<u64, SeamError> {
-    let mut total = 0u64;
+    let mut total = staging.staged_bytes_total().await?;
     for key in staging.staged_keys().await? {
-        if !key.starts_with(OWNER_SEED_CACHE_PREFIX) {
-            total = total.saturating_add(
-                staging
-                    .staged_bytes(&key)
-                    .await?
-                    .map_or(0, |b| b.len() as u64),
-            );
+        if key.starts_with(OWNER_SEED_CACHE_PREFIX) {
+            let held = staging.staged_bytes(&key).await?;
+            total = total.saturating_sub(held.map_or(0, |b| b.len() as u64));
         }
     }
     Ok(total)
@@ -182,7 +165,6 @@ mod tests {
     use super::*;
     use crate::testkit::{SeededEntropy, block_on, fakes::InMemoryStagingStore};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
-    use zeroize::Zeroizing;
 
     #[test]
     fn the_sealed_cache_refuses_account_and_lookup_transplants() {
@@ -197,7 +179,6 @@ mod tests {
             scope_id: [0x44; 16],
             epoch: 1,
             write_epoch: 1,
-            seed: Zeroizing::new([0x55; 32]),
             parent_node_seed: None,
             ipns_name: name.as_str().as_bytes().to_vec(),
             record_bytes: IpnsRecord::create_v2(
@@ -235,7 +216,6 @@ mod tests {
             scope_id: [0x44; 16],
             epoch: 1,
             write_epoch: 1,
-            seed: Zeroizing::new([0x55; 32]),
             parent_node_seed: None,
             ipns_name: IpnsName::from_public_key(&signer.verifying_key())
                 .as_str()

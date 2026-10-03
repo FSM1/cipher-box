@@ -8,7 +8,6 @@ fn a_confirmed_owner_seed_and_its_recovery_copy_round_trip() {
         scope_id: [0x21; 16],
         epoch: 7,
         write_epoch: 1,
-        seed: Zeroizing::new([0x32; 32]),
         parent_node_seed: Some(Zeroizing::new([0x43; 32])),
         ipns_name: b"scope-name".to_vec(),
         record_bytes: vec![1, 2, 3],
@@ -18,7 +17,6 @@ fn a_confirmed_owner_seed_and_its_recovery_copy_round_trip() {
     let restored = decode_owner_seed_record(&bytes).expect("decode");
     assert_eq!(restored.scope_id, [0x21; 16]);
     assert_eq!(restored.epoch, 7);
-    assert!(ct_eq(&restored.seed, &record.seed), "the seed survives");
     assert!(
         ct_eq(
             restored.parent_node_seed.as_ref().unwrap(),

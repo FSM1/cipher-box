@@ -257,8 +257,8 @@ pub enum SeedBlob<'a> {
 /// tests feed candidates directly (blueprint/engine.md: "records are
 /// hand-fed").
 pub struct Candidate {
-    /// The fetched root bytes, retained for durable owner recovery.
-    pub head_block: Vec<u8>,
+    /// The fetched root bytes, kept only for an owner seed cache.
+    pub head_block: Option<Vec<u8>>,
     /// The IPNS name the record was fetched under — the verify chain's sole
     /// trust anchor.
     pub name: IpnsName,

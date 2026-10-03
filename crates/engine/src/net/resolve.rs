@@ -54,10 +54,10 @@ pub trait Adopter {
     /// it: discarding the advance instead would cache the record under stale
     /// cut-epoch, read-epoch and sequence floors, and leave a replay of an older
     /// valid record above every bar this pass was to raise.
-    async fn commit_adoption(&self, _pending: PendingAdoption) -> Result<Adopted, GateError> {
-        Err(GateError::Seam(SeamError::new(
+    async fn commit_adoption(&self, _pending: PendingAdoption) -> Result<Adopted, SeamError> {
+        Err(SeamError::new(
             "a deferred gate pass reached an adopter that commits no floor",
-        )))
+        ))
     }
 
     /// Commit the sequence-floor raise a [`GatePass::DeferredSequence`] pass
@@ -395,38 +395,15 @@ where
                 // Only gate-passing records touch the snapshot; the same verified
                 // bytes ride out to the liveness hold, so no re-fetch/re-get.
                 let adopted = keep_then_commit(snapshot_cache, name, &bytes, async {
-                    Ok(match pass {
+                    match pass {
                         GatePass::Deferred(pending) => adopter.commit_adoption(pending).await,
-                        GatePass::DeferredSequence(pending) => adopter
-                            .commit_sequence_adoption(pending)
-                            .await
-                            .map_err(GateError::Seam),
+                        GatePass::DeferredSequence(pending) => {
+                            adopter.commit_sequence_adoption(pending).await
+                        }
                         GatePass::Advanced(adopted) => Ok(adopted),
-                    })
+                    }
                 })
                 .await?;
-                let adopted = match adopted {
-                    Ok(adopted) => adopted,
-                    Err(GateError::Seam(error)) => return Err(error),
-                    Err(GateError::Rejected(rejection)) => {
-                        return Ok(GatedResolve {
-                            resolved: Resolved {
-                                outcome: ResolveOutcome::TrustViolation(rejection),
-                                last_known_good,
-                                current_at_floor: None,
-                                recovered_owner: None,
-                                fork: None,
-                            },
-                            hold: None,
-                            held_record: None,
-                            read_scope_seed: None,
-                            tied,
-                            absent,
-                            observed: None,
-                            envelope: None,
-                        });
-                    }
-                };
                 let observed = Some(Observed::gated(name, adopted.sequence, version, &bytes));
                 // The adopt left the floor at the pick, so a tie gates there.
                 let fork = fork_of(
@@ -542,8 +519,8 @@ where
                     .map(|seed| (material.node_id, seed));
                 Some(material.at_floor)
             }
-            Ok(None) | Err(GateError::Rejected(_)) => None,
-            Err(GateError::Seam(error)) => return Err(error),
+            // A local fault means no copy; the record keeps its verdict.
+            Ok(None) | Err(_) => None,
         }
     } else {
         None
