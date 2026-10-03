@@ -128,6 +128,9 @@ export type SettingsHoldDescriptor = Extract<QueueHold, { reason: 'settings' }>;
 /** The queue head held over the owner's bin index. */
 export type BinIndexHoldDescriptor = Extract<QueueHold, { reason: 'bin-index' }>;
 
+/** The queue head held until the delete's target record proves its plane. */
+export type DeletePlaneHoldDescriptor = Extract<QueueHold, { reason: 'delete-plane' }>;
+
 /** The one held queue head: the engine `QueueHold`. A host dispatches on `reason`. */
 export type QueueHoldDescriptor = QueueHold;
 

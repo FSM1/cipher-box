@@ -85,8 +85,7 @@ use crate::net::{
     Adopter, ChildAdopter, FanoutRecord, GatedResolve, HeldEnvelope, HeldKey, HeldRecord,
     HeldRecords, HeldValue, LocalHead, OwnScopeMaterial, ResolveOutcome, RootAdopter,
     assemble_head_envelope, fanout_get_classified, fanout_get_verify, fanout_get_verify_failed,
-    observed_at, resolve,
-    resolve_gated,
+    observed_at, resolve, resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::{BinIndexHoldCheck, DefaultsReason, LoadSplit};
@@ -203,6 +202,14 @@ fn admissible_staged_block(key: &[u8], block: Vec<u8>) -> Result<Vec<u8>, Halt> 
 /// either.
 fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
     end.write_name(&child.id).as_str().as_bytes() == child.ipns_name
+}
+
+/// Whether `op` deletes a scope root this session knows of. A grafted pass
+/// authors in another vault, whose roots this set does not hold.
+fn deletes_a_known_scope_root(scope: &DrainScope<'_>, op: &Op) -> bool {
+    !scope.is_grafted()
+        && matches!(op.kind, OpKind::Delete { .. })
+        && scope.known_scope_roots.contains(&op.target)
 }
 
 /// Whether `child` is a node of this scope rather than a scope root. A granted
@@ -409,7 +416,8 @@ enum Halt {
     /// (CONTEXT.md "Epoch lag"). Charged nothing, and re-driven at the pass that
     /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
-    /// The delete has no current proof of its target's plane. Retried without a charge.
+    /// The delete has no current proof of its target's plane. Not a failure of
+    /// the op: it holds the head uncharged ([`QueueHoldReason::DeletePlane`]).
     DeletePlaneUnavailable,
     /// The op carries a folder whose interior move is owed (ADR 0063) out of
     /// the scope the move re-seals it into. Charged nothing, and re-driven at
@@ -738,6 +746,12 @@ pub enum QueueHoldReason {
     /// of it — otherwise stops every queued operation for the account with no
     /// cause the member can see (blueprint/engine.md "Bin index record").
     BinIndex(BinIndexHoldCheck),
+    /// The delete's target record did not prove the plane the delete re-seals
+    /// it under. The exit is a pass that proves it.
+    ///
+    /// Reported for the same reason as [`Self::BinIndex`]: a party who
+    /// withholds the target's record otherwise stops the queue in silence.
+    DeletePlane,
 }
 
 /// The queue head is held over rather than failed: it keeps its place and its
@@ -747,7 +761,7 @@ pub enum QueueHoldReason {
 /// has another arm's state to clear. The cell belongs to the tick rather than
 /// to one pass: a tick runs one pass per proved scope over one identity-wide
 /// queue, so a hold one pass takes is still the head's when the next pass of
-/// the same tick opens ([`bin_index_hold_exits`]).
+/// the same tick opens ([`probed_hold_exits`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueHold {
     /// The held op.
@@ -758,20 +772,24 @@ pub struct QueueHold {
     pub reason: QueueHoldReason,
 }
 
-/// Whether a halt frees a [`QueueHoldReason::BinIndex`] hold.
+/// Whether a halt frees a hold whose exit is the pass itself:
+/// [`QueueHoldReason::BinIndex`] or [`QueueHoldReason::DeletePlane`].
 ///
 /// The exit is a classified verdict on the held op itself. A pass whose scope
 /// does not author that op takes [`Halt::Unclassified`] for it and knows
 /// nothing about the bin plane, so a later pass of the same tick must not drop
 /// the hold an earlier one took — the head would then wait with no cause the
 /// member can see.
-fn bin_index_hold_exits(hold: Option<QueueHold>, halted: OpId, halt: Halt) -> bool {
+fn probed_hold_exits(hold: Option<QueueHold>, halted: OpId, halt: Halt) -> bool {
     let Some(hold) = hold else {
         return false;
     };
-    matches!(hold.reason, QueueHoldReason::BinIndex(_))
-        && hold.op_id == halted
-        && !matches!(halt, Halt::HeldByBinIndex(_) | Halt::Unclassified)
+    let still_held = match hold.reason {
+        QueueHoldReason::BinIndex(_) => matches!(halt, Halt::HeldByBinIndex(_)),
+        QueueHoldReason::DeletePlane => halt == Halt::DeletePlaneUnavailable,
+        QueueHoldReason::Quota { .. } | QueueHoldReason::Settings(_) => return false,
+    };
+    hold.op_id == halted && !still_held && halt != Halt::Unclassified
 }
 
 /// The captures one pass adopts into the bin. A peer chooses both the trigger
@@ -2454,14 +2472,24 @@ where
             return Ok(());
         }
 
-        let queued = match queued.iter().position(|(_, op)| {
-            matches!(op.kind, OpKind::Delete { .. })
-                && scope.known_scope_roots.contains(&op.target)
-                && !scope.scope_roots.contains(&op.target)
-        }) {
-            Some(0) => return Err(Halt::DeletePlaneUnavailable),
-            Some(at) => &queued[..at],
-            None => queued,
+        // The command refuses the same set, so a delete queued before a grant
+        // leaves the same way whether or not this walk proved the root.
+        let refused: Vec<(OpId, DeadLetterReason)> = queued
+            .iter()
+            .filter(|(_, op)| deletes_a_known_scope_root(scope, op))
+            .map(|(op_id, _)| (*op_id, DeadLetterReason::TargetIsScopeRoot))
+            .collect();
+        let all = queued;
+        let kept: Vec<(OpId, Op)>;
+        let queued = if refused.is_empty() {
+            all
+        } else {
+            kept = all
+                .iter()
+                .filter(|(_, op)| !deletes_a_known_scope_root(scope, op))
+                .cloned()
+                .collect();
+            &kept[..]
         };
 
         let opened = self.open_rebased_pass(scope, queued).await;
@@ -2472,8 +2500,8 @@ where
                 .await;
         }
         let (mut pass, rebased) = opened?;
-        for (op_id, reason) in &rebased.dead_letters {
-            let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
+        for (op_id, reason) in refused.iter().chain(&rebased.dead_letters) {
+            let Some((_, op)) = all.iter().find(|(id, _)| id == op_id) else {
                 continue;
             };
             // A terminally unrebasable op keeps its staged bytes, and this is
@@ -2588,11 +2616,11 @@ where
         // The bin plane has no probe of its own — the load is the only one — so
         // its hold exits here, on a classified halt at the held op. Every other
         // reason has an exit the pre-pass gate can try.
-        if bin_index_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
+        if probed_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
             self.release_hold();
         }
         match halt {
-            Halt::EpochLagged | Halt::OwedMove | Halt::DeletePlaneUnavailable => {}
+            Halt::EpochLagged | Halt::OwedMove => {}
             Halt::OtherBinScope if !scope.charges_the_identity => {}
             // Its own budget, its own count: an outage must not spend the
             // attempt budget, and a spent attempt is what tells
@@ -2702,6 +2730,9 @@ where
             Halt::HeldByBinIndex(check) => {
                 self.hold_head(op_id, op, QueueHoldReason::BinIndex(check));
             }
+            Halt::DeletePlaneUnavailable => {
+                self.hold_head(op_id, op, QueueHoldReason::DeletePlane);
+            }
         }
     }
 
@@ -2724,10 +2755,11 @@ where
                         return false;
                     }
                 }
-                // The bin index load is its own probe, so this reason neither
-                // stops a pass nor clears before one: [`Self::apply_valve`] and
-                // [`Self::establish_bin_index`] are its exits.
-                QueueHoldReason::BinIndex(_) => return true,
+                // The bin index load and the delete's plane proof are their
+                // own probes, so neither reason stops a pass nor clears before
+                // one: [`Self::apply_valve`] and [`Self::establish_bin_index`]
+                // are the exits.
+                QueueHoldReason::BinIndex(_) | QueueHoldReason::DeletePlane => return true,
             }
         }
         self.release_hold();
@@ -3971,6 +4003,11 @@ where
                 Err(error) => return Err(fault(error)),
             }
             return Err(Halt::Permanent(DeadLetterReason::TargetIsScopeRoot));
+        }
+        // A failed endpoint can withhold the grant, and the record from before
+        // it still opens under the parent plane.
+        if endpoint_failed {
+            return Err(Halt::DeletePlaneUnavailable);
         }
         if !names_this_scope(&plane.end, child) {
             return Err(Halt::DeletePlaneUnavailable);

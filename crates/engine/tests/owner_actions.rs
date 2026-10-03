@@ -84,9 +84,9 @@ use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, ContentProfile,
     DeadLetterReason, DropCause, Engine, EngineError, Event, EventStream, GatewayConfig,
     InvitePreview, LinkPreviewState, LoginSecret, NodeId, NodeKind, OwedWorkClass, Permission,
-    PreviewEntry, PreviewNames, RecordReader, ScopeEpochs, SessionBearer, SharePointer,
-    SharingInviteLink, StoragePolicy, SyncTimingProfile, WriteTarget, decode_queue, load_bin_index,
-    poll_verified, post_sealed,
+    PreviewEntry, PreviewNames, QueueHold, QueueHoldReason, RecordReader, ScopeEpochs,
+    SessionBearer, SharePointer, SharingInviteLink, StoragePolicy, SyncTimingProfile, WriteTarget,
+    decode_queue, load_bin_index, poll_verified, post_sealed,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -3305,6 +3305,8 @@ fn deleting_a_granted_scope_root_refuses_before_any_publish() {
     }
 }
 
+/// A held delete is a reported hold on its target, and strict FIFO keeps each
+/// later op behind it until a pass proves the target's plane.
 #[test]
 fn an_offline_delete_of_a_plain_folder_queues_and_waits_for_its_plane() {
     let mut fx = GrantScenario::new();
@@ -3315,13 +3317,28 @@ fn an_offline_delete_of_a_plain_folder_queues_and_waits_for_its_plane() {
     fx._events = events;
     fx._tasks = tasks;
     fx.world.record_store.fail_get_for(name.as_str());
-    block_on(fx.engine.command(Command::Delete { node: fx.folder }))
-        .expect("an offline delete queues before the first boundary walk");
+    let op_id = block_on(fx.engine.command(Command::Delete { node: fx.folder }))
+        .expect("an offline delete queues before the first boundary walk")
+        .op_id()
+        .unwrap();
+    block_on(fx.engine.command(Command::Create {
+        parent: ROOT,
+        name: "behind the held delete".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a later create queues");
     let parent_sequence = sequence_at(&fx.world, &write_name(ROOT));
     for _ in 0..16 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    assert_eq!(queued_ops(&fx.owner_device), 1);
+    let held = Some(QueueHold {
+        op_id,
+        node: fx.folder,
+        reason: QueueHoldReason::DeletePlane,
+    });
+    assert_eq!(block_on(fx.engine.status()).unwrap().queue_hold, held);
+    assert_eq!(block_on(fx.engine.snapshot(ROOT)).unwrap().queue_hold, held);
+    assert_eq!(queued_ops(&fx.owner_device), 2, "the later create waits");
     assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
     assert!(published_bin_entries(&fx).is_empty());
     assert!(
@@ -3333,9 +3350,19 @@ fn an_offline_delete_of_a_plain_folder_queues_and_waits_for_its_plane() {
     assert_eq!(abuse_events(&mut fx._events), 0);
 
     fx.world.record_store.heal_get_for(name.as_str());
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
     assert_eq!(queued_ops(&fx.owner_device), 0);
     assert_eq!(published_bin_entries(&fx)[0].node_id, fx.folder.0);
+    published_child_name(
+        &fx.world,
+        &fx.blocks,
+        &write_name(ROOT),
+        &read_key_of(ROOT),
+        "behind the held delete",
+    );
+    assert_eq!(block_on(fx.engine.status()).unwrap().queue_hold, None);
 }
 
 fn stage_legacy_folder_delete(fx: &GrantScenario) -> cipherbox_engine::seams::OpId {
@@ -3358,60 +3385,80 @@ fn stage_legacy_folder_delete(fx: &GrantScenario) -> cipherbox_engine::seams::Op
     .expect("the prior release queued the scope-root delete")
 }
 
+/// A queued delete of a root the walk names but cannot prove leaves at once,
+/// the same as a proved root, and a later op publishes behind it.
 #[test]
-fn a_restarted_delete_waits_when_the_walk_cannot_prove_a_named_root() {
+fn a_restarted_delete_of_a_named_unproved_root_dead_letters() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    block_on(fx.engine.command(Command::Create {
-        parent: ROOT,
-        name: "before the held delete".into(),
-        kind: NodeKind::Folder,
-    }))
-    .expect("an earlier create queues");
     let op_id = stage_legacy_folder_delete(&fx);
+    fx.world
+        .record_store
+        .fail_get_for(write_name(fx.folder).as_str());
+
+    assert_a_known_root_delete_dead_letters(&mut fx, op_id);
+}
+
+/// A root whose record the gate refuses stays in the known set, so its queued
+/// delete leaves the same way.
+#[test]
+fn a_restarted_delete_of_a_refused_root_dead_letters() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let root = fx.granted_scope_repoint().current_root;
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &root) + 1);
+    let op_id = stage_legacy_folder_delete(&fx);
+
+    assert_a_known_root_delete_dead_letters(&mut fx, op_id);
+}
+
+/// Restarts the owner on the staged delete `op_id`, queues a later create, and
+/// asserts the delete dead-letters with its target and the create publishes.
+fn assert_a_known_root_delete_dead_letters(
+    fx: &mut GrantScenario,
+    op_id: cipherbox_engine::seams::OpId,
+) {
     fx._tasks.clear();
     let (engine, events, tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
     fx.engine = engine;
     fx._events = events;
     fx._tasks = tasks;
-    let name = write_name(fx.folder);
-    fx.world.record_store.fail_get_for(name.as_str());
+    block_on(fx.engine.command(Command::Create {
+        parent: ROOT,
+        name: "after the refused delete".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a later create queues");
     for _ in 0..16 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    assert_eq!(queued_ops(&fx.owner_device), 1);
+
+    assert_eq!(queued_ops(&fx.owner_device), 0);
+    let events = events_so_far(&mut fx._events);
+    assert!(events.iter().any(|event| matches!(event,
+        Event::DeadLetter { op_id: reported, target, reason: DeadLetterReason::TargetIsScopeRoot }
+            if *reported == op_id && *target == Some(fx.folder)
+    )));
+    let status = block_on(fx.engine.status()).unwrap();
+    assert_eq!(status.dead_letters.len(), 1);
+    assert_eq!(status.dead_letters[0].op_id, op_id);
+    assert_eq!(status.queue_hold, None);
     published_child_name(
         &fx.world,
         &fx.blocks,
         &write_name(ROOT),
         &read_key_of(ROOT),
-        "before the held delete",
+        "after the refused delete",
     );
-    assert!(published_bin_entries(&fx).is_empty());
-    assert!(
-        block_on(fx.engine.status())
-            .unwrap()
-            .dead_letters
-            .is_empty()
-    );
-    assert_eq!(abuse_events(&mut fx._events), 0);
+    assert!(published_bin_entries(fx).is_empty());
     assert_eq!(
         block_on(fx.engine.command(Command::Delete { node: fx.folder })),
         Err(EngineError::UnsupportedTarget {
             check: "delete-target-is-a-scope-root"
         }),
     );
-
-    fx.world.record_store.heal_get_for(name.as_str());
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let status = block_on(fx.engine.status()).unwrap();
-    assert_eq!(status.dead_letters[0].op_id, op_id);
-    assert_eq!(
-        status.dead_letters[0].reason,
-        DeadLetterReason::TargetIsScopeRoot
-    );
-    assert!(published_bin_entries(&fx).is_empty());
 }
 
 #[test]
@@ -3479,6 +3526,16 @@ fn assert_unindexed_delete_is_refused(mislabeled: bool) {
     assert_eq!(abuse_events(&mut fx._events), 0);
     fx.world.record_store.heal_get_for(name.as_str());
     tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let events = events_so_far(&mut fx._events);
+    assert!(events.iter().any(|event| matches!(event,
+        Event::DeadLetter { op_id: reported, target, reason: DeadLetterReason::TargetIsScopeRoot }
+            if *reported == op_id && *target == Some(fx.folder)
+    )));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. }))
+    );
     let status = block_on(fx.engine.status()).unwrap();
     assert_eq!(status.dead_letters[0].op_id, op_id);
     assert_eq!(
@@ -3487,7 +3544,75 @@ fn assert_unindexed_delete_is_refused(mislabeled: bool) {
     );
     assert_eq!(sequence_at(&fx.world, &write_name(ROOT)), parent_sequence);
     assert!(published_bin_entries(&fx).is_empty());
-    assert_eq!(abuse_events(&mut fx._events), 0);
+}
+
+/// One endpoint fails and the other serves the folder and its parent from
+/// before a grant this device never saw. The plain record still opens under the
+/// parent plane, so the delete holds rather than re-keying the granted root.
+#[test]
+fn a_delete_holds_when_a_failed_endpoint_can_withhold_a_grant() {
+    let mut fx = GrantScenario::new();
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let endpoints = fx.world.record_store.endpoints();
+    let (failing, serving) = (&endpoints[0], &endpoints[1]);
+    let names = [write_name(ROOT), write_name(fx.folder)];
+    let before: Vec<Vec<u8>> = names
+        .iter()
+        .map(|name| {
+            fx.world
+                .record_store
+                .record_at(serving, name.as_str())
+                .expect("a published record")
+        })
+        .collect();
+    let op_id = block_on(fx.engine.command(Command::Delete { node: fx.folder }))
+        .expect("the delete queues")
+        .op_id()
+        .unwrap();
+    let peer = fx.world.device(b"peer owner device");
+    let (mut engine, _events, _tasks) = boot_owner(&fx.world, &fx.blocks, &peer);
+    import_recipient(&mut engine);
+    assert_eq!(
+        block_on(engine.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+            grantee_name: None,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    for (name, record) in names.iter().zip(&before) {
+        fx.world
+            .record_store
+            .seed_record(serving, name.as_str(), record.clone());
+    }
+    fx.world.record_store.fail_endpoint(failing);
+    for _ in 0..12 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(
+        block_on(fx.engine.status()).unwrap().queue_hold,
+        Some(QueueHold {
+            op_id,
+            node: fx.folder,
+            reason: QueueHoldReason::DeletePlane,
+        })
+    );
+    assert_eq!(queued_ops(&fx.owner_device), 1);
+    assert!(published_bin_entries(&fx).is_empty());
+    for (name, record) in names.iter().zip(&before) {
+        assert_eq!(
+            fx.world
+                .record_store
+                .record_at(serving, name.as_str())
+                .as_ref(),
+            Some(record),
+            "the delete publishes nothing"
+        );
+    }
 }
 
 #[test]

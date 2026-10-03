@@ -65,7 +65,7 @@ pub(crate) struct Boundaries<'a> {
     /// The gate-passing base a boundary's place is read off.
     pub(crate) base: &'a BaseSnapshot,
     /// The known set
-    /// ([`Engine::relocation_scope_roots`](crate::facade::Engine::relocation_scope_roots)).
+    /// ([`SessionState::named_scope_roots`](crate::session::SessionState::named_scope_roots)).
     pub(crate) scope_roots: Vec<NodeId>,
     /// What each **walked** boundary seals under, assembled from the read epoch
     /// this tick's walk proved and the two seed caches.

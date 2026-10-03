@@ -689,14 +689,20 @@ delete does (ADR 0043).
   root this session knows: proved roots, minted roots, and named roots without
   material. A folder stays a scope root after its last grant is revoked, so
   the refusal still applies. A scope root is neither binned nor hard-deleted.
-- **An unknown folder can queue offline.** Before a queued delete publishes,
-  the drain must prove the target's plane from its current record. A missing
-  index entry does not prove that the target is a plain folder. If the plane
-  is unavailable, the op stays queued without a charge. A named root with no
-  proved material also stays queued. A proved scope-root target dead-letters
-  as `TargetIsScopeRoot`, with its op id, target and reason sent to the host.
-  The delete publishes nothing and raises no trust violation. A record that
-  fails the adoption gate still raises a trust violation.
+- **An unknown folder can queue offline.** A queued delete whose target is in
+  the same known set dead-letters as `TargetIsScopeRoot`, with its op id,
+  target and reason sent to the host. Before any other queued delete
+  publishes, the drain must prove the target's plane from its current record.
+  A missing index entry does not prove that the target is a plain folder. A
+  target record with a grant section dead-letters the same way. A plain record
+  that arrives while an endpoint failed is not a proof, because that endpoint
+  can withhold the grant. If the plane is unavailable, the delete holds the
+  queue head without a charge, as a reported hold that names the target. The
+  queue stays strict FIFO: the ops before the delete publish, and every op
+  after it waits, also an op that does not depend on it. The hold clears when
+  a pass proves the plane. A dead-lettered delete publishes nothing and raises
+  no trust violation. A record that fails the adoption gate still raises a
+  trust violation.
 - **A node the base links more than once unlinks from every one of them.** The
   delete removes the child ref from every folder the base links the node under
   and republishes each under its own plane, under one bin entry whose

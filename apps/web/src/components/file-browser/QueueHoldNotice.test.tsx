@@ -91,6 +91,17 @@ describe('the queue hold notice', () => {
     expect(screen.queryByTestId('queue-hold-notice')).toBeNull();
   });
 
+  it('names a held delete and its item', () => {
+    render(
+      <QueueHoldNotice
+        view={listing({ queueHold: { reason: 'delete-plane', opId: 7n, node: NODE } })}
+      />
+    );
+    expect(screen.getByTestId('queue-hold-notice').textContent).toContain(
+      'the delete of "child-0" waits'
+    );
+  });
+
   it('reports a hold on a node this folder does not list without naming one', () => {
     render(
       <QueueHoldNotice

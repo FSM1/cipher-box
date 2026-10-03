@@ -179,6 +179,14 @@ describe('readSnapshot', () => {
     }
   });
 
+  it('reads a held delete with its target', () => {
+    const view = skewed<SnapshotView>({
+      ...baseView(),
+      queueHold: { reason: 'delete-plane', opId: 14n, node: new Uint8Array(16).fill(7) },
+    });
+    expect(readSnapshot(view).queueHold).toEqual(view.queueHold);
+  });
+
   it('fails closed on a hold reason this build cannot name', () => {
     const view = skewed<SnapshotView>({
       ...baseView(),

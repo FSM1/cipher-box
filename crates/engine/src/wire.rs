@@ -467,6 +467,15 @@ pub enum QueueHold {
         /// The load outcome.
         check: BinIndexHoldCheck,
     },
+    /// Held until the delete's target record proves its plane.
+    DeletePlane {
+        /// The held op.
+        op_id: OpId,
+        /// The node the held delete targets.
+        #[serde(serialize_with = "node_id::serialize")]
+        #[tsify(type = "Uint8Array")]
+        node: NodeId,
+    },
 }
 
 impl From<facade::QueueHold> for QueueHold {
@@ -484,6 +493,7 @@ impl From<facade::QueueHold> for QueueHold {
                 check: settings.check(),
             },
             QueueHoldReason::BinIndex(check) => Self::BinIndex { op_id, node, check },
+            QueueHoldReason::DeletePlane => Self::DeletePlane { op_id, node },
         }
     }
 }

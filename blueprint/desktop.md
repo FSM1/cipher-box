@@ -215,10 +215,12 @@ there is no `block_on` freeze of the whole mount behind one slow call.
   journal time — the dead-letter surface is the compensation channel).
 - **Scope-root deletes** are refused at journal time when the engine knows the
   target is a scope root. A folder stays a scope root after all grants are
-  revoked. An unknown folder can queue offline. The drain holds the delete
-  until it proves the target's plane. If the target is a scope root, the op
-  dead-letters as `TargetIsScopeRoot`; the tray reports the refusal. The kernel
-  is not retro-failed.
+  revoked. An unknown folder can queue offline. The drain dead-letters a
+  queued delete of a known scope root as `TargetIsScopeRoot`. It holds any
+  other delete as a reported hold until it proves the target's plane, and a
+  target that proves to be a scope root dead-letters the same way. The tray
+  reports the refusal, and the engine status names the hold. The kernel is not
+  retro-failed.
 - **Scope-exit rotation** is invisible to the FS layer: a cross-scope `relink`
   triggers detection and rotation inside the engine's op pipeline
   (FSM1/cipher-box-next#26 D7), as one transaction with the mutation. An ordinary
