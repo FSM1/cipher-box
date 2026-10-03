@@ -65,8 +65,8 @@ use crate::settings::{
 };
 use crate::sync::BookkeepingSeal;
 use crate::sync::drain::{
-    Drain, DrainScope, EngineSeams, GrantedPass, ScopeEnd, SealPlane, TickInputs, TickScopes,
-    hold_captures,
+    Drain, DrainScope, EngineSeams, EpochSeed, GrantedPass, ScopeEnd, SealPlane, TickInputs,
+    TickScopes, hold_captures,
 };
 use crate::sync::model::Snapshot;
 use crate::sync::op::{Op, OpKind};
@@ -1050,6 +1050,7 @@ where
                     floor_namespace: FloorNamespace::Own,
                 },
                 epoch: end.material.read_epoch,
+                epoch_seed: EpochSeed::Ratchet,
             }),
             scope_roots: &proved_roots,
             keyless_roots: &keyless_roots,
