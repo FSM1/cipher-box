@@ -310,12 +310,12 @@ where
         )
         .await
         {
-            Ok(ChildRecord::Admitted(adopted, _, fork)) => {
-                if let Some(fork) = fork {
+            Ok(ChildRecord::Admitted(read)) => {
+                if let Some(fork) = read.fork {
                     self.forks.report(self.events, name.as_str(), fork.sequence);
                 }
                 let scope = adopter.opened_scope().unwrap_or(self.scope_id);
-                Some((name, adopted, scope))
+                Some((name, read.adopted, scope))
             }
             // Availability: the base keeps rendering last-known-good.
             Ok(ChildRecord::Absent)

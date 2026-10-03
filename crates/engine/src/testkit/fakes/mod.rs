@@ -17,7 +17,7 @@ mod scheduler;
 mod snapshot_cache;
 mod staging_store;
 
-pub use adopter::{AdoptVerdict, ScriptedAdopter};
+pub use adopter::{ADMITTED_BAR, AdoptVerdict, ScriptedAdopter};
 pub use credential_store::InMemoryCredentialStore;
 pub use floor_store::{InMemoryFloorStore, SplitWriteFloorStore};
 pub use http::ScriptedHttp;

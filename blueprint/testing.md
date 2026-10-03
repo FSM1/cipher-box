@@ -98,6 +98,12 @@ fake HTTP serves the API's mailbox routes from (ADR 0044), and seeded entropy.
 No network, no docker, no wall clock — CAS races and multi-day EOL timelines
 execute in milliseconds.
 
+The **Engine simulation tests** PR gate also runs the engine unit tests,
+`encode_refusals`, and `renewal_walk` in release mode. Together they exercise
+the shared produce-side gate through root rotation, the name wave, the drain,
+renewal, and revival, including floor changes before signing, foreign envelope
+versions, and sequence exhaustion.
+
 The **simulation harness** is this strategy's center of gravity: N engine
 instances (owner, write-grantee, read-grantee, revokee, adversary) share one
 fake record store and mailbox and are stepped deterministically on virtual
@@ -226,6 +232,11 @@ scenario fails the meta-test):
   vault root back with 45 days left and reports it, renews over it with 25
   days left, and renews over a tie of one value, and the renewal set renews
   over a fork inside 30 days (`tests/renewal_walk.rs`, `net::liveness`).
+  A child or a vault root at a foreign envelope version is not renewed by the
+  walk or the renewal set, and the walk emits `renewalFailed` with a version
+  detail; a scope floor raised during the registration makes the walk refuse
+  (`tests/renewal_walk.rs`); the renewal set refuses a held node at a foreign
+  version or below its scope bar (`net::liveness`).
   A lagging endpoint (ADR 0071): with two endpoints, where one lags one
   sequence and the other fails or answers 429, a revoke gets
   `EngineError::Seam`, a read

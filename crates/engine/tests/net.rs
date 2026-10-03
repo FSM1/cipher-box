@@ -67,6 +67,7 @@ fn held_record(name: &IpnsName, bytes: Vec<u8>) -> HeldRecord {
         signer: Ed25519Signer::from_seed([0u8; 32]),
         value: HeldValue::Head("bafyhead".into()),
         content_cids: Vec::new(),
+        envelope: None,
     }
 }
 
