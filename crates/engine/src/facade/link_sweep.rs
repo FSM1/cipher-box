@@ -199,7 +199,7 @@ where
                 {
                     Ok(current) => current,
                     Err(e) => {
-                        report.fail(EngineError::from_resolve_failure(e));
+                        report.fail(EngineError::from_resolve_failure(e, "link-sweep-scope"));
                         continue;
                     }
                 };
@@ -256,7 +256,7 @@ where
             .net(target, PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
             .await
-            .map_err(EngineError::from_resolve_failure)?;
+            .map_err(|e| EngineError::from_resolve_failure(e, "link-scope-root"))?;
         let links = self.committed_at(target, &current)?;
         let tags = expired_links(&links, now, pending);
         if tags.is_empty() {
