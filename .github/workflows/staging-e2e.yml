@@ -34,6 +34,10 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
+    # Without a page snapshot in `error-context.md`: the uploaded
+    # `test-results/` is public, and a snapshot lists each link on the page.
+    env:
+      PLAYWRIGHT_NO_COPY_PROMPT: '1'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
