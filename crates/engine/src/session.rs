@@ -36,7 +36,7 @@ use zeroize::Zeroizing;
 
 use crate::bin_index::BinIndexKeys;
 use crate::facade::{
-    ClaimCounts, EngineError, LoginSecret, NodeId, RetainedDeadLetters, SyncStatus,
+    ClaimCounts, EngineError, ForkSightings, LoginSecret, NodeId, RetainedDeadLetters, SyncStatus,
 };
 use crate::grants::accept::ReceivedSharesLock;
 use crate::grants::grafted::{
@@ -502,6 +502,8 @@ pub(crate) struct SessionState {
     /// it — a settings change this session adopts is the one event that re-arms
     /// it, whether the member saved it here or on another device.
     pub(crate) byo_reconciled: Rc<Cell<bool>>,
+    /// The same-sequence forks this session's reads reported.
+    pub(crate) fork_sightings: Rc<ForkSightings>,
 }
 
 impl SessionState {
@@ -591,6 +593,7 @@ impl SessionState {
             observed_unlinks: Rc::new(RefCell::new(Vec::new())),
             capture_proofs: Rc::new(RefCell::new(BTreeMap::new())),
             byo_reconciled: Rc::new(Cell::new(false)),
+            fork_sightings: Rc::new(ForkSightings::default()),
         }
     }
 

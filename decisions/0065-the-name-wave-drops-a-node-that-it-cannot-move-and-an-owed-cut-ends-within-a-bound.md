@@ -9,7 +9,7 @@
   [ADR 0063](./0063-a-rotation-step-that-stops-leaves-a-durable-owed-record-that-the-sync-pass-finishes.md)
   D1, D3 and D4, [ADR 0064](./0064-the-name-wave-reads-a-lagging-interior-node.md),
   `blueprint/engine.md` "rotateScopeWrite"
-- **Implemented by:** FSM1/cipher-box#2188
+- **Implemented by:** FSM1/cipher-box#2188, FSM1/cipher-box#2235
 - **Amends:** ADR 0063 D4 (the names the renewal walk skips), ADR 0064 Residuals
 
 ## Context
@@ -30,7 +30,9 @@ head block that does not match its CID; an epoch that no held history link reach
 consequence 8); and a malformed child ref in the body, which drops the parent. The wave removes
 the ref from the moved parent, does not walk below the node, moves the other nodes, re-points the
 root, and finishes the cut. It retires the old name only when the root's write scope seed derives
-that name for the node. The wave never adopts or carries a refused record.
+that name for the node. The same rule applies to a node that the wave moves: an old name that
+neither the root's write scope seed nor the seed one epoch below it derives for the node stays
+registered to its EOL. The wave never adopts or carries a refused record.
 
 **D2 — Of two refs to one node id at different names, the wave keeps the ref at the name that
 the write scope seed of the root it reads derives for that id, and drops the other ref.** That
@@ -59,6 +61,9 @@ that the scope root's current write seed derives.** The count of passes does not
 Before that time, ADR 0063 D4 stays. Such a renewal signs no
 name under a seed that does not derive it (ADR 0061 D4), and gives the revokee no new access. Thus
 a stop at the scope root also does not lapse the scope.
+Amended by ADR 0068 D1 on 2026-10-02: this is false for a planted root, because the walk cannot
+admit a root that the gate refuses; the rotation now moves the root from the last copy that passed
+the gate, and the scope still lapses on a device with no such copy.
 
 ## Alternatives considered
 
@@ -104,3 +109,5 @@ a stop at the scope root also does not lapse the scope.
 
 - A planted record at the scope root name is not covered. The revokee derives the root name, and
   the wave cannot drop the root (FSM1/cipher-box#2176).
+  Amended by ADR 0068 D1 to D4 on 2026-10-02: an owner rotation reads a refused root from its last
+  copy and moves the root before it publishes at the old name.

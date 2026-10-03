@@ -52,8 +52,8 @@ const METADATA: [IpAddr; 3] = [
 pub enum PinMode {
     /// CipherBox's hosted pin store (the default). Quota is authoritative.
     Hosted,
-    /// The member's own provider only. No content block reaches the hosted
-    /// store; record heads and registration still do.
+    /// The member's own provider only. No block reaches the hosted store; only
+    /// registration does.
     External,
     /// Both hosted and the member's own provider.
     Dual,
@@ -430,9 +430,9 @@ impl ProviderError {
     /// The class label used in reject vectors. A policy verdict on the member's
     /// own config is a `capability` limit of this client — no retry converges,
     /// and the provider is not accused — where an answer the provider gave, or
-    /// failed to give, is an `availability` stall. Only
-    /// [`AddressMismatch`](Self::AddressMismatch) accuses the provider: it
-    /// stored the block under an address other than the one it was given.
+    /// failed to give, is an `availability` stall. That covers
+    /// [`AddressMismatch`](Self::AddressMismatch): a node that ignores the codec
+    /// or hash it was given is most often misconfigured, so the member fixes it.
     pub fn class(&self) -> &'static str {
         match self {
             ProviderError::InvalidEndpoint
@@ -445,8 +445,8 @@ impl ProviderError {
             | ProviderError::MalformedBlockAddress => "capability",
             ProviderError::Unreachable
             | ProviderError::NoVerdict
-            | ProviderError::Rejected { .. } => "availability",
-            ProviderError::AddressMismatch => "trust",
+            | ProviderError::Rejected { .. }
+            | ProviderError::AddressMismatch => "availability",
         }
     }
 }
@@ -647,7 +647,7 @@ mod tests {
         HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: b"{}".to_vec(),
+            body: b"{}".to_vec().into(),
         }
     }
 
@@ -709,7 +709,7 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 401,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
         let err = block_on(test_connection(
             &config(ByoKind::Psa, Some("bad")),
@@ -918,7 +918,9 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: format!("{{\"Key\":\"{address}\",\"Size\":17}}\n").into_bytes(),
+            body: format!("{{\"Key\":\"{address}\",\"Size\":17}}\n")
+                .into_bytes()
+                .into(),
         });
         block_on(place_block(
             &config(ByoKind::Kubo, Some("tok")),
@@ -969,7 +971,7 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: format!("{{\"Key\":\"{address}\"}}").into_bytes(),
+            body: format!("{{\"Key\":\"{address}\"}}").into_bytes().into(),
         });
         block_on(place_block(
             &config(ByoKind::Kubo, None),
@@ -1006,7 +1008,7 @@ mod tests {
             http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
-                body: body.as_bytes().to_vec(),
+                body: body.as_bytes().to_vec().into(),
             });
             assert_eq!(
                 block_on(place_block(
@@ -1066,7 +1068,7 @@ mod tests {
         http.enqueue_response(HttpResponse {
             status: 507,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         });
         assert_eq!(
             block_on(place_block(
@@ -1163,7 +1165,7 @@ mod tests {
         let oversized = || HttpResponse {
             status: 200,
             headers: Vec::new(),
-            body: vec![b'{'; MAX_PROVIDER_RESPONSE_BYTES + 1],
+            body: vec![b'{'; MAX_PROVIDER_RESPONSE_BYTES + 1].into(),
         };
         let block = b"sealed leaf bytes".to_vec();
         let cid = leaf(&block);

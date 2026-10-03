@@ -2,8 +2,8 @@
 
 - **Status:** Accepted on 2026-09-26 — retroactive for D2 to D15, which shipped in FSM1/cipher-box#932,
   FSM1/cipher-box#1072, FSM1/cipher-box#1338 and FSM1/cipher-box#1585, and which the blueprint
-  carries. D1 is an owner decision of 2026-09-26 that changes the shipped rule: the code and the
-  blueprint lag it (E1, FSM1/cipher-box#2006); the `blueprint/*.md` and
+  carries. D1 is an owner decision of 2026-09-26 that changes the shipped rule; the code moved to
+  it on 2026-10-02 (E1); the `blueprint/*.md` and
   `CONTEXT.md` rewording in FSM1/cipher-box follows; trimmed on 2026-09-26 to the items that pass
   the three ADR hurdles — the removed items live in the blueprint
 - **Date:** 2026-09-26
@@ -17,9 +17,9 @@
   settings record" and "Advisory pin row" terms
 - **Implemented by:** FSM1/cipher-box#1072 (dispatch, dual, the upload mark, the publish
   refusal, the quota pre-flight, D1 to D11), FSM1/cipher-box#1338 (provenance of the reconcile,
-  D12), FSM1/cipher-box#1585 (the in-session re-decide and the staging read leg, D13 and D14)
-  and FSM1/cipher-box#932 (the BYO endpoint policy, D15). The decision source for D3, D9 and
-  D11 is the resolution of FSM1/cipher-box#822 (2026-07-27).
+  D12), FSM1/cipher-box#1585 (the in-session re-decide and the staging read leg, D13 and D14),
+  FSM1/cipher-box#932 (the BYO endpoint policy, D15) and FSM1/cipher-box#2234 (D1 and D16). The
+  decision source for D3, D9 and D11 is the resolution of FSM1/cipher-box#822 (2026-07-27).
 
 ## Context
 
@@ -38,8 +38,7 @@ Under `External` it goes to the member's own node only, and the API sees the reg
 nothing else. On every leg the record-plane publish compares the address the leg returns against
 the head block's own address, and a mismatch publishes nothing. The owner decided this on
 2026-09-26 during the review of this ADR. It replaces the shipped rule (FSM1/cipher-box#1072),
-which sent every head block to the hosted path in every mode (alternative (i)). The code lags
-this rule (E1).
+which sent every head block to the hosted path in every mode (alternative (i)).
 
 **D3 — Dual runs both legs, and only the hosted leg can fail the op.** Both legs retry inside the
 op. The op completes when the hosted leg succeeds and the external leg has succeeded or used all
@@ -57,6 +56,12 @@ encode side. `https` is required off loopback, because the probe carries the mem
 Private and link-local ranges stay allowed; self-hosting on a LAN is the feature. The engine has
 no resolver, so the cloud-metadata refusal is a legibility rule, not SSRF containment. The rule
 list is the `blueprint/engine.md` "BYO endpoint policy" bullet (FSM1/cipher-box#932).
+
+**D16 — The member's own node keeps what the member puts on it.** For v2.0, retire and prune
+release only the registry rows. They send no unpin to the member's provider, and the member prunes
+that node with their own tools. The node has no reference count, so an unpin for each op can
+remove a block that a live version still names. Owner decision of 2026-10-02
+(FSM1/cipher-box#2007), added in FSM1/cipher-box#2234.
 
 Items D2, D4 to D10, D12, D13 and D14 moved to `blueprint/engine.md` "Content plane" on 2026-09-26.
 
@@ -82,6 +87,10 @@ outage blocks every BYO write and every uncached BYO read, and the vault setting
 being server-free. The exemption also needs a new signal on the wire, because the ingress cannot
 tell a record head from a DAG root by codec. The owner rejected it on 2026-09-26 for D1.
 
+**(j) Unpin on the member's Kubo when the retire ledger settles a target.** It needs a durable
+member-leg flag on each ledger entry, and PSA and Pinata stay out of reach. Rejected for v2.0 by D16;
+FSM1/cipher-box#2244 holds it.
+
 ## Trust argument
 
 - **D1:** a record head and its content share the legs, so a BYO read needs only the member's node.
@@ -92,6 +101,7 @@ tell a record head from a DAG root by codec. The owner rejected it on 2026-09-26
 
 - `blueprint/engine.md` "Content plane" states every item of this ADR and cites it.
 - #34 D1 is confirmed: "BYO bytes bypass it" covers the record head block too.
+- D16: under `External` and `Dual` the member's node grows without bound until the member prunes it.
 
 ## Residuals
 
@@ -130,6 +140,9 @@ resolution of FSM1/cipher-box#822, section 7, decided an order for mode changes:
 when the member leaves `External`, last when the member enters it. Neither the blueprint nor the
 code carries that order. The owner ruled on 2026-09-26: D1 stands, and the code moves to it.
 FSM1/cipher-box#2006 tracks the fix.
+
+Resolved on 2026-10-02 by FSM1/cipher-box#2234: a record head block follows placement, and a save
+that leaves `External` clears `byo` first.
 
 **E3 — An assumed placement on a `Dual` account drops the mirror without a signal.** A `Dual`
 account runs `byo=false` (D11). So on a fresh device whose settings record is withheld, the

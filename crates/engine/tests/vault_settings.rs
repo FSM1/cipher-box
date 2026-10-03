@@ -25,7 +25,7 @@ use cipherbox_engine::seams::{
     BoxedTask, EndpointId, FloorStore, HttpResponse, RecordTransport, Scheduler, SnapshotCache,
     UnixMillis,
 };
-use cipherbox_engine::testkit::account::{Blocks, serve_http};
+use cipherbox_engine::testkit::account::{Blocks, MEMBER_NODE, serve_http};
 use cipherbox_engine::testkit::fakes::{
     InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache, SlotFillingRecordStore,
     VirtualScheduler,
@@ -891,7 +891,7 @@ fn external_only() -> VaultSettings {
     VaultSettings {
         pin_mode: PinMode::External,
         byo: Some(ByoIpfsConfig {
-            endpoint: "https://kubo.example".to_owned(),
+            endpoint: MEMBER_NODE.to_owned(),
             kind: ByoKind::Kubo,
             access_token: ByoBearer::None,
         }),
@@ -2580,11 +2580,13 @@ fn a_head_upload_the_api_refuses_leaves_the_mint_and_the_next_start_refuses_the_
         Some(Ok(HttpResponse {
             status: 503,
             headers: Vec::new(),
-            body: br#"{"statusCode":503,"message":"pin store unavailable"}"#.to_vec(),
+            body: br#"{"statusCode":503,"message":"pin store unavailable"}"#
+                .to_vec()
+                .into(),
         }))
     }));
     let refused_save = block_on(engine.command(Command::SaveVaultSettings {
-        settings: external_only(),
+        settings: configured(),
     }));
     assert!(
         matches!(refused_save, Err(EngineError::Seam { .. })),
@@ -2622,6 +2624,27 @@ fn a_settings_save_the_api_answered_about_another_block_is_a_trust_violation() {
 
     assert!(
         matches!(outcome, Err(EngineError::TrustViolation { .. })),
+        "got {outcome:?}",
+    );
+}
+
+/// A member's node that stores under another address is most often a
+/// misconfigured node, not an attack. The save fails closed and names the
+/// provider check, so the member can fix the node.
+#[test]
+fn a_settings_save_the_members_node_answered_about_another_block_names_the_provider() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+    blocks.echo_other_address();
+
+    let outcome = block_on(engine.command(Command::SaveVaultSettings {
+        settings: external_only(),
+    }));
+
+    assert!(
+        matches!(&outcome, Err(EngineError::Seam { message }) if message.contains("byo-address-mismatch")),
         "got {outcome:?}",
     );
 }

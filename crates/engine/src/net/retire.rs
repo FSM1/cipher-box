@@ -92,6 +92,8 @@ pub fn orphaned_head(error: &RecordPublishError) -> bool {
             matches!(error, ApiError::Transport(_) | ApiError::Decode(_))
         }
         RecordPublishError::HeadCidMismatch { .. } => true,
+        // The member's own node holds no pin row to retire.
+        RecordPublishError::Placement(_) => false,
         RecordPublishError::Publish(error) => match error.verdict() {
             // The head block is already uploaded and charged when publish
             // refuses, and no record naming it reached the transport.
@@ -1035,7 +1037,8 @@ mod tests {
                 r#"{{"retired":{},"unpinned":0}}"#,
                 retired.unwrap_or_default()
             )
-            .into_bytes(),
+            .into_bytes()
+            .into(),
         }
     }
 
@@ -1203,7 +1206,7 @@ mod tests {
                     Some((_, block)) => Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body: block.clone(),
+                        body: block.clone().into(),
                     }),
                     None => Err(SeamError::new("no such block")),
                 }
@@ -1403,7 +1406,7 @@ mod tests {
                     return Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body: root_block,
+                        body: root_block.into(),
                     });
                 }
                 Err(SeamError::new("no such block"))

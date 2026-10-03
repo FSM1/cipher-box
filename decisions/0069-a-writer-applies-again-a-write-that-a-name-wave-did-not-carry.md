@@ -1,6 +1,6 @@
 # ADR 0069 — A writer applies again a write that a name wave did not carry
 
-- **Status:** Proposed
+- **Status:** Accepted on 2026-10-03
 - **Date:** 2026-10-02
 - **Relates to:** FSM1/cipher-box#2220 (the name wave loses a write into the old tree),
   [ADR 0020](./0020-the-durable-op-queue-reads-the-previous-release.md) D2 and D3,

@@ -128,11 +128,17 @@ pub struct ColdStartOutcome {
     /// blob; `None` when nothing adopted. The engine deposits it in its
     /// in-memory per-scope seed cell (never persisted).
     pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    /// The epoch of the record [`read_scope_seed`](Self::read_scope_seed) came
+    /// from, which may be above the epoch the pointer vouches.
+    pub read_seed_epoch: Option<u64>,
     /// The (node id, scope write seed) the same adopt recovered from the
     /// owner-write-blob; `None` when nothing adopted or the root is held
     /// keyless. The drain derives every new node's name and per-name signer
     /// from it (never persisted).
     pub write_scope_seed: Option<([u8; 16], Zeroizing<[u8; 32]>)>,
+    /// The sequence of a same-sequence fork the root resolve met, which the
+    /// session reports (ADR 0066 D2).
+    pub forked: Option<u64>,
 }
 
 impl core::fmt::Debug for ColdStartOutcome {
@@ -147,10 +153,12 @@ impl core::fmt::Debug for ColdStartOutcome {
                 "read_scope_seed",
                 &self.read_scope_seed.as_ref().map(|_| "<redacted>"),
             )
+            .field("read_seed_epoch", &self.read_seed_epoch)
             .field(
                 "write_scope_seed",
                 &self.write_scope_seed.as_ref().map(|_| "<redacted>"),
             )
+            .field("forked", &self.forked)
             .finish()
     }
 }
@@ -213,7 +221,9 @@ where
             base,
             rendered,
             read_scope_seed: None,
+            read_seed_epoch: None,
             write_scope_seed: None,
+            forked: None,
         });
     };
 
@@ -244,13 +254,14 @@ where
     )
     .await
     .map_err(ColdStartError::Seam)?;
+    let forked = resolved.fork.map(|fork| fork.sequence);
     // Project the gate-passing root read-body to its direct children (E7); an
     // own current record at the floor paints from `Resolved::current_at_floor`.
-    let (root_resolve, base) = match resolved.outcome {
+    let (root_resolve, base, painted_epoch) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
             let mut base = base;
             project_root(&mut base, params.root, &adopted);
-            (RootResolve::Adopted, base)
+            (RootResolve::Adopted, base, Some(adopted.epoch))
         }
         // Availability staleness, so it paints without claiming an adoption.
         ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => {
@@ -258,12 +269,14 @@ where
             if let Some(at_floor) = &resolved.current_at_floor {
                 project_root(&mut base, params.root, at_floor);
             }
-            (RootResolve::NoUpdate, base)
+            let at_floor_epoch = resolved.current_at_floor.as_ref().map(|at| at.epoch);
+            (RootResolve::NoUpdate, base, at_floor_epoch)
         }
         ResolveOutcome::TrustViolation(rejection) => {
             return Err(ColdStartError::RootAdoption(rejection));
         }
     };
+    let read_seed_epoch = painted_epoch.filter(|_| read_scope_seed.is_some());
 
     // Step 4 — first snapshot event with the pending-op overlay applied.
     let rendered = apply_overlay(&base, params.pending_ops);
@@ -276,7 +289,9 @@ where
         base,
         rendered,
         read_scope_seed,
+        read_seed_epoch,
         write_scope_seed,
+        forked,
     })
 }
 

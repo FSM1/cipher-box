@@ -91,7 +91,7 @@ fn ok_200() -> HttpResponse {
     HttpResponse {
         status: 200,
         headers: Vec::new(),
-        body: Vec::new(),
+        body: Vec::new().into(),
     }
 }
 
@@ -100,7 +100,7 @@ fn ok_200_body(body: Vec<u8>) -> HttpResponse {
     HttpResponse {
         status: 200,
         headers: Vec::new(),
-        body,
+        body: body.into(),
     }
 }
 
@@ -416,7 +416,7 @@ fn register_first_fail_closed_puts_no_record() {
     device.http.enqueue_response(HttpResponse {
         status: 500,
         headers: Vec::new(),
-        body: Vec::new(),
+        body: Vec::new().into(),
     });
 
     let request = PublishRequest {
@@ -1198,7 +1198,7 @@ fn revive_fails_closed_when_the_recovery_endpoint_is_unauthorized() {
     device.http.enqueue_response(HttpResponse {
         status: 403,
         headers: Vec::new(),
-        body: Vec::new(),
+        body: Vec::new().into(),
     });
 
     let request = ReviveRequest {

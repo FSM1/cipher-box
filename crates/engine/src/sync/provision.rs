@@ -48,7 +48,7 @@ use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::entropy::{Entropy, EntropyError, fresh_nonce};
-use crate::gate::floor::{self, ColdSeedError, FloorRegression};
+use crate::gate::floor::{self, FloorRegression, PointerPlane};
 use crate::net::EndpointFailures;
 use crate::net::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
@@ -398,9 +398,8 @@ where
     // 5) The re-point object the vault pointer will carry, and the floors it
     //    vouches — seeded BEFORE anything is published, so a durable read-epoch
     //    floor already above the genesis epoch stops the run rather than signing
-    //    a pointer at a root its own floor law rejects. Read under the same
-    //    plane `cold_start` reads it under, so mint and boot cannot disagree
-    //    about what this pointer is allowed to vouch.
+    //    a pointer at a root its own floor law rejects. The mint signs this
+    //    re-point, so it is held to the produce bar (ADR 0067 D4).
     let repoint = RepointObject {
         scope_id,
         current_root: root_name.clone(),
@@ -408,12 +407,16 @@ where
         min_read_epoch: GENESIS_EPOCH,
         prev_root: None,
     };
-    floor::cold_seed_checked(floors, &repoint, &scope_id)
+    if let Some(regression) =
+        floor::repoint_regression(floors, &repoint, &scope_id, PointerPlane::VaultPointer)
+            .await
+            .map_err(ProvisionError::Seam)?
+    {
+        return Err(ProvisionError::FloorRegression(regression));
+    }
+    floor::cold_seed(floors, &repoint)
         .await
-        .map_err(|e| match e {
-            ColdSeedError::Seam(seam) => ProvisionError::Seam(seam),
-            ColdSeedError::Regression(reg) => ProvisionError::FloorRegression(reg),
-        })?;
+        .map_err(ProvisionError::Seam)?;
 
     // 6) The stable per-scope pointer read key: the grant section carries it to
     //    every grantee, and the re-point below is sealed under it.
@@ -1528,6 +1531,27 @@ mod tests {
     fn a_read_epoch_floor_above_genesis_refuses_before_any_publish() {
         let session = session();
         let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_epoch_floor(&SCOPE, 9)).expect("floor raise");
+        let net = Network::default();
+        let err =
+            run(&session, &FakePublisher::new(&net), &floors, 9).expect_err("not a first run");
+        assert_eq!(
+            err,
+            ProvisionError::FloorRegression(FloorRegression::ReadEpoch {
+                floor: 9,
+                vouched: GENESIS_EPOCH,
+            }),
+        );
+        assert!(net.effects.borrow().is_empty(), "nothing published");
+    }
+
+    /// A vouched floor below the read-epoch floor does not lower the bar: the
+    /// mint signs its re-point, so it reads the read-epoch floor.
+    #[test]
+    fn a_read_epoch_floor_above_a_lower_vouched_floor_refuses_before_any_publish() {
+        let session = session();
+        let floors = InMemoryFloorStore::default();
+        block_on(floor::raise_vouched_floor(&floors, &SCOPE, GENESIS_EPOCH)).expect("vouched");
         block_on(floors.raise_epoch_floor(&SCOPE, 9)).expect("floor raise");
         let net = Network::default();
         let err =

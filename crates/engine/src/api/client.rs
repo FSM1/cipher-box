@@ -8,6 +8,7 @@
 //! Refresh is single-flight with one retry-then-fail on 401.
 
 use core::cell::RefCell;
+use std::rc::Rc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -34,6 +35,7 @@ use crate::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, SeamError,
     bearer_header, item_id_is_legal,
 };
+use crate::settings::{Placement, SessionPlacement};
 
 const CONTENT_TYPE: &str = "Content-Type";
 const APPLICATION_JSON: &str = "application/json";
@@ -88,6 +90,9 @@ pub struct ApiClient<H: Http, C: CredentialStore> {
     accelerator: SessionBearer,
     refresh_waiters: RefreshWaiters,
     deadlines: DeadlinePolicy,
+    /// The session's placement, which a record head block follows
+    /// ([`Self::placement`]).
+    placement: Rc<RefCell<Option<SessionPlacement>>>,
 }
 
 impl<H: Http, C: CredentialStore> ApiClient<H, C> {
@@ -106,7 +111,30 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             accelerator: SessionBearer::default(),
             refresh_waiters: RefCell::new(None),
             deadlines: DeadlinePolicy::default(),
+            placement: Rc::default(),
         }
+    }
+
+    /// Record heads follow this cell, so a re-decide reaches every publish.
+    #[must_use]
+    pub fn with_placement(mut self, placement: Rc<RefCell<Option<SessionPlacement>>>) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    /// The placement the session decided, or `None` where it decided none.
+    pub(crate) fn placement(&self) -> Option<Placement> {
+        self.placement.borrow().as_ref()?.decision.clone().ok()
+    }
+
+    /// The Http seam this client drives.
+    pub(crate) fn http(&self) -> &H {
+        &self.http
+    }
+
+    /// The deadlines this client holds its requests to.
+    pub(crate) fn deadlines(&self) -> &DeadlinePolicy {
+        &self.deadlines
     }
 
     /// Hold every API leg to `deadlines` instead of the shipped default.
@@ -349,7 +377,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         let outcome = TestLoginOutcome {
             is_new_user: body.is_new_user.unwrap_or(false),
             public_key: body.public_key,
-            private_key: Zeroizing::new(body.private_key),
+            private_key: body.private_key,
         };
         self.store_tokens(TokenResponse {
             access_token: body.access_token,
@@ -707,7 +735,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             .request_authed(HttpMethod::Get, &format!("/recovery/{ipns_name}"))
             .await?;
         let response = ok_or_err(response)?;
-        Ok(response.body)
+        Ok(response.into_body())
     }
 
     /// Toggle the account's BYO (bring-your-own IPFS) flag.
@@ -910,9 +938,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// Persist the refresh token and hold the two in-memory bearers. The
     /// refresh string is zeroized once handed to the store.
     async fn store_tokens(&self, tokens: TokenResponse) -> Result<(), ApiError> {
-        let refresh_token = Zeroizing::new(tokens.refresh_token);
         self.credentials
-            .store_refresh_token(refresh_token.as_bytes())
+            .store_refresh_token(tokens.refresh_token.as_bytes())
             .await?;
         self.session.set(tokens.access_token);
         self.accelerator.set(tokens.accelerator_token);
@@ -1084,7 +1111,7 @@ mod tests {
         HttpResponse {
             status,
             headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned())],
-            body: serde_json::to_vec(&body).unwrap(),
+            body: serde_json::to_vec(&body).unwrap().into(),
         }
     }
 
@@ -1514,6 +1541,30 @@ mod tests {
         );
     }
 
+    /// A decode can fail after it parsed a live token (a 2xx refresh with no
+    /// accelerator token), so each token decodes straight into a wiping string.
+    #[test]
+    fn the_tokens_of_a_login_response_decode_into_wiping_strings() {
+        let mut body = login_response("jwt", "refresh", "gw");
+        let tokens: TokenResponse = serde_json::from_value(body.clone()).expect("decodes");
+        let wiping: [&Zeroizing<String>; 3] = [
+            &tokens.access_token,
+            &tokens.refresh_token,
+            &tokens.accelerator_token,
+        ];
+        assert!(wiping.iter().all(|token| !token.is_empty()));
+        body["publicKey"] = json!("02cafe");
+        body["privateKey"] = json!("11");
+        let test_login: TestLoginResponse = serde_json::from_value(body).expect("decodes");
+        let wiping: [&Zeroizing<String>; 4] = [
+            &test_login.access_token,
+            &test_login.refresh_token,
+            &test_login.accelerator_token,
+            &test_login.private_key,
+        ];
+        assert!(wiping.iter().all(|token| !token.is_empty()));
+    }
+
     #[test]
     fn test_login_returns_the_keypair_and_redacts_the_private_key() {
         let (http, _creds, client) = fakes();
@@ -1687,7 +1738,7 @@ mod tests {
         let raw = |status, body: &[u8]| HttpResponse {
             status,
             headers: Vec::new(),
-            body: body.to_vec(),
+            body: body.to_vec().into(),
         };
         for (reply, case) in [
             (raw(404, b""), "a 404 is a missing route, never an answer"),
@@ -2337,7 +2388,7 @@ mod tests {
         HttpResponse {
             status: 201,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Vec::new().into(),
         }
     }
 
