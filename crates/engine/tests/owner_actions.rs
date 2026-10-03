@@ -12002,11 +12002,11 @@ fn a_replayed_pre_cut_root_does_not_drop_an_owed_downgrade() {
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    let events = events_so_far(&mut fx._events);
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, Event::RotationWorkAbandoned { .. })),
+    // The replay sends the re-drive to the last copy, so the wave keeps no
+    // row (ADR 0068 D5); only the dropped grant is reported.
+    assert_eq!(
+        abandoned(&mut fx._events),
+        vec![(fx.folder, "owed-grants-dropped-from-last-copy".to_owned())],
         "the replay does not drop the owed wave"
     );
     assert_eq!(
