@@ -13,6 +13,21 @@
 
 import type { TooLargeResult } from './types.js';
 
+/**
+ * Release an unread body or reader. The caller already knows its result (a
+ * status, an absence, an over-cap verdict), so a failed cancellation must not
+ * replace it.
+ */
+export async function discard(
+  stream: { cancel(): Promise<void> } | null | undefined
+): Promise<void> {
+  try {
+    await stream?.cancel();
+  } catch {
+    // The known result stands.
+  }
+}
+
 /** A drained body, or a fail-closed rejection of one over the cap. */
 export type CappedBody = { kind: 'body'; body: Uint8Array } | TooLargeResult;
 
@@ -21,7 +36,7 @@ export async function drainCapped(response: Response, maxBytes: number): Promise
   // unusable bound would drain without one. A cap that cannot bound is a
   // refusal, never an unbounded read.
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
-    await response.body?.cancel();
+    await discard(response.body);
     throw new RangeError(
       `drainCapped: maxBytes must be a non-negative safe integer, got ${maxBytes}`
     );
@@ -31,7 +46,7 @@ export async function drainCapped(response: Response, maxBytes: number): Promise
   const declared = contentLength === null ? Number.NaN : Number(contentLength);
   if (Number.isFinite(declared) && declared > maxBytes) {
     // Release the connection instead of leaking an unread body stream.
-    await response.body?.cancel();
+    await discard(response.body);
     return { kind: 'tooLarge', observed: declared, limit: maxBytes };
   }
 
@@ -53,7 +68,7 @@ export async function drainCapped(response: Response, maxBytes: number): Promise
       continue;
     }
     if (total + value.byteLength > maxBytes) {
-      await reader.cancel();
+      await discard(reader);
       return { kind: 'tooLarge', observed: total + value.byteLength, limit: maxBytes };
     }
     chunks.push(value);

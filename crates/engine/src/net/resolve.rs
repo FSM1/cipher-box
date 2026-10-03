@@ -325,6 +325,11 @@ struct GatedParts {
     fork: Option<Fork>,
 }
 
+/// Whether the sequence stage refused a record strictly below the floor.
+pub(crate) fn below_floor(reason: &RejectionReason) -> bool {
+    matches!(reason, RejectionReason::SequenceNotNewer { floor, sequence } if sequence < floor)
+}
+
 /// The gated resolve behind [`resolve`]/[`resolve_and_hold`] and the cold-start
 /// driver.
 pub(crate) async fn resolve_gated<T, S, A>(
@@ -350,8 +355,9 @@ where
         ResolveMode::NoCache => None,
     };
 
-    let (fetched, absent) = fanout_get_tied_classified(transport, name).await;
-    let (fetched, tied) = match fetched {
+    let fetch = fanout_get_tied_classified(transport, name).await;
+    let absent = fetch.absent;
+    let (fetched, tied) = match fetch.pick {
         Some((verified, bytes, tied)) => (Some((verified, bytes)), tied),
         None => (None, Vec::new()),
     };
@@ -403,9 +409,8 @@ where
             // record re-fetched, or one side of a same-sequence fork (ADR 0066)
             // — no update, never a violation; its verified bytes ride out so
             // the liveness loop holds them without a re-fetch.
-            // A strictly older sequence is a replay/rollback and stays a
-            // fail-closed trust violation, as does every other gate rejection —
-            // including one the equal-floor recovery reaches.
+            // A strictly older sequence is a rollback unless an endpoint failed
+            // (ADR 0071); every other gate rejection stays a trust violation.
             Err(GateError::Rejected(rejection)) => match &rejection.reason {
                 RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
                     // Our own current root at exactly the floor: recover the
@@ -462,6 +467,9 @@ where
                         ),
                         Err(GateError::Seam(error)) => return Err(error),
                     }
+                }
+                reason if fetch.endpoint_failed && below_floor(reason) => {
+                    (ResolveOutcome::NoUpdate, GatedParts::default())
                 }
                 _ => (
                     ResolveOutcome::TrustViolation(rejection),
