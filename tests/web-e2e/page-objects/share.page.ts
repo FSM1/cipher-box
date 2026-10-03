@@ -42,6 +42,15 @@ export class SharePage {
     return this.page.getByTestId('share-grant-row');
   }
 
+  get people(): Locator {
+    return this.page.getByTestId('share-people');
+  }
+
+  /** The note the dialog draws while no read of the folder has landed. */
+  get grantsUnavailable(): Locator {
+    return this.page.getByTestId('share-grants-unavailable');
+  }
+
   get noGrants(): Locator {
     return this.page.getByTestId('share-no-grants');
   }
