@@ -2876,16 +2876,15 @@ impl EngineError {
         }
     }
 
-    /// Map the gated read a mint runs first: a rejection is a fail-closed trust
-    /// verdict, and every other verdict is availability.
-    fn from_resolve_failure(err: ResolveFailure) -> Self {
+    /// Map a gated scope-root read: a rejection is a fail-closed trust verdict,
+    /// and every other verdict is availability. `site` names which read
+    /// refused, since one command runs several and the verdict alone does not
+    /// tell them apart.
+    fn from_resolve_failure(err: ResolveFailure, site: &'static str) -> Self {
+        let message = format!("{err} at [{site}]");
         match err {
-            ResolveFailure::Rejected => EngineError::TrustViolation {
-                message: err.to_string(),
-            },
-            _ => EngineError::Seam {
-                message: err.to_string(),
-            },
+            ResolveFailure::Rejected => EngineError::TrustViolation { message },
+            _ => EngineError::Seam { message },
         }
     }
 
@@ -4339,7 +4338,7 @@ impl OwnerScope {
     fn resolve_error(&self, check: &'static str, failure: ResolveFailure) -> EngineError {
         match failure {
             ResolveFailure::Rejected if !self.vouched => EngineError::UnsupportedTarget { check },
-            other => EngineError::from_resolve_failure(other),
+            other => EngineError::from_resolve_failure(other, "scope-root"),
         }
     }
 }
@@ -7316,7 +7315,7 @@ where {
         let mut current = net
             .resolve_vault_root(&scope.scope)
             .await
-            .map_err(EngineError::from_resolve_failure)?;
+            .map_err(|e| EngineError::from_resolve_failure(e, "vault-root"))?;
         // Root-first, so each step descends into the index the step above rode.
         // The vault root is the walk's own anchor rather than a step in it, and
         // no index names it.
@@ -7348,7 +7347,7 @@ where {
             current = net
                 .resolve_anchored(&scope.scope)
                 .await
-                .map_err(EngineError::from_resolve_failure)?;
+                .map_err(|e| EngineError::from_resolve_failure(e, "enclosing-scope"))?;
         }
         Ok((scope, current, net))
     }
@@ -8440,7 +8439,7 @@ where {
         {
             Ok(()) => Err(EngineError::UnsupportedTarget { check }),
             Err(ResolveFailure::Rejected) => Ok(()),
-            Err(other) => Err(EngineError::from_resolve_failure(other)),
+            Err(other) => Err(EngineError::from_resolve_failure(other, "unindexed-scope")),
         }
     }
 
@@ -9776,11 +9775,19 @@ where {
         nodes_in_scope(
             &self.state.snapshot.borrow(),
             &focus_scope_roots(
-                &self.state.descendant_scope_roots.borrow(),
+                &self.own_scopes(),
                 &self.state.unproved_scope_roots.borrow(),
             ),
             root,
             nodes,
+        )
+    }
+
+    /// This session's [`own_descendant_scopes`].
+    fn own_scopes(&self) -> BTreeSet<NodeId> {
+        own_descendant_scopes(
+            &self.state.descendant_scope_roots,
+            &self.state.minted_scope_roots,
         )
     }
 
@@ -9976,7 +9983,7 @@ where {
     /// scope's own root, which resolves on its own leg, is never read here.
     /// Answers the nodes a leg attempted, and whether any node was left unread:
     /// a scope with no material, a leg that could not answer, or a scope root
-    /// no walk proved.
+    /// that is not this vault's own.
     async fn navigation_legs(
         &self,
         root: NodeId,
@@ -9993,17 +10000,17 @@ where {
         let Some(session) = self.session.as_ref() else {
             return (attempted, true);
         };
-        let proved = self.state.descendant_scope_roots.borrow().clone();
+        let own = self.own_scopes();
         let unproved = self.state.unproved_scope_roots.borrow().clone();
         let mut by_scope: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
         {
             let base = self.state.snapshot.borrow();
-            let scope_roots = focus_scope_roots(&proved, &unproved);
+            let scope_roots = focus_scope_roots(&own, &unproved);
             for node in nodes {
                 let scope = scope_root_of(&base, node, &scope_roots);
                 if node != scope {
                     by_scope.entry(scope).or_default().push(node);
-                } else if !proved.contains(&node) {
+                } else if !own.contains(&node) {
                     unread = true;
                 }
             }
@@ -10016,14 +10023,15 @@ where {
             sharers: &sharers,
             contact_label_seed: session.contact_label_seed(),
             own_root: root.0,
-            proved: &proved,
+            own: &own,
             unproved: &unproved,
             base: &self.state.snapshot,
             root_name: root_name.as_ref(),
         };
         for (scope, nodes) in by_scope {
-            // The leg context knows only the proved set, so the seed of a scope
-            // no authority answers for, such as a forgotten share, goes here.
+            // The leg context knows only this vault's own scopes, so the seed of
+            // a scope no authority answers for, such as a forgotten share, goes
+            // here.
             if self.scope_floors(&scope.0).is_none() {
                 self.state.scope_read_seeds.borrow_mut().remove(&scope.0);
             }
@@ -19824,6 +19832,62 @@ mod tests {
             device.floor_store.heal_floors();
             assert_eq!(vouched, Err(RotationPublishError::FloorUnrecorded));
             assert_ne!(pointer_records_of(&device), before, "the vouch landed");
+        }
+
+        /// Vouch `read_epoch` over the standing vault pointer of a started session.
+        fn vouch(
+            engine: &Engine<FakeSeamTypes>,
+            root_name: &IpnsName,
+            read_epoch: u64,
+        ) -> Result<(), RotationPublishError> {
+            let api = engine.api.clone().expect("a started session holds the API");
+            let voucher = engine
+                .vault_pointer_voucher(&api)
+                .expect("the session adopted a vault pointer");
+            block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), read_epoch))
+        }
+
+        /// The network serves a pointer below the epoch a pointer already
+        /// vouched to this device: the vouch does not sign its fields again.
+        #[test]
+        fn a_vouch_over_a_pointer_below_the_vouched_floor_publishes_nothing() {
+            let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+            block_on(floor::raise_vouched_floor(
+                &device.floors(&CAP_SECRET),
+                &SCOPE,
+                EPOCH + 1,
+            ))
+            .expect("a later pointer vouched the next epoch");
+
+            let before = pointer_records_of(&device);
+            assert_eq!(
+                vouch(&engine, &root_name, EPOCH + 1),
+                Err(RotationPublishError::Rejected)
+            );
+            assert_eq!(pointer_records_of(&device), before, "nothing was published");
+        }
+
+        /// The network serves a pointer below the sequence this device published
+        /// at the name: the vouch does not sign its fields again.
+        #[test]
+        fn a_vouch_over_a_pointer_below_the_published_sequence_publishes_nothing() {
+            let world = FakeWorld::new();
+            let (engine, device, root_name) = started_owner(&world);
+            let pointer = vault_pointer_name(&CAP_SECRET, 0);
+            block_on(
+                device
+                    .floors(&CAP_SECRET)
+                    .raise_sequence_floor(pointer.as_str().as_bytes(), 5),
+            )
+            .expect("this device published the pointer at sequence 5");
+
+            let before = pointer_records_of(&device);
+            assert_eq!(
+                vouch(&engine, &root_name, EPOCH + 1),
+                Err(RotationPublishError::Rejected)
+            );
+            assert_eq!(pointer_records_of(&device), before, "nothing was published");
         }
     }
 

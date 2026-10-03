@@ -37,6 +37,7 @@ use crate::grants::link_read::repost_held_claims;
 use crate::grants::received_status::{ReceivedShareStatus, ScopeRender};
 use crate::grants::{ContactStore, StagingContactStore};
 use crate::net::author::ENVELOPE_V;
+use crate::net::rotation::ScopeWritePlane;
 use crate::net::{
     DescendantScopeRoot, FolderRefresh, GraftedLeg, HeldKey, HeldMaterial, HeldRecords,
     PointerConsult, PointerConsultError, ResolveOutcome, Resolved, RootAdopter, ScopeWalk,
@@ -48,9 +49,9 @@ use crate::rotation::{
     ascent_node_seed, cut_exited_scope, derive_write_name, install_walked_read_epochs,
 };
 use crate::scope_seeds::{
-    ScopeSeeds, SeedFloor, SeedFloors, StampedSeed, cached_seed, cached_seed_in, current_seed,
-    deposit_seed, deposit_write_seed, own_descendant_scopes, refresh_seed_floors,
-    walked_boundary_material,
+    ScopeSeeds, SeedFloor, SeedFloors, StampedSeed, cached_seed, cached_seed_in,
+    cached_stamped_seed, cached_stamped_seed_in, current_seed, deposit_seed, deposit_write_seed,
+    own_descendant_scopes, refresh_seed_floors, walked_boundary_material,
 };
 use crate::seams::{
     CredentialStore, FloorStore, Http, QueueGeneration, RecordTransport, Scheduler, SeamError,
@@ -155,8 +156,9 @@ pub(crate) struct ScopeLegContext<'a, F> {
     pub(crate) sharers: &'a GraftedSharers,
     pub(crate) contact_label_seed: &'a SecretBytes,
     pub(crate) own_root: [u8; 16],
-    /// The own check and the floor namespace read this one set.
-    pub(crate) proved: &'a BTreeSet<NodeId>,
+    /// This vault's own scope roots below its root. The own check and the
+    /// floor namespace read this one set.
+    pub(crate) own: &'a BTreeSet<NodeId>,
     pub(crate) unproved: &'a BTreeSet<NodeId>,
     pub(crate) base: &'a BaseSnapshot,
     pub(crate) root_name: Option<&'a IpnsName>,
@@ -194,13 +196,13 @@ impl<'a, F: FloorStore> ScopeLegContext<'a, F> {
         if self.unproved.contains(&scope) {
             return Err(NoScopeLeg::Outage);
         }
-        let own = is_own_scope(&self.own_root, self.proved, &scope.0);
+        let own = is_own_scope(&self.own_root, self.own, &scope.0);
         let floors = floor_view(
             self.floors,
             self.sharers,
             self.contact_label_seed,
             &self.own_root,
-            self.proved,
+            self.own,
             &scope.0,
         )
         .ok_or(NoScopeLeg::Waiting)?;
@@ -462,7 +464,7 @@ where
         state: &SessionState,
         pass: &Pass,
         floors_before: &SeedFloors,
-    ) -> (Result<Resolved, SeamError>, Option<Zeroizing<[u8; 32]>>) {
+    ) -> (Result<Resolved, SeamError>, Option<StampedSeed>) {
         let adopter = RootAdopter::new(
             &self.seams.gateway,
             &self.seams.http,
@@ -553,7 +555,7 @@ where
                 merged.observed_unlinks(self.root_id, NodeId(self.root_id), pass.now.0),
             );
         }
-        let read_seed = cached_seed(&state.scope_read_seeds, &self.root_id);
+        let read_seed = cached_stamped_seed(&state.scope_read_seeds, &self.root_id);
         (resolved, read_seed)
     }
 
@@ -676,6 +678,16 @@ where
             &state.focus.borrow(),
             &focus_scope_ids,
         );
+        // A root this session minted carries a grant section before any walk
+        // proves it, so its own record is no child of the enclosing scope. Its
+        // interior stays on the walk's grouping: while its interior move is
+        // owed, that interior is still sealed under the enclosing scope.
+        {
+            let minted = state.minted_scope_roots.borrow();
+            for targets in by_scope.values_mut() {
+                targets.folders.retain(|folder| !minted.contains(folder));
+            }
+        }
         // A window whose only folder in view is a scope root groups
         // no folder target of its own, because that root resolves on
         // its pointer leg. Its scope still needs a pass, so the rows
@@ -695,7 +707,7 @@ where
             sharers: grafted,
             contact_label_seed: &pass.contact_label_seed,
             own_root: self.root_id,
-            proved: &scopes.proved,
+            own: &scopes.proved,
             unproved: &scopes.unproved,
             base: &state.snapshot,
             root_name: Some(&pass.root_name),
@@ -937,7 +949,7 @@ where
         state: &'a SessionState,
         pass: &Pass,
         decision: &PlacementDecision,
-        read_seed: &'a Option<Zeroizing<[u8; 32]>>,
+        read_seed: &'a Option<StampedSeed>,
         scopes: &ScopeSets,
         assembly: Assembly,
     ) -> Option<Boundaries<'a>> {
@@ -981,7 +993,7 @@ where
                 &state.scope_write_seeds,
             ),
             root: NodeId(self.root_id),
-            root_read_seed,
+            root_read_seed: &root_read_seed.seed,
         });
         let second = match &boundaries {
             Some(boundaries) => {
@@ -1022,20 +1034,13 @@ where
             .await
         });
         let vault = vault_seeds.map(|(read_seed, write_seed)| DrainScope {
-            source: ScopeEnd {
-                root: NodeId(self.root_id),
-                root_name: &pass.root_name,
-                read_scope_seed: read_seed,
-                write_scope_seed: write_seed,
-                // The vault root carries no ascent link.
-                ascent_node_seed: None,
-                floor_namespace: FloorNamespace::Own,
-            },
+            source: vault_source(NodeId(self.root_id), &pass.root_name, read_seed, write_seed),
             destination: second.as_ref().map(|end| SealPlane {
                 end: ScopeEnd {
                     root: end.root,
                     root_name: &end.name,
                     read_scope_seed: &end.material.read_scope_seed,
+                    read_seed_stamp: None,
                     write_scope_seed: &end.material.write_scope_seed,
                     ascent_node_seed: end.ascent.as_ref(),
                     floor_namespace: FloorNamespace::Own,
@@ -1052,17 +1057,7 @@ where
         let interior = drivable
             .iter()
             .map(|(scope, write)| DrainScope {
-                source: ScopeEnd {
-                    root: NodeId(scope.scope_id),
-                    root_name: &scope.name,
-                    read_scope_seed: &scope.read_scope_seed,
-                    write_scope_seed: &write.seed,
-                    ascent_node_seed: Some(&scope.parent_node_seed),
-                    // A grant cut mints an interior scope root out of
-                    // this vault's own tree, so its floors are this
-                    // identity's own.
-                    floor_namespace: FloorNamespace::Own,
-                },
+                source: interior_source(scope, write),
                 destination: None,
                 scope_roots: &proved_roots,
                 keyless_roots: &keyless_roots,
@@ -1078,16 +1073,7 @@ where
         let grafted_passes = grafted
             .iter()
             .map(|pass| DrainScope {
-                source: ScopeEnd {
-                    root: pass.root,
-                    root_name: &pass.name,
-                    read_scope_seed: &pass.read_scope_seed,
-                    write_scope_seed: &pass.write_scope_seed,
-                    // A grantee enters by its own grant blob and holds
-                    // no ancestor seed to derive an ascent keypair from.
-                    ascent_node_seed: None,
-                    floor_namespace: pass.floors,
-                },
+                source: pass.source(),
                 destination: None,
                 scope_roots: &proved_roots,
                 keyless_roots: &keyless_roots,
@@ -1584,12 +1570,47 @@ pub(crate) async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     anchor_root
 }
 
+/// The vault root's end, under the session's cached read seed and its stamp.
+fn vault_source<'a>(
+    root: NodeId,
+    root_name: &'a IpnsName,
+    read: &'a StampedSeed,
+    write: &'a Zeroizing<[u8; 32]>,
+) -> ScopeEnd<'a> {
+    ScopeEnd {
+        root,
+        root_name,
+        read_scope_seed: &read.seed,
+        read_seed_stamp: Some(read.stamp),
+        write_scope_seed: write,
+        // The vault root carries no ascent link.
+        ascent_node_seed: None,
+        floor_namespace: FloorNamespace::Own,
+    }
+}
+
+/// A proved descendant scope root's end, under the read seed the walk
+/// recovered from the record it adopted, and so at that record's epoch.
+fn interior_source<'a>(scope: &'a DescendantScopeRoot, write: &'a ScopeWritePlane) -> ScopeEnd<'a> {
+    ScopeEnd {
+        root: NodeId(scope.scope_id),
+        root_name: &scope.name,
+        read_scope_seed: &scope.read_scope_seed,
+        read_seed_stamp: Some(scope.adopted.epoch),
+        write_scope_seed: &write.seed,
+        ascent_node_seed: Some(&scope.parent_node_seed),
+        // A grant cut mints an interior scope root out of this vault's own
+        // tree, so its floors are this identity's own.
+        floor_namespace: FloorNamespace::Own,
+    }
+}
+
 /// One grafted scope this session may author in, owned for the pass that
 /// borrows it.
 struct GraftedWritePass {
     root: NodeId,
     name: IpnsName,
-    read_scope_seed: Zeroizing<[u8; 32]>,
+    read_scope_seed: StampedSeed,
     write_scope_seed: Zeroizing<[u8; 32]>,
     /// The granting identity, which is the owner a grafted record's commitment
     /// and grant section verify under — never this vault's own.
@@ -1601,6 +1622,23 @@ struct GraftedWritePass {
     /// [`floor_namespace`] picked it —
     /// the granting identity's on every pass a grafted root reaches here.
     floors: FloorNamespace,
+}
+
+impl GraftedWritePass {
+    /// This scope's end, under the cached read seed and its stamp.
+    fn source(&self) -> ScopeEnd<'_> {
+        ScopeEnd {
+            root: self.root,
+            root_name: &self.name,
+            read_scope_seed: &self.read_scope_seed.seed,
+            read_seed_stamp: Some(self.read_scope_seed.stamp),
+            write_scope_seed: &self.write_scope_seed,
+            // A grantee enters by its own grant blob and holds no ancestor
+            // seed to derive an ascent keypair from.
+            ascent_node_seed: None,
+            floor_namespace: self.floors,
+        }
+    }
 }
 
 /// Every grafted scope whose accepted grant the last pass found write-capable
@@ -1640,7 +1678,7 @@ fn grafted_write_passes(
             Some(GraftedWritePass {
                 root,
                 name: IpnsName::parse(core::str::from_utf8(name).ok()?).ok()?,
-                read_scope_seed: cached_seed_in(read_seeds, scope_id, floors)?,
+                read_scope_seed: cached_stamped_seed_in(read_seeds, scope_id, floors)?,
                 write_scope_seed: cached_seed_in(write_seeds, scope_id, floors)?,
                 sharer_identity: EcdsaVerifier::from_sec1(sharers.get(scope_id)?)?,
                 sharer_enc: *sharer_encs.get(scope_id)?,
@@ -1795,7 +1833,7 @@ mod tests {
 
         use crate::gate::Adopted;
         use crate::grants::grafted::GraftedSharers;
-        use crate::net::rotation::{ScopeWritePlane, WritePlaneDark};
+        use crate::net::rotation::WritePlaneDark;
         use crate::seams::ContactLabel;
 
         const VAULT_ROOT: NodeId = NodeId([0u8; 16]);
@@ -2053,6 +2091,66 @@ mod tests {
                 write_cut_unfinished: false,
                 fork: None,
             }
+        }
+
+        /// The vault root's end carries the stamp of the cached read seed, so
+        /// the drain can tell a lag from a root the seed should open.
+        #[test]
+        fn the_vault_end_carries_its_cached_seeds_stamp() {
+            let read = StampedSeed {
+                seed: Zeroizing::new(READ_SCOPE_SEED),
+                stamp: 5,
+            };
+            let write = Zeroizing::new(WRITE_SCOPE_SEED);
+            let name = derive_write_name(&WRITE_SCOPE_SEED, &SHARED);
+
+            let end = vault_source(NodeId(SHARED), &name, &read, &write);
+
+            assert_eq!(end.read_seed_stamp, Some(5));
+        }
+
+        /// A descendant scope's end is stamped at the epoch of the record the
+        /// walk recovered its read seed from.
+        #[test]
+        fn an_interior_end_carries_the_epoch_its_seed_was_recovered_at() {
+            let scope = proved(Ok(ScopeWritePlane {
+                seed: Zeroizing::new(WRITE_SCOPE_SEED),
+                epoch: 1,
+            }));
+            let write = scope.write.as_ref().expect("a write plane");
+
+            assert_eq!(
+                interior_source(&scope, write).read_seed_stamp,
+                Some(scope.adopted.epoch)
+            );
+        }
+
+        /// A grafted pass's end carries the stamp its read seed was cached
+        /// under.
+        #[test]
+        fn a_grafted_end_carries_its_cached_seeds_stamp() {
+            let read = RefCell::new(ScopeSeeds::new());
+            let namespace = own_namespace(&sharers())(&SHARED).expect("SHARED has a sharer");
+            deposit_seed(
+                &read,
+                SHARED,
+                Zeroizing::new(READ_SCOPE_SEED),
+                Some(6),
+                namespace,
+            );
+
+            let passes = grafted_write_passes(
+                &base(),
+                &BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]),
+                &sharers(),
+                &encs(),
+                own_namespace(&sharers()),
+                &read,
+                &seeds(SHARED, WRITE_SCOPE_SEED),
+            );
+
+            assert_eq!(passes.len(), 1);
+            assert_eq!(passes[0].source().read_seed_stamp, Some(6));
         }
 
         /// A walk reports each forked scope once per session, and no other.

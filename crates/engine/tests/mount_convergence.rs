@@ -483,12 +483,21 @@ fn cut_vault_root(world: &FakeWorld, engine: &mut Engine<FakeSeamTypes>) {
 
 /// The `minReadEpoch` the vault pointer at index 0 vouches.
 fn vouched_min_read_epoch(world: &FakeWorld) -> u64 {
-    let name = vault_pointer_name(&SECRET, 0);
+    vault_repoint(world).min_read_epoch
+}
+
+/// The vault-pointer record at the first endpoint.
+fn vault_pointer_record(world: &FakeWorld) -> Option<Vec<u8>> {
     let endpoint = world.record_store.endpoints()[0].clone();
-    let bytes = world
+    world
         .record_store
-        .record_at(&endpoint, name.as_str())
-        .expect("the vault pointer is published");
+        .record_at(&endpoint, vault_pointer_name(&SECRET, 0).as_str())
+}
+
+/// The re-point the vault pointer at index 0 carries.
+fn vault_repoint(world: &FakeWorld) -> RepointObject {
+    let name = vault_pointer_name(&SECRET, 0);
+    let bytes = vault_pointer_record(world).expect("the vault pointer is published");
     let record = IpnsRecord::unmarshal(&bytes).expect("a record");
     let entry = record.verify(&name).expect("the record verifies");
     cipherbox_engine::sync::pointer::open_repoint(
@@ -499,7 +508,6 @@ fn vouched_min_read_epoch(world: &FakeWorld) -> u64 {
         &entry.value,
     )
     .expect("the owner re-point opens")
-    .min_read_epoch
 }
 
 /// The reproduction: a manual read cut of the vault root raises this device's
@@ -1085,6 +1093,43 @@ fn a_replayed_pre_cut_pointer_is_refused_after_a_landed_vouch() {
     assert_start_refuses_a_rolled_back_pointer(&blocks, &owner, 43);
 }
 
+/// The network serves a pointer below the sequence this device published at
+/// the name, at the epoch the device vouched: the start goes on, and its
+/// catch-up does not sign that pointer's fields again.
+#[test]
+fn a_catch_up_over_a_pointer_below_the_published_sequence_publishes_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+    tick(&world, &engine, &mut tasks);
+    drop((engine, tasks));
+    let anchor = vault_pointer_name(&SECRET, 0);
+    block_on(
+        owner
+            .floors(&SECRET)
+            .raise_sequence_floor(anchor.as_str().as_bytes(), 5),
+    )
+    .expect("this device published the pointer at sequence 5");
+    let before = vault_pointer_record(&world);
+
+    let (engine, mut events, _tasks) = boot(&world, &blocks, &owner, 43);
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+    assert!(
+        renewal_failed_at(&mut events, &anchor),
+        "the refused catch-up is surfaced, never silent"
+    );
+    assert_eq!(
+        vault_pointer_record(&world),
+        before,
+        "nothing was published"
+    );
+}
+
 /// The start after a cut whose vouch ran out lands the vouch at its catch-up,
 /// so a later replay of the pre-cut pointer is refused.
 #[test]
@@ -1156,6 +1201,58 @@ fn no_other_owner_action_moves_the_vault_roots_read_epoch() {
 
     let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 43);
     assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+}
+
+/// A write grant, the one command that cuts a write scope with no grant in
+/// place, is refused at the vault root. A write grant, a downgrade and a revoke
+/// below it leave the vault pointer on the same root at the same write epoch.
+#[test]
+fn no_command_runs_a_write_cut_of_the_vault_root() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    let reports = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    import_recipient(&mut engine);
+    let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
+    let revoke = |node| Command::Revoke {
+        node,
+        recipient_identity_public_key: recipient.clone(),
+    };
+    let downgrade = |node| Command::ChangePermission {
+        node,
+        recipient_identity_public_key: recipient.clone(),
+        permission: Permission::Read,
+    };
+    let refused = block_on(engine.command(Command::Grant {
+        node: ROOT,
+        recipient_identity_public_key: recipient.clone(),
+        permission: Permission::Write,
+        grantee_name: None,
+    }));
+    assert!(
+        matches!(
+            refused,
+            Err(EngineError::UnsupportedTarget {
+                check: "grant-target-is-the-vault-root"
+            })
+        ),
+        "a write grant at the vault root: {refused:?}"
+    );
+    for command in [downgrade(reports), revoke(reports)] {
+        grant_to_recipient_at(&mut engine, reports, Permission::Write);
+        let name = command.name();
+        let cut = block_on_while_ticking(engine.command(command), &mut tasks);
+        assert!(cut.is_ok(), "{name} below the vault root: {cut:?}");
+        tick_n(&world, &engine, &mut tasks, 4);
+    }
+    drop(world.scheduler.take_spawned_tasks());
+
+    let repoint = vault_repoint(&world);
+    assert_eq!(repoint.current_root, root_name);
+    assert_eq!(repoint.write_epoch, EPOCH);
 }
 
 // ---------------------------------------------------------------------------

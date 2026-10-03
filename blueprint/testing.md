@@ -114,7 +114,8 @@ scenario fails the meta-test):
   pre-cut vault root above the cut root's sequence; a pointer below the vouched
   floor is refused; the first-run mint refuses a read-epoch floor above a
   lower vouched floor; a standing pointer that already vouches the epoch raises
-  the vouched floor and publishes nothing (ADR 0067;
+  the vouched floor and publishes nothing; a vouch over a pointer below the
+  vouched floor or below the published sequence publishes nothing (ADR 0067;
   `crates/engine/tests/mount_convergence.rs` and the `sync::provision` and
   `facade` unit tests);
 - all five rebase races from the FSM1/cipher-box-next#33 D5 table (conditional delete,

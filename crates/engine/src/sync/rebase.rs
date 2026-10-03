@@ -218,6 +218,10 @@ pub enum DeadLetterReason {
     /// construction — so no pass authors them on the sharer's plane and no retry
     /// changes it. The member's remedy is to work on a copy in their own vault.
     GraftedScopeVaultSurface,
+    /// A record the op builds on is at an envelope version this build does not
+    /// read, so another device runs a newer release. The op waited out the
+    /// unattributed budget; the member's remedy is to update this app.
+    NewerRelease,
 }
 
 /// One applied op, resolved for republish.
