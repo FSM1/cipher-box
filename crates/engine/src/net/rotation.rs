@@ -8091,7 +8091,13 @@ mod tests {
         use cipherbox_core::seal::{encode_grant_section, set_grant_section};
         for rogue_sequence in [1, 2] {
             let harness = Harness::plain();
-            let good = granted_root(Vec::new());
+            let child_id = [0x87; 16];
+            let child_name = IpnsName::from_public_key(
+                &SessionIdentity::write_name_signer(&OWNER_ROOT_WRITE_SCOPE_SEED, &child_id)
+                    .verifying_key(),
+            );
+            let children = vec![ref_to(child_id, &child_name)];
+            let good = granted_root(children.clone());
             harness.stage(SCOPE, &good, Some(OWNER_ROOT_EPOCH));
             let revoked = crate::testkit::with_cut_epoch(
                 vault_root(SCOPE, Vec::new()),
@@ -8115,7 +8121,7 @@ mod tests {
                 )))
                 .expect("confirmed owner read");
             }
-            let mut rogue = granted_root(Vec::new());
+            let mut rogue = granted_root(children.clone());
             let (shared, _) = recipient_self_location(
                 &write_grantee(),
                 &owner_enc().public(),
@@ -8178,7 +8184,14 @@ mod tests {
                 .recovered_owner
                 .expect("the confirmed body survives the restart");
             assert_eq!(recovered.sequence, 1);
-            assert_eq!(body_children(&recovered.read_body).len(), 0);
+            let ReadBody::Folder {
+                children: recovered_children,
+                ..
+            } = &recovered.read_body
+            else {
+                panic!("confirmed folder");
+            };
+            assert_eq!(recovered_children, &children);
             block_on(restarted.publish_scope_root(&cut))
                 .expect("the cut lands over the rogue root");
             let (verified, envelope) = published_head(&harness, &good.name);
@@ -8186,7 +8199,16 @@ mod tests {
             assert_eq!(envelope.epoch, OWNER_ROOT_EPOCH + 1);
             let seed = kdf::node_seed(&FRESH_SEED, &SCOPE);
             let key = kdf::read_key(seed.as_bytes());
-            open_read_body(&envelope, key.as_bytes()).expect("the owner opens the cut");
+            let cut_body =
+                open_read_body(&envelope, key.as_bytes()).expect("the owner opens the cut");
+            let ReadBody::Folder {
+                children: cut_children,
+                ..
+            } = cut_body
+            else {
+                panic!("cut folder");
+            };
+            assert_eq!(cut_children, children);
             assert!(
                 harness
                     .events()
