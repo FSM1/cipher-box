@@ -15,11 +15,11 @@ import { SharedPage, type RowStanding } from '../../page-objects/shared.page';
 import { nudgedUntil } from '../fixtures';
 import { check, expect, fact, test } from './fixtures';
 import { utcDay } from './ledger';
-import { SoakFailure } from './reasons';
 import { markerFile } from './markers';
 import {
   CYCLE_FOLDER,
   cycleEpochStepped,
+  grantsRead,
   linkPrefix,
   LONG_RUNNING_MS,
   markerDates,
@@ -202,16 +202,15 @@ test('the cycle folder mints, converts and revokes a read link in one night', as
   // A failed night can leave the grantee granted, which would hold the next join off a claim.
   await check('cycle leftover grants', 'cycle-epoch-flat', async () => {
     await share.open(CYCLE_FOLDER);
-    const unavailable = share.page.getByTestId('share-grants-unavailable');
-    await expect(share.page.getByTestId('share-people').or(unavailable)).toBeVisible({
-      timeout: PAGE_MS,
-    });
-    if (await unavailable.isVisible()) {
-      throw new SoakFailure(
-        'cycle-epoch-flat',
-        `the share dialog read no grants of ${CYCLE_FOLDER}/`
-      );
-    }
+    await grantsRead(
+      {
+        people: share.people,
+        unavailable: share.grantsUnavailable,
+        error: share.error,
+      },
+      CYCLE_FOLDER,
+      PAGE_MS
+    );
     // The opening converts waiting claims, so a row can land until the dialog is idle.
     await expect(share.closeButton).toBeEnabled({ timeout: PAGE_MS });
     for (let left = await share.grantRows.count(); left > 0; left -= 1) {
