@@ -12024,7 +12024,7 @@ mod tests {
                     .headers
                     .iter()
                     .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
-                    .map(|(_, value)| value.clone())
+                    .map(|(_, value)| value.as_str())
                     .unwrap_or_default();
                 format!("{{\"cid\":\"{cid}\",\"size\":0}}").into_bytes()
             } else if request.url.ends_with("/registry/register") {

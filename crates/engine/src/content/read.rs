@@ -436,7 +436,7 @@ async fn fetch(
     timeout_ms: u64,
 ) -> Result<crate::seams::HttpResponse, CappedFetchError> {
     let base = source.base_url.trim_end_matches('/');
-    let mut headers = vec![(ACCEPT.to_owned(), RAW_BLOCK.to_owned())];
+    let mut headers = vec![(ACCEPT.to_owned(), RAW_BLOCK.to_owned().into())];
     if let Some(bearer) = source.bearer.peek() {
         // A source whose token cannot be a header value is skipped, never
         // contacted unauthenticated: rotation drops to the next source.
@@ -602,9 +602,27 @@ mod tests {
             request
                 .headers
                 .iter()
-                .any(|(n, v)| n == AUTHORIZATION && v == "Bearer member-token"),
+                .any(|(n, v)| n == AUTHORIZATION && v.as_str() == "Bearer member-token"),
             "accelerator request carries the member bearer token"
         );
+    }
+
+    #[test]
+    fn the_accelerator_bearer_reaches_the_seam_in_a_wiping_value() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        block_on(read_block(
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+
+        crate::testkit::assert_bearer_wipes_on_drop(&http.requests()[0]);
     }
 
     #[test]
@@ -1154,14 +1172,18 @@ mod tests {
                 .find(|(name, _)| name == AUTHORIZATION)
                 .map(|(_, value)| value.clone())
         };
+        let presents = |expected: &str| read().is_some_and(|value| value.as_str() == expected);
 
-        assert_eq!(read(), None, "no session yet: the leg goes out bare");
+        assert!(read().is_none(), "no session yet: the leg goes out bare");
         session.set(Zeroizing::new("jwt-1".to_owned()));
-        assert_eq!(read(), Some("Bearer jwt-1".to_owned()));
+        assert!(
+            presents("Bearer jwt-1"),
+            "the leg presents the session token"
+        );
         session.set(Zeroizing::new("jwt-2".to_owned()));
-        assert_eq!(read(), Some("Bearer jwt-2".to_owned()), "a rotation lands");
+        assert!(presents("Bearer jwt-2"), "a rotation lands");
         session.clear();
-        assert_eq!(read(), None, "logout drops the credential");
+        assert!(read().is_none(), "logout drops the credential");
     }
 
     #[test]

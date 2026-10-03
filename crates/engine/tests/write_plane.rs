@@ -13253,7 +13253,7 @@ fn uploaded_cids(device: &FakeDevice) -> Vec<String> {
                 .headers
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
-                .map(|(_, value)| value.clone())
+                .map(|(_, value)| value.as_str().to_owned())
                 .expect("an upload declares its CID")
         })
         .collect()
