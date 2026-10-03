@@ -1159,12 +1159,12 @@ confirmed scope root publish by the owner is a last copy (D2). A rotation whose
 root read fell back publishes nothing more at the old root name (D3). A cut
 that moves the write plane runs its wave first; the root republish at the new
 name re-mints the grant section from the cut set, never from the copy, and the
-read cut then runs at the new root. A cut that does not move the write plane
-keeps the stop, so a read revoke over a root that leaves no room for its re-seal
-stops, as over any other refused root. A cut whose command read fell back keeps
-no grant row: the last copy cannot prove that its grant set is current, so the
-cut seals the new seed to no recipient, and the owner shares again (D5). A
-re-drive keeps the rows of the cut set that it reads.
+read cut then runs at the new root. A cut whose root read fell back keeps no
+grant row: the last copy cannot prove that its grant set is current, so the cut
+seals the new seed to no recipient, and the owner shares again (D5). A re-drive
+that reads a copy with rows signs this cut again at a new cut epoch before
+either plane runs. So a cut from a copy that holds a write row moves the write
+plane, and only a cut from a copy with read rows alone keeps the stop.
 
 ### Triggers
 

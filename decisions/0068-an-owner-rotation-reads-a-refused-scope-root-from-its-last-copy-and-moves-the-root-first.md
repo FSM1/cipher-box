@@ -66,9 +66,10 @@ starts at the first stop of an owner rotation on that scope and survives a run a
 pass that re-drives the entry counts as a pass: the pass places each owed scope whose root its
 boundary walk refused under a gated parent. The durable `owed-rotation` body does not change.
 
-**D5 — A cut whose command read fell back keeps no grant row (added on 2026-10-03).** The last copy
+**D5 — A cut whose root read fell back keeps no grant row (added on 2026-10-03).** The last copy
 cannot prove that its grant set is current. So the cut removes every row, seals the new seed to no
-recipient, and the owner shares again. A re-drive keeps the rows of the cut set that it reads.
+recipient, and the owner shares again. A re-drive that reads a copy with rows signs this cut again
+at a new cut epoch before either plane runs.
 
 ## Alternatives considered
 
@@ -95,7 +96,7 @@ recipient, and the owner shares again. A re-drive keeps the rows of the cut set 
    goes, surfaced by the trust event. "Triggers" states the order of D3: the read plane goes
    first, except after a fallback.
 2. `blueprint/engine.md` "Adoption gate and floors" names the owner rotation fallback of D1 beside
-   the gate's fail-closed rule.
+   the gate's fail-closed rule. "rotateScopeWrite" states D5.
 3. `CONTEXT.md` "Forgery window" ends at the wave for a planted root when a copy passes the gate.
    "Owed rotation work" states D4.
 4. `blueprint/testing.md` "crates/engine — seam fakes and the simulation harness": the rotation
@@ -103,17 +104,16 @@ recipient, and the owner shares again. A re-drive keeps the rows of the cut set 
    serves, a plant at `u64::MAX`, a plant before the command). Each ends the revoke in one pass
    with a copy, and a wave on a pre-cut copy re-mints no grant for the revokee.
 5. ADR 0065 D4 and ADR 0065 Residuals carry an "Amended by ADR 0068" sentence.
-6. Honest lag (amended on 2026-10-03): when another owner device published the root and no source
-   holds its head block yet, a command runs on the older copy, and what that device published goes,
-   surfaced by the trust event.
+6. Honest lag (amended on 2026-10-03): a command runs on the older copy while no source holds the
+   head block of another owner device's root; what it published goes, with the trust event.
 7. The last command run time is in memory (amended on 2026-10-03): after a restart the bound runs
    from the first stop, so the re-drive can drop an entry early with `rotationWorkAbandoned`.
-8. `blueprint/engine.md` "rotateScopeWrite" states D5. An owner-signed grant-set digest at the
-   scope pointer could let a fallback cut keep its rows; that needs a new ADR.
 
 ## Residuals
 
-- A device with no copy that passes the gate keeps the stop, and the scope lapses. Does option 3
-  follow, or does the owner accept this?
+- A device with no copy that passes the gate keeps the stop, and the scope lapses. Option 3?
 - A `directChildScopeIndex` entry that a committed writer put in the root body before the cut
   stops the wave in `record_scope_boundary`, also on the copy. Does it get its own rule?
+- D5 under honest lag: a read revoke removes every share and the write access of every writer.
+- D5 lets a write grantee that plants, or a party that holds every block source or record endpoint,
+  force a full re-share on the next owner revoke. The owner accepts this for now.
