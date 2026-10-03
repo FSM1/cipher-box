@@ -825,12 +825,20 @@ pub(super) fn reject(stage: GateStage, e: CodecError) -> GateError {
     })
 }
 
+/// The status a head block read carries when every source answered that it
+/// holds no such block (ADR 0068 D1).
+pub(super) const HEAD_BLOCK_NOT_FOUND: u16 = 404;
+
 /// Map a content-read failure: a CID mismatch/tamper is a fail-closed trust
 /// violation surfaced verbatim; no source or an over-cap body is availability (a
 /// retryable seam), never a trust verdict (`content/read.rs`).
 pub(super) fn map_read_error(e: ReadError) -> GateError {
     match e {
         ReadError::TrustViolation(codec) => assembly_reject(codec),
+        ReadError::NotFound => GateError::Seam(SeamError::http_status(
+            "head block not found",
+            HEAD_BLOCK_NOT_FOUND,
+        )),
         ReadError::Unavailable => GateError::Seam(SeamError::new("head block unavailable")),
         ReadError::TooLarge { size, limit } => GateError::Seam(SeamError::new(format!(
             "head block exceeds the content cap ({size} > {limit})"

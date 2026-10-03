@@ -33,6 +33,7 @@ pub use floor_store::{
     CONTACT_LABEL_LEN, ContactLabel, FloorNamespace, FloorRaise, FloorStore, OWNER_TAG_LEN,
     OwnerScopedFloorStore, SharerScopedFloorStore,
 };
+pub(crate) use http::bearer_value;
 pub use http::{
     CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, InvalidBearer,
     bearer_header, check_bearer,
