@@ -25,6 +25,8 @@ struct Inner {
     /// Floor keys whose epoch **read** fails once a budget of earlier reads
     /// of the same bar is spent.
     read_budgets: HashMap<Vec<u8>, u64>,
+    /// The same, for sequence floor reads.
+    sequence_read_budgets: HashMap<Vec<u8>, u64>,
     /// Whether [`FloorStore::commit_floors`] is injected to fail.
     failing_commit: bool,
     /// Raises still allowed before every later raise, on any key, fails.
@@ -77,22 +79,28 @@ impl Inner {
                 "floor read injected to fail for key {key:?}"
             )));
         }
-        if self.read_budgets.is_empty() {
-            return None;
-        }
-        let untagged = key.get(OWNER_TAG_LEN..).unwrap_or_default().to_vec();
-        let budgeted = [key.to_vec(), untagged]
-            .into_iter()
-            .find(|candidate| self.read_budgets.contains_key(candidate))?;
-        let budget = self.read_budgets.get_mut(&budgeted)?;
-        if *budget == 0 {
-            return Some(SeamError::new(format!(
-                "floor read injected to fail for key {key:?} past its budget"
-            )));
-        }
-        *budget -= 1;
-        None
+        spend_read(&mut self.read_budgets, key)
     }
+}
+
+/// Spend one read of `key`'s budget in `budgets`, whole or with its owner tag
+/// stripped, and fail the read once the budget is spent.
+fn spend_read(budgets: &mut HashMap<Vec<u8>, u64>, key: &[u8]) -> Option<SeamError> {
+    if budgets.is_empty() {
+        return None;
+    }
+    let untagged = key.get(OWNER_TAG_LEN..).unwrap_or_default().to_vec();
+    let budgeted = [key.to_vec(), untagged]
+        .into_iter()
+        .find(|candidate| budgets.contains_key(candidate))?;
+    let budget = budgets.get_mut(&budgeted)?;
+    if *budget == 0 {
+        return Some(SeamError::new(format!(
+            "floor read injected to fail for key {key:?} past its budget"
+        )));
+    }
+    *budget -= 1;
+    None
 }
 
 /// Whether `key` names an injected fault in `keys`, whole or with its owner tag
@@ -181,6 +189,7 @@ impl InMemoryFloorStore {
         inner.failing_sequence_read_keys.clear();
         inner.under_reported_keys.clear();
         inner.read_budgets.clear();
+        inner.sequence_read_budgets.clear();
         inner.failing_commit = false;
         inner.raise_budget = None;
         inner.raise_report_skew = 0;
@@ -214,6 +223,16 @@ impl InMemoryFloorStore {
             .lock()
             .expect("lock")
             .read_budgets
+            .insert(key.to_vec(), budget);
+    }
+
+    /// Let `budget` sequence-floor reads naming `key` through and fail every one
+    /// after.
+    pub fn fail_sequence_floor_reads_after(&self, key: &[u8], budget: u64) {
+        self.inner
+            .lock()
+            .expect("lock")
+            .sequence_read_budgets
             .insert(key.to_vec(), budget);
     }
 
@@ -322,6 +341,9 @@ impl FloorStore for InMemoryFloorStore {
             return Err(SeamError::new(format!(
                 "floor read injected to fail for key {ipns_name:?}"
             )));
+        }
+        if let Some(error) = spend_read(&mut inner.sequence_read_budgets, ipns_name) {
+            return Err(error);
         }
         Ok(inner.sequence.get(ipns_name).copied())
     }

@@ -3001,15 +3001,21 @@ fn assert_write_grant_follows_the_link_rank(inner_counter: u64) {
     }
 }
 
-/// A read grant drops the losing ref of a node the granted folder holds. A
-/// second owner device that loaded that folder but never the winning parent
-/// sees a departure, and must not bin the node the winning parent still names.
-#[test]
-fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner() {
-    let mut fx = GrantScenario::new();
+/// A node `keep` names and the granted folder's `box` holds by a losing ref,
+/// then a read grant that drops that ref. A second owner device loaded `box`
+/// with the ref before the grant, and never the winning parent.
+fn a_second_device_that_lacks_the_winner(
+    fx: &mut GrantScenario,
+) -> (
+    NodeId,
+    NodeId,
+    Engine<FakeSeamTypes>,
+    EventStream,
+    Vec<BoxedTask>,
+) {
     let second = fx.world.device(b"owner-second-device");
     let mut session = None;
-    let (keep, deep, _inner) = dual_linked_at(&mut fx, 0, true, |fx| {
+    let (keep, deep, _inner) = dual_linked_at(fx, 0, true, |fx| {
         serve_http(&second, &fx.blocks, 600);
         let (mut engine, events) = engine_on_api(&second, 7);
         block_on(engine.start(secret(), None)).expect("the second device starts");
@@ -3037,7 +3043,7 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
         session = Some((engine, events, tasks));
         granted_at(Permission::Read)(fx);
     });
-    let (engine, mut events, mut tasks) = session.expect("the second device booted");
+    let (engine, mut events, tasks) = session.expect("the second device booted");
     events_so_far(&mut events);
     assert!(
         !block_on(engine.view())
@@ -3047,6 +3053,17 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
             .any(|child| child.id == deep),
         "the second device never loaded the winning parent"
     );
+    (keep, deep, engine, events, tasks)
+}
+
+/// A read grant drops the losing ref of a node the granted folder holds. A
+/// second owner device that loaded that folder but never the winning parent
+/// sees a departure, and must not bin the node the winning parent still names.
+#[test]
+fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner() {
+    let mut fx = GrantScenario::new();
+    let (keep, deep, engine, mut events, mut tasks) =
+        a_second_device_that_lacks_the_winner(&mut fx);
     for _ in 0..4 {
         tick(&fx.world, &engine, &mut tasks);
     }
@@ -3060,22 +3077,322 @@ fn a_grant_dropping_a_losing_ref_is_no_capture_on_a_device_that_lacks_the_winner
     assert_held_in_the_vault_scope(&fx, keep, deep, "second device");
 }
 
-/// A second owner device loads a node in the vault scope. A read grant then
-/// makes its folder a scope root, the node converges onto that scope, and a
-/// writer of the scope unlinks it. The departure is the granted scope's
-/// capture, which bins there with no faulty record reported.
+/// The node the grant held in the vault scope then leaves `keep` too. The
+/// second device saw it leave `box`, so its capture is the granted scope's,
+/// but the record that seals the node opens under the vault scope's end: the
+/// capture bins there, and no record is reported faulty.
 #[test]
-fn a_node_a_read_grant_moved_bins_in_the_granted_scope() {
+fn a_held_node_that_leaves_both_parents_bins_in_the_scope_that_seals_it() {
     let mut fx = GrantScenario::new();
-    let inner = create_published_folder(
-        &fx.world,
-        &mut fx.engine,
-        &mut fx._tasks,
-        fx.folder,
-        "inner",
+    let (keep, deep, engine, mut events, mut tasks) =
+        a_second_device_that_lacks_the_winner(&mut fx);
+    unlink_from_keep(&fx, keep, deep);
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        bin_scopes_of(&fx, deep),
+        vec![SCOPE],
+        "the node bins in the scope that seals it"
     );
-    let doomed =
-        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "doomed");
+}
+
+/// The same departure, with the node's record sealed under a key no own scope
+/// derives: the capture is refused once, and nothing bins.
+#[test]
+fn a_captured_record_no_own_scope_opens_is_one_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let (keep, deep, engine, mut events, mut tasks) =
+        a_second_device_that_lacks_the_winner(&mut fx);
+    unlink_from_keep(&fx, keep, deep);
+    let (_, epoch, _) =
+        published_seal(&fx.world, &fx.blocks, &write_name(deep), &read_key_of(deep));
+    reseal_interior_node(&fx.world, &fx.blocks, deep, SCOPE, &[0x42; 32], epoch);
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 1, "the record is refused once");
+    assert_eq!(
+        bin_scopes_of(&fx, deep),
+        Vec::<[u8; 16]>::new(),
+        "nothing bins"
+    );
+}
+
+/// The writer that unlinked a node leaves it at a record below the vault
+/// scope's read epoch, with a seal that the seed the scope's history gives
+/// for that epoch does not open. The gate refuses it, the capture is reported
+/// once, and nothing bins.
+#[test]
+fn a_captured_record_below_the_epoch_floor_that_does_not_open_is_one_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let (mut engine, mut events, mut tasks) = fx.second_owner_device();
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |fx, doomed| {
+        let (_, epoch, _) = published_seal(
+            &fx.world,
+            &fx.blocks,
+            &write_name(doomed),
+            &read_key_of(doomed),
+        );
+        reseal_interior_node(&fx.world, &fx.blocks, doomed, SCOPE, &[0x42; 32], epoch);
+        assert_eq!(
+            block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
+            Ok(CommandOutcome::Done)
+        );
+    });
+    events_so_far(&mut events);
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 1, "the record is refused once");
+    assert_eq!(
+        bin_scopes_of(&fx, doomed),
+        Vec::<[u8; 16]>::new(),
+        "nothing bins"
+    );
+}
+
+/// The record reads one capture pass spends to find sealing scopes, as the
+/// drain bounds them.
+const MAX_SEALER_READS: usize = 64;
+
+/// Six read grants leave seven own scopes that derive one captured name. A
+/// writer unlinks eight nodes and leaves each at a record that no own key
+/// opens. Each pass reads within its bound, a capture the pass does not finish
+/// resumes on a later pass, and each record is reported once.
+#[test]
+fn the_search_for_sealing_scopes_reads_within_its_bound_and_resumes() {
+    let mut fx = GrantScenario::new();
+    for i in 0..6 {
+        let folder = create_published_folder(
+            &fx.world,
+            &mut fx.engine,
+            &mut fx._tasks,
+            ROOT,
+            &format!("granted {i}"),
+        );
+        assert_eq!(
+            block_on(fx.engine.command(Command::Grant {
+                node: folder,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission: Permission::Read,
+                grantee_name: None,
+            })),
+            Ok(CommandOutcome::Done)
+        );
+    }
+    let device = fx.world.device(b"the owner's second device");
+    let (mut engine, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &device);
+    tick(&fx.world, &engine, &mut tasks);
+    let plain = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "plain");
+    let doomed: Vec<NodeId> = (0..8)
+        .map(|i| {
+            create_published_folder(
+                &fx.world,
+                &mut fx.engine,
+                &mut fx._tasks,
+                plain,
+                &format!("doomed {i}"),
+            )
+        })
+        .collect();
+    block_on(engine.command(Command::SetFocus { node: Some(plain) })).unwrap();
+    tick(&fx.world, &engine, &mut tasks);
+    assert_eq!(block_on(engine.view()).unwrap().children(plain).len(), 8);
+    for node in &doomed {
+        let (_, epoch, _) = published_seal(
+            &fx.world,
+            &fx.blocks,
+            &write_name(*node),
+            &read_key_of(*node),
+        );
+        reseal_interior_node(&fx.world, &fx.blocks, *node, SCOPE, &[0x42; 32], epoch);
+    }
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        plain,
+        &read_key_of(plain),
+        SCOPE,
+        |children| children.clear(),
+    );
+    events_so_far(&mut events);
+    let names: Vec<Vec<u8>> = doomed
+        .iter()
+        .map(|node| write_name(*node).as_str().as_bytes().to_vec())
+        .collect();
+    let reads = || {
+        device
+            .snapshot_cache
+            .reads()
+            .iter()
+            .filter(|key| names.contains(key))
+            .count()
+    };
+    let mut reported = Vec::new();
+    for _ in 0..8 {
+        let before = reads();
+        tick(&fx.world, &engine, &mut tasks);
+        assert!(
+            reads() - before <= MAX_SEALER_READS,
+            "one pass reads within its bound"
+        );
+        reported.push(abuse_events(&mut events));
+    }
+    assert_eq!(
+        reported.iter().sum::<usize>(),
+        8,
+        "each record is reported once"
+    );
+    assert!(
+        reported.iter().all(|count| *count < 8),
+        "no one pass reads every record under every end"
+    );
+    assert!(
+        doomed
+            .iter()
+            .all(|node| bin_scopes_of(&fx, *node).is_empty()),
+        "nothing bins"
+    );
+}
+
+/// The writer that unlinked a node then publishes a signed record with a head
+/// that does not decode at the node's name. The gate refuses it, the capture
+/// is reported once, and nothing bins.
+#[test]
+fn a_captured_node_with_a_malformed_head_is_one_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let (mut engine, mut events, mut tasks) = fx.second_owner_device();
+    let doomed = unlinked_by_another_writer(&mut fx, &mut engine, &mut tasks, |_, _| {});
+    let cid = fx.blocks.put(b"not an envelope".to_vec());
+    publish_value_at(&fx.world, doomed, format!("/ipfs/{cid}").as_bytes());
+    events_so_far(&mut events);
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 1, "the record is refused once");
+    assert_eq!(
+        bin_scopes_of(&fx, doomed),
+        Vec::<[u8; 16]>::new(),
+        "nothing bins"
+    );
+}
+
+/// A node another writer unlinked, whose re-key lands on `device` while the
+/// bin index publish does not.
+fn rekeyed_with_no_entry(
+    fx: &mut GrantScenario,
+    device: &FakeDevice,
+) -> (NodeId, Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    let (mut engine, events, mut tasks) = boot_owner(&fx.world, &fx.blocks, device);
+    tick(&fx.world, &engine, &mut tasks);
+    let doomed = unlinked_by_another_writer(fx, &mut engine, &mut tasks, |_, _| {});
+    let bin = BinIndexKeys::derive(&SECRET);
+    fx.world.record_store.fail_put_for(bin.name().as_str());
+    let before = published_head_cid(&fx.world, &write_name(doomed));
+    for _ in 0..8 {
+        if published_head_cid(&fx.world, &write_name(doomed)) != before {
+            break;
+        }
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_ne!(
+        published_head_cid(&fx.world, &write_name(doomed)),
+        before,
+        "the re-key landed"
+    );
+    assert!(bin_scopes_of(fx, doomed).is_empty(), "and no entry did");
+    fx.world.record_store.heal_put_for(bin.name().as_str());
+    (doomed, engine, events, tasks)
+}
+
+/// The re-key of a capture lands and the bin index publish does not. The
+/// next pass opens the node under the bin's held key and bins it, with no
+/// record reported faulty.
+#[test]
+fn a_capture_whose_bin_publish_failed_bins_on_the_next_pass() {
+    let mut fx = GrantScenario::new();
+    let device = fx.world.device(b"the owner's second device");
+    let (doomed, engine, mut events, mut tasks) = rekeyed_with_no_entry(&mut fx, &device);
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        bin_scopes_of(&fx, doomed),
+        vec![SCOPE],
+        "the node bins on a later pass"
+    );
+}
+
+/// The same, with a rotation of the vault scope before the next pass: the
+/// re-keyed record is then below the read-epoch floor, and it still opens
+/// under the bin's held key, so the node bins with no record reported faulty.
+#[test]
+fn a_capture_whose_bin_publish_failed_bins_after_a_rotation() {
+    let mut fx = GrantScenario::new();
+    let device = fx.world.device(b"the owner's second device");
+    let (doomed, engine, mut events, mut tasks) = rekeyed_with_no_entry(&mut fx, &device);
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: ROOT })),
+        Ok(CommandOutcome::Done)
+    );
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        bin_scopes_of(&fx, doomed),
+        vec![SCOPE],
+        "the node bins on a later pass"
+    );
+}
+
+/// The sequence-floor reads of the node's name that answer before the
+/// re-key's held-key read.
+const HELD_KEY_READ_BUDGET: u64 = 6;
+
+/// The same, with the re-key's held-key read failing after the scope key
+/// refused the record: the read did not answer, so no record is reported
+/// faulty, and the node bins once the reads answer again.
+#[test]
+fn a_held_key_read_with_no_answer_is_no_trust_violation() {
+    let mut fx = GrantScenario::new();
+    let device = fx.world.device(b"the owner's second device");
+    let (doomed, engine, mut events, mut tasks) = rekeyed_with_no_entry(&mut fx, &device);
+    device.floor_store.fail_sequence_floor_reads_after(
+        &floor_label(write_name(doomed).as_str().as_bytes()),
+        HELD_KEY_READ_BUDGET,
+    );
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert!(
+        bin_scopes_of(&fx, doomed).is_empty(),
+        "the held-key read did not answer"
+    );
+    device.floor_store.heal_floors();
+    for _ in 0..8 {
+        tick(&fx.world, &engine, &mut tasks);
+    }
+    assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
+    assert_eq!(
+        bin_scopes_of(&fx, doomed),
+        vec![SCOPE],
+        "the node bins once the reads answer"
+    );
+}
+
+/// A second owner device loads a node in the vault scope. A grant then makes
+/// its folder a scope root, the node converges onto that scope, and a writer
+/// of the scope unlinks it. The departure is the granted scope's capture,
+/// which bins there with no faulty record reported.
+fn assert_a_node_a_grant_moved_bins_in_the_granted_scope(permission: Permission) {
+    let mut fx = GrantScenario::new();
+    let (inner, doomed) = nested_subtree(&mut fx);
     let (mut second, mut events, mut tasks) = fx.second_owner_device();
     for node in [fx.folder, inner] {
         block_on(second.command(Command::SetFocus { node: Some(node) })).unwrap();
@@ -3088,23 +3405,39 @@ fn a_node_a_read_grant_moved_bins_in_the_granted_scope() {
     );
     block_on(second.command(Command::SetFocus { node: None })).unwrap();
     tick(&fx.world, &second, &mut tasks);
-    assert_eq!(
-        fx.grant_folder_at(Permission::Read),
-        Ok(CommandOutcome::Done)
-    );
+    assert_eq!(fx.grant_folder_at(permission), Ok(CommandOutcome::Done));
     for _ in 0..2 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    for node in [inner, doomed] {
-        converge_into_granted_scope(&fx, node);
-    }
-    tick(&fx.world, &second, &mut tasks);
-    let (seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
-    concurrent_edit(
+    // A write grant's name wave moves and re-seals the folder's nodes; a read
+    // grant leaves them to the lazy wave.
+    let (write_seed, read_seed) = match permission {
+        Permission::Read => {
+            for node in [inner, doomed] {
+                converge_into_granted_scope(&fx, node);
+            }
+            tick(&fx.world, &second, &mut tasks);
+            let (seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+            (Zeroizing::new(WRITE_SCOPE_SEED), seed)
+        }
+        Permission::Write => {
+            // The second device reads the folder as the wave left it, at the
+            // name its scope now derives.
+            block_on(second.command(Command::SetFocus { node: Some(inner) })).unwrap();
+            for _ in 0..2 {
+                tick(&fx.world, &second, &mut tasks);
+            }
+            let root = fx.granted_scope_repoint().current_root;
+            let seed = grantee_write_scope_seed(&fx.folder_section(), &root, &fx.folder.0, 1);
+            (Zeroizing::new(seed), granted_override_seed(&fx, 1))
+        }
+    };
+    concurrent_edit_under(
         &fx.world,
         &fx.blocks,
         inner,
-        &read_key_under(&seed, inner),
+        &write_seed,
+        &read_key_under(&read_seed, inner),
         fx.folder.0,
         |children| children.retain(|child| child.id != doomed.0),
     );
@@ -3115,14 +3448,41 @@ fn a_node_a_read_grant_moved_bins_in_the_granted_scope() {
     }
     assert_eq!(abuse_events(&mut events), 0, "no record is faulty");
     assert_eq!(
-        published_bin_entries(&fx)
-            .into_iter()
-            .filter(|entry| entry.node_id == doomed.0)
-            .map(|entry| entry.scope_id)
-            .collect::<Vec<_>>(),
+        bin_scopes_of(&fx, doomed),
         vec![fx.folder.0],
         "the unlinked node bins in the scope that seals it"
     );
+}
+
+#[test]
+fn a_node_a_read_grant_moved_bins_in_the_granted_scope() {
+    assert_a_node_a_grant_moved_bins_in_the_granted_scope(Permission::Read);
+}
+
+#[test]
+fn a_node_a_write_grant_moved_bins_in_the_granted_scope() {
+    assert_a_node_a_grant_moved_bins_in_the_granted_scope(Permission::Write);
+}
+
+/// A vault-scope writer unlinks `deep` from `keep`.
+fn unlink_from_keep(fx: &GrantScenario, keep: NodeId, deep: NodeId) {
+    concurrent_edit(
+        &fx.world,
+        &fx.blocks,
+        keep,
+        &read_key_of(keep),
+        SCOPE,
+        |children| children.retain(|child| child.id != deep.0),
+    );
+}
+
+/// The scope id of each published bin entry for `node`.
+fn bin_scopes_of(fx: &GrantScenario, node: NodeId) -> Vec<[u8; 16]> {
+    published_bin_entries(fx)
+        .into_iter()
+        .filter(|entry| entry.node_id == node.0)
+        .map(|entry| entry.scope_id)
+        .collect()
 }
 
 /// A granted folder keeps the ref its parent named it by, under the parent's
@@ -4539,7 +4899,28 @@ fn concurrent_edit(
     scope_id: [u8; 16],
     edit: impl FnOnce(&mut Vec<ChildRef>),
 ) {
-    let name = write_name(folder);
+    concurrent_edit_under(
+        world,
+        blocks,
+        folder,
+        &WRITE_SCOPE_SEED,
+        read_key,
+        scope_id,
+        edit,
+    );
+}
+
+/// [`concurrent_edit`] at the name `write_scope_seed` derives for `folder`.
+fn concurrent_edit_under(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    folder: NodeId,
+    write_scope_seed: &[u8; 32],
+    read_key: &[u8; 32],
+    scope_id: [u8; 16],
+    edit: impl FnOnce(&mut Vec<ChildRef>),
+) {
+    let name = derive_write_name(write_scope_seed, &folder.0);
     let head = published_head(world, blocks, &name).expect("the folder is published");
     let envelope = decode_envelope(&head).expect("the head block decodes");
     let ReadBody::Folder {
@@ -4575,7 +4956,7 @@ fn concurrent_edit(
     .expect("the concurrent writer authors a valid record");
     blocks.put(authored.block.clone());
     let record = IpnsRecord::create_v2(
-        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &folder.0).as_bytes()),
+        &kdf::ipns_keypair(kdf::write_seed(write_scope_seed, &folder.0).as_bytes()),
         format!("/ipfs/{}", authored.cid).as_bytes(),
         sequence,
         TTL_NANOS,
