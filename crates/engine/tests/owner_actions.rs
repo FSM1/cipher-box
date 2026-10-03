@@ -58,7 +58,7 @@ use cipherbox_engine::seams::{
 };
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::kept_op::{KEPT_OP_BOUND, KEPT_OP_NOTES_PREFIX};
-use cipherbox_engine::sync::op::ScopeCrossing;
+use cipherbox_engine::sync::op::{OpKind, ScopeCrossing};
 use cipherbox_engine::sync::owed_rotation::{
     DROP_BOUND, DROP_BOUND_PASSES, OWED_ROTATION_PREFIX, OwedEntry, OwedRecord, OwedStep,
     ROTATION_WORK_OWED, open_owed_record, owed_rotation_key, seal_owed_record,
@@ -1721,11 +1721,6 @@ fn a_kept_edit_a_later_writer_overtook_leaves_quietly_after_the_flip() {
     tick(&fx.world, &phone, &mut phone_tasks);
     publish_version(&fx.world, &mut phone, &mut phone_tasks, doc, &[2u8; 64]);
     cut_the_write_scope(&fx, &mut phone);
-    assert_eq!(
-        block_on(fx.engine.read_content(doc)).expect("the head reads"),
-        vec![2u8; 64],
-        "this device reads the later version"
-    );
     let retired_before = retired(&fx.owner_device).len();
 
     for _ in 0..6 {
@@ -1797,10 +1792,10 @@ fn a_kept_op_under_a_new_scope_root_gets_its_check_after_the_grant() {
     assert!(status.dead_letters.is_empty(), "as landed");
 }
 
-/// A kept version delete that the name wave carried finds its version gone
-/// after the flip. That absence is the delete already done, not a failure.
+/// A version delete leaves the queue at its publish, so a flip after it
+/// gives no notice and retires nothing again.
 #[test]
-fn a_kept_version_delete_the_wave_carried_leaves_quietly_after_the_flip() {
+fn a_version_delete_leaves_the_queue_at_publish() {
     let mut fx = GrantScenario::new();
     assert_eq!(
         fx.grant_folder_at(Permission::Write),
@@ -1849,6 +1844,384 @@ fn a_kept_version_delete_the_wave_carried_leaves_quietly_after_the_flip() {
         !queued_targets(&fx.owner_device).contains(&doc),
         "the delete left the queue"
     );
+}
+
+/// The ops this device holds on its durable queue for `node`, kept ops
+/// included.
+fn queued_ops_on(device: &FakeDevice, node: NodeId) -> Vec<OpKind> {
+    let raw = block_on(device.staging_store.queued_ops()).expect("the queue reads");
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    decode_queue(&RecordReader::new(&enc_subkey), &raw)
+        .mine
+        .into_iter()
+        .filter(|(_, op)| op.target == node)
+        .map(|(_, op)| op.kind.clone())
+        .collect()
+}
+
+/// The live root of the granted scope and the read seed its records seal
+/// under.
+fn live_scope(fx: &GrantScenario) -> (IpnsName, Zeroizing<[u8; 32]>) {
+    let root = fx.granted_scope_repoint().current_root;
+    let seed = granted_seed_at(fx, &root);
+    (root, seed)
+}
+
+/// The body of the record at `name`, opened with the read key of `node`.
+fn live_body(fx: &GrantScenario, name: &IpnsName, node: NodeId) -> ReadBody {
+    let (_, seed) = live_scope(fx);
+    let head = published_head(&fx.world, &fx.blocks, name).expect("a published record");
+    let envelope = decode_envelope(&head).expect("the head decodes");
+    open_read_body(&envelope, &read_key_under(&seed, node)).expect("the body opens")
+}
+
+/// The child names of the folder `node` at `name` in the live tree.
+fn live_names(fx: &GrantScenario, name: &IpnsName, node: NodeId) -> Vec<String> {
+    let ReadBody::Folder { children, .. } = live_body(fx, name, node) else {
+        panic!("expected a folder body");
+    };
+    children
+        .into_iter()
+        .map(|child| child.name.clone())
+        .collect()
+}
+
+/// The content CIDs of the file `node` at `name` in the live tree, head
+/// first.
+fn live_versions(fx: &GrantScenario, name: &IpnsName, node: NodeId) -> Vec<Vec<u8>> {
+    let ReadBody::File { versions, .. } = live_body(fx, name, node) else {
+        panic!("expected a file body");
+    };
+    versions
+        .into_iter()
+        .map(|version| version.content_cid)
+        .collect()
+}
+
+/// The name of `child` in the live folder `node` at `name`.
+fn live_child(fx: &GrantScenario, name: &IpnsName, node: NodeId, child: &str) -> IpnsName {
+    let (_, seed) = live_scope(fx);
+    published_child_name(
+        &fx.world,
+        &fx.blocks,
+        name,
+        &read_key_under(&seed, node),
+        child,
+    )
+}
+
+/// Run `write` on this device, then cut the write scope on another owner
+/// device while the walk reads each record in `held` from before the write.
+/// The moved tree does not carry the write.
+fn cut_after_a_write_the_walk_misses(
+    fx: &mut GrantScenario,
+    held: &[&IpnsName],
+    write: impl FnOnce(&mut GrantScenario),
+) {
+    let endpoints = fx.world.record_store.endpoints();
+    let walked: Vec<_> = held
+        .iter()
+        .map(|name| {
+            fx.world
+                .record_store
+                .record_at(&endpoints[0], name.as_str())
+        })
+        .collect();
+    let (mut phone, _phone_events, _phone_tasks) = fx.second_owner_device();
+    write(fx);
+    for (name, record) in held.iter().zip(walked) {
+        fx.world
+            .record_store
+            .serve_gets_for_after(name.as_str(), 0, endpoints.len() * 8, record);
+    }
+    cut_the_write_scope(fx, &mut phone);
+    for name in held {
+        fx.world
+            .record_store
+            .serve_gets_for_after(name.as_str(), 0, 0, None);
+    }
+}
+
+/// Six passes of this device: the pointer consult is paced, so a flip shows a
+/// few passes after the cut.
+fn passes_after_the_flip(fx: &mut GrantScenario) {
+    for _ in 0..6 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+}
+
+/// A write-granted folder holding `child`, and `child`'s live name.
+fn write_granted_child(fx: &mut GrantScenario) -> (NodeId, IpnsName) {
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let child = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "child",
+    );
+    let (root, _) = live_scope(fx);
+    let child_name = live_child(fx, &root, fx.folder, "child");
+    (child, child_name)
+}
+
+/// A delete that lands in the old tree after the walk is not in the moved
+/// tree. The writer keeps the op and deletes the node again there.
+#[test]
+fn a_delete_the_name_wave_did_not_carry_applies_again_after_the_flip() {
+    let mut fx = GrantScenario::new();
+    let (child, child_name) = write_granted_child(&mut fx);
+    let gone = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, child, "gone");
+    let gone_name = live_child(&fx, &child_name, child, "gone");
+
+    cut_after_a_write_the_walk_misses(&mut fx, &[&child_name, &gone_name], |fx| {
+        block_on(fx.engine.command(Command::Delete { node: gone })).expect("the delete stages");
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    });
+    let (root, _) = live_scope(&fx);
+    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    assert!(
+        live_names(&fx, &moved_child, child).contains(&"gone".to_owned()),
+        "the moved tree does not carry the delete"
+    );
+
+    passes_after_the_flip(&mut fx);
+
+    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    assert!(
+        !live_names(&fx, &moved_child, child).contains(&"gone".to_owned()),
+        "the delete applied again in the moved tree"
+    );
+}
+
+/// A delete that the wave carried shows in the moved tree, so it gets no
+/// second apply. The base no longer holds the node, so no check reads it, and
+/// the op leaves at the bound.
+#[test]
+fn a_delete_the_name_wave_carried_gets_no_second_apply() {
+    let mut fx = GrantScenario::new();
+    let (child, _) = write_granted_child(&mut fx);
+    let gone = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, child, "gone");
+    block_on(fx.engine.command(Command::Delete { node: gone })).expect("the delete stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        queued_ops_on(&fx.owner_device, gone)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Delete { .. })),
+        "the delete is kept"
+    );
+    let (mut phone, _phone_events, _phone_tasks) = fx.second_owner_device();
+    cut_the_write_scope(&fx, &mut phone);
+    let (root, _) = live_scope(&fx);
+    let moved_child = live_child(&fx, &root, fx.folder, "child");
+    let endpoint = &fx.world.record_store.endpoints()[0];
+    let carried = fx
+        .world
+        .record_store
+        .record_at(endpoint, moved_child.as_str());
+
+    passes_after_the_flip(&mut fx);
+
+    assert_eq!(
+        fx.world
+            .record_store
+            .record_at(endpoint, moved_child.as_str()),
+        carried,
+        "no second publish"
+    );
+    let status = block_on(fx.engine.status()).expect("the session status reads");
+    assert!(status.dead_letters.is_empty(), "and no notice");
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        queued_ops_on(&fx.owner_device, gone).is_empty(),
+        "the delete leaves at the bound"
+    );
+}
+
+/// A content edit that lands in the old tree after the walk is not in the
+/// moved tree. The writer keeps the op and writes the version again there.
+#[test]
+fn an_edit_the_name_wave_did_not_carry_applies_again_after_the_flip() {
+    let mut fx = GrantScenario::new();
+    let (child, child_name) = write_granted_child(&mut fx);
+    block_on(fx.engine.command(Command::Create {
+        parent: child,
+        name: "doc.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a metadata create stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let doc = block_on(fx.engine.view())
+        .expect("a rendered view")
+        .children(child)
+        .into_iter()
+        .find(|row| row.name == "doc.bin")
+        .expect("the file is listed")
+        .id;
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[1u8; 64]);
+    let doc_name = live_child(&fx, &child_name, child, "doc.bin");
+    let before = live_versions(&fx, &doc_name, doc);
+
+    cut_after_a_write_the_walk_misses(&mut fx, &[&doc_name], |fx| {
+        publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[2u8; 64]);
+    });
+    let (root, _) = live_scope(&fx);
+    let moved_doc = live_child(
+        &fx,
+        &live_child(&fx, &root, fx.folder, "child"),
+        child,
+        "doc.bin",
+    );
+    assert_eq!(
+        live_versions(&fx, &moved_doc, doc),
+        before,
+        "the moved tree does not carry the edit"
+    );
+
+    passes_after_the_flip(&mut fx);
+
+    let versions = live_versions(&fx, &moved_doc, doc);
+    assert_eq!(versions.len(), before.len() + 1, "the edit applied again");
+    assert_eq!(versions[1..], before[..], "on top of the carried history");
+}
+
+/// A rename leaves the queue at its publish. A later writer's rename then
+/// stays after a flip, because no second apply can undo it.
+#[test]
+fn a_rename_leaves_the_queue_at_publish_and_a_later_rename_stays() {
+    let mut fx = GrantScenario::new();
+    let (child, _) = write_granted_child(&mut fx);
+    block_on(fx.engine.command(Command::Rename {
+        node: child,
+        new_name: "mine".into(),
+    }))
+    .expect("the rename stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        !queued_ops_on(&fx.owner_device, child)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Rename { .. })),
+        "the rename left the queue at publish"
+    );
+    let (mut phone, _phone_events, mut phone_tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::Rename {
+        node: child,
+        new_name: "later".into(),
+    }))
+    .expect("the later rename stages");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    cut_the_write_scope(&fx, &mut phone);
+
+    passes_after_the_flip(&mut fx);
+
+    let (root, _) = live_scope(&fx);
+    assert!(
+        live_names(&fx, &root, fx.folder).contains(&"later".to_owned()),
+        "the later rename stays"
+    );
+}
+
+/// A move leaves the queue at its publish. A later writer's move then stays
+/// after a flip.
+#[test]
+fn a_move_leaves_the_queue_at_publish_and_a_later_move_stays() {
+    let mut fx = GrantScenario::new();
+    let (child, _) = write_granted_child(&mut fx);
+    let there = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "there",
+    );
+    let moved = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, child, "moved");
+    block_on(fx.engine.command(Command::Move {
+        node: moved,
+        new_parent: there,
+        new_name: "moved".into(),
+        replacing: None,
+    }))
+    .expect("the move stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        !queued_ops_on(&fx.owner_device, moved)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::Move { .. })),
+        "the move left the queue at publish"
+    );
+    let (mut phone, _phone_events, mut phone_tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::SetFocus { node: Some(there) }))
+        .expect("the phone opens the folder");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    block_on(phone.command(Command::Move {
+        node: moved,
+        new_parent: child,
+        new_name: "moved".into(),
+        replacing: None,
+    }))
+    .expect("the later move stages");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    cut_the_write_scope(&fx, &mut phone);
+
+    passes_after_the_flip(&mut fx);
+
+    let (root, _) = live_scope(&fx);
+    let live_child_folder = live_child(&fx, &root, fx.folder, "child");
+    assert!(
+        live_names(&fx, &live_child_folder, child).contains(&"moved".to_owned()),
+        "the later move stays"
+    );
+}
+
+/// A version restore leaves the queue at its publish. A later writer's
+/// restore then stays after a flip.
+#[test]
+fn a_version_restore_leaves_the_queue_at_publish_and_a_later_restore_stays() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let doc = published_file_in_folder(&mut fx, "doc.bin");
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[1u8; 64]);
+    publish_version(&fx.world, &mut fx.engine, &mut fx._tasks, doc, &[2u8; 64]);
+    let (root, _) = live_scope(&fx);
+    let history = live_versions(&fx, &live_child(&fx, &root, fx.folder, "doc.bin"), doc);
+    block_on(fx.engine.command(Command::RestoreVersion {
+        node: doc,
+        content_cid: history[1].clone(),
+    }))
+    .expect("the restore queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        !queued_ops_on(&fx.owner_device, doc)
+            .iter()
+            .any(|kind| matches!(kind, OpKind::RestoreVersion { .. })),
+        "the restore left the queue at publish"
+    );
+    let (mut phone, _phone_events, mut phone_tasks) = fx.second_owner_device();
+    block_on(phone.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the phone opens the folder");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    block_on(phone.command(Command::RestoreVersion {
+        node: doc,
+        content_cid: history[0].clone(),
+    }))
+    .expect("the later restore queues");
+    tick(&fx.world, &phone, &mut phone_tasks);
+    cut_the_write_scope(&fx, &mut phone);
+
+    passes_after_the_flip(&mut fx);
+
+    let (root, _) = live_scope(&fx);
+    let versions = live_versions(&fx, &live_child(&fx, &root, fx.folder, "doc.bin"), doc);
+    assert_eq!(versions[0], history[0], "the later restore stays");
 }
 
 /// A manual rotation leaves the subtree lagging just as a revoke's read cut

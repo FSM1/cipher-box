@@ -921,16 +921,18 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   command; a relocation between two interior scopes journals as a parking leg
   and an arriving leg, and both legs are journaled or neither is (ADR 0045).
   Replay is FIFO in performed order through the standard rebase, and rebases
-  only onto gate-passing state (FSM1/cipher-box-next#33 D5–D7). A published op
-  stays queued as a kept op, with a sealed note of its scope root, write epoch
-  and publish time, until the live root of its write scope shows it (ADR 0069).
-  With no flip, it waits at its write epoch for at most T = 7 days. At a flip
-  (a new write epoch or a new nearest scope root), once the base read its
-  folder at the live name, the standard rebase decides: a landed op drops, and
-  a lost op applies again under the new seed. A second apply that cannot land
-  leaves with no notice. A device with no new seed reads the old tree, where
-  the op is satisfied, so the op leaves with no notice. A kept op is not
-  pending (ADR 0069 D7). A build decodes,
+  only onto gate-passing state (FSM1/cipher-box-next#33 D5–D7). A published
+  create, delete or content edit stays queued as a kept op, with a sealed note
+  of its scope root, write epoch and publish time, until the live root of its
+  write scope shows it (ADR 0069). Every other op kind leaves at its publish.
+  With no flip, a kept op waits at its write epoch for at most T = 7 days. At a
+  flip (a new write epoch or a new nearest scope root), once the base read its
+  node at the live name, the standard rebase decides: a landed op drops, and a
+  lost op applies again under the new seed. A content edit reads its file's
+  live record first, and it landed when the history names its version. A
+  second apply that cannot land leaves with no notice. A device with no new
+  seed reads the old tree, where the op is satisfied, so the op leaves with no
+  notice. A kept op is not pending (ADR 0069 D7). A build decodes,
   opens and drains every queue record that the previous release wrote
   ([ADR 0020](../decisions/0020-the-durable-op-queue-reads-the-previous-release.md)).
   A new field on a queued op takes a decode default equal to the value the older
@@ -1239,7 +1241,9 @@ rebases and signs above.
   label for a sweep-length window, and the label attests nothing.
 - Late writes: a write that a revoked or downgraded writer puts in the old tree
   after the walk leaves the queue of its own device with no notice, and the
-  dead letter of ADR 0069 D3 is not landed. A kept op whose device sees no flip
+  dead letter of ADR 0069 D3 is not landed. A rename, a move or a history edit
+  that lands in the old tree after the walk is lost, because only a create, a
+  delete and a content edit stay kept. A kept op whose device sees no flip
   within T leaves the queue at T, so a flip after T loses the write
   (ADR 0069).
 

@@ -102,7 +102,7 @@ use crate::sync::doomed::{
     record_matches_manifest, seal_reclamation,
 };
 use crate::sync::kept_op::{
-    KeptNote, KeptNotes, KeptPlace, KeptVerdict, is_kept, kept_verdict, load_kept_notes,
+    KeptNote, KeptNotes, KeptPlace, KeptVerdict, is_kept, keeps, kept_verdict, load_kept_notes,
     store_kept_notes,
 };
 use crate::sync::model::{Snapshot, collation_key};
@@ -2303,7 +2303,7 @@ where
             };
             // A kept op's version landed, and a live record may still name what
             // it registered: it leaves with no retire and no notice.
-            if kept(*op_id) {
+            if kept(*op_id, op) {
                 self.dequeue_op(*op_id).await?;
                 report.dropped.push(*op_id);
                 continue;
@@ -2344,7 +2344,10 @@ where
         // all there is.
         // A kept op's crossing owed its cut when it first published.
         for (op_id, root) in &rebased.dropped_scope_exits {
-            if !kept(*op_id) {
+            if !queued
+                .iter()
+                .any(|(id, op)| id == op_id && kept(*op_id, op))
+            {
                 self.owe_scope_exit(scope, *root).await;
             }
         }
@@ -2359,10 +2362,9 @@ where
                     .await;
                 return Err(halt);
             }
-            // A plan whose last step is not a record publish (a restore or a
-            // purge ends at the bin index) raises no mark and writes no note,
-            // so it completes here, as before ADR 0069.
-            if !self.kept_ids(scope).await?(applied.op_id) {
+            // An op of a kind the check cannot judge, or a plan that ends at
+            // the bin index with no mark, completes here, as before ADR 0069.
+            if !self.kept_ids(scope).await?(applied.op_id, &applied.op) {
                 self.dequeue_op(applied.op_id).await?;
                 report.completed.push(applied.op_id);
             }
@@ -2435,7 +2437,7 @@ where
         // A kept op's version landed once: a second apply that cannot land
         // leaves with no retire and no notice, as its rebase dead letter does.
         if matches!(halt, Halt::Permanent(_))
-            && self.kept_ids(scope).await.is_ok_and(|kept| kept(op_id))
+            && self.kept_ids(scope).await.is_ok_and(|kept| kept(op_id, op))
         {
             if self.dequeue_op(op_id).await.is_ok() {
                 report.dropped.push(op_id);
@@ -2666,6 +2668,14 @@ where
                 continue;
             }
             if is_kept(op_id, published, &notes) {
+                // Its record publish was confirmed, so its version is live.
+                if !keeps(&op.kind) {
+                    self.dequeue_op(op_id).await?;
+                    self.release_staged_blocks(&op).await;
+                    notes.remove(op_id);
+                    report.dropped.push(op_id);
+                    continue;
+                }
                 let place = self.kept_place(scope, &op).await?;
                 // A later op of this device on the same node decides what that
                 // node shows, so a check of this one would undo it.
@@ -2700,13 +2710,13 @@ where
         })
     }
 
-    /// Which ops of this identity are kept ops ([`is_kept`]).
-    async fn kept_ids(&self, scope: &DrainScope<'_>) -> Result<impl Fn(OpId) -> bool, Halt> {
+    /// Which ops of this identity are kept ops ([`is_kept`], [`keeps`]).
+    async fn kept_ids(&self, scope: &DrainScope<'_>) -> Result<impl Fn(OpId, &Op) -> bool, Halt> {
         let mark = published_op_mark(&self.seams.staging, scope.enc_secret)
             .await
             .map_err(seam)?;
         let notes = self.kept_notes(scope).await?;
-        Ok(move |op_id| is_kept(op_id, mark, &notes))
+        Ok(move |op_id, op: &Op| keeps(&op.kind) && is_kept(op_id, mark, &notes))
     }
 
     /// This identity's kept-op notes ([`crate::sync::kept_op`]).
@@ -2826,13 +2836,38 @@ where
     ) -> Result<(Pass, ReplayReport), Halt> {
         let (resolved, others) = self.scope_root_candidates(scope).await?;
         let mut pass = self.open_pass(scope, &resolved).await?;
+        let landed = self.read_kept_heads(scope, &mut pass, queued).await?;
+        if landed.is_empty() {
+            return self.rebase_on_pass(scope, pass, &others, queued).await;
+        }
+        let rest: Vec<(OpId, Op)> = queued
+            .iter()
+            .filter(|(op_id, _)| !landed.contains(op_id))
+            .cloned()
+            .collect();
+        let (pass, mut rebased) = self.rebase_on_pass(scope, pass, &others, &rest).await?;
+        rebased.dropped.extend(
+            landed
+                .into_iter()
+                .map(|op_id| (op_id, DropReason::AlreadySatisfied)),
+        );
+        Ok((pass, rebased))
+    }
+
+    async fn rebase_on_pass(
+        &self,
+        scope: &DrainScope<'_>,
+        mut pass: Pass,
+        others: &[Vec<u8>],
+        queued: &[(OpId, Op)],
+    ) -> Result<(Pass, ReplayReport), Halt> {
         let rebased = self.rebase_queue(scope, queued);
         if !head_reads_applied(&rebased, queued) {
             return Ok((pass, rebased));
         }
         let root = scope.source.root;
         let chosen = self
-            .first_unapplied(scope, queued, root, &others, |bytes| {
+            .first_unapplied(scope, queued, root, others, |bytes| {
                 self.open_root_candidate(scope, bytes)
             })
             .await;
@@ -2849,6 +2884,58 @@ where
             }
         }
         Ok((pass, self.rebase_queue(scope, queued)))
+    }
+
+    /// Read the live record of each file that a kept content edit checks, and
+    /// return the edits whose version the history names. A folder read at the
+    /// live name carries a file's name, not its head, so the base can still
+    /// hold the head from before the flip. A later edit or restore moves the
+    /// head, so only the history shows that this edit landed.
+    async fn read_kept_heads(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        queued: &[(OpId, Op)],
+    ) -> Result<BTreeSet<OpId>, Halt> {
+        let kept = self.kept_ids(scope).await?;
+        let mut landed = BTreeSet::new();
+        for (op_id, op) in queued {
+            if !matches!(op.kind, OpKind::UpdateContent { .. }) || !kept(*op_id, op) {
+                continue;
+            }
+            let plane = self
+                .ensure_folder(scope, pass, self.published_parent(op.target)?)
+                .await?;
+            let loaded = self
+                .load_child_node(
+                    &plane,
+                    pass.anchor_for(&plane)?,
+                    op.target,
+                    ResolveMode::NoCache,
+                )
+                .await?;
+            let ReadBody::File { versions, .. } = &loaded.body else {
+                return Err(Halt::Unclassified);
+            };
+            if let Some(content) = op.staged_content()
+                && versions
+                    .iter()
+                    .any(|version| version.content_cid == content.root_cid)
+            {
+                landed.insert(*op_id);
+            }
+            if let Some(head) = versions.first() {
+                project_child_version(
+                    &mut self.cells.base.borrow_mut(),
+                    op.target,
+                    head.size,
+                    head.modified_at,
+                    versions.len() as u64,
+                    Some(&head.content_cid),
+                );
+            }
+        }
+        Ok(landed)
     }
 
     /// The folders among the head op's authored nodes: a tied record of any

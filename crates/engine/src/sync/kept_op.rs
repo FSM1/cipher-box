@@ -16,6 +16,7 @@ use crate::seams::{OpId, SeamResult, StagingStore, UnixMillis};
 use crate::sync::BookkeepingSeal;
 use crate::sync::drain::{owner_scoped_key, published_op_mark};
 use crate::sync::duration_millis;
+use crate::sync::op::OpKind;
 use crate::sync::owed_rotation::DROP_BOUND;
 
 /// The staging-key prefix of one identity's kept-op notes
@@ -187,6 +188,17 @@ pub(crate) async fn store_kept_notes<St: StagingStore>(
     }
     let blob = seal.seal(OwnerLocalKind::KeptOps, &notes.encode())?;
     staging.put_staged_bytes(&key, &blob).await
+}
+
+/// Whether an op of `kind` stays queued after its publish. The live tree can
+/// show whether a create, a delete or a content edit landed; it cannot show
+/// whether a later writer overtook a rename, a move or a history edit, so a
+/// second apply of those could undo the later write (ADR 0069 D2).
+pub(crate) fn keeps(kind: &OpKind) -> bool {
+    matches!(
+        kind,
+        OpKind::Create { .. } | OpKind::Delete { .. } | OpKind::UpdateContent { .. }
+    )
 }
 
 /// Whether `op_id` is a kept op: at or below the published-op mark, or noted.

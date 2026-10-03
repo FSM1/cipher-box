@@ -68,6 +68,7 @@ use crate::sync::drain::{
     Drain, DrainScope, EngineSeams, GrantedPass, ScopeEnd, SealPlane, TickInputs, TickScopes,
     hold_captures, published_op_mark,
 };
+use crate::sync::kept_op::keeps;
 use crate::sync::model::Snapshot;
 use crate::sync::op::{Op, OpKind};
 use crate::sync::owed_rotation::OwedRotation;
@@ -1355,10 +1356,11 @@ async fn queued_second_end<St: StagingStore + QueueGeneration>(
         .iter()
         .filter(|(op_id, op)| {
             published.is_none_or(|mark| op_id.0 > mark)
-                || !replay(&base, &base, &[(*op_id, op.clone())], listed)
-                    .dropped
-                    .iter()
-                    .any(|(_, reason)| *reason == DropReason::AlreadySatisfied)
+                || keeps(&op.kind)
+                    && !replay(&base, &base, &[(*op_id, op.clone())], listed)
+                        .dropped
+                        .iter()
+                        .any(|(_, reason)| *reason == DropReason::AlreadySatisfied)
         })
         .find_map(|(_, op)| second_end_scope(&base, op, listed))?;
     let proved = boundaries.material.get(&scope)?;
