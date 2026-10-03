@@ -56,9 +56,9 @@ pub(crate) use fanout::{fanout_get_classified, fanout_get_verify};
 pub(crate) use focus::{FolderRefresh, FolderRefreshReport, GraftedLeg};
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
-    EolRenewResult, HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl, RE_PUT_INTERVAL,
-    RePutResult, drop_superseded, eol_republish, hold_if_unchanged, keyless_re_put, observed_at,
-    run_liveness_loop,
+    EolRenewResult, HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl,
+    RE_PUT_INTERVAL, RePutResult, drop_superseded, eol_republish, hold_if_unchanged,
+    keyless_re_put, observed_at, run_liveness_loop,
 };
 pub use pointer_fetch::RecordPointerFetch;
 pub(crate) use pointer_fetch::{PointerConsult, PointerConsultError};

@@ -21,11 +21,12 @@ use zeroize::Zeroizing;
 use super::fanout::fanout_get_tied_classified;
 use super::fork::{Fork, cached_fork, fork_of, served_fork};
 use super::last_known_good::{keep_served_last_known_good, keep_then_commit};
-use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
-use super::publish::{Observed, PublishError, head_cid_from_value};
+use super::liveness::{HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue};
+use super::publish::{Observed, PublishBar, PublishError, head_cid_from_value};
 use crate::facade::NodeId;
 use crate::gate::floor::PendingSequenceRaise;
 use crate::gate::{Adopted, GateError, GateRejection, PendingAdoption, RejectionReason};
+use crate::grants::grafted::FloorNamespace;
 use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::session::SessionIdentity;
 use crate::sync::project::{FolderMerge, merge_root};
@@ -149,6 +150,8 @@ pub struct OwnScopeMaterial {
     pub at_floor: Adopted,
     /// The envelope version the record carries.
     pub version: u64,
+    /// The floors a renewal of the record must clear.
+    pub bar: PublishBar,
 }
 
 /// A gate pass, and where its floor-law advance stands.
@@ -208,6 +211,8 @@ pub struct AdoptOutcome {
     pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
     /// The envelope version the gated record carries.
     pub version: u64,
+    /// The floors a renewal of the record must clear.
+    pub bar: PublishBar,
 }
 
 /// What a resolve produced for the freshest fetched record.
@@ -323,6 +328,8 @@ pub(crate) struct GatedResolve {
     /// [`Observed::gated`] for the record the gate passed. `None` when none
     /// passed, or an own `Current` recovered no material.
     pub(crate) observed: Option<Result<Observed, PublishError>>,
+    /// The envelope a renewal of [`Self::observed`] is gated on.
+    pub(crate) envelope: Option<HeldEnvelope>,
 }
 
 /// What one arm of the gate match yields beside its outcome. Named because four
@@ -334,6 +341,7 @@ struct GatedParts {
     read_scope_seed: Option<Zeroizing<[u8; 32]>>,
     current_at_floor: Option<Adopted>,
     observed: Option<Result<Observed, PublishError>>,
+    envelope: Option<HeldEnvelope>,
     fork: Option<Fork>,
 }
 
@@ -382,6 +390,7 @@ where
                 node_id,
                 read_scope_seed,
                 version,
+                bar,
             }) => {
                 // Only gate-passing records touch the snapshot; the same verified
                 // bytes ride out to the liveness hold, so no re-fetch/re-get.
@@ -414,10 +423,11 @@ where
                             tied,
                             absent,
                             observed: None,
+                            envelope: None,
                         });
                     }
                 };
-                let observed = Some(Observed::gated(name, adopted.sequence, version));
+                let observed = Some(Observed::gated(name, adopted.sequence, version, &bytes));
                 // The adopt left the floor at the pick, so a tie gates there.
                 let fork = fork_of(
                     &verified,
@@ -435,6 +445,11 @@ where
                         read_scope_seed,
                         current_at_floor: None,
                         observed,
+                        envelope: Some(HeldEnvelope {
+                            version,
+                            bar,
+                            namespace: FloorNamespace::Own,
+                        }),
                         fork,
                     },
                 )
@@ -479,7 +494,13 @@ where
                                     name,
                                     material.at_floor.sequence,
                                     material.version,
+                                    &bytes,
                                 )),
+                                envelope: Some(HeldEnvelope {
+                                    version: material.version,
+                                    bar: material.bar,
+                                    namespace: FloorNamespace::Own,
+                                }),
                                 current_at_floor: Some(material.at_floor),
                                 fork: None,
                             });
@@ -533,6 +554,7 @@ where
         read_scope_seed,
         current_at_floor,
         observed,
+        envelope,
         fork,
     } = parts;
 
@@ -550,6 +572,7 @@ where
         tied,
         absent,
         observed,
+        envelope,
     })
 }
 
@@ -613,6 +636,7 @@ where
         hold: adopt_hold,
         held_record,
         read_scope_seed,
+        envelope,
         ..
     } = resolve_gated(transport, snapshot_cache, adopter, name, mode).await?;
     let write_scope_seed = adopt_hold.clone();
@@ -624,7 +648,8 @@ where
     // A gate-passing adopt (`Adopted`) and our own current record (`Current`)
     // are both alive-worthy and ride their verified bytes back here; a
     // `TrustViolation`/`NoUpdate` holds nothing (blueprint/engine.md "Liveness").
-    if let Some((verified, record_bytes)) = held_record {
+    // A record with no envelope rule has nothing to gate its renewal on.
+    if let (Some((verified, record_bytes)), Some(envelope)) = (held_record, envelope) {
         // Renew under the record's own adopted head CID, not a caller-supplied
         // one: it comes from the signed `/ipfs/<cid>` value. A gate-passing
         // record always carries a valid value; if it does not, skip the hold
@@ -671,6 +696,7 @@ where
                 signer,
                 value: HeldValue::Head(head_cid),
                 content_cids,
+                envelope: Some(envelope),
             },
         );
     }
@@ -817,6 +843,7 @@ mod tests {
                     node_id: self.grant.map(|(_, id)| id).unwrap_or([0u8; 16]),
                     read_scope_seed: None,
                     version: self.version,
+                    bar: crate::testkit::fakes::ADMITTED_BAR,
                 }),
                 Verdict::DeferSequence => Ok(super::AdoptOutcome {
                     pass: GatePass::DeferredSequence(PendingSequenceRaise::new(
@@ -836,6 +863,7 @@ mod tests {
                     node_id: [0u8; 16],
                     read_scope_seed: None,
                     version: self.version,
+                    bar: crate::testkit::fakes::ADMITTED_BAR,
                 }),
                 Verdict::TrustViolation => Err(GateError::Rejected(GateRejection {
                     stage: GateStage::RecordVerify,
@@ -889,6 +917,7 @@ mod tests {
                     epoch: 0,
                 },
                 version: self.version,
+                bar: crate::testkit::fakes::ADMITTED_BAR,
             }))
         }
     }
@@ -1322,6 +1351,7 @@ mod tests {
                     signer: SessionIdentity::write_name_signer(&write_scope_seed, &node_id),
                     value: HeldValue::Head(head_cid.to_owned()),
                     content_cids: registered.clone(),
+                    envelope: None,
                 },
             );
             block_on(resolve_and_hold(
@@ -1406,7 +1436,7 @@ mod tests {
         let resolved = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
-            &StubAdopter::new(Verdict::EqualSequence),
+            &StubAdopter::own_current(write_scope_seed, node_id),
             &name,
             &held,
             &material,
@@ -1994,6 +2024,7 @@ mod tests {
             signer: SessionIdentity::write_name_signer(&write_scope_seed, &node_id),
             value: HeldValue::Head(head_cid_from_value(VALUE).expect("fixture head cid")),
             content_cids: Vec::new(),
+            envelope: None,
         };
         raise(1);
         // A co-writer's newer record, standing above that floor. Minted at time

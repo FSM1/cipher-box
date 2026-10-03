@@ -26,8 +26,9 @@ Each completed owner read tries to save its entry before floors advance. A
 failed cache write does not stop the read or floor advance. A probe or refused
 read saves nothing. At one name, only a greater sequence replaces the entry.
 A confirmed read at a new name replaces the old name's entry. Updates cannot
-lower the saved read, write, or cut epoch. A new name must have a greater write epoch. A corrupt entry is absent and can be
-replaced; a local failure cannot accuse a writer.
+lower the saved read, write, or cut epoch. A new name must have a greater write
+epoch. A corrupt entry is absent and can be replaced; a local failure cannot
+accuse a writer.
 
 **D2 — Use the confirmed copy as the durable source for recovery and ADR 0068.**
 A failed current owner blob stays a trust violation and raises attributable
@@ -55,7 +56,8 @@ retains its store. The vault record for all owner devices is not landed.
 - `blueprint/testing.md` names the behavior tests and their required CI gates.
 - The old `cross_check` and its test-only `owner_entry` KAT family add no
   invariant: the root gate checks the ascent link and opens the body with the
-  owner blob's seed. A different seed fails with `seal-open-failed`.
+  owner blob's seed. A different seed fails with `ascent-link-mismatch` or
+  `seal-open-failed`.
 - Entries do not count toward the upload budget. Scope deletion removes the
   entry. Each scope has at most one entry, bounded by the core codec.
 - Sign-out keeps the sealed entries for the next session of that account.

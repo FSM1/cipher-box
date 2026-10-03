@@ -116,7 +116,7 @@ pub use grants::{
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 pub use name::{NameError, is_emittable, validate_name};
 pub use net::{
-    AdoptOutcome, Adopter, HeldKey, HeldRecord, HeldRecords, HeldValue, OrphanHeads,
+    AdoptOutcome, Adopter, HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue, OrphanHeads,
     PreflightError, PublishError, PublishOutcome, PublishRequest, RePutResult, ReclaimPass,
     ReclaimStall, ReclaimStallReason, RecordPointerFetch, RecordPublishError, ResolveOutcome,
     Resolved, ReviveError, ReviveRequest, RootAdopter, StagingRetireLedger, observed_at, publish,

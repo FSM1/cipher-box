@@ -459,6 +459,7 @@ where
         value: HeldValue::Head(head.cid().to_owned()),
         // The bin index record anchors its sealed body and nothing else.
         content_cids: Vec::new(),
+        envelope: None,
     })
 }
 

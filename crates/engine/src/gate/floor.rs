@@ -658,7 +658,7 @@ pub async fn cold_seed_checked<F: FloorStore>(
 }
 
 /// Advance the write-epoch floor on sight of an owner-vouched pointer
-/// `writeEpoch` (floor law item 3). Monotonic-max: a value at or below the
+/// `writeEpoch` (ADR 0067 D1 (a)). Monotonic-max: a value at or below the
 /// durable floor is a no-op that reports the stored floor. Returns the
 /// resulting floor.
 ///
@@ -685,7 +685,7 @@ pub async fn advance_write_epoch_on_sight<F: FloorStore>(
         .await
 }
 
-/// Seed a scope root's write-epoch floor (floor law item 5) — the anchor for a
+/// Seed a scope root's write-epoch floor (ADR 0067 D1 (c)) — the anchor for a
 /// scope no pointer plane speaks for yet. Returns the resulting floor.
 ///
 /// `write_epoch` must be an epoch the caller holds proof of, never one it read

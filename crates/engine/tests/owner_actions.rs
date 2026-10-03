@@ -15841,6 +15841,15 @@ fn a_restarted_owner_cuts_a_disagreeing_seed_from_its_durable_copy() {
 
 #[test]
 fn deleting_a_folder_removes_its_previous_scope_copy() {
+    delete_with_previous_scope_copy(false);
+}
+
+#[test]
+fn a_stale_delete_keeps_the_live_folders_scope_copy() {
+    delete_with_previous_scope_copy(true);
+}
+
+fn delete_with_previous_scope_copy(concurrent: bool) {
     use cipherbox_core::seal::{OwnerLocalKind, decode_owner_seed_record, open_owner_local};
     let mut previous = GrantScenario::new();
     assert_eq!(
@@ -15869,7 +15878,28 @@ fn deleting_a_folder_removes_its_previous_scope_copy() {
     assert_eq!(previous.folder, fx.folder);
     drop(previous);
     block_on(fx.owner_device.staging_store.put_staged_bytes(&key, &blob)).unwrap();
-    block_on(fx.engine.command(Command::Delete { node: fx.folder })).unwrap();
+    if concurrent {
+        use cipherbox_engine::sync::{Op, RecordSeal, stage_op};
+        let current = sequence_at(&fx.world, &write_name(fx.folder));
+        let stale = Op::delete(
+            fx.folder,
+            sequence_at(&fx.world, &write_name(ROOT)),
+            UnixMillis(0),
+            current - 1,
+            true,
+        );
+        block_on(stage_op(
+            &fx.owner_device.staging_store,
+            RecordSeal {
+                owner_enc_secret: &kdf::enc_subkey(&SECRET),
+                ephemeral_scalar: Zeroizing::new([0x79; 32]),
+            },
+            &stale,
+        ))
+        .unwrap();
+    } else {
+        block_on(fx.engine.command(Command::Delete { node: fx.folder })).unwrap();
+    }
     for _ in 0..3 {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
@@ -15878,11 +15908,19 @@ fn deleting_a_folder_removes_its_previous_scope_copy() {
             .unwrap()
             .is_empty()
     );
-    assert!(
-        block_on(fx.owner_device.staging_store.staged_bytes(&key))
-            .unwrap()
-            .is_none()
-    );
+    let held = block_on(fx.owner_device.staging_store.staged_bytes(&key)).unwrap();
+    if concurrent {
+        assert!(
+            block_on(fx.engine.view())
+                .unwrap()
+                .children(ROOT)
+                .iter()
+                .any(|child| child.id == fx.folder)
+        );
+        assert!(held.as_ref().is_some_and(|held| held == &blob));
+    } else {
+        assert!(held.is_none());
+    }
 }
 
 /// ADR 0068 D3: a plant at the sequence ceiling blocks each publish at the

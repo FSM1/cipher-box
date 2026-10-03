@@ -67,7 +67,7 @@ pub(crate) enum PointerConsultError {
 
 /// One scope-pointer consult: fetch the block, authenticate the re-point,
 /// refuse a rolled-back write epoch, then advance the write-epoch floor on
-/// sight (floor law item 3, #38 D4).
+/// sight (ADR 0067 D1 (a), #38 D4).
 ///
 /// Shared by both triggers the pointer discipline names — the sweep's
 /// `Superseded` verdict and the focus tick's polled leg — so the trust rules a
