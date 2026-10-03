@@ -7,7 +7,7 @@
 //! a cut carries no seeds, and the write arm must run off the read epoch the
 //! cascade just published, not the one the caller last saw.
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 
 use futures_channel::mpsc;
 
@@ -25,16 +25,16 @@ use crate::gate::floor;
 use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
     GatedRoots, GatedWaveReads, MovedScopeSeed, OnAccessMisses, OwnerRotationKeys,
-    OwnerRotationNet, PointerConsultArm, RotationAncestry, SweptScopeState, WaveSubtree,
-    WriteWaveNet,
+    OwnerRotationNet, PointerConsultArm, RootFallback, RotationAncestry, SweptScopeState,
+    WaveSubtree, WriteWaveNet,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
-    AscentAuthority, CascadeError, CascadeOutcome, CommittedSet, CutRotator, MAX_ROTATION_ATTEMPTS,
-    NodeBound, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable, RevokedCommittedSet,
-    RotateScopePlan, RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity,
-    ScopeRootPublisher, WriteHistory, WriteRotateError, WriteRotationOutcome, bounded,
-    cascade_rotate_scope, derive_write_name, reseal_scope_root, rotate_scope_write,
+    AscentAuthority, CascadeError, CascadeOutcome, CascadeTarget, CommittedSet, CutRotator,
+    MAX_ROTATION_ATTEMPTS, NodeBound, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable,
+    RevokedCommittedSet, RotateScopePlan, RotateScopeWritePlan, RotationPublishError,
+    ScopeRootIdentity, ScopeRootPublisher, WriteHistory, WriteRotateError, WriteRotationOutcome,
+    bounded, cascade_rotate_scope, derive_write_name, reseal_scope_root, rotate_scope_write,
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache,
@@ -90,11 +90,22 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> 
     /// [`scope_id`](Self::scope_id) whenever the cut is anchored below the root.
     pub session_root_scope_id: [u8; 16],
     /// Builds the lazy-wave sweep task the read cascade enqueues once its cut is
-    /// durable. Nullary: a cut is anchored at one scope root, and the task needs
-    /// the name and ancestor seed that scope was read under, not just its id.
-    pub sweep: &'a dyn Fn() -> BoxedTask,
+    /// durable, over the scope reference the cascade read the root at.
+    pub sweep: &'a dyn Fn(ChildScopeRef) -> BoxedTask,
     /// The cut's bound of ADR 0065 D3 ([`RotateScopeWritePlan::bound`]).
     pub bound: &'a dyn NodeBound,
+    /// What this cut's own root reads met ([`CutRootReads`]).
+    pub root_reads: CutRootReads,
+}
+
+/// Whether a root read of one cut fell back to the last copy, and the root a
+/// wave of that cut moved to (ADR 0068 D3). A cut whose root read fell back
+/// publishes nothing more at the old root name, so its read cut runs at the
+/// moved root.
+#[derive(Default)]
+pub(crate) struct CutRootReads {
+    fell_back: Cell<bool>,
+    moved_root: RefCell<Option<IpnsName>>,
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerCutNet<'_, T, H, C, F, Sch, E, S>
@@ -110,10 +121,18 @@ where
         if scope_root.0 != self.scope_id {
             return Err(ResolveFailure::Rejected);
         }
+        let moved = self.root_reads.moved_root.borrow();
+        let name = moved.as_ref().unwrap_or(self.scope_root_name);
         Ok(ChildScopeRef::new(
             scope_root.0,
-            self.scope_root_name.as_str().as_bytes().to_vec(),
+            name.as_str().as_bytes().to_vec(),
         ))
+    }
+
+    /// Whether a root read of this cut fell back and the root still sits at
+    /// the old name, where no step of this cut publishes (ADR 0068 D3).
+    fn at_refused_root(&self) -> bool {
+        self.root_reads.fell_back.get() && self.root_reads.moved_root.borrow().is_none()
     }
 
     /// Re-drive one plane under the rotation caller contract's bound.
@@ -167,7 +186,29 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            root_fallback: Some(RootFallback::new(self.scope_id, self.bound)),
         }
+    }
+
+    /// `scope`'s root, gated through `net`, noting a read that fell back.
+    async fn resolve_root(
+        &self,
+        net: &OwnerRotationNet<'_, T, H, C, F, Sch, E, S>,
+        scope: &ChildScopeRef,
+    ) -> Result<CascadeTarget, ResolveFailure>
+    where
+        Sch: Scheduler,
+        S: SnapshotCache,
+    {
+        let current = net.resolve_anchored(scope).await;
+        if net
+            .root_fallback
+            .as_ref()
+            .is_some_and(RootFallback::fell_back)
+        {
+            self.root_reads.fell_back.set(true);
+        }
+        current
     }
 }
 
@@ -192,7 +233,10 @@ where
         let scope = self.scope(scope_root).map_err(resolve_failed)?;
         self.bounded(async || {
             let net = self.rotation_net();
-            let current = net.resolve_anchored(&scope).await.map_err(resolve_failed)?;
+            let current = self
+                .resolve_root(&net, &scope)
+                .await
+                .map_err(resolve_failed)?;
             // Idempotent by comparison, never by assumption: a read cascade or a
             // grant mint may already have published this set, and republishing
             // would spend a CAS to change nothing. Both halves are compared —
@@ -202,6 +246,9 @@ where
             // owes a republish.
             if current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger {
                 return Ok(());
+            }
+            if self.at_refused_root() {
+                return Err(resolve_failed(ResolveFailure::Rejected));
             }
             // The publisher derives this record's IPNS signer from the seed the
             // root's own owner-write blob carries, so a root whose seed does not
@@ -287,7 +334,25 @@ where
             // that seed, not the fresh one the cascade is about to mint. It also
             // parks the republish base the root's own publish then takes.
             let net = self.rotation_net();
-            let current = net.resolve_anchored(&scope).await.map_err(resolve_failed)?;
+            let current = self
+                .resolve_root(&net, &scope)
+                .await
+                .map_err(resolve_failed)?;
+            if self.at_refused_root() {
+                return Err(resolve_failed(ResolveFailure::Rejected));
+            }
+            // At the moved root the wave already re-minted the cut set under the
+            // new name; the cut still withholds its recipients.
+            let moved = self.root_reads.moved_root.borrow().is_some();
+            let (commitment, commitment_sig, grant_ledger) = if moved {
+                (
+                    &current.commitment,
+                    &current.commitment_sig,
+                    &current.grant_ledger,
+                )
+            } else {
+                (&cut.commitment, &cut.commitment_sig, &cut.grant_ledger)
+            };
             cascade_rotate_scope(
                 &mut SharedEntropy(self.entropy),
                 self.floors,
@@ -298,7 +363,7 @@ where
                     identity: ScopeRootIdentity {
                         v: current.v,
                         scope_id: scope_root.0,
-                        ipns_name: self.scope_root_name.as_str().as_bytes(),
+                        ipns_name: &scope.ipns_name,
                         owner_enc_pub: &current.owner_enc_pub,
                         owner_enc_secret: Some(self.keys.enc_secret),
                         ascent: self.parent_node_seed.map(AscentAuthority::ParentSeed),
@@ -309,9 +374,9 @@ where
                     // the cut party's row from the re-wrapped blobs *is* the
                     // revocation.
                     committed: CommittedSet {
-                        commitment: &cut.commitment,
-                        commitment_sig: &cut.commitment_sig,
-                        grant_ledger: &cut.grant_ledger,
+                        commitment,
+                        commitment_sig,
+                        grant_ledger,
                         direct_child_scope_index: &current.direct_child_scope_index,
                         revoked_recipients: &cut.revoked_recipients,
                     },
@@ -323,11 +388,15 @@ where
                     pointer_read_key: &current.pointer_read_key,
                     carried_history_links: &current.carried_history_links,
                 },
-                || (self.sweep)(),
+                || (self.sweep)(scope.clone()),
             )
             .await
         })
         .await
+    }
+
+    fn root_fell_back(&self) -> bool {
+        self.root_reads.fell_back.get()
     }
 
     async fn rotate_write_plane(
@@ -346,8 +415,7 @@ where
                 // the wave derives every per-node read key from the seed that cut
                 // published.
                 let current = self
-                    .rotation_net()
-                    .resolve_anchored(&scope)
+                    .resolve_root(&self.rotation_net(), &scope)
                     .await
                     .map_err(resolve_failed)?;
                 // The durable floor is the owner-vouched `minReadEpoch` the re-point
@@ -384,6 +452,7 @@ where
                     owner_enc_secret: self.keys.enc_secret,
                     scope_keys: self.keys.scope_keys,
                     authorized_commitment: &cut.commitment,
+                    authorized_ledger: &cut.grant_ledger,
                     owner_pointer_seed: self.owner_pointer_seed,
                     vault_pointer_signer,
                     held: self.held,
@@ -392,6 +461,7 @@ where
                     session_root_scope_id: self.session_root_scope_id,
                     gated_reads: GatedWaveReads::default(),
                     subtree: WaveSubtree::default(),
+                    root_fallback: Some(RootFallback::new(scope_root.0, self.bound)),
                 };
                 rotate_scope_write(
                     &mut SharedEntropy(self.entropy),
@@ -414,6 +484,7 @@ where
                 .await
             })
             .await?;
+        *self.root_reads.moved_root.borrow_mut() = Some(outcome.new_root_name.clone());
         for dropped in &outcome.dropped {
             let _ = self.events.unbounded_send(Event::NodeDropped {
                 scope_root,

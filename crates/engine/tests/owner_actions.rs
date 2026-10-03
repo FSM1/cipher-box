@@ -14717,3 +14717,326 @@ fn a_node_new_to_an_entry_past_its_time_does_not_drop_on_its_first_stop() {
     );
     assert_revoke_finished(&mut fx, &revokee_seed, child);
 }
+
+// ---------------------------------------------------------------------------
+// ADR 0068: a planted record at the scope root name
+// ---------------------------------------------------------------------------
+
+/// The revokee signs `value` at the name `signer_seed` derives for `node`, at
+/// `sequence`, on every endpoint. Returns the name.
+fn sign_at(
+    fx: &GrantScenario,
+    signer_seed: &[u8; 32],
+    node: NodeId,
+    value: &[u8],
+    sequence: u64,
+) -> IpnsName {
+    let name = derive_write_name(signer_seed, &node.0);
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(signer_seed, &node.0).as_bytes()),
+        value,
+        sequence,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+    name
+}
+
+/// The revokee plants a record the gate refuses at the scope root name its
+/// seed derives, at `sequence`: a folder envelope with no grant section.
+/// Returns the name.
+fn plant_root_at(fx: &GrantScenario, revokee_seed: &[u8; 32], sequence: u64) -> IpnsName {
+    let planted = author_child_envelope(EnvelopeAuthoring {
+        node_id: fx.folder.0,
+        scope_id: fx.folder.0,
+        epoch: 1,
+        read_key: &[0x13; 32],
+        nonce: &[0x5f; 24],
+        body: &folder_body(Vec::new()),
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the planted root seals");
+    fx.blocks.put(planted.block.clone());
+    sign_at(
+        fx,
+        revokee_seed,
+        fx.folder,
+        format!("/ipfs/{}", planted.cid).as_bytes(),
+        sequence,
+    )
+}
+
+/// A revoke of the write grantee, across the retries of its bounded steps.
+fn revoke_the_recipient(fx: &mut GrantScenario) -> Result<CommandOutcome, EngineError> {
+    let folder = fx.folder;
+    command_across_retries(
+        fx,
+        Command::Revoke {
+            node: folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        },
+    )
+}
+
+/// The abuse events in `events` that report the scope root refused at
+/// `sequence`.
+fn root_refusals(fx: &GrantScenario, events: &[Event], sequence: u64) -> usize {
+    let scope = hex_lower(&fx.folder.0);
+    let refused = format!("refused at sequence {sequence}");
+    events
+        .iter()
+        .filter(|event| {
+            matches!(event, Event::AttributableAbuse { description }
+                if description.contains(&scope) && description.contains(&refused))
+        })
+        .count()
+}
+
+/// The cut moved the root to a name the revokee's seed does not derive, and
+/// the moved root gives the revokee no row and no blob.
+fn assert_the_revokee_is_cut(fx: &GrantScenario, revokee_seed: &[u8; 32]) {
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(derive_write_name(revokee_seed, &fx.folder.0), moved);
+    assert_eq!(
+        fx.committed_permission(&moved),
+        None,
+        "no row for the revokee"
+    );
+    assert_eq!(
+        fx.granted_blob_carries_write_seed(&moved),
+        None,
+        "and no blob"
+    );
+}
+
+/// ADR 0068 D1 and D3: the revokee plants a record the gate refuses at the
+/// root name before the revoke. The revoke reads the root from its last copy,
+/// moves the root first, cuts the read plane at the moved root, and
+/// publishes nothing more at the old name. The refusal is a trust event.
+#[test]
+fn a_write_revoke_runs_on_the_last_copy_of_a_planted_root() {
+    let mut fx = GrantScenario::new();
+    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let old_root = fx.granted_scope_repoint().current_root;
+    let sequence = sequence_at(&fx.world, &old_root) + 1;
+    assert_eq!(plant_root_at(&fx, &revokee_seed, sequence), old_root);
+    let planted = published_value(&fx.world, &old_root);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    let events = events_so_far(&mut fx._events);
+    assert!(
+        root_refusals(&fx, &events, sequence) > 0,
+        "the refusal is reported"
+    );
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+    let moved = fx.granted_scope_repoint().current_root;
+    let head = published_head(&fx.world, &fx.blocks, &moved).expect("the moved root");
+    assert_eq!(
+        decode_envelope(&head).expect("the head decodes").epoch,
+        2,
+        "the read cut ran at the moved root"
+    );
+    assert_eq!(
+        published_value(&fx.world, &old_root),
+        planted,
+        "nothing publishes at the old root name"
+    );
+}
+
+/// ADR 0068 D3: a plant at the sequence ceiling blocks each publish at the
+/// old root name, and the revoke publishes none there.
+#[test]
+fn a_write_revoke_moves_a_root_planted_at_the_sequence_ceiling() {
+    let mut fx = GrantScenario::new();
+    let (child, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_root_at(&fx, &revokee_seed, u64::MAX);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    assert_revoke_finished(&mut fx, &revokee_seed, child);
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+}
+
+/// ADR 0068 D1: the revokee replays the root from before an earlier cut at a
+/// higher sequence. The gate refuses it below the cut-epoch floor, and the
+/// revoke runs on the last copy.
+#[test]
+fn a_write_revoke_reads_past_a_replayed_pre_cut_root() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let old_root = fx.granted_scope_repoint().current_root;
+    let pre_cut = published_value(&fx.world, &old_root);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let folder = fx.folder;
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::Revoke {
+                node: folder,
+                recipient_identity_public_key: bystander_identity(),
+            }
+        ),
+        Ok(CommandOutcome::Done),
+        "a read revoke cuts the set at the same root name"
+    );
+    let sequence = sequence_at(&fx.world, &old_root) + 1;
+    sign_at(&fx, &revokee_seed, folder, &pre_cut, sequence);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    let events = events_so_far(&mut fx._events);
+    assert!(root_refusals(&fx, &events, sequence) > 0);
+    assert_eq!(fx.granted_scope_repoint().write_epoch, 3);
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+}
+
+/// ADR 0068 D3: a downgrade over a planted root publishes no cut set at the
+/// old name. The wave re-mints the demoted set at the moved root.
+#[test]
+fn a_downgrade_runs_on_the_last_copy_of_a_planted_root() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let old_root = fx.granted_scope_repoint().current_root;
+    let sequence = sequence_at(&fx.world, &old_root) + 1;
+    plant_root_at(&fx, &revokee_seed, sequence);
+    let planted = published_value(&fx.world, &old_root);
+    let folder = fx.folder;
+
+    assert_eq!(
+        command_across_retries(
+            &mut fx,
+            Command::ChangePermission {
+                node: folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                permission: Permission::Read,
+            }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+
+    let moved = fx.granted_scope_repoint();
+    assert_eq!(moved.write_epoch, 3, "the downgrade moved the root");
+    assert_ne!(
+        derive_write_name(&revokee_seed, &folder.0),
+        moved.current_root
+    );
+    assert_eq!(
+        fx.committed_permission(&moved.current_root),
+        Some(CorePermission::Read),
+        "the moved root commits the demoted row"
+    );
+    assert_eq!(
+        fx.granted_blob_carries_write_seed(&moved.current_root),
+        Some(false),
+        "and its blob carries no write scope seed"
+    );
+    assert_eq!(published_value(&fx.world, &old_root), planted);
+}
+
+/// ADR 0068 D3: a read revoke moves no root, so a planted root keeps the
+/// stop, and the trust event names the refused record.
+#[test]
+fn a_read_revoke_over_a_planted_root_keeps_the_stop() {
+    let mut fx = GrantScenario::new();
+    let (_, _, writer_seed) = write_granted_nested_subtree(&mut fx);
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let old_root = fx.granted_scope_repoint().current_root;
+    let sequence = sequence_at(&fx.world, &old_root) + 1;
+    plant_root_at(&fx, &writer_seed, sequence);
+    let planted = published_value(&fx.world, &old_root);
+    let folder = fx.folder;
+
+    let outcome = command_across_retries(
+        &mut fx,
+        Command::Revoke {
+            node: folder,
+            recipient_identity_public_key: bystander_identity(),
+        },
+    );
+
+    assert!(outcome.is_err(), "the read revoke stops: {outcome:?}");
+    let events = events_so_far(&mut fx._events);
+    assert!(root_refusals(&fx, &events, sequence) > 0);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::RotationWorkOwed { .. })),
+        "no work stays owed"
+    );
+    assert_eq!(published_value(&fx.world, &old_root), planted);
+}
+
+/// ADR 0068 D1 and D4: the read cut lands, the wave stops at its re-point,
+/// and the revokee then plants at the root. The owner runs the revoke again,
+/// and its re-drive reads the cut set from the last copy and moves the root.
+#[test]
+fn a_redrive_reads_a_planted_root_from_its_last_copy() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    let pointer = scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0);
+    fx.world.record_store.fail_put_for(pointer.as_str());
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+    assert_eq!(fx.owed_scopes(), vec![fx.folder], "the wave is owed");
+    fx.world.record_store.heal_put_for(pointer.as_str());
+    let old_root = derive_write_name(&revokee_seed, &fx.folder.0);
+    let sequence = sequence_at(&fx.world, &old_root) + 1;
+    plant_root_at(&fx, &revokee_seed, sequence);
+
+    assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+
+    let events = events_so_far(&mut fx._events);
+    assert!(root_refusals(&fx, &events, sequence) > 0);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::RotationWorkOwed { .. })),
+        "no work stays owed"
+    );
+    assert_eq!(fx.granted_scope_repoint().write_epoch, 3);
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+}
+
+/// ADR 0068 D4: the revokee plants at the root before the revoke, and the
+/// wave that runs first stops. No root carries the cut set, so the re-drive
+/// drops the entry, and the owner runs the revoke again.
+#[test]
+fn a_first_wave_that_stops_leaves_a_cut_the_redrive_abandons() {
+    let mut fx = GrantScenario::new();
+    let (_, grandchild, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    plant_an_unserved_head(&fx, &revokee_seed, grandchild);
+    let old_root = fx.granted_scope_repoint().current_root;
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &old_root) + 1);
+
+    assert!(
+        revoke_the_recipient(&mut fx).is_err(),
+        "the first wave stops"
+    );
+
+    assert!(
+        revoke_the_recipient(&mut fx).is_err(),
+        "the run again stops at the same node"
+    );
+    assert_eq!(
+        abandoned(&mut fx._events),
+        vec![(fx.folder, "owed-cut-never-landed".to_owned())],
+        "and its re-drive dropped the first cut"
+    );
+}

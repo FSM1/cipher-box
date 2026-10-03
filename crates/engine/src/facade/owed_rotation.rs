@@ -7,7 +7,7 @@
 use super::claim_conversion::{ConversionSites, Running};
 use super::*;
 use crate::grants::resume_owed_interior_move;
-use crate::rotation::{RotateOnCutError, WriteRotateError, owed_read_cut};
+use crate::rotation::{NoBound, RotateOnCutError, WriteRotateError, owed_read_cut};
 use crate::sync::owed_rotation::{
     EntryBound, OwedEntry, OwedRecordError, OwedRotation, OwedStep, ScopeHold,
 };
@@ -288,6 +288,24 @@ where
                     .await;
                 return Ok(None);
             }
+            // The wave ran first and carried the cut set to the moved root, where
+            // the re-drive runs each step (ADR 0068 D4).
+            Err(error @ RotateOnCutError::ReadAfterWrite(_)) => {
+                let _ = record_cut_epoch_floor(
+                    self.floors,
+                    &target.scope.scope_id,
+                    cut.commitment.cut_epoch,
+                )
+                .await;
+                self.stop_owed(node, steps, cut_stop(error)).await;
+                return Ok(None);
+            }
+            // No root read here tells whether the first wave carried the cut set
+            // to a root: the entry stands, and the re-drive drops it when no
+            // root carries the set (ADR 0068 D4).
+            Err(error @ RotateOnCutError::WriteFirst(_)) => {
+                return Err(EngineError::from_cut_rotation(error));
+            }
             Err(error) => {
                 return match self.cut_set_published(target, cut).await {
                     Some(true) => {
@@ -332,8 +350,9 @@ where
         target: &OwnerScope,
         cut: &RevokedCommittedSet,
     ) -> Option<bool> {
+        let bound = self.owed_bound(NodeId(target.scope.scope_id)).await;
         let current = self
-            .net(target, PointerConsultArm::Refused)
+            .cut_net(target, bound.as_ref().map_or(&NoBound, |b| b))
             .resolve_anchored(&target.scope)
             .await
             .ok()?;
@@ -470,14 +489,20 @@ where
         // The first step reuses the scope the check read: nothing published
         // since.
         let mut read = None;
+        let mut steps = entry.steps.clone();
         if entry.cut_epoch > 0 {
-            let published = self.owed_scope(sites, scope, "owed-cut").await?;
+            let published = self.owed_scope(sites, scope, "owed-cut", true).await?;
             if published.current.commitment.cut_epoch < entry.cut_epoch {
                 return Err(OwedStop::abandoned(OWED_CUT_NEVER_LANDED));
             }
+            // No step publishes at a root read from its last copy, so the
+            // wave moves the root first (ADR 0068 D3).
+            if published.fell_back {
+                steps.sort_by_key(|step| !matches!(step, OwedStep::WriteCut { .. }));
+            }
             read = Some(published);
         }
-        for (at, step) in entry.steps.iter().enumerate() {
+        for (at, step) in steps.iter().enumerate() {
             let read = read.take();
             match step {
                 OwedStep::InteriorMove { left_scope } => {
@@ -499,8 +524,12 @@ where
                         .await
                 }
             }?;
-            if let Some(next) = entry.steps.get(at + 1) {
-                let _ = self.owed().advance_to(scope, next).await;
+            if let Some(next) = steps.get(at + 1) {
+                let _ = if steps == entry.steps {
+                    self.owed().advance_to(scope, next).await
+                } else {
+                    self.owed().leave(scope, steps[at + 1..].to_vec()).await
+                };
             }
         }
         if entry.cut_epoch > 0 {
@@ -523,6 +552,7 @@ where
         sites: &impl ConversionSites,
         node: NodeId,
         step: &'static str,
+        cut: bool,
     ) -> Result<OwedScope, OwedStop> {
         let stop = |e: EngineError| OwedStop::of(step, &e);
         let vouched = self.vouched_root(node).await.map_err(stop)?;
@@ -546,16 +576,27 @@ where
             }
             _ => placed,
         };
-        let current = self
-            .net(&target, PointerConsultArm::Refused)
+        let bound = self.owed_bound(node).await;
+        let net = if cut {
+            self.cut_net(&target, bound.as_ref().map_or(&NoBound, |b| b))
+        } else {
+            self.net(&target, PointerConsultArm::Refused)
+        };
+        let current = net
             .resolve_anchored(&target.scope)
             .await
             .map_err(|e| stop(EngineError::from_resolve_failure(e)))?;
+        let fell_back = net
+            .root_fallback
+            .as_ref()
+            .is_some_and(RootFallback::fell_back);
+        drop(net);
         Ok(OwedScope {
             indexed,
             target,
             current,
             pointer_placed: vouched.is_some(),
+            fell_back,
         })
     }
 
@@ -566,10 +607,11 @@ where
         node: NodeId,
         step: &'static str,
         read: Option<OwedScope>,
+        cut: bool,
     ) -> Result<OwedScope, OwedStop> {
         match read {
             Some(read) => Ok(read),
-            None => self.owed_scope(sites, node, step).await,
+            None => self.owed_scope(sites, node, step, cut).await,
         }
     }
 
@@ -675,7 +717,7 @@ where
         let stop = |e: EngineError| OwedStop::of(step, &e);
         let OwedScope {
             target, current, ..
-        } = self.owed_scope_or(sites, node, step, read).await?;
+        } = self.owed_scope_or(sites, node, step, read, true).await?;
         // Above the entry's epoch a later cut re-keyed the scope; at it, see
         // blueprint/engine.md "Owed rotation work".
         if current.commitment.cut_epoch > cut_epoch {
@@ -711,7 +753,8 @@ where
             target,
             current,
             pointer_placed,
-        } = self.owed_scope_or(sites, node, step, read).await?;
+            ..
+        } = self.owed_scope_or(sites, node, step, read, true).await?;
         let (root_name, landed_epoch) = if current.write_epoch >= write_epoch {
             // A landed wave re-points the scope pointer, and the floor never
             // takes an epoch only the root read off the wire states.
@@ -772,7 +815,7 @@ where
             }
             Err(e) => return Err(stop(EngineError::from_contact_store(e))),
         };
-        let OwedScope { target, .. } = self.owed_scope_or(sites, node, step, read).await?;
+        let OwedScope { target, .. } = self.owed_scope_or(sites, node, step, read, false).await?;
         let display_name = sites.folder_name(node).await.map_err(stop)?;
         post_share_pointer_at(
             &mut SharedEntropy(self.entropy),
@@ -805,6 +848,8 @@ struct OwedScope {
     current: CascadeTarget,
     /// The owner-signed scope pointer names `target`.
     pointer_placed: bool,
+    /// The read ran on the last copy of a root the gate refused (ADR 0068 D1).
+    fell_back: bool,
 }
 
 /// The stop a plane rotation failure reports, classed as the command's own

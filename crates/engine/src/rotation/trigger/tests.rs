@@ -583,6 +583,9 @@ struct FakeCutRotator {
     refuse_read: bool,
     refuse_write: bool,
     refuse_publish: bool,
+    /// The root read fell back, so each step at the old root refuses
+    /// (ADR 0068 D3).
+    fell_back: bool,
 }
 
 impl FakeCutRotator {
@@ -593,7 +596,13 @@ impl FakeCutRotator {
             refuse_read: false,
             refuse_write: false,
             refuse_publish: false,
+            fell_back: false,
         }
+    }
+
+    /// The root has not moved, so a step there publishes at the old name.
+    fn at_old_root(&self) -> bool {
+        self.fell_back && !self.seen.borrow().contains(&"write")
     }
 
     fn record(&self, arm: &'static str, cut: &RevokedCommittedSet) {
@@ -613,7 +622,7 @@ impl CutRotator for FakeCutRotator {
         cut: &RevokedCommittedSet,
     ) -> Result<(), CascadeError> {
         self.record("publish-cut", cut);
-        if self.refuse_publish {
+        if self.refuse_publish || self.at_old_root() {
             return Err(CascadeError::Resolve {
                 scope_id: scope_root.0,
                 reason: super::super::eager_set::ResolveFailure::Unavailable,
@@ -627,8 +636,9 @@ impl CutRotator for FakeCutRotator {
         scope_root: NodeId,
         cut: &RevokedCommittedSet,
     ) -> Result<CascadeOutcome, CascadeError> {
+        let at_old_root = self.at_old_root();
         self.record("read", cut);
-        if self.refuse_read {
+        if self.refuse_read || at_old_root {
             return Err(CascadeError::Resolve {
                 scope_id: scope_root.0,
                 reason: super::super::eager_set::ResolveFailure::Unavailable,
@@ -658,6 +668,10 @@ impl CutRotator for FakeCutRotator {
             interior_node_count: 0,
             dropped: Vec::new(),
         })
+    }
+
+    fn root_fell_back(&self) -> bool {
+        self.fell_back
     }
 }
 
@@ -841,6 +855,64 @@ fn a_refused_read_plane_never_reaches_the_write_plane() {
     assert!(err.is_retryable());
 }
 
+/// ADR 0068 D3: a full revoke whose root read fell back moves the root first,
+/// then cuts the read plane at the moved root.
+#[test]
+fn a_full_revoke_over_a_root_read_that_fell_back_runs_the_wave_first() {
+    let mut rotator = FakeCutRotator::new();
+    rotator.fell_back = true;
+    let report =
+        block_on(rotate_on_cut(&rotator, node(1), &full_write_revoke())).expect("both planes");
+
+    assert_eq!(*rotator.seen.borrow(), ["read", "write", "read"]);
+    assert!(report.read.is_some());
+    assert!(report.write.is_some());
+}
+
+/// A downgrade whose root read fell back publishes no cut set at the old
+/// root: the wave re-mints it at the moved root.
+#[test]
+fn a_downgrade_over_a_root_read_that_fell_back_runs_only_the_wave() {
+    let fx = Fixture::new();
+    let cut = revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::DowngradeToRead)
+        .expect("downgrade");
+    let mut rotator = FakeCutRotator::new();
+    rotator.fell_back = true;
+    let report = block_on(rotate_on_cut(&rotator, node(1), &cut)).expect("the write plane");
+
+    assert_eq!(*rotator.seen.borrow(), ["publish-cut", "write"]);
+    assert!(report.read.is_none());
+    assert!(report.write.is_some());
+}
+
+/// A read-only cut moves no root, so a root read that fell back keeps the
+/// stop.
+#[test]
+fn a_read_revoke_over_a_root_read_that_fell_back_keeps_the_stop() {
+    let fx = Fixture::new();
+    let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("cut");
+    let mut rotator = FakeCutRotator::new();
+    rotator.fell_back = true;
+    let err = block_on(rotate_on_cut(&rotator, node(1), &cut)).expect_err("the stop stands");
+
+    assert!(matches!(err, RotateOnCutError::Read(_)));
+    assert_eq!(*rotator.seen.borrow(), ["read"]);
+}
+
+/// The wave that runs first and stops names its own order, so the caller
+/// does not read the cut set as landed.
+#[test]
+fn a_first_wave_that_stops_after_a_fall_back_is_its_own_failure() {
+    let mut rotator = FakeCutRotator::new();
+    rotator.fell_back = true;
+    rotator.refuse_write = true;
+    let err = block_on(rotate_on_cut(&rotator, node(1), &full_write_revoke()))
+        .expect_err("the wave stops");
+
+    assert!(matches!(err, RotateOnCutError::WriteFirst(_)));
+    assert_eq!(*rotator.seen.borrow(), ["read", "write"]);
+}
+
 #[test]
 fn a_refused_write_plane_fails_the_whole_revoke() {
     let mut rotator = FakeCutRotator::new();
@@ -885,8 +957,8 @@ fn the_revoke_check_surface_matches_the_variants_in_order() {
     assert_eq!(named, RevokeError::CHECKS);
 }
 
-/// The three per-plane variants delegate, so the cut driver owns exactly one
-/// check of its own.
+/// The per-plane variants delegate, so the cut driver owns exactly one check
+/// of its own.
 #[test]
 fn the_cut_check_surface_matches_the_variants_in_order() {
     let named: Vec<&str> = [RotateOnCutError::WriteOnlyCutWithdrawsRead]

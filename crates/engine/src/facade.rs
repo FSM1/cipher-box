@@ -109,7 +109,9 @@ use crate::net::renewal_walk::{
 };
 use crate::net::retire::{ReclaimStall, retire};
 use crate::net::rotation::scope_name;
-use crate::net::rotation::{GatedRoots, MovedScopeSeed, RotationAncestry, SweptScopeState};
+use crate::net::rotation::{
+    GatedRoots, MovedScopeSeed, RootFallback, RotationAncestry, SweptScopeState,
+};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, FolderRefreshReport,
     GraftedLeg, HeldKey, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
@@ -124,8 +126,8 @@ use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
 use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
-    MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure,
-    Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
+    MAX_ROTATION_ATTEMPTS, NoBound, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot,
+    ResolveFailure, Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError,
     RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepKeys,
     SweepOutcome, SweepResolveFailure, SweepRun, SweepTaskFactory, WalkedReadEpochs, WriteHistory,
     WriteRevokeKind, bounded, cut_for_write_scope, derive_write_name, record_grant_floor,
@@ -6375,6 +6377,7 @@ where {
                         gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
                         moved_seed: MovedScopeSeed::default(),
+                        root_fallback: None,
                     };
                     SweepRun::Swept(
                         run_sweep(
@@ -7466,6 +7469,7 @@ where {
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            root_fallback: None,
         }
     }
 
@@ -7763,16 +7767,18 @@ where {
         let target = self
             .owner_scope(node, api, owner_keys(), check, unindexed)
             .await?;
-        let current = self
-            .owner_rotation_net(
+        let current = OwnerRotationNet {
+            root_fallback: Some(RootFallback::new(target.scope.scope_id, &NoBound)),
+            ..self.owner_rotation_net(
                 api,
                 owner_keys(),
                 target.ancestry(),
                 PointerConsultArm::Refused,
             )
-            .resolve_anchored(&target.scope)
-            .await
-            .map_err(|e| target.resolve_error(check, e))?;
+        }
+        .resolve_anchored(&target.scope)
+        .await
+        .map_err(|e| target.resolve_error(check, e))?;
         let tags = select(&target, &current).await?;
         self.cut_at(node, &target, &current, CutKind::Revoke(&tags))
             .await?;
@@ -8708,8 +8714,20 @@ where {
                 Err(EngineError::rotation_work_owed())
             };
         }
+        let target = self
+            .owner_scope(
+                node,
+                api,
+                keys.rotation(),
+                PERMISSION_CHANGE_TARGET,
+                UnindexedScope::Refuse,
+            )
+            .await?;
+        // A downgrade is a cut, whose read runs on the last copy of a root the
+        // gate refuses (ADR 0068 D1).
+        let downgrade = permission == Permission::Read;
         let gated = self
-            .settled_owner_scope(&keys, node, PERMISSION_CHANGE_TARGET)
+            .settled_scope_read(&keys, node, target, PERMISSION_CHANGE_TARGET, downgrade)
             .await?;
         let applied = self
             .apply_permission(
@@ -8828,13 +8846,28 @@ where {
         target: OwnerScope,
         check: &'static str,
     ) -> Result<GatedScope<'a, T>, EngineError> {
+        self.resolve_owned_scope_read(keys, target, check, false)
+            .await
+    }
+
+    /// [`Self::resolve_owned_scope`], for a cut's read when `cut` holds.
+    async fn resolve_owned_scope_read<'a>(
+        &'a self,
+        keys: &'a OwnerActionKeys<'a>,
+        target: OwnerScope,
+        check: &'static str,
+        cut: bool,
+    ) -> Result<GatedScope<'a, T>, EngineError> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let net = self.owner_rotation_net(
-            api,
-            keys.rotation(),
-            target.ancestry(),
-            PointerConsultArm::Refused,
-        );
+        let net = OwnerRotationNet {
+            root_fallback: cut.then(|| RootFallback::new(target.scope.scope_id, &NoBound)),
+            ..self.owner_rotation_net(
+                api,
+                keys.rotation(),
+                target.ancestry(),
+                PointerConsultArm::Refused,
+            )
+        };
         let current = net
             .resolve_anchored(&target.scope)
             .await
@@ -8885,7 +8918,22 @@ where {
         target: OwnerScope,
         check: &'static str,
     ) -> Result<GatedScope<'a, T>, EngineError> {
-        let gated = self.resolve_owned_scope(keys, target, check).await?;
+        self.settled_scope_read(keys, node, target, check, false)
+            .await
+    }
+
+    /// [`Self::settled_scope`], for a cut's read when `cut` holds.
+    async fn settled_scope_read<'a>(
+        &'a self,
+        keys: &'a OwnerActionKeys<'a>,
+        node: NodeId,
+        target: OwnerScope,
+        check: &'static str,
+        cut: bool,
+    ) -> Result<GatedScope<'a, T>, EngineError> {
+        let gated = self
+            .resolve_owned_scope_read(keys, target, check, cut)
+            .await?;
         if derive_write_name(&gated.current.write_scope_seed, &node.0)
             .as_str()
             .as_bytes()

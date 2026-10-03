@@ -19,7 +19,8 @@ use crate::grants::{
     AckedClaim, ClaimDisposition, CommittedLink, GrantRecipient, fingerprint_identity_key,
     link_of_sender, post_share_pointer_at,
 };
-use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys};
+use crate::net::cut::CutRootReads;
+use crate::net::rotation::{OnAccessMiss, OnAccessMisses, OwnerScopeKeys, RootFallback};
 use crate::rotation::{Boundaries, NoBound, NodeBound, RotateOnCutError, cut_for_write_scope};
 use crate::sync::BookkeepingSeal;
 use crate::sync::owed_rotation::OwedCell;
@@ -326,6 +327,20 @@ where
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
             moved_seed: MovedScopeSeed::default(),
+            root_fallback: None,
+        }
+    }
+
+    /// [`Self::net`] for an owner cut's read of `target`'s root, which runs on
+    /// the last copy of a root the gate refuses (ADR 0068 D1).
+    pub(super) fn cut_net<'b>(
+        &'b self,
+        target: &OwnerScope,
+        bound: &'b dyn NodeBound,
+    ) -> OwnerRotationNet<'b, T, H, C, F, Sch, Box<dyn Entropy>, S> {
+        OwnerRotationNet {
+            root_fallback: Some(RootFallback::new(target.scope.scope_id, bound)),
+            ..self.net(target, PointerConsultArm::Refused)
         }
     }
 
@@ -430,10 +445,11 @@ where
             scope_id: target.scope.scope_id,
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.cut.vault_root.0,
-            sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
+            sweep: &|scope| sweep(scope, target.parent_node_seed.clone()),
             bound: owed_bound
                 .as_ref()
                 .map_or(&NoBound as &dyn NodeBound, |bound| bound),
+            root_reads: CutRootReads::default(),
         };
         rotate_on_cut(&rotator, node, cut).await
     }
