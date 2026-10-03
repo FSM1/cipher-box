@@ -44,6 +44,20 @@ pub fn padding(bytes: usize) -> cipherbox_core::seal::PreservedFields {
     .into_iter()
     .collect()
 }
+
+/// Compiles only while the bearer a request carries wipes itself on drop.
+/// The proof is the type, so the test never reads the credential.
+#[track_caller]
+pub fn assert_bearer_wipes_on_drop(request: &crate::seams::HttpRequest) {
+    fn wipes_on_drop<T: zeroize::ZeroizeOnDrop>(_: &T) {}
+    let (_, value) = request
+        .headers
+        .iter()
+        .find(|(name, _)| name == crate::seams::AUTHORIZATION)
+        .expect("the request carries a bearer");
+    wipes_on_drop(value);
+}
+
 pub use executor::{block_on, block_on_while_ticking, poll_tasks_once, poll_tasks_until_parked};
 pub use owner_root::{
     CARRIED_WRITE_HISTORY_LINK, OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY,
