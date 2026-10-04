@@ -27,9 +27,6 @@ export function devnetFault(refusal: string): DevnetFault | null {
   return DEVNET_FAULTS.find(([, pattern]) => pattern.test(refusal))?.[0] ?? null;
 }
 
-/** The wait before each retry of a devnet fault. */
-export const DEVNET_BACKOFF_MS: readonly number[] = [15_000, 30_000, 60_000, 105_000];
-
 /**
  * The time one sign-in may spend on its retries. An attempt can wait minutes
  * for a refusal, so the backoff alone does not bound a sign-in.
@@ -56,7 +53,7 @@ export function runRetryBudget(metadata: Readonly<Record<string, unknown>>): num
   return budget;
 }
 
-export type RetryStop = 'attempts-exhausted' | 'sign-in-budget' | 'run-budget';
+export type RetryStop = 'sign-in-budget' | 'run-budget';
 
 /** What a sign-in does after a refused attempt. */
 export type NextStep =
@@ -65,18 +62,20 @@ export type NextStep =
 
 /**
  * Decides the step after refused `attempt` (0-based), `elapsedMs` into the
- * sign-in. A wait must leave time for another attempt inside both deadlines.
+ * sign-in, with a jitter sample in [0, 1]. A wait must leave time for another
+ * attempt inside both deadlines.
  */
 export function nextStep(
   attempt: number,
   refusal: string,
   runRemainingMs: number,
-  elapsedMs: number
+  elapsedMs: number,
+  jitter: number
 ): NextStep {
   const fault = devnetFault(refusal);
   if (fault === null) return { action: 'fail', fault, result: 'refused' };
-  const waitMs = DEVNET_BACKOFF_MS[attempt];
-  if (waitMs === undefined) return { action: 'fail', fault, result: 'attempts-exhausted' };
+  // Keep trying throughout the fault window without synchronizing callers.
+  const waitMs = (attempt === 0 ? 15_000 : 25_000) + Math.floor(jitter * 5_000);
   if (elapsedMs + waitMs >= SIGN_IN_RETRY_BUDGET_MS) {
     return { action: 'fail', fault, result: 'sign-in-budget' };
   }
@@ -137,7 +136,7 @@ export function summarize(records: readonly SignInRecord[]): string {
     records.filter((record) => record.result === result).length;
   return (
     `sign-ins: ${records.length}, recovered: ${count('recovered')}, ` +
-    `observed faults: ${observed}, attempts exhausted: ${count('attempts-exhausted')}, ` +
+    `observed faults: ${observed}, ` +
     `sign-in budget exhausted: ${count('sign-in-budget')}, ` +
     `retries suppressed by run budget: ${count('run-budget')}, ` +
     `refused: ${count('refused')}`

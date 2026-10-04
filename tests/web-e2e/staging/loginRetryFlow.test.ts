@@ -5,7 +5,6 @@ import type { Locator, Page } from '@playwright/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { signInWithWallet } from './fixtures';
 import {
-  DEVNET_BACKOFF_MS,
   RUN_RETRY_BUDGET_KEY,
   RUN_SIGN_IN_RETRY_BUDGET_MS,
   runRetryDeadline,
@@ -67,6 +66,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000_000);
   vi.resetAllMocks();
+  vi.spyOn(Math, 'random').mockReturnValue(0);
   harness.info.project.outputDir = mkdtempSync(join(tmpdir(), 'login-flow-'));
   harness.info.project.metadata = {};
   harness.info.annotations = [];
@@ -78,6 +78,7 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(harness.info.project.outputDir, { recursive: true, force: true });
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -85,16 +86,40 @@ describe('the wallet login retry flow', () => {
   it('gives the login after an exhausted login its own retries on a new page', async () => {
     const first = page();
     harness.refusal.mockResolvedValue(POLY_FAILURE);
-    await expect(signInWithWallet(first.page, signedIn)).rejects.toThrow('attempt 5');
-    expect(first.calls.waitForTimeout.mock.calls.map(([ms]) => ms)).toEqual(DEVNET_BACKOFF_MS);
+    const started = Date.now();
+    await expect(signInWithWallet(first.page, signedIn)).rejects.toThrow('sign-in-budget');
+    expect(Date.now() - started).toBeLessThan(SIGN_IN_RETRY_BUDGET_MS);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(SIGN_IN_RETRY_BUDGET_MS - 25_000);
+    expect(harness.refusal.mock.calls.length).toBeGreaterThan(5);
 
     const second = page();
     harness.refusal.mockResolvedValueOnce(NODE_FAILURE).mockResolvedValueOnce(null);
     await expect(signInWithWallet(second.page, signedIn)).resolves.toBe(0);
     expect(second.calls.waitForTimeout).toHaveBeenCalledExactlyOnceWith(15_000);
-    expect(records().map(({ result }) => result)).toEqual(['attempts-exhausted', 'recovered']);
+    expect(records().map(({ result }) => result)).toEqual(['sign-in-budget', 'recovered']);
     expect(records()[1]?.faults).toEqual([{ fault: 'node-5xx', attempt: 1 }]);
   });
+
+  it.each([0, 0.5, 0.9999])(
+    'recovers on attempt fourteen on the same page with jitter %s',
+    async (jitter) => {
+      vi.mocked(Math.random).mockReturnValue(jitter);
+      const opened = page();
+      harness.refusal.mockImplementation(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+        return harness.refusal.mock.calls.length < 14 ? POLY_FAILURE : null;
+      });
+      await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(6_000);
+      expect(opened.calls.reload).toHaveBeenCalledTimes(13);
+      expect(harness.refusal.mock.calls.every(([locator]) => locator === signedIn)).toBe(true);
+      expect(records()).toEqual([
+        {
+          faults: Array.from({ length: 13 }, (_, i) => ({ fault: 'poly-commits', attempt: i + 1 })),
+          result: 'recovered',
+        },
+      ]);
+    }
+  );
 
   it('retries the explicit busy-node response and preserves the successful attempt duration', async () => {
     const opened = page();
@@ -152,7 +177,7 @@ describe('the wallet login retry flow', () => {
   );
 
   it('takes the run window from the project metadata', async () => {
-    harness.info.project.metadata = { [RUN_RETRY_BUDGET_KEY]: DEVNET_BACKOFF_MS[0]! };
+    harness.info.project.metadata = { [RUN_RETRY_BUDGET_KEY]: 15_000 };
     const opened = page();
     harness.refusal.mockResolvedValueOnce(NODE_FAILURE);
     await expect(signInWithWallet(opened.page, signedIn)).rejects.toThrow('attempt 1 (run-budget)');
