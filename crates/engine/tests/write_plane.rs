@@ -1171,6 +1171,254 @@ fn a_folder_create_publishes_and_resolves_back() {
     );
 }
 
+/// The publish that completes an op makes it kept before the self-adopt, and a
+/// kept op leaves the render. The base must hold the published folder by then,
+/// or a folder created inside it renders detached from the root and a write
+/// into it is refused as outside the vault.
+#[test]
+fn a_new_folder_stays_in_the_vault_while_the_publish_of_its_parent_completes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    create(&mut engine, "deep");
+    let deep = child_id(&engine, ROOT, "deep");
+    create_under(&mut engine, deep, "deeper");
+    let deeper = child_id(&engine, deep, "deeper");
+
+    enter_the_window(&world, &alice, &engine, &mut tasks, false);
+
+    let view = block_on(engine.snapshot(deeper)).expect("deeper renders");
+    assert!(!view.received_share, "deeper still reaches the vault root");
+    let upload = block_on(engine.command(Command::Create {
+        parent: deeper,
+        name: "deeper.bin".into(),
+        kind: NodeKind::File,
+    }));
+    assert!(upload.is_ok(), "a write into deeper is queued: {upload:?}");
+
+    leave_the_window(&alice, &mut tasks, false);
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+    assert_eq!(
+        published_names(&world.record_store, &blocks, deeper),
+        vec!["deeper.bin".to_owned()],
+        "the write publishes inside deeper"
+    );
+}
+
+/// Run one pass that stops just after it marks an op published, the window
+/// in which that op has left the render. With `self_adopt_fails`, the pass
+/// then runs to its end with a failed self-adopt, which keeps the window open.
+fn enter_the_window(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    self_adopt_fails: bool,
+) {
+    device
+        .staging_store
+        .inner()
+        .park_after_staged_write(&mark_key());
+    tick(world, engine, tasks);
+    assert!(
+        device.staging_store.inner().holds_parked_write(),
+        "the drain stops just after an op is marked published"
+    );
+    if self_adopt_fails {
+        device.snapshot_cache.fail_puts();
+        release_the_mark(device, tasks);
+    }
+}
+
+/// Close the window that [`enter_the_window`] opened.
+fn leave_the_window(device: &FakeDevice, tasks: &mut [BoxedTask], self_adopt_fails: bool) {
+    if self_adopt_fails {
+        device.snapshot_cache.heal_puts();
+    } else {
+        release_the_mark(device, tasks);
+    }
+}
+
+/// Let the pass that stopped at the mark run to its end.
+fn release_the_mark(device: &FakeDevice, tasks: &mut [BoxedTask]) {
+    device.staging_store.inner().release_parked_write();
+    poll_tasks_until_parked(tasks);
+}
+
+/// Drain until quiet, then require that no op dead-lettered and that `node`
+/// reads `head`.
+fn settles_on_head(
+    world: &FakeWorld,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    events: &mut EventStream,
+    node: NodeId,
+    head: &[u8],
+    why: &str,
+) {
+    for _ in 0..4 {
+        tick(world, engine, tasks);
+    }
+    assert!(!dead_lettered(events), "{why}");
+    assert_eq!(
+        block_on(engine.read_content(node)).expect("the head reads"),
+        head
+    );
+}
+
+/// A content edit made while the previous edit of the same file is marked
+/// published anchors on the head that edit published.
+fn a_second_edit_in_the_window_of_the_first(self_adopt_fails: bool) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        b"first version bytes",
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "notes.txt");
+    write_file(&mut engine, version(node), b"second version bytes").expect("the edit commits");
+
+    enter_the_window(&world, &alice, &engine, &mut tasks, self_adopt_fails);
+    let third = b"third version bytes, the newest";
+    write_file(&mut engine, version(node), third).expect("the next edit commits");
+    leave_the_window(&alice, &mut tasks, self_adopt_fails);
+
+    settles_on_head(
+        &world,
+        &engine,
+        &mut tasks,
+        &mut events,
+        node,
+        third,
+        "the next edit anchors on the head the first edit published",
+    );
+}
+
+#[test]
+fn a_second_edit_in_the_window_of_the_first_publishes() {
+    a_second_edit_in_the_window_of_the_first(false);
+}
+
+#[test]
+fn a_second_edit_after_a_failed_self_adopt_of_the_first_publishes() {
+    a_second_edit_in_the_window_of_the_first(true);
+}
+
+/// A delete made while an edit of the same file is marked published carries
+/// the sequence that edit published, so the rebase does not drop it as
+/// superseded.
+fn a_delete_in_the_window_of_an_edit(self_adopt_fails: bool) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        b"first version bytes",
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "notes.txt");
+    write_file(&mut engine, version(node), b"second version bytes").expect("the edit commits");
+
+    enter_the_window(&world, &alice, &engine, &mut tasks, self_adopt_fails);
+    block_on(engine.command(Command::Delete { node })).expect("the delete stages");
+    leave_the_window(&alice, &mut tasks, self_adopt_fails);
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    assert!(!dead_lettered(&mut events), "no op dead-lettered");
+    let root = block_on(engine.snapshot(ROOT)).expect("the root renders");
+    assert!(
+        root.children.iter().all(|child| child.name != "notes.txt"),
+        "the delete made in the window lands"
+    );
+}
+
+#[test]
+fn a_delete_in_the_window_of_an_edit_lands() {
+    a_delete_in_the_window_of_an_edit(false);
+}
+
+#[test]
+fn a_delete_after_a_failed_self_adopt_of_an_edit_lands() {
+    a_delete_in_the_window_of_an_edit(true);
+}
+
+/// A file whose create is marked published shows the version its own record
+/// carries, and an edit made then anchors on it.
+fn a_new_file_in_the_window_of_its_create(self_adopt_fails: bool) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let first = b"first version bytes";
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        first,
+    )
+    .expect("the create commits");
+
+    enter_the_window(&world, &alice, &engine, &mut tasks, self_adopt_fails);
+    let view = block_on(engine.snapshot(ROOT)).expect("the root renders");
+    let file = view
+        .children
+        .iter()
+        .find(|child| child.name == "notes.txt")
+        .expect("the new file renders");
+    assert_eq!(file.size, Some(first.len() as u64));
+    assert_eq!(file.content_version, Some(1));
+    let node = file.id;
+    let second = b"second version bytes";
+    write_file(&mut engine, version(node), second).expect("an edit of the new file commits");
+    leave_the_window(&alice, &mut tasks, self_adopt_fails);
+
+    settles_on_head(
+        &world,
+        &engine,
+        &mut tasks,
+        &mut events,
+        node,
+        second,
+        "the edit anchors on the head the create published",
+    );
+}
+
+#[test]
+fn a_new_file_in_the_window_of_its_create_shows_its_head() {
+    a_new_file_in_the_window_of_its_create(false);
+}
+
+#[test]
+fn a_new_file_after_a_failed_self_adopt_of_its_create_shows_its_head() {
+    a_new_file_in_the_window_of_its_create(true);
+}
+
 /// The two KDF edges the write plane hangs off must not be crossed: a node's
 /// name comes from the WRITE scope seed and its body opens under a key derived
 /// from the READ scope seed. Swapping them would still publish, so only this
