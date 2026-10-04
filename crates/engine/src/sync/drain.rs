@@ -636,9 +636,13 @@ impl From<PublishHalt> for Halt {
 
 /// One head publish that reached the transport.
 enum HeadPublish {
-    /// Our record confirmed at its name, and the floors its head was proven
-    /// against.
-    Confirmed(Vec<u8>, Option<PublishBar>),
+    /// Our record confirmed at its name at `sequence`, and the floors its head
+    /// was proven against.
+    Confirmed {
+        record_bytes: Vec<u8>,
+        bar: Option<PublishBar>,
+        sequence: u64,
+    },
     /// A lost CAS race at `sequence`, with the winning record when the
     /// confirm read one.
     Lost {
@@ -8120,16 +8124,20 @@ where
                 observed.clearing(floor.unwrap_or(0).saturating_add(u64::from(ATTEMPT_BUDGET)))
             }
         };
-        let (record_bytes, bar) = match self
+        let (record_bytes, bar, sequence) = match self
             .publish_head(plane, &observed, &node.0, &head, content_cids.clone())
             .await
             .map_err(PublishHalt::before_the_put)?
         {
-            HeadPublish::Confirmed(record_bytes, bar) => {
+            HeadPublish::Confirmed {
+                record_bytes,
+                bar,
+                sequence,
+            } => {
                 if acked != Acknowledged::Nothing {
                     let _ = ledger.forget_acknowledged(&owner, node.0).await;
                 }
-                (record_bytes, bar)
+                (record_bytes, bar, sequence)
             }
             // Its bytes may still surface at `sequence`, so the next publish
             // here signs above it rather than tying it.
@@ -8159,6 +8167,17 @@ where
             }
         };
         if let Some(op_id) = completes {
+            // The mark drops the op from the render, so the base takes the
+            // folder first: a node created inside it would otherwise render
+            // detached from the root.
+            if let ReadBody::Folder {
+                children,
+                modified_at,
+                ..
+            } = body
+            {
+                self.repaint_folder(scope, node, children, sequence, *modified_at);
+            }
             self.keep_published(scope, &plane.end, op_id).await;
             self.mark_published(scope, op_id).await;
         }
@@ -8286,9 +8305,11 @@ where
             classify_publish(error, head.block.len() as u64)
         })?;
         match outcome {
-            PublishOutcome::Published { .. } => {
-                Ok(HeadPublish::Confirmed(record_bytes, preflighted.bar()))
-            }
+            PublishOutcome::Published { sequence } => Ok(HeadPublish::Confirmed {
+                record_bytes,
+                bar: preflighted.bar(),
+                sequence,
+            }),
             PublishOutcome::LostRace {
                 published_sequence, ..
             } => Ok(HeadPublish::Lost {

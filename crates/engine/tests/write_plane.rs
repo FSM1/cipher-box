@@ -1171,6 +1171,54 @@ fn a_folder_create_publishes_and_resolves_back() {
     );
 }
 
+/// The publish that completes an op makes it kept before the self-adopt, and a
+/// kept op leaves the render. The base must hold the published folder by then,
+/// or a folder created inside it renders detached from the root and a write
+/// into it is refused as outside the vault.
+#[test]
+fn a_new_folder_stays_in_the_vault_while_the_publish_of_its_parent_completes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    create(&mut engine, "deep");
+    let deep = child_id(&engine, ROOT, "deep");
+    create_under(&mut engine, deep, "deeper");
+    let deeper = child_id(&engine, deep, "deeper");
+
+    alice
+        .staging_store
+        .inner()
+        .park_after_staged_write(&mark_key());
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        alice.staging_store.inner().holds_parked_write(),
+        "the drain stops just after the create of deep is marked published"
+    );
+
+    let view = block_on(engine.snapshot(deeper)).expect("deeper renders");
+    assert!(!view.received_share, "deeper still reaches the vault root");
+    let upload = block_on(engine.command(Command::Create {
+        parent: deeper,
+        name: "deeper.bin".into(),
+        kind: NodeKind::File,
+    }));
+    assert!(upload.is_ok(), "a write into deeper is queued: {upload:?}");
+
+    alice.staging_store.inner().release_parked_write();
+    poll_tasks_until_parked(&mut tasks);
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+    assert_eq!(
+        published_names(&world.record_store, &blocks, deeper),
+        vec!["deeper.bin".to_owned()],
+        "the write publishes inside deeper"
+    );
+}
+
 /// The two KDF edges the write plane hangs off must not be crossed: a node's
 /// name comes from the WRITE scope seed and its body opens under a key derived
 /// from the READ scope seed. Swapping them would still publish, so only this

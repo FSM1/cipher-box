@@ -21,6 +21,8 @@ struct Inner {
     partial_write_budget: Option<Arm>,
     staged_removal_budget: Option<Arm>,
     dropped_removal_budget: Option<Arm>,
+    parked_write: Option<Vec<u8>>,
+    holding_write: bool,
     key_listings: u64,
     queue_listings: u64,
 }
@@ -42,6 +44,8 @@ impl Default for Inner {
             partial_write_budget: None,
             staged_removal_budget: None,
             dropped_removal_budget: None,
+            parked_write: None,
+            holding_write: false,
             key_listings: 0,
             queue_listings: 0,
         }
@@ -152,6 +156,24 @@ impl InMemoryStagingStore {
     pub fn interrupt_staged_removal_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").staged_removal_budget =
             Some(Arm::exact(staging_key, budget));
+    }
+
+    /// Lands the next write at `staging_key`, then parks its caller until
+    /// [`release_parked_write`](Self::release_parked_write), so a test can act
+    /// in the window just after that write.
+    pub fn park_after_staged_write(&self, staging_key: &[u8]) {
+        self.inner.lock().expect("lock").parked_write = Some(staging_key.to_vec());
+    }
+
+    /// Lets the write [`park_after_staged_write`](Self::park_after_staged_write)
+    /// parked return.
+    pub fn release_parked_write(&self) {
+        self.inner.lock().expect("lock").holding_write = false;
+    }
+
+    /// Whether a write is parked.
+    pub fn holds_parked_write(&self) -> bool {
+        self.inner.lock().expect("lock").holding_write
     }
 
     /// How many whole-key-space enumerations this store has served. A desktop
@@ -285,22 +307,40 @@ impl StagingStore for InMemoryStagingStore {
     }
 
     async fn put_staged_bytes(&self, staging_key: &[u8], bytes: &[u8]) -> SeamResult<()> {
-        let mut inner = self.inner.lock().expect("lock");
-        if interrupts(&mut inner.staged_write_budget, staging_key) {
-            return Err(SeamError::new("put_staged_bytes unavailable"));
-        }
-        if interrupts(&mut inner.destructive_write_budget, staging_key) {
-            inner.staged.remove(staging_key);
-            return Err(SeamError::new("put_staged_bytes unavailable"));
-        }
-        if interrupts(&mut inner.partial_write_budget, staging_key) {
-            if !inner.staged.contains_key(staging_key) {
-                let half = bytes[..bytes.len() / 2].to_vec();
-                inner.staged.insert(staging_key.to_vec(), half);
+        let parks = {
+            let mut inner = self.inner.lock().expect("lock");
+            if interrupts(&mut inner.staged_write_budget, staging_key) {
+                return Err(SeamError::new("put_staged_bytes unavailable"));
             }
-            return Err(SeamError::new("put_staged_bytes unavailable"));
+            if interrupts(&mut inner.destructive_write_budget, staging_key) {
+                inner.staged.remove(staging_key);
+                return Err(SeamError::new("put_staged_bytes unavailable"));
+            }
+            if interrupts(&mut inner.partial_write_budget, staging_key) {
+                if !inner.staged.contains_key(staging_key) {
+                    let half = bytes[..bytes.len() / 2].to_vec();
+                    inner.staged.insert(staging_key.to_vec(), half);
+                }
+                return Err(SeamError::new("put_staged_bytes unavailable"));
+            }
+            inner.staged.insert(staging_key.to_vec(), bytes.to_vec());
+            let parks = inner.parked_write.as_deref() == Some(staging_key);
+            if parks {
+                inner.parked_write = None;
+                inner.holding_write = true;
+            }
+            parks
+        };
+        if parks {
+            core::future::poll_fn(|_| {
+                if self.holds_parked_write() {
+                    core::task::Poll::Pending
+                } else {
+                    core::task::Poll::Ready(())
+                }
+            })
+            .await;
         }
-        inner.staged.insert(staging_key.to_vec(), bytes.to_vec());
         Ok(())
     }
 
