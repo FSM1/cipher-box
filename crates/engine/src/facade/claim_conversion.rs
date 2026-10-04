@@ -175,6 +175,7 @@ pub(crate) struct CutAuthority<'a> {
 
 /// The seams and the owner material one conversion pass runs on.
 pub(crate) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, St> {
+    pub(crate) owner_seed_cache: Option<crate::grants::owner_entry::OwnerSeedCache<'a>>,
     pub(crate) transport: &'a T,
     pub(crate) api: &'a ApiClient<H, C>,
     pub(crate) gateway: &'a Gateway,
@@ -314,6 +315,7 @@ where
         pointer_consult: PointerConsultArm,
     ) -> OwnerRotationNet<'_, T, H, C, F, Sch, Box<dyn Entropy>, S> {
         OwnerRotationNet {
+            owner_seed_cache: self.owner_seed_cache.clone(),
             transport: self.transport,
             api: self.api,
             gateway: self.gateway,
@@ -445,6 +447,7 @@ where
             .as_ref()
             .map_or(&NoBound as &dyn NodeBound, |bound| bound);
         let rotator = OwnerCutNet {
+            owner_seed_cache: self.owner_seed_cache.clone(),
             transport: self.transport,
             api: self.api,
             gateway: self.gateway,

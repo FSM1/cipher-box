@@ -2280,9 +2280,7 @@ pub enum Event {
     /// The conversion record held its bound of refused claims, so the oldest
     /// refusal went. That claimant posts its claim again to be read again.
     RefusedClaimDropped,
-    /// Attributable abuse: a fail-closed adoption-gate rejection, or an
-    /// owner-blob / ascent-link / unseal cross-check disagreement (#39 D6) —
-    /// never a silent failure.
+    /// A fail-closed trust rejection, surfaced without key material.
     AttributableAbuse {
         /// Human-readable classification (no key material).
         description: String,
@@ -6172,6 +6170,9 @@ impl<T: SeamTypes> Engine<T> {
             owner_identity,
             scope_id,
         )
+        .with_owner_seed_cache(Some(
+            session.owner_seed_cache(&self.seams.staging_store, &self.entropy),
+        ))
     }
 
     /// The registry speaks for the genesis name only
@@ -6326,9 +6327,11 @@ where {
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
         T::SnapshotCache: Clone + 'static,
+        T::StagingStore: Clone + 'static,
     {
         let session = self.session.as_ref()?;
         *self.secrets.sweep_keys.borrow_mut() = Some(Rc::new(SweepKeys {
+            contact_label_seed: session.contact_label_seed().clone(),
             enc_secret: session.enc_subkey().clone(),
             owner_identity: session.owner_identity(),
             scope_keys: OwnerSeedKeys::of(session),
@@ -6337,6 +6340,7 @@ where {
         let transport = self.record_transport.clone();
         let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
+        let staging = LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone());
         let events = self.events.clone();
         let scheduler = self.seams.scheduler.clone();
         let http = self.seams.http.clone();
@@ -6360,6 +6364,7 @@ where {
                 let http = http.clone();
                 let gateway = gateway.clone();
                 let entropy = entropy.clone();
+                let staging = staging.clone();
                 let alive = alive.clone();
                 let on_access_misses = on_access_misses.clone();
                 Box::pin(async move {
@@ -6369,6 +6374,7 @@ where {
                         return SweepRun::SessionEnded;
                     };
                     let net = OwnerRotationNet {
+                        owner_seed_cache: Some(keys.owner_seed_cache(&staging, &entropy)),
                         transport: &transport,
                         api: api.as_ref(),
                         gateway: &gateway,
@@ -6556,6 +6562,7 @@ where {
                     let session_keys = pointer_keys.borrow().clone();
                     if let Some(keys) = session_keys {
                         let consulted = enrol_owned_scope_pointers(ScopePointerEnrolment {
+                            owner_seed_cache: Some(keys.owner_seed_cache(&staging, &entropy)),
                             api: &api,
                             transport: &transport,
                             gateway: &gateway,
@@ -6636,6 +6643,7 @@ where {
                     };
                     let unfinished = unfinished_write_cuts.borrow().clone();
                     let walk = RenewalWalk {
+                        owner_seed_cache: Some(keys.owner_seed_cache(&staging, &entropy)),
                         transport: &transport,
                         api: &api,
                         floors: &floors,
@@ -7482,6 +7490,10 @@ where {
         pointer_consult: PointerConsultArm,
     ) -> OwnerNet<'a, T> {
         OwnerRotationNet {
+            owner_seed_cache: self
+                .session
+                .as_ref()
+                .map(|session| session.owner_seed_cache(&self.seams.staging_store, &self.entropy)),
             transport: &self.record_transport,
             api: api.as_ref(),
             gateway: &self.gateway,
@@ -9579,6 +9591,9 @@ where {
         QueueGenerationStore<T::StagingStore>,
     > {
         ConversionPass {
+            owner_seed_cache: Some(
+                session.owner_seed_cache(&self.seams.staging_store, &self.entropy),
+            ),
             transport: &self.record_transport,
             api: api.as_ref(),
             gateway: &self.gateway,
@@ -10259,10 +10274,7 @@ where {
         })?;
         // Sized in sealed bytes, which is what the hosted ingress counts.
         self.hosted_quota_pre_flight(requested).await?;
-        let staged = self
-            .seams
-            .staging_store
-            .staged_bytes_total()
+        let staged = crate::grants::owner_entry::upload_staged_bytes(&self.seams.staging_store)
             .await
             .map_err(EngineError::from_seam)?;
         // Admitted before anything is spent, so a refused write burns no node id

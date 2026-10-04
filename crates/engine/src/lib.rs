@@ -107,11 +107,10 @@ pub use gate::{
     SeedBlob, adopt,
 };
 pub use grants::{
-    AbuseEvent, AcceptError, AcceptOutcome, AuthorityViolation, BookmarkKey, Contact,
-    MintedInviteLink, OwnerEntry, OwnerSeedCache, PublishedGrantBlob, ReceivedShare,
-    ReceivedShareStore, ReceivedShareStoreError, ReceivedSharesCodecError, ReceivedSharesList,
-    ResolutionClass, ResolutionFacts, SentIndex, SentShare, SharePointer,
-    StagingReceivedShareStore, accept_share, cross_check, enforce_committed_ledger,
+    AcceptError, AcceptOutcome, AuthorityViolation, BookmarkKey, Contact, MintedInviteLink,
+    PublishedGrantBlob, ReceivedShare, ReceivedShareStore, ReceivedShareStoreError,
+    ReceivedSharesCodecError, ReceivedSharesList, ResolutionClass, ResolutionFacts, SentIndex,
+    SentShare, SharePointer, StagingReceivedShareStore, accept_share, enforce_committed_ledger,
     fingerprint_identity_key, import_contact, recipient_blinded_tag, self_locate,
 };
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};

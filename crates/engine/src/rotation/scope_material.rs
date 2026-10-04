@@ -126,6 +126,7 @@ mod tests {
     /// the read epoch, so a deposit of the wrong one is visible.
     fn proved(n: u8, read_epoch: u64) -> DescendantScopeRoot {
         DescendantScopeRoot {
+            recovered_after_rejection: false,
             scope_id: [n; 16],
             name: IpnsName::parse(NAME).expect("a valid name"),
             parent_node_seed: Zeroizing::new([n; SECRET_LEN]),

@@ -66,13 +66,6 @@
         "ledger-diverges-from-commitment"
       ]
     },
-    "owner_entry": {
-      "file": "vectors/owner_entry_reject.json",
-      "count": 1,
-      "checks": [
-        "owner-seed-cross-check-disagreement"
-      ]
-    },
     "placement": {
       "file": "vectors/placement_reject.json",
       "count": 3,

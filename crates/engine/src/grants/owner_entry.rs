@@ -1,209 +1,327 @@
-//! Owner entry — the owner seed cache and the seed cross-check (blueprint/
-//! engine.md "Grants and ledger — Owner entry", #39 D6).
-//!
-//! In an owner session the canonical source of a scope's override seed is the
-//! own-vault **owner seed cache** — the last-confirmed `{seed, epoch}` per
-//! granted scope, refreshed on every confirmed owner read. The grantee-
-//! maintained owner blob is only an accelerator. The trust rule is a cross-
-//! check: the owner-blob seed, the ascent-link seed (when descending as an
-//! ancestor), and the seed that actually unsealed the read-body must all agree.
-//! Any disagreement is an **attributable abuse event** surfaced to the host —
-//! never a silent failure — because a write-grantee that publishes a mismatched
-//! owner blob or ascent link is caught here rather than trusted.
-//!
-//! Seeds are secret material in zeroizing owners; comparisons are constant-time
-//! so a mismatch is never a timing oracle over a seed. This module holds no
-//! crypto — it composes secret containers and equality only.
+//! Durable owner entry over the owner-local sealed store.
 
-use std::collections::BTreeMap;
+use core::cell::RefCell;
+use futures_util::future::LocalBoxFuture;
 
-use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
-use zeroize::Zeroizing;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::kdf;
+use cipherbox_core::seal::{
+    OwnerLocalKind, OwnerSeedRecord, decode_envelope, decode_grant_section,
+    decode_owner_seed_record, encode_owner_seed_record, grant_section_bytes, open_owner_local,
+    seal_owner_local,
+};
+use cipherbox_core::suite::secret::SecretBytes;
+use cipherbox_core::suite::x25519::X25519Secret;
 
-/// The last-confirmed override seed and epoch for one scope — the canonical
-/// owner-session view. `seed` is secret material; it zeroizes on drop.
+use crate::entropy::{Entropy, fresh_ephemeral};
+use crate::net::last_known_good::NameLock;
+use crate::seams::{SeamError, StagingStore};
+
+/// Reserved staging namespace for confirmed owner recovery records.
+pub const OWNER_SEED_CACHE_PREFIX: &[u8] = b"cbx/os/";
+
+// StagingStore has async methods; these three boxed calls erase only the host seam.
+trait CacheBytes {
+    fn read<'s>(&'s self, key: &'s [u8]) -> LocalBoxFuture<'s, Result<Option<Vec<u8>>, SeamError>>;
+    fn write<'s>(
+        &'s self,
+        key: &'s [u8],
+        blob: &'s [u8],
+    ) -> LocalBoxFuture<'s, Result<(), SeamError>>;
+    fn remove<'s>(&'s self, key: &'s [u8]) -> LocalBoxFuture<'s, Result<(), SeamError>>;
+}
+impl<St: StagingStore> CacheBytes for St {
+    fn read<'s>(&'s self, key: &'s [u8]) -> LocalBoxFuture<'s, Result<Option<Vec<u8>>, SeamError>> {
+        Box::pin(self.staged_bytes(key))
+    }
+    fn write<'s>(
+        &'s self,
+        key: &'s [u8],
+        blob: &'s [u8],
+    ) -> LocalBoxFuture<'s, Result<(), SeamError>> {
+        Box::pin(self.put_staged_bytes(key, blob))
+    }
+    fn remove<'s>(&'s self, key: &'s [u8]) -> LocalBoxFuture<'s, Result<(), SeamError>> {
+        Box::pin(self.remove_staged_bytes(key))
+    }
+}
+
+trait Ephemeral {
+    fn draw(&self) -> Result<zeroize::Zeroizing<[u8; 32]>, SeamError>;
+}
+impl<E: Entropy> Ephemeral for RefCell<E> {
+    fn draw(&self) -> Result<zeroize::Zeroizing<[u8; 32]>, SeamError> {
+        fresh_ephemeral(&mut *self.borrow_mut()).map_err(local_error)
+    }
+}
+
+/// One device's confirmed owner reads, with one sealed entry per scope.
 #[derive(Clone)]
-pub struct OwnerSeedEntry {
-    seed: SecretBytes,
-    /// The epoch the confirmed seed belongs to.
-    pub epoch: u64,
+pub struct OwnerSeedCache<'a> {
+    owner: &'a X25519Secret,
+    labels: &'a SecretBytes,
+    staging: &'a dyn CacheBytes,
+    entropy: &'a dyn Ephemeral,
 }
 
-impl OwnerSeedEntry {
-    /// Borrow the confirmed override seed.
-    pub fn seed(&self) -> &[u8; 32] {
-        self.seed.as_bytes()
-    }
+fn local_error(_: impl core::fmt::Display) -> SeamError {
+    SeamError::new("owner seed cache entry unavailable")
 }
 
-/// The own-vault owner seed cache: canonical `{seed, epoch}` per granted scope,
-/// keyed by scope id. Refreshed on every confirmed owner read (a passing
-/// [`cross_check`]).
-#[derive(Default)]
-pub struct OwnerSeedCache {
-    by_scope: BTreeMap<[u8; 16], OwnerSeedEntry>,
-}
-
-impl OwnerSeedCache {
-    /// An empty cache — cold start adopts nothing until the first confirmed read.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The canonical entry for a scope, if one has been confirmed.
-    pub fn get(&self, scope_id: &[u8; 16]) -> Option<&OwnerSeedEntry> {
-        self.by_scope.get(scope_id)
-    }
-
-    /// Record a confirmed `{seed, epoch}` as canonical for a scope, replacing any
-    /// prior entry (the confirmed read is authoritative).
-    pub fn refresh(&mut self, scope_id: [u8; 16], seed: Zeroizing<[u8; 32]>, epoch: u64) {
-        self.by_scope.insert(
-            scope_id,
-            OwnerSeedEntry {
-                seed: SecretBytes::new(*seed),
-                epoch,
-            },
-        );
-    }
-}
-
-/// An attributable abuse event: a seed disagreement caught at owner entry. The
-/// description is host-facing and carries no key material; it maps directly to
-/// the facade's `AttributableAbuse` event.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AbuseEvent {
-    /// A stable, key-material-free description of the disagreement.
-    pub description: String,
-}
-
-impl AbuseEvent {
-    /// The one owner-entry check, the surface `crates/engine/tests/
-    /// kat_checks.rs` pins (see the crate header).
-    pub const CHECKS: &'static [&'static str] = &["owner-seed-cross-check-disagreement"];
-
-    /// The stable classification name.
-    pub fn check(&self) -> &'static str {
-        Self::CHECKS[0]
-    }
-
-    /// The class label used in reject vectors. A seed disagreement is
-    /// attributable to a writer, so it is a trust verdict and never a stall.
-    pub fn class(&self) -> &'static str {
-        "trust"
-    }
-}
-
-/// The outcome of an owner-entry cross-check.
-pub enum OwnerEntry {
-    /// All present seed sources agreed; the caller refreshes the cache with this
-    /// canonical `{seed, epoch}`.
-    Confirmed {
-        /// The agreed override seed.
-        seed: Zeroizing<[u8; 32]>,
-        /// The epoch it belongs to.
-        epoch: u64,
-    },
-    /// A disagreement — surfaced to the host, never silently dropped.
-    Abuse(AbuseEvent),
-}
-
-/// Cross-check the owner-blob seed, the optional ascent-link seed, and the seed
-/// that actually unsealed the read-body. All present sources must equal
-/// `unseal_seed`; the first disagreement is an [`AbuseEvent`], otherwise the
-/// agreed `{unseal_seed, epoch}` is [`OwnerEntry::Confirmed`] for the caller to
-/// cache.
-///
-/// `unseal_seed` is the trusted anchor — it is the seed that demonstrably
-/// derived the working read key at the gate — so the two accelerator sources are
-/// checked against it, not against each other.
-pub fn cross_check(
-    owner_blob_seed: &[u8; 32],
-    ascent_link_seed: Option<&[u8; 32]>,
-    unseal_seed: &[u8; 32],
-    epoch: u64,
-) -> OwnerEntry {
-    if !ct_eq(owner_blob_seed, unseal_seed) {
-        return OwnerEntry::Abuse(AbuseEvent {
-            description: "owner-blob seed disagrees with the unsealed scope seed".to_string(),
-        });
-    }
-    if let Some(ascent) = ascent_link_seed {
-        if !ct_eq(ascent, unseal_seed) {
-            return OwnerEntry::Abuse(AbuseEvent {
-                description: "ascent-link seed disagrees with the unsealed scope seed".to_string(),
-            });
+impl<'a> OwnerSeedCache<'a> {
+    pub(crate) fn new<St: StagingStore, E: Entropy>(
+        staging: &'a St,
+        owner: &'a X25519Secret,
+        entropy: &'a RefCell<E>,
+        labels: &'a SecretBytes,
+    ) -> Self {
+        Self {
+            owner,
+            labels,
+            staging,
+            entropy,
         }
     }
-    OwnerEntry::Confirmed {
-        seed: Zeroizing::new(*unseal_seed),
-        epoch,
+
+    fn key(&self, scope: &[u8; 16]) -> Vec<u8> {
+        let label = kdf::name_label(
+            self.labels.as_bytes(),
+            &[OWNER_SEED_CACHE_PREFIX, scope.as_slice()].concat(),
+        );
+        [OWNER_SEED_CACHE_PREFIX, label.as_slice()].concat()
     }
+
+    async fn read_scope(
+        &self,
+        key: &[u8],
+        scope: &[u8; 16],
+    ) -> Result<Option<OwnerSeedRecord>, SeamError> {
+        let Some(blob) = self.staging.read(key).await? else {
+            return Ok(None);
+        };
+        let record = open_owner_local(self.owner, OwnerLocalKind::OwnerSeedCache, &blob)
+            .and_then(|body| decode_owner_seed_record(&body));
+        Ok(record.ok().filter(|record| record.scope_id == *scope))
+    }
+
+    pub(crate) async fn load(
+        &self,
+        scope: &[u8; 16],
+        name: &IpnsName,
+    ) -> Result<Option<OwnerSeedRecord>, SeamError> {
+        Ok(self
+            .read_scope(&self.key(scope), scope)
+            .await?
+            .filter(|record| record.ipns_name == name.as_str().as_bytes()))
+    }
+
+    pub(crate) async fn remove(&self, scope: &[u8; 16]) -> Result<(), SeamError> {
+        let key = self.key(scope);
+        let _writing = NameLock::acquire(&key).await;
+        self.staging.remove(&key).await
+    }
+
+    pub(crate) async fn save(&self, record: &OwnerSeedRecord) -> Result<(), SeamError> {
+        let name = IpnsName::parse(std::str::from_utf8(&record.ipns_name).map_err(local_error)?)
+            .map_err(local_error)?;
+        let key = self.key(&record.scope_id);
+        let _writing = NameLock::acquire(&key).await;
+        let next_sequence = IpnsRecord::unmarshal(&record.record_bytes)
+            .and_then(|r| r.verify(&name))
+            .map_err(local_error)?
+            .sequence;
+        // At one name the gate already holds every epoch floor, and a keyless
+        // root must still move the entry up to the sequence floor.
+        if let Some(held) = self.read_scope(&key, &record.scope_id).await? {
+            let stale = if held.ipns_name == record.ipns_name {
+                IpnsRecord::unmarshal(&held.record_bytes)
+                    .and_then(|r| r.verify(&name))
+                    .is_ok_and(|previous| previous.sequence >= next_sequence)
+            } else {
+                // A keyless read knows no write epoch. The owner-signed cut
+                // epoch never falls across a root move, and a copy at a name the
+                // owner did not choose cannot pass the gate.
+                match (cut_epoch(&held), cut_epoch(record)) {
+                    (Some(old), Some(new)) => new < old,
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                }
+            };
+            if stale {
+                return Ok(());
+            }
+        }
+        let body = encode_owner_seed_record(record).map_err(local_error)?;
+        let ephemeral = self.entropy.draw()?;
+        let blob = seal_owner_local(
+            self.owner,
+            OwnerLocalKind::OwnerSeedCache,
+            &ephemeral,
+            &body,
+        )
+        .map_err(local_error)?;
+        self.staging.write(&key, &blob).await
+    }
+}
+
+fn cut_epoch(record: &OwnerSeedRecord) -> Option<u64> {
+    let envelope = decode_envelope(&record.head_block).ok()?;
+    let section = decode_grant_section(grant_section_bytes(&envelope)?).ok()?;
+    Some(section.commitment.cut_epoch)
+}
+
+/// Recovery records do not reserve upload space.
+pub(crate) async fn upload_staged_bytes<St: StagingStore>(staging: &St) -> Result<u64, SeamError> {
+    let mut total = staging.staged_bytes_total().await?;
+    for key in staging.staged_keys().await? {
+        if key.starts_with(OWNER_SEED_CACHE_PREFIX) {
+            let held = staging.staged_bytes(&key).await?;
+            total = total.saturating_sub(held.map_or(0, |b| b.len() as u64));
+        }
+    }
+    Ok(total)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const SEED: [u8; 32] = [0x66; 32];
-    const OTHER: [u8; 32] = [0x99; 32];
-    const SCOPE: [u8; 16] = [0x44; 16];
+    use crate::testkit::{SeededEntropy, block_on, fakes::InMemoryStagingStore};
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     #[test]
-    fn all_sources_agree_confirms_and_caches() {
-        let outcome = cross_check(&SEED, Some(&SEED), &SEED, 4);
-        let mut cache = OwnerSeedCache::new();
-        match outcome {
-            OwnerEntry::Confirmed { seed, epoch } => {
-                assert!(ct_eq(&seed, &SEED), "seed mismatch");
-                assert_eq!(epoch, 4);
-                cache.refresh(SCOPE, seed, epoch);
-            }
-            OwnerEntry::Abuse(_) => panic!("agreement must confirm"),
-        }
-        assert!(
-            ct_eq(cache.get(&SCOPE).unwrap().seed(), &SEED),
-            "cached seed mismatch"
-        );
-        assert_eq!(cache.get(&SCOPE).unwrap().epoch, 4);
-    }
-
-    #[test]
-    fn owner_blob_disagreement_is_attributable_abuse() {
-        match cross_check(&OTHER, None, &SEED, 4) {
-            OwnerEntry::Abuse(event) => {
-                assert_eq!(event.check(), "owner-seed-cross-check-disagreement");
-                assert!(event.description.contains("owner-blob"));
-            }
-            OwnerEntry::Confirmed { .. } => panic!("a disagreement must raise abuse"),
-        }
-    }
-
-    #[test]
-    fn ascent_link_disagreement_is_attributable_abuse() {
-        match cross_check(&SEED, Some(&OTHER), &SEED, 4) {
-            OwnerEntry::Abuse(event) => assert!(event.description.contains("ascent-link")),
-            OwnerEntry::Confirmed { .. } => panic!("a disagreement must raise abuse"),
-        }
-    }
-
-    #[test]
-    fn no_ascent_link_still_cross_checks_the_owner_blob() {
+    fn the_sealed_cache_refuses_account_and_lookup_transplants() {
+        let staging = InMemoryStagingStore::default();
+        let owner = X25519Secret::from_scalar([0x11; 32]);
+        let entropy = RefCell::new(SeededEntropy::new(17));
+        let labels = kdf::contact_label_seed(&[0x22; 32]);
+        let store = OwnerSeedCache::new(&staging, &owner, &entropy, &labels);
+        let signer = Ed25519Signer::from_seed([0x33; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let record = record(&signer, 1, b"/ipfs/test");
+        block_on(store.save(&record)).unwrap();
+        let body = block_on(store.load(&record.scope_id, &name))
+            .unwrap()
+            .unwrap();
+        assert_eq!(body.epoch, 1);
+        let key = store.key(&record.scope_id);
+        let blob = block_on(staging.staged_bytes(&key)).unwrap().unwrap();
+        let other_scope = [0x66; 16];
+        block_on(staging.put_staged_bytes(&store.key(&other_scope), &blob)).unwrap();
         assert!(matches!(
-            cross_check(&SEED, None, &SEED, 7),
-            OwnerEntry::Confirmed { epoch: 7, .. }
+            block_on(store.load(&other_scope, &name)),
+            Ok(None)
+        ));
+        let foreign_owner = X25519Secret::from_scalar([0x77; 32]);
+        let foreign = OwnerSeedCache::new(&staging, &foreign_owner, &entropy, &labels);
+        assert!(matches!(
+            block_on(foreign.load(&record.scope_id, &name)),
+            Ok(None)
         ));
     }
 
+    fn record(signer: &Ed25519Signer, sequence: u64, value: &[u8]) -> OwnerSeedRecord {
+        OwnerSeedRecord {
+            scope_id: [0x44; 16],
+            epoch: 1,
+            write_epoch: 1,
+            parent_node_seed: None,
+            ipns_name: IpnsName::from_public_key(&signer.verifying_key())
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+            record_bytes: IpnsRecord::create_v2(
+                signer,
+                value,
+                sequence,
+                2_000_000_000,
+                "2099-01-01T00:00:00Z",
+            )
+            .marshal(),
+            head_block: Vec::new(),
+        }
+    }
+
     #[test]
-    fn refresh_replaces_the_prior_canonical_entry() {
-        let mut cache = OwnerSeedCache::new();
-        cache.refresh(SCOPE, Zeroizing::new(SEED), 1);
-        cache.refresh(SCOPE, Zeroizing::new(OTHER), 2);
-        assert!(
-            ct_eq(cache.get(&SCOPE).unwrap().seed(), &OTHER),
-            "cached seed mismatch"
+    fn one_scope_keeps_one_name_and_only_a_greater_sequence_replaces_it() {
+        let staging = InMemoryStagingStore::default();
+        let owner = X25519Secret::from_scalar([0x11; 32]);
+        let entropy = RefCell::new(SeededEntropy::new(17));
+        let labels = kdf::contact_label_seed(&[0x22; 32]);
+        let cache = OwnerSeedCache::new(&staging, &owner, &entropy, &labels);
+        let first = Ed25519Signer::from_seed([0x33; 32]);
+        let next = Ed25519Signer::from_seed([0x34; 32]);
+        let old_name = IpnsName::from_public_key(&first.verifying_key());
+        let next_name = IpnsName::from_public_key(&next.verifying_key());
+        let confirmed = record(&first, 4, b"/ipfs/confirmed");
+        block_on(cache.save(&confirmed)).unwrap();
+        for sequence in [3, 4] {
+            block_on(cache.save(&record(&first, sequence, b"/ipfs/fork"))).unwrap();
+            assert_eq!(
+                block_on(cache.load(&confirmed.scope_id, &old_name))
+                    .unwrap()
+                    .unwrap()
+                    .record_bytes,
+                confirmed.record_bytes
+            );
+        }
+        let advanced = record(&first, 5, b"/ipfs/advanced");
+        block_on(cache.save(&advanced)).unwrap();
+        assert_eq!(
+            block_on(cache.load(&confirmed.scope_id, &old_name))
+                .unwrap()
+                .unwrap()
+                .record_bytes,
+            advanced.record_bytes
         );
-        assert_eq!(cache.get(&SCOPE).unwrap().epoch, 2);
+        let moved = record(&next, 1, b"/ipfs/moved");
+        block_on(cache.save(&moved)).unwrap();
+        assert!(
+            block_on(cache.load(&confirmed.scope_id, &old_name))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            block_on(cache.load(&confirmed.scope_id, &next_name))
+                .unwrap()
+                .unwrap()
+                .record_bytes,
+            moved.record_bytes
+        );
+        assert_eq!(block_on(staging.staged_keys()).unwrap().len(), 1);
+        block_on(cache.remove(&confirmed.scope_id)).unwrap();
+        assert!(block_on(staging.staged_keys()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_cache_does_not_spend_the_upload_budget() {
+        let staging = InMemoryStagingStore::default();
+        block_on(staging.put_staged_bytes(b"cbx/os/recovery", &[0; 4096])).unwrap();
+        block_on(staging.put_staged_bytes(b"upload", &[0; 12])).unwrap();
+        assert_eq!(block_on(upload_staged_bytes(&staging)).unwrap(), 12);
+    }
+
+    #[test]
+    fn the_lookup_key_matches_the_core_kat() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../../core/kat/manifest.json")).unwrap();
+        let lookup = &manifest["ownerSeedCache"]["lookup"];
+        let labels = SecretBytes::new(
+            hex::decode(lookup["labelSeed"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        );
+        let scope = hex::decode(lookup["scope"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let staging = InMemoryStagingStore::default();
+        let owner = X25519Secret::from_scalar([0x11; 32]);
+        let entropy = RefCell::new(SeededEntropy::new(17));
+        let cache = OwnerSeedCache::new(&staging, &owner, &entropy, &labels);
+        assert_eq!(
+            hex::encode(cache.key(&scope)),
+            lookup["key"].as_str().unwrap()
+        );
     }
 }

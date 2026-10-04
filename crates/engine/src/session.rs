@@ -98,6 +98,23 @@ pub(crate) struct SessionIdentity {
 
 #[allow(dead_code)]
 impl SessionIdentity {
+    pub(crate) fn owner_seed_cache<
+        'a,
+        St: crate::seams::StagingStore,
+        E: crate::entropy::Entropy,
+    >(
+        &'a self,
+        staging: &'a St,
+        entropy: &'a RefCell<E>,
+    ) -> crate::grants::OwnerSeedCache<'a> {
+        crate::grants::OwnerSeedCache::new(
+            staging,
+            self.enc_subkey(),
+            entropy,
+            self.contact_label_seed(),
+        )
+    }
+
     /// Derive the cold-start identity from the login secret — a pure function
     /// of the secret bytes (no clock, no RNG), composing only frozen catalog
     /// edges. Same secret in, same identity out.

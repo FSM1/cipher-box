@@ -1,7 +1,0 @@
-[
-  {
-    "name": "owner-blob-seed-that-did-not-unseal-the-body",
-    "check": "owner-seed-cross-check-disagreement",
-    "class": "trust"
-  }
-]

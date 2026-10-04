@@ -17314,6 +17314,234 @@ fn a_write_revoke_runs_on_the_last_copy_of_a_planted_root() {
     );
 }
 
+/// A signed owner blob with another seed is refused after restart. The cut
+/// moves the root and drops the old copy's whole grant set (ADR 0068 D3, D5).
+#[test]
+fn a_restarted_owner_cuts_a_disagreeing_seed_from_its_durable_copy() {
+    use cipherbox_core::seal::{OverrideSeedPayload, STRUCT_TAG_OWNER_BLOB, seal_owner_blob};
+    for sequence_offset in [0, 1, u64::MAX] {
+        let mut fx = GrantScenario::new();
+        let (child, _, writer_seed) = write_granted_nested_subtree(&mut fx);
+        assert_eq!(
+            fx.grant_bystander(Permission::Read),
+            Ok(CommandOutcome::Done)
+        );
+        let name = fx.granted_scope_repoint().current_root;
+        for _ in 0..2 {
+            tick(&fx.world, &fx.engine, &mut fx._tasks);
+        }
+        let honest_value = published_value(&fx.world, &name);
+        let honest_cid = std::str::from_utf8(&honest_value)
+            .unwrap()
+            .strip_prefix("/ipfs/")
+            .unwrap();
+        let head = published_head(&fx.world, &fx.blocks, &name).unwrap();
+        let mut envelope = decode_envelope(&head).unwrap();
+        let mut section = decode_grant_section(grant_section_bytes(&envelope).unwrap()).unwrap();
+        let blob = seal_owner_blob(
+            &kdf::enc_subkey(&SECRET).public(),
+            &[0x99; 32],
+            &AadContext {
+                v: envelope.v,
+                id: envelope.id,
+                scope: envelope.scope,
+                epoch: envelope.epoch,
+                struct_tag: STRUCT_TAG_OWNER_BLOB,
+            },
+            &OverrideSeedPayload::new([0x98; 32], envelope.epoch),
+        )
+        .unwrap();
+        let (shared, _) = cipherbox_engine::grants::recipient_self_location(
+            &kdf::enc_subkey(&RECIPIENT_SECRET),
+            &kdf::enc_subkey(&SECRET).public(),
+            name.as_str().as_bytes(),
+        )
+        .unwrap();
+        let writer = kdf::pseudonym_sign(shared.as_bytes(), &fx.folder.0);
+        section.owner_blob.enc = blob.enc;
+        section.owner_blob.ciphertext = blob.ciphertext;
+        cipherbox_engine::testkit::resign_section(
+            &mut section,
+            fx.folder.0,
+            envelope.epoch,
+            &writer,
+        );
+        set_grant_section(&mut envelope, encode_grant_section(&section).unwrap());
+        let cid = fx.blocks.put(encode_envelope(&envelope).unwrap());
+        let sequence = sequence_at(&fx.world, &name).saturating_add(sequence_offset);
+        sign_at(
+            &fx,
+            &writer_seed,
+            fx.folder,
+            format!("/ipfs/{cid}").as_bytes(),
+            sequence,
+        );
+        let planted = published_value(&fx.world, &name);
+        fx.blocks.fail_block(honest_cid);
+        block_on(fx.owner_device.snapshot_cache.clear()).unwrap();
+        restart_owner(&mut fx);
+        assert_eq!(revoke_the_recipient(&mut fx), Ok(CommandOutcome::Done));
+        let events = events_so_far(&mut fx._events);
+        assert!(root_refusals(&fx, &events, sequence) > 0);
+        assert_revoke_finished(&mut fx, &writer_seed, child);
+        let moved = fx.granted_scope_repoint().current_root;
+        assert_ne!(moved, name);
+        assert_no_grant_at(&fx, &moved);
+        assert_eq!(published_value(&fx.world, &name), planted);
+    }
+}
+
+#[test]
+fn deleting_a_folder_removes_its_previous_scope_copy() {
+    delete_with_previous_scope_copy(false);
+}
+
+#[test]
+fn a_stale_delete_keeps_the_live_folders_scope_copy() {
+    delete_with_previous_scope_copy(true);
+}
+
+/// The staged key and sealed bytes of `fx.folder`'s durable scope copy.
+fn scope_copy(fx: &GrantScenario) -> Option<(Vec<u8>, Vec<u8>)> {
+    use cipherbox_core::seal::{OwnerLocalKind, decode_owner_seed_record, open_owner_local};
+    block_on(fx.owner_device.staging_store.staged_keys())
+        .unwrap()
+        .into_iter()
+        .find_map(|key| {
+            let blob = block_on(fx.owner_device.staging_store.staged_bytes(&key)).unwrap()?;
+            let record = open_owner_local(
+                &kdf::enc_subkey(&SECRET),
+                OwnerLocalKind::OwnerSeedCache,
+                &blob,
+            )
+            .and_then(|body| decode_owner_seed_record(&body))
+            .ok()?;
+            (record.scope_id == fx.folder.0).then_some((key, blob))
+        })
+}
+
+/// A granted folder, read twice, with the durable copy its confirmed scope saved.
+fn granted_with_scope_copy() -> (GrantScenario, Vec<u8>, Vec<u8>) {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    let (key, blob) = scope_copy(&fx).expect("the confirmed scope has a durable copy");
+    (fx, key, blob)
+}
+
+/// A plain folder whose id holds the durable copy that a granted run of the
+/// same scenario saved.
+fn folder_with_scope_copy() -> (GrantScenario, Vec<u8>, Vec<u8>) {
+    let (previous, key, blob) = granted_with_scope_copy();
+    let fx = GrantScenario::new();
+    assert_eq!(previous.folder, fx.folder);
+    drop(previous);
+    block_on(fx.owner_device.staging_store.put_staged_bytes(&key, &blob)).unwrap();
+    (fx, key, blob)
+}
+
+#[test]
+fn a_store_fault_on_the_scope_copy_does_not_stop_the_delete() {
+    let (mut fx, _, _) = folder_with_scope_copy();
+    fx.owner_device
+        .staging_store
+        .inner()
+        .fail_staged_removals_under(cipherbox_engine::grants::OWNER_SEED_CACHE_PREFIX);
+    block_on(fx.engine.command(Command::Delete { node: fx.folder })).unwrap();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.owner_device.staging_store.queued_ops())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !block_on(fx.engine.view())
+            .unwrap()
+            .children(ROOT)
+            .iter()
+            .any(|child| child.id == fx.folder)
+    );
+}
+
+/// The copy goes before the publish that completes the delete. A live scope
+/// that lost its copy in that window gets it again at its next confirmed read.
+#[test]
+fn a_delete_drops_the_copy_before_its_publish_and_a_live_scope_saves_it_again() {
+    let (mut fx, key, _) = folder_with_scope_copy();
+    let root = write_name(ROOT);
+    let linked = published_value(&fx.world, &root);
+    fx.world.record_store.fail_put_for(root.as_str());
+    block_on(fx.engine.command(Command::Delete { node: fx.folder })).unwrap();
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.owner_device.staging_store.staged_bytes(&key))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(published_value(&fx.world, &root), linked);
+
+    let (mut fx, key, _) = granted_with_scope_copy();
+    block_on(fx.owner_device.staging_store.remove_staged_bytes(&key)).unwrap();
+    restart_owner(&mut fx);
+    for _ in 0..2 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(scope_copy(&fx).is_some());
+}
+
+fn delete_with_previous_scope_copy(concurrent: bool) {
+    let (mut fx, key, blob) = folder_with_scope_copy();
+    if concurrent {
+        use cipherbox_engine::sync::{Op, RecordSeal, stage_op};
+        let current = sequence_at(&fx.world, &write_name(fx.folder));
+        let stale = Op::delete(
+            fx.folder,
+            sequence_at(&fx.world, &write_name(ROOT)),
+            UnixMillis(0),
+            current - 1,
+            true,
+        );
+        block_on(stage_op(
+            &fx.owner_device.staging_store,
+            RecordSeal {
+                owner_enc_secret: &kdf::enc_subkey(&SECRET),
+                ephemeral_scalar: Zeroizing::new([0x79; 32]),
+            },
+            &stale,
+        ))
+        .unwrap();
+    } else {
+        block_on(fx.engine.command(Command::Delete { node: fx.folder })).unwrap();
+    }
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.owner_device.staging_store.queued_ops())
+            .unwrap()
+            .is_empty()
+    );
+    let held = block_on(fx.owner_device.staging_store.staged_bytes(&key)).unwrap();
+    if concurrent {
+        assert!(
+            block_on(fx.engine.view())
+                .unwrap()
+                .children(ROOT)
+                .iter()
+                .any(|child| child.id == fx.folder)
+        );
+        assert!(held.as_ref().is_some_and(|held| held == &blob));
+    } else {
+        assert!(held.is_none());
+    }
+}
+
 /// ADR 0068 D3: a plant at the sequence ceiling blocks each publish at the
 /// old root name, and the revoke publishes none there.
 #[test]

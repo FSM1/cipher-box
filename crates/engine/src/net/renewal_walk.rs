@@ -127,6 +127,7 @@ pub(crate) struct WalkGuards<'a> {
 
 /// The seams and keys one walk pass runs over.
 pub(crate) struct RenewalWalk<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
+    pub(crate) owner_seed_cache: Option<crate::grants::owner_entry::OwnerSeedCache<'a>>,
     pub(crate) transport: &'a T,
     pub(crate) api: &'a ApiClient<H, C>,
     pub(crate) floors: &'a F,
@@ -505,6 +506,7 @@ where
                         self.http,
                         self.floors,
                         self.snapshot_cache,
+                        self.owner_seed_cache.clone(),
                         self.enc_secret,
                         self.identity,
                         scope_id,

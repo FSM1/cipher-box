@@ -83,6 +83,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(RENEWAL_CURSOR_PREFIX)
         || key.starts_with(OWED_ROTATION_PREFIX)
         || key.starts_with(KEPT_OP_NOTES_PREFIX)
+        || key.starts_with(crate::grants::owner_entry::OWNER_SEED_CACHE_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.
@@ -1520,6 +1521,7 @@ mod tests {
                 RENEWAL_CURSOR_PREFIX,
                 OWED_ROTATION_PREFIX,
                 KEPT_OP_NOTES_PREFIX,
+                crate::grants::owner_entry::OWNER_SEED_CACHE_PREFIX,
             ] {
                 store
                     .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())

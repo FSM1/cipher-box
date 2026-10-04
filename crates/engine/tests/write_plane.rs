@@ -42,6 +42,7 @@ use cipherbox_engine::content::{
 };
 use cipherbox_engine::facade::{BinOrigin, PendingClass, SnapshotView};
 use cipherbox_engine::gate::record_cut_epoch_floor;
+use cipherbox_engine::grants::OWNER_SEED_CACHE_PREFIX;
 use cipherbox_engine::net::OrphanHeads;
 use cipherbox_engine::net::author::{
     AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
@@ -1482,7 +1483,7 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
 
     let_kept_ops_leave(&world, &engine_a, &mut tasks);
     assert_eq!(
-        staged_keys_but_the_cursor(&alice),
+        staged_keys_without_read_state(&alice),
         vec![mark_key()],
         "no staged block survives a published version, only queue bookkeeping"
     );
@@ -2757,12 +2758,8 @@ fn a_truncated_file_fails_the_commit_and_publishes_nothing() {
         block_on(engine_a.view()).unwrap().children(ROOT).is_empty(),
         "nothing was journaled, so nothing publishes"
     );
-    let cursor = block_on(alice.staging_store.staged_bytes(&cursor_key()))
-        .unwrap()
-        .map_or(0, |cursor| cursor.len() as u64);
-    assert_eq!(
-        block_on(alice.staging_store.staged_bytes_total()).unwrap(),
-        cursor,
+    assert!(
+        staged_keys_without_read_state(&alice).is_empty(),
         "the failed write releases every block it staged"
     );
 }
@@ -3208,7 +3205,7 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
         );
         let_kept_ops_leave(&world, &engine, &mut tasks);
         assert_eq!(
-            staged_keys_but_the_cursor(&alice),
+            staged_keys_without_read_state(&alice),
             vec![mark_key()],
             "and nothing stays once the kept op leaves"
         );
@@ -10714,10 +10711,9 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
 
     assert_no_blocks_staged(&alice, &version);
     assert!(
-        block_on(alice.staging_store.staged_keys())
-            .unwrap()
+        staged_keys_without_read_state(&alice)
             .iter()
-            .all(|key| *key == drained_key() || *key == cursor_key()),
+            .all(|key| *key == drained_key()),
         "the staging budget holds nothing but queue bookkeeping"
     );
     assert!(
@@ -10883,11 +10879,10 @@ fn cursor_key() -> Vec<u8> {
     owner_scoped_key(RENEWAL_CURSOR_PREFIX, &kdf::enc_subkey(&SECRET))
 }
 
-/// Every staged key but the renewal cursor, which the walk writes on its own
-/// clock.
-fn staged_keys_but_the_cursor(device: &FakeDevice) -> Vec<Vec<u8>> {
+/// Upload state, excluding the renewal cursor and durable owner recovery copies.
+fn staged_keys_without_read_state(device: &FakeDevice) -> Vec<Vec<u8>> {
     let mut keys = block_on(device.staging_store.staged_keys()).unwrap();
-    keys.retain(|key| *key != cursor_key());
+    keys.retain(|key| *key != cursor_key() && !key.starts_with(OWNER_SEED_CACHE_PREFIX));
     keys
 }
 

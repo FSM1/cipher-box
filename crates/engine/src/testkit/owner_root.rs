@@ -375,3 +375,38 @@ pub fn owner_root_fixture_sealed(
         head_cid_str,
     }
 }
+
+/// Re-sign every structure as one committed writer (ADR 0052).
+pub fn resign_section(
+    section: &mut GrantSection,
+    scope: [u8; 16],
+    epoch: u64,
+    signer: &Ed25519Signer,
+) {
+    let sign = |tag, recipient, bytes: &[u8]| {
+        sign_structure(
+            signer,
+            &StructureSigInput::over_ciphertext(scope, epoch, tag, recipient, bytes),
+        )
+        .to_bytes()
+    };
+    section.owner_blob.signature =
+        sign(STRUCT_TAG_OWNER_BLOB, None, &section.owner_blob.ciphertext);
+    if let Some(blob) = &mut section.owner_write_blob {
+        blob.signature = sign(STRUCT_TAG_OWNER_WRITE_BLOB, None, &blob.ciphertext);
+    }
+    for blob in &mut section.grant_blobs {
+        blob.signature = sign(STRUCT_TAG_GRANT_BLOB, Some(blob.tag), &blob.ciphertext);
+    }
+    for link in &mut section.history_links {
+        link.signature = sign(
+            cipherbox_core::seal::STRUCT_TAG_HISTORY_LINK,
+            None,
+            &link.sealed,
+        );
+    }
+    section.write_body.signature = sign(STRUCT_TAG_WRITE_BODY, None, &section.write_body.sealed);
+    if let Some(link) = &mut section.ascent_link {
+        link.signature = sign(STRUCT_TAG_ASCENT_LINK, None, &link.sig_body());
+    }
+}

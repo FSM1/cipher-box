@@ -81,6 +81,14 @@ const MANIFEST: &str = include_str!("../kat/manifest.json");
 /// Path keys are manifest-relative (relative to `kat/`).
 const FIXTURES: &[(&str, &str)] = &[
     (
+        "vectors/owner_local/owner_seed_cache_accept.json",
+        include_str!("../kat/vectors/owner_local/owner_seed_cache_accept.json"),
+    ),
+    (
+        "vectors/owner_local/owner_seed_cache_reject.json",
+        include_str!("../kat/vectors/owner_local/owner_seed_cache_reject.json"),
+    ),
+    (
         "vectors/codec/accept.json",
         include_str!("../kat/vectors/codec/accept.json"),
     ),
@@ -381,8 +389,36 @@ struct Manifest {
     settings_record: SettingsRecordManifest,
     content_key: ContentKeyManifest,
     owner_local: OwnerLocalManifest,
+    owner_seed_cache: OwnerSeedCacheManifest,
     bin_index: BinIndexManifest,
     bounds: BoundsManifest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnerSeedCacheManifest {
+    lookup: OwnerSeedCacheLookup,
+    v: u64,
+    max_bytes: usize,
+    charged_measure: String,
+    fields: BTreeMap<String, OwnerSeedCacheBound>,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnerSeedCacheLookup {
+    label_seed: String,
+    scope: String,
+    key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnerSeedCacheBound {
+    max_bytes: usize,
+    charged_measure: String,
 }
 
 #[derive(Deserialize)]
@@ -1749,6 +1785,8 @@ fn manifest_header_is_pinned() {
 fn fixture_table_matches_manifest_files() {
     let m = manifest();
     let referenced = [
+        m.owner_seed_cache.accept.file.as_str(),
+        m.owner_seed_cache.reject.file.as_str(),
         m.codecs.det_cbor.accept.file.as_str(),
         m.codecs.det_cbor.reject.file.as_str(),
         m.codecs.det_cbor.unknown_fields.file.as_str(),
@@ -1895,7 +1933,7 @@ const EPHEMERAL_SCALAR_FAMILIES: &[(&str, usize)] = &[
     ("vectors/grant/owner_write_blob_accept.json", 1),
     ("vectors/hpke/seal.json", 3),
     ("vectors/op_record/op_record_accept.json", 2),
-    ("vectors/owner_local/owner_local_accept.json", 12),
+    ("vectors/owner_local/owner_local_accept.json", 13),
     ("vectors/payload/mailbox_accept.json", 2),
     ("vectors/settings_record/settings_record_accept.json", 2),
     ("vectors/grant/write_history_link_accept.json", 1),
@@ -4411,6 +4449,11 @@ fn artifact_round_trip(artifact: &str, bytes: &[u8]) -> Result<Vec<u8>, CodecErr
         "envelope" => decode_envelope(bytes).and_then(|v| encode_envelope(&v)),
         "writeBody" => decode_write_body(bytes).and_then(|v| encode_write_body(&v)),
         "grantSection" => decode_grant_section(bytes).and_then(|v| encode_grant_section(&v)),
+        "ownerSeedCache" | "ownerSeedCacheFull" => {
+            cipherbox_core::seal::decode_owner_seed_record(bytes)
+                .and_then(|v| cipherbox_core::seal::encode_owner_seed_record(&v))
+                .map(|v| v.to_vec())
+        }
         other => panic!("unknown bound artifact {other}"),
     }
 }
@@ -4425,6 +4468,22 @@ fn artifact_round_trip(artifact: &str, bytes: &[u8]) -> Result<Vec<u8>, CodecErr
 fn the_charged_measure_of_every_byte_bound_is_frozen_in_the_manifest() {
     let m = manifest();
     let expected: BTreeMap<&str, usize> = BTreeMap::from([
+        (
+            "ownerSeedCache.maxBytes",
+            cipherbox_core::seal::MAX_OWNER_SEED_CACHE_BYTES,
+        ),
+        (
+            "ownerSeedCache.fields.ipnsName.maxBytes",
+            cipherbox_core::ipns::MAX_IPNS_NAME_BYTES,
+        ),
+        (
+            "ownerSeedCache.fields.ipnsRecord.maxBytes",
+            cipherbox_core::seal::MAX_OWNER_SEED_RECORD_BYTES,
+        ),
+        (
+            "ownerSeedCache.fields.headBlock.maxBytes",
+            cipherbox_core::seal::MAX_BLOCK_BYTES,
+        ),
         ("seal.envelopeMaxBytes", MAX_BLOCK_BYTES),
         ("seal.readSealedMaxBytes", MAX_READ_SEALED_BYTES),
         ("seal.criticalCarriedMaxBytes", MAX_CRITICAL_CARRIED_BYTES),
@@ -4458,9 +4517,8 @@ fn the_charged_measure_of_every_byte_bound_is_frozen_in_the_manifest() {
         let at_bound = pad_artifact(&base, &b.pad_field, b.pad_byte, b.pad_len);
         assert_eq!(at_bound.len(), b.encoded_len, "{name}: encoded length");
         assert_eq!(hex::encode(hash(&at_bound)), b.blake3, "{name}: digest");
-        assert_eq!(
-            artifact_round_trip(&b.artifact, &at_bound).as_deref(),
-            Ok(at_bound.as_slice()),
+        assert!(
+            artifact_round_trip(&b.artifact, &at_bound).is_ok_and(|bytes| bytes == at_bound),
             "{name}: the bound must admit its at-the-bound artifact"
         );
 
@@ -7067,6 +7125,67 @@ fn owner_local_cross_kind_vectors_cover_every_ordered_pair() {
                 open_owner_local(&owner, sealed_as, &blob).is_ok(),
                 "{name}: the blob must open under the kind it was sealed as"
             );
+        }
+    }
+}
+
+#[test]
+fn owner_seed_cache_vectors_pin_the_body_and_its_refusals() {
+    use cipherbox_core::seal::{
+        MAX_OWNER_SEED_CACHE_BYTES, decode_owner_seed_record, encode_owner_seed_record,
+    };
+    let m = manifest();
+    let spec = &m.owner_seed_cache;
+    let seed: [u8; 32] = hex::decode(&spec.lookup.label_seed)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let scope = hex::decode(&spec.lookup.scope).unwrap();
+    let label = cipherbox_core::kdf::name_label(&seed, &[b"cbx/os/".as_slice(), &scope].concat());
+    assert_eq!(
+        hex::encode([b"cbx/os/".as_slice(), &label].concat()),
+        spec.lookup.key
+    );
+    assert_eq!(spec.v, 1);
+    assert_eq!(spec.max_bytes, MAX_OWNER_SEED_CACHE_BYTES);
+    assert_eq!(spec.charged_measure, "whole-encoding");
+    for (field, expected) in [
+        ("headBlock", cipherbox_core::seal::MAX_BLOCK_BYTES),
+        ("ipnsName", cipherbox_core::ipns::MAX_IPNS_NAME_BYTES),
+        (
+            "ipnsRecord",
+            cipherbox_core::seal::MAX_OWNER_SEED_RECORD_BYTES,
+        ),
+    ] {
+        assert_eq!(spec.fields[field].max_bytes, expected);
+        assert_eq!(spec.fields[field].charged_measure, "byte-string-payload");
+    }
+    assert_eq!(spec.fields.len(), 3);
+    for (family, file, count) in [
+        ("accept", &spec.accept.file, spec.accept.count),
+        ("reject", &spec.reject.file, spec.reject.count),
+    ] {
+        let rows: Vec<serde_json::Value> = serde_json::from_str(fixture(file)).unwrap();
+        assert_eq!(rows.len(), count);
+        let mut checks = Vec::new();
+        for row in rows {
+            let bytes = zeroize::Zeroizing::new(hex::decode(row["hex"].as_str().unwrap()).unwrap());
+            let result = decode_owner_seed_record(&bytes);
+            if family == "accept" {
+                let record = result.expect("frozen body opens");
+                assert!(
+                    encode_owner_seed_record(&record).unwrap().as_slice() == bytes.as_slice(),
+                    "canonical re-encode"
+                );
+            } else {
+                let error = result.err().expect("frozen refusal");
+                assert_eq!(error.check(), row["check"].as_str().unwrap());
+                assert_eq!(error.class(), row["class"].as_str().unwrap());
+                checks.push(error.check());
+            }
+        }
+        if family == "reject" {
+            assert_eq!(checks, spec.reject.checks);
         }
     }
 }

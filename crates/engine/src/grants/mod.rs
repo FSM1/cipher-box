@@ -30,7 +30,8 @@ pub mod invite_mint;
 pub mod ledger;
 pub(crate) mod link_read;
 pub mod name_cache;
-pub mod owner_entry;
+pub(crate) mod owner_entry;
+pub use owner_entry::{OWNER_SEED_CACHE_PREFIX, OwnerSeedCache};
 pub mod received_share_store;
 pub(crate) mod received_status;
 pub mod revocation;
@@ -87,6 +88,5 @@ pub use ledger::{
 pub use name_cache::{
     GRANTEE_NAMES_PREFIX, GranteeNameCache, MAX_CACHED_NAMES, StagingGranteeNameCache,
 };
-pub use owner_entry::{AbuseEvent, OwnerEntry, OwnerSeedCache, OwnerSeedEntry, cross_check};
 pub use received_share_store::{RECEIVED_SHARES_PREFIX, StagingReceivedShareStore};
 pub use revocation::{ResolutionClass, ResolutionFacts, classify};

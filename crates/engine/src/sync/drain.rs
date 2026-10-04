@@ -1245,6 +1245,7 @@ impl<'a> SealPlane<'a> {
 /// none of it.
 #[derive(Clone, Copy)]
 pub(crate) struct DrainScope<'a> {
+    pub(crate) owner_seed_cache: Option<&'a crate::grants::owner_entry::OwnerSeedCache<'a>>,
     /// The scope the pass anchors on, and the one every intra-scope record seals
     /// under.
     pub(crate) source: ScopeEnd<'a>,
@@ -2589,6 +2590,13 @@ where
                     return Err(halt);
                 }
             }
+            if *reason == DropReason::AlreadySatisfied
+                && let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id)
+                && matches!(op.kind, OpKind::Delete { .. })
+                && let Some(cache) = scope.owner_seed_cache
+            {
+                let _ = cache.remove(&op.target.0).await;
+            }
             self.dequeue_op(*op_id).await?;
             report.dropped.push(*op_id);
         }
@@ -3526,7 +3534,8 @@ where
                 scope.enc_secret,
                 scope.owner_identity,
                 end.root.0,
-            ),
+            )
+            .with_owner_seed_cache(scope.owner_seed_cache.cloned()),
         };
         match end.ascent_node_seed {
             Some(seed) => adopter.under_parent_node_seed(seed.clone()),
@@ -4152,6 +4161,9 @@ where
             if to_bin {
                 self.finish_binned_delete(scope, pass, target).await?;
             }
+            if let Some(cache) = scope.owner_seed_cache {
+                let _ = cache.remove(&target.0).await;
+            }
             return Ok(());
         };
 
@@ -4200,6 +4212,14 @@ where
                 .await?,
             )
         };
+        // Before the publish that completes the op: a crash in between leaves a
+        // live scope with no entry, which its next confirmed read saves again.
+        if let Some(cache) = scope.owner_seed_cache {
+            let _ = cache.remove(&target.0).await;
+            for node in doomed.iter().flatten() {
+                let _ = cache.remove(&node.node.0).await;
+            }
+        }
         // Only the last unlink completes the op. A pass that stops part-way
         // leaves the node binned and still linked, which is the residue the
         // entry-before-unlink order already settles on the retry.
@@ -8206,12 +8226,15 @@ where
             adopter.adopt(name, record_bytes).await?
         };
         let version = adopted.version;
-        keep_then_commit(
-            &self.seams.snapshot_cache,
-            name,
-            record_bytes,
-            adopted.pass.commit(&floors),
-        )
+        keep_then_commit(&self.seams.snapshot_cache, name, record_bytes, async {
+            if let crate::net::GatePass::Deferred(ref pending) = adopted.pass
+                && let Some(record) = pending.owner_seed_record.as_ref()
+                && let Some(cache) = scope.owner_seed_cache
+            {
+                let _ = cache.save(record).await;
+            }
+            adopted.pass.commit(&floors).await
+        })
         .await
         .map(|adopted| Observed::gated(name, adopted.sequence, version, record_bytes))
         .map_err(GateError::Seam)
@@ -9279,6 +9302,7 @@ mod tests {
         roots: &'a [NodeId],
     ) -> DrainScope<'a> {
         DrainScope {
+            owner_seed_cache: None,
             source: source.end(),
             destination: Some(destination.end().at(DESTINATION_EPOCH)),
             scope_roots: roots,
@@ -9348,6 +9372,7 @@ mod tests {
                     epoch: 0,
                 }),
                 current_at_floor: None,
+                recovered_owner: None,
                 fork: None,
             },
             hold: None,
@@ -9387,6 +9412,7 @@ mod tests {
                     record_bytes: first.clone(),
                 },
                 current_at_floor: None,
+                recovered_owner: None,
                 fork: None,
             },
             hold: None,
@@ -9422,6 +9448,7 @@ mod tests {
                     last_known_good: None,
                     outcome,
                     current_at_floor: None,
+                    recovered_owner: None,
                     fork: None,
                 },
                 hold: None,
@@ -10720,6 +10747,7 @@ mod tests {
         let (source, destination) = ends();
         let roots = [SOURCE_ROOT, DESTINATION_ROOT];
         let uncharged = DrainScope {
+            owner_seed_cache: None,
             charges_the_identity: false,
             ..two_ended(&seams, &source, &destination, &roots)
         };
@@ -10870,6 +10898,7 @@ mod tests {
         /// queue gives the pass nothing to open.
         fn scope_at(&self, root: NodeId, floor_namespace: FloorNamespace) -> DrainScope<'_> {
             DrainScope {
+                owner_seed_cache: None,
                 source: ScopeEnd {
                     root,
                     root_name: &self.root_name,
@@ -11115,6 +11144,7 @@ mod tests {
             let drain = harness.drain();
             let base = harness.scope();
             let scope = DrainScope {
+                owner_seed_cache: None,
                 source: ScopeEnd {
                     read_scope_seed: &foreign,
                     read_seed_stamp: stamp,
@@ -11443,6 +11473,7 @@ mod tests {
         }
         let drain = harness.drain();
         let first = DrainScope {
+            owner_seed_cache: None,
             charges_the_identity: true,
             ..harness.scope()
         };

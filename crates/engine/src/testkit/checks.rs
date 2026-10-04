@@ -38,7 +38,6 @@ use crate::gate::floor::{Strictness, check as floor_check};
 use crate::gate::{GateError, GateRejection};
 use crate::grants::contact::import_contact;
 use crate::grants::ledger::enforce_committed_ledger;
-use crate::grants::owner_entry::{AbuseEvent, OwnerEntry, cross_check};
 use crate::grants::{
     AckedClaim, AuthorityViolation, CLAIM_ID_LEN, CommittedScope, CreateGrantError,
     EphemeralInvitee, GrantRecipient, GrantRow, GranteeScopePlan, InviteClaim, InviteError,
@@ -74,7 +73,6 @@ pub fn reject_families() -> Vec<RejectFamily> {
         gate_family(),
         invite_family(),
         ledger_family(),
-        owner_entry_family(),
         placement_family(),
         provider_family(),
     ]
@@ -311,7 +309,7 @@ async fn raise_floors(floors: &InMemoryFloorStore, name: &[u8], scope_id: &[u8; 
         .expect("an in-memory floor store raises");
 }
 
-// --- ledger and owner entry -------------------------------------------------
+// --- ledger -------------------------------------------------
 
 const POINTER_READ_KEY: [u8; SECRET_LEN] = [0x66; SECRET_LEN];
 
@@ -356,26 +354,6 @@ fn ledger_family() -> RejectFamily {
     )];
 
     family("ledger", AuthorityViolation::CHECKS, vectors)
-}
-
-fn owner_entry_family() -> RejectFamily {
-    const SEED: [u8; 32] = [0x66; 32];
-    const OTHER: [u8; 32] = [0x99; 32];
-
-    let refused = |name, owner_blob: &[u8; 32], ascent: Option<&[u8; 32]>| match cross_check(
-        owner_blob, ascent, &SEED, 4,
-    ) {
-        OwnerEntry::Abuse(event) => refusal!(name, event),
-        OwnerEntry::Confirmed { .. } => panic!("{name}: a disagreement must raise abuse"),
-    };
-
-    let vectors = vec![refused(
-        "owner-blob-seed-that-did-not-unseal-the-body",
-        &OTHER,
-        None,
-    )];
-
-    family("owner_entry", AbuseEvent::CHECKS, vectors)
 }
 
 // --- devices ----------------------------------------------------------------

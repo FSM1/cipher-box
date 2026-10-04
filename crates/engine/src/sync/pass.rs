@@ -331,6 +331,15 @@ where
     St: StagingStore + QueueGeneration,
     Sch: Scheduler + Clone + 'static,
 {
+    fn owner_seed_cache<'a>(&'a self, pass: &'a Pass) -> crate::grants::OwnerSeedCache<'a> {
+        crate::grants::OwnerSeedCache::new(
+            &self.seams.staging,
+            &pass.enc_subkey,
+            &self.seams.entropy,
+            &pass.contact_label_seed,
+        )
+    }
+
     /// Start has just decided, so the first re-decide comes one interval on.
     pub(crate) fn new(
         seams: EngineSeams<T, H, C, F, S, St, Sch>,
@@ -365,7 +374,10 @@ where
         self.consult_scope_pointers(state, &mut pass).await;
         let (floors_before, grafted) = self.refresh_floors(state, &pass).await;
         let (resolved, read_seed) = self.adopt_root(state, &pass, &floors_before).await;
-        let descendants = self.walk_scopes(state, &pass).await;
+        let recovered_root = resolved
+            .as_ref()
+            .is_ok_and(|read| read.recovered_owner.is_some());
+        let descendants = self.walk_scopes(state, &pass, recovered_root).await;
         let (folder_verdict, scopes) = self.refresh_focus(state, &pass, &grafted).await;
         let verdict = self.settle_verdict(state, &resolved, folder_verdict);
         let assembly = self
@@ -564,6 +576,7 @@ where
             &self.owner_identity,
             self.root_id,
         )
+        .with_owner_seed_cache(Some(self.owner_seed_cache(pass)))
         .holding(steady_state_hold(
             &state.held_records,
             self.root_id,
@@ -603,7 +616,12 @@ where
                 // and takes the pre-resolve floor (see `deposit_seed`).
                 let stamp = match &surfaced.resolved.outcome {
                     ResolveOutcome::Adopted(adopted) => Some(adopted.epoch),
-                    _ => floors_before.read,
+                    _ => surfaced
+                        .resolved
+                        .recovered_owner
+                        .as_ref()
+                        .map(|root| root.epoch)
+                        .or(floors_before.read),
                 };
                 deposit_seed(
                     &state.scope_read_seeds,
@@ -651,19 +669,32 @@ where
     }
 
     /// The scope walk below the vault root, and the boundaries it proved.
-    async fn walk_scopes(&self, state: &SessionState, pass: &Pass) -> Vec<DescendantScopeRoot> {
+    async fn walk_scopes(
+        &self,
+        state: &SessionState,
+        pass: &Pass,
+        recovered_root: bool,
+    ) -> Vec<DescendantScopeRoot> {
         // The held record is the root this pass reconciled, so the
         // walk needs no second read of either plane to start.
-        let held_root = state
+        let mut held_root = state
             .held_records
             .borrow()
             .get(&HeldKey::Node(self.root_id))
             .map(|record| (record.routing_key.clone(), record.record_bytes.clone()));
+        let owner_seed_cache = self.owner_seed_cache(pass);
+        let use_confirmed_root = held_root.is_none() && recovered_root;
+        if use_confirmed_root
+            && let Ok(Some(record)) = owner_seed_cache.load(&self.root_id, &pass.root_name).await
+        {
+            held_root = Some((pass.root_name.as_str().to_owned(), record.record_bytes));
+        }
         // Cloned out of the cell: a `Ref` cannot be held across the
         // walk's awaits.
         let walk_keys = self.secrets.sweep_keys.borrow().clone();
         let mut descendants = Vec::new();
         let walk = walk_keys.as_ref().map(|keys| ScopeWalk {
+            owner_seed_cache: Some(owner_seed_cache),
             transport: &self.seams.transport,
             snapshot_cache: &self.seams.snapshot_cache,
             gateway: &self.seams.gateway,
@@ -679,7 +710,7 @@ where
             && let Ok(name) = IpnsName::parse(&name)
         {
             let walked = walk
-                .descendant_scope_roots(self.root_id, &name, &root_bytes)
+                .descendant_scope_roots(self.root_id, &name, &root_bytes, use_confirmed_root)
                 .await;
             let failure = walked
                 .as_ref()
@@ -1127,12 +1158,14 @@ where
             }
             None => None,
         };
+        let owner_seed_cache = self.owner_seed_cache(pass);
         let exits = RotateOnExit(async |scope_root: NodeId| {
             let Some(boundaries) = &boundaries else {
                 return Err(RotateError::Resolve(ResolveFailure::Unavailable));
             };
             cut_exited_scope(
                 ScopeExitArm {
+                    owner_seed_cache: Some(owner_seed_cache.clone()),
                     transport: &self.seams.transport,
                     api: &self.seams.api,
                     gateway: &self.seams.gateway,
@@ -1154,6 +1187,7 @@ where
             .await
         });
         let vault = vault_seeds.map(|(read_seed, write_seed)| DrainScope {
+            owner_seed_cache: Some(&owner_seed_cache),
             source: vault_source(NodeId(self.root_id), &pass.root_name, read_seed, write_seed),
             destination: second.as_ref().map(|end| SealPlane {
                 end: ScopeEnd {
@@ -1179,6 +1213,7 @@ where
         let interior = drivable
             .iter()
             .map(|(scope, write)| DrainScope {
+                owner_seed_cache: Some(&owner_seed_cache),
                 source: interior_source(scope, write),
                 destination: None,
                 scope_roots: &proved_roots,
@@ -1196,6 +1231,7 @@ where
         let grafted_passes = grafted
             .iter()
             .map(|pass| DrainScope {
+                owner_seed_cache: None,
                 source: pass.source(),
                 destination: None,
                 scope_roots: &proved_roots,
@@ -1313,6 +1349,7 @@ where
         };
         let seams = &self.seams;
         let conversion = ConversionPass {
+            owner_seed_cache: Some(self.owner_seed_cache(pass)),
             transport: &seams.transport,
             api: seams.api.as_ref(),
             gateway: &seams.gateway,
@@ -2279,6 +2316,7 @@ mod tests {
         /// gives it.
         fn proved(write: Result<ScopeWritePlane, WritePlaneDark>) -> DescendantScopeRoot {
             DescendantScopeRoot {
+                recovered_after_rejection: false,
                 scope_id: SHARED,
                 name: derive_write_name(&WRITE_SCOPE_SEED, &SHARED),
                 parent_node_seed: Zeroizing::new([0x21; 32]),

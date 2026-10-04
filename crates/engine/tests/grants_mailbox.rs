@@ -30,7 +30,6 @@ use cipherbox_core::suite::x25519::X25519Secret;
 
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::gate::Candidate;
-use cipherbox_engine::grants::owner_entry::{OwnerEntry, cross_check};
 use cipherbox_engine::grants::revocation::{ResolutionClass, ResolutionFacts, classify};
 use cipherbox_engine::grants::{
     AcceptError, PublishedGrantBlob, ReceivedShareStore, ReceivedSharesList, SentIndex, SentShare,
@@ -294,6 +293,7 @@ impl GrantFixture {
 
     fn candidate_with_record(&self, record_bytes: Vec<u8>) -> Candidate {
         Candidate {
+            head_block: None,
             name: self.name.clone(),
             record_bytes,
             grant_section: self.grant_section.clone(),
@@ -387,6 +387,7 @@ impl GrantFixture {
         grant_section.grant_blobs = vec![grant_blob_signed];
 
         let candidate = Candidate {
+            head_block: None,
             name: self.name.clone(),
             record_bytes: self.record_bytes(2),
             grant_section,
@@ -1714,47 +1715,6 @@ fn revocation_classification_triple() {
     assert_ne!(signal, unresolvable);
     assert_ne!(signal, lag);
     assert_ne!(unresolvable, lag);
-}
-
-// ---------------------------------------------------------------------------
-// Owner-entry cross-check disagreement → attributable abuse.
-// ---------------------------------------------------------------------------
-
-#[test]
-fn owner_entry_seed_disagreement_raises_an_abuse_event() {
-    let fx = GrantFixture::new();
-
-    // The seed that actually unsealed the read body is the real scope seed.
-    let unseal_seed = fx.scope_seed;
-
-    // Agreement: owner-blob seed and ascent-link seed both equal the unseal seed
-    // → a confirmed owner read (no abuse).
-    match cross_check(&unseal_seed, Some(&unseal_seed), &unseal_seed, fx.epoch) {
-        OwnerEntry::Confirmed { seed, epoch } => {
-            assert!(ct_eq(&seed, &unseal_seed), "seed mismatch");
-            assert_eq!(epoch, fx.epoch);
-        }
-        OwnerEntry::Abuse(_) => panic!("agreement must confirm"),
-    }
-
-    // A write-grantee published an owner blob carrying a DIFFERENT seed than the
-    // one that unseals: an attributable abuse event, surfaced — never silent.
-    let rogue_owner_blob_seed = [0xEE; 32];
-    match cross_check(&rogue_owner_blob_seed, None, &unseal_seed, fx.epoch) {
-        OwnerEntry::Abuse(event) => {
-            assert_eq!(event.check(), "owner-seed-cross-check-disagreement");
-            // The description maps straight onto the facade abuse event and
-            // carries no key material.
-            let facade_event = cipherbox_engine::facade::Event::AttributableAbuse {
-                description: event.description.clone(),
-            };
-            assert!(matches!(
-                facade_event,
-                cipherbox_engine::facade::Event::AttributableAbuse { .. }
-            ));
-        }
-        OwnerEntry::Confirmed { .. } => panic!("a seed disagreement must raise abuse"),
-    }
 }
 
 // ---------------------------------------------------------------------------

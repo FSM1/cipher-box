@@ -291,6 +291,7 @@ impl Fixture {
 
     fn candidate_with_record(&self, record_bytes: Vec<u8>) -> Candidate {
         Candidate {
+            head_block: None,
             name: self.name.clone(),
             record_bytes,
             grant_section: self.grant_section.clone(),
@@ -1857,6 +1858,7 @@ impl ResealedFixture {
 
     fn candidate(&self) -> Candidate {
         Candidate {
+            head_block: None,
             name: self.name.clone(),
             record_bytes: IpnsRecord::create_v2(&self.ipns_signer, RECORD_VALUE, 1, TTL_NANOS, EOL)
                 .marshal(),

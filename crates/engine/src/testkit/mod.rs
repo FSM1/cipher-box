@@ -60,6 +60,7 @@ pub fn assert_bearer_wipes_on_drop(request: &crate::seams::HttpRequest) {
 }
 
 pub use executor::{block_on, block_on_while_ticking, poll_tasks_once, poll_tasks_until_parked};
+pub use owner_root::resign_section;
 pub use owner_root::{
     CARRIED_WRITE_HISTORY_LINK, OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY,
     OWNER_ROOT_PSEUDONYM_SEED, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED,
