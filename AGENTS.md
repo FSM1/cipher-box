@@ -95,11 +95,7 @@ Length discipline for the permitted domain-rationale exception: state each invar
 
 **Verification workflow:** the dev server runs at `http://localhost:5173`. Navigate, screenshot, assert the elements and computed styles the change touches, then exercise the interaction. Element waits go through `puppeteer_evaluate` polling — there is no dedicated wait tool.
 
-**If Puppeteer MCP is not available:**
-
-- Document what needs human verification
-- Provide manual test steps
-- Flag items in VERIFICATION.md
+**Verification reporting:** record results and any remaining manual steps in the PR description, or in the final response when there is no PR. Keep task-specific verification notes out of repository files.
 
 ### Pencil Design Files
 
