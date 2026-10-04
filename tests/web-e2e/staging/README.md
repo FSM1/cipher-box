@@ -28,8 +28,19 @@ minted. The specs wait on what the chrome renders — the per-row queue mark and
 the staleness rung — because no introspection hook is there to poll.
 
 Staging rate-limits its auth surface per caller address and raises the limit
-only on an undeployed profile, so the run stays serial and every spec logs in
-once.
+only on an undeployed profile, so the run stays serial.
+
+Known Web3Auth devnet refusals, including the explicit busy-node response,
+retry the same wallet up to five attempts within eight minutes per login.
+Retries stop sixty minutes after the first login of each job; that deadline
+survives Playwright worker replacement. Every later login still gets its first
+attempt, and one login exhausting its allowance does not disable another's
+retries. The deployment step retains its eighty-minute hard timeout.
+
+The sign-in summary counts observed faults, including terminal ones, and
+separates attempt exhaustion, the per-login deadline, and retries suppressed
+by the job's deadline. Unrecognized refusals fail immediately. These rules
+also apply to each web soak job through the shared sign-in fixture.
 
 `front-contract.spec.ts` holds the two defects the v2.0.2 deploy shipped: a
 record publish the browser never completes, and a read answer carrying a cache

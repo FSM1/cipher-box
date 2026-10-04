@@ -19,11 +19,11 @@ import { LoginPage } from '../page-objects/login.page';
 import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
 import { recordForensics, redact, requestTarget, type Forensics } from './forensics';
 import {
-  markRunExhausted,
   nextStep,
-  runExhausted,
+  runRetryDeadline,
   SIGN_IN_ANNOTATION,
-  type AbsorbedFault,
+  SIGN_IN_RETRY_BUDGET_MS,
+  type SignInFault,
   type SignInRecord,
 } from './loginRetry';
 import { installTestWallet, TEST_WALLET_NAME, type TestWallet } from './wallet';
@@ -177,7 +177,7 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
   const login = new LoginPage(page);
   const info = test.info();
   const outputDir = info.project.outputDir;
-  const faults: AbsorbedFault[] = [];
+  const faults: SignInFault[] = [];
   const annotate = (result: SignInRecord['result']): void => {
     info.annotations.push({
       type: SIGN_IN_ANNOTATION,
@@ -186,10 +186,18 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
   };
 
   const signInStarted = Date.now();
+  const signInDeadline = signInStarted + SIGN_IN_RETRY_BUDGET_MS;
+  const runDeadline = runRetryDeadline(outputDir, signInStarted);
   for (let attempt = 0; ; attempt += 1) {
     const attemptStarted = Date.now();
-    if (attempt > 0) await page.reload();
-    await expect(login.walletButton).toBeEnabled({ timeout: 60_000 });
+    // The run window limits retries; every later login still gets its first attempt.
+    const deadline = attempt === 0 ? signInDeadline : Math.min(signInDeadline, runDeadline);
+    const checkBudget = (): number => {
+      const remaining = deadline - Date.now();
+      if (remaining > 0) return remaining;
+      const result = deadline === signInDeadline ? 'sign-in-budget' : 'run-budget';
+      throw new Error(`the wallet login stopped on attempt ${attempt + 1}: ${result}`);
+    };
 
     const failed: string[] = [];
     const noteRefused = (response: Response): void => {
@@ -197,14 +205,24 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
       failed.push(`${requestTarget(response.url())} ${response.status()}`);
     };
     page.on('response', noteRefused);
-    const started = Date.now();
+    let started = attemptStarted;
     let refusal: string | null;
     try {
-      await login.walletButton.click();
+      if (attempt > 0) await page.reload({ timeout: checkBudget() });
+      await expect(login.walletButton).toBeEnabled({ timeout: Math.min(60_000, checkBudget()) });
+      started = Date.now();
+      await login.walletButton.click({ timeout: checkBudget() });
       await page
         .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
-        .click();
-      refusal = await login.refusal(signedIn, 300_000);
+        .click({ timeout: checkBudget() });
+      refusal = await login.refusal(signedIn, Math.min(300_000, checkBudget()));
+      checkBudget();
+    } catch (error) {
+      if (Date.now() >= deadline) {
+        annotate(deadline === signInDeadline ? 'sign-in-budget' : 'run-budget');
+        checkBudget();
+      }
+      throw error;
     } finally {
       page.off('response', noteRefused);
     }
@@ -213,14 +231,14 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
       return Date.now() - started;
     }
 
-    const step = nextStep(attempt, refusal, runExhausted(outputDir), Date.now() - signInStarted);
+    const now = Date.now();
+    const step = nextStep(attempt, refusal, runDeadline - now, now - signInStarted);
     if (step.fault !== null) faults.push({ fault: step.fault, attempt: attempt + 1 });
     if (step.action === 'fail') {
-      if (step.result === 'exhausted') markRunExhausted(outputDir);
       annotate(step.result);
       throw new Error(
         redact(
-          `the wallet login was refused on attempt ${attempt + 1}; the refusal read: ` +
+          `the wallet login was refused on attempt ${attempt + 1} (${step.result}); the refusal read: ` +
             `${refusal}; the refused requests: ${failed.join(', ') || 'none'}`
         )
       );

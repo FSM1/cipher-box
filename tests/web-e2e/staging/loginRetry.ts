@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -6,7 +6,13 @@ import { join } from 'node:path';
  * A fault window outlasts one attempt, so a match waits and tries again; any
  * other refusal is a real failure and ends the sign-in at once.
  */
-export type DevnetFault = 'nonce' | 'rss-round' | 'poly-commits' | 'node-quorum' | 'node-5xx';
+export type DevnetFault =
+  | 'nonce'
+  | 'rss-round'
+  | 'poly-commits'
+  | 'node-quorum'
+  | 'node-5xx'
+  | 'node-busy';
 
 const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['nonce', /could not retrieve nonce|failed to get nonce/i],
@@ -14,6 +20,10 @@ const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['poly-commits', /master poly commits inconsistent/i],
   ['node-quorum', /unable to resolve enough promises/i],
   ['node-5xx', /request to \S*web3auth\.io failed with status 5\d\d/i],
+  [
+    'node-busy',
+    /unable to assign key, All auth network nodes are currently busy, Please try again\./i,
+  ],
 ];
 
 export function devnetFault(refusal: string): DevnetFault | null {
@@ -29,60 +39,70 @@ export const DEVNET_BACKOFF_MS: readonly number[] = [15_000, 30_000, 60_000, 105
  */
 export const SIGN_IN_RETRY_BUDGET_MS = 480_000;
 
+/** Keeps retry headroom below the deployment step's eighty-minute hard limit. */
+export const RUN_SIGN_IN_RETRY_BUDGET_MS = 3_600_000;
+
+export type RetryStop = 'attempts-exhausted' | 'sign-in-budget' | 'run-budget';
+
 /** What a sign-in does after a refused attempt. */
 export type NextStep =
   | { action: 'retry'; fault: DevnetFault; waitMs: number }
-  | { action: 'fail'; fault: DevnetFault | null; result: 'refused' | 'exhausted' };
+  | { action: 'fail'; fault: DevnetFault | null; result: 'refused' | RetryStop };
 
 /**
  * Decides the step after refused `attempt` (0-based), `elapsedMs` into the
- * sign-in. Once a sign-in in this run has exhausted the backoff or its budget,
- * the devnet is down for the run, and a later sign-in that waits again only
- * pushes the run past its step timeout.
+ * sign-in. A wait must leave time for another attempt inside both deadlines.
  */
 export function nextStep(
   attempt: number,
   refusal: string,
-  runExhausted: boolean,
+  runRemainingMs: number,
   elapsedMs: number
 ): NextStep {
   const fault = devnetFault(refusal);
   if (fault === null) return { action: 'fail', fault, result: 'refused' };
   const waitMs = DEVNET_BACKOFF_MS[attempt];
-  if (runExhausted || waitMs === undefined || elapsedMs + waitMs > SIGN_IN_RETRY_BUDGET_MS) {
-    return { action: 'fail', fault, result: 'exhausted' };
+  if (waitMs === undefined) return { action: 'fail', fault, result: 'attempts-exhausted' };
+  if (elapsedMs + waitMs >= SIGN_IN_RETRY_BUDGET_MS) {
+    return { action: 'fail', fault, result: 'sign-in-budget' };
   }
+  if (waitMs >= runRemainingMs) return { action: 'fail', fault, result: 'run-budget' };
   return { action: 'retry', fault, waitMs };
 }
 
 // A file, not module state: Playwright starts a new worker after a failed
 // test, and the output directory is emptied at the start of each run.
-const EXHAUSTED_FILE = 'devnet-exhausted';
+const DEADLINE_FILE = 'devnet-retry-deadline';
 
-export function runExhausted(outputDir: string): boolean {
-  return existsSync(join(outputDir, EXHAUSTED_FILE));
-}
-
-export function markRunExhausted(outputDir: string): void {
+/** The first login starts the window; later logins and replacement workers keep that deadline. */
+export function runRetryDeadline(outputDir: string, now: number): number {
   mkdirSync(outputDir, { recursive: true });
-  writeFileSync(join(outputDir, EXHAUSTED_FILE), '');
+  const file = join(outputDir, DEADLINE_FILE);
+  try {
+    writeFileSync(file, String(now + RUN_SIGN_IN_RETRY_BUDGET_MS), { flag: 'wx' });
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+  }
+  const deadline = Number(readFileSync(file, 'utf8'));
+  if (!Number.isSafeInteger(deadline) || deadline <= 0) {
+    throw new Error('the sign-in retry deadline is invalid');
+  }
+  return deadline;
 }
 
-/** A devnet fault that a sign-in waited out, on its 1-based attempt. */
-export interface AbsorbedFault {
+/** A devnet fault observed on a 1-based attempt, including a terminal refusal. */
+export interface SignInFault {
   fault: DevnetFault;
   attempt: number;
 }
 
 /**
- * One sign-in, as the stats see it: the faults it absorbed, by attempt, and how
- * it ended. `exhausted` failed on a devnet fault after the last wait or past
- * the budget; `refused`
- * failed at once on any other refusal. It holds no identity, path or token.
+ * One sign-in, as the stats see it: the faults it observed, by attempt, and how
+ * it ended. It holds no identity, path or token.
  */
 export interface SignInRecord {
-  faults: readonly AbsorbedFault[];
-  result: 'signed-in' | 'recovered' | 'exhausted' | 'refused';
+  faults: readonly SignInFault[];
+  result: 'signed-in' | 'recovered' | RetryStop | 'refused';
 }
 
 /** The annotation type a sign-in record travels under to the reporter. */
@@ -94,12 +114,14 @@ export function summarize(records: readonly SignInRecord[]): string {
   for (const { faults } of records) {
     for (const { fault } of faults) byFault.set(fault, (byFault.get(fault) ?? 0) + 1);
   }
-  const absorbed = [...byFault].map(([fault, count]) => `${fault}=${count}`).join(' ') || 'none';
+  const observed = [...byFault].map(([fault, count]) => `${fault}=${count}`).join(' ') || 'none';
   const count = (result: SignInRecord['result']) =>
     records.filter((record) => record.result === result).length;
   return (
     `sign-ins: ${records.length}, recovered: ${count('recovered')}, ` +
-    `absorbed faults: ${absorbed}, failed after all retries: ${count('exhausted')}, ` +
+    `observed faults: ${observed}, attempts exhausted: ${count('attempts-exhausted')}, ` +
+    `sign-in budget exhausted: ${count('sign-in-budget')}, ` +
+    `retries suppressed by run budget: ${count('run-budget')}, ` +
     `refused: ${count('refused')}`
   );
 }
