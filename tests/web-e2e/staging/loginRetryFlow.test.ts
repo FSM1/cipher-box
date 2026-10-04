@@ -6,14 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { signInWithWallet } from './fixtures';
 import {
   DEVNET_BACKOFF_MS,
+  RUN_RETRY_BUDGET_KEY,
   RUN_SIGN_IN_RETRY_BUDGET_MS,
   runRetryDeadline,
+  SIGN_IN_RETRY_BUDGET_MS,
   type SignInRecord,
 } from './loginRetry';
 
 const harness = vi.hoisted(() => {
   const info = {
-    project: { outputDir: '' },
+    project: { outputDir: '', metadata: {} as Record<string, unknown> },
     annotations: [] as Array<{ type: string; description: string }>,
     timeout: 300_000,
     setTimeout: vi.fn(),
@@ -66,6 +68,7 @@ beforeEach(() => {
   vi.setSystemTime(1_000_000);
   vi.resetAllMocks();
   harness.info.project.outputDir = mkdtempSync(join(tmpdir(), 'login-flow-'));
+  harness.info.project.metadata = {};
   harness.info.annotations = [];
   harness.info.timeout = 300_000;
   harness.info.setTimeout.mockImplementation((timeout: number) => {
@@ -79,7 +82,7 @@ afterEach(() => {
 });
 
 describe('the wallet login retry flow', () => {
-  it('gives the login after an exhausted login its own retries, across page replacements', async () => {
+  it('gives the login after an exhausted login its own retries on a new page', async () => {
     const first = page();
     harness.refusal.mockResolvedValue(POLY_FAILURE);
     await expect(signInWithWallet(first.page, signedIn)).rejects.toThrow('attempt 5');
@@ -147,6 +150,26 @@ describe('the wallet login retry flow', () => {
       expect(opened.calls.off).toHaveBeenCalledTimes(2);
     }
   );
+
+  it('takes the run window from the project metadata', async () => {
+    harness.info.project.metadata = { [RUN_RETRY_BUDGET_KEY]: DEVNET_BACKOFF_MS[0]! };
+    const opened = page();
+    harness.refusal.mockResolvedValueOnce(NODE_FAILURE);
+    await expect(signInWithWallet(opened.page, signedIn)).rejects.toThrow('attempt 1 (run-budget)');
+    expect(opened.calls.waitForTimeout).not.toHaveBeenCalled();
+  });
+
+  it('keeps a login that signs in after its deadline has passed', async () => {
+    const opened = page();
+    harness.refusal.mockImplementationOnce(async () => {
+      await vi.advanceTimersByTimeAsync(SIGN_IN_RETRY_BUDGET_MS + 1);
+      return null;
+    });
+    await expect(signInWithWallet(opened.page, signedIn)).resolves.toBe(
+      SIGN_IN_RETRY_BUDGET_MS + 1
+    );
+    expect(records()).toEqual([{ faults: [], result: 'signed-in' }]);
+  });
 
   it('does not retry an unrelated authentication refusal', async () => {
     const opened = page();

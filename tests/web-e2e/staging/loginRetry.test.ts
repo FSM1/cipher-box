@@ -1,19 +1,22 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  DEADLINE_FILE,
   DEVNET_BACKOFF_MS,
   devnetFault,
   nextStep,
+  RUN_RETRY_BUDGET_KEY,
   SIGN_IN_RETRY_BUDGET_MS,
+  runRetryBudget,
   runRetryDeadline,
   RUN_SIGN_IN_RETRY_BUDGET_MS,
   summarize,
 } from './loginRetry';
 
 const NONCE = 'could not retrieve nonce: Internal error';
-const RUN_LEFT = RUN_SIGN_IN_RETRY_BUDGET_MS;
+const FULL_RUN_WINDOW = RUN_SIGN_IN_RETRY_BUDGET_MS;
 
 describe('devnetFault', () => {
   it.each([
@@ -29,6 +32,7 @@ describe('devnetFault', () => {
       'undefined unable to assign key, All auth network nodes are currently busy, Please try again.',
       'node-busy',
     ],
+    ['unable to assign key; all auth network nodes are currently busy - try again', 'node-busy'],
   ])('classes %s', (refusal, fault) => {
     expect(devnetFault(refusal)).toBe(fault);
   });
@@ -87,7 +91,7 @@ describe('summarize', () => {
 
 describe('nextStep', () => {
   it('fails at once on a refusal that is not a devnet fault', () => {
-    expect(nextStep(0, 'the wallet signature was rejected', RUN_LEFT, 0)).toEqual({
+    expect(nextStep(0, 'the wallet signature was rejected', FULL_RUN_WINDOW, 0)).toEqual({
       action: 'fail',
       fault: null,
       result: 'refused',
@@ -96,7 +100,7 @@ describe('nextStep', () => {
 
   it('retries a devnet fault with the backoff of its attempt', () => {
     DEVNET_BACKOFF_MS.forEach((waitMs, attempt) => {
-      expect(nextStep(attempt, NONCE, RUN_LEFT, 0)).toEqual({
+      expect(nextStep(attempt, NONCE, FULL_RUN_WINDOW, 0)).toEqual({
         action: 'retry',
         fault: 'nonce',
         waitMs,
@@ -105,7 +109,7 @@ describe('nextStep', () => {
   });
 
   it('stops after the last wait, on the fifth attempt', () => {
-    expect(nextStep(DEVNET_BACKOFF_MS.length, NONCE, RUN_LEFT, 0)).toEqual({
+    expect(nextStep(DEVNET_BACKOFF_MS.length, NONCE, FULL_RUN_WINDOW, 0)).toEqual({
       action: 'fail',
       fault: 'nonce',
       result: 'attempts-exhausted',
@@ -124,7 +128,7 @@ describe('nextStep', () => {
 describe('nextStep budget', () => {
   it('retries while the wait still fits in the budget of one sign-in', () => {
     const waitMs = DEVNET_BACKOFF_MS[1]!;
-    expect(nextStep(1, NONCE, RUN_LEFT, SIGN_IN_RETRY_BUDGET_MS - waitMs - 1)).toEqual({
+    expect(nextStep(1, NONCE, FULL_RUN_WINDOW, SIGN_IN_RETRY_BUDGET_MS - waitMs - 1)).toEqual({
       action: 'retry',
       fault: 'nonce',
       waitMs,
@@ -133,7 +137,7 @@ describe('nextStep budget', () => {
 
   it('stops at the sign-in limit when a wait leaves no time for the next attempt', () => {
     const waitMs = DEVNET_BACKOFF_MS[1]!;
-    expect(nextStep(1, NONCE, RUN_LEFT, SIGN_IN_RETRY_BUDGET_MS - waitMs)).toEqual({
+    expect(nextStep(1, NONCE, FULL_RUN_WINDOW, SIGN_IN_RETRY_BUDGET_MS - waitMs)).toEqual({
       action: 'fail',
       fault: 'nonce',
       result: 'sign-in-budget',
@@ -148,39 +152,56 @@ describe('nextStep budget', () => {
 });
 
 describe('the retry window across logins and workers', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'login-retry-'));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it('allows a later login to retry after an earlier login exhausts its attempts', () => {
-    const root = mkdtempSync(join(tmpdir(), 'login-retry-'));
     const outputDir = join(root, 'test-results');
     const now = 1_000_000;
-    try {
-      const deadline = runRetryDeadline(outputDir, now);
-      expect(deadline).toBe(now + RUN_SIGN_IN_RETRY_BUDGET_MS);
-      expect(nextStep(4, NONCE, deadline - now, 240_000)).toMatchObject({
-        action: 'fail',
-        result: 'attempts-exhausted',
-      });
-      // A replacement worker reads the same file, with no state from the failed login.
-      const later = now + 300_000;
-      const laterDeadline = runRetryDeadline(outputDir, later);
-      expect(laterDeadline).toBe(deadline);
-      expect(nextStep(0, NONCE, laterDeadline - later, 0)).toMatchObject({ action: 'retry' });
-      expect(nextStep(0, NONCE, laterDeadline - (deadline + 1), 0)).toMatchObject({
-        action: 'fail',
-        result: 'run-budget',
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const deadline = runRetryDeadline(outputDir, now);
+    expect(deadline).toBe(now + RUN_SIGN_IN_RETRY_BUDGET_MS);
+    expect(nextStep(4, NONCE, deadline - now, 240_000)).toMatchObject({
+      action: 'fail',
+      result: 'attempts-exhausted',
+    });
+    // A replacement worker reads the same file, with no state from the failed login.
+    const later = now + 300_000;
+    const laterDeadline = runRetryDeadline(outputDir, later);
+    expect(laterDeadline).toBe(deadline);
+    expect(nextStep(0, NONCE, laterDeadline - later, 0)).toMatchObject({ action: 'retry' });
+    expect(nextStep(0, NONCE, laterDeadline - (deadline + 1), 0)).toMatchObject({
+      action: 'fail',
+      result: 'run-budget',
+    });
+  });
+
+  it('starts the window with the budget a project passes', () => {
+    expect(runRetryDeadline(root, 1_000_000, 13_200_000)).toBe(14_200_000);
+    expect(runRetryDeadline(root, 2_000_000, 60_000)).toBe(14_200_000);
   });
 
   it('refuses corrupt persisted state instead of silently granting a new window', () => {
-    const root = mkdtempSync(join(tmpdir(), 'login-retry-'));
-    try {
-      runRetryDeadline(root, 1_000_000);
-      writeFileSync(join(root, 'devnet-retry-deadline'), 'not a deadline');
-      expect(() => runRetryDeadline(root, 2_000_000)).toThrow('retry deadline is invalid');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    runRetryDeadline(root, 1_000_000);
+    writeFileSync(join(root, DEADLINE_FILE), 'not a deadline');
+    expect(() => runRetryDeadline(root, 2_000_000)).toThrow('retry deadline is invalid');
+  });
+});
+
+describe('runRetryBudget', () => {
+  it('uses the default when the project names no run window', () => {
+    expect(runRetryBudget({})).toBe(RUN_SIGN_IN_RETRY_BUDGET_MS);
+  });
+
+  it('uses the run window the project names', () => {
+    expect(runRetryBudget({ [RUN_RETRY_BUDGET_KEY]: 13_200_000 })).toBe(13_200_000);
+  });
+
+  it.each([0, -1, 1.5, '13200000', null])('refuses the run window %s', (budget) => {
+    expect(() => runRetryBudget({ [RUN_RETRY_BUDGET_KEY]: budget })).toThrow('is invalid');
   });
 });

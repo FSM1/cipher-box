@@ -20,9 +20,11 @@ import { removeAccount, watchApiOrigin, type RemovalOutcome } from './cleanup';
 import { recordForensics, redact, requestTarget, type Forensics } from './forensics';
 import {
   nextStep,
+  runRetryBudget,
   runRetryDeadline,
   SIGN_IN_ANNOTATION,
   SIGN_IN_RETRY_BUDGET_MS,
+  type RetryStop,
   type SignInFault,
   type SignInRecord,
 } from './loginRetry';
@@ -187,16 +189,21 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
 
   const signInStarted = Date.now();
   const signInDeadline = signInStarted + SIGN_IN_RETRY_BUDGET_MS;
-  const runDeadline = runRetryDeadline(outputDir, signInStarted);
+  const runDeadline = runRetryDeadline(
+    outputDir,
+    signInStarted,
+    runRetryBudget(info.project.metadata)
+  );
   for (let attempt = 0; ; attempt += 1) {
     const attemptStarted = Date.now();
     // The run window limits retries; every later login still gets its first attempt.
     const deadline = attempt === 0 ? signInDeadline : Math.min(signInDeadline, runDeadline);
+    const stop: RetryStop = deadline === signInDeadline ? 'sign-in-budget' : 'run-budget';
+    const stopped = `the wallet login stopped on attempt ${attempt + 1}: ${stop}`;
     const checkBudget = (): number => {
       const remaining = deadline - Date.now();
       if (remaining > 0) return remaining;
-      const result = deadline === signInDeadline ? 'sign-in-budget' : 'run-budget';
-      throw new Error(`the wallet login stopped on attempt ${attempt + 1}: ${result}`);
+      throw new Error(stopped);
     };
 
     const failed: string[] = [];
@@ -216,11 +223,10 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
         .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
         .click({ timeout: checkBudget() });
       refusal = await login.refusal(signedIn, Math.min(300_000, checkBudget()));
-      checkBudget();
     } catch (error) {
       if (Date.now() >= deadline) {
-        annotate(deadline === signInDeadline ? 'sign-in-budget' : 'run-budget');
-        checkBudget();
+        annotate(stop);
+        throw new Error(stopped, { cause: error });
       }
       throw error;
     } finally {

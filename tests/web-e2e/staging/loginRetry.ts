@@ -20,10 +20,7 @@ const DEVNET_FAULTS: ReadonlyArray<readonly [DevnetFault, RegExp]> = [
   ['poly-commits', /master poly commits inconsistent/i],
   ['node-quorum', /unable to resolve enough promises/i],
   ['node-5xx', /request to \S*web3auth\.io failed with status 5\d\d/i],
-  [
-    'node-busy',
-    /unable to assign key, All auth network nodes are currently busy, Please try again\./i,
-  ],
+  ['node-busy', /all auth network nodes are currently busy/i],
 ];
 
 export function devnetFault(refusal: string): DevnetFault | null {
@@ -39,8 +36,25 @@ export const DEVNET_BACKOFF_MS: readonly number[] = [15_000, 30_000, 60_000, 105
  */
 export const SIGN_IN_RETRY_BUDGET_MS = 480_000;
 
-/** Keeps retry headroom below the deployment step's eighty-minute hard limit. */
+/**
+ * The default run window. A Playwright project overrides it under
+ * {@link RUN_RETRY_BUDGET_KEY}; each project's window stays below the hard
+ * limit of the step that runs it.
+ */
 export const RUN_SIGN_IN_RETRY_BUDGET_MS = 3_600_000;
+
+/** The project metadata key that carries a project's run window. */
+export const RUN_RETRY_BUDGET_KEY = 'runSignInRetryBudgetMs';
+
+/** The run window `metadata` names, or the default. */
+export function runRetryBudget(metadata: Readonly<Record<string, unknown>>): number {
+  const budget = metadata[RUN_RETRY_BUDGET_KEY];
+  if (budget === undefined) return RUN_SIGN_IN_RETRY_BUDGET_MS;
+  if (typeof budget !== 'number' || !Number.isSafeInteger(budget) || budget <= 0) {
+    throw new Error(`the project metadata ${RUN_RETRY_BUDGET_KEY} is invalid`);
+  }
+  return budget;
+}
 
 export type RetryStop = 'attempts-exhausted' | 'sign-in-budget' | 'run-budget';
 
@@ -72,16 +86,20 @@ export function nextStep(
 
 // A file, not module state: Playwright starts a new worker after a failed
 // test, and the output directory is emptied at the start of each run.
-const DEADLINE_FILE = 'devnet-retry-deadline';
+export const DEADLINE_FILE = 'devnet-retry-deadline';
 
 /** The first login starts the window; later logins and replacement workers keep that deadline. */
-export function runRetryDeadline(outputDir: string, now: number): number {
+export function runRetryDeadline(
+  outputDir: string,
+  now: number,
+  budgetMs = RUN_SIGN_IN_RETRY_BUDGET_MS
+): number {
   mkdirSync(outputDir, { recursive: true });
   const file = join(outputDir, DEADLINE_FILE);
   try {
-    writeFileSync(file, String(now + RUN_SIGN_IN_RETRY_BUDGET_MS), { flag: 'wx' });
+    writeFileSync(file, String(now + budgetMs), { flag: 'wx' });
   } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
   const deadline = Number(readFileSync(file, 'utf8'));
   if (!Number.isSafeInteger(deadline) || deadline <= 0) {

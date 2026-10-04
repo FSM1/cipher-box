@@ -32,15 +32,19 @@ only on an undeployed profile, so the run stays serial.
 
 Known Web3Auth devnet refusals, including the explicit busy-node response,
 retry the same wallet up to five attempts within eight minutes per login.
-Retries stop sixty minutes after the first login of each job; that deadline
-survives Playwright worker replacement. Every later login still gets its first
-attempt, and one login exhausting its allowance does not disable another's
-retries. The deployment step retains its eighty-minute hard timeout.
+Retries stop at the end of a run window that starts at the first login of each
+job; that deadline survives Playwright worker replacement. Each Playwright
+project sets its window below the hard limit of its step: 60 minutes for
+`staging` under the 80-minute deployment step, and 220 minutes for `soak` under
+the 240-minute soak step. Every later login still gets its first attempt, and
+one login exhausting its allowance does not disable another's retries.
+Unrecognized refusals fail immediately. These rules also apply to each web soak
+job through the shared sign-in fixture.
 
-The sign-in summary counts observed faults, including terminal ones, and
-separates attempt exhaustion, the per-login deadline, and retries suppressed
-by the job's deadline. Unrecognized refusals fail immediately. These rules
-also apply to each web soak job through the shared sign-in fixture.
+The staging run prints a sign-in summary. It counts observed faults, including
+terminal ones, and separates attempt exhaustion, the per-login deadline, and
+retries suppressed by the job's deadline. The soak run does not print this
+summary.
 
 `front-contract.spec.ts` holds the two defects the v2.0.2 deploy shipped: a
 record publish the browser never completes, and a read answer carrying a cache
