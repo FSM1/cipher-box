@@ -12,6 +12,7 @@ function browser() {
     getByTestId(id: string) {
       const locator = {
         first: () => locator,
+        count: async () => (visible.has(id) ? 1 : 0),
         isVisible: async () => visible.has(id),
         innerText: async () => visible.get(id) ?? '',
       };
@@ -66,8 +67,6 @@ describe('returning to the vault with a saved session', () => {
   it('bounds a restore that never reaches either the vault or sign-in', async () => {
     const b = browser();
 
-    await expect(restoreVault(b.page, 20)).rejects.toThrow(
-      'the saved session did not restore the file browser'
-    );
+    await expect(restoreVault(b.page, 20)).rejects.toThrow('neither signed in nor refused');
   });
 });

@@ -71,7 +71,7 @@ it('preserves the account-conflict explanation on the front door', async () => {
   expect(core.calls.logouts).toBe(1);
 });
 
-it('shows only the host and status of a refused provider response', async () => {
+it('carries a refused provider response from the restore to the front door', async () => {
   const core = fakeCoreKitSession({ loggedIn: true });
   core.session._UNSAFE_exportTssKey = () =>
     Promise.reject({
