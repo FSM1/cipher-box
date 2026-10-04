@@ -238,7 +238,7 @@ export async function signInWithWallet(page: Page, signedIn: Locator): Promise<n
     }
 
     const now = Date.now();
-    const step = nextStep(attempt, refusal, runDeadline - now, now - signInStarted);
+    const step = nextStep(attempt, refusal, runDeadline - now, now - signInStarted, Math.random());
     if (step.fault !== null) faults.push({ fault: step.fault, attempt: attempt + 1 });
     if (step.action === 'fail') {
       annotate(step.result);

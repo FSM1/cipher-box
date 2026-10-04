@@ -29,7 +29,13 @@ permissions: {}
 
 jobs:
   staging-e2e:
-    name: Staging E2E
+    name: Staging E2E (${{ matrix.project }})
+    strategy:
+      fail-fast: false
+      # Separate retry windows, with one job at a time against staging.
+      max-parallel: 1
+      matrix:
+        project: [staging, staging-link-first]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -64,7 +70,7 @@ jobs:
       # limited per caller address with no bypass.
       - name: Run the staging profiles
         timeout-minutes: 80
-        run: pnpm --filter @cipherbox/web-e2e test:e2e
+        run: pnpm --filter @cipherbox/web-e2e test:e2e --project=${{ matrix.project }}
         env:
           E2E_BASE_URL: ${{ inputs.base-url }}
 
@@ -72,7 +78,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: staging-e2e-report
+          name: staging-e2e-report-${{ matrix.project }}
           path: |
             tests/web-e2e/playwright-report/
             tests/web-e2e/test-results/

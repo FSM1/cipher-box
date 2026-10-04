@@ -9,7 +9,7 @@
 // alone, against `E2E_BASE_URL`.
 //
 // `E2E_BASE_URL` switches the whole run onto the deployed front instead: no
-// local server, the `staging` project only, and the real login the staging
+// local server, the staging projects only, and the real login the staging
 // profiles need (`staging/README` and blueprint/testing.md staging release
 // gates).
 //
@@ -85,7 +85,14 @@ const staging = {
       testDir: './staging',
       // The `*.test.ts` files beside the specs are the vitest unit suite.
       testMatch: '**/*.spec.ts',
-      testIgnore: ['**/soak/**'],
+      testIgnore: ['**/soak/**', '**/link-first.spec.ts'],
+      dependencies: ['staging-media'],
+      use: stagingUse,
+    },
+    {
+      name: 'staging-link-first',
+      testDir: './staging',
+      testMatch: '**/link-first.spec.ts',
       dependencies: ['staging-media'],
       use: stagingUse,
     },

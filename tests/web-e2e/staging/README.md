@@ -10,15 +10,19 @@ Normative sources: [`blueprint/testing.md`](../../../blueprint/testing.md) and
 ## The staging profiles
 
 `E2E_BASE_URL` switches the whole run onto a deployed front: no local server,
-the `staging` project only, and one worker. The `e2e` and `release` projects
-keep their gates, and a red staging run is the verdict on a deploy.
+the `staging` and `staging-link-first` projects, and one worker. The `e2e` and
+`release` projects keep their gates, and a red staging run is the verdict on a deploy.
 
 ```sh
 E2E_BASE_URL=https://app-staging.cipherbox.cc pnpm --filter @cipherbox/web-e2e test:e2e
 ```
 
 The workflow is `Staging E2E` (`.github/workflows/staging-e2e.yml`), dispatchable
-with a base URL and called by `tag-staging.yml` after the deploy job.
+with a base URL and called by `tag-staging.yml` after the deploy job. Its two
+matrix jobs run serially, even if one fails: `staging-link-first` runs the long
+link-first scenario, and `staging` runs all remaining profiles. Each job has its
+own retry window and uploads `staging-e2e-report-<project>`. To run one group
+locally, append `--project=staging` or `--project=staging-link-first`.
 
 A deployed bundle refuses the introspection hook, so these specs sign in through
 a shipped method: an injected test wallet for SIWE (`wallet.ts`). Each page
@@ -31,20 +35,21 @@ Staging rate-limits its auth surface per caller address and raises the limit
 only on an undeployed profile, so the run stays serial.
 
 Known Web3Auth devnet refusals, including the explicit busy-node response,
-retry the same wallet up to five attempts within eight minutes per login.
+retry the same wallet within eight minutes per login, without an attempt cap.
+The first retry waits 15–20 seconds; subsequent retries wait 25–30 seconds.
+Jitter spreads callers out, and a wait must leave time for the next attempt.
 Retries stop at the end of a run window that starts at the first login of each
 job; that deadline survives Playwright worker replacement. Each Playwright
 project sets its window below the hard limit of its step: 60 minutes for
-`staging` under the 80-minute deployment step, and 220 minutes for `soak` under
+each staging group under its 80-minute test step, and 220 minutes for `soak` under
 the 240-minute soak step. Every later login still gets its first attempt, and
 one login exhausting its allowance does not disable another's retries.
 Unrecognized refusals fail immediately. These rules also apply to each web soak
 job through the shared sign-in fixture.
 
 The staging run prints a sign-in summary. It counts observed faults, including
-terminal ones, and separates attempt exhaustion, the per-login deadline, and
-retries suppressed by the job's deadline. The soak run does not print this
-summary.
+terminal ones, and separates the per-login deadline from retries suppressed by
+the job's deadline. The soak run does not print this summary.
 
 `front-contract.spec.ts` holds the two defects the v2.0.2 deploy shipped: a
 record publish the browser never completes, and a read answer carrying a cache

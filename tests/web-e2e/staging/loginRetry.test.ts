@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DEADLINE_FILE,
-  DEVNET_BACKOFF_MS,
   devnetFault,
   nextStep,
   RUN_RETRY_BUDGET_KEY,
@@ -46,19 +45,8 @@ describe('devnetFault', () => {
   });
 });
 
-describe('DEVNET_BACKOFF_MS', () => {
-  it('grows and spans 3 to 4 minutes', () => {
-    const total = DEVNET_BACKOFF_MS.reduce((sum, wait) => sum + wait, 0);
-    expect(total).toBeGreaterThanOrEqual(180_000);
-    expect(total).toBeLessThanOrEqual(240_000);
-    for (let i = 1; i < DEVNET_BACKOFF_MS.length; i += 1) {
-      expect(DEVNET_BACKOFF_MS[i]).toBeGreaterThan(DEVNET_BACKOFF_MS[i - 1]!);
-    }
-  });
-});
-
 describe('summarize', () => {
-  it('distinguishes terminal faults, attempt exhaustion and the two time limits', () => {
+  it('distinguishes terminal faults and the two time limits', () => {
     expect(
       summarize([
         { faults: [], result: 'signed-in' },
@@ -68,7 +56,7 @@ describe('summarize', () => {
             { fault: 'nonce', attempt: 1 },
             { fault: 'rss-round', attempt: 2 },
           ],
-          result: 'attempts-exhausted',
+          result: 'sign-in-budget',
         },
         { faults: [], result: 'refused' },
         { faults: [{ fault: 'node-5xx', attempt: 1 }], result: 'run-budget' },
@@ -76,14 +64,14 @@ describe('summarize', () => {
       ])
     ).toBe(
       'sign-ins: 6, recovered: 1, observed faults: nonce=2 rss-round=1 node-5xx=1 node-busy=1, ' +
-        'attempts exhausted: 1, sign-in budget exhausted: 1, ' +
+        'sign-in budget exhausted: 2, ' +
         'retries suppressed by run budget: 1, refused: 1'
     );
   });
 
   it('reads an empty run', () => {
     expect(summarize([])).toBe(
-      'sign-ins: 0, recovered: 0, observed faults: none, attempts exhausted: 0, ' +
+      'sign-ins: 0, recovered: 0, observed faults: none, ' +
         'sign-in budget exhausted: 0, retries suppressed by run budget: 0, refused: 0'
     );
   });
@@ -91,33 +79,30 @@ describe('summarize', () => {
 
 describe('nextStep', () => {
   it('fails at once on a refusal that is not a devnet fault', () => {
-    expect(nextStep(0, 'the wallet signature was rejected', FULL_RUN_WINDOW, 0)).toEqual({
+    expect(nextStep(0, 'the wallet signature was rejected', FULL_RUN_WINDOW, 0, 1)).toEqual({
       action: 'fail',
       fault: null,
       result: 'refused',
     });
   });
 
-  it('retries a devnet fault with the backoff of its attempt', () => {
-    DEVNET_BACKOFF_MS.forEach((waitMs, attempt) => {
-      expect(nextStep(attempt, NONCE, FULL_RUN_WINDOW, 0)).toEqual({
-        action: 'retry',
-        fault: 'nonce',
-        waitMs,
-      });
-    });
-  });
-
-  it('stops after the last wait, on the fifth attempt', () => {
-    expect(nextStep(DEVNET_BACKOFF_MS.length, NONCE, FULL_RUN_WINDOW, 0)).toEqual({
-      action: 'fail',
+  it.each([
+    [0, 0, 15_000],
+    [0, 1, 20_000],
+    [1, 0, 25_000],
+    [1, 1, 30_000],
+    [13, 0.5, 27_500],
+    [100, 1, 30_000],
+  ])('bounds the delay on attempt %s with jitter %s', (attempt, jitter, waitMs) => {
+    expect(nextStep(attempt, NONCE, FULL_RUN_WINDOW, 0, jitter)).toEqual({
+      action: 'retry',
       fault: 'nonce',
-      result: 'attempts-exhausted',
+      waitMs,
     });
   });
 
-  it('reports run-budget suppression separately from attempt exhaustion', () => {
-    expect(nextStep(0, NONCE, 0, 0)).toEqual({
+  it('reports run-budget suppression', () => {
+    expect(nextStep(0, NONCE, 0, 0, 1)).toEqual({
       action: 'fail',
       fault: 'nonce',
       result: 'run-budget',
@@ -127,8 +112,8 @@ describe('nextStep', () => {
 
 describe('nextStep budget', () => {
   it('retries while the wait still fits in the budget of one sign-in', () => {
-    const waitMs = DEVNET_BACKOFF_MS[1]!;
-    expect(nextStep(1, NONCE, FULL_RUN_WINDOW, SIGN_IN_RETRY_BUDGET_MS - waitMs - 1)).toEqual({
+    const waitMs = 30_000;
+    expect(nextStep(1, NONCE, FULL_RUN_WINDOW, SIGN_IN_RETRY_BUDGET_MS - waitMs - 1, 1)).toEqual({
       action: 'retry',
       fault: 'nonce',
       waitMs,
@@ -136,8 +121,8 @@ describe('nextStep budget', () => {
   });
 
   it('stops at the sign-in limit when a wait leaves no time for the next attempt', () => {
-    const waitMs = DEVNET_BACKOFF_MS[1]!;
-    expect(nextStep(1, NONCE, FULL_RUN_WINDOW, SIGN_IN_RETRY_BUDGET_MS - waitMs)).toEqual({
+    const waitMs = 30_000;
+    expect(nextStep(1, NONCE, FULL_RUN_WINDOW, SIGN_IN_RETRY_BUDGET_MS - waitMs, 1)).toEqual({
       action: 'fail',
       fault: 'nonce',
       result: 'sign-in-budget',
@@ -145,9 +130,12 @@ describe('nextStep budget', () => {
   });
 
   it('does not start a wait that consumes the remaining run window', () => {
-    const waitMs = DEVNET_BACKOFF_MS[0]!;
-    expect(nextStep(0, NONCE, waitMs, 0)).toMatchObject({ action: 'fail', result: 'run-budget' });
-    expect(nextStep(0, NONCE, waitMs + 1, 0)).toMatchObject({ action: 'retry', waitMs });
+    const waitMs = 20_000;
+    expect(nextStep(0, NONCE, waitMs, 0, 1)).toMatchObject({
+      action: 'fail',
+      result: 'run-budget',
+    });
+    expect(nextStep(0, NONCE, waitMs + 1, 0, 1)).toMatchObject({ action: 'retry', waitMs });
   });
 });
 
@@ -160,21 +148,21 @@ describe('the retry window across logins and workers', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('allows a later login to retry after an earlier login exhausts its attempts', () => {
+  it('allows a later login to retry after an earlier login exhausts its time budget', () => {
     const outputDir = join(root, 'test-results');
     const now = 1_000_000;
     const deadline = runRetryDeadline(outputDir, now);
     expect(deadline).toBe(now + RUN_SIGN_IN_RETRY_BUDGET_MS);
-    expect(nextStep(4, NONCE, deadline - now, 240_000)).toMatchObject({
+    expect(nextStep(4, NONCE, deadline - now, SIGN_IN_RETRY_BUDGET_MS, 1)).toMatchObject({
       action: 'fail',
-      result: 'attempts-exhausted',
+      result: 'sign-in-budget',
     });
     // A replacement worker reads the same file, with no state from the failed login.
-    const later = now + 300_000;
+    const later = now + SIGN_IN_RETRY_BUDGET_MS;
     const laterDeadline = runRetryDeadline(outputDir, later);
     expect(laterDeadline).toBe(deadline);
-    expect(nextStep(0, NONCE, laterDeadline - later, 0)).toMatchObject({ action: 'retry' });
-    expect(nextStep(0, NONCE, laterDeadline - (deadline + 1), 0)).toMatchObject({
+    expect(nextStep(0, NONCE, laterDeadline - later, 0, 1)).toMatchObject({ action: 'retry' });
+    expect(nextStep(0, NONCE, laterDeadline - (deadline + 1), 0, 1)).toMatchObject({
       action: 'fail',
       result: 'run-budget',
     });
