@@ -1318,6 +1318,53 @@ fn a_second_edit_after_a_failed_self_adopt_of_the_first_publishes() {
     a_second_edit_in_the_window_of_the_first(true);
 }
 
+/// A delete made while an edit of the same file is marked published carries
+/// the sequence that edit published, so the rebase does not drop it as
+/// superseded.
+fn a_delete_in_the_window_of_an_edit(self_adopt_fails: bool) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        b"first version bytes",
+    )
+    .expect("the create commits");
+    tick(&world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "notes.txt");
+    write_file(&mut engine, version(node), b"second version bytes").expect("the edit commits");
+
+    enter_the_window(&world, &alice, &engine, &mut tasks, self_adopt_fails);
+    block_on(engine.command(Command::Delete { node })).expect("the delete stages");
+    leave_the_window(&alice, &mut tasks, self_adopt_fails);
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    assert!(!dead_lettered(&mut events), "no op dead-lettered");
+    let root = block_on(engine.snapshot(ROOT)).expect("the root renders");
+    assert!(
+        root.children.iter().all(|child| child.name != "notes.txt"),
+        "the delete made in the window lands"
+    );
+}
+
+#[test]
+fn a_delete_in_the_window_of_an_edit_lands() {
+    a_delete_in_the_window_of_an_edit(false);
+}
+
+#[test]
+fn a_delete_after_a_failed_self_adopt_of_an_edit_lands() {
+    a_delete_in_the_window_of_an_edit(true);
+}
+
 /// A file whose create is marked published shows the version its own record
 /// carries, and an edit made then anchors on it.
 fn a_new_file_in_the_window_of_its_create(self_adopt_fails: bool) {
