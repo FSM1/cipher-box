@@ -324,11 +324,11 @@ impl StagingStore for InMemoryStagingStore {
                 return Err(SeamError::new("put_staged_bytes unavailable"));
             }
             inner.staged.insert(staging_key.to_vec(), bytes.to_vec());
-            let parks = inner.parked_write.as_deref() == Some(staging_key);
-            if parks {
-                inner.parked_write = None;
-                inner.holding_write = true;
-            }
+            let parks = inner
+                .parked_write
+                .take_if(|key| key.as_slice() == staging_key)
+                .is_some();
+            inner.holding_write |= parks;
             parks
         };
         if parks {

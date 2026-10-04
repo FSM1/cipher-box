@@ -1188,15 +1188,7 @@ fn a_new_folder_stays_in_the_vault_while_the_publish_of_its_parent_completes() {
     create_under(&mut engine, deep, "deeper");
     let deeper = child_id(&engine, deep, "deeper");
 
-    alice
-        .staging_store
-        .inner()
-        .park_after_staged_write(&mark_key());
-    tick(&world, &engine, &mut tasks);
-    assert!(
-        alice.staging_store.inner().holds_parked_write(),
-        "the drain stops just after the create of deep is marked published"
-    );
+    enter_the_window(&world, &alice, &engine, &mut tasks, false);
 
     let view = block_on(engine.snapshot(deeper)).expect("deeper renders");
     assert!(!view.received_share, "deeper still reaches the vault root");
@@ -1207,8 +1199,7 @@ fn a_new_folder_stays_in_the_vault_while_the_publish_of_its_parent_completes() {
     }));
     assert!(upload.is_ok(), "a write into deeper is queued: {upload:?}");
 
-    alice.staging_store.inner().release_parked_write();
-    poll_tasks_until_parked(&mut tasks);
+    leave_the_window(&alice, &mut tasks, false);
     for _ in 0..4 {
         tick(&world, &engine, &mut tasks);
     }
@@ -1220,12 +1211,14 @@ fn a_new_folder_stays_in_the_vault_while_the_publish_of_its_parent_completes() {
 }
 
 /// Run one pass that stops just after it marks an op published, the window
-/// in which that op has left the render.
-fn tick_to_the_mark(
+/// in which that op has left the render. With `self_adopt_fails`, the pass
+/// then runs to its end with a failed self-adopt, which keeps the window open.
+fn enter_the_window(
     world: &FakeWorld,
     device: &FakeDevice,
     engine: &Engine<FakeSeamTypes>,
     tasks: &mut [BoxedTask],
+    self_adopt_fails: bool,
 ) {
     device
         .staging_store
@@ -1236,19 +1229,46 @@ fn tick_to_the_mark(
         device.staging_store.inner().holds_parked_write(),
         "the drain stops just after an op is marked published"
     );
+    if self_adopt_fails {
+        device.snapshot_cache.fail_puts();
+        release_the_mark(device, tasks);
+    }
 }
 
-/// Let the pass that [`tick_to_the_mark`] stopped run to its end.
+/// Close the window that [`enter_the_window`] opened.
+fn leave_the_window(device: &FakeDevice, tasks: &mut [BoxedTask], self_adopt_fails: bool) {
+    if self_adopt_fails {
+        device.snapshot_cache.heal_puts();
+    } else {
+        release_the_mark(device, tasks);
+    }
+}
+
+/// Let the pass that stopped at the mark run to its end.
 fn release_the_mark(device: &FakeDevice, tasks: &mut [BoxedTask]) {
     device.staging_store.inner().release_parked_write();
     poll_tasks_until_parked(tasks);
 }
 
-/// No op dead-lettered in `events`.
-fn no_dead_letter(events: &[Event]) -> bool {
-    !events
-        .iter()
-        .any(|event| matches!(event, Event::DeadLetter { .. }))
+/// Drain until quiet, then require that no op dead-lettered and that `node`
+/// reads `head`.
+fn settles_on_head(
+    world: &FakeWorld,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    events: &mut EventStream,
+    node: NodeId,
+    head: &[u8],
+    why: &str,
+) {
+    for _ in 0..4 {
+        tick(world, engine, tasks);
+    }
+    assert!(!dead_lettered(events), "{why}");
+    assert_eq!(
+        block_on(engine.read_content(node)).expect("the head reads"),
+        head
+    );
 }
 
 /// A content edit made while the previous edit of the same file is marked
@@ -1272,33 +1292,19 @@ fn a_second_edit_in_the_window_of_the_first(self_adopt_fails: bool) {
     let node = child_id(&engine, ROOT, "notes.txt");
     write_file(&mut engine, version(node), b"second version bytes").expect("the edit commits");
 
-    tick_to_the_mark(&world, &alice, &engine, &mut tasks);
-    if self_adopt_fails {
-        alice.snapshot_cache.fail_puts();
-        release_the_mark(&alice, &mut tasks);
-    }
-    write_file(
-        &mut engine,
-        version(node),
-        b"third version bytes, the newest",
-    )
-    .expect("the next edit commits");
-    if self_adopt_fails {
-        alice.snapshot_cache.heal_puts();
-    } else {
-        release_the_mark(&alice, &mut tasks);
-    }
-    for _ in 0..4 {
-        tick(&world, &engine, &mut tasks);
-    }
+    enter_the_window(&world, &alice, &engine, &mut tasks, self_adopt_fails);
+    let third = b"third version bytes, the newest";
+    write_file(&mut engine, version(node), third).expect("the next edit commits");
+    leave_the_window(&alice, &mut tasks, self_adopt_fails);
 
-    assert!(
-        no_dead_letter(&events_so_far(&mut events)),
-        "the next edit anchors on the head the first edit published"
-    );
-    assert_eq!(
-        block_on(engine.read_content(node)).expect("the head reads"),
-        b"third version bytes, the newest"
+    settles_on_head(
+        &world,
+        &engine,
+        &mut tasks,
+        &mut events,
+        node,
+        third,
+        "the next edit anchors on the head the first edit published",
     );
 }
 
@@ -1331,11 +1337,7 @@ fn a_new_file_in_the_window_of_its_create(self_adopt_fails: bool) {
     )
     .expect("the create commits");
 
-    tick_to_the_mark(&world, &alice, &engine, &mut tasks);
-    if self_adopt_fails {
-        alice.snapshot_cache.fail_puts();
-        release_the_mark(&alice, &mut tasks);
-    }
+    enter_the_window(&world, &alice, &engine, &mut tasks, self_adopt_fails);
     let view = block_on(engine.snapshot(ROOT)).expect("the root renders");
     let file = view
         .children
@@ -1345,24 +1347,18 @@ fn a_new_file_in_the_window_of_its_create(self_adopt_fails: bool) {
     assert_eq!(file.size, Some(first.len() as u64));
     assert_eq!(file.content_version, Some(1));
     let node = file.id;
-    write_file(&mut engine, version(node), b"second version bytes")
-        .expect("an edit of the new file commits");
-    if self_adopt_fails {
-        alice.snapshot_cache.heal_puts();
-    } else {
-        release_the_mark(&alice, &mut tasks);
-    }
-    for _ in 0..4 {
-        tick(&world, &engine, &mut tasks);
-    }
+    let second = b"second version bytes";
+    write_file(&mut engine, version(node), second).expect("an edit of the new file commits");
+    leave_the_window(&alice, &mut tasks, self_adopt_fails);
 
-    assert!(
-        no_dead_letter(&events_so_far(&mut events)),
-        "the edit anchors on the head the create published"
-    );
-    assert_eq!(
-        block_on(engine.read_content(node)).expect("the head reads"),
-        b"second version bytes"
+    settles_on_head(
+        &world,
+        &engine,
+        &mut tasks,
+        &mut events,
+        node,
+        second,
+        "the edit anchors on the head the create published",
     );
 }
 

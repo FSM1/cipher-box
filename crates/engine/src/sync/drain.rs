@@ -634,7 +634,6 @@ impl From<PublishHalt> for Halt {
     }
 }
 
-/// One head publish that reached the transport.
 /// A file head the base takes before the op that published it stops
 /// rendering.
 struct FileHead<'a> {
@@ -645,6 +644,23 @@ struct FileHead<'a> {
     content_cid: &'a [u8],
 }
 
+/// The op a record is the last publish of, and the head of the file that op
+/// created, if any.
+struct Completion<'a> {
+    op_id: OpId,
+    created: Option<FileHead<'a>>,
+}
+
+impl Completion<'_> {
+    fn of(op_id: OpId) -> Self {
+        Self {
+            op_id,
+            created: None,
+        }
+    }
+}
+
+/// One head publish that reached the transport.
 enum HeadPublish {
     /// Our record confirmed at its name at `sequence`, and the floors its head
     /// was proven against.
@@ -4077,7 +4093,6 @@ where
                 // The parent's record below is this plan's last: a mark raised
                 // here would drop an op on restart whose child no parent names.
                 None,
-                None,
             )
             .await
             .map_err(Halt::from)?;
@@ -4096,17 +4111,14 @@ where
             version_count: 1,
             content_cid: &staged.root_cid,
         });
-        self.publish_folder(
-            scope,
-            pass,
-            parent,
-            modified_at,
-            Some(applied.op_id),
-            created.as_ref(),
-        )
-        .await
-        .map_err(Halt::from)?;
-        if created.is_none()
+        let completion = Completion {
+            op_id: applied.op_id,
+            created,
+        };
+        self.publish_folder(scope, pass, parent, modified_at, Some(completion))
+            .await
+            .map_err(Halt::from)?;
+        if applied.op.staged_content().is_none()
             && let Some(meta) = self.cells.base.borrow_mut().node_mut(child_id)
         {
             applied.op.stamp_authored(meta);
@@ -4257,8 +4269,7 @@ where
                 pass,
                 parent,
                 modified_at,
-                (at + 1 == count).then_some(applied.op_id),
-                None,
+                (at + 1 == count).then_some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -4496,7 +4507,6 @@ where
             // The entry drop below is this plan's last act, not the relink: a
             // mark raised here would drop the op on the next pass and leave the
             // entry standing for a node the vault links again.
-            None,
             None,
         )
         .await
@@ -5852,7 +5862,6 @@ where
                     envelope_unknown,
                     epoch_tag_unknown,
                     None,
-                    None,
                 )
                 .await
                 .map_err(Halt::from)?;
@@ -6335,8 +6344,7 @@ where
                 pass,
                 dest,
                 modified_at,
-                single_record.then_some(applied.op_id),
-                None,
+                single_record.then_some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -6360,8 +6368,7 @@ where
                 pass,
                 source,
                 source_modified_at,
-                Some(applied.op_id),
-                None,
+                Some(Completion::of(applied.op_id)),
             )
             .await
         {
@@ -6582,7 +6589,6 @@ where
                     node_loaded.envelope_unknown,
                     node_loaded.epoch_tag_unknown,
                     None,
-                    None,
                 )
                 .await
                 .map_err(Halt::from)?;
@@ -6712,7 +6718,7 @@ where
             }
         };
         pass.folder_mut(dest)?.children = children;
-        self.publish_folder(scope, pass, dest, modified_at, None, None)
+        self.publish_folder(scope, pass, dest, modified_at, None)
             .await
             .map_err(Halt::from)?;
         Ok(())
@@ -6875,8 +6881,7 @@ where
                 content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
-                Some(applied.op_id),
-                None,
+                Some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -6999,8 +7004,7 @@ where
                 content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
-                Some(applied.op_id),
-                None,
+                Some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -7139,8 +7143,7 @@ where
                 content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
-                Some(applied.op_id),
-                None,
+                Some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -7230,8 +7233,7 @@ where
                 content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
-                Some(applied.op_id),
-                None,
+                Some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -7949,8 +7951,7 @@ where
         pass: &mut Pass,
         folder: NodeId,
         modified_at: u64,
-        completes: Option<OpId>,
-        created: Option<&FileHead<'_>>,
+        completes: Option<Completion<'_>>,
     ) -> Result<u64, PublishHalt> {
         let (name, commitment, built_on, body, envelope_unknown, epoch_tag_unknown) = {
             let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
@@ -7987,7 +7988,6 @@ where
                 envelope_unknown,
                 epoch_tag_unknown,
                 completes,
-                created,
             )
             .await?;
 
@@ -8107,8 +8107,7 @@ where
         content_cids: Vec<String>,
         carried_unknown: PreservedFields,
         carried_epoch_tag_unknown: PreservedFields,
-        completes: Option<OpId>,
-        created: Option<&FileHead<'_>>,
+        completes: Option<Completion<'_>>,
     ) -> Result<Published, PublishHalt> {
         let name = &observed.name().clone();
         plane_seals(plane, node, name, is_scope_root).map_err(PublishHalt::before_the_put)?;
@@ -8203,10 +8202,10 @@ where
                 return Err(PublishHalt::before_the_put(Halt::Attempt));
             }
         };
-        if let Some(op_id) = completes {
-            // The note drops the op from the render, so the base takes the
-            // record first, or the render loses what the op wrote.
-            self.paint_confirmed(scope, node, body, sequence, created);
+        if let Some(Completion { op_id, created }) = completes {
+            // `keep_published` drops the op from the render, so the base takes
+            // the record first, or the render loses what the op wrote.
+            self.paint_confirmed(scope, node, body, sequence, created.as_ref());
             self.keep_published(scope, &plane.end, op_id).await;
             self.mark_published(scope, op_id).await;
         }
@@ -8370,34 +8369,32 @@ where
                 modified_at,
                 ..
             } => {
+                let mut base = self.cells.base.borrow_mut();
                 if let Some(head) = versions.first() {
-                    self.paint_file_head(&FileHead {
+                    project_child_version(
+                        &mut base,
                         node,
-                        size: head.size,
-                        modified_at: *modified_at,
-                        version_count: versions.len() as u64,
-                        content_cid: &head.content_cid,
-                    });
+                        head.size,
+                        *modified_at,
+                        versions.len() as u64,
+                        Some(&head.content_cid),
+                    );
                 }
-                if let Some(meta) = self.cells.base.borrow_mut().node_mut(node) {
+                if let Some(meta) = base.node_mut(node) {
                     meta.record_sequence = sequence;
                 }
             }
         }
         if let Some(head) = created {
-            self.paint_file_head(head);
+            project_child_version(
+                &mut self.cells.base.borrow_mut(),
+                head.node,
+                head.size,
+                head.modified_at,
+                head.version_count,
+                Some(head.content_cid),
+            );
         }
-    }
-
-    fn paint_file_head(&self, head: &FileHead<'_>) {
-        project_child_version(
-            &mut self.cells.base.borrow_mut(),
-            head.node,
-            head.size,
-            head.modified_at,
-            head.version_count,
-            Some(head.content_cid),
-        );
     }
 
     /// Merge one folder's published children into the base snapshot, under
