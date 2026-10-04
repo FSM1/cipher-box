@@ -13,10 +13,16 @@ import { useSyncExternalStore } from 'react';
 /** How the session was established. */
 export type LoginMethod = 'google' | 'email' | 'wallet';
 
+export type LoginFailure =
+  | { readonly kind: 'error'; readonly message: string }
+  | { readonly kind: 'held-elsewhere'; readonly heldBy: string | null };
+
 export interface AuthState {
   /** What the member signed in as, for every method; a wallet's is truncated. */
   readonly display: string | null;
   readonly method: LoginMethod | null;
+  /** A restore can fail in a consumer that outlives the route rendering sign-in. */
+  readonly loginFailure: LoginFailure | null;
   /**
    * A login reached this account's factor policy and stopped: the tab owes a
    * recovery phrase. Held here rather than in a hook so every surface reads the
@@ -45,6 +51,7 @@ export interface AuthState {
 const SIGNED_OUT: AuthState = Object.freeze({
   display: null,
   method: null,
+  loginFailure: null,
   recoveryRequired: false,
   factorPolicy: false,
   recoveryPhraseHeld: false,
@@ -60,6 +67,7 @@ function set(next: AuthState): void {
   if (
     next.display === state.display &&
     next.method === state.method &&
+    next.loginFailure === state.loginFailure &&
     next.recoveryRequired === state.recoveryRequired &&
     next.factorPolicy === state.factorPolicy &&
     next.recoveryPhraseHeld === state.recoveryPhraseHeld &&
@@ -84,6 +92,7 @@ export const authStore = {
     set({
       display,
       method,
+      loginFailure: null,
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
@@ -92,6 +101,9 @@ export const authStore = {
   },
   signedOut(): void {
     set(SIGNED_OUT);
+  },
+  loginFailure(failure: LoginFailure | null): void {
+    set({ ...state, loginFailure: failure === null ? null : Object.freeze({ ...failure }) });
   },
   /** A login stopped at the factor policy; the front door owes a phrase. */
   recoveryRequired(): void {

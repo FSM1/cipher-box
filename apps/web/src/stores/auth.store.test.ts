@@ -8,6 +8,7 @@ describe('auth.store', () => {
     expect(authStore.getState()).toEqual({
       display: null,
       method: null,
+      loginFailure: null,
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
@@ -16,6 +17,7 @@ describe('auth.store', () => {
   });
 
   it('records the method and labels a login carries, and nothing the last session left', () => {
+    authStore.loginFailure({ kind: 'error', message: 'previous refusal' });
     authStore.recoveryRequired();
     authStore.factorPolicy(true);
     authStore.recoveryPhrase(true);
@@ -27,6 +29,7 @@ describe('auth.store', () => {
     expect(authStore.getState()).toEqual({
       display: 'user@example.com',
       method: 'google',
+      loginFailure: null,
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,
@@ -96,6 +99,7 @@ describe('auth.store', () => {
 
   it('clears the session on sign-out', () => {
     authStore.signedIn('email', 'user@example.com');
+    authStore.loginFailure({ kind: 'error', message: 'previous refusal' });
     authStore.recoveryRequired();
     authStore.factorPolicy(true);
     authStore.recoveryPhrase(true);
@@ -105,6 +109,7 @@ describe('auth.store', () => {
     expect(authStore.getState()).toEqual({
       display: null,
       method: null,
+      loginFailure: null,
       recoveryRequired: false,
       factorPolicy: false,
       recoveryPhraseHeld: false,

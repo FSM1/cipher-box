@@ -124,6 +124,25 @@ describe('useAuth recovery phrase', () => {
     expect(menu.result.current.auth.recoveryPhraseHeld).toBe(true);
   });
 
+  it('keeps an enrollment failure on the surface that enrolled', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({ loggedIn: true });
+    coreKit.session.enrollRecoveryPhrase = () => Promise.reject(new Error('enrollment refused'));
+    const dialog = mount(engine, coreKit);
+    const other = mount(engine, coreKit);
+    await waitFor(() => expect(dialog.result.current.auth.isReady).toBe(true));
+    await act(() => dialog.result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+
+    await act(async () => {
+      await expect(dialog.result.current.auth.enrollRecoveryPhrase()).rejects.toThrow();
+    });
+
+    expect(dialog.result.current.auth.error).toBe('enrollment refused');
+    expect(other.result.current.auth.error).toBeNull();
+    dialog.unmount();
+    expect(mount(engine, coreKit).result.current.auth.error).toBeNull();
+  });
+
   /**
    * The phrase is every account's guaranteed path (ADR 0009 D2), so a device
    * that joined by approval must still be offered enrollment.
@@ -445,7 +464,10 @@ describe('useAuth against an engine another account holds', () => {
       await expect(result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN)).rejects.toThrow();
     });
 
-    expect(result.current.auth.heldElsewhere).toEqual({ heldBy: 'other-account' });
+    expect(result.current.auth.heldElsewhere).toEqual({
+      kind: 'held-elsewhere',
+      heldBy: 'other-account',
+    });
     // A one-line banner cannot say what to do about it, so none is rendered.
     expect(result.current.auth.error).toBeNull();
     expect(result.current.auth.isAuthenticated).toBe(false);
@@ -464,7 +486,7 @@ describe('useAuth against an engine another account holds', () => {
       await expect(result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN)).rejects.toThrow();
     });
 
-    expect(result.current.auth.heldElsewhere).toEqual({ heldBy: null });
+    expect(result.current.auth.heldElsewhere).toEqual({ kind: 'held-elsewhere', heldBy: null });
   });
 
   it('clears the state when the next attempt begins', async () => {

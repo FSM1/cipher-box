@@ -1,8 +1,9 @@
 /**
  * React's binding to the shared login flow (ADR 0008 D3). The sequencing lives
  * in `@cipherbox/login`; this hook supplies the web host's parts — the facade
- * the client wraps, the Core Kit session, the collector, the auth chrome — and
- * renders the transitions as component state.
+ * the client wraps, the Core Kit session, the collector, the auth chrome. A
+ * login or restore failure lives in `authStore`, so it outlives the route that
+ * rendered the attempt.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -15,7 +16,7 @@ import {
 } from '@cipherbox/login';
 import { errorMessage } from '../lib/errorMessage';
 import { useEngineAccount } from '../engine/useEngineSession';
-import { authStore, useAuthState } from '../stores/auth.store';
+import { authStore, useAuthState, type LoginFailure } from '../stores/auth.store';
 import { notificationStore } from '../stores/notification.store';
 import { useEngine, useLoginSecretSource, useRebuildEngine } from '../providers/EngineProvider';
 import type { RecoveryEnrollment } from './coreKit';
@@ -41,9 +42,7 @@ function notSaved(failure: unknown): string {
 }
 
 /** The origin's engine belongs to another account; `heldBy` names it. */
-export interface HeldElsewhere {
-  heldBy: string | null;
-}
+export type HeldElsewhere = Extract<LoginFailure, { kind: 'held-elsewhere' }>;
 
 export interface Auth {
   isAuthenticated: boolean;
@@ -93,7 +92,7 @@ export function useAuth(): Auth {
   const rebuildEngine = useRebuildEngine();
   const { session, status, error: coreKitError } = useCoreKit();
   const { exchange, collector } = useIdentity();
-  const { recoveryRequired, recoveryPhraseHeld } = useAuthState();
+  const { recoveryRequired, recoveryPhraseHeld, loginFailure } = useAuthState();
   // The engine's word, not this tab's: a logout in another tab zeroizes the one
   // engine the origin has, and a UI reading its own store would keep rendering
   // a vault over it.
@@ -104,8 +103,9 @@ export function useAuth(): Auth {
   // on the session and the facade together, so a replacement of either owes the
   // engine a fresh attempt that consumers must await in turn.
   const [resumedFlow, setResumedFlow] = useState<LoginFlow<WebCollected> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [heldElsewhere, setHeldElsewhere] = useState<HeldElsewhere | null>(null);
+  // Local to the surface that enrolls: a closed dialog must not leave its
+  // failure for the next consumer to render.
+  const [enrollError, setEnrollError] = useState<string | null>(null);
 
   const isReady = client !== null && session !== null && status === 'ready';
 
@@ -113,17 +113,17 @@ export function useAuth(): Auth {
     () => ({
       begin: () => {
         setIsBusy(true);
-        setError(null);
-        setHeldElsewhere(null);
+        setEnrollError(null);
+        authStore.loginFailure(null);
       },
       // A refusal by account is a state the front door renders in full, not a
       // one-line failure: its message alone cannot say what to do about it.
       failed: (failure) => {
         if (failure instanceof EngineHeldElsewhereError) {
-          setHeldElsewhere({ heldBy: failure.heldBy });
+          authStore.loginFailure({ kind: 'held-elsewhere', heldBy: failure.heldBy });
           return;
         }
-        setError(errorMessage(failure));
+        authStore.loginFailure({ kind: 'error', message: errorMessage(failure) });
       },
       end: () => setIsBusy(false),
     }),
@@ -253,14 +253,14 @@ export function useAuth(): Auth {
   const enrollRecoveryPhrase = useCallback(async (): Promise<RecoveryEnrollment> => {
     if (!session) throw new Error('the login provider is not ready');
     setIsBusy(true);
-    setError(null);
+    setEnrollError(null);
     try {
       const enrolled = await session.enrollRecoveryPhrase();
       authStore.factorPolicy(true);
       authStore.recoveryPhrase(true);
       return enrolled;
     } catch (failure) {
-      setError(errorMessage(failure));
+      setEnrollError(errorMessage(failure));
       throw failure;
     } finally {
       setIsBusy(false);
@@ -293,8 +293,8 @@ export function useAuth(): Auth {
     isReady,
     isSignedOut,
     isBusy,
-    error: error ?? coreKitError,
-    heldElsewhere,
+    error: enrollError ?? (loginFailure?.kind === 'error' ? loginFailure.message : coreKitError),
+    heldElsewhere: loginFailure?.kind === 'held-elsewhere' ? loginFailure : null,
     loginWithGoogle,
     sendEmailCode: flow.sendEmailCode,
     loginWithEmailCode,

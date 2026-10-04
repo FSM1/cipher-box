@@ -23,20 +23,25 @@ export class LoginPage {
 
   /**
    * Waits until the tab either shows `signedIn` or draws a refusal. Answers
-   * with the refusal text, or `null` once the sign-in won.
+   * with the refusal text, or `null` once the sign-in won. A visible
+   * `signedOut` without a banner is a refusal too.
    */
-  async refusal(signedIn: Locator, timeout: number): Promise<string | null> {
+  async refusal(signedIn: Locator, timeout: number, signedOut?: Locator): Promise<string | null> {
     let refused: string | null = null;
     await expect
       .poll(
         async () => {
           if (await signedIn.isVisible()) return true;
           const banner = this.error.first();
-          if ((await banner.count()) === 0) return false;
-          refused = (await banner.innerText()).trim();
+          if ((await banner.count()) > 0) {
+            refused = (await banner.innerText()).trim();
+            return true;
+          }
+          if (!(await signedOut?.isVisible())) return false;
+          refused = 'returned to sign-in without an error';
           return true;
         },
-        { timeout, intervals: [2_000] }
+        { timeout, intervals: [2_000], message: 'neither signed in nor refused' }
       )
       .toBe(true);
     return refused;

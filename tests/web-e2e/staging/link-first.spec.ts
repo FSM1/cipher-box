@@ -16,6 +16,7 @@ import { InvitePage } from '../page-objects/invite.page';
 import { SharePage } from '../page-objects/share.page';
 import { SharedPage, type RowStanding } from '../page-objects/shared.page';
 import { expect, nudgedUntil, published, signIn, signInWithWallet, test } from './fixtures';
+import { restoreVault } from './restoreVault';
 
 const FOLDER = 'link-first';
 const EXPIRED_FOLDER = 'link-first-expired';
@@ -41,14 +42,6 @@ const revoked = (row: RowStanding) => row !== 'gone' && row.resolution === 'revo
 
 async function offline(page: Page): Promise<void> {
   await page.goto('about:blank');
-}
-
-/** Loads the vault again; the session resumes, and a fresh engine starts. */
-async function online(page: Page): Promise<FilesPage> {
-  await page.goto('/files');
-  const files = new FilesPage(page);
-  await expect(files.browser).toBeVisible({ timeout: 180_000 });
-  return files;
 }
 
 /** Spends `link` in `page` under `name`: sign-in on the claim route, then the join. */
@@ -141,7 +134,7 @@ test('the link-first flow runs across two owner devices', async ({
 
     // The reader's session resumes on the invite load, so the page offers the
     // join at once.
-    await online(page);
+    await restoreVault(page);
     await ownerShare.open(FOLDER);
     const again = await ownerShare.mintLink();
     await ownerShare.close();
@@ -154,7 +147,7 @@ test('the link-first flow runs across two owner devices', async ({
     await readerShared.awaitStandingOf(scope, granted, PASS);
     await offline(page);
 
-    await online(deviceB);
+    await restoreVault(deviceB);
     await bShare.openUntilGranted(FOLDER, 1, PASS_MS);
     await bShare.close();
     await bShare.openUntilLinks(FOLDER, 1, PASS_MS);
@@ -177,7 +170,7 @@ test('the link-first flow runs across two owner devices', async ({
 
   const writerView =
     await test.step('4. a write link holder writes after device B converts, and device A reads the write', async () => {
-      await online(page);
+      await restoreVault(page);
       await ownerShare.open(FOLDER);
       const writeLink = await ownerShare.mintLink({ permission: 'write' });
       await ownerShare.close();
@@ -199,7 +192,7 @@ test('the link-first flow runs across two owner devices', async ({
       await expect(writerFiles.row(WRITTEN)).toBeVisible({ timeout: 180_000 });
       await published(writer);
 
-      await online(page);
+      await restoreVault(page);
       await ownerFiles.open(FOLDER);
       await nudgedUntil(ownerFiles, ownerFiles.row(WRITTEN), 1, PASS_MS);
       await ownerFiles.openFromSidebar();
@@ -228,7 +221,7 @@ test('the link-first flow runs across two owner devices', async ({
     // A fresh session on device A, so its first sweep is a cadence away.
     await offline(page);
     const started = Date.now();
-    await online(page);
+    await restoreVault(page);
     await ownerFiles.createFolder(EXPIRED_FOLDER);
     await expect(ownerFiles.row(EXPIRED_FOLDER)).toBeVisible();
     await published(page);
@@ -245,7 +238,7 @@ test('the link-first flow runs across two owner devices', async ({
     // load, so B reads the link before it cuts it, and its absence afterwards
     // is a cut, not a read that predates the mint.
     await offline(deviceB);
-    await online(deviceB);
+    await restoreVault(deviceB);
     await bShare.openUntilLinks(EXPIRED_FOLDER, 1, PASS_MS);
     await bShare.openUntilLinks(
       EXPIRED_FOLDER,
@@ -254,7 +247,7 @@ test('the link-first flow runs across two owner devices', async ({
     );
     await bShare.close();
 
-    await online(page);
+    await restoreVault(page);
     await ownerShare.openUntilLinks(EXPIRED_FOLDER, 0, PASS_MS);
   });
 });
