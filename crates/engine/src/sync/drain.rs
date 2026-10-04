@@ -634,11 +634,41 @@ impl From<PublishHalt> for Halt {
     }
 }
 
+/// A file head the base takes before the op that published it stops
+/// rendering.
+struct FileHead<'a> {
+    node: NodeId,
+    size: u64,
+    modified_at: u64,
+    version_count: u64,
+    content_cid: &'a [u8],
+}
+
+/// The op a record is the last publish of, and the head of the file that op
+/// created, if any.
+struct Completion<'a> {
+    op_id: OpId,
+    created: Option<FileHead<'a>>,
+}
+
+impl Completion<'_> {
+    fn of(op_id: OpId) -> Self {
+        Self {
+            op_id,
+            created: None,
+        }
+    }
+}
+
 /// One head publish that reached the transport.
 enum HeadPublish {
-    /// Our record confirmed at its name, and the floors its head was proven
-    /// against.
-    Confirmed(Vec<u8>, Option<PublishBar>),
+    /// Our record confirmed at its name at `sequence`, and the floors its head
+    /// was proven against.
+    Confirmed {
+        record_bytes: Vec<u8>,
+        bar: Option<PublishBar>,
+        sequence: u64,
+    },
     /// A lost CAS race at `sequence`, with the winning record when the
     /// confirm read one.
     Lost {
@@ -4071,22 +4101,26 @@ where
         pass.folder_mut(parent)?.children.push(child.child_ref);
         let authored = applied.op.authored_nodes(Vec::new);
         let modified_at = stamped_modified_at(pass, &applied.op, &authored, parent)?;
-        self.publish_folder(scope, pass, parent, modified_at, Some(applied.op_id))
-            .await
-            .map_err(Halt::from)?;
         // The parent's repaint lifts the child in without what its own record
         // carries; the first edit of this file anchors on the version its
         // create published.
-        if let Some(staged) = applied.op.staged_content() {
-            project_child_version(
-                &mut self.cells.base.borrow_mut(),
-                child_id,
-                staged.plaintext_size,
-                applied.op.authored_at.0,
-                1,
-                Some(&staged.root_cid),
-            );
-        } else if let Some(meta) = self.cells.base.borrow_mut().node_mut(child_id) {
+        let created = applied.op.staged_content().map(|staged| FileHead {
+            node: child_id,
+            size: staged.plaintext_size,
+            modified_at: applied.op.authored_at.0,
+            version_count: 1,
+            content_cid: &staged.root_cid,
+        });
+        let completion = Completion {
+            op_id: applied.op_id,
+            created,
+        };
+        self.publish_folder(scope, pass, parent, modified_at, Some(completion))
+            .await
+            .map_err(Halt::from)?;
+        if applied.op.staged_content().is_none()
+            && let Some(meta) = self.cells.base.borrow_mut().node_mut(child_id)
+        {
             applied.op.stamp_authored(meta);
         }
         // Held only once the parent names it: a record nothing references is
@@ -4235,7 +4269,7 @@ where
                 pass,
                 parent,
                 modified_at,
-                (at + 1 == count).then_some(applied.op_id),
+                (at + 1 == count).then_some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -6310,7 +6344,7 @@ where
                 pass,
                 dest,
                 modified_at,
-                single_record.then_some(applied.op_id),
+                single_record.then_some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -6329,7 +6363,13 @@ where
         // unclassified.
         let source_modified_at = stamped_modified_at(pass, &applied.op, &authored, source)?;
         if let Err(failure) = self
-            .publish_folder(scope, pass, source, source_modified_at, Some(applied.op_id))
+            .publish_folder(
+                scope,
+                pass,
+                source,
+                source_modified_at,
+                Some(Completion::of(applied.op_id)),
+            )
             .await
         {
             // A confirmed source-remove is the move complete on the network, so
@@ -6841,7 +6881,7 @@ where
                 content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
-                Some(applied.op_id),
+                Some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -6964,7 +7004,7 @@ where
                 content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
-                Some(applied.op_id),
+                Some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -7103,7 +7143,7 @@ where
                 content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
-                Some(applied.op_id),
+                Some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -7193,7 +7233,7 @@ where
                 content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
-                Some(applied.op_id),
+                Some(Completion::of(applied.op_id)),
             )
             .await
             .map_err(Halt::from)?;
@@ -7911,7 +7951,7 @@ where
         pass: &mut Pass,
         folder: NodeId,
         modified_at: u64,
-        completes: Option<OpId>,
+        completes: Option<Completion<'_>>,
     ) -> Result<u64, PublishHalt> {
         let (name, commitment, built_on, body, envelope_unknown, epoch_tag_unknown) = {
             let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
@@ -8067,7 +8107,7 @@ where
         content_cids: Vec<String>,
         carried_unknown: PreservedFields,
         carried_epoch_tag_unknown: PreservedFields,
-        completes: Option<OpId>,
+        completes: Option<Completion<'_>>,
     ) -> Result<Published, PublishHalt> {
         let name = &observed.name().clone();
         plane_seals(plane, node, name, is_scope_root).map_err(PublishHalt::before_the_put)?;
@@ -8120,16 +8160,20 @@ where
                 observed.clearing(floor.unwrap_or(0).saturating_add(u64::from(ATTEMPT_BUDGET)))
             }
         };
-        let (record_bytes, bar) = match self
+        let (record_bytes, bar, sequence) = match self
             .publish_head(plane, &observed, &node.0, &head, content_cids.clone())
             .await
             .map_err(PublishHalt::before_the_put)?
         {
-            HeadPublish::Confirmed(record_bytes, bar) => {
+            HeadPublish::Confirmed {
+                record_bytes,
+                bar,
+                sequence,
+            } => {
                 if acked != Acknowledged::Nothing {
                     let _ = ledger.forget_acknowledged(&owner, node.0).await;
                 }
-                (record_bytes, bar)
+                (record_bytes, bar, sequence)
             }
             // Its bytes may still surface at `sequence`, so the next publish
             // here signs above it rather than tying it.
@@ -8158,7 +8202,10 @@ where
                 return Err(PublishHalt::before_the_put(Halt::Attempt));
             }
         };
-        if let Some(op_id) = completes {
+        if let Some(Completion { op_id, created }) = completes {
+            // `keep_published` drops the op from the render, so the base takes
+            // the record first, or the render loses what the op wrote.
+            self.paint_confirmed(scope, node, body, sequence, created.as_ref());
             self.keep_published(scope, &plane.end, op_id).await;
             self.mark_published(scope, op_id).await;
         }
@@ -8286,9 +8333,11 @@ where
             classify_publish(error, head.block.len() as u64)
         })?;
         match outcome {
-            PublishOutcome::Published { .. } => {
-                Ok(HeadPublish::Confirmed(record_bytes, preflighted.bar()))
-            }
+            PublishOutcome::Published { sequence } => Ok(HeadPublish::Confirmed {
+                record_bytes,
+                bar: preflighted.bar(),
+                sequence,
+            }),
             PublishOutcome::LostRace {
                 published_sequence, ..
             } => Ok(HeadPublish::Lost {
@@ -8296,6 +8345,55 @@ where
                 sequence: published_sequence,
             }),
             PublishOutcome::Unconfirmed { sequence } => Ok(HeadPublish::Unconfirmed { sequence }),
+        }
+    }
+
+    /// Paint a confirmed record into the base: a folder's children, or a
+    /// file's head and sequence, then the head of the file `created` names.
+    fn paint_confirmed(
+        &self,
+        scope: &DrainScope<'_>,
+        node: NodeId,
+        body: &ReadBody,
+        sequence: u64,
+        created: Option<&FileHead<'_>>,
+    ) {
+        match body {
+            ReadBody::Folder {
+                children,
+                modified_at,
+                ..
+            } => self.repaint_folder(scope, node, children, sequence, *modified_at),
+            ReadBody::File {
+                versions,
+                modified_at,
+                ..
+            } => {
+                let mut base = self.cells.base.borrow_mut();
+                if let Some(head) = versions.first() {
+                    project_child_version(
+                        &mut base,
+                        node,
+                        head.size,
+                        *modified_at,
+                        versions.len() as u64,
+                        Some(&head.content_cid),
+                    );
+                }
+                if let Some(meta) = base.node_mut(node) {
+                    meta.record_sequence = sequence;
+                }
+            }
+        }
+        if let Some(head) = created {
+            project_child_version(
+                &mut self.cells.base.borrow_mut(),
+                head.node,
+                head.size,
+                head.modified_at,
+                head.version_count,
+                Some(head.content_cid),
+            );
         }
     }
 

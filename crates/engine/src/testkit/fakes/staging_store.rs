@@ -1,5 +1,6 @@
 //! In-memory [`StagingStore`] fake.
 
+use core::task::{Poll, Waker};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -21,6 +22,9 @@ struct Inner {
     partial_write_budget: Option<Arm>,
     staged_removal_budget: Option<Arm>,
     dropped_removal_budget: Option<Arm>,
+    parked_write: Option<Vec<u8>>,
+    holding_write: bool,
+    parked_waker: Option<Waker>,
     key_listings: u64,
     queue_listings: u64,
 }
@@ -42,6 +46,9 @@ impl Default for Inner {
             partial_write_budget: None,
             staged_removal_budget: None,
             dropped_removal_budget: None,
+            parked_write: None,
+            holding_write: false,
+            parked_waker: None,
             key_listings: 0,
             queue_listings: 0,
         }
@@ -152,6 +159,31 @@ impl InMemoryStagingStore {
     pub fn interrupt_staged_removal_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").staged_removal_budget =
             Some(Arm::exact(staging_key, budget));
+    }
+
+    /// Lands the next write at `staging_key`, then parks its caller until
+    /// [`release_parked_write`](Self::release_parked_write), so a test can act
+    /// in the window just after that write.
+    pub fn park_after_staged_write(&self, staging_key: &[u8]) {
+        self.inner.lock().expect("lock").parked_write = Some(staging_key.to_vec());
+    }
+
+    /// Lets the write [`park_after_staged_write`](Self::park_after_staged_write)
+    /// parked return.
+    pub fn release_parked_write(&self) {
+        let waker = {
+            let mut inner = self.inner.lock().expect("lock");
+            inner.holding_write = false;
+            inner.parked_waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// Whether a write is parked.
+    pub fn holds_parked_write(&self) -> bool {
+        self.inner.lock().expect("lock").holding_write
     }
 
     /// How many whole-key-space enumerations this store has served. A desktop
@@ -285,22 +317,42 @@ impl StagingStore for InMemoryStagingStore {
     }
 
     async fn put_staged_bytes(&self, staging_key: &[u8], bytes: &[u8]) -> SeamResult<()> {
-        let mut inner = self.inner.lock().expect("lock");
-        if interrupts(&mut inner.staged_write_budget, staging_key) {
-            return Err(SeamError::new("put_staged_bytes unavailable"));
-        }
-        if interrupts(&mut inner.destructive_write_budget, staging_key) {
-            inner.staged.remove(staging_key);
-            return Err(SeamError::new("put_staged_bytes unavailable"));
-        }
-        if interrupts(&mut inner.partial_write_budget, staging_key) {
-            if !inner.staged.contains_key(staging_key) {
-                let half = bytes[..bytes.len() / 2].to_vec();
-                inner.staged.insert(staging_key.to_vec(), half);
+        let parks = {
+            let mut inner = self.inner.lock().expect("lock");
+            if interrupts(&mut inner.staged_write_budget, staging_key) {
+                return Err(SeamError::new("put_staged_bytes unavailable"));
             }
-            return Err(SeamError::new("put_staged_bytes unavailable"));
+            if interrupts(&mut inner.destructive_write_budget, staging_key) {
+                inner.staged.remove(staging_key);
+                return Err(SeamError::new("put_staged_bytes unavailable"));
+            }
+            if interrupts(&mut inner.partial_write_budget, staging_key) {
+                if !inner.staged.contains_key(staging_key) {
+                    let half = bytes[..bytes.len() / 2].to_vec();
+                    inner.staged.insert(staging_key.to_vec(), half);
+                }
+                return Err(SeamError::new("put_staged_bytes unavailable"));
+            }
+            inner.staged.insert(staging_key.to_vec(), bytes.to_vec());
+            let parks = inner
+                .parked_write
+                .take_if(|key| key.as_slice() == staging_key)
+                .is_some();
+            inner.holding_write |= parks;
+            parks
+        };
+        if parks {
+            core::future::poll_fn(|cx| {
+                let mut inner = self.inner.lock().expect("lock");
+                if inner.holding_write {
+                    inner.parked_waker = Some(cx.waker().clone());
+                    Poll::Pending
+                } else {
+                    Poll::Ready(())
+                }
+            })
+            .await;
         }
-        inner.staged.insert(staging_key.to_vec(), bytes.to_vec());
         Ok(())
     }
 
@@ -377,5 +429,46 @@ impl InMemoryStagingBackings {
             .entry(backing)
             .or_default()
             .clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::pin::pin;
+    use core::sync::atomic::{AtomicBool, Ordering};
+    use core::task::Context;
+    use std::task::Wake;
+
+    use super::*;
+
+    struct Flag(AtomicBool);
+
+    impl Wake for Flag {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_parked_write_lands_then_wakes_its_task_on_release() {
+        let store = InMemoryStagingStore::default();
+        store.park_after_staged_write(b"key");
+        let flag = Arc::new(Flag(AtomicBool::new(false)));
+        let waker = Waker::from(Arc::clone(&flag));
+        let mut cx = Context::from_waker(&waker);
+        let mut write = pin!(store.put_staged_bytes(b"key", b"bytes"));
+
+        assert!(write.as_mut().poll(&mut cx).is_pending());
+        assert!(store.holds_parked_write());
+        assert_eq!(
+            store.contents().1.get(b"key".as_slice()).map(Vec::as_slice),
+            Some(b"bytes".as_slice()),
+            "the write lands before it parks"
+        );
+        assert!(!flag.0.load(Ordering::SeqCst));
+
+        store.release_parked_write();
+        assert!(flag.0.load(Ordering::SeqCst), "the release wakes the task");
+        assert!(matches!(write.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
     }
 }
