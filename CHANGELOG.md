@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.12.1](https://github.com/FSM1/cipher-box/compare/v2.12.0...v2.12.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **engine:** keep a new folder in the vault while the publish of its parent completes ([#2305](https://github.com/FSM1/cipher-box/issues/2305)) ([3231492](https://github.com/FSM1/cipher-box/commit/3231492572279d64b910f3f657668ec428d3ffb7))
+* **web-e2e:** give each login its own bounded retries ([#2308](https://github.com/FSM1/cipher-box/issues/2308)) ([52b4617](https://github.com/FSM1/cipher-box/commit/52b46171ffc415562b24f340c2f58169368a3304))
+
 ## [2.12.0](https://github.com/FSM1/cipher-box/compare/v2.11.0...v2.12.0) (2026-10-04)
 
 
