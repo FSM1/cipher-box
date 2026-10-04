@@ -16,6 +16,7 @@
 // `retries: 0` is policy in every slice, not tuning: a flaky test is a defect.
 import { defineConfig, devices, type ReporterDescription } from '@playwright/test';
 import { previewCommand } from './preview';
+import { RUN_RETRY_BUDGET_KEY } from './staging/loginRetry';
 
 const suite = process.env.E2E_SUITE ?? 'smoke';
 // Reject an unrecognized value rather than silently running the smaller slice.
@@ -101,6 +102,8 @@ const soak = {
       name: 'soak',
       testDir: './staging/soak',
       testMatch: '**/*.spec.ts',
+      // Twenty minutes below the shorter soak step's 240-minute limit.
+      metadata: { [RUN_RETRY_BUDGET_KEY]: 220 * 60_000 },
       use: stagingUse,
     },
   ],

@@ -1,4 +1,4 @@
-/** Prints one line per staging run: the sign-ins and the devnet faults they absorbed. */
+/** Prints one line per staging run: the sign-ins, observed faults and retry stop reasons. */
 
 import type { Reporter, TestCase, TestResult } from '@playwright/test/reporter';
 import { SIGN_IN_ANNOTATION, summarize, type SignInRecord } from './loginRetry';
