@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.12.2](https://github.com/FSM1/cipher-box/compare/v2.12.1...v2.12.2) (2026-10-04)
+
+
+### Bug Fixes
+
+* **web:** preserve and report session restore failures ([#2309](https://github.com/FSM1/cipher-box/issues/2309)) ([09ac55f](https://github.com/FSM1/cipher-box/commit/09ac55f95501115cfbcae9974d02e48392f2694d))
+
 ## [2.12.1](https://github.com/FSM1/cipher-box/compare/v2.12.0...v2.12.1) (2026-10-04)
 
 
