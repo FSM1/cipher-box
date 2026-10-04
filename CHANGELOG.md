@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.12.3](https://github.com/FSM1/cipher-box/compare/v2.12.2...v2.12.3) (2026-10-04)
+
+
+### Bug Fixes
+
+* tolerate longer staging devnet sign-in fault windows ([#2313](https://github.com/FSM1/cipher-box/issues/2313)) ([4d36cc4](https://github.com/FSM1/cipher-box/commit/4d36cc4d7d2b8284bd50f5fdbe1dd1ca42fabdc8))
+
 ## [2.12.2](https://github.com/FSM1/cipher-box/compare/v2.12.1...v2.12.2) (2026-10-04)
 
 
