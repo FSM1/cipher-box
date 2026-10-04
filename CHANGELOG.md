@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.12.0](https://github.com/FSM1/cipher-box/compare/v2.11.0...v2.12.0) (2026-10-04)
+
+
+### Features
+
+* **engine:** keep a durable owner seed cache so a rogue writer cannot lock the owner out ([#2292](https://github.com/FSM1/cipher-box/issues/2292)) ([d8f46ad](https://github.com/FSM1/cipher-box/commit/d8f46ad32bd062d376f99419ac9ee6562a2a8e07))
+
+
+### Bug Fixes
+
+* **engine:** bind an owner capture to the scope whose key opens its record ([#2258](https://github.com/FSM1/cipher-box/issues/2258)) ([e0a5618](https://github.com/FSM1/cipher-box/commit/e0a5618a72ba2a6a5c568bee24624d8483398f58))
+* **engine:** finish the shared produce-side publish gate ([#2281](https://github.com/FSM1/cipher-box/issues/2281)) ([55b9ae8](https://github.com/FSM1/cipher-box/commit/55b9ae87b854f8a19f7632d03e1c0a5c6a550edd))
+* **engine:** keep a published op until the live root shows it and apply it again after a name wave flip ([#2274](https://github.com/FSM1/cipher-box/issues/2274)) ([24a59d5](https://github.com/FSM1/cipher-box/commit/24a59d5e43dfc50105e694b1909416036fa40bcc))
+* **engine:** open an interior node of a root with an owed interior move under the scope its tag names ([#2278](https://github.com/FSM1/cipher-box/issues/2278)) ([e613cc7](https://github.com/FSM1/cipher-box/commit/e613cc7607fe1209c385a341910f5b1fb6bd8caa))
+* **engine:** read a refused scope root from its last copy and move it first ([#2270](https://github.com/FSM1/cipher-box/issues/2270)) ([2c74871](https://github.com/FSM1/cipher-box/commit/2c7487101886bc2f2cf1c43297d07f34ab1d47eb))
+* **engine:** read the content header value as a string in the drain test helper ([#2299](https://github.com/FSM1/cipher-box/issues/2299)) ([8b5cd22](https://github.com/FSM1/cipher-box/commit/8b5cd22b413551bf27b9afd99a63cb8175139196))
+* **engine:** record in each retire-ledger entry the name of the record that owes the debt ([#2279](https://github.com/FSM1/cipher-box/issues/2279)) ([90642c4](https://github.com/FSM1/cipher-box/commit/90642c4b71540bfbf54569856b212e8b464e592a))
+* **engine:** refuse deletes of granted scope roots ([#2293](https://github.com/FSM1/cipher-box/issues/2293)) ([776bd35](https://github.com/FSM1/cipher-box/commit/776bd35ebef170f5b6ff1215cba03f05e70482c1))
+* **engine:** wipe the bearer header value that each authed request carries ([#2275](https://github.com/FSM1/cipher-box/issues/2275)) ([b37bd4d](https://github.com/FSM1/cipher-box/commit/b37bd4df4b27afd2d2ed3a44134ee48a2379afa8))
+* **web-e2e:** wait for the people table before the soak cycle check fails ([#2276](https://github.com/FSM1/cipher-box/issues/2276)) ([8d92013](https://github.com/FSM1/cipher-box/commit/8d920137da817985ae980c3e54a82befc875b517))
+
 ## [2.11.0](https://github.com/FSM1/cipher-box/compare/v2.10.0...v2.11.0) (2026-10-03)
 
 
