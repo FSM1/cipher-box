@@ -16,6 +16,7 @@ import { InvitePage } from '../page-objects/invite.page';
 import { SharePage } from '../page-objects/share.page';
 import { SharedPage, type RowStanding } from '../page-objects/shared.page';
 import { expect, nudgedUntil, published, signIn, signInWithWallet, test } from './fixtures';
+import { restoreVault as online } from './restoreVault';
 
 const FOLDER = 'link-first';
 const EXPIRED_FOLDER = 'link-first-expired';
@@ -41,14 +42,6 @@ const revoked = (row: RowStanding) => row !== 'gone' && row.resolution === 'revo
 
 async function offline(page: Page): Promise<void> {
   await page.goto('about:blank');
-}
-
-/** Loads the vault again; the session resumes, and a fresh engine starts. */
-async function online(page: Page): Promise<FilesPage> {
-  await page.goto('/files');
-  const files = new FilesPage(page);
-  await expect(files.browser).toBeVisible({ timeout: 180_000 });
-  return files;
 }
 
 /** Spends `link` in `page` under `name`: sign-in on the claim route, then the join. */
