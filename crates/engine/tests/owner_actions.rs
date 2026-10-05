@@ -1703,9 +1703,7 @@ fn second_apply_under_a_survivor(fx: &mut GrantScenario) -> SurvivorApply {
     );
     let late = late.expect("the write ran");
     let moved = fx.granted_scope_repoint().current_root;
-    let head = published_head(&fx.world, &fx.blocks, &moved).expect("the moved root");
-    let epoch = decode_envelope(&head).expect("the head decodes").epoch;
-    let survivor_seed = grantee_write_scope_seed(&fx.folder_section(), &moved, &fx.folder.0, epoch);
+    let survivor_seed = survivor_write_seed(fx);
     let moved_child = live_child(fx, &moved, fx.folder, "child");
     assert_eq!(derive_write_name(&survivor_seed, &child.0), moved_child);
     assert!(
@@ -1784,6 +1782,213 @@ fn a_second_apply_under_a_refused_parent_dead_letters_with_a_notice() {
             .collect::<Vec<_>>(),
         vec![DeadLetterReason::AttemptsExhausted],
         "and the member can name it"
+    );
+}
+
+/// The cut of a second write grantee misses this device's create, and the
+/// surviving grantee then plants a record the gate refuses at the moved scope
+/// root. This device restarts, sees the cut on the pointer, and cannot prove
+/// the root; the clock then moves past the kept-op bound. Returns the fixture
+/// and the moved root's honest record.
+fn kept_create_past_the_bound_under_a_refused_moved_root(
+    fx: &mut GrantScenario,
+) -> (SurvivorApply, Vec<u8>) {
+    let survivor = second_apply_under_a_survivor(fx);
+    let moved = fx.granted_scope_repoint().current_root;
+    let honest = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], moved.as_str())
+        .expect("the moved root has a record");
+    assert_eq!(
+        plant_root_at(
+            fx,
+            &survivor.survivor_seed,
+            sequence_at(&fx.world, &moved) + 1
+        ),
+        moved
+    );
+    restart_owner(fx);
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    fx.world.scheduler.advance(KEPT_OP_BOUND);
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    (survivor, honest)
+}
+
+/// A cut this device has seen is a flip, so a kept op under a moved root the
+/// walk cannot prove waits past the bound rather than leave unseen
+/// (ADR 0069 D5).
+#[test]
+fn a_kept_op_under_a_refused_moved_root_waits_past_the_bound() {
+    let mut fx = GrantScenario::new();
+    let (survivor, _) = kept_create_past_the_bound_under_a_refused_moved_root(&mut fx);
+
+    assert!(
+        queued_targets(&fx.owner_device).contains(&survivor.late),
+        "the op is still queued"
+    );
+    assert!(
+        dead_letter_events(&mut fx._events).is_empty(),
+        "with no notice"
+    );
+}
+
+/// Once the walk proves the moved root again, the kept op applies again and
+/// the write lands in the moved tree (ADR 0069 D3).
+#[test]
+fn a_kept_op_under_a_moved_root_applies_again_once_the_walk_proves_it() {
+    let mut fx = GrantScenario::new();
+    let (survivor, honest) = kept_create_past_the_bound_under_a_refused_moved_root(&mut fx);
+    let moved = fx.granted_scope_repoint().current_root;
+    let value = IpnsRecord::unmarshal(&honest)
+        .and_then(|record| record.verify(&moved))
+        .expect("the honest root verifies")
+        .value;
+    let healed = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&survivor.survivor_seed, &fx.folder.0).as_bytes()),
+        &value,
+        sequence_at(&fx.world, &moved) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, moved.as_str(), healed.clone());
+    }
+
+    passes_after_the_flip(&mut fx);
+
+    assert!(
+        live_names(&fx, &survivor.moved_child, survivor.child).contains(&"late".to_owned()),
+        "the write landed in the moved tree"
+    );
+    assert!(dead_letter_events(&mut fx._events).is_empty());
+}
+
+/// The surviving write grantee's write scope seed at the granted scope's
+/// live root.
+fn survivor_write_seed(fx: &GrantScenario) -> [u8; 32] {
+    let moved = fx.granted_scope_repoint().current_root;
+    let head = published_head(&fx.world, &fx.blocks, &moved).expect("the moved root");
+    let epoch = decode_envelope(&head).expect("the head decodes").epoch;
+    grantee_write_scope_seed(&fx.folder_section(), &moved, &fx.folder.0, epoch)
+}
+
+/// A kept file create whose second apply meets a refused parent dead-letters
+/// with a notice, and its version survives a restart: recovered once the
+/// parent reads again, it publishes the same bytes.
+#[test]
+fn a_kept_file_create_under_a_refused_parent_keeps_its_bytes_across_a_restart() {
+    let mut fx = GrantScenario::new();
+    let (child, _) = write_granted_child(&mut fx);
+    assert_eq!(
+        fx.grant_bystander(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (root, _) = live_scope(&fx);
+    let child_name = live_child(&fx, &root, fx.folder, "child");
+    let bytes = vec![7u8; 96];
+    cut_by_demoting_after_a_write_the_walk_misses(
+        &mut fx,
+        &[&child_name],
+        |fx| {
+            write_version(
+                fx,
+                WriteTarget::NewFile {
+                    parent: child,
+                    name: "late.bin".into(),
+                },
+                &bytes,
+            );
+        },
+        bystander_identity(),
+    );
+    let late = block_on(fx.engine.view())
+        .expect("a rendered view")
+        .children(child)
+        .into_iter()
+        .find(|row| row.name == "late.bin")
+        .expect("the file is listed")
+        .id;
+    let survivor_seed = survivor_write_seed(&fx);
+    let moved_child = derive_write_name(&survivor_seed, &child.0);
+    let honest = published_head_cid(&fx.world, &moved_child).expect("the moved parent");
+    let sequence = sequence_at(&fx.world, &moved_child);
+    let signed = |value: &[u8], sequence| {
+        IpnsRecord::create_v2(
+            &kdf::ipns_keypair(kdf::write_seed(&survivor_seed, &child.0).as_bytes()),
+            value,
+            sequence,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal()
+    };
+    let planted = author_child_envelope(EnvelopeAuthoring {
+        node_id: [0xee; 16],
+        scope_id: fx.folder.0,
+        epoch: 1,
+        read_key: &[0x13; 32],
+        nonce: &[0x5e; 24],
+        body: &folder_body(Vec::new()),
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the planted record seals");
+    fx.blocks.put(planted.block.clone());
+    // The plant lands once the second apply has put the file's own record,
+    // so the pass reads the moved parent first and then meets the plant.
+    fx.world.record_store.seed_record_after_put(
+        derive_write_name(&survivor_seed, &late.0).as_str(),
+        moved_child.as_str(),
+        signed(format!("/ipfs/{}", planted.cid).as_bytes(), sequence + 2),
+    );
+    let _ = dead_letter_events(&mut fx._events);
+
+    for _ in 0..12 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert_eq!(
+        dead_letter_events(&mut fx._events).len(),
+        1,
+        "the create dead-letters with a notice"
+    );
+
+    restart_owner(&mut fx);
+    let parked = block_on(fx.engine.status())
+        .expect("the session status reads")
+        .dead_letters;
+    assert_eq!(parked.len(), 1, "the restart still names it");
+    let healed = signed(format!("/ipfs/{honest}").as_bytes(), sequence + 3);
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, moved_child.as_str(), healed.clone());
+    }
+    passes_after_the_flip(&mut fx);
+    block_on(fx.engine.command(Command::RecoverDeadLetter {
+        op_id: parked[0].op_id,
+    }))
+    .expect("the parked version re-queues");
+    passes_after_the_flip(&mut fx);
+
+    let recovered = block_on(fx.engine.view())
+        .expect("a rendered view")
+        .children(child)
+        .into_iter()
+        .find(|row| row.name == "late.bin")
+        .expect("the recovered file is listed")
+        .id;
+    assert!(
+        block_on(fx.engine.read_content(recovered)).expect("the file reads") == bytes,
+        "the preserved version publishes the create's bytes"
     );
 }
 

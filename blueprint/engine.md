@@ -1017,9 +1017,13 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   A content edit reads its file's live record first, and it landed when the
   history names its version. A second apply that a rebase or a permanent halt
   refuses leaves with no notice; a charged halt is charged, and the op
-  dead-letters with a notice once its attempt budget is spent. A known scope
-  root that the walk did not prove, a gate-refused one included, is no flip.
-  A device with no new seed does not rebase the op: the op holds the head on
+  dead-letters with a notice once its attempt budget is spent. A pass that
+  cannot check the op, because the walk did not prove its root (a gate-refused
+  one included) or another pass writes it, reads the durable write-epoch
+  floor of the root: at the note's root and epoch the op waits out T, and a
+  higher floor or another root keeps it with no bound until a pass can check
+  it. A delete whose node a proved root no longer holds still leaves at T. A
+  device with no new seed does not rebase the op: the op holds the head on
   the keyless charge and dead-letters with a notice once that budget is spent
   (ADR 0069 D3). A kept op is not pending (ADR 0069 D7).
 - **Withheld-update escalation**: shared scopes only — a name pinned past a

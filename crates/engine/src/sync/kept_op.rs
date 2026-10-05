@@ -236,6 +236,13 @@ pub(crate) enum KeptPlace {
     /// not apply again: the pass takes it out before the rebase, and the valve
     /// charges it on the keyless charge until it dead-letters (ADR 0069 D3).
     Keyless { root: NodeId },
+    /// This pass cannot check the op at `root`: the boundary walk did not
+    /// prove it, a gate-refused one included, or another pass writes it.
+    /// `live_write_epoch` is its durable write-epoch floor. Only the root the
+    /// op published under, at no higher floor than its note's, is no flip and
+    /// runs the bound; a flip waits with no bound for a pass that can check it
+    /// (ADR 0069 D5).
+    Unchecked { root: NodeId, live_write_epoch: u64 },
     /// Another pass, or none this tick, answers for the op's scope.
     Elsewhere,
 }
@@ -272,7 +279,13 @@ pub(crate) fn kept_verdict(note: KeptNote, place: KeptPlace, now: UnixMillis) ->
                 KeptVerdict::Stay
             };
         }
-        KeptPlace::Writes { .. } | KeptPlace::Elsewhere => {}
+        KeptPlace::Unchecked {
+            root,
+            live_write_epoch,
+        } if note.scope != Some(root) || live_write_epoch > note.write_epoch => {
+            return KeptVerdict::Stay;
+        }
+        KeptPlace::Writes { .. } | KeptPlace::Unchecked { .. } | KeptPlace::Elsewhere => {}
     }
     if now.0.saturating_sub(note.published_at.0) >= duration_millis(KEPT_OP_BOUND) {
         KeptVerdict::Expired
@@ -375,6 +388,41 @@ mod tests {
             KeptVerdict::Recheck,
             "the pass, not the bound, decides"
         );
+    }
+
+    #[test]
+    fn an_unchecked_root_at_the_notes_epoch_waits_out_the_bound() {
+        let unproved = KeptPlace::Unchecked {
+            root: SCOPE,
+            live_write_epoch: 2,
+        };
+        assert_eq!(
+            kept_verdict(note(2), unproved, at(JUST_BEFORE)),
+            KeptVerdict::Stay
+        );
+        assert_eq!(
+            kept_verdict(note(2), unproved, at(KEPT_OP_BOUND)),
+            KeptVerdict::Expired
+        );
+    }
+
+    #[test]
+    fn an_unchecked_root_past_a_cut_keeps_the_op_past_the_bound() {
+        let cut = KeptPlace::Unchecked {
+            root: SCOPE,
+            live_write_epoch: 3,
+        };
+        let other_root = KeptPlace::Unchecked {
+            root: NodeId([6; 16]),
+            live_write_epoch: 2,
+        };
+        for place in [cut, other_root] {
+            assert_eq!(
+                kept_verdict(note(2), place, at(KEPT_OP_BOUND * 2)),
+                KeptVerdict::Stay,
+                "{place:?}"
+            );
+        }
     }
 
     #[test]

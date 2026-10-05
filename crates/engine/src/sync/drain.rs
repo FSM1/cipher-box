@@ -2990,7 +2990,18 @@ where
             if is_kept(op_id, published, &notes) {
                 // Its record publish was confirmed, so its version is live.
                 let verdict = if keeps(&op.kind) {
-                    let place = self.kept_place(scope, &op).await?;
+                    let mut place = self.kept_place(scope, &op).await?;
+                    // This pass cannot check the op, so the floor of the root
+                    // it published under decides whether the bound runs. A
+                    // delete whose node a proved root no longer holds leaves
+                    // at the bound (ADR 0069 D6).
+                    if place == KeptPlace::Elsewhere
+                        && let Some(root) = notes.note_at(op_id, now).scope
+                        && (!matches!(op.kind, OpKind::Delete { .. })
+                            || !scope.scope_roots.contains(&root))
+                    {
+                        place = self.unchecked_place(scope, root).await?;
+                    }
                     // A later op of this device on the same node decides what
                     // that node shows, so a check of this one would undo it.
                     if last_on.get(&op.target) != Some(&op_id) {
@@ -3063,8 +3074,9 @@ where
     }
 
     /// Where the write scope of a kept op stands for this pass: the nearest
-    /// proved scope root above the node the op writes under, as
-    /// [`Self::ensure_folder`] finds it.
+    /// known scope root above the node the op writes under, when the boundary
+    /// walk proved it. An unproved root reports its durable write-epoch floor
+    /// ([`KeptPlace::Unchecked`]).
     async fn kept_place(&self, scope: &DrainScope<'_>, op: &Op) -> Result<KeptPlace, Halt> {
         let anchor = match &op.kind {
             OpKind::Create { parent, .. } => *parent,
@@ -3087,11 +3099,12 @@ where
                 meta.ipns_name.clone(),
             )
         };
-        // A known root this walk did not prove, a gate-refused one included,
-        // is no flip: the root above it would read as one.
-        let Some(root) = nearest.filter(|root| scope.scope_roots.contains(root)) else {
+        let Some(root) = nearest else {
             return Ok(KeptPlace::Elsewhere);
         };
+        if !scope.scope_roots.contains(&root) {
+            return self.unchecked_place(scope, root).await;
+        }
         let end = match scope.second_end() {
             Ok(Some(destination)) if destination.end.root == root => destination.end,
             _ if scope.source.root == root => scope.source,
@@ -3107,6 +3120,22 @@ where
             root,
             live_write_epoch: self.write_epoch_of(&end).await?,
             anchor_read_live,
+        })
+    }
+
+    /// [`KeptPlace::Unchecked`] at `root`, under its durable write-epoch floor.
+    async fn unchecked_place(
+        &self,
+        scope: &DrainScope<'_>,
+        root: NodeId,
+    ) -> Result<KeptPlace, Halt> {
+        let floors = scope.source.floors(&self.seams.floors);
+        Ok(KeptPlace::Unchecked {
+            root,
+            live_write_epoch: floor::write_epoch_floor(&floors, &root.0)
+                .await
+                .map_err(seam)?
+                .unwrap_or(GENESIS_EPOCH),
         })
     }
 
