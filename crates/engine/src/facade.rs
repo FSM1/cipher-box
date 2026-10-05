@@ -118,8 +118,8 @@ use crate::net::{
     OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishOutcome,
     RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX, RecordAccelerator, RecordPointerFetch, RootAdopter,
     ScopePointerEnrolment, ScopePointerMint, VaultProvisionNet, drop_superseded,
-    enrol_owned_scope_pointers, eol_renew_pass, keyless_re_put, observed_at, resolve_child,
-    run_liveness_loop,
+    enrol_owned_scope_pointers, eol_renew_pass, follow_renewals, keyless_re_put, observed_at,
+    resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -6612,6 +6612,7 @@ where {
                         &records,
                     )
                     .await;
+                    follow_renewals(&held, &records, &renewals);
                     emit_renewal_failures(&events, &renewals);
                 }
                 let session_keys = pointer_keys.borrow().clone();
@@ -14711,20 +14712,24 @@ mod tests {
                     published_sequence: 2,
                     observed_sequence: 3,
                 })),
+                signed: None,
             },
             // A fail-closed publish failure: surfaced.
             EolRenewResult {
                 routing_key: "k12D-failed".to_owned(),
                 outcome: Err(PublishError::AllEndpointsFailed),
+                signed: None,
             },
             // A clean republish and a comfortably-ahead no-renewal: silent.
             EolRenewResult {
                 routing_key: "k12D-ok".to_owned(),
                 outcome: Ok(Some(PublishOutcome::Published { sequence: 2 })),
+                signed: None,
             },
             EolRenewResult {
                 routing_key: "k12D-ahead".to_owned(),
                 outcome: Ok(None),
+                signed: None,
             },
         ];
 

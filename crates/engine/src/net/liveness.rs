@@ -29,7 +29,9 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol::{self, EOL_RENEW_THRESHOLD};
 use super::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify, fanout_put};
-use super::publish::{Observed, PublishBar, PublishError, PublishOutcome, PublishRequest, publish};
+use super::publish::{
+    Observed, PublishBar, PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish,
+};
 use super::register::register;
 use super::renewal_walk::{FloorRule, RenewalSeams, renew_admitted};
 use crate::api::{ApiClient, NameRegistration};
@@ -439,7 +441,7 @@ async fn renew_held<T, H, C, F, Sch>(
     seams: &RenewalSeams<'_, T, F, Sch>,
     name: &IpnsName,
     held: &HeldRecord,
-) -> Result<Option<PublishOutcome>, PublishError>
+) -> Result<Option<PublishReceipt>, PublishError>
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -502,10 +504,20 @@ where
         publishing: seams.publishing,
     };
     let bar = held.envelope.map(|envelope| envelope.bar);
-    match renew_admitted(&seams, &observed, bar, rule, &held.signer, &admitted.value).await {
-        None => Ok(None),
-        Some(receipt) => receipt.map(|receipt| Some(receipt.outcome)),
+    let Some(receipt) =
+        renew_admitted(&seams, &observed, bar, rule, &held.signer, &admitted.value).await
+    else {
+        return Ok(None);
+    };
+    let receipt = receipt?;
+    // This device authored the renewal from the admitted value, so the next
+    // pass renews from it under the same exact-floor rule.
+    if let (PublishOutcome::Published { sequence }, FloorRule::Exact) = (&receipt.outcome, rule) {
+        let _ = floors
+            .raise_sequence_floor(name.as_str().as_bytes(), *sequence)
+            .await;
     }
+    Ok(Some(receipt))
 }
 
 /// One held record's sub-EOL renewal outcome.
@@ -518,6 +530,35 @@ pub struct EolRenewResult {
     /// renewal), `Ok(Some(_))` on a seq+1 republish (including a reported lost
     /// CAS race), `Err` on a fail-closed publish failure.
     pub outcome: Result<Option<PublishOutcome>, PublishError>,
+    /// The record a [`PublishOutcome::Published`] renewal signed and confirmed.
+    pub signed: Option<Vec<u8>>,
+}
+
+/// Point each held entry that a renewal in `results` replaced at the record it
+/// signed, while the entry still holds the record of `renewed` that the pass
+/// read. Without it, the next pass finds a pick that is not the held record
+/// and never renews the name again.
+pub(crate) fn follow_renewals(
+    held: &RefCell<HeldRecords>,
+    renewed: &[HeldRecord],
+    results: &[EolRenewResult],
+) {
+    for result in results {
+        let Some(signed) = &result.signed else {
+            continue;
+        };
+        let Some(prior) = renewed
+            .iter()
+            .find(|record| record.routing_key == result.routing_key)
+        else {
+            continue;
+        };
+        for entry in held.borrow_mut().values_mut() {
+            if entry.routing_key == prior.routing_key && entry.record_bytes == prior.record_bytes {
+                entry.record_bytes.clone_from(signed);
+            }
+        }
+    }
 }
 
 /// Run one sub-EOL renewal pass over the held set: for each record still live
@@ -563,13 +604,23 @@ where
             results.push(EolRenewResult {
                 routing_key: hr.routing_key.clone(),
                 outcome: Ok(None),
+                signed: None,
             });
             continue;
         }
-        let outcome = renew_held(api, seams, &name, hr).await;
+        let (outcome, signed) = match renew_held(api, seams, &name, hr).await {
+            Ok(Some(receipt)) => {
+                let signed = matches!(receipt.outcome, PublishOutcome::Published { .. })
+                    .then_some(receipt.record_bytes);
+                (Ok(Some(receipt.outcome)), signed)
+            }
+            Ok(None) => (Ok(None), None),
+            Err(error) => (Err(error), None),
+        };
         results.push(EolRenewResult {
             routing_key: hr.routing_key.clone(),
             outcome,
+            signed,
         });
     }
     results
@@ -579,7 +630,7 @@ where
 mod tests {
     use super::{
         EolRenewResult, HeldEnvelope, HeldKey, HeldRecord, HeldRecords, HeldValue, eol_renew_pass,
-        keyless_re_put,
+        follow_renewals, keyless_re_put,
     };
 
     use core::cell::RefCell;
@@ -1539,6 +1590,52 @@ mod tests {
             Some(third),
             "the third record stands"
         );
+    }
+
+    /// A renewed held record renews again when its own renewal falls due, so
+    /// a long session keeps the name alive.
+    fn a_followed_renewal_renews_again(arm: Arm, key: HeldKey) {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let (name, record) = due(&world, &device, arm);
+        let held = RefCell::new(HeldRecords::from([(key, record)]));
+        let pass = || {
+            let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
+            device.http.enqueue_response(ok_200());
+            let results = block_on(eol_renew_pass(
+                &api,
+                &RenewalSeams {
+                    transport: &device.record_store,
+                    floors: &device.floor_store,
+                    scheduler: &world.scheduler,
+                    profile: &SyncTimingProfile::CI,
+                    publishing: &RefCell::default(),
+                },
+                &records,
+            ));
+            follow_renewals(&held, &records, &results);
+            results.into_iter().next().unwrap().outcome
+        };
+
+        assert_eq!(pass(), Ok(Some(PublishOutcome::Published { sequence: 2 })));
+        world.scheduler.advance(Duration::from_secs(65 * DAY));
+        assert_eq!(pass(), Ok(Some(PublishOutcome::Published { sequence: 3 })));
+        assert_eq!(seq_at(&device, &name), 3);
+    }
+
+    #[test]
+    fn a_renewed_settings_record_renews_again_when_it_falls_due() {
+        a_followed_renewal_renews_again(Arm::Head, HeldKey::VaultSettings);
+    }
+
+    #[test]
+    fn a_renewed_node_record_renews_again_when_it_falls_due() {
+        a_followed_renewal_renews_again(Arm::Sealed, HeldKey::Node([6u8; 16]));
     }
 
     #[test]

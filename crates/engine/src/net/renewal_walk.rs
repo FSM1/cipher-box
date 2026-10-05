@@ -888,6 +888,7 @@ where
                 pass.report.renewals.push(EolRenewResult {
                     routing_key: key.to_owned(),
                     outcome: Err(refused.error),
+                    signed: None,
                 });
                 return;
             }
@@ -923,6 +924,7 @@ where
                     .extend(batch.iter().map(|due| EolRenewResult {
                         routing_key: due.name.as_str().to_owned(),
                         outcome: Err(PublishError::Register(error.clone())),
+                        signed: None,
                     }));
                 continue;
             }
@@ -932,6 +934,7 @@ where
                     pass.report.renewals.push(EolRenewResult {
                         routing_key: due.name.as_str().to_owned(),
                         outcome,
+                        signed: None,
                     });
                 }
             }
