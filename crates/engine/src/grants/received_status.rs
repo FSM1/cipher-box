@@ -1207,7 +1207,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::secret::SecretBytes;
 
-    use core::cell::Cell;
+    use core::cell::{Cell, RefCell};
     use core::pin::pin;
     use core::task::{Context, Waker};
     use std::sync::{Arc, Mutex};
@@ -1486,6 +1486,8 @@ mod tests {
         gateway: Gateway,
         /// Whether the last resolve reported a trust violation.
         reported: Cell<bool>,
+        /// What each trust violation of the last resolve said.
+        reports: RefCell<Vec<String>>,
     }
 
     impl ServedScopeRoot {
@@ -1508,6 +1510,7 @@ mod tests {
                     ..Default::default()
                 },
                 reported: Cell::new(false),
+                reports: RefCell::new(Vec::new()),
             };
             served.seed(sequence);
             served
@@ -1574,10 +1577,14 @@ mod tests {
             )
             .class;
             drop(events);
-            self.reported.set(
-                core::iter::from_fn(|| rx.try_recv().ok())
-                    .any(|event| matches!(event, Event::AttributableAbuse { .. })),
-            );
+            let reports: Vec<String> = core::iter::from_fn(|| rx.try_recv().ok())
+                .filter_map(|event| match event {
+                    Event::AttributableAbuse { description } => Some(description),
+                    _ => None,
+                })
+                .collect();
+            self.reported.set(!reports.is_empty());
+            *self.reports.borrow_mut() = reports;
             class
         }
     }
@@ -1687,9 +1694,10 @@ mod tests {
             served.resolve(&floors, &sharer),
             ResolutionClass::Unresolvable
         );
+        let reports = served.reports.borrow();
         assert!(
-            served.reported.get(),
-            "a commitment fault is a trust verdict"
+            matches!(reports.as_slice(), [report] if report.contains("[commitment-verify]")),
+            "the commitment stage reports, not the sequence stage: {reports:?}"
         );
     }
 

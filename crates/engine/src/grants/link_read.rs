@@ -236,7 +236,7 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
         })
     })?;
     // Ahead of the link verdict, so a rollback never reads as revoked or
-    // expired. A record at the floor is the one this account adopted.
+    // expired.
     match floor::check_sequence(
         &seams.floors,
         name,
