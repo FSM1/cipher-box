@@ -2081,8 +2081,13 @@ impl SealerPass {
 
 /// Which own end a proved capture's node record opens under.
 enum Sealer<'e> {
-    /// The end, with its root when it is not the capture's own scope.
-    End(ScopeEnd<'e>, Option<Rc<LoadedRoot>>),
+    /// The end, with its root when it is not the capture's own scope, and the
+    /// record that opened, which the re-key seals rather than reading again.
+    End(
+        ScopeEnd<'e>,
+        Option<Rc<LoadedRoot>>,
+        Box<(LoadedNode, bool)>,
+    ),
     /// A read did not land, so a later pass decides.
     Unanswered,
     /// The pass spent its reads before the search ended.
@@ -4230,8 +4235,15 @@ where
             let deleted_at = self
                 .record_bin_entry(&unlinked, applied.op.authored_at.0)
                 .await?;
-            self.rekey_into_bin(scope, &plane, pass.anchor_for(&plane)?, target, deleted_at)
-                .await?;
+            self.rekey_into_bin(
+                scope,
+                &plane,
+                pass.anchor_for(&plane)?,
+                target,
+                deleted_at,
+                None,
+            )
+            .await?;
             None
         } else {
             Some(
@@ -4425,6 +4437,7 @@ where
             pass.anchor_for(&plane)?,
             target,
             entry.deleted_at,
+            None,
         )
         .await
         .map_err(charge_bin_read)
@@ -4477,6 +4490,7 @@ where
             &plane,
             pass.anchor_for(&binned_under)?,
             target,
+            None,
         )
         .await
         .map_err(charge_bin_read)?;
@@ -5044,11 +5058,11 @@ where
                 continue;
             }
             let deleted_at = standing.map_or(unlinked.deleted_at, |entry| entry.deleted_at);
-            let (end, other_root) = match self
+            let (end, other_root, opened) = match self
                 .sealing_end(scope, ends, &root, &mut sealer, &unlinked, deleted_at)
                 .await
             {
-                Sealer::End(end, other_root) => (end, other_root),
+                Sealer::End(end, other_root, opened) => (end, other_root, opened),
                 Sealer::Unanswered => {
                     unfinished.push(unlinked);
                     continue;
@@ -5071,6 +5085,7 @@ where
                     sealing_root.anchor(),
                     unlinked.node,
                     deleted_at,
+                    Some(*opened),
                 )
                 .await
                 .is_err()
@@ -5147,9 +5162,9 @@ where
             )
             .await
         {
-            Ok(()) => {
+            Ok(opened) => {
                 self.keep_sealer_search(scope, node, None);
-                return Sealer::End(scope.source, None);
+                return Sealer::End(scope.source, None, Box::new(opened));
             }
             Err(fault) if fault.seal_open_failed() => fault,
             Err(ChildFault::Halt(_)) => return Sealer::Unanswered,
@@ -5221,9 +5236,9 @@ where
                 )
                 .await
             {
-                Ok(()) => {
+                Ok(opened) => {
                     self.keep_sealer_search(scope, node, None);
-                    return Sealer::End(*end, Some(other_root));
+                    return Sealer::End(*end, Some(other_root), Box::new(opened));
                 }
                 Err(ChildFault::Halt(_)) => {
                     search.unanswered.insert(end.root, search.searches);
@@ -5269,20 +5284,19 @@ where
         };
     }
 
-    /// Whether `node`'s record opens under `plane`, or under the bin's held key
-    /// that a re-key whose index publish did not land left it at.
+    /// `node`'s record opened under `plane`, or under the bin's held key that a
+    /// re-key whose index publish did not land left it at, as
+    /// [`Self::load_under_either`] answers it.
     async fn opens_under(
         &self,
         plane: &SealPlane<'_>,
         anchor: Anchor<'_>,
         node: NodeId,
         deleted_at: u64,
-    ) -> Result<(), ChildFault> {
+    ) -> Result<(LoadedNode, bool), ChildFault> {
         let held = self.inputs.bin_keys.held_key(&node.0, deleted_at);
         let binned = plane.held_plane(&held);
-        self.load_under_either(plane, &binned, anchor, node)
-            .await
-            .map(|_| ())
+        self.load_under_either(plane, &binned, anchor, node).await
     }
 
     /// `node`'s record read under `from`, else under `to`, with whether `to`
@@ -5788,10 +5802,11 @@ where
         anchor: Anchor<'_>,
         root: NodeId,
         deleted_at: u64,
+        opened: Option<(LoadedNode, bool)>,
     ) -> Result<(), Halt> {
         let held = self.inputs.bin_keys.held_key(&root.0, deleted_at);
         let binned = plane.held_plane(&held);
-        self.rekey_subtree(scope, plane, &binned, anchor, root)
+        self.rekey_subtree(scope, plane, &binned, anchor, root, opened)
             .await
     }
 
@@ -5808,6 +5823,9 @@ where
     ///
     /// Every failure returns before the caller publishes the link it is about
     /// to move, so a subtree this pass could not re-key stays as it was.
+    ///
+    /// `opened` is `root`'s record as the caller already read it under `from`
+    /// or `to`, which the re-key seals in place of a second read.
     async fn rekey_subtree(
         &self,
         scope: &DrainScope<'_>,
@@ -5815,6 +5833,7 @@ where
         to: &SealPlane<'_>,
         anchor: Anchor<'_>,
         root: NodeId,
+        mut opened: Option<(LoadedNode, bool)>,
     ) -> Result<(), Halt> {
         let mut seen = BTreeSet::new();
         let mut pending = vec![root];
@@ -5824,7 +5843,10 @@ where
             if !seen.insert(node.0) {
                 continue;
             }
-            let (loaded, already_moved) = self.load_doomed(from, to, anchor, node).await?;
+            let (loaded, already_moved) = match opened.take() {
+                Some(opened) => opened,
+                None => self.load_doomed(from, to, anchor, node).await?,
+            };
             let LoadedNode {
                 observed,
                 envelope_unknown,
@@ -12669,7 +12691,7 @@ mod tests {
             &unlinked,
             unlinked.deleted_at,
         )) {
-            Sealer::End(end, _) => Some(end.root),
+            Sealer::End(end, ..) => Some(end.root),
             _ => None,
         };
         (found, reads - pass.reads)
@@ -12695,6 +12717,79 @@ mod tests {
             .iter()
             .map(|unlinked| unlinked.node)
             .collect()
+    }
+
+    /// A [`walk_harness`] whose capture's record is published in the harness
+    /// scope, with its node read again from the snapshot cache, and the bytes
+    /// of another record at that name that only another end opens.
+    fn resealed_capture_harness() -> (DrainHarness, IpnsName, Vec<u8>) {
+        let (mut harness, mut blocks) = walk_harness();
+        accept_uploads(&mut harness);
+        let target = capture(&harness.write_scope_seed).node;
+        let name = derive_write_name(&harness.write_scope_seed, &target.0);
+        let endpoint = harness.seams.transport.endpoints()[0].clone();
+        OtherEnd::new(0x30).seal(&mut harness, &mut blocks, target, 2);
+        let resealed = harness
+            .seams
+            .transport
+            .record_at(&endpoint, name.as_str())
+            .expect("the other end's record is served");
+        publish_harness_folder(&mut harness, &mut blocks, target, 1, Vec::new());
+        let record = harness
+            .seams
+            .transport
+            .record_at(&endpoint, name.as_str())
+            .expect("the harness record is served");
+        block_on(
+            harness
+                .seams
+                .snapshot_cache
+                .put(name.as_str().as_bytes(), &record),
+        )
+        .expect("the record caches");
+        (harness, name, resealed)
+    }
+
+    /// A read after the scope decision serves a record only another end
+    /// opens. The re-key seals the record that decided the scope rather than
+    /// reading the node again.
+    #[test]
+    fn a_capture_re_key_seals_the_record_that_decided_its_scope() {
+        let decision_reads = {
+            let (harness, name, _) = resealed_capture_harness();
+            sealing_root(
+                &harness,
+                &[],
+                MAX_SEALER_READS,
+                MAX_SEALER_READS_PER_CAPTURE,
+            );
+            harness.seams.transport.get_count(name.as_str())
+        };
+        assert!(decision_reads > 0, "the scope decision reads the record");
+        let (harness, name, resealed) = resealed_capture_harness();
+        harness.seams.transport.serve_gets_for_after(
+            name.as_str(),
+            decision_reads,
+            decision_reads,
+            Some(resealed),
+        );
+
+        walk_pass(&harness, MAX_CAPTURE_WALK_READS, MAX_CAPTURE_WALK_NODES);
+
+        let endpoint = harness.seams.transport.endpoints()[0].clone();
+        let stored = harness
+            .seams
+            .transport
+            .record_at(&endpoint, name.as_str())
+            .expect("a record is stored");
+        assert_eq!(
+            IpnsRecord::unmarshal(&stored)
+                .and_then(|record| record.verify(&name))
+                .expect("the record verifies")
+                .sequence,
+            2,
+            "the re-key publishes over the record that decided the scope"
+        );
     }
 
     /// A pass stops its search at its bound. An end with a lower root then

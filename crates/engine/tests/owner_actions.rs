@@ -3286,10 +3286,10 @@ fn a_capture_whose_bin_publish_failed_bins_after_a_rotation() {
 }
 
 /// The sequence-floor reads of the node's name that answer before the
-/// re-key's held-key read.
-const HELD_KEY_READ_BUDGET: u64 = 6;
+/// capture's held-key read.
+const HELD_KEY_READ_BUDGET: u64 = 2;
 
-/// The same, with the re-key's held-key read failing after the scope key
+/// The same, with the capture's held-key read failing after the scope key
 /// refused the record: the read did not answer, so no record is reported
 /// faulty, and the node bins once the reads answer again.
 #[test]
