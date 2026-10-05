@@ -13166,6 +13166,23 @@ fn a_share_re_run_over_its_standing_mint_keeps_the_first_stop() {
     assert_eq!(staged_owed_record(&fx)[&fx.folder].first_stop, first);
 }
 
+/// Whether the owner device's staged owed record holds an entry at `scope`.
+fn owes_at(fx: &GrantScenario, scope: NodeId) -> bool {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(11));
+    block_on(
+        fx.owner_device
+            .staging_store
+            .staged_bytes(&owed_rotation_key(&enc)),
+    )
+    .expect("the store answers")
+    .is_some_and(|blob| {
+        open_owed_record(BookkeepingSeal::new(&enc, &entropy), &blob)
+            .expect("the record opens")
+            .contains_key(&scope)
+    })
+}
+
 /// Seal `record` as the owner's owed rotation record on the owner device, for
 /// the next session to read.
 fn stage_owed_record(fx: &GrantScenario, record: &OwedRecord) {
@@ -13638,9 +13655,18 @@ fn command_across_retries(
     fx: &mut GrantScenario,
     command: Command,
 ) -> Result<CommandOutcome, EngineError> {
-    let cadence = fx.engine.profile().poll_cadence;
-    let scheduler = fx.world.scheduler.clone();
-    let mut future = pin!(fx.engine.command(command));
+    run_across_retries(&fx.world, &mut fx.engine, command)
+}
+
+/// [`command_across_retries`] on any engine of `world`.
+fn run_across_retries(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    command: Command,
+) -> Result<CommandOutcome, EngineError> {
+    let cadence = engine.profile().poll_cadence;
+    let scheduler = world.scheduler.clone();
+    let mut future = pin!(engine.command(command));
     let mut cx = Context::from_waker(Waker::noop());
     for _ in 0..64 {
         if let Poll::Ready(outcome) = future.as_mut().poll(&mut cx) {
@@ -13709,6 +13735,100 @@ fn a_revoke_after_the_pass_finished_it_is_refused_as_not_granted() {
             check: "rot-revoke-not-granted",
         })
     );
+}
+
+/// The owner's second device holds no owed entry, so it finishes the write
+/// cut of a stalled revoke with a write rotate-now. The first device's pass
+/// then finds the cut landed, clears its entry, and cuts nothing again.
+#[test]
+fn another_owner_device_finishes_a_stalled_write_revoke() {
+    let mut fx = GrantScenario::new();
+    let revokee_seed = strand_a_write_revoke(&mut fx);
+    // The revoke's one-shot sweep would end inside the other device's boot.
+    drop(fx.world.scheduler.take_spawned_tasks());
+    let (mut other, _other_events, _other_tasks) = fx.second_owner_device();
+
+    assert_eq!(
+        run_across_retries(
+            &fx.world,
+            &mut other,
+            Command::RotateWriteNow { node: fx.folder }
+        ),
+        Ok(CommandOutcome::Done),
+    );
+    assert_the_revoke_finished(&fx, &revokee_seed);
+    let landed = fx.granted_scope_repoint();
+    assert!(
+        owes_at(&fx, fx.folder),
+        "the first device still owes the cut"
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        fx.granted_scope_repoint(),
+        landed,
+        "the first device's re-drive cut nothing again"
+    );
+    assert!(!owes_at(&fx, fx.folder), "and cleared its entry");
+    assert!(fx.owed_scopes().is_empty(), "and reports nothing owed");
+}
+
+/// A grant whose write-scope cut stalled leaves a root whose name its write
+/// seed does not derive. Another owner device finishes that cut with a write
+/// rotate-now, and the moved root conveys the write seed to the grantee.
+#[test]
+fn another_owner_device_finishes_a_stalled_write_scope_cut() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    let stalled = write_name(fx.folder);
+    let (mut other, _other_events, _other_tasks) = fx.second_owner_device();
+
+    assert_eq!(
+        run_across_retries(
+            &fx.world,
+            &mut other,
+            Command::RotateWriteNow { node: fx.folder }
+        ),
+        Ok(CommandOutcome::Done),
+    );
+
+    let moved = fx.granted_scope_repoint();
+    assert_ne!(moved.current_root, stalled, "the write cut ran");
+    assert_eq!(
+        fx.granted_blob_carries_write_seed(&moved.current_root),
+        Some(true)
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        fx.granted_scope_repoint(),
+        moved,
+        "the first device's re-drive cut nothing again"
+    );
+}
+
+/// A write rotate-now on a scope with no owed work moves the write plane one
+/// epoch, so a revoked writer's seed derives none of the new names.
+#[test]
+fn a_write_rotate_now_moves_the_scope_one_write_epoch() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let before = fx.granted_scope_repoint();
+    let folder = fx.folder;
+
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done),
+    );
+
+    let after = fx.granted_scope_repoint();
+    assert_eq!(after.write_epoch, before.write_epoch + 1);
+    assert_ne!(after.current_root, before.current_root);
+    assert!(fx.owed_scopes().is_empty(), "and nothing is owed");
 }
 
 /// The parent's index is writer-authored, so a parent writer that drops the

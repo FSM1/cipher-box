@@ -1969,6 +1969,18 @@ pub enum Command {
         )]
         node: NodeId,
     },
+    /// Run a write-scope cut of a scope below the vault root from its
+    /// published state (owner-only), so any owner device finishes a write cut
+    /// another device left owed (ADR 0063 consequence 6).
+    RotateWriteNow {
+        /// The scope root to cut.
+        #[cfg_attr(
+            feature = "wasm",
+            serde(with = "crate::wire::node_id"),
+            tsify(type = "Uint8Array")
+        )]
+        node: NodeId,
+    },
 
     // --- vault settings ---
     /// Publish the account's vault settings record — the member's placement,
@@ -2094,6 +2106,7 @@ impl Command {
             Command::ConvertInviteClaims { .. } => "convertInviteClaims",
             Command::DismissRefusedClaims { .. } => "dismissRefusedClaims",
             Command::RotateNow { .. } => "rotateNow",
+            Command::RotateWriteNow { .. } => "rotateWriteNow",
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
             Command::SiweLink { .. } => "siweLink",
             Command::EmailLinkSendCode { .. } => "emailLinkSendCode",
@@ -2390,8 +2403,9 @@ pub enum Event {
         cause: DropCause,
     },
     /// The renewal walk met an owned scope root whose name its write seed does
-    /// not derive: a write cut that did not finish, which only the device that
-    /// owes it finishes. Its names lapse until then (ADR 0063 consequence 8).
+    /// not derive: a write cut that did not finish. The device that owes it
+    /// finishes it, or [`Command::RotateWriteNow`] on any owner device. Its
+    /// names lapse until then (ADR 0063 consequence 8).
     WriteCutUnfinished {
         /// The scope root whose names the walk cannot renew.
         #[cfg_attr(
@@ -7186,6 +7200,9 @@ where {
             Command::RotateNow { node } => Box::pin(self.rotate_now(node))
                 .await
                 .map(|()| CommandOutcome::Done),
+            Command::RotateWriteNow { node } => Box::pin(self.rotate_write_now(node))
+                .await
+                .map(|()| CommandOutcome::Done),
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
             Command::SaveVaultSettings { settings } => {
                 self.save_vault_settings(&settings).await?;
@@ -7648,6 +7665,45 @@ where {
         .await
         .map(|_| ())
         .map_err(EngineError::from_rotate)
+    }
+
+    /// Run a write-scope cut of the scope root at `node` from its published
+    /// state, after this device re-drives its own entry there. A re-drive
+    /// that finishes is the cut, so a second one does not run.
+    async fn rotate_write_now(&self, node: NodeId) -> Result<(), EngineError> {
+        // The cold-start floor has no bar for a vault anchor that a write cut
+        // moved.
+        if node == self.state.snapshot.borrow().root {
+            return Err(EngineError::UnsupportedTarget {
+                check: "rotate-write-target-is-the-vault-root",
+            });
+        }
+        let check = "rotate-write-target-is-not-a-scope-root";
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let pass_keys = self.pass_keys(session)?;
+        let pass = self.conversion_pass(session, api, &pass_keys);
+        match pass.redrive_scope(&self.sites(session, api), node).await? {
+            Redriven::Finished => return Ok(()),
+            Redriven::StillOwed | Redriven::NotLanded => {
+                return Err(EngineError::rotation_work_owed());
+            }
+            Redriven::NoEntry | Redriven::Dropped => {}
+        }
+        let keys = OwnerActionKeys::new(session);
+        let gated = self.gated_owner_scope(&keys, node, check).await?;
+        let (scope_root_name, cut) = self.write_scope_cut(&gated.target, &gated.current)?;
+        // A wave that stops after the cut set lands is owed work, which the
+        // owed event already reported (ADR 0063 D5).
+        self.drive_owed_cut(
+            node,
+            &gated.target,
+            &scope_root_name,
+            &cut,
+            gated.current.write_epoch,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Revoke a recipient's grant at `node`'s scope root.

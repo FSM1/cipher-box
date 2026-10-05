@@ -107,6 +107,44 @@ describe('engine warnings', () => {
     expect(notice.textContent).toContain('another of your devices');
   });
 
+  it('finishes a write cut another device has not finished from the notice', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+    const scopeRoot = new Uint8Array(16).fill(9);
+    await act(async () => {
+      engine.emit({ kind: 'writeCutUnfinished', scopeRoot });
+    });
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
+    });
+
+    expect(engine.writeCuts).toEqual([scopeRoot]);
+    expect(screen.queryByTestId('notification-toast')).toBeNull();
+  });
+
+  it('keeps the notice and says so when the engine refuses the write cut', async () => {
+    const engine = fakeEngine();
+    engine.refuseWriteCut(new Error('rotation-work-owed'));
+    draw(engine.client);
+    await act(async () => {
+      engine.emit({ kind: 'writeCutUnfinished', scopeRoot: new Uint8Array(16).fill(9) });
+    });
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: '[finish it here]' }));
+    });
+
+    const notices = screen.getAllByTestId('notification-notice');
+    expect(notices).toHaveLength(2);
+    expect(notices[1].textContent).toContain('did not finish on this device');
+    expect(notices[1].textContent).not.toContain('rotation-work-owed');
+    expect(screen.getByRole('button', { name: '[finish it here]' })).toHaveProperty(
+      'disabled',
+      false
+    );
+  });
+
   it('collapses a scope that escalates on every tick', async () => {
     const engine = fakeEngine();
     draw(engine.client);

@@ -9,10 +9,17 @@
  * a notice names the scope it came from, so it must not outlive that session.
  */
 
+/** A step the reader can take from the notice itself. */
+export interface NoticeAction {
+  readonly label: string;
+  run(): Promise<void>;
+}
+
 /** One standing warning. `key` is its identity: a repeat collapses onto it. */
 export interface Notice {
   readonly key: string;
   readonly message: string;
+  readonly action?: NoticeAction;
 }
 
 /** Distinct keys accumulate unbounded otherwise; the newest warning wins. */
@@ -34,9 +41,9 @@ export const notificationStore = {
   },
   getState: (): readonly Notice[] => notices,
   /** Raises `message` under `key`, or does nothing if that key already stands. */
-  warn(key: string, message: string): void {
+  warn(key: string, message: string, action?: NoticeAction): void {
     if (notices.some((notice) => notice.key === key)) return;
-    publish([...notices, { key, message }].slice(-MAX_NOTICES));
+    publish([...notices, { key, message, action }].slice(-MAX_NOTICES));
   },
   dismiss(key: string): void {
     const next = notices.filter((notice) => notice.key !== key);

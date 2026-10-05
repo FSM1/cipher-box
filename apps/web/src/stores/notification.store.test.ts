@@ -18,6 +18,21 @@ describe('the notification store', () => {
     expect(keys).toEqual(['abuse:7', 'abuse:8', 'abuse:9', 'abuse:10', 'abuse:11']);
   });
 
+  it('carries the action a notice offers', async () => {
+    let ran = 0;
+    notificationStore.warn('unfinished:aa', 'a write cut is unfinished', {
+      label: 'finish it here',
+      run: async () => {
+        ran += 1;
+      },
+    });
+
+    const [notice] = notificationStore.getState();
+    expect(notice.action?.label).toBe('finish it here');
+    await notice.action?.run();
+    expect(ran).toBe(1);
+  });
+
   it('raises the same key again once it was dismissed', () => {
     notificationStore.warn('withheld:aa', 'first');
     notificationStore.dismiss('withheld:aa');

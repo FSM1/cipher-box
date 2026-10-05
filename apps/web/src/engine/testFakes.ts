@@ -63,6 +63,8 @@ export function fakeEngine() {
   let failFocus: ((error: Error) => void) | null = null;
   let refreshes = 0;
   let refuseRefresh: Error | null = null;
+  const writeCuts: Uint8Array[] = [];
+  let refuseWriteCut: Error | null = null;
 
   const client = {
     facade: {
@@ -89,6 +91,12 @@ export function fakeEngine() {
       vaultStorage(): Promise<VaultStorageDescriptor> {
         return Promise.resolve(FAKE_VAULT_STORAGE);
       },
+      rotateWriteNow(node: Uint8Array) {
+        writeCuts.push(node);
+        return refuseWriteCut === null
+          ? Promise.resolve({ kind: 'done' })
+          : Promise.reject(refuseWriteCut);
+      },
     },
     // No session: this fake drives the browse plane, and a surface that reads
     // the account off it must see a tab that holds none.
@@ -112,6 +120,8 @@ export function fakeEngine() {
     rejectFocus: (error: Error) => failFocus?.(error),
     refreshes: () => refreshes,
     refuseRefresh: (error: Error) => (refuseRefresh = error),
+    writeCuts,
+    refuseWriteCut: (error: Error) => (refuseWriteCut = error),
     subscriberCount: () => listeners.size,
   };
 }

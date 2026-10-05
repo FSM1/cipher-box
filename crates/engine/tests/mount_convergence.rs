@@ -1203,9 +1203,10 @@ fn no_other_owner_action_moves_the_vault_roots_read_epoch() {
     assert_eq!(listed_names(&engine, ROOT), ["reports"]);
 }
 
-/// A write grant, the one command that cuts a write scope with no grant in
-/// place, is refused at the vault root. A write grant, a downgrade and a revoke
-/// below it leave the vault pointer on the same root at the same write epoch.
+/// A write grant and a write rotate-now, the commands that cut a write scope
+/// with no grant in place, are refused at the vault root. A write grant, a
+/// downgrade and a revoke below it leave the vault pointer on the same root at
+/// the same write epoch.
 #[test]
 fn no_command_runs_a_write_cut_of_the_vault_root() {
     let world = FakeWorld::new();
@@ -1241,6 +1242,12 @@ fn no_command_runs_a_write_cut_of_the_vault_root() {
         ),
         "a write grant at the vault root: {refused:?}"
     );
+    assert_eq!(
+        block_on(engine.command(Command::RotateWriteNow { node: ROOT })),
+        Err(EngineError::UnsupportedTarget {
+            check: "rotate-write-target-is-the-vault-root"
+        }),
+    );
     for command in [downgrade(reports), revoke(reports)] {
         grant_to_recipient_at(&mut engine, reports, Permission::Write);
         let name = command.name();
@@ -1249,6 +1256,30 @@ fn no_command_runs_a_write_cut_of_the_vault_root() {
         tick_n(&world, &engine, &mut tasks, 4);
     }
     drop(world.scheduler.take_spawned_tasks());
+
+    let repoint = vault_repoint(&world);
+    assert_eq!(repoint.current_root, root_name);
+    assert_eq!(repoint.write_epoch, EPOCH);
+}
+
+/// A write rotate-now at the vault root is refused before it publishes, so
+/// the vault pointer stays on the same root at the same write epoch.
+#[test]
+fn a_write_rotate_now_of_the_vault_root_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+
+    assert_eq!(
+        block_on(engine.command(Command::RotateWriteNow { node: ROOT })),
+        Err(EngineError::UnsupportedTarget {
+            check: "rotate-write-target-is-the-vault-root"
+        }),
+    );
+    tick_n(&world, &engine, &mut tasks, 4);
 
     let repoint = vault_repoint(&world);
     assert_eq!(repoint.current_root, root_name);

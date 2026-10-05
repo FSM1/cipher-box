@@ -481,6 +481,11 @@ export class EngineFacade {
     return this.command({ kind: 'rotateNow', node });
   }
 
+  /** Cuts the write keys of the scope root at `node` now, from any owner device. */
+  rotateWriteNow(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'rotateWriteNow', node });
+  }
+
   /**
    * Saves the member's placement, provider and retention choice. A BYO bearer is
    * moved to the engine, not copied, so the caller's buffer is detached — and a
