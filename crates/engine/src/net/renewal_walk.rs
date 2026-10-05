@@ -966,7 +966,6 @@ where
         let receipt = match put_and_confirm(
             self.transport,
             self.scheduler,
-            self.profile,
             &due.name,
             record_bytes,
             sequence,
