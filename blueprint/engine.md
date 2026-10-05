@@ -152,10 +152,11 @@ bytes (FSM1/cipher-box-next#28 D2).
   periodically, the engine checks the EOLs of its renewal set (`HeldRecords`)
   and below ~30 days remaining republishes the same value at seq+1. A held
   record renews through the signature path of the renewal walk (ADR 0061 D3
-  steps 4 to 6), and the loop skips a name that the drain is publishing. A
-  scope pointer name has no floor that its enrolment raises, so its renewal
-  signs when the floor is absent or equal to the held sequence, and refuses a
-  floor above it. A held node record carries its envelope version and its
+  steps 4 to 6), and the loop skips a name that the drain is publishing. The
+  renewal signs only when the record that the network serves is the held
+  record, before and after the registration. A scope pointer name has no floor
+  that its enrolment raises, so its renewal signs when the floor is absent or
+  at most the held sequence. A held node record carries its envelope version and its
   scope bar (`HeldEnvelope`): the renewal does not sign a version that this
   build does not author, or a record whose scope floors rose above the bar,
   and sends `renewalFailed` for it, as the renewal walk does. The same pass

@@ -399,6 +399,7 @@ where
 /// ([`EOL_RENEW_THRESHOLD`]). Returns `Ok(None)` when the record's EOL is
 /// comfortably ahead (no renewal needed) or when no current record can be
 /// resolved to inspect. A lapsed record is out of scope here — that is revival.
+/// The renewal loop does not use it, and it carries no renewal guards.
 pub async fn eol_republish<T, H, C, F, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,
@@ -429,10 +430,10 @@ where
 }
 
 /// Renew one due held record through the renewal walk's signature path (ADR
-/// 0061 D3 steps 3 to 6), over the record the network serves now. A node
-/// record's [`HeldEnvelope`] also refuses a foreign version once the record is
-/// due, and signs under the scope bar. `Ok(None)` when the record is not due,
-/// or when another write superseded it.
+/// 0061 D3 steps 3 to 6), while the network serves exactly that record. A
+/// node record's [`HeldEnvelope`] also refuses a foreign version once the
+/// record is due, and signs under the scope bar. `Ok(None)` when the record
+/// is not due, or when the network serves another record.
 async fn renew_held<T, H, C, F, Sch>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
@@ -446,36 +447,38 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let Some((live, live_bytes)) = fanout_get_verify(seams.transport, name).await else {
+    let Some(admitted) = super::fork::verified(name, &held.record_bytes) else {
         return Ok(None);
     };
-    let (value, head_cid, rule) = match &held.value {
-        HeldValue::Head(head_cid) => {
-            // A newer write supersedes the held record: re-signing its head
-            // would roll the name back.
-            let Some(held_record) = super::fork::verified(name, &held.record_bytes) else {
-                return Ok(None);
-            };
-            if live.sequence != held_record.sequence {
-                return Ok(None);
-            }
-            (held_record.value, Some(head_cid.clone()), FloorRule::Exact)
-        }
-        // Nothing gates a pointer record, so a re-point another device landed
-        // shows only as a different live value.
-        HeldValue::Inline(block) => {
-            if live.value != *block {
-                return Ok(None);
-            }
-            (block.clone(), None, FloorRule::AtMost)
-        }
-    };
-    if !eol::needs_renewal(seams.scheduler.now(), &live.validity, EOL_RENEW_THRESHOLD) {
+    if admitted.value != held.value.record_value() {
         return Ok(None);
     }
+    // Only the record the device admitted renews (ADR 0061 D3 step 4). A
+    // different pick, at any sequence, is adopted by the next resolve and
+    // renewed by the device that holds it.
+    match fanout_get_verify(seams.transport, name).await {
+        Some((_, served)) if served == held.record_bytes => {}
+        _ => return Ok(None),
+    }
+    if !eol::needs_renewal(
+        seams.scheduler.now(),
+        &admitted.validity,
+        EOL_RENEW_THRESHOLD,
+    ) {
+        return Ok(None);
+    }
+    let (head_cid, rule) = match &held.value {
+        HeldValue::Head(head_cid) => (Some(head_cid.clone()), FloorRule::Exact),
+        HeldValue::Inline(_) => (None, FloorRule::AtMost),
+    };
     let observed = match held.envelope {
-        Some(envelope) => Observed::gated(name, live.sequence, envelope.version, &live_bytes)?,
-        None => Observed::admitted(name, live.sequence, &live_bytes),
+        Some(envelope) => Observed::gated(
+            name,
+            admitted.sequence,
+            envelope.version,
+            &held.record_bytes,
+        )?,
+        None => Observed::admitted(name, admitted.sequence, &held.record_bytes),
     };
     register(
         api,
@@ -499,7 +502,7 @@ where
         publishing: seams.publishing,
     };
     let bar = held.envelope.map(|envelope| envelope.bar);
-    match renew_admitted(&seams, &observed, bar, rule, &held.signer, &value).await {
+    match renew_admitted(&seams, &observed, bar, rule, &held.signer, &admitted.value).await {
         None => Ok(None),
         Some(receipt) => receipt.map(|receipt| Some(receipt.outcome)),
     }
@@ -885,50 +888,50 @@ mod tests {
         );
     }
 
-    /// A held name inside the renewal threshold renews over a same-sequence
-    /// fork the endpoints serve: liveness wins (ADR 0066 D3).
+    /// A held name inside the renewal threshold, which is the pick, renews over
+    /// the other branch of a same-sequence fork that one endpoint serves (ADR
+    /// 0066 D3).
     #[test]
-    fn a_held_name_the_endpoints_serve_forked_renews_inside_the_threshold() {
+    fn a_held_pick_renews_over_the_other_branch_of_a_fork() {
         let world = FakeWorld::new();
         let device = world.device(b"me");
-        let scheduler = world.scheduler.clone();
-        let api = ApiClient::new(
-            device.http.clone(),
-            device.credential_store.clone(),
-            "http://api.test",
-        );
-        let (name, held) = seeded_held(&device, [1u8; 32], [2u8; 16], "bafyheld", 0);
+        let (name, held) = due(&world, &device, Arm::Head);
+        let held_value = IpnsRecord::unmarshal(&held.record_bytes)
+            .unwrap()
+            .verify(&name)
+            .unwrap()
+            .value;
         let other = IpnsRecord::create_v2(
             &held.signer,
             b"/ipfs/bafyother",
             1,
             TTL_NANOS,
-            &eol::eol_from(UnixMillis(0)),
+            &eol::renewal_eol_from(UnixMillis(0)),
         )
         .marshal();
         let endpoint = device.record_store.endpoints()[1].clone();
         device
             .record_store
             .seed_record(&endpoint, name.as_str(), other);
-        scheduler.advance(Duration::from_secs(65 * DAY));
         device.http.enqueue_response(ok_200());
 
-        let results = block_on(eol_renew_pass(
-            &api,
-            &RenewalSeams {
-                transport: &device.record_store,
-                floors: &device.floor_store,
-                scheduler: &scheduler,
-                profile: &SyncTimingProfile::CI,
-                publishing: &Default::default(),
-            },
-            &[held],
-        ));
+        let result = renew_one(&world, &device, &RefCell::default(), held);
         assert!(matches!(
-            outcome_of(&results, &name).outcome,
-            Ok(Some(PublishOutcome::Published { .. }))
+            result.outcome,
+            Ok(Some(PublishOutcome::Published { sequence: 2 }))
         ));
-        assert_eq!(seq_at(&device, &name), 2);
+        let endpoint = device.record_store.endpoints()[0].clone();
+        let renewed = IpnsRecord::unmarshal(
+            &device
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .unwrap(),
+        )
+        .unwrap()
+        .verify(&name)
+        .unwrap();
+        assert_eq!(renewed.sequence, 2);
+        assert_eq!(renewed.value, held_value, "the held record's value");
     }
 
     #[test]
@@ -1460,6 +1463,82 @@ mod tests {
     #[test]
     fn a_pointer_floor_that_rose_above_the_held_sequence_refuses_the_signature() {
         a_floor_rise_during_the_registration_refuses_the_signature(Arm::Inline);
+    }
+
+    /// One endpoint serves another branch at the held sequence with the later
+    /// EOL, so the pick is not the held record.
+    fn a_held_record_that_is_not_the_pick_is_never_signed(arm: Arm) {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let (name, held) = due(&world, &device, arm);
+        let other = IpnsRecord::create_v2(
+            &held.signer,
+            b"/ipfs/bafyother",
+            1,
+            TTL_NANOS,
+            &eol::eol_from(UnixMillis(DAY * 1000)),
+        )
+        .marshal();
+        let endpoint = device.record_store.endpoints()[1].clone();
+        device
+            .record_store
+            .seed_record(&endpoint, name.as_str(), other);
+        device.http.enqueue_response(ok_200());
+
+        let result = renew_one(&world, &device, &RefCell::default(), held);
+        assert_eq!(result.outcome, Ok(None));
+        assert!(device.http.requests().is_empty(), "nothing is registered");
+        assert_eq!(seq_at(&device, &name), 1, "nothing is signed");
+    }
+
+    #[test]
+    fn a_held_node_that_is_not_the_pick_is_never_signed() {
+        a_held_record_that_is_not_the_pick_is_never_signed(Arm::Sealed);
+    }
+
+    #[test]
+    fn a_held_head_record_that_is_not_the_pick_is_never_signed() {
+        a_held_record_that_is_not_the_pick_is_never_signed(Arm::Head);
+    }
+
+    #[test]
+    fn a_held_pointer_that_is_not_the_pick_is_never_signed() {
+        a_held_record_that_is_not_the_pick_is_never_signed(Arm::Inline);
+    }
+
+    #[test]
+    fn a_pick_that_changes_during_the_registration_is_never_signed() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let (name, held) = due(&world, &device, Arm::Sealed);
+        let third = IpnsRecord::create_v2(
+            &held.signer,
+            b"/ipfs/bafythird",
+            1,
+            TTL_NANOS,
+            &eol::eol_from(UnixMillis(DAY * 1000)),
+        )
+        .marshal();
+        let (store, key, record) = (
+            device.record_store.clone(),
+            name.as_str().to_owned(),
+            third.clone(),
+        );
+        device.http.enqueue_derived(move |_| {
+            for endpoint in store.endpoints() {
+                store.seed_record(&endpoint, &key, record.clone());
+            }
+            Ok(ok_200())
+        });
+
+        let result = renew_one(&world, &device, &RefCell::default(), held);
+        assert_eq!(result.outcome, Ok(None));
+        let endpoint = device.record_store.endpoints()[0].clone();
+        assert_eq!(
+            device.record_store.record_at(&endpoint, name.as_str()),
+            Some(third),
+            "the third record stands"
+        );
     }
 
     #[test]
