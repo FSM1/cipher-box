@@ -33,8 +33,9 @@ use crate::gate::{
     adopt, read_cut_epoch_floor, record_cut_epoch_floor, verify_commitment_in_force,
 };
 use crate::name::validate_name;
+use crate::net::resolve::below_floor;
 use crate::net::rotation::scope_name;
-use crate::net::{PointerConsultError, assemble_candidate, fanout_get_verify};
+use crate::net::{PointerConsultError, assemble_candidate, fanout_get_verify_failed};
 use crate::profile::SyncTimingProfile;
 use crate::scope_seeds::{ScopeSeeds, deposit_seed, deposit_write_seed};
 use crate::seams::{
@@ -893,7 +894,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .ok()?;
 
         let name = scope_name(&share.scope_root_name).ok()?;
-        let (verified, record_bytes) = fanout_get_verify(self.transport, &name).await?;
+        let (verified, record_bytes, endpoint_failed) =
+            fanout_get_verify_failed(self.transport, &name).await?;
         // Fan-out has no memory — it answers with the best of what endpoints
         // served. A suppressing relay could otherwise re-serve the record that
         // still committed this device and pin the verdict at `Granted`. Read the
@@ -908,6 +910,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         .await
         {
             Ok(()) => {}
+            // ADR 0071 D1: unavailable, not a verdict.
+            Err(GateError::Rejected(rejection))
+                if endpoint_failed && below_floor(&rejection.reason) =>
+            {
+                return None;
+            }
             Err(GateError::Rejected(rejection)) => {
                 report_refusal(events, share, &rejection);
                 return None;
@@ -1484,7 +1492,7 @@ mod tests {
 
         fn serving(fixture: OwnerRootFixture, sequence: u64) -> ServedScopeRoot {
             let endpoint = EndpointId::new("e0");
-            let records = InMemoryRecordStore::new(vec![endpoint.clone()]);
+            let records = InMemoryRecordStore::new(vec![endpoint.clone(), EndpointId::new("e1")]);
             let served = ServedScopeRoot {
                 fixture,
                 endpoint,
@@ -1509,20 +1517,20 @@ mod tests {
         }
 
         fn seed(&self, sequence: u64) {
-            self.records.seed_record(
-                &self.endpoint,
-                self.fixture.name.as_str(),
-                IpnsRecord::create_v2(
-                    &kdf::ipns_keypair(
-                        kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
-                    ),
-                    format!("/ipfs/{}", self.fixture.head_cid_str).as_bytes(),
-                    sequence,
-                    2_000_000_000,
-                    "2099-01-01T00:00:00Z",
-                )
-                .marshal(),
-            );
+            let record = IpnsRecord::create_v2(
+                &kdf::ipns_keypair(
+                    kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
+                ),
+                format!("/ipfs/{}", self.fixture.head_cid_str).as_bytes(),
+                sequence,
+                2_000_000_000,
+                "2099-01-01T00:00:00Z",
+            )
+            .marshal();
+            for endpoint in self.records.endpoints() {
+                self.records
+                    .seed_record(&endpoint, self.fixture.name.as_str(), record.clone());
+            }
         }
 
         fn resolve<F: FloorStore>(&self, floors: &F, sharer: &EcdsaSigner) -> ResolutionClass {
@@ -1635,6 +1643,26 @@ mod tests {
             !served.reported.get(),
             "the record this device already adopted is no replay"
         );
+    }
+
+    /// ADR 0071 D1: while one endpoint fails, a record below the sequence floor
+    /// is unavailable. The row stays unresolvable, and nobody is accused.
+    #[test]
+    fn a_record_below_the_sequence_floor_while_an_endpoint_fails_is_unreported() {
+        let sharer = sharer_signer();
+        let floors = InMemoryFloorStore::default();
+        block_on(
+            floors.raise_sequence_floor(scope_root_name().as_str().as_bytes(), SERVED_SEQUENCE + 1),
+        )
+        .expect("the floor store answers");
+        let served = ServedScopeRoot::new(&sharer);
+        served.records.fail_endpoint(&served.endpoint);
+
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::Unresolvable
+        );
+        assert!(!served.reported.get(), "an endpoint failed: no verdict");
     }
 
     /// The control for the two cut tests below: the same seeded read-epoch and
