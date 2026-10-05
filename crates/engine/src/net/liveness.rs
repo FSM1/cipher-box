@@ -433,8 +433,9 @@ where
 /// Renew one due held record through the renewal walk's signature path (ADR
 /// 0061 D3 steps 3 to 6), while the network serves exactly that record. A
 /// node record's [`HeldEnvelope`] also refuses a foreign version once the
-/// record is due, and signs under the scope bar. `Ok(None)` when the record
-/// is not due, or when the network serves another record.
+/// record is due, and signs under the scope bar. `Ok(None)` when the drain is
+/// publishing the name, when the record is not due, when the network serves
+/// another record, or when the durable floor moved.
 async fn renew_held<T, H, C, F, Sch>(
     api: &ApiClient<H, C>,
     seams: &RenewalSeams<'_, T, F, Sch>,
@@ -465,9 +466,7 @@ where
     {
         return Ok(None);
     }
-    // Only the record the device admitted renews (ADR 0061 D3 step 4). A
-    // different pick, at any sequence, is adopted by the next resolve and
-    // renewed by the device that holds it.
+    // Only the record the device admitted renews (ADR 0061 D3 step 4).
     match fanout_get_verify(seams.transport, name).await {
         Some((_, served)) if served == held.record_bytes => {}
         _ => return Ok(None),
@@ -518,7 +517,9 @@ where
     };
     let receipt = receipt?;
     // This device authored the renewal from the admitted value, so the next
-    // pass renews from it under the same exact-floor rule.
+    // pass renews from it under the same exact-floor rule. A failed write is
+    // safe: the next pass refuses at the floor check, and the next adoption
+    // through the gate raises the floor.
     if let (PublishOutcome::Published { sequence }, FloorRule::Exact) = (&receipt.outcome, rule) {
         let _ = floors
             .raise_sequence_floor(name.as_str().as_bytes(), *sequence)
@@ -542,10 +543,9 @@ pub struct EolRenewResult {
 /// Run one sub-EOL renewal pass over the held set: for each record still live
 /// but within [`EOL_RENEW_THRESHOLD`], republish the same value at seq+1
 /// through [`renew_held`] (blueprint/engine.md "Liveness"), and point the
-/// held entry at the renewal while it still holds the record the pass read.
-/// Without that, the next pass finds a pick that is not the held record and
-/// never renews the name again. A lost race is reported, never silently
-/// overwritten.
+/// held entry at the renewal while it still holds the record the pass read,
+/// so the next pass finds the held record as the pick. A lost race is
+/// reported, never silently overwritten.
 ///
 /// This is the renewal-pass **body**; the ~hourly [`Scheduler`] loop that drives
 /// it alongside [`keyless_re_put`] is wired by the facade.
@@ -1577,7 +1577,7 @@ mod tests {
 
     /// A renewed held record renews again when its own renewal falls due, so
     /// a long session keeps the name alive.
-    fn a_followed_renewal_renews_again(arm: Arm, key: HeldKey) {
+    fn a_followed_renewal_renews_again(arm: Arm, key: HeldKey) -> (FakeDevice, IpnsName) {
         let world = FakeWorld::new();
         let device = world.device(b"me");
         let api = ApiClient::new(
@@ -1607,6 +1607,22 @@ mod tests {
         world.scheduler.advance(Duration::from_secs(65 * DAY));
         assert_eq!(pass(), Ok(Some(PublishOutcome::Published { sequence: 3 })));
         assert_eq!(seq_at(&device, &name), 3);
+        (device, name)
+    }
+
+    #[test]
+    fn a_renewed_pointer_renews_again_when_it_falls_due() {
+        let (device, name) =
+            a_followed_renewal_renews_again(Arm::Inline, HeldKey::ScopePointer([7u8; 16]));
+        assert_eq!(
+            block_on(crate::gate::floor::sequence_floor(
+                &device.floor_store,
+                name.as_str().as_bytes()
+            ))
+            .unwrap(),
+            None,
+            "a pointer renewal raises no floor"
+        );
     }
 
     #[test]

@@ -36,9 +36,13 @@ admitted only when it makes the device more restrictive. (c) An epoch that a dev
 construction when it mints a scope root. Each raise is a maximum. A field that the network
 authors, or a grant blob carries, raises no floor. A local write clock (a revision mint counter,
 a mint mark, the vault-pointer index mark) is not an adoption bar, and the law does not cover it.
+Amended by PR-local change on 2026-10-05: (b) also admits a value that a write grantee device
+signed in a liveness renewal, after `Published`.
 
 **D2 — The list of raises is closed.** `blueprint/engine.md` names each raise that D1 admits. A
-new raise enters the list only through an ADR or an amendment, also when it fits D1.
+new raise enters the list only through an ADR or an amendment, also when it fits D1. Amended by
+PR-local change on 2026-10-05: the list adds the name sequence of a liveness renewal after
+`Published` (`renew_held`).
 
 **D3 — The cold-start guard at the vault anchor reads a vouched floor.** The vouched floor is the
 highest `minReadEpoch` that a vault pointer vouched to this device. It is a floor-store key in
