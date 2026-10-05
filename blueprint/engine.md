@@ -602,7 +602,9 @@ and that includes when the mint counter moves and where the revision comes from.
   below the adopted revision, and a body that will not open under a key only
   this account holds are refusals of bytes the plane actually served. They are
   trust verdicts, not availability, and a caller that retries on availability
-  must not retry on them.
+  must not retry on them. A record below the sequence floor while an endpoint
+  failed is availability: the load reports `suppressed`, holds, retries, and
+  sends no trust event (ADR 0071 D1, D4).
 - **An empty bin is the bottom rung, not an error.** A vault that has never
   soft-deleted anything has no entries to load, so the ladder bottoms out at an
   empty index. The record still exists from vault genesis, because its very

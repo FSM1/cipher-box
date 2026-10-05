@@ -37,8 +37,9 @@ use crate::entropy::Entropy;
 use crate::facade::{Event, NodeId, emit_trust_violation, published_grant_blobs};
 use crate::gate::GateError;
 use crate::mailbox::{VerifiedMailboxItem, poll_verified};
+use crate::net::resolve::unavailable_below_floor;
 use crate::net::rotation::scope_name;
-use crate::net::{assemble_candidate, fanout_get_verify};
+use crate::net::{assemble_candidate, fanout_get_verify_failed};
 use crate::seams::{FloorStore, Http, Mailbox, RecordTransport, StagingStore};
 
 use super::accept::{
@@ -200,7 +201,9 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             let Ok(name) = scope_name(&pointer.scope_root_name) else {
                 continue;
             };
-            let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
+            let Some((_, record_bytes, endpoint_failed)) =
+                fanout_get_verify_failed(self.transport, &name).await
+            else {
                 continue;
             };
             let candidate =
@@ -230,6 +233,9 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             .await
             {
                 Ok(_) => (),
+                // ADR 0071 D1: unavailable; the item waits for the next pass.
+                Err(AcceptError::Gate(GateError::Rejected(rejection)))
+                    if unavailable_below_floor(&rejection.reason, endpoint_failed) => {}
                 Err(e) => report(events, name.as_str(), &e),
             }
         }
@@ -382,23 +388,28 @@ mod tests {
 
     impl Inbox {
         fn new() -> Self {
+            Self::over(&["e0"])
+        }
+
+        /// The same world, with every endpoint in `endpoints` serving the
+        /// scope root.
+        fn over(endpoints: &[&str]) -> Self {
             let fixture = published();
-            let endpoint = EndpointId::new("e0");
-            let records = InMemoryRecordStore::new(vec![endpoint.clone()]);
-            records.seed_record(
-                &endpoint,
-                fixture.name.as_str(),
-                IpnsRecord::create_v2(
-                    &kdf::ipns_keypair(
-                        kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
-                    ),
-                    format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
-                    1,
-                    2_000_000_000,
-                    "2099-01-01T00:00:00Z",
-                )
-                .marshal(),
-            );
+            let records =
+                InMemoryRecordStore::new(endpoints.iter().copied().map(EndpointId::new).collect());
+            let record = IpnsRecord::create_v2(
+                &kdf::ipns_keypair(
+                    kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
+                ),
+                format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
+                1,
+                2_000_000_000,
+                "2099-01-01T00:00:00Z",
+            )
+            .marshal();
+            for endpoint in records.endpoints() {
+                records.seed_record(&endpoint, fixture.name.as_str(), record.clone());
+            }
             let hub = InMemoryMailboxHub::default();
             let mailbox = hub.mailbox_for(&me().verifying_key().to_sec1());
             Self {
@@ -751,6 +762,40 @@ mod tests {
 
         assert!(accuses(&events), "the replay is a trust verdict");
         assert_eq!(fx.inbox_len(), 1, "and the item is never acked");
+    }
+
+    /// ADR 0071 D1: the sequence floor stands above what both endpoints serve.
+    /// While one endpoint fails, the old record is unavailable: no report, and
+    /// the item stays for the next pass. With both up, it is a replay.
+    #[test]
+    fn a_below_floor_record_while_an_endpoint_fails_is_kept_unreported() {
+        let fx = Inbox::over(&["e0", "e1"]);
+        fx.import(&sharer(), &sharer_enc());
+        fx.post(&sharer(), &fx.pointer(), "share-1");
+        fx.pull();
+        block_on(
+            SharerScopedFloorStore::granted_by(
+                &fx.floors,
+                ContactLabel::of(
+                    &kdf::contact_label_seed(&[0x4c; 32]),
+                    &sharer().verifying_key().to_sec1(),
+                ),
+            )
+            .raise_sequence_floor(scope_root_name().as_str().as_bytes(), 2),
+        )
+        .expect("the floor store answers");
+        fx.post(&sharer(), &fx.pointer(), "share-2");
+        let failed = EndpointId::new("e0");
+        fx.records.fail_endpoint(&failed);
+
+        let events = fx.pull();
+        assert!(!accuses(&events), "an endpoint failed: {events:?}");
+        assert_eq!(fx.inbox_len(), 1, "and the item waits for the next pass");
+
+        fx.records.heal_endpoint(&failed);
+        let events = fx.pull();
+        assert!(accuses(&events), "every endpoint answered: a replay");
+        assert_eq!(fx.inbox_len(), 1);
     }
 
     /// A link holder's claim sits on the owner's inbox until a conversion acks
