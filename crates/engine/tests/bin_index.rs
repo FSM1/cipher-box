@@ -435,6 +435,54 @@ fn a_replayed_sequence_is_refused_and_the_cached_copy_answers() {
     );
 }
 
+/// ADR 0071 D1: endpoint B lags one sequence and endpoint A fails, so the old
+/// record is unavailable, not a replay. With A up and serving it too, it is.
+#[test]
+fn a_lagging_endpoint_while_another_fails_is_withheld_not_rolled_back() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let endpoints = device.record_store.endpoints();
+    let (a, b) = (&endpoints[0], &endpoints[1]);
+    publish(&world, &device, &blocks, &binned(&[1]), 1);
+    let old = device
+        .record_store
+        .record_at(b, name().as_str())
+        .expect("B holds the first record");
+    publish(&world, &device, &blocks, &binned(&[1, 2]), 2);
+    device
+        .record_store
+        .seed_record(b, name().as_str(), old.clone());
+    device.record_store.fail_endpoint(a);
+
+    let first = load(&world, &device, &blocks, &keys());
+    let BinIndexLoad::Stale { index, reason } = first.clone() else {
+        panic!("the load falls back to this device's last-known-good copy: {first:?}");
+    };
+    assert_eq!(reason, DefaultsReason::Suppressed);
+    assert_eq!(reason.class(), "availability", "an endpoint failed");
+    assert_eq!(index.entries, binned(&[1, 2]).entries);
+    assert_eq!(
+        first.writable().unwrap_err(),
+        reason,
+        "still no publish over it"
+    );
+
+    device.record_store.heal_endpoint(a);
+    device.record_store.seed_record(a, name().as_str(), old);
+    let BinIndexLoad::Stale { reason, .. } = load(&world, &device, &blocks, &keys()) else {
+        panic!("the load falls back to this device's last-known-good copy");
+    };
+    assert_eq!(
+        reason,
+        DefaultsReason::RolledBack {
+            floor: 2,
+            sequence: 1
+        },
+        "every endpoint answered, so the old record is a replay"
+    );
+}
+
 /// The revision arbitrates what the outer sequence cannot: a fork *at* the
 /// sequence this device already adopted.
 #[test]

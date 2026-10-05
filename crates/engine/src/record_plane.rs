@@ -24,7 +24,7 @@ use crate::gate::floor;
 use crate::net::eol::is_expired;
 use crate::net::liveness::{HeldRecord, HeldValue};
 use crate::net::publish::head_cid_from_value;
-use crate::net::{fanout_get_verify, fetch_head_block};
+use crate::net::{fanout_get_verify_failed, fetch_head_block};
 use crate::seams::{FloorStore, Http, RecordTransport, Scheduler, SnapshotCache, UnixMillis};
 
 /// Why a load did not use the published record, carried by both degraded
@@ -45,7 +45,8 @@ pub enum DefaultsReason {
     /// cache write.
     UnprovenFirstRun,
     /// No usable record, but a durable mark proves this device already adopted
-    /// one: the record is being withheld or its head block is unreachable.
+    /// one: the record is being withheld or its head block is unreachable. Also
+    /// a record below the sequence floor while an endpoint failed (ADR 0071 D1).
     Suppressed,
     /// No usable record, and the publish mint counter is this device's only
     /// mark: the attempt it marks may have landed and lost its floor write
@@ -55,7 +56,8 @@ pub enum DefaultsReason {
     /// device is needed to reach it and none may be needed to leave it
     /// (blueprint/engine.md "Bin index record").
     StrandedMint,
-    /// A record below the durable sequence floor — a replay, not staleness.
+    /// A record below the durable sequence floor, with every endpoint
+    /// answered — a replay, not staleness (ADR 0071 D4).
     RolledBack {
         /// The durable floor the record failed.
         floor: u64,
@@ -455,7 +457,9 @@ where
     let Ok(durable) = floor::sequence_floor(floors, key).await else {
         return Err(DefaultsReason::FloorUnreadable);
     };
-    let Some((verified, record_bytes)) = fanout_get_verify(transport, name).await else {
+    let Some((verified, record_bytes, endpoint_failed)) =
+        fanout_get_verify_failed(transport, name).await
+    else {
         // The other two marks join the sequence floor only here, because only
         // here does their absence still authorise a write, and each is raised
         // where the sequence floor is not. The mint counter outlives the
@@ -475,7 +479,11 @@ where
     let sequence = verified.sequence;
     let floor = durable.unwrap_or(0);
     if !lapsed && sequence < floor {
-        return Err(DefaultsReason::RolledBack { floor, sequence });
+        return Err(if endpoint_failed {
+            DefaultsReason::Suppressed
+        } else {
+            DefaultsReason::RolledBack { floor, sequence }
+        });
     }
 
     let fetched = fetch_head_block(gateway, http, name, &record_bytes, None).await;

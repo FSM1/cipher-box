@@ -33,8 +33,9 @@ use crate::gate::{
     adopt, read_cut_epoch_floor, record_cut_epoch_floor, verify_commitment_in_force,
 };
 use crate::name::validate_name;
+use crate::net::resolve::unavailable_below_floor;
 use crate::net::rotation::scope_name;
-use crate::net::{PointerConsultError, assemble_candidate, fanout_get_verify};
+use crate::net::{PointerConsultError, assemble_candidate, fanout_get_verify_failed};
 use crate::profile::SyncTimingProfile;
 use crate::scope_seeds::{ScopeSeeds, deposit_seed, deposit_write_seed};
 use crate::seams::{
@@ -798,7 +799,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         hold: Option<&LinkHold>,
         events: &mpsc::UnboundedSender<Event>,
     ) -> Classified {
-        let Some((candidate, floors)) = self.resolved(share, events).await else {
+        let Some((candidate, floors, withheld)) = self.resolved(share, events).await else {
             return Classified::unresolvable();
         };
         let sharer_enc = contact.enc_subkey();
@@ -823,6 +824,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             &sharer_enc,
             floors,
         ) {
+            Ok(_) if withheld => return Classified::unresolvable(),
             Ok(facts) => facts,
             Err(rejection) => {
                 report_refusal(events, share, &rejection);
@@ -875,11 +877,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// blocks a seam could not fetch, or a floor this pass could not read — or a
     /// gate refusal (a replay below the sequence floor, a record the assembly
     /// rejects), which is reported on `events` first.
+    ///
+    /// The flag is a record below the sequence floor while an endpoint failed
+    /// (ADR 0071 D1): the caller runs stage 2 on it, then reads it as
+    /// unavailable, so a commitment fault stays a trust violation.
     async fn resolved(
         &self,
         share: &ReceivedShare,
         events: &mpsc::UnboundedSender<Event>,
-    ) -> Option<(Candidate, SharedScopeFloors)> {
+    ) -> Option<(Candidate, SharedScopeFloors, bool)> {
         // A floor this pass could not read is availability, not a verdict: with
         // no floor neither bar can fire, so a superseded or stale record would
         // read as granted. Absent (`Ok(None)`) is a genuine zero.
@@ -893,13 +899,14 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .ok()?;
 
         let name = scope_name(&share.scope_root_name).ok()?;
-        let (verified, record_bytes) = fanout_get_verify(self.transport, &name).await?;
+        let (verified, record_bytes, endpoint_failed) =
+            fanout_get_verify_failed(self.transport, &name).await?;
         // Fan-out has no memory — it answers with the best of what endpoints
         // served. A suppressing relay could otherwise re-serve the record that
         // still committed this device and pin the verdict at `Granted`. Read the
         // durable bar only; a body this pass never unsealed may not raise it
         // (the floor law's provenance rule).
-        match floor::check_sequence(
+        let withheld = match floor::check_sequence(
             self.floors,
             &share.scope_root_name,
             verified.sequence,
@@ -907,13 +914,18 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         )
         .await
         {
-            Ok(()) => {}
+            Ok(()) => false,
+            Err(GateError::Rejected(rejection))
+                if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+            {
+                true
+            }
             Err(GateError::Rejected(rejection)) => {
                 report_refusal(events, share, &rejection);
                 return None;
             }
             Err(GateError::Seam(_)) => return None,
-        }
+        };
         let candidate =
             match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await {
                 Ok(candidate) => candidate,
@@ -923,7 +935,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 }
                 Err(GateError::Seam(_)) => return None,
             };
-        Some((candidate, SharedScopeFloors { epoch, cut_epoch }))
+        Some((candidate, SharedScopeFloors { epoch, cut_epoch }, withheld))
     }
 
     /// Open the accepted scope's own folder body, and cache the scope seeds the
@@ -1195,7 +1207,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::secret::SecretBytes;
 
-    use core::cell::Cell;
+    use core::cell::{Cell, RefCell};
     use core::pin::pin;
     use core::task::{Context, Waker};
     use std::sync::{Arc, Mutex};
@@ -1474,6 +1486,8 @@ mod tests {
         gateway: Gateway,
         /// Whether the last resolve reported a trust violation.
         reported: Cell<bool>,
+        /// What each trust violation of the last resolve said.
+        reports: RefCell<Vec<String>>,
     }
 
     impl ServedScopeRoot {
@@ -1484,7 +1498,7 @@ mod tests {
 
         fn serving(fixture: OwnerRootFixture, sequence: u64) -> ServedScopeRoot {
             let endpoint = EndpointId::new("e0");
-            let records = InMemoryRecordStore::new(vec![endpoint.clone()]);
+            let records = InMemoryRecordStore::new(vec![endpoint.clone(), EndpointId::new("e1")]);
             let served = ServedScopeRoot {
                 fixture,
                 endpoint,
@@ -1496,6 +1510,7 @@ mod tests {
                     ..Default::default()
                 },
                 reported: Cell::new(false),
+                reports: RefCell::new(Vec::new()),
             };
             served.seed(sequence);
             served
@@ -1509,20 +1524,20 @@ mod tests {
         }
 
         fn seed(&self, sequence: u64) {
-            self.records.seed_record(
-                &self.endpoint,
-                self.fixture.name.as_str(),
-                IpnsRecord::create_v2(
-                    &kdf::ipns_keypair(
-                        kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
-                    ),
-                    format!("/ipfs/{}", self.fixture.head_cid_str).as_bytes(),
-                    sequence,
-                    2_000_000_000,
-                    "2099-01-01T00:00:00Z",
-                )
-                .marshal(),
-            );
+            let record = IpnsRecord::create_v2(
+                &kdf::ipns_keypair(
+                    kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
+                ),
+                format!("/ipfs/{}", self.fixture.head_cid_str).as_bytes(),
+                sequence,
+                2_000_000_000,
+                "2099-01-01T00:00:00Z",
+            )
+            .marshal();
+            for endpoint in self.records.endpoints() {
+                self.records
+                    .seed_record(&endpoint, self.fixture.name.as_str(), record.clone());
+            }
         }
 
         fn resolve<F: FloorStore>(&self, floors: &F, sharer: &EcdsaSigner) -> ResolutionClass {
@@ -1562,10 +1577,14 @@ mod tests {
             )
             .class;
             drop(events);
-            self.reported.set(
-                core::iter::from_fn(|| rx.try_recv().ok())
-                    .any(|event| matches!(event, Event::AttributableAbuse { .. })),
-            );
+            let reports: Vec<String> = core::iter::from_fn(|| rx.try_recv().ok())
+                .filter_map(|event| match event {
+                    Event::AttributableAbuse { description } => Some(description),
+                    _ => None,
+                })
+                .collect();
+            self.reported.set(!reports.is_empty());
+            *self.reports.borrow_mut() = reports;
             class
         }
     }
@@ -1634,6 +1653,51 @@ mod tests {
         assert!(
             !served.reported.get(),
             "the record this device already adopted is no replay"
+        );
+    }
+
+    /// ADR 0071 D1: while one endpoint fails, a record below the sequence floor
+    /// is unavailable. The row stays unresolvable, and nobody is accused.
+    #[test]
+    fn a_record_below_the_sequence_floor_while_an_endpoint_fails_is_unreported() {
+        let sharer = sharer_signer();
+        let floors = InMemoryFloorStore::default();
+        block_on(
+            floors.raise_sequence_floor(scope_root_name().as_str().as_bytes(), SERVED_SEQUENCE + 1),
+        )
+        .expect("the floor store answers");
+        let served = ServedScopeRoot::new(&sharer);
+        served.records.fail_endpoint(&served.endpoint);
+
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::Unresolvable
+        );
+        assert!(!served.reported.get(), "an endpoint failed: no verdict");
+    }
+
+    /// ADR 0071 D1 covers the sequence stage alone. A pre-cut set below both
+    /// the sequence floor and the cut-epoch floor fails stage 2, so it stays a
+    /// trust violation while an endpoint fails.
+    #[test]
+    fn a_pre_cut_set_below_the_sequence_floor_while_an_endpoint_fails_is_reported() {
+        let sharer = sharer_signer();
+        let floors = seeded_floors(SHARER_IDENTITY_PK, 1);
+        block_on(
+            floors.raise_sequence_floor(scope_root_name().as_str().as_bytes(), SERVED_SEQUENCE + 1),
+        )
+        .expect("the floor store answers");
+        let served = ServedScopeRoot::new(&sharer);
+        served.records.fail_endpoint(&served.endpoint);
+
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::Unresolvable
+        );
+        let reports = served.reports.borrow();
+        assert!(
+            matches!(reports.as_slice(), [report] if report.contains("[commitment-verify]")),
+            "the commitment stage reports, not the sequence stage: {reports:?}"
         );
     }
 
