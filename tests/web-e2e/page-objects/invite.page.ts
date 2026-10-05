@@ -72,8 +72,22 @@ export class InvitePage {
     await this.joinButton.click();
   }
 
+  /**
+   * Whether the address still carries the link's fragment. A boolean, so an
+   * assertion on it never prints the fragment, which is the capability.
+   */
+  holdsLink(): boolean {
+    return new URL(this.page.url()).hash !== '';
+  }
+
   /** A join, or "open folder", lands on the shared folder in the vault browser. */
   async expectFolderOpened(timeout?: number): Promise<void> {
-    await expect(this.page).toHaveURL(/\/files\/[0-9a-f]{32}$/, { timeout });
+    await expect
+      .poll(
+        () =>
+          /^\/files\/[0-9a-f]{32}$/.test(new URL(this.page.url()).pathname) && !this.holdsLink(),
+        { timeout, message: 'the join did not land on the shared folder' }
+      )
+      .toBe(true);
   }
 }

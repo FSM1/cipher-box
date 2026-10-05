@@ -67,7 +67,7 @@ test('@full a second visit to a joined link offers only "open folder"', async ({
   await expect(invite.joinButton).toHaveCount(0);
   await invite.openFolderButton.click();
   await invite.expectFolderOpened();
-  expect(new URL(second.url()).hash).toBe('');
+  expect(invite.holdsLink(), 'the open left the link in the address').toBe(false);
   await context.close();
 });
 
