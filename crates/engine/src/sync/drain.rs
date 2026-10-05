@@ -4324,7 +4324,10 @@ where
         let fault = |error| match error {
             GateError::Seam(_) => Halt::DeletePlaneUnavailable,
             GateError::Rejected(rejection)
-                if endpoint_failed && crate::net::resolve::below_floor(&rejection.reason) =>
+                if crate::net::resolve::unavailable_below_floor(
+                    &rejection.reason,
+                    endpoint_failed,
+                ) =>
             {
                 Halt::DeletePlaneUnavailable
             }

@@ -45,7 +45,8 @@ pub enum DefaultsReason {
     /// cache write.
     UnprovenFirstRun,
     /// No usable record, but a durable mark proves this device already adopted
-    /// one: the record is being withheld or its head block is unreachable.
+    /// one: the record is being withheld or its head block is unreachable. Also
+    /// a record below the sequence floor while an endpoint failed (ADR 0071 D1).
     Suppressed,
     /// No usable record, and the publish mint counter is this device's only
     /// mark: the attempt it marks may have landed and lost its floor write

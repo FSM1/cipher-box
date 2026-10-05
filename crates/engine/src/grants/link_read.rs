@@ -33,7 +33,7 @@ use crate::gate::{
     Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
     adopt, read_cut_epoch_floor, verify_commitment_in_force,
 };
-use crate::net::resolve::below_floor;
+use crate::net::resolve::unavailable_below_floor;
 use crate::net::rotation::OwnerPointerRead;
 use crate::net::{
     PointerConsult, PointerConsultError, assemble_candidate, fanout_get_verify_failed,
@@ -175,8 +175,6 @@ enum LinkEntryRead {
         candidate: Box<Candidate>,
         conversion_permission: Permission,
         personal: bool,
-        /// Whether an endpoint failed on the read that served `candidate`.
-        endpoint_failed: bool,
     },
     Expired {
         conversion_permission: Permission,
@@ -210,7 +208,8 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
             }
             Err(PointerConsultError::Rejected) => return Err(LinkReadRefusal::Repoint),
         };
-    let Some((_, record, endpoint_failed)) = fanout_get_verify_failed(seams.transport, &root).await
+    let Some((verified, record, endpoint_failed)) =
+        fanout_get_verify_failed(seams.transport, &root).await
     else {
         return Ok(LinkEntryRead::Unavailable);
     };
@@ -236,6 +235,25 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
             reason: RejectionReason::Trust(e),
         })
     })?;
+    // Ahead of the link verdict, so a rollback never reads as revoked or
+    // expired. A record at the floor is the one this account adopted.
+    match floor::check_sequence(
+        &seams.floors,
+        name,
+        verified.sequence,
+        floor::Strictness::AtOrAboveFloor,
+    )
+    .await
+    {
+        Ok(()) => {}
+        Err(GateError::Rejected(rejection))
+            if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+        {
+            return Ok(LinkEntryRead::Unavailable);
+        }
+        Err(GateError::Rejected(rejection)) => return Err(LinkReadRefusal::Gate(rejection)),
+        Err(GateError::Seam(_)) => return Ok(LinkEntryRead::Unavailable),
+    }
     let Some(entry) = recipient_blinded_tag(invitee.enc_secret(), &owner.enc_subkey(), name)
         .and_then(|tag| committed_link_entry(&candidate, &tag))
     else {
@@ -261,7 +279,6 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
         candidate: Box::new(candidate),
         conversion_permission,
         personal,
-        endpoint_failed,
     })
 }
 
@@ -332,21 +349,14 @@ pub(crate) async fn preview_read<T: RecordTransport, H: Http, F: FloorStore>(
         http: seams.http,
         floors: NoPersistFloorStore::over(&seams.floors),
     };
-    let (root, candidate, conversion_permission, personal, endpoint_failed) =
+    let (root, candidate, conversion_permission, personal) =
         match read_link_entry(&seams, link, now).await? {
             LinkEntryRead::Live {
                 root,
                 candidate,
                 conversion_permission,
                 personal,
-                endpoint_failed,
-            } => (
-                root,
-                candidate,
-                conversion_permission,
-                personal,
-                endpoint_failed,
-            ),
+            } => (root, candidate, conversion_permission, personal),
             LinkEntryRead::Expired {
                 conversion_permission,
             } => {
@@ -364,7 +374,6 @@ pub(crate) async fn preview_read<T: RecordTransport, H: Http, F: FloorStore>(
         link.share,
         link.owner,
         link.invitee,
-        endpoint_failed,
     )
     .await
     .map_err(LinkReadRefusal::Gate)?;
@@ -389,8 +398,7 @@ enum LinkOpen {
 /// Open the scope root through the link's grant blob under the adoption gate.
 /// A record at exactly the sequence floor, at or above the read-epoch floor,
 /// is the one this account already adopted, and reads as the tick's
-/// equal-floor recovery reads it. One below the sequence floor, read while an
-/// endpoint failed, is unavailable (ADR 0071 D1).
+/// equal-floor recovery reads it.
 async fn open_through_link<F: FloorStore>(
     floors: &F,
     candidate: &Candidate,
@@ -398,7 +406,6 @@ async fn open_through_link<F: FloorStore>(
     share: &ReceivedShare,
     owner: &Contact,
     invitee: &EphemeralInvitee,
-    endpoint_failed: bool,
 ) -> Result<LinkOpen, GateRejection> {
     let refused = |e| GateRejection {
         stage: GateStage::Unseal,
@@ -443,11 +450,6 @@ async fn open_through_link<F: FloorStore>(
     let body = match adopt(floors, &reader, candidate).await {
         Ok((adopted, _)) => adopted.read_body,
         Err(GateError::Seam(_)) => return Ok(LinkOpen::Unavailable),
-        Err(GateError::Rejected(rejection))
-            if endpoint_failed && below_floor(&rejection.reason) =>
-        {
-            return Ok(LinkOpen::Unavailable);
-        }
         Err(GateError::Rejected(rejection)) => {
             let RejectionReason::SequenceNotNewer { floor, sequence } = rejection.reason else {
                 return Err(rejection);

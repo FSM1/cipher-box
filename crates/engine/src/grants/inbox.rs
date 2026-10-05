@@ -37,7 +37,7 @@ use crate::entropy::Entropy;
 use crate::facade::{Event, NodeId, emit_trust_violation, published_grant_blobs};
 use crate::gate::GateError;
 use crate::mailbox::{VerifiedMailboxItem, poll_verified};
-use crate::net::resolve::below_floor;
+use crate::net::resolve::unavailable_below_floor;
 use crate::net::rotation::scope_name;
 use crate::net::{assemble_candidate, fanout_get_verify_failed};
 use crate::seams::{FloorStore, Http, Mailbox, RecordTransport, StagingStore};
@@ -235,7 +235,7 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
                 Ok(_) => (),
                 // ADR 0071 D1: unavailable; the item waits for the next pass.
                 Err(AcceptError::Gate(GateError::Rejected(rejection)))
-                    if endpoint_failed && below_floor(&rejection.reason) => {}
+                    if unavailable_below_floor(&rejection.reason, endpoint_failed) => {}
                 Err(e) => report(events, name.as_str(), &e),
             }
         }

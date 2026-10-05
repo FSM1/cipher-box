@@ -345,9 +345,11 @@ struct GatedParts {
     fork: Option<Fork>,
 }
 
-/// Whether the sequence stage refused a record strictly below the floor.
-pub(crate) fn below_floor(reason: &RejectionReason) -> bool {
-    matches!(reason, RejectionReason::SequenceNotNewer { floor, sequence } if sequence < floor)
+/// Whether a gate refusal reads as unavailable: the sequence stage refused a
+/// record strictly below the floor while an endpoint failed (ADR 0071 D1).
+pub(crate) fn unavailable_below_floor(reason: &RejectionReason, endpoint_failed: bool) -> bool {
+    endpoint_failed
+        && matches!(reason, RejectionReason::SequenceNotNewer { floor, sequence } if sequence < floor)
 }
 
 /// The gated resolve behind [`resolve`]/[`resolve_and_hold`] and the cold-start
@@ -499,7 +501,7 @@ where
                         Err(GateError::Seam(error)) => return Err(error),
                     }
                 }
-                reason if fetch.endpoint_failed && below_floor(reason) => {
+                reason if unavailable_below_floor(reason, fetch.endpoint_failed) => {
                     (ResolveOutcome::NoUpdate, GatedParts::default())
                 }
                 _ => (

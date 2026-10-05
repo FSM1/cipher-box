@@ -254,7 +254,21 @@ scenario fails the meta-test):
   read, and the write cut's root, boundary, interior and `gated_root_at` reads
   give the same split, and a forged record stays a rejection
   (`net::rotation`); the vault pointer's standing read does too
-  (`net::vault_pointer`); only no answer, a 5xx, a 408, a 429, a 3xx or a
+  (`net::vault_pointer`); the bin index load reports `suppressed`, not
+  `rolled-back` (`tests/bin_index.rs`
+  `a_lagging_endpoint_while_another_fails_is_withheld_not_rolled_back`), the
+  share inbox keeps the item unreported (`grants::inbox`
+  `a_below_floor_record_while_an_endpoint_fails_is_kept_unreported`), the
+  received-share status reports nothing (`grants::received_status`
+  `a_record_below_the_sequence_floor_while_an_endpoint_fails_is_unreported`),
+  and the link preview is unresolvable (`tests/owner_actions.rs`
+  `a_preview_of_a_lagging_root_while_an_endpoint_fails_is_unresolvable`); a
+  pre-cut set below both floors stays a trust violation while an endpoint
+  fails (`grants::received_status`
+  `a_pre_cut_set_below_the_sequence_floor_while_an_endpoint_fails_is_reported`),
+  and a rollback of a joined root to a set from before the link is a trust
+  violation, not a revoked link (`tests/owner_actions.rs`
+  `a_rollback_to_a_root_from_before_the_link_is_no_revoked_link`); only no answer, a 5xx, a 408, a 429, a 3xx or a
   timeout is a failed endpoint, and a failed body cancellation keeps the known
   answer (`net::fanout`, the desktop record transport, the web
   `recordTransport`). The fix tests fail on the code before ADR 0071.

@@ -91,7 +91,7 @@ use crate::net::fanout::{
     AnsweredFetch, FanoutRecord, fanout_get_answered, fanout_get_classified,
     fanout_get_tied_classified, fanout_get_verify, fanout_get_verify_failed,
 };
-use crate::net::resolve::{Adopter, below_floor};
+use crate::net::resolve::{Adopter, unavailable_below_floor};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::eager_set::bind_child_labels;
 use crate::rotation::sweep::body_children;
@@ -3480,10 +3480,12 @@ fn resolve_verdict(error: GateError) -> ResolveFailure {
     }
 }
 
-/// [`resolve_verdict`] for a sequence check on a fan-out read ([`below_floor`]).
+/// [`resolve_verdict`] for a sequence check on a fan-out read ([`unavailable_below_floor`]).
 fn sequence_verdict(error: GateError, endpoint_failed: bool) -> ResolveFailure {
     match &error {
-        GateError::Rejected(rejection) if endpoint_failed && below_floor(&rejection.reason) => {
+        GateError::Rejected(rejection)
+            if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+        {
             ResolveFailure::Unavailable
         }
         _ => resolve_verdict(error),

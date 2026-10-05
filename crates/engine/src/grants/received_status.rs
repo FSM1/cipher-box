@@ -33,7 +33,7 @@ use crate::gate::{
     adopt, read_cut_epoch_floor, record_cut_epoch_floor, verify_commitment_in_force,
 };
 use crate::name::validate_name;
-use crate::net::resolve::below_floor;
+use crate::net::resolve::unavailable_below_floor;
 use crate::net::rotation::scope_name;
 use crate::net::{PointerConsultError, assemble_candidate, fanout_get_verify_failed};
 use crate::profile::SyncTimingProfile;
@@ -799,7 +799,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         hold: Option<&LinkHold>,
         events: &mpsc::UnboundedSender<Event>,
     ) -> Classified {
-        let Some((candidate, floors)) = self.resolved(share, events).await else {
+        let Some((candidate, floors, withheld)) = self.resolved(share, events).await else {
             return Classified::unresolvable();
         };
         let sharer_enc = contact.enc_subkey();
@@ -824,6 +824,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             &sharer_enc,
             floors,
         ) {
+            Ok(_) if withheld => return Classified::unresolvable(),
             Ok(facts) => facts,
             Err(rejection) => {
                 report_refusal(events, share, &rejection);
@@ -876,11 +877,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// blocks a seam could not fetch, or a floor this pass could not read — or a
     /// gate refusal (a replay below the sequence floor, a record the assembly
     /// rejects), which is reported on `events` first.
+    ///
+    /// The flag is a record below the sequence floor while an endpoint failed
+    /// (ADR 0071 D1): the caller runs stage 2 on it, then reads it as
+    /// unavailable, so a commitment fault stays a trust violation.
     async fn resolved(
         &self,
         share: &ReceivedShare,
         events: &mpsc::UnboundedSender<Event>,
-    ) -> Option<(Candidate, SharedScopeFloors)> {
+    ) -> Option<(Candidate, SharedScopeFloors, bool)> {
         // A floor this pass could not read is availability, not a verdict: with
         // no floor neither bar can fire, so a superseded or stale record would
         // read as granted. Absent (`Ok(None)`) is a genuine zero.
@@ -901,7 +906,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // still committed this device and pin the verdict at `Granted`. Read the
         // durable bar only; a body this pass never unsealed may not raise it
         // (the floor law's provenance rule).
-        match floor::check_sequence(
+        let withheld = match floor::check_sequence(
             self.floors,
             &share.scope_root_name,
             verified.sequence,
@@ -909,19 +914,18 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         )
         .await
         {
-            Ok(()) => {}
-            // ADR 0071 D1: unavailable, not a verdict.
+            Ok(()) => false,
             Err(GateError::Rejected(rejection))
-                if endpoint_failed && below_floor(&rejection.reason) =>
+                if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
             {
-                return None;
+                true
             }
             Err(GateError::Rejected(rejection)) => {
                 report_refusal(events, share, &rejection);
                 return None;
             }
             Err(GateError::Seam(_)) => return None,
-        }
+        };
         let candidate =
             match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await {
                 Ok(candidate) => candidate,
@@ -931,7 +935,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 }
                 Err(GateError::Seam(_)) => return None,
             };
-        Some((candidate, SharedScopeFloors { epoch, cut_epoch }))
+        Some((candidate, SharedScopeFloors { epoch, cut_epoch }, withheld))
     }
 
     /// Open the accepted scope's own folder body, and cache the scope seeds the
@@ -1663,6 +1667,30 @@ mod tests {
             ResolutionClass::Unresolvable
         );
         assert!(!served.reported.get(), "an endpoint failed: no verdict");
+    }
+
+    /// ADR 0071 D1 covers the sequence stage alone. A pre-cut set below both
+    /// the sequence floor and the cut-epoch floor fails stage 2, so it stays a
+    /// trust violation while an endpoint fails.
+    #[test]
+    fn a_pre_cut_set_below_the_sequence_floor_while_an_endpoint_fails_is_reported() {
+        let sharer = sharer_signer();
+        let floors = seeded_floors(SHARER_IDENTITY_PK, 1);
+        block_on(
+            floors.raise_sequence_floor(scope_root_name().as_str().as_bytes(), SERVED_SEQUENCE + 1),
+        )
+        .expect("the floor store answers");
+        let served = ServedScopeRoot::new(&sharer);
+        served.records.fail_endpoint(&served.endpoint);
+
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::Unresolvable
+        );
+        assert!(
+            served.reported.get(),
+            "a commitment fault is a trust verdict"
+        );
     }
 
     /// The control for the two cut tests below: the same seeded read-epoch and
