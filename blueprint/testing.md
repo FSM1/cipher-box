@@ -401,6 +401,10 @@ is not the contract gate.
   appears as an `evaluate` argument in an uploaded trace.
   The device-approval approver signs in with the token of a wallet exchange,
   so its login binds the account and its registration passes (ADR 0058 D3).
+  The account-switch spec signs two owner accounts in on one browser profile.
+  It checks through the UI and the origin's storage that a switch keeps the
+  other account's staging and floors databases and its staged records, and
+  that a forget erases only its own account.
 - **Desktop mounted e2e** keeps the v1 shape that worked: dev-key headless
   entry, real mounts per platform (FUSE-T SMB, libfuse3, WinFsp), the
   orchestrator scripts and wait-for-mount pattern — scenarios rewritten onto
