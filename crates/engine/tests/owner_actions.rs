@@ -14062,6 +14062,21 @@ fn a_write_rotate_now_over_a_write_cut_landed_elsewhere_still_cuts() {
         granted.write_epoch + 1,
         "one wave in the call"
     );
+    let bystander_tag = recipient_blinded_tag(
+        &kdf::enc_subkey(&BYSTANDER_SECRET),
+        &kdf::enc_subkey(&SECRET).public(),
+        after.current_root.as_str().as_bytes(),
+    )
+    .expect("a contributory owner key");
+    assert!(
+        published_grant_section_at(&fx.world, &fx.blocks, &after.current_root)
+            .expect("the moved root")
+            .commitment
+            .entries
+            .iter()
+            .all(|entry| entry.tag != bystander_tag),
+        "the revoked second writer holds no row at the moved root"
+    );
     assert_ne!(after.current_root, granted.current_root);
     assert!(owed_entry(&fx).is_none(), "and device A owes nothing");
 }
@@ -14186,6 +14201,138 @@ fn a_write_rotate_now_after_another_device_cut_rotates_once_more() {
         fx.committed_permission(&after.current_root),
         Some(CorePermission::Write),
         "the grant row stays"
+    );
+    assert!(owed_entry(&fx).is_none(), "and nothing is owed");
+}
+
+/// Device A reads the root before device B revokes the writer, and the writer
+/// then plants at the root. A's cut falls back to the last copy, which is B's
+/// later set, so the cut is refused, retryably, and no wave gives the writer
+/// a fresh write seed.
+#[test]
+fn a_write_rotate_now_over_a_later_set_in_the_last_copy_is_refused() {
+    let mut fx = GrantScenario::new();
+    let (_, _, writer_seed) = write_granted_nested_subtree(&mut fx);
+    drop(fx.world.scheduler.take_spawned_tasks());
+    let (mut device_a, _a_events, _a_tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    let (mut device_b, _b_events, _b_tasks) = fx.second_owner_device();
+    let granted = fx.granted_scope_repoint();
+    let root = granted.current_root.clone();
+    let pre_revoke = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], root.as_str());
+    fx.world
+        .record_store
+        .fail_put_for(folder_pointer(&fx).as_str());
+    assert_eq!(
+        run_across_retries(
+            &fx.world,
+            &mut device_b,
+            Command::Revoke {
+                node: fx.folder,
+                recipient_identity_public_key: recipient_identity()
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+            }
+        ),
+        Ok(CommandOutcome::Done),
+        "device B cuts the writer, and its wave stalls"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(folder_pointer(&fx).as_str());
+    // Device A's command read still meets the root from before the revoke.
+    serve_the_walk_one_cut_behind(&fx, &root, pre_revoke);
+    let cadence = device_a.profile().poll_cadence;
+    let scheduler = fx.world.scheduler.clone();
+    let folder = fx.folder;
+
+    let outcome = {
+        let mut future = pin!(device_a.command(Command::RotateWriteNow { node: folder }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(
+            future.as_mut().poll(&mut cx).is_pending(),
+            "the first attempt meets device B's later set"
+        );
+        let sequence = sequence_at(&fx.world, &root) + 1;
+        assert_eq!(plant_root_at(&fx, &writer_seed, sequence), root);
+        let mut settled = None;
+        for _ in 0..64 {
+            if let Poll::Ready(outcome) = future.as_mut().poll(&mut cx) {
+                settled = Some(outcome);
+                break;
+            }
+            scheduler.advance(cadence);
+        }
+        settled.expect("the command settles")
+    };
+
+    assert!(
+        matches!(outcome, Err(EngineError::Seam { .. })),
+        "a retryable refusal: {outcome:?}"
+    );
+    assert_eq!(
+        fx.granted_scope_repoint(),
+        granted,
+        "no wave ran, so the writer got no fresh write seed"
+    );
+    assert!(
+        owed_entry(&fx).is_none(),
+        "device A published nothing it owes"
+    );
+}
+
+/// The re-drive runs the owed wave, and the owed delivery after it names a
+/// recipient that is not in the contact book, so the entry drops. The wave
+/// was the one of the call, so the command cuts no second time.
+#[test]
+fn a_write_rotate_now_whose_re_drive_waved_then_dropped_cuts_no_second_time() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let before = fx.granted_scope_repoint();
+    let unknown: [u8; IDENTITY_PUBLIC_LEN] = bystander_identity()
+        .try_into()
+        .expect("a compressed identity key");
+    stage_owed_record(
+        &fx,
+        &OwedRecord::from([(
+            fx.folder,
+            OwedEntry {
+                cut_epoch: fx.cut_epoch(),
+                first_stop: None,
+                steps: vec![
+                    OwedStep::WriteCut {
+                        write_epoch: before.write_epoch + 1,
+                    },
+                    OwedStep::DeliverGrant {
+                        recipient_identity_pk: unknown,
+                        write: true,
+                    },
+                ],
+            },
+        )]),
+    );
+    let (mut fresh, _events, _tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    let folder = fx.folder;
+
+    assert_eq!(
+        run_across_retries(
+            &fx.world,
+            &mut fresh,
+            Command::RotateWriteNow { node: folder }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(
+        fx.granted_scope_repoint().write_epoch,
+        before.write_epoch + 1,
+        "exactly one write wave"
     );
     assert!(owed_entry(&fx).is_none(), "and nothing is owed");
 }

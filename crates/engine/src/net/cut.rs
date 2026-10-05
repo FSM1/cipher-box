@@ -33,8 +33,9 @@ use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CascadeTarget, CommittedSet, CutRotator,
     MAX_ROTATION_ATTEMPTS, NodeBound, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable,
     RevokedCommittedSet, RotateScopePlan, RotateScopeWritePlan, RotationPublishError,
-    ScopeRootIdentity, ScopeRootPublisher, WriteHistory, WriteRotateError, WriteRotationOutcome,
-    bounded, cascade_rotate_scope, derive_write_name, reseal_scope_root, rotate_scope_write,
+    ScopeRootIdentity, ScopeRootPublisher, WriteHistory, WritePublishError, WriteRotateError,
+    WriteRotationOutcome, bounded, cascade_rotate_scope, derive_write_name, reseal_scope_root,
+    rotate_scope_write,
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache,
@@ -247,14 +248,8 @@ where
             if current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger {
                 return Ok(());
             }
-            // A cut that moves no cut epoch past the root's was authorized over
-            // a set the root no longer carries, so publishing it would drop the
-            // rows written since.
-            if cut.commitment.cut_epoch <= current.commitment.cut_epoch {
-                return Err(CascadeError::Publish {
-                    scope_id: scope_root.0,
-                    error: RotationPublishError::LostRace,
-                });
+            if superseded(&current, cut) {
+                return Err(set_superseded(scope_root));
             }
             if self.at_refused_root() {
                 return Err(resolve_failed(ResolveFailure::Rejected));
@@ -347,12 +342,15 @@ where
                 .resolve_root(&net, &scope)
                 .await
                 .map_err(resolve_failed)?;
+            let moved = self.root_reads.moved_root.borrow().is_some();
+            if !moved && superseded(&current, cut) {
+                return Err(set_superseded(scope_root));
+            }
             if self.at_refused_root() {
                 return Err(resolve_failed(ResolveFailure::Rejected));
             }
             // At the moved root the wave already re-minted the cut set under the
             // new name; the cut still withholds its recipients.
-            let moved = self.root_reads.moved_root.borrow().is_some();
             let (commitment, commitment_sig, grant_ledger) = if moved {
                 (
                     &current.commitment,
@@ -427,6 +425,15 @@ where
                     .resolve_root(&self.rotation_net(), &scope)
                     .await
                     .map_err(resolve_failed)?;
+                // The wave re-mints the authorized set, so a root, or a last
+                // copy, that carries a later one stops it.
+                if superseded(&current, cut) {
+                    return Err(WriteRotateError::Publish {
+                        stage: "republish",
+                        node_id: scope_root.0,
+                        error: WritePublishError::LostRace,
+                    });
+                }
                 // The durable floor is the owner-vouched `minReadEpoch` the re-point
                 // carries; a scope that has never been rotated has none, and its record's
                 // own epoch is the floor a reader would derive.
@@ -507,5 +514,21 @@ where
             });
         }
         Ok(outcome)
+    }
+}
+
+/// Whether `current` carries a set other than `cut`'s at `cut`'s cut epoch or
+/// above: another cut or row landed after the cut was authorized, and running
+/// it would drop that work.
+fn superseded(current: &CascadeTarget, cut: &RevokedCommittedSet) -> bool {
+    (current.commitment != cut.commitment || current.grant_ledger != cut.grant_ledger)
+        && current.commitment.cut_epoch >= cut.commitment.cut_epoch
+}
+
+/// The retryable refusal of a cut whose set [`superseded`] names.
+fn set_superseded(scope_root: NodeId) -> CascadeError {
+    CascadeError::Publish {
+        scope_id: scope_root.0,
+        error: RotationPublishError::LostRace,
     }
 }

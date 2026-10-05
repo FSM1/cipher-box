@@ -24,7 +24,7 @@ use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Public;
 
 use super::cascade::{CascadeError, CascadeOutcome, CascadeTarget};
-use super::rotate::{RotateError, RotationOutcome};
+use super::rotate::{RotateError, RotationOutcome, RotationPublishError};
 use super::rotate_write::{WriteRotateError, WriteRotationOutcome};
 use crate::facade::NodeId;
 use crate::grants::ledger::{AuthorityViolation, enforce_committed_ledger};
@@ -843,6 +843,21 @@ impl RotateOnCutError {
         }
     }
 
+    /// Whether the first step found a later set at the root, which no wave
+    /// run off this cut may write over.
+    fn is_superseded_set(&self) -> bool {
+        matches!(
+            self,
+            RotateOnCutError::PublishCut(CascadeError::Publish {
+                error: RotationPublishError::LostRace,
+                ..
+            }) | RotateOnCutError::Read(CascadeError::Publish {
+                error: RotationPublishError::LostRace,
+                ..
+            })
+        )
+    }
+
     /// [`WriteRotateError::is_unreadable`] on the write plane.
     pub fn is_unreadable(&self) -> bool {
         matches!(
@@ -901,7 +916,9 @@ pub async fn rotate_on_cut<R: CutRotator>(
     };
     let read = match first {
         Ok(read) => read,
-        Err(_) if cut.planes.write && rotator.root_fell_back() => {
+        Err(error)
+            if cut.planes.write && rotator.root_fell_back() && !error.is_superseded_set() =>
+        {
             return write_first(rotator, scope_root, cut).await;
         }
         Err(error) => return Err(error),

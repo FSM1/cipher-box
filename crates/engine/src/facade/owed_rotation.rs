@@ -107,7 +107,10 @@ pub(crate) enum Redriven {
         waved: bool,
     },
     /// An entry stood whose work can never land, and the re-drive dropped it.
-    Dropped,
+    Dropped {
+        /// The re-drive ran a name wave of its own before the drop.
+        waved: bool,
+    },
     /// An entry stands still.
     StillOwed,
     /// An entry stands whose cut never landed. A command may run the cut
@@ -253,15 +256,20 @@ where
     /// Settle one re-drive of `scope`'s entry. An entry whose work can never
     /// land is dropped, and the host is told once why: only after the drop is
     /// durable, so a later pass that drops it again is the one that tells.
-    async fn settle_redrive(&self, scope: NodeId, redriven: Result<bool, OwedStop>) -> Redriven {
+    async fn settle_redrive(
+        &self,
+        scope: NodeId,
+        redriven: Result<(), OwedStop>,
+        waved: bool,
+    ) -> Redriven {
         match redriven {
-            Ok(waved) => Redriven::Finished { waved },
+            Ok(()) => Redriven::Finished { waved },
             Err(stop) if stop.terminal && self.owed().clear(scope).await.is_ok() => {
                 let _ = self.events.unbounded_send(Event::RotationWorkAbandoned {
                     scope_root: scope,
                     detail: stop.detail,
                 });
-                Redriven::Dropped
+                Redriven::Dropped { waved }
             }
             Err(stop) => {
                 let not_landed = stop.not_landed();
@@ -503,8 +511,9 @@ where
         else {
             return Ok(Redriven::NoEntry);
         };
-        let redriven = self.redrive_entry(sites, scope, entry).await;
-        Ok(self.settle_redrive(scope, redriven).await)
+        let waved = Cell::new(false);
+        let redriven = self.redrive_entry(sites, scope, entry, &waved).await;
+        Ok(self.settle_redrive(scope, redriven, waved.get()).await)
     }
 
     /// Drop the share pointer owed to `recipient` at `scope`.
@@ -582,7 +591,7 @@ where
         match redriven {
             Redriven::Finished { .. } => Ok(()),
             Redriven::StillOwed | Redriven::NotLanded => self.require_owed_cut(scope).await,
-            Redriven::NoEntry | Redriven::Dropped => Err(shown),
+            Redriven::NoEntry | Redriven::Dropped { .. } => Err(shown),
         }
     }
 
@@ -594,7 +603,8 @@ where
         sites: &impl ConversionSites,
         scope: NodeId,
         entry: OwedEntry,
-    ) -> Result<bool, OwedStop> {
+        waved: &Cell<bool>,
+    ) -> Result<(), OwedStop> {
         // The first step reuses the scope the check read: nothing published
         // since.
         let mut read = None;
@@ -609,7 +619,7 @@ where
             // re-drive signs that cut again.
             if published.fell_back && copy_epoch.checked_add(1) == Some(entry.cut_epoch) {
                 return self
-                    .redrive_recut(sites, scope, &entry.steps, published)
+                    .redrive_recut(sites, scope, &entry.steps, published, waved)
                     .await;
             }
             if copy_epoch < entry.cut_epoch {
@@ -622,7 +632,6 @@ where
             read = Some(published);
         }
         let reordered = steps != entry.steps;
-        let mut waved = false;
         for (at, step) in steps.iter().enumerate() {
             let mut read = read.take();
             let cut_step = match step {
@@ -634,7 +643,7 @@ where
                 let published = self.owed_scope_or(sites, scope, name, read, true).await?;
                 if published.fell_back && !published.current.commitment.entries.is_empty() {
                     return self
-                        .redrive_recut(sites, scope, &steps[at..], published)
+                        .redrive_recut(sites, scope, &steps[at..], published, waved)
                         .await;
                 }
                 read = Some(published);
@@ -649,8 +658,7 @@ where
                         .await?;
                 }
                 OwedStep::WriteCut { write_epoch } => {
-                    waved |= self
-                        .redrive_write_cut(sites, scope, *write_epoch, read)
+                    self.redrive_write_cut(sites, scope, *write_epoch, read, waved)
                         .await?;
                 }
                 OwedStep::DeliverGrant {
@@ -675,7 +683,7 @@ where
                 .map_err(|e| OwedStop::of("owed-cut-epoch-floor", &EngineError::from_seam(e)))?;
         }
         let _ = self.owed().clear(scope).await;
-        Ok(waved)
+        Ok(())
     }
 
     /// Run the cut steps of `remaining` again as one cut of every row of the
@@ -688,7 +696,8 @@ where
         scope: NodeId,
         remaining: &[OwedStep],
         published: OwedScope,
-    ) -> Result<bool, OwedStop> {
+        waved: &Cell<bool>,
+    ) -> Result<(), OwedStop> {
         let step = "owed-cut";
         let stop = |e: EngineError| OwedStop::of(step, &e);
         let OwedScope {
@@ -718,7 +727,7 @@ where
             .await
             .map_err(|e| stop(EngineError::from_seam(e)))?
         else {
-            return Ok(false);
+            return Ok(());
         };
         self.owed()
             .rerun(
@@ -755,8 +764,8 @@ where
             )
             .await
             .map_err(cut_stop)?;
-        let waved = report.write.is_some();
         if let Some(write) = report.write {
+            waved.set(true);
             floor::advance_write_epoch_on_sight(self.floors, &scope.0, write.new_write_epoch)
                 .await
                 .map_err(|e| stop(EngineError::from_seam(e)))?;
@@ -771,7 +780,7 @@ where
             .await
             .map_err(|e| OwedStop::of("owed-cut-epoch-floor", &EngineError::from_seam(e)))?;
         let _ = self.owed().clear(scope).await;
-        Ok(waved)
+        Ok(())
     }
 
     /// The scope root at `node` where its owner-signed pointer vouches for it,
@@ -978,7 +987,8 @@ where
         node: NodeId,
         write_epoch: u64,
         read: Option<OwedScope>,
-    ) -> Result<bool, OwedStop> {
+        waved: &Cell<bool>,
+    ) -> Result<(), OwedStop> {
         let step = "owed-write-cut";
         let stop = |e: EngineError| OwedStop::of(step, &e);
         let OwedScope {
@@ -988,7 +998,7 @@ where
             pointer_placed,
             ..
         } = self.owed_scope_or(sites, node, step, read, true).await?;
-        let (root_name, landed_epoch, waved) = if current.write_epoch >= write_epoch {
+        let (root_name, landed_epoch) = if current.write_epoch >= write_epoch {
             // A landed wave re-points the scope pointer, and the floor never
             // takes an epoch only the root read off the wire states.
             if !pointer_placed {
@@ -997,7 +1007,6 @@ where
             (
                 parsed_scope_name(&target.scope.ipns_name).map_err(stop)?,
                 current.write_epoch,
-                false,
             )
         } else if current.write_epoch.checked_add(1) == Some(write_epoch) {
             let scope_root_name = parsed_scope_name(&target.scope.ipns_name).map_err(stop)?;
@@ -1013,7 +1022,8 @@ where
                 .map_err(cut_stop)?
                 .write
                 .ok_or_else(|| OwedStop::refused(OWED_WAVE_NOT_RUN))?;
-            (write.new_root_name, write.new_write_epoch, true)
+            waved.set(true);
+            (write.new_root_name, write.new_write_epoch)
         } else {
             return Err(OwedStop::refused(OWED_WAVE_AT_ANOTHER_EPOCH));
         };
@@ -1026,7 +1036,7 @@ where
                 .await
                 .map_err(stop)?;
         }
-        Ok(waved)
+        Ok(())
     }
 
     /// Post the share pointer a grant still owes its recipient, at the name the

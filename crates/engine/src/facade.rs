@@ -1972,8 +1972,9 @@ pub enum Command {
     /// Run a write-scope cut of a scope below the vault root from its
     /// published state (owner-only), so any owner device finishes a write cut
     /// another device left owed (ADR 0063 consequence 6). It runs one write
-    /// wave in the call, by the re-drive of this device's own entry (ADR 0063
-    /// D5) or by a new cut, and refuses retryably while work stays owed.
+    /// wave in the call, by the re-drive of this device's own entry or by a new
+    /// cut. Work owed before the cut refuses retryably; a wave that stops after
+    /// the cut set lands is owed (ADR 0063 D5).
     RotateWriteNow {
         /// The scope root to cut.
         #[cfg_attr(
@@ -7690,11 +7691,13 @@ where {
         let pass = self.conversion_pass(session, api, &pass_keys);
         // One write wave runs in this call: the re-drive's own, or the cut below.
         match pass.redrive_scope(&self.sites(session, api), node).await? {
-            Redriven::Finished { waved: true } => return Ok(()),
+            Redriven::Finished { waved: true } | Redriven::Dropped { waved: true } => {
+                return Ok(());
+            }
             Redriven::StillOwed => return Err(EngineError::rotation_work_owed()),
             Redriven::Finished { waved: false }
             | Redriven::NoEntry
-            | Redriven::Dropped
+            | Redriven::Dropped { waved: false }
             | Redriven::NotLanded => {}
         }
         let keys = OwnerActionKeys::new(session);
@@ -8201,7 +8204,7 @@ where {
             (
                 Redriven::NoEntry
                 | Redriven::Finished { .. }
-                | Redriven::Dropped
+                | Redriven::Dropped { .. }
                 | Redriven::NotLanded,
                 _,
             ) => {}
