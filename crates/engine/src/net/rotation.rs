@@ -464,6 +464,15 @@ const FOREIGN_VERSION_STOPS: &str = concat!(
     "so the owner rotation stops",
 );
 
+/// The trust-event text for a last copy whose envelope names another node.
+const OTHER_NODE_STOPS: &str = "the last copy names another node, so the owner rotation stops";
+
+/// The trust-event text for a fallback that runs on the last copy.
+const LAST_COPY_RUNS: &str = concat!(
+    "the owner rotation runs on the last copy that passed the gate and ",
+    "drops what a writer published after it",
+);
+
 /// When a root read under a [`RootFallback`] falls back on a cause that a
 /// lagging or bad endpoint can give (ADR 0068 D1).
 #[derive(Clone, Copy)]
@@ -547,12 +556,11 @@ impl<'a> RootFallback<'a> {
             verdict,
         ))
         .await;
-        // The rotation runs only on a copy that names this scope and that
-        // `Observed::gated` admits.
         let stop = match &copy {
-            Ok(root) if root.envelope.id == scope_id && root.observed.is_ok() => None,
+            Ok(root) if root.reseals_as(&scope_id) => None,
             Ok(root) if root.envelope.id == scope_id => Some(FOREIGN_VERSION_STOPS),
-            _ => Some(NO_COPY_STOPS),
+            Ok(_) => Some(OTHER_NODE_STOPS),
+            Err(_) => Some(NO_COPY_STOPS),
         };
 
         if this
@@ -566,10 +574,7 @@ impl<'a> RootFallback<'a> {
                 format_args!(
                     "scope root [{}] refused at sequence {refused_sequence}; {}",
                     hex_lower(&this.scope_id),
-                    stop.unwrap_or(
-                        "the owner rotation runs on the last copy that passed the gate and \
-                         drops what a writer published after it"
-                    )
+                    stop.unwrap_or(LAST_COPY_RUNS)
                 ),
             );
         }
@@ -784,6 +789,15 @@ struct GatedScopeRoot {
 }
 
 impl GatedScopeRoot {
+    /// Whether a re-seal or a republish of `scope_id` can build on this root.
+    /// The root gate binds `envelope.scope` but not `envelope.id`, and every
+    /// AAD a re-seal authors binds the id, so a root whose record claims
+    /// another node would be re-sealed under a key no reader re-derives. A
+    /// republish also needs an `Observed`.
+    fn reseals_as(&self, scope_id: &[u8; 16]) -> bool {
+        self.envelope.id == *scope_id && self.observed.is_ok()
+    }
+
     /// A copy bound to `expected_child`, when the caller expects one.
     fn names_child(&self, expected_child: Option<[u8; 16]>) -> bool {
         expected_child.is_none_or(|id| self.envelope.id == id && self.section.ascent_link.is_some())
@@ -2625,6 +2639,9 @@ where
             write_epoch,
             over_sequence,
         } = self.gated_write_plane(scope, anchor).await?;
+        if !root.reseals_as(&scope.scope_id) {
+            return Err(ResolveFailure::Rejected);
+        }
         let observed = root_observed(&root, over_sequence).map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
             write_epoch: _,
@@ -2636,13 +2653,6 @@ where
             read_scope_seed,
             write_scope_seed,
         } = root;
-        // The root gate binds `envelope.scope` but not `envelope.id`, and every
-        // AAD a re-seal of this target authors binds the id — so a root whose
-        // record claims another node would be re-sealed under a key no reader
-        // re-derives (the write wave imposes the same binding).
-        if envelope.id != scope.scope_id {
-            return Err(ResolveFailure::Rejected);
-        }
         let Some(write_scope_seed) = write_scope_seed else {
             return Err(ResolveFailure::Unavailable);
         };
@@ -5100,17 +5110,10 @@ where
             .gated_scope_root(name, sequence, record_bytes, endpoint_failed)
             .await
             .map_err(|verdict| wave_read_verdict(verdict.into()))?;
-        gated
-            .observed
-            .as_ref()
-            .map_err(|_| WritePublishError::Rejected)?;
-        let envelope = gated.envelope;
-        // The root gate binds `envelope.scope` but not `envelope.id`, and every
-        // AAD this republish authors binds the id — so a root whose record claims
-        // another node would be re-sealed under a key no reader re-derives.
-        if envelope.id != self.scope_id {
+        if !gated.reseals_as(&self.scope_id) {
             return Err(WritePublishError::Rejected);
         }
+        let envelope = gated.envelope;
         let read_scope_seed = gated.read_scope_seed;
         let (write_scope_seed, write_epoch) = match resumed_write_epoch {
             Some(epoch) => (
@@ -5272,11 +5275,7 @@ where
             .gated_scope_root(name, verified.sequence, &record_bytes, endpoint_failed)
             .await
             .map_err(ResolveFailure::from)?;
-        gated
-            .observed
-            .as_ref()
-            .map_err(|_| ResolveFailure::Rejected)?;
-        if gated.envelope.id != self.scope_id {
+        if !gated.reseals_as(&self.scope_id) {
             return Err(ResolveFailure::Rejected);
         }
         Ok(gated)
@@ -9116,7 +9115,7 @@ mod tests {
         assert!(matches!(
             &events[0],
             Event::AttributableAbuse { description }
-                if description.ends_with(NO_COPY_STOPS)
+                if description.ends_with(OTHER_NODE_STOPS)
         ));
     }
 
