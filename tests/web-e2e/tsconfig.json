@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
     // `vite/client` types the `import.meta.env` reads in the `apps/web` source
     // this suite types its window contract against.
     "types": ["node", "vite/client"],
