@@ -98,20 +98,23 @@ async function storesOf(page: Page, accountId: string): Promise<AccountStores> {
 }
 
 /**
- * Polls `accountId`'s stores until `check` passes on two reads in a row: the
- * sweeps and the erase run detached from the route change.
+ * Polls `accountId`'s stores until `check` passes and the read equals the one a
+ * poll interval before it: the sweeps and the erase run detached from the
+ * route change.
  */
 async function storesUntil(
   page: Page,
   accountId: string,
   check: (stores: AccountStores) => void
 ): Promise<AccountStores> {
+  let previous: AccountStores | undefined;
   let latest!: AccountStores;
   await expect(async () => {
-    const first = await storesOf(page, accountId);
-    check(first);
+    const prior = previous;
     latest = await storesOf(page, accountId);
-    expect(latest).toEqual(first);
+    previous = latest;
+    check(latest);
+    expect(prior).toEqual(latest);
   }).toPass({ timeout: 30_000, intervals: [500] });
   return latest;
 }
