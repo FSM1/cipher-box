@@ -74,6 +74,16 @@ export class InvitePage {
 
   /** A join, or "open folder", lands on the shared folder in the vault browser. */
   async expectFolderOpened(timeout?: number): Promise<void> {
-    await expect(this.page).toHaveURL(/\/files\/[0-9a-f]{32}$/, { timeout });
+    // A boolean rather than `toHaveURL`, whose failure prints the address and
+    // so the fragment that is the link's capability.
+    await expect
+      .poll(
+        () => {
+          const url = new URL(this.page.url());
+          return /^\/files\/[0-9a-f]{32}$/.test(url.pathname) && url.hash === '';
+        },
+        { timeout, message: 'the join did not land on the shared folder' }
+      )
+      .toBe(true);
   }
 }
