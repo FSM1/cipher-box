@@ -537,6 +537,9 @@ impl<'a> RootFallback<'a> {
             verdict,
         ))
         .await;
+        // A copy at an envelope version this build does not author is refused
+        // at `root_source`, so the rotation does not run on it.
+        let runs = copy.as_ref().is_ok_and(|root| root.observed.is_ok());
 
         if this
             .reported
@@ -549,16 +552,16 @@ impl<'a> RootFallback<'a> {
                 format_args!(
                     "scope root [{}] refused at sequence {refused_sequence}; {}",
                     hex_lower(&this.scope_id),
-                    match copy {
-                        Ok(_) =>
-                            "the owner rotation runs on the last copy that passed the gate and \
-                             drops what a writer published after it",
-                        Err(_) => "no copy passes the gate, so the owner rotation stops",
+                    if runs {
+                        "the owner rotation runs on the last copy that passed the gate and \
+                         drops what a writer published after it"
+                    } else {
+                        "no copy passes the gate, so the owner rotation stops"
                     }
                 ),
             );
         }
-        if copy.is_ok() {
+        if runs {
             this.fell_back.set(true);
         }
         copy
@@ -8841,20 +8844,33 @@ mod tests {
         scope_id: [u8; 16],
         parent_node_seed: Option<[u8; 32]>,
     ) -> (Harness<InMemoryRecordStore>, OwnerRootFixture) {
-        let good = owner_root_fixture(OwnerRootSpec {
-            writer_pseudonym: &owner_root_pseudonym(),
-            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
-            owner_identity: &owner_identity(),
-            owner_enc: &owner_enc().public(),
-            scope_id,
-            root_id: scope_id,
-            children: Vec::new(),
-            child_scope_index: Vec::new(),
-            parent_node_seed,
-            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
-            write_history_link: Vec::new(),
-            grants: Vec::new(),
-        });
+        wedged_scope_at(scope_id, parent_node_seed, ENVELOPE_V)
+    }
+
+    /// [`wedged_scope`] with the last copy at envelope version `v`.
+    fn wedged_scope_at(
+        scope_id: [u8; 16],
+        parent_node_seed: Option<[u8; 32]>,
+        v: u64,
+    ) -> (Harness<InMemoryRecordStore>, OwnerRootFixture) {
+        let good = crate::testkit::owner_root_fixture_sealed(
+            OwnerRootSpec {
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+                owner_identity: &owner_identity(),
+                owner_enc: &owner_enc().public(),
+                scope_id,
+                root_id: scope_id,
+                children: Vec::new(),
+                child_scope_index: Vec::new(),
+                parent_node_seed,
+                owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+                write_history_link: Vec::new(),
+                grants: Vec::new(),
+            },
+            OWNER_ROOT_EPOCH,
+            v,
+        );
         let harness = Harness::plain();
         harness.stage(scope_id, &good, Some(OWNER_ROOT_EPOCH));
         // One earlier rotation read, which raises this name's sequence floor
@@ -8972,6 +8988,29 @@ mod tests {
         assert!(net.fell_back());
         assert_eq!(harness.events().len(), 1, "one trust event");
         assert_eq!(sequence_at(&harness, &good.name), Some(u64::MAX));
+    }
+
+    /// A last copy at an envelope version this build does not author passes
+    /// the gate, but the rotation refuses it, so the trust event and the
+    /// fallback mark say the rotation stops.
+    #[test]
+    fn a_cut_does_not_fall_back_on_a_last_copy_at_a_foreign_envelope_version() {
+        let (harness, good) = wedged_scope_at(SCOPE, None, ENVELOPE_V + 1);
+        let reported = RootReports::default();
+        let mut net = harness.net(&[]);
+        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
+
+        let read = block_on(net.gated_root(SCOPE, &good.name)).expect("the copy passes the gate");
+
+        assert!(read.root.observed.is_err(), "no publish builds on the copy");
+        assert!(!net.fell_back());
+        let events = harness.events();
+        assert_eq!(events.len(), 1, "one trust event");
+        assert!(matches!(
+            &events[0],
+            Event::AttributableAbuse { description }
+                if description.ends_with("no copy passes the gate, so the owner rotation stops")
+        ));
     }
 
     /// ADR 0068 D1: a record below the sequence floor is what a lagging
