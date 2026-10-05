@@ -77,6 +77,7 @@ use crate::net::record_publish::{
     HeadBinding, MirrorLeg, RecordPublishError, RecordPublishRequest, preflight,
     publish_record_placed,
 };
+use crate::net::resolve::unavailable_below_floor;
 use crate::net::retire::{
     Acknowledged, LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger,
     drain_owed_retires, linked_nowhere, orphaned_head, retire,
@@ -4430,7 +4431,7 @@ where
         let fault = |error| match error {
             GateError::Seam(_) => Halt::DeletePlaneUnavailable,
             GateError::Rejected(rejection)
-                if endpoint_failed && crate::net::resolve::below_floor(&rejection.reason) =>
+                if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
             {
                 Halt::DeletePlaneUnavailable
             }

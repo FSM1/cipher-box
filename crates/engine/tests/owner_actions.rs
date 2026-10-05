@@ -13018,6 +13018,86 @@ fn a_preview_whose_pointer_does_not_answer_is_unresolvable() {
     assert!(preview.listing.is_empty());
 }
 
+/// ADR 0071 D1: endpoint B lags the joined root and endpoint A fails, so the
+/// preview reads the root as unresolvable. With A up and serving B's old
+/// record too, the old record is a trust violation.
+#[test]
+fn a_preview_of_a_lagging_root_while_an_endpoint_fails_is_unresolvable() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment.clone()),
+        Ok(CommandOutcome::Done)
+    );
+    let endpoints = fx.world.record_store.endpoints();
+    let (a, b) = (endpoints[0].clone(), endpoints[1].clone());
+    fx.world.record_store.fail_put_endpoint(&b);
+    create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "drafts",
+    );
+    fx.world.record_store.heal_put_endpoint(&b);
+    tick(&fx.world, &holder, &mut holder_tasks);
+    let name = write_name(fx.folder);
+    let old = fx
+        .world
+        .record_store
+        .record_at(&b, name.as_str())
+        .expect("B holds the old root");
+    fx.world.record_store.fail_endpoint(&a);
+
+    let seen = preview(&holder, &fragment).expect("an endpoint failed: no verdict");
+    assert_eq!(seen.state, LinkPreviewState::Unresolvable);
+
+    fx.world.record_store.heal_endpoint(&a);
+    fx.world.record_store.seed_record(&a, name.as_str(), old);
+    assert!(matches!(
+        preview(&holder, &fragment),
+        Err(EngineError::TrustViolation { .. })
+    ));
+}
+
+/// The sequence stage runs ahead of the link verdict: a rollback of the
+/// joined root to a set from before the link (one that commits an older link
+/// only) is a trust violation, never a revoked link. While an endpoint fails,
+/// it is unresolvable (ADR 0071 D1).
+#[test]
+fn a_rollback_to_a_root_from_before_the_link_is_no_revoked_link() {
+    let mut fx = GrantScenario::new();
+    fx.mint_link();
+    let name = write_name(fx.folder);
+    let before_link = fx
+        .world
+        .record_store
+        .record_at(&fx.world.record_store.endpoints()[0], name.as_str())
+        .expect("the folder root is published");
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment.clone()),
+        Ok(CommandOutcome::Done)
+    );
+    let endpoints = fx.world.record_store.endpoints();
+    for endpoint in &endpoints {
+        fx.world
+            .record_store
+            .seed_record(endpoint, name.as_str(), before_link.clone());
+    }
+
+    assert!(matches!(
+        preview(&holder, &fragment),
+        Err(EngineError::TrustViolation { .. })
+    ));
+
+    fx.world.record_store.fail_endpoint(&endpoints[0]);
+    let seen = preview(&holder, &fragment).expect("an endpoint failed: no verdict");
+    assert_eq!(seen.state, LinkPreviewState::Unresolvable);
+}
+
 /// ADR 0028 D5: a link this account joined previews as joined, names the
 /// folder the join bookmarked, and the root its pass adopted still lists.
 #[test]
