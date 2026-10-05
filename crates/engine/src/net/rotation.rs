@@ -457,6 +457,13 @@ pub(crate) struct RootFallback<'a> {
 /// The trust-event text for a fallback that finds no copy to run on.
 const NO_COPY_STOPS: &str = "no copy passes the gate, so the owner rotation stops";
 
+/// The trust-event text for a last copy at an envelope version this build
+/// does not author.
+const FOREIGN_VERSION_STOPS: &str = concat!(
+    "the last copy is at an envelope version this build does not author, ",
+    "so the owner rotation stops",
+);
+
 /// When a root read under a [`RootFallback`] falls back on a cause that a
 /// lagging or bad endpoint can give (ADR 0068 D1).
 #[derive(Clone, Copy)]
@@ -543,13 +550,9 @@ impl<'a> RootFallback<'a> {
         // The rotation runs only on a copy that names this scope and that
         // `Observed::gated` admits.
         let stop = match &copy {
-            Ok(root) if root.envelope.id != scope_id => Some(NO_COPY_STOPS),
-            Ok(root) if root.observed.is_err() => Some(
-                "the last copy is at an envelope version this build does not author, so the \
-                 owner rotation stops",
-            ),
-            Ok(_) => None,
-            Err(_) => Some(NO_COPY_STOPS),
+            Ok(root) if root.envelope.id == scope_id && root.observed.is_ok() => None,
+            Ok(root) if root.envelope.id == scope_id => Some(FOREIGN_VERSION_STOPS),
+            _ => Some(NO_COPY_STOPS),
         };
 
         if this
@@ -8922,19 +8925,11 @@ mod tests {
         scope_id: [u8; 16],
         parent_node_seed: Option<[u8; 32]>,
     ) -> (Harness<InMemoryRecordStore>, OwnerRootFixture) {
-        wedged_scope_at(scope_id, parent_node_seed, ENVELOPE_V)
+        wedged_scope_of(scope_id, scope_id, parent_node_seed, ENVELOPE_V)
     }
 
-    /// [`wedged_scope`] with the last copy at envelope version `v`.
-    fn wedged_scope_at(
-        scope_id: [u8; 16],
-        parent_node_seed: Option<[u8; 32]>,
-        v: u64,
-    ) -> (Harness<InMemoryRecordStore>, OwnerRootFixture) {
-        wedged_scope_of(scope_id, scope_id, parent_node_seed, v)
-    }
-
-    /// [`wedged_scope_at`] with both records claiming node `root_id`.
+    /// [`wedged_scope`] with both records claiming node `root_id` and the last
+    /// copy at envelope version `v`.
     fn wedged_scope_of(
         scope_id: [u8; 16],
         root_id: [u8; 16],
@@ -9085,7 +9080,7 @@ mod tests {
     /// fallback mark say the rotation stops.
     #[test]
     fn a_cut_does_not_fall_back_on_a_last_copy_at_a_foreign_envelope_version() {
-        let (harness, good) = wedged_scope_at(SCOPE, None, ENVELOPE_V + 1);
+        let (harness, good) = wedged_scope_of(SCOPE, SCOPE, None, ENVELOPE_V + 1);
         let reported = RootReports::default();
         let mut net = harness.net(&[]);
         net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
@@ -9099,10 +9094,7 @@ mod tests {
         assert!(matches!(
             &events[0],
             Event::AttributableAbuse { description }
-                if description.ends_with(
-                    "the last copy is at an envelope version this build does not author, so \
-                     the owner rotation stops"
-                )
+                if description.ends_with(FOREIGN_VERSION_STOPS)
         ));
     }
 
