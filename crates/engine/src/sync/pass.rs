@@ -974,7 +974,7 @@ where
         // command that could overrule that.
         if bin_retention_days(&state.settings_summary) == 0 {
             state.observed_unlinks.borrow_mut().clear();
-            state.capture_proofs.borrow_mut().clear();
+            state.capture_proofs.take();
         }
         root_verdict
     }

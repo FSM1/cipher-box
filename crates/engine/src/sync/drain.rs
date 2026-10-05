@@ -217,12 +217,13 @@ fn deletes_a_known_scope_root(scope: &DrainScope<'_>, op: &Op) -> bool {
         && scope.known_scope_roots.contains(&op.target)
 }
 
-/// The pass's own end, then the tick's own ends, which may hold it again.
+/// The pass's own end, then the tick's other own ends.
 fn own_ends<'s, 'e>(
     scope: &'s DrainScope<'e>,
     ends: &'s [ScopeEnd<'e>],
 ) -> impl Iterator<Item = &'s ScopeEnd<'e>> {
-    std::iter::once(&scope.source).chain(ends)
+    std::iter::once(&scope.source)
+        .chain(ends.iter().filter(move |end| end.root != scope.source.root))
 }
 
 /// Whether `child` is a node of this scope rather than a scope root. A granted
@@ -974,10 +975,6 @@ pub(crate) struct CaptureProofs {
 }
 
 impl CaptureProofs {
-    pub(crate) fn clear(&mut self) {
-        *self = Self::default();
-    }
-
     /// The proofs of the scope at `root`, made empty when it has none.
     fn scope_mut(&mut self, root: NodeId) -> &mut ScopeProofs {
         self.scopes.entry(root).or_default()
@@ -5087,7 +5084,14 @@ where
             return;
         }
         self.prove_captures(scope, ends, &eligible).await;
-        if eligible.is_empty() {
+        let has_proved = self
+            .cells
+            .capture_proofs
+            .borrow()
+            .scopes
+            .get(&scope.source.root)
+            .is_some_and(|proofs| !proofs.proved.is_empty());
+        if !has_proved {
             return;
         }
         let Ok(root) = self.load_scope_root(&scope.source).await else {
@@ -5157,6 +5161,7 @@ where
                 continue;
             }
             let sealing_root = other_root.as_deref().unwrap_or(&root);
+            let bin_name = opened.node.name.as_str().as_bytes().to_vec();
             if self
                 .rekey_into_bin(
                     scope,
@@ -5177,10 +5182,7 @@ where
             }
             index.entries.push(BinEntry::new(
                 unlinked.node.0,
-                end.write_name(&unlinked.node.0)
-                    .as_str()
-                    .as_bytes()
-                    .to_vec(),
+                bin_name,
                 unlinked.kind,
                 unlinked.parent.0,
                 unlinked.name.clone(),
@@ -5519,22 +5521,19 @@ where
     ///
     /// A node the base still links did not leave the tree, and binning it would
     /// seal a live node under a key no reader derives. A capture of a proved
-    /// scope root drops unbinned. A name longer than this build ever authors
-    /// is a peer's, and no entry carries it. So is an `ipnsName` that no own
-    /// end derives for the node. One that another own end derives, as a write
-    /// grant's name wave leaves it, waits for [`Self::sealing_end`] to read
-    /// the record at the name the capture's scope derives. With no vault end
-    /// this tick, an end that derives the name may be missing, so such a
-    /// capture is held, not eligible, for a tick that has the vault end.
+    /// scope root, a name longer than this build ever authors, or an
+    /// `ipnsName` no own end derives for the node drops unbinned, the last
+    /// only on a tick with the vault end (blueprint/engine.md "Owner capture").
     fn prune_captures(
         &self,
         scope: &DrainScope<'_>,
         ends: &[ScopeEnd<'_>],
     ) -> BTreeSet<CaptureKey> {
         let base = self.cells.base.borrow();
-        // A grafted pass adopts nothing, so it holds nothing for a later tick.
-        let vault_held =
-            scope.is_grafted() || own_ends(scope, ends).any(|end| end.ascent_node_seed.is_none());
+        // With no vault end, an end that derives a capture's name may be
+        // missing this tick.
+        let wait_for_vault =
+            !scope.is_grafted() && !own_ends(scope, ends).any(|end| end.ascent_node_seed.is_none());
         let mut eligible = BTreeSet::new();
         self.cells.observed_unlinks.borrow_mut().retain(|unlinked| {
             // A capture belongs to whichever pass names its scope. One that no
@@ -5558,7 +5557,7 @@ where
             if derived {
                 eligible.insert(capture_key(unlinked));
             }
-            derived || !vault_held
+            derived || wait_for_vault
         });
         eligible
     }
@@ -5636,7 +5635,9 @@ where
                     let (linked, proved): (BTreeSet<CaptureKey>, BTreeSet<CaptureKey>) = keys
                         .into_iter()
                         .partition(|(node, _)| walk.linked.contains(node));
-                    self.take_captures(root, &linked);
+                    if !linked.is_empty() {
+                        self.take_captures(root, &linked);
+                    }
                     if !walk.blind && !proved.is_empty() {
                         proofs.scope_mut(root).proved.extend(proved);
                     }

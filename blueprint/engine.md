@@ -802,8 +802,9 @@ the grantee that removed it stops reading it.
   the base does not link just before its re-key, and a capture it gives back
   needs a new walk. A walk past the bound drops the captures of each scope it
   served, those scopes are not walked again in that session, and a scope that
-  holds 1024 captures drops each new one. Residual: such a scope re-keys no orphan, and the grantee that
-  unlinked it keeps its key. Residual: four scopes at 1024 fill the session's
+  holds 1024 captures drops each new one. Residual: such a scope re-keys no
+  orphan, and the grantee that unlinked it keeps its key. Residual: four scopes
+  at 1024 fill the session's
   set of 4096, so a peer with write access to four scopes can make every other
   scope drop its new captures. Residual: a settled proof waits for an adoption
   slot, so its snapshot ages; the risk is low, because an honest move publishes
