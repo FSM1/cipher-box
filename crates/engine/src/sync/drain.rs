@@ -2718,9 +2718,19 @@ where
         if probed_hold_exits(*self.cells.hold.borrow(), op_id, halt) {
             self.release_hold();
         }
-        // A kept op leaves with no notice, as its rebase dead letter does.
-        if matches!(halt, Halt::Permanent(_))
-            && keeps(&op.kind)
+        // A kept op leaves with no notice, as its rebase dead letter does, and
+        // a charged halt spends no budget on a version that landed once. A
+        // scope this device can no longer write is the dead letter of ADR 0069
+        // D3, so it keeps its charge.
+        if matches!(
+            halt,
+            Halt::Permanent(_)
+                | Halt::Attempt
+                | Halt::UploadAttempt
+                | Halt::RecordRefused
+                | Halt::HeadOversized
+                | Halt::ScopeRootNotResealable
+        ) && keeps(&op.kind)
             && self.kept_ids(scope).await.is_ok_and(|kept| kept(op_id, op))
         {
             if self.dequeue_op(op_id).await.is_ok() {

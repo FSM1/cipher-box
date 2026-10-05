@@ -4243,6 +4243,34 @@ fn a_restarted_delete_of_a_refused_root_dead_letters() {
     assert_a_known_root_delete_dead_letters(&mut fx, op_id);
 }
 
+/// A kept create under a root the gate refuses landed before the plant, so a
+/// restart past the attempt budget shows no dead letter for it (ADR 0069 D5).
+#[test]
+fn a_kept_create_under_a_refused_root_shows_no_dead_letter_after_a_restart() {
+    let mut fx = GrantScenario::new();
+    let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let root = fx.granted_scope_repoint().current_root;
+    plant_root_at(&fx, &revokee_seed, sequence_at(&fx.world, &root) + 1);
+
+    restart_owner(&mut fx);
+    for _ in 0..16 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    let dead: Vec<_> = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::DeadLetter { .. }))
+        .collect();
+    assert!(dead.is_empty(), "a landed create is no failure: {dead:?}");
+    assert!(
+        block_on(fx.engine.status())
+            .unwrap()
+            .dead_letters
+            .is_empty()
+    );
+}
+
 /// Restarts the owner on the staged delete `op_id`, queues a later create, and
 /// asserts the delete dead-letters with its target and the create publishes.
 fn assert_a_known_root_delete_dead_letters(

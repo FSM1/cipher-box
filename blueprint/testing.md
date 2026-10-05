@@ -150,7 +150,8 @@ scenario fails the meta-test):
   and a content edit. A rename, a move and a version restore leave at publish,
   so a later writer's change stays. A kept op leaves after the bound of
   ADR 0069 D5, a kept op with no note leaves once the live tree shows it, and a
-  second apply that cannot land leaves with no notice (ADR 0069,
+  second apply that cannot land leaves with no notice, also a kept create
+  under a refused scope root after a restart (ADR 0069,
   `crates/engine/tests/owner_actions.rs`); a body of many
   outranking refs re-walks one time and reads nothing again, and a derived ref
   met after two others is kept, a re-walk keeps the first ref of its own
