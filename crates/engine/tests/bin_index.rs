@@ -738,6 +738,38 @@ fn a_device_that_has_never_adopted_the_bin_record_re_signs_nothing() {
     );
 }
 
+/// The renewal signs only at an exact floor. A load whose floor advance fails
+/// enrols nothing, and the next load that advances the floor enrols the record.
+#[test]
+fn a_bin_record_whose_floor_did_not_advance_is_not_offered_for_renewal() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let author = world.device(b"alice-laptop");
+    let reader = world.device(b"alice-phone");
+    publish(&world, &author, &blocks, &binned(&[1]), 1);
+    // The first sight leaves the floor that the later loads are held to.
+    read(&world, &reader, &blocks, &keys());
+    publish(&world, &author, &blocks, &binned(&[1, 2]), 2);
+
+    reader
+        .floor_store
+        .fail_floor_raises_for(name().as_str().as_bytes());
+    assert!(
+        read(&world, &reader, &blocks, &keys()).renewable.is_none(),
+        "a record above the floor is not this device's to re-sign",
+    );
+
+    reader.floor_store.heal_floors();
+    let renewable = read(&world, &reader, &blocks, &keys())
+        .renewable
+        .expect("the advanced floor admits the record");
+    let record = IpnsRecord::unmarshal(&renewable.record_bytes)
+        .unwrap()
+        .verify(&name())
+        .unwrap();
+    assert_eq!(record.sequence, 2);
+}
+
 /// The renewal re-signs at `floor + 1`, so a record the floor law rejected must
 /// never enter the set: renewing a replay would make it win record selection.
 #[test]
