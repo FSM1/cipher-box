@@ -44,6 +44,11 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   substituted ephemeral key shows other digits and seals a factor the honest
   device cannot open
 - the shipping bundle exposes no introspection hook
+- two owner accounts on one browser profile (`account-switch.spec.ts`): a
+  second account's sign-in keeps the first account's staging, op queue and
+  floors, and reclaims only its snapshot cache; the first account still holds
+  its link and converts the claim a recipient made meanwhile; a forget erases
+  every store of its own account and none of the other
 - the link-first flow across two owner devices (`link-first.spec.ts`), in these
   steps:
   1. device A mints a read link with the owner name on a folder of two entries
