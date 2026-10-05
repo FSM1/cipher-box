@@ -781,9 +781,11 @@ the grantee that removed it stops reading it.
   the move, does not show the new link. So the drain holds the capture and walks
   the whole vault from its root, each proved scope under its own material: it
   reads every node fresh through the gate, then reads each one again, from a
-  read budget the tick shares across its passes. A walk that meets a child it
+  read budget the tick shares across its passes. One walk serves every own
+  scope: each own pass of a tick steps it, and it proves each capture that an
+  own scope of the tick held when it started. A walk that meets a child it
   cannot read, at a name its scope's write seed does not derive or below a
-  scope root with no material this tick, holds every capture of the scope, as a
+  scope root with no material this tick, holds every capture of the walk, as a
   failed read does. Residual: this hold has no exit and sends no event, so a
   writer of the scope, or a ref a name wave left at an old name, holds that
   scope's captures for the session; the per-scope cap bounds them. Residual: a
@@ -798,9 +800,9 @@ the grantee that removed it stops reading it.
   third attempt with no answer starts the walk again on a later pass. The drain
   bins only a capture that a settled walk proved, that no folder names and that
   the base does not link just before its re-key, and a capture it gives back
-  needs a new walk. A scope past the walk bound drops its captures and is not
-  walked again in that session, and a scope that holds 1024 captures drops each
-  new one. Residual: such a scope re-keys no orphan, and the grantee that
+  needs a new walk. A walk past the bound drops the captures of each scope it
+  served, those scopes are not walked again in that session, and a scope that
+  holds 1024 captures drops each new one. Residual: such a scope re-keys no orphan, and the grantee that
   unlinked it keeps its key. Residual: four scopes at 1024 fill the session's
   set of 4096, so a peer with write access to four scopes can make every other
   scope drop its new captures. Residual: a settled proof waits for an adoption

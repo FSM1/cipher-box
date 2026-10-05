@@ -935,8 +935,9 @@ pub(crate) fn hold_captures(set: &RefCell<Vec<UnlinkedChild>>, observed: Vec<Unl
 const MAX_CAPTURE_WALK_READS: usize = 128;
 
 /// The nodes one capture walk may hold. A walk past this bound cannot prove
-/// any capture, so the session drops the scope's captures and walks that scope
-/// no more (blueprint/engine.md "Owner capture").
+/// any capture, so the session drops the captures of each scope the walk
+/// served and walks for those scopes no more (blueprint/engine.md "Owner
+/// capture").
 const MAX_CAPTURE_WALK_NODES: usize = 65_536;
 
 /// A held capture as a proof names it: the node and the stamp its merge minted,
@@ -952,14 +953,42 @@ fn names_node(keys: &BTreeSet<CaptureKey>, node: NodeId) -> bool {
     keys.range((node, 0)..=(node, u64::MAX)).next().is_some()
 }
 
-/// One scope's proof that held captures left the tree.
+/// The session's proofs that held captures left the tree: one vault walk,
+/// which the pass of each own scope steps, and what each scope keeps.
 #[derive(Default)]
 pub(crate) struct CaptureProofs {
-    /// Captures a settled walk proved, which wait for an adoption slot.
-    proved: BTreeSet<CaptureKey>,
     /// The walk under way, if any.
     walk: Option<CaptureWalk>,
-    /// A walk of this scope passed [`MAX_CAPTURE_WALK_NODES`].
+    scopes: BTreeMap<NodeId, ScopeProofs>,
+}
+
+impl CaptureProofs {
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.walk.is_none() && self.scopes.is_empty()
+    }
+
+    /// Proofs that hold an empty entry for the scope at `root`.
+    #[cfg(test)]
+    pub(crate) fn of_scope(root: NodeId) -> Self {
+        Self {
+            walk: None,
+            scopes: BTreeMap::from([(root, ScopeProofs::default())]),
+        }
+    }
+}
+
+/// One scope's share of [`CaptureProofs`].
+#[derive(Default)]
+struct ScopeProofs {
+    /// Captures a settled walk proved, which wait for an adoption slot.
+    proved: BTreeSet<CaptureKey>,
+    /// A walk passed [`MAX_CAPTURE_WALK_NODES`] while this scope held
+    /// captures.
     overflowed: bool,
     /// For a capture whose sealing scope a pass did not find, what its search
     /// knows of each end. At most one entry for each held capture.
@@ -972,7 +1001,7 @@ pub(crate) struct CaptureProofs {
     served: Option<CaptureKey>,
 }
 
-impl CaptureProofs {
+impl ScopeProofs {
     /// Take at most [`MAX_BIN_ADOPTIONS`] proved captures: the stopped ones
     /// first, then in node order after the last one served, so the same
     /// captures do not take every slot on each pass.
@@ -1020,12 +1049,13 @@ struct SealerSearch {
 }
 
 /// A fresh read of every node of the vault, each proved scope under its own
-/// end, then a second read of each, which proves which held captures of one
-/// scope no folder names (blueprint/engine.md "Owner capture"). A node whose second read shows
+/// end, then a second read of each, which proves which held captures no folder
+/// names (blueprint/engine.md "Owner capture"). A node whose second read shows
 /// another record moved during the walk, so the walk is not a snapshot and
 /// starts again.
 struct CaptureWalk {
-    cohort: BTreeSet<CaptureKey>,
+    /// The captures the walk proves, by the scope root that holds them.
+    cohort: BTreeMap<NodeId, BTreeSet<CaptureKey>>,
     /// Each node still to read, with the scope root whose end reads it.
     pending: Vec<(NodeId, NodeId)>,
     seen: BTreeSet<NodeId>,
@@ -1033,8 +1063,7 @@ struct CaptureWalk {
     linked: BTreeSet<NodeId>,
     /// Each node read, as `pending` holds it, with the record read.
     read: Vec<((NodeId, NodeId), RecordMark)>,
-    /// The anchor of each scope the walk entered, from its root's read, but
-    /// the capture's own scope, whose pass holds its anchor.
+    /// The anchor of each scope the walk entered, from its root's read.
     anchors: BTreeMap<NodeId, WalkAnchor>,
     /// How many of `read` the second read has confirmed.
     confirmed: usize,
@@ -1102,12 +1131,12 @@ enum WalkStep {
 
 impl CaptureWalk {
     /// A walk of the whole vault from its root, so a link in a scope above or
-    /// beside the capture's own scope counts. With no vault end this tick, the
-    /// walk reads the capture's own scope and proves nothing.
+    /// beside a capture's own scope counts. With no vault end this tick, the
+    /// walk reads the pass's own scope and proves nothing.
     fn from_vault_root(
         scope: &DrainScope<'_>,
         ends: &[ScopeEnd<'_>],
-        cohort: BTreeSet<CaptureKey>,
+        cohort: BTreeMap<NodeId, BTreeSet<CaptureKey>>,
     ) -> Self {
         let vault = std::iter::once(&scope.source)
             .chain(ends)
@@ -1117,7 +1146,17 @@ impl CaptureWalk {
         walk
     }
 
-    fn new(root: NodeId, cohort: BTreeSet<CaptureKey>) -> Self {
+    /// Keep, of the captures of the scope at `root`, only those in `held`.
+    fn keep(&mut self, root: NodeId, held: &BTreeSet<CaptureKey>) {
+        if let Some(keys) = self.cohort.get_mut(&root) {
+            keys.retain(|key| held.contains(key));
+            if keys.is_empty() {
+                self.cohort.remove(&root);
+            }
+        }
+    }
+
+    fn new(root: NodeId, cohort: BTreeMap<NodeId, BTreeSet<CaptureKey>>) -> Self {
         Self {
             cohort,
             pending: vec![(root, root)],
@@ -1146,7 +1185,7 @@ impl CaptureWalk {
     ) -> bool {
         for child in children {
             let id = NodeId(child.id);
-            if names_node(&self.cohort, id) {
+            if self.cohort.values().any(|keys| names_node(keys, id)) {
                 self.linked.insert(id);
             }
             if ends.iter().any(|below| below.root == id) {
@@ -1610,7 +1649,7 @@ pub(crate) struct DrainCells<'a> {
     pub(crate) cancels: &'a RefCell<UploadCancels>,
     pub(crate) dead_letters: &'a RefCell<RetainedDeadLetters>,
     pub(crate) observed_unlinks: &'a RefCell<Vec<UnlinkedChild>>,
-    pub(crate) capture_proofs: &'a RefCell<BTreeMap<NodeId, CaptureProofs>>,
+    pub(crate) capture_proofs: &'a RefCell<CaptureProofs>,
     pub(crate) pending_scope_exits: &'a RefCell<BTreeSet<NodeId>>,
     /// The names this drain is publishing right now, which the renewal walk
     /// stays clear of (ADR 0061 D3 step 2).
@@ -5001,6 +5040,7 @@ where
             .cells
             .capture_proofs
             .borrow()
+            .scopes
             .get(&scope.source.root)
             .is_some_and(|proofs| proofs.overflowed);
         // The bin index and the bin's held key are this vault's own, so binning
@@ -5010,21 +5050,27 @@ where
         // device bins what it unlinked. An overflowed scope's captures can never
         // be proved ([`MAX_CAPTURE_WALK_NODES`]).
         if scope.is_grafted() || overflowed {
-            self.take_captures(scope, &eligible);
+            self.take_captures(scope.source.root, &eligible);
             return;
         }
+        self.prove_captures(scope, ends, &eligible).await;
         if eligible.is_empty() {
-            self.cells
-                .capture_proofs
-                .borrow_mut()
-                .remove(&scope.source.root);
             return;
         }
         let Ok(root) = self.load_scope_root(&scope.source).await else {
             return;
         };
-        let proved = self.prove_captures(scope, ends, &root, eligible).await;
-        let taken = self.take_captures(scope, &proved);
+        // A proof is spent once taken, so a capture given back waits for a new
+        // walk.
+        let proved = self
+            .cells
+            .capture_proofs
+            .borrow_mut()
+            .scopes
+            .get_mut(&scope.source.root)
+            .map(ScopeProofs::take_ready)
+            .unwrap_or_default();
+        let taken = self.take_captures(scope.source.root, &proved);
         if taken.is_empty() {
             return;
         }
@@ -5126,6 +5172,7 @@ where
             self.cells
                 .capture_proofs
                 .borrow_mut()
+                .scopes
                 .entry(scope.source.root)
                 .or_default()
                 .stopped
@@ -5264,6 +5311,7 @@ where
         self.cells
             .capture_proofs
             .borrow_mut()
+            .scopes
             .get_mut(&scope.source.root)
             .and_then(|proofs| proofs.sealer_search.remove(&node))
             .unwrap_or_default()
@@ -5277,7 +5325,7 @@ where
         search: Option<SealerSearch>,
     ) {
         let mut proofs = self.cells.capture_proofs.borrow_mut();
-        let proofs = proofs.entry(scope.source.root).or_default();
+        let proofs = proofs.scopes.entry(scope.source.root).or_default();
         match search {
             Some(search) => proofs.sealer_search.insert(node, search),
             None => proofs.sealer_search.remove(&node),
@@ -5469,15 +5517,12 @@ where
         eligible
     }
 
-    /// Remove and answer this scope's captures under the keys in `keys`.
-    fn take_captures(
-        &self,
-        scope: &DrainScope<'_>,
-        keys: &BTreeSet<CaptureKey>,
-    ) -> Vec<UnlinkedChild> {
+    /// Remove and answer the captures of the scope at `scope_root` under the
+    /// keys in `keys`.
+    fn take_captures(&self, scope_root: NodeId, keys: &BTreeSet<CaptureKey>) -> Vec<UnlinkedChild> {
         let mut taken = Vec::new();
         self.cells.observed_unlinks.borrow_mut().retain(|unlinked| {
-            if unlinked.scope_id != scope.source.root.0 || !keys.contains(&capture_key(unlinked)) {
+            if unlinked.scope_id != scope_root.0 || !keys.contains(&capture_key(unlinked)) {
                 return true;
             }
             taken.push(unlinked.clone());
@@ -5486,68 +5531,98 @@ where
         taken
     }
 
-    /// Run this pass's share of the scope's capture walk, and answer the
-    /// captures proved to have left the tree, at most [`MAX_BIN_ADOPTIONS`].
+    /// Run this pass's share of the vault's capture walk, which serves every
+    /// own scope of the tick. A settled walk adds each scope's proved captures
+    /// to its [`ScopeProofs`], and a capture some folder names leaves the set
+    /// unbinned.
     ///
     /// The cohort keeps only captures still held, so a walk proves nothing about
-    /// a capture the set dropped. A capture some folder names leaves the set
-    /// unbinned.
+    /// a capture the set dropped: this pass keeps its own scope's to `eligible`.
     async fn prove_captures<'e>(
         &self,
         scope: &DrainScope<'e>,
         ends: &[ScopeEnd<'e>],
-        root: &LoadedRoot,
-        eligible: BTreeSet<CaptureKey>,
-    ) -> BTreeSet<CaptureKey> {
+        eligible: &BTreeSet<CaptureKey>,
+    ) {
         let scope_root = scope.source.root;
-        let mut proofs = self
-            .cells
-            .capture_proofs
-            .borrow_mut()
-            .remove(&scope_root)
-            .unwrap_or_default();
-        proofs.proved.retain(|key| eligible.contains(key));
-        proofs
-            .sealer_search
-            .retain(|node, _| names_node(&eligible, *node));
-        proofs.stopped.retain(|key| eligible.contains(key));
-        let unproved: BTreeSet<CaptureKey> = eligible.difference(&proofs.proved).copied().collect();
-        let mut walk = proofs.walk.take().and_then(|mut walk| {
-            walk.cohort.retain(|key| unproved.contains(key));
-            (!walk.cohort.is_empty()).then_some(walk)
-        });
-        if walk.is_none() && !unproved.is_empty() {
-            walk = Some(CaptureWalk::from_vault_root(scope, ends, unproved));
-        }
-        if let Some(mut walk) = walk {
-            match self.step_walk(scope, ends, root, &mut walk).await {
-                WalkStep::Unfinished => proofs.walk = Some(walk),
-                WalkStep::Restart => {}
-                WalkStep::Overflowed => {
-                    proofs.overflowed = true;
-                    proofs.proved.clear();
-                    self.take_captures(scope, &eligible);
+        let mut walk = {
+            let mut proofs = self.cells.capture_proofs.borrow_mut();
+            let unproved: BTreeSet<CaptureKey> = if eligible.is_empty() {
+                proofs.scopes.remove(&scope_root);
+                BTreeSet::new()
+            } else {
+                let own = proofs.scopes.entry(scope_root).or_default();
+                own.proved.retain(|key| eligible.contains(key));
+                own.sealer_search
+                    .retain(|node, _| names_node(eligible, *node));
+                own.stopped.retain(|key| eligible.contains(key));
+                eligible.difference(&own.proved).copied().collect()
+            };
+            let walk = proofs.walk.take().and_then(|mut walk| {
+                walk.keep(scope_root, &unproved);
+                (!walk.cohort.is_empty()).then_some(walk)
+            });
+            match walk {
+                Some(walk) => walk,
+                None if unproved.is_empty() => return,
+                None => {
+                    let cohort = self.new_cohort(&proofs, scope_root, unproved, ends);
+                    CaptureWalk::from_vault_root(scope, ends, cohort)
                 }
-                WalkStep::Settled => {
-                    let (linked, proved): (BTreeSet<CaptureKey>, BTreeSet<CaptureKey>) = walk
-                        .cohort
-                        .iter()
+            }
+        };
+        let step = self.step_walk(scope, ends, &mut walk).await;
+        let mut proofs = self.cells.capture_proofs.borrow_mut();
+        match step {
+            WalkStep::Unfinished => proofs.walk = Some(walk),
+            WalkStep::Restart => {}
+            WalkStep::Overflowed => {
+                for root in walk.cohort.keys().copied().chain([scope_root]) {
+                    let served = proofs.scopes.entry(root).or_default();
+                    served.overflowed = true;
+                    served.proved.clear();
+                }
+                self.take_captures(scope_root, eligible);
+            }
+            WalkStep::Settled => {
+                for (root, keys) in walk.cohort {
+                    let (linked, proved): (BTreeSet<CaptureKey>, BTreeSet<CaptureKey>) = keys
+                        .into_iter()
                         .partition(|(node, _)| walk.linked.contains(node));
-                    self.take_captures(scope, &linked);
-                    if !walk.blind {
-                        proofs.proved.extend(proved);
+                    self.take_captures(root, &linked);
+                    if !walk.blind && !proved.is_empty() {
+                        proofs.scopes.entry(root).or_default().proved.extend(proved);
                     }
                 }
             }
         }
-        // A proof is spent once taken, so a capture given back waits for a new
-        // walk.
-        let ready = proofs.take_ready();
-        self.cells
-            .capture_proofs
-            .borrow_mut()
-            .insert(scope_root, proofs);
-        ready
+    }
+
+    /// The cohort a new walk starts with: `own`, the unproved captures of the
+    /// scope at `scope_root`, and each capture another own end of the tick
+    /// holds that its scope has not proved.
+    fn new_cohort(
+        &self,
+        proofs: &CaptureProofs,
+        scope_root: NodeId,
+        own: BTreeSet<CaptureKey>,
+        ends: &[ScopeEnd<'_>],
+    ) -> BTreeMap<NodeId, BTreeSet<CaptureKey>> {
+        let mut cohort = BTreeMap::from([(scope_root, own)]);
+        for unlinked in self.cells.observed_unlinks.borrow().iter() {
+            let root = NodeId(unlinked.scope_id);
+            let key = capture_key(unlinked);
+            if root != scope_root
+                && ends.iter().any(|end| end.root == root)
+                && !proofs
+                    .scopes
+                    .get(&root)
+                    .is_some_and(|scope| scope.overflowed || scope.proved.contains(&key))
+            {
+                cohort.entry(root).or_default().insert(key);
+            }
+        }
+        cohort
     }
 
     /// Spend this pass's share of the tick's walk reads on `walk`. `ends` are
@@ -5556,7 +5631,6 @@ where
         &self,
         scope: &DrainScope<'e>,
         ends: &[ScopeEnd<'e>],
-        root: &LoadedRoot,
         walk: &mut CaptureWalk,
     ) -> WalkStep {
         let share = self.capture_reads.borrow().share();
@@ -5576,14 +5650,11 @@ where
                 Some(next) => *next,
                 None => walk.read[walk.confirmed].0,
             };
-            let (end, anchor) = if at == scope.source.root {
-                (Some(scope.source), Some(root.anchor()))
-            } else {
-                (
-                    ends.iter().find(|end| end.root == at).copied(),
-                    walk.anchors.get(&at).map(WalkAnchor::anchor),
-                )
-            };
+            let end = std::iter::once(&scope.source)
+                .chain(ends)
+                .find(|end| end.root == at)
+                .copied();
+            let anchor = walk.anchors.get(&at).map(WalkAnchor::anchor);
             let read = match end {
                 Some(end) => self
                     .walk_read(scope, &end, anchor, node)
@@ -5613,9 +5684,7 @@ where
             }
             walk.pending.pop();
             walk.read.push(((node, at), read.mark));
-            if let Some(anchor) = read.anchor
-                && at != scope.source.root
-            {
+            if let Some(anchor) = read.anchor {
                 walk.anchors.insert(at, anchor);
             }
             if !walk.visit(
@@ -12086,7 +12155,10 @@ mod tests {
         interior.source.root = NodeId([0x32; 16]);
         interior.source.ascent_node_seed = Some(&ascent);
         let vault = harness.scope().source;
-        let cohort = BTreeSet::from([(NodeId([0x43; 16]), 9)]);
+        let cohort = BTreeMap::from([(
+            interior.source.root,
+            BTreeSet::from([(NodeId([0x43; 16]), 9)]),
+        )]);
 
         let walk = CaptureWalk::from_vault_root(&interior, &[], cohort.clone());
         assert!(walk.blind, "no vault end: the walk proves nothing");
@@ -12462,7 +12534,7 @@ mod tests {
         walk_pass(&harness, MAX_CAPTURE_WALK_READS, MAX_CAPTURE_WALK_NODES);
 
         assert_eq!(
-            harness.state.capture_proofs.borrow()[&HARNESS_ROOT]
+            harness.state.capture_proofs.borrow().scopes[&HARNESS_ROOT]
                 .proved
                 .len(),
             1,
@@ -12509,6 +12581,9 @@ mod tests {
         root_name: IpnsName,
         read_scope_seed: Zeroizing<[u8; 32]>,
         read_seed_stamp: Option<u64>,
+        /// Set for an interior scope root, whose record carries an ascent
+        /// link under this seed.
+        ascent_node_seed: Option<Zeroizing<[u8; 32]>>,
     }
 
     impl OtherEnd {
@@ -12519,6 +12594,15 @@ mod tests {
                 root_name: derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &root.0),
                 read_scope_seed: Zeroizing::new(OWNER_ROOT_SCOPE_SEED),
                 read_seed_stamp: Some(OWNER_ROOT_EPOCH),
+                ascent_node_seed: None,
+            }
+        }
+
+        /// [`Self::new`] as an interior scope root.
+        fn interior(root: u8) -> Self {
+            Self {
+                ascent_node_seed: Some(Zeroizing::new([0x6A; 32])),
+                ..Self::new(root)
             }
         }
 
@@ -12529,7 +12613,7 @@ mod tests {
                 read_scope_seed: &self.read_scope_seed,
                 read_seed_stamp: self.read_seed_stamp,
                 write_scope_seed: &harness.write_scope_seed,
-                ascent_node_seed: None,
+                ascent_node_seed: self.ascent_node_seed.as_ref(),
                 floor_namespace: FloorNamespace::Own,
             }
         }
@@ -12546,7 +12630,7 @@ mod tests {
                 root_id: self.root.0,
                 children: Vec::new(),
                 child_scope_index: Vec::new(),
-                parent_node_seed: None,
+                parent_node_seed: self.ascent_node_seed.as_deref().copied(),
                 owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
                 write_history_link: Vec::new(),
                 grants: Vec::new(),
@@ -12790,6 +12874,53 @@ mod tests {
             2,
             "the re-key publishes over the record that decided the scope"
         );
+    }
+
+    /// The vault scope and an interior scope each hold a capture. One walk of
+    /// the vault proves both, so the tick reads each vault record at most
+    /// twice.
+    #[test]
+    fn one_capture_walk_serves_every_scope_of_a_tick() {
+        let folders = [WALK_FOLDER, NodeId([0x49; 16])];
+        let (mut harness, mut blocks) = walk_harness_of(&folders);
+        let interior = OtherEnd::interior(0x30);
+        interior.serve(&mut harness, &mut blocks);
+        harness.scope_roots.push(interior.root);
+        let held = NodeId([0x4A; 16]);
+        harness
+            .state
+            .observed_unlinks
+            .borrow_mut()
+            .push(UnlinkedChild {
+                scope_id: interior.root.0,
+                ..capture_of(&harness.write_scope_seed, held)
+            });
+        let vault = harness.scope();
+        let inner = DrainScope {
+            source: interior.end(&harness),
+            ..vault
+        };
+        let ends = [vault.source, inner.source];
+        let drain = harness.drain();
+
+        for scope in [&vault, &inner] {
+            block_on(drain.adopt_observed_unlinks(scope, &ends));
+        }
+
+        let reads: Vec<usize> = core::iter::once(HARNESS_ROOT)
+            .chain(folders)
+            .map(|node| reads_of(&harness, node))
+            .collect();
+        assert!(
+            reads.iter().all(|reads| *reads <= 2),
+            "the tick reads each vault record at most twice: {reads:?}"
+        );
+        for node in [capture(&harness.write_scope_seed).node, held] {
+            assert!(
+                reads_of(&harness, node) > 0,
+                "each scope's capture is proved and read for its scope"
+            );
+        }
     }
 
     /// A pass stops its search at its bound. An end with a lower root then
