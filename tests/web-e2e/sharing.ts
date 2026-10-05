@@ -72,8 +72,8 @@ export async function claimHere(page: Page, link: URL, how: ClaimSignIn): Promis
   await invite.join();
   await invite.expectFolderOpened();
   // The join takes the capability out of the address, so a reload cannot spend
-  // it a second time. A boolean, so a failure never prints the fragment.
-  expect(new URL(page.url()).hash === '', 'the join left the link in the address').toBe(true);
+  // it a second time.
+  expect(invite.holdsLink(), 'the join left the link in the address').toBe(false);
 }
 
 /**

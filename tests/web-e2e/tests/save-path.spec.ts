@@ -39,7 +39,8 @@ test('a saved file is its own bytes, not the app shell', { tag: '@full' }, async
   const download = await files.save(NAME);
 
   // A `blob:` here is the buffered fallback, which works and settles nothing.
-  expect(download.url()).toContain('/stream/');
+  // A boolean, so a failure never prints the ticket, which is a bearer token.
+  expect(download.url().includes('/stream/'), 'the save did not stream').toBe(true);
   // The name rides the pipe's `content-disposition`.
   expect(download.suggestedFilename()).toBe(NAME);
 

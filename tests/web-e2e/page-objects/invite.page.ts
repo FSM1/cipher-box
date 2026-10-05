@@ -72,6 +72,14 @@ export class InvitePage {
     await this.joinButton.click();
   }
 
+  /**
+   * Whether the address still carries the link's fragment. A boolean, so an
+   * assertion on it never prints the fragment, which is the capability.
+   */
+  holdsLink(): boolean {
+    return new URL(this.page.url()).hash !== '';
+  }
+
   /** A join, or "open folder", lands on the shared folder in the vault browser. */
   async expectFolderOpened(timeout?: number): Promise<void> {
     // A boolean rather than `toHaveURL`, whose failure prints the address and

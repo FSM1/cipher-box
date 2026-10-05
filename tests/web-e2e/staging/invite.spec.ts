@@ -40,14 +40,14 @@ test('a minted link is claimed by a second identity and converted to a grant', a
   await invite.expectState('waiting', 180_000);
   await signInWithWallet(claimant, invite.joinButton);
   await invite.expectState('joinable');
-  expect(new URL(claimant.url()).hash).not.toBe('');
+  expect(invite.holdsLink(), 'the sign-in dropped the link from the address').toBe(true);
   await expect(invite.account).not.toBeEmpty();
   await expect(invite.headline).toHaveText(`${FOLDER} was shared with you`);
   await invite.join();
   await invite.expectFolderOpened(180_000);
   // The join takes the capability out of the address, so a reload cannot spend
   // it a second time.
-  expect(new URL(claimant.url()).hash).toBe('');
+  expect(invite.holdsLink(), 'the join left the link in the address').toBe(false);
 
   // A claim is a standing request; opening the share dialog converts it.
   await share.openUntilGranted(FOLDER, 1, 360_000);
