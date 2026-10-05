@@ -388,8 +388,11 @@ describe('the people table', () => {
     expect(screen.queryByTestId('dialog-error')).toBeNull();
   });
 
-  it('shows a trust refusal of the write-key rotation in the engine words', async () => {
-    const refusal = new EngineRequestError('the scope root did not verify', 'trustViolation');
+  it('shows a trust refusal of the write-key rotation in plain words and offers no retry', async () => {
+    const refusal = new EngineRequestError(
+      'trust violation: owed-scope-root refused at sequence 7',
+      'trustViolation'
+    );
     await share(
       sharingEngine(
         { rotateWriteNow: refusal },
@@ -399,7 +402,10 @@ describe('the people table', () => {
 
     await click('share-rotate-write');
 
-    expect(screen.getByTestId('dialog-error').textContent).toBe('the scope root did not verify');
+    const shown = screen.getByTestId('dialog-error').textContent ?? '';
+    expect(shown).toContain('failed verification');
+    expect(shown).not.toContain('scope-root');
+    expect((screen.getByTestId('share-rotate-write') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId('share-epochs').textContent).toBe('// read epoch 3 · write epoch 1');
   });
 

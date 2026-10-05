@@ -13855,13 +13855,58 @@ fn a_write_rotate_now_over_a_stale_read_keeps_a_row_another_device_appended() {
     assert!(owed_entry(&fx).is_none(), "and nothing is owed");
 }
 
-/// A write rotate-now reads no root from its last copy: a root the gate
-/// refuses at a cut read, after the command read it whole, is a trust
-/// violation, and nothing is cut or owed.
+/// ADR 0068 D1, D3 and D5: the revokee plants a record the gate refuses at
+/// the root name, and the device that owes the stalled cut is gone. Another
+/// owner device's write rotate-now reads the root from its last copy, moves
+/// the root first, keeps no grant row, and reports the refusal once.
 #[test]
-fn a_write_rotate_now_refuses_a_planted_root_without_the_last_copy() {
+fn a_write_rotate_now_cuts_a_planted_root_from_its_last_copy() {
     let mut fx = GrantScenario::new();
     let (_, _, revokee_seed) = write_granted_nested_subtree(&mut fx);
+    drop(fx.world.scheduler.take_spawned_tasks());
+    let (mut other, mut other_events, _other_tasks) = fx.second_owner_device();
+    let old_root = fx.granted_scope_repoint().current_root;
+    let sequence = sequence_at(&fx.world, &old_root) + 1;
+    assert_eq!(plant_root_at(&fx, &revokee_seed, sequence), old_root);
+    let planted = published_value(&fx.world, &old_root);
+    let _ = events_so_far(&mut other_events);
+
+    assert_eq!(
+        run_across_retries(
+            &fx.world,
+            &mut other,
+            Command::RotateWriteNow { node: fx.folder }
+        ),
+        Ok(CommandOutcome::Done)
+    );
+
+    let events = events_so_far(&mut other_events);
+    assert_eq!(root_refusals(&fx, &events, sequence), 1, "one trust event");
+    assert_the_revokee_is_cut(&fx, &revokee_seed);
+    let moved = fx.granted_scope_repoint().current_root;
+    assert!(
+        published_grant_section_at(&fx.world, &fx.blocks, &moved)
+            .expect("the moved root")
+            .commitment
+            .entries
+            .is_empty(),
+        "the cut from the last copy keeps no grant row"
+    );
+    assert_eq!(
+        published_value(&fx.world, &old_root),
+        planted,
+        "nothing publishes at the old root name"
+    );
+}
+
+/// ADR 0068 D1 and D3: a writer plants at the root name after the command
+/// read the root whole. The name wave reads the root from its last copy and
+/// moves the scope off every name the writer's seed derives, with nothing
+/// owed and nothing published at the old name.
+#[test]
+fn a_write_rotate_now_over_a_root_planted_after_its_read_moves_the_scope() {
+    let mut fx = GrantScenario::new();
+    let (_, _, writer_seed) = write_granted_nested_subtree(&mut fx);
     let before = fx.granted_scope_repoint();
     let root = before.current_root.clone();
     let honest = fx
@@ -13869,34 +13914,77 @@ fn a_write_rotate_now_refuses_a_planted_root_without_the_last_copy() {
         .record_store
         .record_at(&fx.world.record_store.endpoints()[0], root.as_str());
     let sequence = sequence_at(&fx.world, &root) + 1;
-    assert_eq!(plant_root_at(&fx, &revokee_seed, sequence), root);
+    assert_eq!(plant_root_at(&fx, &writer_seed, sequence), root);
     let planted = published_value(&fx.world, &root);
-    // The command's own read meets the honest root; the cut reads meet the
-    // planted one.
-    serve_the_walk_one_cut_behind(&fx, &root, honest);
+    // The command read and the cut-set publish read meet the honest root;
+    // every later read meets the plant.
+    let endpoints = fx.world.record_store.endpoints().len();
+    fx.world
+        .record_store
+        .serve_gets_for_after(root.as_str(), 0, 2 * endpoints, honest);
     let folder = fx.folder;
 
-    let outcome = command_across_retries(&mut fx, Command::RotateWriteNow { node: folder });
-
-    assert!(
-        matches!(outcome, Err(EngineError::TrustViolation { .. })),
-        "{outcome:?}"
-    );
-    assert_eq!(fx.granted_scope_repoint(), before, "no wave ran");
     assert_eq!(
-        published_value(&fx.world, &before.current_root),
-        planted,
-        "nothing published at the root name"
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
     );
+
+    let after = fx.granted_scope_repoint();
+    assert_eq!(after.write_epoch, before.write_epoch + 1);
+    assert_ne!(
+        derive_write_name(&writer_seed, &fx.folder.0),
+        after.current_root
+    );
+    assert_eq!(published_value(&fx.world, &root), planted);
     assert!(owed_entry(&fx).is_none(), "and nothing is owed");
 }
 
-/// Owed work of this device at the scope refuses a write rotate-now,
-/// retryably: the sync pass re-drives that work.
+/// ADR 0063 D5: this device's owed write cut re-drives first, and the
+/// finished re-drive is the cut, so the scope moves one write epoch.
 #[test]
-fn a_write_rotate_now_over_owed_work_of_this_device_is_refused() {
+fn a_write_rotate_now_finishes_this_devices_owed_write_cut_once() {
     let mut fx = GrantScenario::new();
-    let _ = strand_a_write_revoke(&mut fx);
+    let revokee_seed = strand_a_write_revoke(&mut fx);
+    let folder = fx.folder;
+
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_the_revoke_finished(&fx, &revokee_seed);
+    assert!(owed_entry(&fx).is_none(), "and nothing is owed");
+}
+
+/// ADR 0063 D5: an owed entry with no write cut re-drives first, and the
+/// command still cuts the write plane after it.
+#[test]
+fn a_write_rotate_now_cuts_after_an_owed_entry_with_no_write_cut() {
+    let mut fx = GrantScenario::new();
+    fx.stall_the_owed_move();
+    let before = fx.granted_scope_repoint();
+    let folder = fx.folder;
+
+    assert_eq!(
+        command_across_retries(&mut fx, Command::RotateWriteNow { node: folder }),
+        Ok(CommandOutcome::Done)
+    );
+
+    let after = fx.granted_scope_repoint();
+    assert_eq!(after.write_epoch, before.write_epoch + 1);
+    assert!(owed_entry(&fx).is_none(), "and nothing is owed");
+}
+
+/// ADR 0063 D5: an owed entry the re-drive cannot finish refuses the
+/// command, retryably, and stays for the sync pass.
+#[test]
+fn a_write_rotate_now_over_work_still_owed_is_refused() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    stop_the_revoke_wave(&mut fx);
     let folder = fx.folder;
 
     assert_eq!(

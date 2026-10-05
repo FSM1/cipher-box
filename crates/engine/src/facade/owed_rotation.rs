@@ -363,12 +363,7 @@ where
                 return Ok(None);
             }
             Err(error) => {
-                // A strict command cuts no set from a root it cannot read.
-                let published = self
-                    .cut_set_published(target, cut, command)
-                    .await
-                    .or_else(|| self.strict_root.then_some(false));
-                return match published {
+                return match self.cut_set_published(target, cut, command).await {
                     Some(true) => {
                         self.stop_owed(node, steps, cut_stop(error)).await;
                         Ok(None)
@@ -457,7 +452,11 @@ where
         command: bool,
     ) -> Option<bool> {
         let bound = self.owed_bound(NodeId(target.scope.scope_id)).await;
-        let wait = self.root_wait(command, bound.as_ref().map_or(&NoBound, |b| b));
+        let wait = if command {
+            RootWait::Command
+        } else {
+            RootWait::Bound(bound.as_ref().map_or(&NoBound, |b| b))
+        };
         let current = self
             .cut_net(target, wait)
             .resolve_anchored(&target.scope)
@@ -805,7 +804,11 @@ where
         };
         let bound = self.owed_bound(node).await;
         let net = if cut {
-            let wait = self.root_wait(sites.command(), bound.as_ref().map_or(&NoBound, |b| b));
+            let wait = if sites.command() {
+                RootWait::Command
+            } else {
+                RootWait::Bound(bound.as_ref().map_or(&NoBound, |b| b))
+            };
             self.cut_net(&target, wait)
         } else {
             self.net(&target, PointerConsultArm::Refused)

@@ -64,6 +64,8 @@ const SHARE_REFUSALS: Record<string, string> = {
     'this device holds all the claims it can — the rest wait on the mailbox for a later pass',
   'a-claim-could-not-be-held':
     'this device could not keep a claim, so it waits on the mailbox for a later pass',
+  'rotate-write-target-is-the-vault-root':
+    'your whole vault has no write keys to rotate - rotate a shared folder inside it',
   'rotate-write-target-is-not-a-scope-root':
     'this folder is not shared, so it has no write keys of its own',
   'rotation-work-owed':

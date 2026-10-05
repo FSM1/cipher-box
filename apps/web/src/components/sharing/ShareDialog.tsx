@@ -91,7 +91,8 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
               type="button"
               className="dialog-button"
               onClick={() => void actions.rotateWriteKeys()}
-              disabled={busy}
+              // A trust stop is no availability fault, so it offers no retry.
+              disabled={busy || actions.code === 'trustViolation'}
               data-testid="share-rotate-write"
             >
               {actions.busy === 'rotateWriteNow' ? 'rotating...' : 'rotate write keys'}

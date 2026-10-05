@@ -1723,9 +1723,9 @@ Accepted by ADRs 0023 to 0028 and ADR 0063:
   it. On another owner device, a revoked writer keeps the old write seed until
   the first device runs a pass, or until the owner runs "rotate write keys now"
   (`RotateWriteNow`) there: any owner device runs that write-scope cut from the
-  published state, below the vault root, with no root read from its last copy.
-  A lost first device leaves an owed read cut and an interior move owed for
-  ever (ADR 0063 consequence 6).
+  published state, below the vault root, and its root reads follow ADR 0068
+  like every owner command. A lost first device leaves an owed read cut and an
+  interior move owed for ever (ADR 0063 consequence 6).
 
 ## Mailbox logic
 

@@ -243,11 +243,7 @@ where
                 .map_err(resolve_failed)?;
             // Idempotent by comparison, never by assumption: a read cascade or a
             // grant mint may already have published this set, and republishing
-            // would spend a CAS to change nothing. Both halves are compared —
-            // the wave re-mints from the ledger and refuses one the commitment
-            // does not commit (`net/rotation.rs` `remint_grants`), so an equal
-            // commitment over a divergent ledger is a record this step still
-            // owes a republish.
+            // would spend a CAS to change nothing.
             if current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger {
                 return Ok(());
             }

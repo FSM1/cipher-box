@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { toHex } from '@cipherbox/client';
+import { EngineRequestError, toHex } from '@cipherbox/client';
 import type { EngineFacade, Permission, SharingDescriptor } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { useEngine } from '../providers/EngineProvider';
@@ -34,6 +34,10 @@ export const JOINED_NOTICE_MS = 8_000;
 /** The least time between two event re-reads of the sharing view. */
 export const SNAPSHOT_REREAD_GAP_MS = 1_000;
 
+/** A write-key rotation that met a record which failed verification; no retry clears that. */
+export const ROTATE_WRITE_TRUST_STOP =
+  'a record in this folder failed verification, so its write keys did not rotate - CipherBox will not rotate them while that record stands';
+
 /** The engine's refusal of a conversion while another pass runs on this device. */
 const CONVERSION_RUNNING = 'a-conversion-pass-is-running';
 
@@ -46,6 +50,8 @@ export interface SharingActions {
   busy: SharingCommand | null;
   /** The last refusal, in the engine's own words; cleared by the next dispatch. */
   error: string | null;
+  /** That refusal's stable engine code, absent for a transport fault. */
+  code: string | undefined;
   clearError(): void;
   /** Who joined this scope through a link while the dialog was open, until the notice lapses. */
   joined: string | null;
@@ -113,7 +119,7 @@ async function fingerprintsOf(
 }
 
 export function useSharingActions(scope: Uint8Array): SharingActions {
-  const { busy, error, run, clearError } = useCommandRunner<SharingCommand>();
+  const { busy, error, code, run, clearError } = useCommandRunner<SharingCommand>();
   // Keyed by the scope's hex id: a caller rebuilding the byte array each render
   // is the same scope, and re-reading on it would loop through the store the
   // read publishes to.
@@ -199,6 +205,7 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
   return {
     busy,
     error,
+    code,
     clearError,
     joined,
     open: useCallback(async () => {
@@ -290,7 +297,15 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
     rotateWriteKeys: useCallback(
       () =>
         run('rotateWriteNow', async (facade) => {
-          await facade.rotateWriteNow(target);
+          try {
+            await facade.rotateWriteNow(target);
+          } catch (refusal: unknown) {
+            // The engine words name a record; the member reads what it means.
+            if (refusal instanceof EngineRequestError && refusal.code === 'trustViolation') {
+              throw new EngineRequestError(ROTATE_WRITE_TRUST_STOP, refusal.code);
+            }
+            throw refusal;
+          }
           await read(facade);
         }),
       [run, read, target]
