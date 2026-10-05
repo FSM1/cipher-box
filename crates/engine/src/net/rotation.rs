@@ -43,8 +43,8 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
 use super::adopter::{
-    HEAD_BLOCK_NOT_FOUND, LocalHead, RecoveredScopeRoot, RecoveredSeeds, RootAdopter,
-    fetch_head_block, open_write_scope_seed_at, root_bar,
+    LocalHead, RecoveredScopeRoot, RecoveredSeeds, RootAdopter, fetch_head_block,
+    open_write_scope_seed_at, root_bar,
 };
 use super::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
@@ -454,6 +454,25 @@ pub(crate) struct RootFallback<'a> {
     fell_back: Cell<bool>,
 }
 
+/// The trust-event text for a fallback that finds no copy to run on.
+const NO_COPY_STOPS: &str = "no copy passes the gate, so the owner rotation stops";
+
+/// The trust-event text for a last copy at an envelope version this build
+/// does not author.
+const FOREIGN_VERSION_STOPS: &str = concat!(
+    "the last copy is at an envelope version this build does not author, ",
+    "so the owner rotation stops",
+);
+
+/// The trust-event text for a last copy whose envelope names another node.
+const OTHER_NODE_STOPS: &str = "the last copy names another node, so the owner rotation stops";
+
+/// The trust-event text for a fallback that runs on the last copy.
+const LAST_COPY_RUNS: &str = concat!(
+    "the owner rotation runs on the last copy that passed the gate and ",
+    "drops what a writer published after it",
+);
+
 /// When a root read under a [`RootFallback`] falls back on a cause that a
 /// lagging or bad endpoint can give (ADR 0068 D1).
 #[derive(Clone, Copy)]
@@ -537,6 +556,12 @@ impl<'a> RootFallback<'a> {
             verdict,
         ))
         .await;
+        let stop = match &copy {
+            Ok(root) if root.reseals_as(&scope_id) => None,
+            Ok(root) if root.envelope.id == scope_id => Some(FOREIGN_VERSION_STOPS),
+            Ok(_) => Some(OTHER_NODE_STOPS),
+            Err(_) => Some(NO_COPY_STOPS),
+        };
 
         if this
             .reported
@@ -549,16 +574,11 @@ impl<'a> RootFallback<'a> {
                 format_args!(
                     "scope root [{}] refused at sequence {refused_sequence}; {}",
                     hex_lower(&this.scope_id),
-                    match copy {
-                        Ok(_) =>
-                            "the owner rotation runs on the last copy that passed the gate and \
-                             drops what a writer published after it",
-                        Err(_) => "no copy passes the gate, so the owner rotation stops",
-                    }
+                    stop.unwrap_or(LAST_COPY_RUNS)
                 ),
             );
         }
-        if copy.is_ok() {
+        if stop.is_none() {
             this.fell_back.set(true);
         }
         copy
@@ -769,6 +789,15 @@ struct GatedScopeRoot {
 }
 
 impl GatedScopeRoot {
+    /// Whether a re-seal or a republish of `scope_id` can build on this root.
+    /// The root gate binds `envelope.scope` but not `envelope.id`, and every
+    /// AAD a re-seal authors binds the id, so a root whose record claims
+    /// another node would be re-sealed under a key no reader re-derives. A
+    /// republish also needs an `Observed`.
+    fn reseals_as(&self, scope_id: &[u8; 16]) -> bool {
+        self.envelope.id == *scope_id && self.observed.is_ok()
+    }
+
     /// A copy bound to `expected_child`, when the caller expects one.
     fn names_child(&self, expected_child: Option<[u8; 16]>) -> bool {
         expected_child.is_none_or(|id| self.envelope.id == id && self.section.ascent_link.is_some())
@@ -1115,7 +1144,7 @@ async fn gate_root_pass<H: Http, F: FloorStore>(
                 seeds,
             ))))
         }
-        Err(GateError::Seam(seam)) if seam.status() == Some(HEAD_BLOCK_NOT_FOUND) => {
+        Err(GateError::Seam(seam)) if seam.is_block_not_held() => {
             Err(RootGateVerdict::HeadBlockAbsent)
         }
         Err(GateError::Seam(_)) => Err(RootGateVerdict::Unavailable),
@@ -2610,6 +2639,9 @@ where
             write_epoch,
             over_sequence,
         } = self.gated_write_plane(scope, anchor).await?;
+        if !root.reseals_as(&scope.scope_id) {
+            return Err(ResolveFailure::Rejected);
+        }
         let observed = root_observed(&root, over_sequence).map_err(|_| ResolveFailure::Rejected)?;
         let GatedScopeRoot {
             write_epoch: _,
@@ -2621,13 +2653,6 @@ where
             read_scope_seed,
             write_scope_seed,
         } = root;
-        // The root gate binds `envelope.scope` but not `envelope.id`, and every
-        // AAD a re-seal of this target authors binds the id — so a root whose
-        // record claims another node would be re-sealed under a key no reader
-        // re-derives (the write wave imposes the same binding).
-        if envelope.id != scope.scope_id {
-            return Err(ResolveFailure::Rejected);
-        }
         let Some(write_scope_seed) = write_scope_seed else {
             return Err(ResolveFailure::Unavailable);
         };
@@ -5085,17 +5110,10 @@ where
             .gated_scope_root(name, sequence, record_bytes, endpoint_failed)
             .await
             .map_err(|verdict| wave_read_verdict(verdict.into()))?;
-        gated
-            .observed
-            .as_ref()
-            .map_err(|_| WritePublishError::Rejected)?;
-        let envelope = gated.envelope;
-        // The root gate binds `envelope.scope` but not `envelope.id`, and every
-        // AAD this republish authors binds the id — so a root whose record claims
-        // another node would be re-sealed under a key no reader re-derives.
-        if envelope.id != self.scope_id {
+        if !gated.reseals_as(&self.scope_id) {
             return Err(WritePublishError::Rejected);
         }
+        let envelope = gated.envelope;
         let read_scope_seed = gated.read_scope_seed;
         let (write_scope_seed, write_epoch) = match resumed_write_epoch {
             Some(epoch) => (
@@ -5257,11 +5275,7 @@ where
             .gated_scope_root(name, verified.sequence, &record_bytes, endpoint_failed)
             .await
             .map_err(ResolveFailure::from)?;
-        gated
-            .observed
-            .as_ref()
-            .map_err(|_| ResolveFailure::Rejected)?;
-        if gated.envelope.id != self.scope_id {
+        if !gated.reseals_as(&self.scope_id) {
             return Err(ResolveFailure::Rejected);
         }
         Ok(gated)
@@ -8687,6 +8701,66 @@ mod tests {
         fn resolved(&self, _node_id: &[u8; 16]) {}
     }
 
+    #[test]
+    fn a_root_whose_head_block_no_source_holds_is_head_block_absent() {
+        let (harness, root, _) = staged_cut();
+        let not_found = ScriptedHttp::with_route(|_| {
+            Some(Ok(HttpResponse {
+                status: 404,
+                headers: Vec::new(),
+                body: Vec::new().into(),
+            }))
+        });
+        let mut net = harness.net(&[]);
+        net.http = &not_found;
+
+        let read = block_on(net.gated_root(SCOPE, &root.name)).map(|_| ());
+
+        assert_eq!(read, Err(RootGateVerdict::HeadBlockAbsent));
+    }
+
+    /// A floor store that answers every epoch-floor read with an HTTP 404.
+    struct NotFoundFloors(InMemoryFloorStore);
+
+    impl FloorStore for NotFoundFloors {
+        async fn epoch_floor(&self, _: &[u8]) -> SeamResult<Option<u64>> {
+            Err(SeamError::http_status("not found", 404))
+        }
+
+        async fn raise_epoch_floor(&self, key: &[u8], epoch: u64) -> SeamResult<u64> {
+            self.0.raise_epoch_floor(key, epoch).await
+        }
+
+        async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            self.0.sequence_floor(ipns_name).await
+        }
+
+        async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+            self.0.raise_sequence_floor(ipns_name, sequence).await
+        }
+
+        async fn clear(&self) -> SeamResult<()> {
+            self.0.clear().await
+        }
+    }
+
+    /// Only the head-block read names an absent head block: a 404 from any
+    /// other seam in the gate is a fault, so an owner cut never falls back on it.
+    #[test]
+    fn a_404_from_a_seam_other_than_the_head_block_read_is_unavailable() {
+        let (harness, root, _) = staged_cut();
+        let floors = NotFoundFloors(harness.floors.clone());
+        let reported = RootReports::default();
+        let mut net = net_over(&harness, &floors);
+        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
+
+        let read = block_on(net.gated_root(SCOPE, &root.name)).map(|_| ());
+
+        assert_eq!(read, Err(RootGateVerdict::Unavailable));
+        assert!(!net.fell_back());
+        assert!(harness.events().is_empty(), "a fault is no trust event");
+    }
+
     /// ADR 0068 D1: a refusal in the record bytes falls back at once; a cause
     /// that an endpoint can give holds the pass until the bound is past;
     /// another scope's root never falls back.
@@ -8767,6 +8841,15 @@ mod tests {
         scope_id: [u8; 16],
         parent_node_seed: Option<[u8; 32]>,
     ) -> OwnerRootFixture {
+        root_past_the_reseal_reservation_of(scope_id, scope_id, parent_node_seed)
+    }
+
+    /// [`root_past_the_reseal_reservation`] claiming node `root_id`.
+    fn root_past_the_reseal_reservation_of(
+        scope_id: [u8; 16],
+        root_id: [u8; 16],
+        parent_node_seed: Option<[u8; 32]>,
+    ) -> OwnerRootFixture {
         // Aimed at the midpoint of the reservation and the block ceiling off an
         // approximate per-child cost, so a wire-cost drift fails the assertion
         // below rather than testing nothing.
@@ -8794,7 +8877,7 @@ mod tests {
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id,
-            root_id: scope_id,
+            root_id,
             children,
             child_scope_index: Vec::new(),
             parent_node_seed,
@@ -8841,22 +8924,39 @@ mod tests {
         scope_id: [u8; 16],
         parent_node_seed: Option<[u8; 32]>,
     ) -> (Harness<InMemoryRecordStore>, OwnerRootFixture) {
-        let good = owner_root_fixture(OwnerRootSpec {
-            writer_pseudonym: &owner_root_pseudonym(),
-            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
-            owner_identity: &owner_identity(),
-            owner_enc: &owner_enc().public(),
-            scope_id,
-            root_id: scope_id,
-            children: Vec::new(),
-            child_scope_index: Vec::new(),
-            parent_node_seed,
-            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
-            write_history_link: Vec::new(),
-            grants: Vec::new(),
-        });
+        wedged_scope_of(scope_id, scope_id, parent_node_seed, ENVELOPE_V)
+    }
+
+    /// [`wedged_scope`] with both records claiming node `root_id` and the last
+    /// copy at envelope version `v`.
+    fn wedged_scope_of(
+        scope_id: [u8; 16],
+        root_id: [u8; 16],
+        parent_node_seed: Option<[u8; 32]>,
+        v: u64,
+    ) -> (Harness<InMemoryRecordStore>, OwnerRootFixture) {
+        let good = crate::testkit::owner_root_fixture_sealed(
+            OwnerRootSpec {
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+                owner_identity: &owner_identity(),
+                owner_enc: &owner_enc().public(),
+                scope_id,
+                root_id,
+                children: Vec::new(),
+                child_scope_index: Vec::new(),
+                parent_node_seed,
+                owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+                write_history_link: Vec::new(),
+                grants: Vec::new(),
+            },
+            OWNER_ROOT_EPOCH,
+            v,
+        );
         let harness = Harness::plain();
         harness.stage(scope_id, &good, Some(OWNER_ROOT_EPOCH));
+        // The record is signed at the name that `root_id` derives.
+        serve_at(&harness, root_id, &good, 1);
         // One earlier rotation read, which raises this name's sequence floor
         // and leaves the gate-passing record in the cache the fallback reads.
         let ancestry =
@@ -8873,8 +8973,8 @@ mod tests {
                 .is_some(),
             "the rotation's own gate-passing read is what leaves the copy behind",
         );
-        let wedge = root_past_the_reseal_reservation(scope_id, parent_node_seed);
-        serve_at(&harness, scope_id, &wedge, 2);
+        let wedge = root_past_the_reseal_reservation_of(scope_id, root_id, parent_node_seed);
+        serve_at(&harness, root_id, &wedge, 2);
         (harness, good)
     }
 
@@ -8972,6 +9072,51 @@ mod tests {
         assert!(net.fell_back());
         assert_eq!(harness.events().len(), 1, "one trust event");
         assert_eq!(sequence_at(&harness, &good.name), Some(u64::MAX));
+    }
+
+    /// A last copy at an envelope version this build does not author passes
+    /// the gate, but the rotation refuses it, so the trust event and the
+    /// fallback mark say the rotation stops.
+    #[test]
+    fn a_cut_does_not_fall_back_on_a_last_copy_at_a_foreign_envelope_version() {
+        let (harness, good) = wedged_scope_of(SCOPE, SCOPE, None, ENVELOPE_V + 1);
+        let reported = RootReports::default();
+        let mut net = harness.net(&[]);
+        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
+
+        let read = block_on(net.gated_root(SCOPE, &good.name)).expect("the copy passes the gate");
+
+        assert!(read.root.observed.is_err(), "no publish builds on the copy");
+        assert!(!net.fell_back());
+        let events = harness.events();
+        assert_eq!(events.len(), 1, "one trust event");
+        assert!(matches!(
+            &events[0],
+            Event::AttributableAbuse { description }
+                if description.ends_with(FOREIGN_VERSION_STOPS)
+        ));
+    }
+
+    /// A last copy that names another node passes the gate, but no reader
+    /// re-seals it, so the rotation does not run on it.
+    #[test]
+    fn a_cut_does_not_fall_back_on_a_last_copy_that_names_another_node() {
+        let (harness, good) = wedged_scope_of(SCOPE, CHILD_SCOPE, None, ENVELOPE_V);
+        let reported = RootReports::default();
+        let mut net = harness.net(&[]);
+        net.root_fallback = Some(RootFallback::new(SCOPE, RootWait::Command, &reported));
+
+        let read = block_on(net.gated_root(SCOPE, &good.name)).expect("the copy passes the gate");
+
+        assert_eq!(read.root.envelope.id, CHILD_SCOPE);
+        assert!(!net.fell_back());
+        let events = harness.events();
+        assert_eq!(events.len(), 1, "one trust event");
+        assert!(matches!(
+            &events[0],
+            Event::AttributableAbuse { description }
+                if description.ends_with(OTHER_NODE_STOPS)
+        ));
     }
 
     /// ADR 0068 D1: a record below the sequence floor is what a lagging
