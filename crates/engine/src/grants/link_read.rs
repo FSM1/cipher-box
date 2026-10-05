@@ -33,8 +33,11 @@ use crate::gate::{
     Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
     adopt, read_cut_epoch_floor, verify_commitment_in_force,
 };
+use crate::net::resolve::unavailable_below_floor;
 use crate::net::rotation::OwnerPointerRead;
-use crate::net::{PointerConsult, PointerConsultError, assemble_candidate, fanout_get_verify};
+use crate::net::{
+    PointerConsult, PointerConsultError, assemble_candidate, fanout_get_verify_failed,
+};
 use crate::seams::{
     FloorStore, Http, Mailbox, NoPersistFloorStore, RecordTransport, StagingStore, UnixMillis,
 };
@@ -205,7 +208,9 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
             }
             Err(PointerConsultError::Rejected) => return Err(LinkReadRefusal::Repoint),
         };
-    let Some((_, record)) = fanout_get_verify(seams.transport, &root).await else {
+    let Some((verified, record, endpoint_failed)) =
+        fanout_get_verify_failed(seams.transport, &root).await
+    else {
         return Ok(LinkEntryRead::Unavailable);
     };
     let candidate = match assemble_candidate(seams.gateway, seams.http, &root, &record, None).await
@@ -230,6 +235,25 @@ async fn read_link_entry<T: RecordTransport, H: Http, F: FloorStore>(
             reason: RejectionReason::Trust(e),
         })
     })?;
+    // Ahead of the link verdict, so a rollback never reads as revoked or
+    // expired.
+    match floor::check_sequence(
+        &seams.floors,
+        name,
+        verified.sequence,
+        floor::Strictness::AtOrAboveFloor,
+    )
+    .await
+    {
+        Ok(()) => {}
+        Err(GateError::Rejected(rejection))
+            if unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+        {
+            return Ok(LinkEntryRead::Unavailable);
+        }
+        Err(GateError::Rejected(rejection)) => return Err(LinkReadRefusal::Gate(rejection)),
+        Err(GateError::Seam(_)) => return Ok(LinkEntryRead::Unavailable),
+    }
     let Some(entry) = recipient_blinded_tag(invitee.enc_secret(), &owner.enc_subkey(), name)
         .and_then(|tag| committed_link_entry(&candidate, &tag))
     else {

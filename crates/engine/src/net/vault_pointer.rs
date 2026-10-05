@@ -11,7 +11,7 @@ use cipherbox_core::suite::secret::SecretBytes;
 
 use super::fanout::{TiedFetch, fanout_get_tied_classified};
 use super::publish::Observed;
-use super::resolve::below_floor;
+use super::resolve::unavailable_below_floor;
 use super::rotation::{PointerPipeline, publish_pointer_over};
 use crate::api::ApiClient;
 use crate::entropy::Entropy;
@@ -233,7 +233,9 @@ where
 /// floor while an endpoint failed is unavailable (ADR 0071 D1).
 fn standing_verdict(error: GateError, endpoint_failed: bool) -> RotationPublishError {
     match error {
-        GateError::Rejected(rejection) if !(endpoint_failed && below_floor(&rejection.reason)) => {
+        GateError::Rejected(rejection)
+            if !unavailable_below_floor(&rejection.reason, endpoint_failed) =>
+        {
             RotationPublishError::Rejected
         }
         _ => RotationPublishError::NotPublished,
